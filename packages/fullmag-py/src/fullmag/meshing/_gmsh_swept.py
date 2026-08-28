@@ -35,6 +35,7 @@ from fullmag.model.geometry import ArchWaveguide, Box, Cylinder, Geometry
 
 from ._gmsh_types import (
     AirboxOptions,
+    FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS,
     MeshData,
     MeshRealizationReport,
     MeshOptions,
@@ -42,6 +43,7 @@ from ._gmsh_types import (
     _MIXED_CELL_LOCAL_FACETS,
     _infer_axis_aligned_periodic_pairs,
     _count_exact_layer_planes,
+    _cell_jacobian_determinants,
     _mixed_cell_scaled_jacobians,
     MIXED_PYRAMID_APEX_SCALE_MAX,
     MIXED_PYRAMID_APEX_SCALE_STEP,
@@ -240,6 +242,103 @@ def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
         family: float(np.percentile(family_values, 5.0))
         for family, family_values in sorted(values.items())
     }
+
+
+@dataclass(frozen=True)
+class _MixedTetDegeneracyReport:
+    element_tags: frozenset[int]
+    worst_element_tag: int | None
+    worst_determinant: float | None
+    worst_threshold: float | None
+
+
+def _mixed_tet_degeneracy_report(
+    gmsh: Any,
+    *,
+    element_tags: frozenset[int] | None = None,
+) -> _MixedTetDegeneracyReport:
+    """Return strict tet4 degeneracies without extracting the complete mesh."""
+    gmsh_element_tags, element_nodes = gmsh.model.mesh.getElementsByType(4)
+    tags = np.asarray(gmsh_element_tags, dtype=np.int64)
+    if tags.size == 0:
+        return _MixedTetDegeneracyReport(frozenset(), None, None, None)
+    connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, 4))
+    if element_tags is not None:
+        selected = np.isin(tags, np.asarray(sorted(element_tags), dtype=np.int64))
+        tags = tags[selected]
+        connectivity = connectivity[selected]
+        if tags.size == 0:
+            return _MixedTetDegeneracyReport(frozenset(), None, None, None)
+    node_tags, node_coordinates, _ = gmsh.model.mesh.getNodes()
+    node_tags_array = np.asarray(node_tags, dtype=np.int64)
+    coordinates = np.asarray(node_coordinates, dtype=np.float64).reshape((-1, 3))
+    order = np.argsort(node_tags_array)
+    sorted_tags = node_tags_array[order]
+    degenerate_tags: set[int] = set()
+    worst_tag: int | None = None
+    worst_determinant: float | None = None
+    worst_threshold: float | None = None
+    worst_margin = math.inf
+    chunk_size = 65_536
+    for start in range(0, len(tags), chunk_size):
+        stop = min(start + chunk_size, len(tags))
+        chunk_connectivity = connectivity[start:stop]
+        positions = np.searchsorted(sorted_tags, chunk_connectivity)
+        if np.any(positions >= len(sorted_tags)) or not np.array_equal(
+            sorted_tags[positions], chunk_connectivity
+        ):
+            raise RuntimeError("mixed tet4 connectivity references an unknown Gmsh node")
+        points = coordinates[order[positions]]
+        matrices = np.stack(
+            (
+                points[:, 1] - points[:, 0],
+                points[:, 2] - points[:, 0],
+                points[:, 3] - points[:, 0],
+            ),
+            axis=2,
+        )
+        determinants = np.abs(np.linalg.det(matrices))
+        pairwise = points[:, :, np.newaxis, :] - points[:, np.newaxis, :, :]
+        characteristic_lengths = np.max(np.linalg.norm(pairwise, axis=3), axis=(1, 2))
+        thresholds = np.maximum(
+            np.finfo(np.float64).tiny,
+            FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_lengths**3,
+        )
+        invalid = determinants <= thresholds
+        if not np.any(invalid):
+            continue
+        invalid_indices = np.flatnonzero(invalid)
+        degenerate_tags.update(int(tags[start + index]) for index in invalid_indices)
+        margins = determinants[invalid_indices] / thresholds[invalid_indices]
+        local = int(invalid_indices[int(np.argmin(margins))])
+        local_margin = float(determinants[local] / thresholds[local])
+        if local_margin < worst_margin:
+            worst_margin = local_margin
+            worst_tag = int(tags[start + local])
+            worst_determinant = float(determinants[local])
+            worst_threshold = float(thresholds[local])
+    return _MixedTetDegeneracyReport(
+        frozenset(degenerate_tags),
+        worst_tag,
+        worst_determinant,
+        worst_threshold,
+    )
+
+
+def _mixed_cell_has_degenerate_jacobian(
+    family: str,
+    coordinates: NDArray[np.float64],
+) -> bool:
+    determinants = _cell_jacobian_determinants(family, coordinates)
+    characteristic_length = float(np.max(np.linalg.norm(
+        coordinates[:, np.newaxis, :] - coordinates[np.newaxis, :, :],
+        axis=2,
+    )))
+    threshold = max(
+        np.finfo(np.float64).tiny,
+        FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_length**3,
+    )
+    return bool(np.min(np.abs(determinants)) <= threshold)
 
 
 def _mixed_apex_candidate_preserves_face_sides(
@@ -609,6 +708,21 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
                 for value in incident_qualities
             ):
                 continue
+            if any(
+                family == "tet4"
+                and _mixed_cell_has_degenerate_jacobian(
+                    family,
+                    np.asarray(
+                        [
+                            candidate if int(tag) == apex else coordinates[int(tag)]
+                            for tag in cell
+                        ],
+                        dtype=np.float64,
+                    ),
+                )
+                for family, cell in incident_by_apex[apex]
+            ):
+                continue
             pyramid_min = min(
                 value
                 for pyramid in pyramids_by_apex[apex]
@@ -637,6 +751,22 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         )
         coordinates[apex] = np.array(best_candidate, copy=True)
         selected_factors.append(best_factor)
+
+    degenerate_tets = _mixed_tet_degeneracy_report(gmsh)
+    if degenerate_tets.element_tags:
+        for apex in sorted(mean_direction):
+            gmsh.model.mesh.setNode(
+                apex,
+                original_apex_coordinates[apex].tolist(),
+                parametric[apex],
+            )
+        raise RuntimeError(
+            "mixed pyramid apex optimization created degenerate tet4: "
+            f"count={len(degenerate_tets.element_tags)}, "
+            f"worst_element_tag={degenerate_tets.worst_element_tag}, "
+            f"determinant={degenerate_tets.worst_determinant:.6e}, "
+            f"threshold={degenerate_tets.worst_threshold:.6e}"
+        )
 
     p05 = _mixed_gmsh_scaled_jacobian_p05(gmsh)
     if not p05 or any(
@@ -716,8 +846,28 @@ def _execute_mixed_tet_repair_policy(
     if not isinstance(policy, _MixedTetRepairPolicy):
         raise TypeError("mixed tetrahedral repair policy has an invalid type")
     _validate_mixed_tet_repair_policy(policy)
+    before = _mixed_tet_degeneracy_report(gmsh)
     emit_progress("Gmsh: repairing mixed-domain tetrahedra")
     gmsh.model.mesh.optimize(policy.method, niter=policy.iterations)
+    after = _mixed_tet_degeneracy_report(gmsh)
+    if after.element_tags:
+        created = after.element_tags - before.element_tags
+        left = after.element_tags & before.element_tags
+        reports = []
+        for label, subset in (("created", created), ("left", left)):
+            if not subset:
+                continue
+            report = _mixed_tet_degeneracy_report(gmsh, element_tags=subset)
+            reports.append(
+                f"{label}: count={len(report.element_tags)}, "
+                f"worst_element_tag={report.worst_element_tag}, "
+                f"determinant={report.worst_determinant:.6e}, "
+                f"threshold={report.worst_threshold:.6e}"
+            )
+        raise RuntimeError(
+            "mixed tetrahedral repair left or created degenerate tet4; "
+            + "; ".join(reports)
+        )
 
 
 def _repair_mixed_tetrahedra(

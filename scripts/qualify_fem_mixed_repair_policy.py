@@ -9,7 +9,7 @@ import json
 import math
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
@@ -25,7 +25,7 @@ PRESERVED_NETGEN_REGRESSION_CONTROL = {
     "mesh_part": "far_air",
     "same_side_two_owner_faces": 2,
     "non_manifold_faces": 2,
-    "expected_exception": "RuntimeError",
+    "expected_exception": "MeshValidationError",
     "expected_result": "rejected",
 }
 
@@ -170,29 +170,112 @@ def candidate_quality_failures(
         if run.get("degraded") is not False:
             failures.append(f"run {index} is degraded")
         quality = _mapping(run.get("quality"), f"runs[{index}].quality")
+        required_quality_fields = (
+            "magnetic_plane_count",
+            "cell_family_counts_by_part",
+            "nonconforming_faces",
+            "orphan_faces",
+            "non_manifold_faces",
+            "same_side_two_owner_faces",
+            "coincident_interface_faces",
+            "duplicate_cells",
+            "fallbacks_triggered",
+            "strict_jacobian_validation_passed",
+            "marker_coverage_complete",
+            "global_ordinals_complete",
+            "relative_volume_error",
+            "jacobian_minima_m3_by_family",
+            "scaled_jacobian_minima_by_family",
+            "scaled_jacobian_p05_by_family",
+        )
+        for field in required_quality_fields:
+            if field not in quality:
+                failures.append(f"run {index} quality is missing {field}")
         if quality.get("requested_layers") != 1 or quality.get("realized_layers") != 1:
             failures.append(f"run {index} does not preserve exact layer count 1")
+        if quality.get("magnetic_plane_count") != 2:
+            failures.append(f"run {index} magnetic_plane_count must be 2")
+        parts_value = quality.get("cell_family_counts_by_part")
+        if isinstance(parts_value, Mapping):
+            expected_families = {
+                "magnetic": {"prism6"},
+                "transition_air": {"pyramid5", "tet4"},
+                "far_air": {"tet4"},
+            }
+            if set(parts_value) != set(expected_families):
+                failures.append(
+                    f"run {index} cell_family_counts_by_part has incomplete mesh parts"
+                )
+            else:
+                for part, families in expected_families.items():
+                    counts = parts_value.get(part)
+                    actual_families = set(counts) if isinstance(counts, Mapping) else set()
+                    if (
+                        not isinstance(counts, Mapping)
+                        or not actual_families.issubset(families)
+                        or (
+                            part == "transition_air"
+                            and "pyramid5" not in actual_families
+                        )
+                        or (part != "transition_air" and actual_families != families)
+                        or any(
+                            isinstance(count, bool)
+                            or not isinstance(count, int)
+                            or count < 1
+                            for count in counts.values()
+                        )
+                    ):
+                        failures.append(
+                            f"run {index} {part} cell families violate {sorted(families)}"
+                        )
         if quality.get("non_manifold_faces") != 0:
             failures.append(f"run {index} has non-manifold faces")
         if quality.get("same_side_two_owner_faces") != 0:
             failures.append(f"run {index} has same-side two-owner faces")
-        volume_error = _finite(
-            quality.get("relative_volume_error"),
-            f"runs[{index}].quality.relative_volume_error",
-        )
-        if volume_error > 1.0e-8:
-            failures.append(f"run {index} exceeds relative volume error 1e-8")
-        p05 = _mapping(
-            quality.get("scaled_jacobian_p05_by_family"),
-            f"runs[{index}].quality.scaled_jacobian_p05_by_family",
-        )
-        if set(p05) != {"prism6", "pyramid5", "tet4"}:
-            failures.append(f"run {index} does not report all mixed cell families")
-        else:
+        for field in (
+            "nonconforming_faces",
+            "orphan_faces",
+            "coincident_interface_faces",
+            "duplicate_cells",
+        ):
+            if quality.get(field) != 0:
+                failures.append(f"run {index} {field} must be zero")
+        if quality.get("fallbacks_triggered") != []:
+            failures.append(f"run {index} fallbacks_triggered must be empty")
+        for field in (
+            "strict_jacobian_validation_passed",
+            "marker_coverage_complete",
+            "global_ordinals_complete",
+        ):
+            if quality.get(field) is not True:
+                failures.append(f"run {index} {field} must be true")
+        if "relative_volume_error" in quality:
+            volume_error = _finite(
+                quality.get("relative_volume_error"),
+                f"runs[{index}].quality.relative_volume_error",
+            )
+            if volume_error > 1.0e-8:
+                failures.append(f"run {index} exceeds relative volume error 1e-8")
+        for field, minimum in (
+            ("jacobian_minima_m3_by_family", 0.0),
+            ("scaled_jacobian_minima_by_family", 0.0),
+            ("scaled_jacobian_p05_by_family", 0.1),
+        ):
+            values = quality.get(field)
+            if not isinstance(values, Mapping):
+                continue
+            if set(values) != {"prism6", "pyramid5", "tet4"}:
+                failures.append(f"run {index} {field} does not report all families")
+                continue
             for family in ("prism6", "pyramid5", "tet4"):
-                value = _finite(p05[family], f"run {index} {family} p05")
-                if value < 0.1:
-                    failures.append(f"run {index} {family} p05 is below 0.1")
+                value = _finite(values[family], f"run {index} {family} {field}")
+                violates_minimum = (
+                    value <= minimum if minimum == 0.0 else value < minimum
+                )
+                if violates_minimum:
+                    failures.append(
+                        f"run {index} {family} {field} minimum is below {minimum}"
+                    )
     if len(fingerprints) != 1:
         failures.append("topology fingerprint differs across candidate runs")
     return failures
@@ -261,6 +344,9 @@ def evaluate_candidate(
         "legal": not failures,
         "failures": failures,
         "p95_total_s": _candidate_p95(document),
+        "mesh_counts": {
+            field: mesh.get(field) for field in ("nodes", "cells", "facets")
+        },
         "topology_fingerprint_v3": mesh.get("topology_fingerprint_v3"),
         "regression_control": regression_control,
         "worker_status": "completed",
@@ -306,9 +392,65 @@ def _candidate_policy_identity(method: str) -> dict[str, object]:
     }
 
 
-def fastest_legal_method(candidates: Sequence[Mapping[str, object]]) -> str | None:
+def topology_equivalence_failures(
+    candidates: Sequence[Mapping[str, object]],
+) -> list[str]:
     legal = [candidate for candidate in candidates if candidate.get("legal") is True]
     if not legal:
+        return []
+    failures: list[str] = []
+    reference = legal[0]
+    reference_method = str(reference.get("method"))
+    reference_counts = reference.get("mesh_counts")
+    reference_fingerprint = reference.get("topology_fingerprint_v3")
+    expected_count_fields = {"nodes", "cells", "facets"}
+    if (
+        not isinstance(reference_counts, Mapping)
+        or set(reference_counts) != expected_count_fields
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in reference_counts.values()
+        )
+    ):
+        failures.append(
+            f"{reference_method} lacks valid nodes/cells/facets element counts"
+        )
+    if not isinstance(reference_fingerprint, str) or len(reference_fingerprint) != 64:
+        failures.append(f"{reference_method} lacks a topology fingerprint")
+    for candidate in legal[1:]:
+        method = str(candidate.get("method"))
+        counts = candidate.get("mesh_counts")
+        fingerprint = candidate.get("topology_fingerprint_v3")
+        if (
+            not isinstance(counts, Mapping)
+            or set(counts) != expected_count_fields
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+                for value in counts.values()
+            )
+        ):
+            failures.append(f"{method} lacks valid nodes/cells/facets element counts")
+        elif isinstance(reference_counts, Mapping) and counts != reference_counts:
+            failures.append(
+                "timing ranking requires equal element counts: "
+                f"{reference_method}={dict(reference_counts)}, {method}={dict(counts)}"
+            )
+        if not isinstance(fingerprint, str) or len(fingerprint) != 64:
+            failures.append(f"{method} lacks a topology fingerprint")
+        elif (
+            isinstance(reference_fingerprint, str)
+            and fingerprint != reference_fingerprint
+        ):
+            failures.append(
+                "timing ranking requires an equal topology fingerprint: "
+                f"{reference_method}={reference_fingerprint}, {method}={fingerprint}"
+            )
+    return failures
+
+
+def fastest_legal_method(candidates: Sequence[Mapping[str, object]]) -> str | None:
+    legal = [candidate for candidate in candidates if candidate.get("legal") is True]
+    if not legal or topology_equivalence_failures(candidates):
         return None
     return str(min(legal, key=lambda row: float(row["p95_total_s"]))["method"])
 
@@ -320,6 +462,7 @@ def decide_matrix_status(candidates: Sequence[Mapping[str, object]]) -> dict[str
         None,
     )
     fastest = fastest_legal_method(candidates)
+    ranking_failures = topology_equivalence_failures(candidates)
     if relocate is None or relocate.get("legal") is not True:
         infrastructure = bool(
             relocate is not None
@@ -333,14 +476,24 @@ def decide_matrix_status(candidates: Sequence[Mapping[str, object]]) -> dict[str
             ),
             "selected_production_method": None,
             "fastest_legal_method": fastest,
+            "ranking_failures": ranking_failures,
             "failing_topology_fingerprint_v3": (
                 relocate.get("topology_fingerprint_v3") if relocate else None
             ),
+        }
+    if ranking_failures:
+        return {
+            "status": "BLOCKED_TOPOLOGY_EQUIVALENCE",
+            "selected_production_method": None,
+            "fastest_legal_method": None,
+            "ranking_failures": ranking_failures,
+            "failing_topology_fingerprint_v3": None,
         }
     return {
         "status": "PASSED",
         "selected_production_method": production_method,
         "fastest_legal_method": fastest,
+        "ranking_failures": [],
         "failing_topology_fingerprint_v3": None,
     }
 
@@ -360,6 +513,52 @@ def classify_worker_failure(message: str) -> str:
     return "BLOCKED_MESHER_QUALITY"
 
 
+def _complete_candidate_quality(
+    mesh: object,
+    base: Mapping[str, object],
+) -> dict[str, object]:
+    """Bind every currently implemented brief-3.3 gate to worker evidence."""
+    certificate = mesh.mixed_layer_topology_certificate  # type: ignore[attr-defined]
+    if certificate is None:
+        raise ValueError("SP4 mixed mesh is missing its topology certificate")
+    mesh.validate_strict(require_positive_orientation=True)  # type: ignore[attr-defined]
+    cell_keys = [
+        (
+            str(mesh.cell_types[index]),  # type: ignore[attr-defined]
+            tuple(sorted(int(node) for node in mesh.cell_node_ids(index))),  # type: ignore[attr-defined]
+        )
+        for index in range(int(mesh.n_elements))  # type: ignore[attr-defined]
+    ]
+    ordinals = [
+        int(value) for value in mesh.cell_global_ordinals.tolist()  # type: ignore[attr-defined]
+    ]
+    complete = dict(base)
+    complete.update(
+        {
+            "magnetic_plane_count": len(certificate.magnetic_plane_coordinates_m),
+            "cell_family_counts_by_part": certificate.cell_family_counts_by_part,
+            "nonconforming_faces": certificate.nonconforming_face_count,
+            "orphan_faces": certificate.orphan_face_count,
+            "coincident_interface_faces": certificate.coincident_interface_face_count,
+            "duplicate_cells": len(cell_keys) - len(set(cell_keys)),
+            "fallbacks_triggered": list(certificate.fallbacks_triggered),
+            "strict_jacobian_validation_passed": True,
+            "marker_coverage_complete": certificate.marker_coverage_complete,
+            "global_ordinals_complete": (
+                len(ordinals) == len(set(ordinals))
+                and sorted(ordinals) == list(range(len(ordinals)))
+            ),
+            "jacobian_minima_m3_by_family": dict(
+                certificate.jacobian_minima_m3_by_family
+            ),
+            "scaled_jacobian_minima_by_family": dict(
+                certificate.scaled_jacobian_minima_by_family
+            ),
+        }
+    )
+    return complete
+
+
 def _worker_failure_row(
     method: str,
     *,
@@ -371,7 +570,19 @@ def _worker_failure_row(
     message = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
     status = classify_worker_failure(message)
     policy = _candidate_policy_identity(method)
+    captured: Mapping[str, object] = {}
+    if evidence_path.is_file():
+        try:
+            candidate = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            candidate = None
+        if (
+            isinstance(candidate, Mapping)
+            and candidate.get("schema") == WORKER_FAILURE_SCHEMA
+        ):
+            captured = candidate
     failure_document = {
+        **captured,
         "schema": WORKER_FAILURE_SCHEMA,
         "generated_at": _utc_now(),
         "method": method,
@@ -382,14 +593,13 @@ def _worker_failure_row(
         "stderr": stderr,
     }
     _write_json(evidence_path, failure_document)
-    return {
+    row = {
         "method": method,
         "algorithm_id": policy["algorithm_id"],
         "iterations": policy["iterations"],
         "legal": False,
         "failures": [message or f"worker exited with status {returncode}"],
         "p95_total_s": None,
-        "topology_fingerprint_v3": None,
         "regression_control": (
             dict(PRESERVED_NETGEN_REGRESSION_CONTROL)
             if method == "Netgen"
@@ -397,6 +607,16 @@ def _worker_failure_row(
         ),
         "worker_status": status,
     }
+    fingerprint = captured.get("topology_fingerprint_v3")
+    if isinstance(fingerprint, str) and fingerprint.startswith("sha256:"):
+        row["topology_fingerprint_v3"] = fingerprint
+    mesh_counts = captured.get("mesh_counts")
+    if isinstance(mesh_counts, Mapping):
+        row["mesh_counts"] = dict(mesh_counts)
+    capture_error = captured.get("topology_capture_error")
+    if isinstance(capture_error, str):
+        row["topology_capture_error"] = capture_error
+    return row
 
 
 def run_qualification(
@@ -415,6 +635,7 @@ def run_qualification(
             evidence_path=evidence_path,
             artifact_dir=artifact_dir,
         )
+        evidence_path.unlink(missing_ok=True)
         completed = run_process(
             command,
             check=False,
@@ -454,8 +675,40 @@ def run_qualification(
     return document
 
 
+def _capture_failing_topology(gmsh: object, swept: object) -> dict[str, object]:
+    from fullmag.meshing._gmsh_types import (
+        AirboxOptions,
+        MIXED_INTERFACE_MARKER,
+    )
+
+    raw_mesh = swept._extract_mesh_data(  # type: ignore[attr-defined]
+        gmsh,
+        has_physical_groups=True,
+        boundary_role_markers=(
+            MIXED_INTERFACE_MARKER,
+            AirboxOptions().boundary_marker,
+        ),
+    )
+    mesh_si = replace(
+        raw_mesh,
+        nodes=raw_mesh.nodes * 1.0e-6,
+    )
+    return {
+        "topology_fingerprint_v3": mesh_si.topology_fingerprint_v3(),
+        "mesh_counts": {
+            "nodes": mesh_si.n_nodes,
+            "cells": mesh_si.n_elements,
+            "facets": mesh_si.n_boundary_faces,
+        },
+    }
+
+
 @contextlib.contextmanager
-def _qualification_probe_installed(method: str) -> Iterator[None]:
+def _qualification_probe_installed(
+    method: str,
+    *,
+    failing_topology: dict[str, object] | None = None,
+) -> Iterator[None]:
     import benchmark_fem_mixed_mesh_pipeline as benchmark
 
     package_source = (
@@ -466,7 +719,24 @@ def _qualification_probe_installed(method: str) -> Iterator[None]:
     from fullmag.meshing import _gmsh_swept as swept
 
     original_probe = benchmark._mesh_phase_probe
+    original_quality_document = benchmark._quality_document
     selected_method = "" if method == "default" else method
+
+    def selected_repair(candidate_method: str, gmsh: object) -> None:
+        try:
+            swept._repair_mixed_tetrahedra_for_qualification(
+                candidate_method,
+                gmsh,
+            )
+        except Exception:
+            if failing_topology is not None:
+                try:
+                    failing_topology.update(_capture_failing_topology(gmsh, swept))
+                except Exception as capture_error:
+                    failing_topology["topology_capture_error"] = (
+                        f"{type(capture_error).__name__}: {capture_error}"
+                    )
+            raise
 
     @contextlib.contextmanager
     def qualification_probe(
@@ -478,17 +748,20 @@ def _qualification_probe_installed(method: str) -> Iterator[None]:
         with original_probe(
             timings_ns,
             selected_method,
-            qualification_selector=(
-                swept._repair_mixed_tetrahedra_for_qualification
-            ),
+            qualification_selector=selected_repair,
         ):
             yield
 
     benchmark._mesh_phase_probe = qualification_probe
+    benchmark._quality_document = lambda mesh: _complete_candidate_quality(
+        mesh,
+        original_quality_document(mesh),
+    )
     try:
         yield
     finally:
         benchmark._mesh_phase_probe = original_probe
+        benchmark._quality_document = original_quality_document
 
 
 def _run_worker(
@@ -515,8 +788,25 @@ def _run_worker(
         rayon_threads=(1,),
         gmsh_threads=(gmsh_threads,),
     )
-    with _qualification_probe_installed(method):
-        document = benchmark._run_benchmark(config, mode="qualification")
+    failing_topology: dict[str, object] = {}
+    try:
+        with _qualification_probe_installed(
+            method,
+            failing_topology=failing_topology,
+        ):
+            document = benchmark._run_benchmark(config, mode="qualification")
+    except Exception as error:
+        failure_document = {
+            "schema": WORKER_FAILURE_SCHEMA,
+            "generated_at": _utc_now(),
+            "method": method,
+            "repair_policy": _candidate_policy_identity(method),
+            "status": classify_worker_failure(str(error)),
+            "error": f"{type(error).__name__}: {error}",
+            **failing_topology,
+        }
+        _write_json(evidence_output, failure_document)
+        raise
     benchmark.validate_evidence_document(document)
     _write_json(
         evidence_output,

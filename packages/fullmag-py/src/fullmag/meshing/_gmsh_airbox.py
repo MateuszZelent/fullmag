@@ -33,6 +33,7 @@ from ._gmsh_types import (
     MeshData,
     MeshOptions,
     MeshQualityReport,
+    MeshValidationError,
     MixedLayerTopologyCertificate,
     _PREVALIDATED_MIXED_CERTIFICATE_TOKEN,
     MIXED_INTERFACE_MARKER,
@@ -601,7 +602,7 @@ def _attach_mixed_layer_topology_certificate(
             interface_marker=MIXED_INTERFACE_MARKER,
             outer_boundary_marker=outer_boundary_marker,
         )
-        raise RuntimeError(
+        raise MeshValidationError(
             "mixed shared-domain conformity validation failed: "
             f"{conformity}; diagnostics={diagnostics}"
         )

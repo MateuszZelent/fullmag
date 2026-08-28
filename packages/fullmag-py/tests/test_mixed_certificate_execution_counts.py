@@ -52,13 +52,15 @@ class MixedCertificateExecutionCountTests(TestCase):
 
     def _prevalidated_certificate(
         self,
+        mesh_without_certificate: gmsh_types.MeshData | None = None,
     ) -> gmsh_types._PrevalidatedMixedCertificate:
         certificate = self.mesh.mixed_layer_topology_certificate
         assert certificate is not None
+        mesh = mesh_without_certificate or self.mesh_without_certificate
         return gmsh_types._validate_and_create_prevalidated_mixed_certificate(
-            self.mesh_without_certificate,
+            mesh,
             certificate=certificate,
-            canonical_evidence=self._carrier(),
+            canonical_evidence=self._carrier(mesh),
         )
 
     def _evidence(self) -> dict[str, object]:
@@ -75,19 +77,27 @@ class MixedCertificateExecutionCountTests(TestCase):
             airbox_bounds_max_m=certificate.airbox_bounds_max_m,
         )
 
-    def _workspace(self) -> gmsh_types._MixedTopologyWorkspace:
+    def _workspace(
+        self,
+        mesh_without_certificate: gmsh_types.MeshData | None = None,
+    ) -> gmsh_types._MixedTopologyWorkspace:
+        mesh = mesh_without_certificate or self.mesh_without_certificate
         return gmsh_types._build_mixed_topology_workspace(
-            self.mesh_without_certificate,
+            mesh,
             sweep_axis=2,
             interface_marker=10,
         )
 
-    def _carrier(self) -> gmsh_types._CanonicalMixedCertificateEvidence:
+    def _carrier(
+        self,
+        mesh_without_certificate: gmsh_types.MeshData | None = None,
+    ) -> gmsh_types._CanonicalMixedCertificateEvidence:
         certificate = self.mesh.mixed_layer_topology_certificate
         assert certificate is not None
-        workspace = self._workspace()
+        mesh = mesh_without_certificate or self.mesh_without_certificate
+        workspace = self._workspace(mesh)
         return gmsh_types._recompute_and_bind_mixed_certificate_evidence(
-            self.mesh_without_certificate,
+            mesh,
             sweep_axis=2,
             interface_marker=certificate.interface_marker,
             outer_boundary_marker=certificate.outer_boundary_marker,
@@ -165,6 +175,44 @@ class MixedCertificateExecutionCountTests(TestCase):
                 validation=validation,
                 token=gmsh_types._PREVALIDATED_MIXED_CERTIFICATE_TOKEN,
             )
+
+    def test_prevalidated_attach_rejects_mesh_mutated_after_proof_minting(
+        self,
+    ) -> None:
+        certificate = self.mesh.mixed_layer_topology_certificate
+        assert certificate is not None
+
+        for mutation in ("nodes", "cell_nodes", "element_markers"):
+            with self.subTest(mutation=mutation):
+                mesh = replace(
+                    self.mesh_without_certificate,
+                    nodes=np.array(self.mesh_without_certificate.nodes, copy=True),
+                    cell_nodes=np.array(
+                        self.mesh_without_certificate.cell_nodes,
+                        copy=True,
+                    ),
+                    element_markers=np.array(
+                        self.mesh_without_certificate.element_markers,
+                        copy=True,
+                    ),
+                )
+                validation = self._prevalidated_certificate(mesh)
+
+                if mutation == "nodes":
+                    mesh.nodes[0, 0] += 1.0e-15
+                elif mutation == "cell_nodes":
+                    mesh.cell_nodes[:2] = mesh.cell_nodes[1::-1]
+                else:
+                    mesh.element_markers[0] = (
+                        2 if mesh.element_markers[0] == 1 else 1
+                    )
+
+                with self.assertRaisesRegex(ValueError, "topology fingerprint"):
+                    gmsh_types.MeshData._from_prevalidated_mixed_certificate(
+                        mesh_without_certificate=mesh,
+                        validation=validation,
+                        token=gmsh_types._PREVALIDATED_MIXED_CERTIFICATE_TOKEN,
+                    )
 
     def test_prevalidated_attach_rejects_mutated_certificate_payload(self) -> None:
         certificate = self.mesh.mixed_layer_topology_certificate
@@ -386,7 +434,7 @@ class MixedCertificateExecutionCountTests(TestCase):
         self.assertEqual(recompute.call_count, 1)
         self.assertEqual(dict(carrier.evidence), self._evidence())
 
-    def test_accepted_producer_hashes_topology_once(self) -> None:
+    def test_accepted_producer_hashes_topology_twice(self) -> None:
         original = gmsh_types.MeshData.topology_fingerprint_v3
         calls = 0
 
@@ -413,7 +461,7 @@ class MixedCertificateExecutionCountTests(TestCase):
                 effective_gmsh_thread_count=1,
             )
 
-        self.assertEqual(calls, 1)
+        self.assertEqual(calls, 2)
 
     def test_public_certificate_audit_hashes_topology_once(self) -> None:
         original = gmsh_types.MeshData.topology_fingerprint_v3

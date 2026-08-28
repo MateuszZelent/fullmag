@@ -24,8 +24,11 @@ from fullmag._core import (
 from ._certification_receipt import (
     ARTIFACT_SCHEMA_V2,
     MIXED_CERTIFIER_ALGORITHM,
+    RECEIPT_SCHEMA_V1,
+    RECEIPT_SCHEMA_V2,
     CertificationReceiptBindingsV1,
     CertificationReceiptV1,
+    CertificationReceiptV2,
 )
 from ._gmsh_extraction import _read_mesh_file
 from ._gmsh_extraction import _derive_facet_roles
@@ -36,6 +39,7 @@ from ._gmsh_types import (
     MeshRealizationReport,
     MixedLayerTopologyCertificate,
     _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+    _bind_trusted_topology_fingerprint_v3,
     _certificate_payload_sha256,
     _mint_trusted_native_preflight_receipt_proof,
 )
@@ -342,6 +346,40 @@ def _document_sha256(document: Mapping[str, object]) -> str:
     return sha256(_canonical_json(dict(document))).hexdigest()
 
 
+def _semantic_manifest_sha256(
+    *,
+    region_markers: object,
+    object_region_markers: object,
+    boundary_map: object,
+) -> str:
+    def normalized_markers(value: object, *, label: str) -> list[dict[str, object]]:
+        if not isinstance(value, (list, tuple)) or any(
+            not isinstance(entry, Mapping) for entry in value
+        ):
+            raise ValueError(f"{label} must be an array of marker objects")
+        return sorted(
+            _normalize_markers(value),  # type: ignore[arg-type]
+            key=lambda entry: (str(entry["geometry_name"]), int(entry["marker"])),
+        )
+
+    if not isinstance(boundary_map, Mapping):
+        raise ValueError("boundary_map must be an object")
+    projection = {
+        "region_markers": normalized_markers(
+            region_markers,
+            label="region_markers",
+        ),
+        "object_region_markers": normalized_markers(
+            object_region_markers,
+            label="object_region_markers",
+        ),
+        "boundary_map": dict(
+            sorted((str(name), int(marker)) for name, marker in boundary_map.items())
+        ),
+    }
+    return sha256(_canonical_json(projection)).hexdigest()
+
+
 def _member_descriptors(members: Mapping[str, bytes]) -> dict[str, dict[str, object]]:
     return {
         name: {"sha256": sha256(content).hexdigest(), "bytes": len(content)}
@@ -462,12 +500,19 @@ def _bindings_from_manifest(
         ) from exc
 
 
-def _receipt_from_members(members: Mapping[str, bytes]) -> CertificationReceiptV1:
+def _receipt_from_members(
+    members: Mapping[str, bytes],
+) -> CertificationReceiptV1 | CertificationReceiptV2:
     try:
         payload = json.loads(members["certification-receipt.json"])
         if not isinstance(payload, Mapping):
             raise ValueError("receipt JSON must contain an object")
-        return CertificationReceiptV1.from_dict(payload)
+        schema = payload.get("schema")
+        if schema == RECEIPT_SCHEMA_V1:
+            return CertificationReceiptV1.from_dict(payload)
+        if schema == RECEIPT_SCHEMA_V2:
+            return CertificationReceiptV2.from_dict(payload)
+        raise ValueError(f"certification receipt schema {schema!r} is unsupported")
     except MeshArtifactError:
         raise
     except Exception as exc:
@@ -482,7 +527,11 @@ def _validate_v2_receipt(
     members: Mapping[str, bytes],
     mesh: MeshData,
     certificate: MixedLayerTopologyCertificate,
-) -> tuple[CertificationReceiptV1, CertificationReceiptBindingsV1]:
+    topology_fingerprint_v3: str,
+) -> tuple[
+    CertificationReceiptV1 | CertificationReceiptV2,
+    CertificationReceiptBindingsV1,
+]:
     receipt = _receipt_from_members(members)
     bindings = _bindings_from_manifest(manifest)
     authoring = manifest.get("authoring_document")
@@ -491,19 +540,30 @@ def _validate_v2_receipt(
             "manifest authoring_document must be an object"
         )
     try:
-        expected = CertificationReceiptV1.from_components(
-            topology_bytes=members["topology.npz"],
-            build_report_bytes=members["build-report.json"],
-            topology_fingerprint_v3=mesh.topology_fingerprint_v3(),
-            certificate_payload_sha256=_certificate_payload_sha256(certificate),
-            authoring_document_sha256=_document_sha256(authoring),
-            bindings=bindings,
-            mesh_counts={
+        components = {
+            "topology_bytes": members["topology.npz"],
+            "build_report_bytes": members["build-report.json"],
+            "topology_fingerprint_v3": topology_fingerprint_v3,
+            "certificate_payload_sha256": _certificate_payload_sha256(certificate),
+            "authoring_document_sha256": _document_sha256(authoring),
+            "bindings": bindings,
+            "mesh_counts": {
                 "nodes": mesh.n_nodes,
                 "cells": mesh.n_elements,
                 "facets": mesh.n_boundary_faces,
             },
-        )
+        }
+        if isinstance(receipt, CertificationReceiptV2):
+            expected = CertificationReceiptV2.from_components(
+                **components,
+                semantic_manifest_sha256=_semantic_manifest_sha256(
+                    region_markers=manifest.get("region_markers"),
+                    object_region_markers=manifest.get("object_region_markers"),
+                    boundary_map=manifest.get("boundary_map"),
+                ),
+            )
+        else:
+            expected = CertificationReceiptV1.from_components(**components)
     except (TypeError, ValueError) as exc:
         raise MeshArtifactCorruptionError(
             f"certification receipt binding is invalid: {exc}"
@@ -596,10 +656,15 @@ def save_mesh_artifact(
             or native.rayon_threads != certification_bindings.certifier_threads
         ):
             raise ValueError("native mixed certificate result does not match v2 bindings")
-        receipt = CertificationReceiptV1.from_components(
+        receipt = CertificationReceiptV2.from_components(
             topology_bytes=topology,
             build_report_bytes=report_bytes,
             topology_fingerprint_v3=native.topology_fingerprint_v3,
+            semantic_manifest_sha256=_semantic_manifest_sha256(
+                region_markers=regions,
+                object_region_markers=object_regions,
+                boundary_map=boundaries,
+            ),
             certificate_payload_sha256=expected_payload,
             authoring_document_sha256=_document_sha256(authoring),
             bindings=certification_bindings,
@@ -675,7 +740,7 @@ def _load_mesh_artifact_full_audit(
         raise ValueError("study.mesh.load() accepts only .fullmag-mesh artifacts")
     manifest, members = _read_native_artifact(source)
     schema = manifest["schema"]
-    receipt: CertificationReceiptV1 | None = None
+    receipt: CertificationReceiptV1 | CertificationReceiptV2 | None = None
     native_backend = "python_reference"
     if schema == ARTIFACT_SCHEMA_V2:
         unsigned, certificate = _deserialize_mesh_with_detached_certificate(
@@ -683,11 +748,13 @@ def _load_mesh_artifact_full_audit(
         )
         if certificate is None:
             raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
+        topology_fingerprint = unsigned.topology_fingerprint_v3()
         receipt, _ = _validate_v2_receipt(
             manifest=manifest,
             members=members,
             mesh=unsigned,
             certificate=certificate,
+            topology_fingerprint_v3=topology_fingerprint,
         )
         native = certify_mixed_mesh_arrays(
             mesh=unsigned,
@@ -739,7 +806,7 @@ def _load_mesh_artifact_full_audit(
                         "native certificate audit does not match legacy mixed artifact"
                     )
                 native_backend = "rust_rayon"
-    topology_fingerprint = mesh.topology_fingerprint_v3()
+        topology_fingerprint = mesh.topology_fingerprint_v3()
     manifest_fingerprint = manifest.get("topology_fingerprint")
     if topology_fingerprint != manifest_fingerprint:
         raise MeshArtifactCorruptionError("topology fingerprint does not match manifest")
@@ -826,19 +893,29 @@ def _load_trusted_cached_mesh_artifact(
     )
     if certificate is None:
         raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
+    topology_context = _bind_trusted_topology_fingerprint_v3(
+        mesh_without_certificate=unsigned,
+        _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+    )
+    topology_fingerprint = topology_context.topology_fingerprint_v3
     receipt, _ = _validate_v2_receipt(
         manifest=manifest,
         members=members,
         mesh=unsigned,
         certificate=certificate,
+        topology_fingerprint_v3=topology_fingerprint,
     )
+    if not isinstance(receipt, CertificationReceiptV2):
+        raise MeshArtifactVersionError(
+            "receipt v1 is never eligible for trusted fast loading"
+        )
     if mesh_authoring_fingerprint(manifest["authoring_document"]) != manifest.get(
         "authoring_fingerprint"
     ):
         raise MeshArtifactCorruptionError(
             "authoring fingerprint does not match manifest"
         )
-    if unsigned.topology_fingerprint_v3() != manifest.get("topology_fingerprint"):
+    if topology_fingerprint != manifest.get("topology_fingerprint"):
         raise MeshArtifactCorruptionError("topology fingerprint does not match manifest")
     expected_bindings = {
         "document_sha256": expected_authoring_sha256,
@@ -878,6 +955,7 @@ def _load_trusted_cached_mesh_artifact(
         mesh_without_certificate=unsigned,
         certificate=certificate,
         native_preflight=native,
+        topology_context=topology_context,
         expected_topology_fingerprint_v3=receipt.topology_fingerprint_v3,
         expected_certificate_payload_sha256=receipt.certificate.payload_sha256,
         expected_counts=receipt.mesh_counts.to_dict(),
@@ -916,7 +994,7 @@ def _load_trusted_cached_mesh_artifact(
         mesh_name=str(manifest.get("mesh_name", "")),
         authoring_document=authoring,
         authoring_fingerprint=str(manifest.get("authoring_fingerprint", "")),
-        topology_fingerprint=mesh.topology_fingerprint_v3(),
+        topology_fingerprint=topology_fingerprint,
         region_markers=regions,
         object_region_markers=object_regions,
         boundary_map=boundaries,

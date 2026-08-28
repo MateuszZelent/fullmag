@@ -419,3 +419,34 @@ Task mixed-P1 local interactions 1: complete (working-tree scope, final review c
 | 10 | pending | — | — | pending |
 | 11 | pending | — | — | pending |
 | 12 | pending | — | — | pending |
+
+## Plan: FEM mixed-mesh performance and certification (2026-08-27)
+
+- Worktree/branch: `/home/kkingstoun/git/fullmag/fullmag`, `master` (jawnie zatwierdzony przez użytkownika).
+- Source plan: `docs/superpowers/plans/2026-08-27-fem-mixed-mesh-performance-and-certification.md`.
+- Commit policy: task-scoped working-tree evidence; no automatic commit, stage or push.
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 0 | complete (working-tree evidence; benchmark import side-effect and tuple return fixed; 30/30 tests) | `mixed_task0_benchmark_import` + `mixed_task0_review_fix` | approved after isolation fix wave; corrected production baseline still requires runtime execution |
+| 1 | source/spec complete; production `BLOCKED_MESHER_QUALITY` | `mixed_task1_root_cause` | source approved after two fix waves; exact SP4 `Relocate3D,niter=1` leaves a strict-degenerate tet4, so N=10 and production receipt are not passed |
+| 2 | implemented (focused working-tree evidence; exact-SP4 performance gate deferred by small-first strategy) | `mixed_task2_implement` | approved after fail-closed mutation and benchmark-evidence fix waves; 54 benchmark/qualification tests plus focused certificate/trust/public-fixture gates pass |
+| 3 | current-state audit pending | — | — |
+| 4 | current-state audit pending | — | — |
+| 5 | blocked by Task 1 production gate | — | — |
+| 6 | blocked by Task 1 production gate | — | — |
+| 7 | blocked by Task 1 production gate | — | — |
+| 8 | blocked by Task 1 production gate | — | — |
+| 9 | blocked by Task 1 production gate | — | — |
+| 10 | blocked by Task 1 production gate | — | — |
+| 11 | blocked by Task 1 production gate | — | — |
+
+Small-first repair diagnostic: complete (working-tree evidence). The real-Gmsh
+microfixture in `scripts/fem_mixed_tet_repair_microfixture.py` uses 161 nodes,
+101 tet4, one prism6 and one pyramid5. The thresholded default repair changes
+only the defective cavity (`101 -> 100` tet4, strict degenerates `1 -> 0`),
+preserves 96 control tet topology keys and raw hybrid connectivity, and is
+deterministic across 10 fresh runs. Independent re-review approved 7/7 tests,
+ruff, lifecycle restoration and the real-Gmsh audit. This is not OCC/SP4 or
+production-runtime qualification; medium and canonical scenarios remain
+deferred until a versioned repair-policy design is approved.

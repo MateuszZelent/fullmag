@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
 
-SCHEMA = "fullmag.fem-mixed-mesh-performance.v1"
+SCHEMA = "fullmag.fem-mixed-mesh-performance.v2"
 SOURCE_IDENTITY_SCHEMA = "fullmag.source-snapshot.v2"
 GMSH_VERSION = "4.15.2"
 PRODUCTION_REPAIR_METHOD = "Relocate3D"
@@ -251,23 +251,40 @@ def _summary_stats(values: Sequence[float]) -> dict[str, float] | None:
     }
 
 
+def _python_audit_samples(run: Mapping[str, object], label: str) -> list[float]:
+    samples = run["python_audit_samples_s"]
+    if not isinstance(samples, list):
+        raise ValueError(f"{label}.python_audit_samples_s must be an array")
+    return [
+        _require_finite(sample, f"{label}.python_audit_samples_s[{index}]")
+        for index, sample in enumerate(samples)
+    ]
+
+
 def _summarize(runs: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    timings = {
-        field: _summary_stats(
-            [
-                float(_require_mapping(run["timings"], "timings")[field])
-                for run in runs
-                if field not in run["unavailable_phase_timings"]
-            ]
-        )
-        for field in PHASE_TIMING_FIELDS
-    }
+    timings: dict[str, dict[str, float] | None] = {}
+    for field in PHASE_TIMING_FIELDS:
+        values = [
+            float(_require_mapping(run["timings"], "timings")[field])
+            for run in runs
+            if field not in run["unavailable_phase_timings"]
+        ]
+        timings[field] = _summary_stats(values)
+    python_audit_values = [
+        sample
+        for index, run in enumerate(runs)
+        for sample in _python_audit_samples(run, f"runs[{index}]")
+    ]
     rss_values = [
         float(run["peak_rss_bytes"])
         for run in runs
         if run["memory_status"] == "measured"
     ]
-    return {"timings": timings, "peak_rss_bytes": _summary_stats(rss_values)}
+    return {
+        "timings": timings,
+        "python_audit_s": _summary_stats(python_audit_values),
+        "peak_rss_bytes": _summary_stats(rss_values),
+    }
 
 
 def _run_failures(runs: Sequence[Mapping[str, object]]) -> list[str]:
@@ -309,7 +326,11 @@ def _run_failures(runs: Sequence[Mapping[str, object]]) -> list[str]:
 
 def _validate_summary(value: object) -> dict[str, object]:
     summary = _require_mapping(value, "summary")
-    _require_exact_fields(summary, {"timings", "peak_rss_bytes"}, "summary")
+    _require_exact_fields(
+        summary,
+        {"timings", "python_audit_s", "peak_rss_bytes"},
+        "summary",
+    )
     timings = _require_mapping(summary["timings"], "summary.timings")
     _require_exact_fields(timings, set(PHASE_TIMING_FIELDS), "summary.timings")
     normalized_timings: dict[str, object] = {}
@@ -323,14 +344,33 @@ def _validate_summary(value: object) -> dict[str, object]:
             stat: _require_finite(stats[stat], f"summary.timings.{field}.{stat}")
             for stat in _SUMMARY_STATS
         }
+    python_audit = summary["python_audit_s"]
+    if python_audit is None:
+        normalized_python_audit = None
+    else:
+        python_audit_stats = _require_mapping(python_audit, "summary.python_audit_s")
+        _require_exact_fields(
+            python_audit_stats, _SUMMARY_STATS, "summary.python_audit_s"
+        )
+        normalized_python_audit = {
+            stat: _require_finite(
+                python_audit_stats[stat], f"summary.python_audit_s.{stat}"
+            )
+            for stat in _SUMMARY_STATS
+        }
     if summary["peak_rss_bytes"] is None:
-        return {"timings": normalized_timings, "peak_rss_bytes": None}
+        return {
+            "timings": normalized_timings,
+            "python_audit_s": normalized_python_audit,
+            "peak_rss_bytes": None,
+        }
     peak_rss = _require_mapping(
         summary["peak_rss_bytes"], "summary.peak_rss_bytes"
     )
     _require_exact_fields(peak_rss, _SUMMARY_STATS, "summary.peak_rss_bytes")
     return {
         "timings": normalized_timings,
+        "python_audit_s": normalized_python_audit,
         "peak_rss_bytes": {
             stat: _require_finite(
                 peak_rss[stat], f"summary.peak_rss_bytes.{stat}"
@@ -389,7 +429,14 @@ def validate_evidence_document(document: Mapping[str, object]) -> None:
     scenario = _require_mapping(root["scenario"], "scenario")
     _require_exact_fields(
         scenario,
-        {"id", "requested_layers", "repair_method", "gmsh_threads", "rayon_threads"},
+        {
+            "id",
+            "requested_layers",
+            "repair_method",
+            "gmsh_threads",
+            "rayon_threads",
+            "python_audit_runs",
+        },
         "scenario",
     )
     if scenario["id"] != "sp4_mixed":
@@ -402,6 +449,10 @@ def validate_evidence_document(document: Mapping[str, object]) -> None:
     _require_positive_int(scenario["rayon_threads"], "rayon_threads")
     if scenario["repair_method"] not in REPAIR_METHODS:
         raise ValueError("scenario.repair_method is unsupported")
+    python_audit_runs = _require_nonnegative_int(
+        scenario["python_audit_runs"],
+        "scenario.python_audit_runs",
+    )
 
     mesh = _require_mapping(root["mesh"], "mesh")
     _require_exact_fields(
@@ -430,6 +481,7 @@ def validate_evidence_document(document: Mapping[str, object]) -> None:
                 "kind",
                 "index",
                 "timings",
+                "python_audit_samples_s",
                 "unavailable_phase_timings",
                 "peak_rss_bytes",
                 "memory_status",
@@ -467,6 +519,12 @@ def validate_evidence_document(document: Mapping[str, object]) -> None:
                 raise ValueError(
                     f"runs[{index}].timings.{field} must be zero when unavailable"
                 )
+        python_audit_samples = _python_audit_samples(run, f"runs[{index}]")
+        if len(python_audit_samples) != python_audit_runs:
+            raise ValueError(
+                f"runs[{index}].python_audit_samples_s must contain exactly "
+                f"{python_audit_runs} samples"
+            )
         memory_status = run["memory_status"]
         if memory_status == "measured":
             _require_positive_int(

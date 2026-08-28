@@ -16,13 +16,14 @@ import numpy as np
 from fullmag import _core
 from fullmag.meshing._certification_receipt import (
     CertificationReceiptBindingsV1,
-    CertificationReceiptV1,
+    CertificationReceiptV2,
     ProducerBindingV1,
 )
 from fullmag.meshing._gmsh_types import (
     MeshData,
     MixedLayerTopologyCertificate,
     _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+    _bind_trusted_topology_fingerprint_v3,
     _certificate_payload_sha256,
     _mint_trusted_native_preflight_receipt_proof,
 )
@@ -191,10 +192,19 @@ def _rewrite_receipt(
     members["manifest.json"] = _canonical_json(manifest)
 
 
+def _rewrite_manifest(
+    members: dict[str, bytes],
+    mutate: object,
+) -> None:
+    manifest = json.loads(members["manifest.json"])
+    mutate(manifest)
+    members["manifest.json"] = _canonical_json(manifest)
+
+
 class CertificationReceiptSchemaTests(unittest.TestCase):
     def test_receipt_is_frozen_deterministic_and_exact(self) -> None:
         payload = {
-            "schema": "fullmag.mesh-certification-receipt.v1",
+            "schema": "fullmag.mesh-certification-receipt.v2",
             "artifact_schema": "fullmag.mesh-artifact.v2",
             "topology_member": {
                 "name": "topology.npz",
@@ -207,6 +217,7 @@ class CertificationReceiptSchemaTests(unittest.TestCase):
                 "sha256": "2" * 64,
             },
             "topology_fingerprint_v3": "3" * 64,
+            "semantic_manifest_sha256": "8" * 64,
             "certificate": {
                 "schema": "fullmag.mixed-layer-topology-certificate.v1",
                 "payload_sha256": "4" * 64,
@@ -228,7 +239,7 @@ class CertificationReceiptSchemaTests(unittest.TestCase):
             },
             "mesh_counts": {"nodes": 1, "cells": 2, "facets": 3},
         }
-        receipt = CertificationReceiptV1.from_dict(payload)
+        receipt = CertificationReceiptV2.from_dict(payload)
 
         self.assertEqual(receipt.to_dict(), payload)
         self.assertEqual(receipt.to_json_bytes(), _canonical_json(payload))
@@ -237,10 +248,11 @@ class CertificationReceiptSchemaTests(unittest.TestCase):
             receipt.topology_fingerprint_v3 = "8" * 64  # type: ignore[misc]
 
     def test_receipt_rejects_unknown_fields_future_schema_and_bad_values(self) -> None:
-        base = CertificationReceiptV1.from_components(
+        base = CertificationReceiptV2.from_components(
             topology_bytes=b"topology",
             build_report_bytes=b"report",
             topology_fingerprint_v3="1" * 64,
+            semantic_manifest_sha256="8" * 64,
             certificate_payload_sha256="2" * 64,
             authoring_document_sha256="3" * 64,
             bindings=_bindings(),
@@ -249,7 +261,7 @@ class CertificationReceiptSchemaTests(unittest.TestCase):
         attacks = {
             "unknown": lambda value: value.update({"unknown": True}),
             "future schema": lambda value: value.update(
-                {"schema": "fullmag.mesh-certification-receipt.v2"}
+                {"schema": "fullmag.mesh-certification-receipt.v3"}
             ),
             "upper digest": lambda value: value["authoring"].update(
                 {"document_sha256": "A" * 64}
@@ -264,15 +276,16 @@ class CertificationReceiptSchemaTests(unittest.TestCase):
                 candidate = json.loads(json.dumps(base))
                 attack(candidate)
                 with self.assertRaises(ValueError):
-                    CertificationReceiptV1.from_dict(candidate)
+                    CertificationReceiptV2.from_dict(candidate)
 
     def test_producer_integer_fields_reject_bool_and_float_in_both_constructors(
         self,
     ) -> None:
-        producer = CertificationReceiptV1.from_components(
+        producer = CertificationReceiptV2.from_components(
             topology_bytes=b"topology",
             build_report_bytes=b"report",
             topology_fingerprint_v3="1" * 64,
+            semantic_manifest_sha256="8" * 64,
             certificate_payload_sha256="2" * 64,
             authoring_document_sha256="3" * 64,
             bindings=_bindings(),
@@ -349,6 +362,10 @@ class MeshArtifactTrustTests(unittest.TestCase):
         preflight = _native_preflight_result(unsigned)
         digest = _certificate_payload_sha256(certificate)
         counts = preflight.counts
+        topology_context = _bind_trusted_topology_fingerprint_v3(
+            mesh_without_certificate=unsigned,
+            _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+        )
         with mock.patch(
             "fullmag.meshing._gmsh_types._recompute_mixed_certificate_evidence",
             side_effect=AssertionError("trusted proof recomputed Python evidence"),
@@ -357,6 +374,7 @@ class MeshArtifactTrustTests(unittest.TestCase):
                 mesh_without_certificate=unsigned,
                 certificate=certificate,
                 native_preflight=preflight,
+                topology_context=topology_context,
                 expected_topology_fingerprint_v3=preflight.topology_fingerprint_v3,
                 expected_certificate_payload_sha256=digest,
                 expected_counts=counts,
@@ -381,6 +399,7 @@ class MeshArtifactTrustTests(unittest.TestCase):
                 mesh_without_certificate=unsigned,
                 certificate=certificate,
                 native_preflight={"counts": counts},
+                topology_context=topology_context,
                 expected_topology_fingerprint_v3=preflight.topology_fingerprint_v3,
                 expected_certificate_payload_sha256=digest,
                 expected_counts=counts,
@@ -396,6 +415,7 @@ class MeshArtifactTrustTests(unittest.TestCase):
                     mesh_without_certificate=unsigned,
                     certificate=certificate,
                     native_preflight=candidate,
+                    topology_context=topology_context,
                     expected_topology_fingerprint_v3=preflight.topology_fingerprint_v3,
                     expected_certificate_payload_sha256=digest,
                     expected_counts=counts,
@@ -406,11 +426,62 @@ class MeshArtifactTrustTests(unittest.TestCase):
                 mesh_without_certificate=unsigned,
                 certificate=certificate,
                 native_preflight=preflight,
+                topology_context=topology_context,
                 expected_topology_fingerprint_v3=preflight.topology_fingerprint_v3,
                 expected_certificate_payload_sha256="c" * 64,
                 expected_counts=counts,
                 _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
             )
+
+    def test_trusted_receipt_attach_rejects_mesh_mutation_after_proof_minting(
+        self,
+    ) -> None:
+        signed = _certified_mesh()
+        certificate = signed.mixed_layer_topology_certificate
+        assert certificate is not None
+
+        for mutation in ("nodes", "cell_nodes", "element_markers"):
+            with self.subTest(mutation=mutation):
+                unsigned = replace(
+                    signed,
+                    nodes=np.array(signed.nodes, copy=True),
+                    cell_nodes=np.array(signed.cell_nodes, copy=True),
+                    element_markers=np.array(signed.element_markers, copy=True),
+                    mixed_layer_topology_certificate=None,
+                )
+                topology_context = _bind_trusted_topology_fingerprint_v3(
+                    mesh_without_certificate=unsigned,
+                    _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+                )
+                preflight = _native_preflight_result(unsigned)
+                proof = _mint_trusted_native_preflight_receipt_proof(
+                    mesh_without_certificate=unsigned,
+                    certificate=certificate,
+                    native_preflight=preflight,
+                    topology_context=topology_context,
+                    expected_topology_fingerprint_v3=preflight.topology_fingerprint_v3,
+                    expected_certificate_payload_sha256=_certificate_payload_sha256(
+                        certificate
+                    ),
+                    expected_counts=preflight.counts,
+                    _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+                )
+
+                if mutation == "nodes":
+                    unsigned.nodes[0, 0] += 1.0e-15
+                elif mutation == "cell_nodes":
+                    unsigned.cell_nodes[:2] = unsigned.cell_nodes[1::-1]
+                else:
+                    unsigned.element_markers[0] = (
+                        2 if unsigned.element_markers[0] == 1 else 1
+                    )
+
+                with self.assertRaisesRegex(ValueError, "topology"):
+                    MeshData._from_trusted_native_preflight_receipt(
+                        mesh_without_certificate=unsigned,
+                        certificate=certificate,
+                        proof=proof,
+                    )
 
     def _save_v2(self, path: Path) -> MeshData:
         mesh = _certified_mesh()
@@ -486,6 +557,36 @@ class MeshArtifactTrustTests(unittest.TestCase):
             self.assertEqual(manifest["schema"], "fullmag.mesh-artifact.v1")
             with self.assertRaisesRegex(MeshArtifactVersionError, "v1.*trusted"):
                 self._trusted(path, unsigned)
+
+    def test_artifact_v2_with_legacy_receipt_v1_is_full_audit_only(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy-receipt.fullmag-mesh"
+            mesh = self._save_v2(path)
+            members = _read_members(path)
+            _rewrite_receipt(
+                members,
+                lambda receipt: (
+                    receipt.update({"schema": "fullmag.mesh-certification-receipt.v1"}),
+                    receipt.pop("semantic_manifest_sha256"),
+                ),
+            )
+            _write_members(path, members)
+            with mock.patch(
+                "fullmag.meshing.persistence.certify_mixed_mesh_arrays",
+                return_value=_native_certificate_result(mesh),
+            ):
+                with self.subTest(mode="full"):
+                    artifact = load_mesh_artifact(path)
+                    self.assertEqual(
+                        artifact.provenance["artifact_trust"],
+                        "portable_full_audit",
+                    )
+                with self.subTest(mode="trusted"):
+                    with self.assertRaisesRegex(
+                        MeshArtifactVersionError,
+                        "receipt v1.*trusted",
+                    ):
+                        self._trusted(path, mesh)
 
     def test_forced_audit_of_certified_v1_requires_native_certificate(self) -> None:
         mesh = _certified_mesh()
@@ -587,6 +688,34 @@ class MeshArtifactTrustTests(unittest.TestCase):
         certify.assert_not_called()
         self.assertIsNotNone(artifact.mesh.mixed_layer_topology_certificate)
         self.assertEqual(artifact.provenance["artifact_trust"], "trusted_cache_fast")
+
+    def test_trusted_path_computes_python_topology_fingerprint_twice(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.fullmag-mesh"
+            mesh = self._save_v2(path)
+            native_preflight = _native_preflight_result(mesh)
+            original = MeshData.topology_fingerprint_v3
+            fingerprint_calls = 0
+
+            def counted_fingerprint(subject: MeshData) -> str:
+                nonlocal fingerprint_calls
+                fingerprint_calls += 1
+                return original(subject)
+
+            with (
+                mock.patch.object(
+                    MeshData,
+                    "topology_fingerprint_v3",
+                    counted_fingerprint,
+                ),
+                mock.patch(
+                    "fullmag.meshing.persistence.preflight_mixed_mesh_arrays",
+                    return_value=native_preflight,
+                ),
+            ):
+                self._trusted(path, mesh)
+
+        self.assertEqual(fingerprint_calls, 2)
 
     def test_missing_native_preflight_bypasses_fast_and_runs_public_full_audit(
         self,
@@ -692,6 +821,59 @@ class MeshArtifactTrustTests(unittest.TestCase):
                         load_mesh_artifact(path)
                     with self.assertRaises((MeshArtifactCorruptionError, ValueError)):
                         self._trusted(path, mesh)
+
+    def test_semantic_manifest_tamper_fails_closed_in_fast_and_full_modes(
+        self,
+    ) -> None:
+        attacks = {
+            "region geometry name": lambda members: _rewrite_manifest(
+                members,
+                lambda manifest: manifest["region_markers"][0].update(
+                    {"geometry_name": "renamed-magnet"}
+                ),
+            ),
+            "object region markers": lambda members: _rewrite_manifest(
+                members,
+                lambda manifest: manifest["object_region_markers"].append(
+                    {"geometry_name": "forged-object", "marker": 1}
+                ),
+            ),
+            "boundary meanings": lambda members: _rewrite_manifest(
+                members,
+                lambda manifest: manifest.update(
+                    {
+                        "boundary_map": {
+                            "outer": manifest["boundary_map"]["material_interface"],
+                            "material_interface": manifest["boundary_map"]["outer"],
+                        }
+                    }
+                ),
+            ),
+        }
+        for name, attack in attacks.items():
+            with TemporaryDirectory() as tmp:
+                path = Path(tmp) / "mixed.fullmag-mesh"
+                mesh = self._save_v2(path)
+                members = _read_members(path)
+                attack(members)
+                _write_members(path, members)
+                with (
+                    mock.patch(
+                        "fullmag.meshing.persistence.certify_mixed_mesh_arrays",
+                        return_value=_native_certificate_result(mesh),
+                    ),
+                    mock.patch(
+                        "fullmag.meshing.persistence.preflight_mixed_mesh_arrays",
+                        return_value=_native_preflight_result(mesh),
+                    ),
+                ):
+                    for mode, loader in (
+                        ("full", lambda: load_mesh_artifact(path)),
+                        ("trusted", lambda: self._trusted(path, mesh)),
+                    ):
+                        with self.subTest(name=name, mode=mode):
+                            with self.assertRaises(MeshArtifactCorruptionError):
+                                loader()
 
     @staticmethod
     def _tamper_raw_topology(members: dict[str, bytes]) -> None:

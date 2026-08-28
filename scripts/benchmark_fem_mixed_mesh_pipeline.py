@@ -109,12 +109,12 @@ def _validate_config(config: BenchmarkConfig, mode: str) -> None:
     if not config.output.is_absolute():
         raise ValueError("output must resolve to an absolute path")
     if len(config.rayon_threads) != 1:
-        raise ValueError("evidence.v1 requires exactly one Rayon thread value")
+        raise ValueError("evidence.v2 requires exactly one Rayon thread value")
     (rayon_threads,) = tuple(config.rayon_threads)
     _require_positive_int(rayon_threads, "rayon_threads")
     if tuple(config.gmsh_threads) != (1,):
         raise ValueError(
-            "evidence.v1 requires Gmsh threads to be exactly one: "
+            "evidence.v2 requires Gmsh threads to be exactly one: "
             "gmsh_threads=(1,)"
         )
     if config.repair_method_override not in {None, "", *REPAIR_METHOD_OVERRIDES}:
@@ -170,6 +170,16 @@ def _measure(
         return operation()
     finally:
         timings_ns[field] = timings_ns.get(field, 0) + time.perf_counter_ns() - started
+
+
+def _measure_sample(operation: Callable[[], _T]) -> tuple[_T, float]:
+    """Run one audit without folding it into a producer-phase timing."""
+    started = time.perf_counter_ns()
+    try:
+        result = operation()
+    finally:
+        elapsed_ns = time.perf_counter_ns() - started
+    return result, _seconds(elapsed_ns)
 
 
 @contextlib.contextmanager
@@ -351,15 +361,17 @@ def _persistence_phase_probe(
 
 def _author_sp4_without_meshing() -> object:
     import fullmag.world as world
-    from tests.standard_problems.mumag.sp4.fem.problem import (
-        SP4RunRequest,
-        build_study,
-    )
 
     world.reset()
     original_build = world.build_domain_mesh
     world.build_domain_mesh = lambda: None
     try:
+        from tests.standard_problems.mumag.sp4.fem.problem import (
+            SP4RunRequest,
+            build_study,
+        )
+
+        world.reset()
         request = SP4RunRequest(
             "relax",
             "case-a",
@@ -371,7 +383,8 @@ def _author_sp4_without_meshing() -> object:
             "mixed_p1",
             1,
         )
-        return build_study(request)
+        study, _body = build_study(request)
+        return study
     finally:
         world.build_domain_mesh = original_build
 
@@ -405,6 +418,7 @@ def _single_run(
     from fullmag.meshing import persistence
 
     timings_ns = {field: 0 for field in PHASE_TIMING_FIELDS}
+    python_audit_samples_s: list[float] = []
     started_total = time.perf_counter_ns()
     with _isolated_run_environment(
         rayon_threads=rayon_threads,
@@ -426,11 +440,10 @@ def _single_run(
             lambda: validate_mesh_ir(mesh_ir),
         )
         for _ in range(python_audit_runs):
-            _measure(
-                timings_ns,
-                "certificate_python_s",
-                lambda: mesh.validate_strict(require_positive_orientation=True),
+            _, elapsed_s = _measure_sample(
+                lambda: mesh.validate_strict(require_positive_orientation=True)
             )
+            python_audit_samples_s.append(elapsed_s)
         for _ in range(native_audit_runs):
             _measure(
                 timings_ns,
@@ -468,6 +481,7 @@ def _single_run(
                 }
             )
         ),
+        "python_audit_samples_s": python_audit_samples_s,
         "unavailable_phase_timings": _unavailable_phase_timings(
             native_audit_runs=native_audit_runs
         ),
@@ -500,7 +514,9 @@ def _quality_document(mesh: object) -> dict[str, object]:
         "requested_layers": certificate.requested_layer_count,
         "realized_layers": certificate.realized_layer_count,
         "non_manifold_faces": certificate.nonmanifold_face_count,
-        "same_side_two_owner_faces": _mixed_same_side_two_owner_face_count(mesh),
+        "same_side_two_owner_faces": _mixed_same_side_two_owner_face_count(
+            mesh, tolerance=certificate.plane_tolerance_m
+        ),
         "relative_volume_error": certificate.shared_domain_relative_volume_error,
         "scaled_jacobian_p05_by_family": dict(
             certificate.scaled_jacobian_p05_by_family
@@ -608,6 +624,7 @@ def _run_benchmark(
             ),
             "gmsh_threads": gmsh_threads,
             "rayon_threads": rayon_threads,
+            "python_audit_runs": config.python_audit_runs,
         },
         "mesh": {
             "nodes": last_mesh.n_nodes,  # type: ignore[attr-defined]
@@ -669,7 +686,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--artifact-dir must be an absolute path")
     if len(arguments.rayon_threads) != 1:
         parser.error(
-            "evidence.v1 records exactly one Rayon setting; "
+            "evidence.v2 records exactly one Rayon setting; "
             "pass one --rayon-threads value"
         )
     if tuple(arguments.gmsh_threads) != (1,):

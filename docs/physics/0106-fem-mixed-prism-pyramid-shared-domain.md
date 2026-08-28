@@ -433,11 +433,24 @@ make the two validation contracts interchangeable.
 After Gmsh generates the mixed shared-domain mesh and before Fullmag extracts
 and certifies it, the bounded mixed-P1 realization applies the private repair
 policy `fullmag.mixed-tet-repair.v1`: Gmsh method `Relocate3D` with `niter=1`.
-This is the qualified Fullmag policy for this bounded workload, not a claim
-that `Relocate3D` is universally the best tetrahedral optimizer. The previous
-`Netgen` choice is rejected because it reproducibly lost conformity for the
-canonical SP4 mixed mesh, including same-side two-owner tetrahedral faces and
-non-manifold far-air faces.
+This remains the selected Fullmag candidate for this bounded workload, not a
+claim that `Relocate3D` is universally the best tetrahedral optimizer and not a
+production-qualification claim before its managed ten-cold-run matrix passes.
+The previous `Netgen` choice is rejected because it reproducibly lost
+conformity for the canonical SP4 mixed mesh, including same-side two-owner
+tetrahedral faces and non-manifold far-air faces.
+
+The repair boundary uses the same relative determinant threshold as strict
+`MeshData` validation before and after `Relocate3D`. A canonical SP4 stage
+probe confirmed that one far-air sliver already existed after `generate(3)`;
+`Relocate3D` left it in place and the pyramid-apex optimizer had not run. Gmsh
+`minSJ` reported a false-safe value for this element, so neither `minSJ` nor a
+family p05 is an admissible substitute for the strict per-element determinant
+gate. A sliver created by `Relocate3D` fails immediately. A generated sliver
+left by `Relocate3D` also fails immediately before extraction; v1 performs no
+additional node movement beyond the single Gmsh `Relocate3D` iteration. The
+separate pyramid-apex line search applies the same absolute nondegeneracy guard
+to every incident `tet4` and performs a global postcondition check.
 
 Repair is topology-quality work inside realization. It must not change the
 requested or realized cell families, exact magnetic layer count, region or
@@ -592,7 +605,7 @@ or acceptance logic.
 | FEM GPU | Same shared `fullmag-ir` engine, typed PyO3 bridge, and artifact-v2 caller implemented; host extension qualified; this does not claim certificate computation runs on the GPU | Intended consumer of the backend-neutral certificate; `backends/fem` retains GPU preflight and MFEM/libCEED/CUDA execution without duplicating equations or tolerances. | Artifact receipt/provenance and trusted preflight are host-tested; managed runtime qualification is **NOT VERIFIED** and fails closed, with no alternate per-device certificate implementation or solver-device fallback. |
 
 The artifact-v2 production-caller integration, build report, and deterministic
-certification receipt preserve
+receipt-v2 certification contract preserve
 the existing requested topology separately from resolved execution and bind
 the algorithm ID `fullmag.mixed-certificate.rust-rayon.v1`, Rust/Rayon
 backend and thread count, source snapshot, exact mesh counts, topology
@@ -600,7 +613,15 @@ fingerprint, and certificate payload digest. The receipt additionally binds the
 topology and build-report member lengths and SHA-256 digests, exact node/cell/
 facet counts, authoring-document and resolved-policy digests, Gmsh `4.15.2`,
 the production repair ID `fullmag.mixed-tet-repair.v1`, `Relocate3D`, and one
-iteration. Thread count is provenance, not a semantic input. The current `1`,
+iteration. Receipt schema `fullmag.mesh-certification-receipt.v2` also binds
+`semantic_manifest_sha256`, computed from canonical
+compact JSON containing exactly `region_markers`, `object_region_markers`, and
+the sorted `boundary_map`. Consequently, changing a geometry/object name or
+exchanging boundary meanings fails both full and trusted audit even when the
+same numeric marker set still covers the mesh. Timestamp, provenance, member
+descriptors, and the receipt descriptor are excluded from this projection, so
+the digest graph remains acyclic. Thread count is provenance, not a semantic
+input. The current `1`,
 `2`, `4`, and `8` engine proof establishes
 identical serialized evidence, counts, and metrics, including bitwise-stable
 fixed-order volume sums. The host extension validates topology-fingerprint-v3
@@ -620,6 +641,12 @@ receipt integrity into fast trust. Managed and forced-release audits require
 native certification. An outside-managed Python reference fallback is explicit
 non-production provenance. Generic/non-mixed artifacts and mixed producers
 missing any binding remain v1/full-audit rather than fabricating a receipt.
+The exact historical receipt schema
+`fullmag.mesh-certification-receipt.v1` remains parseable inside artifact v2,
+but it is accepted only by public full audit and is never eligible for trusted
+fast loading because it lacks the semantic-manifest binding. This receipt
+migration does not introduce artifact v3 and never rewrites a legacy artifact
+in place.
 
 Validation must compare complete evidence against the Python oracle, exercise
 the four-thread-count matrix, preserve global-ordinal order, freeze the p05
@@ -1248,8 +1275,9 @@ own fresh managed evidence:
 - control-room mesh inspection and WebGL browser smoke;
 - artifact schema and certificate tamper/staleness tests;
 - repair-policy tests that freeze the production algorithm ID, method, and
-  iteration count, plus a minimal Netgen regression topology and the N=10
-  candidate matrix;
+  iteration count, reject both created and pre-existing degeneracies left by
+  the policy, require positive per-family minima, plus a minimal Netgen
+  regression topology and the N=10 candidate matrix;
 - frozen Python/Rust fingerprint-v3 vectors spanning SI scales (`1e-7`,
   `1e-5`, `3e-9`, `1e20`), arbitrary finite round-trip floats, signed zero,
   all enum tags, non-ASCII/empty/prefix strings, absent versus present-empty
@@ -1352,9 +1380,9 @@ No lower level implies a higher one.
 | Public exact-layer authoring | `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | validates and lowers prismatic thin-film intent | FEM CPU/GPU | Python round-trip and real-mesh tests |
 | Published Python-to-IR example | `packages/fullmag-py/tests/test_api.py` | `test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir` | executes the documented authoring path and compares the complete per-geometry mesh entry | FEM CPU/GPU shared contract | focused executable lowering test |
 | Shared-domain prism realization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | generates exact stacked prisms and conforming air | FEM CPU/GPU | Gmsh 4.15.2 topology/certificate tests |
-| Production mixed-tetrahedral repair policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_STRICT_MIXED_TET_REPAIR_POLICY` | freezes algorithm ID `fullmag.mixed-tet-repair.v1`, `Relocate3D`, and one iteration | FEM CPU/GPU shared meshing contract | focused source/contract tests; candidate N=10 and managed receipt pending |
+| Production mixed-tetrahedral repair policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_STRICT_MIXED_TET_REPAIR_POLICY` | freezes candidate algorithm ID `fullmag.mixed-tet-repair.v1`, `Relocate3D`, and one iteration | FEM CPU/GPU shared meshing contract | focused source/contract tests and one exact stage diagnosis; candidate N=10 and managed receipt pending |
 | Mixed-tetrahedral repair policy validation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_validate_mixed_tet_repair_policy` | fail-closed validation owner for the source-mapped production constant `_STRICT_MIXED_TET_REPAIR_POLICY` | FEM CPU/GPU shared meshing contract | focused valid/invalid private-policy tests |
-| Mixed-tetrahedral repair execution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_repair_mixed_tetrahedra` | validates the private policy and invokes the non-overridable policy executor before extraction and certification | FEM CPU/GPU shared meshing contract | focused selector/probe integration and Netgen certificate-boundary tests; candidate N=10 pending |
+| Mixed-tetrahedral repair execution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_repair_mixed_tetrahedra` | validates the private policy and invokes the non-overridable fail-closed policy executor before extraction and certification | FEM CPU/GPU shared meshing contract | focused selector/probe integration, strict created/left degeneracy tests, and Netgen certificate-boundary tests; candidate N=10 pending |
 | Certificate generation, current Python oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence during meshing; artifact persistence independently revalidates the claimed certificate natively | FEM CPU/GPU | current Python source/contract evidence; Rust engine, host bridge, and artifact caller are host-tested; managed runtime remains not verified |
 | Current Python evidence oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_recompute_mixed_certificate_evidence` | computes the readable reference evidence and preserves current equations, ordering, and tolerances | backend-neutral reference consumed by FEM CPU/GPU | current source/contract oracle |
 | Canonical typed certificate schema | `crates/fullmag-ir/src/mesh_assets.rs` | `MixedLayerTopologyCertificateV1IR` | owns the complete certificate field set and rejects unknown fields before a certificate can contribute to the bridge digest or canonical validation | backend-neutral `fullmag-ir`; consumed by FEM CPU/GPU | full `fullmag-ir` suite: 372 passing tests; production caller/runtime not verified |
@@ -1363,10 +1391,13 @@ No lower level implies a higher one.
 | Typed PyO3 certificate entry | `crates/fullmag-py-core/src/mixed_certificate.rs` | `certify_mixed_mesh_arrays` | enforces the 1 MiB pre-parse cap, rejects unknown certificate fields, and builds owned typed `MeshIR` plus the Python-canonical typed certificate projection under the GIL, then hashes and computes/validates through `fullmag-ir` while detached | backend-neutral bridge intended for FEM CPU/GPU | implemented and host-extension qualified: 11 Rust core tests and 17 real-extension Python tests with no skips; artifact caller host-tested, managed runtime not verified |
 | Typed PyO3 structural preflight | `crates/fullmag-py-core/src/mixed_certificate.rs` | `preflight_mixed_mesh_arrays` | accepts an exact separated metadata/expected envelope and validates structure plus counts/fingerprint without invoking certificate evidence or adjacency | backend-neutral bridge intended for FEM CPU/GPU | implemented and host-extension qualified; override regressions and production-seam probe prove metadata isolation and zero certificate-engine calls |
 | Python certificate adapter | `packages/fullmag-py/src/fullmag/_core.py` | `certify_mixed_mesh_arrays` | exposes the exact mandatory keyword-only `MeshData` adapter and strict native-selection boundary without `.tolist()` topology conversion | Python bridge for FEM CPU/GPU | implemented and real-extension tested; artifact v2 requires native on save and records explicit non-production Python fallback on public full audit |
-| Deterministic mixed artifact receipt | `packages/fullmag-py/src/fullmag/meshing/_certification_receipt.py` | `class CertificationReceiptV1` | freezes the acyclic artifact-v2 member, certificate, authoring, producer, and mesh-count bindings without a semantic timestamp | FEM CPU/GPU shared persistence contract | exact JSON, immutability, schema rejection, and tamper-matrix tests |
+| Deterministic mixed artifact receipt v2 | `packages/fullmag-py/src/fullmag/meshing/_certification_receipt.py` | `class CertificationReceiptV2` | freezes the acyclic artifact-v2 member, certificate, authoring, producer, mesh-count, and canonical semantic-manifest bindings without a semantic timestamp | FEM CPU/GPU shared persistence contract | exact JSON, immutability, schema rejection, semantic-map tamper matrix, and member tamper-matrix tests |
+| Legacy mixed artifact receipt v1 | `packages/fullmag-py/src/fullmag/meshing/_certification_receipt.py` | `class CertificationReceiptV1` | preserves the exact pre-semantic-binding receipt parser for public full audit without admitting trusted fast loading | FEM CPU/GPU shared persistence compatibility | legacy artifact-v2 full-audit acceptance and trusted-fast rejection regression |
+| Canonical semantic-manifest digest | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `_semantic_manifest_sha256` | hashes the normalized geometry/object region names and marker values plus sorted boundary meanings without timestamp, provenance, or member descriptors | FEM CPU/GPU shared persistence contract | full/trusted tamper rejection for region name, object-region map, and swapped boundary meanings |
 | Certified mixed artifact writer | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `save_mesh_artifact` | emits v2 only for complete explicit certified-mixed bindings and calls the native certifier with `require_native=True`; otherwise preserves generic v1/full-audit compatibility | FEM CPU/GPU shared persistence contract | host-extension v2 save/load test plus generic-v1 regression |
 | Portable full artifact audit | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `load_mesh_artifact` | exposes no trust/skip flag, verifies every binding, performs native full certification when available, and marks an outside-managed Python fallback non-production | FEM CPU/GPU shared persistence contract | fast/full tamper matrix and fallback provenance tests |
 | Internal trusted-cache loader | `packages/fullmag-py/src/fullmag/meshing/persistence.py` | `_load_trusted_cached_mesh_artifact` | accepts exact expected identities, verifies v2 receipt/member bindings, requires native structural preflight for fast trust, and falls back to public full audit with `bypassed_native_unavailable` | internal FEM CPU/GPU cache contract | real-extension preflight, no-Python-evidence execution-count, v1/future-schema, and tamper tests |
+| Trusted topology-fingerprint context | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_bind_trusted_topology_fingerprint_v3` | computes one Python topology fingerprint, binds it to the unsigned mesh identity, and shares it across receipt, manifest, native-preflight, proof, and result checks | internal backend-neutral mesh carrier | exact one-call trusted-load regression plus native fingerprint equality |
 | Owner-minted trusted receipt proof | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `_mint_trusted_native_preflight_receipt_proof` | binds one unsigned mesh identity, immutable certificate, exact counts, topology fingerprint, certificate digest, and native preflight to private certificate attachment without evidence recomputation | internal backend-neutral mesh carrier | forged proof/digest/count/fingerprint rejection and zero-evidence-call tests |
 | Python structural-preflight adapter | `packages/fullmag-py/src/fullmag/_core.py` | `preflight_mixed_mesh_arrays` | exposes the exact mandatory keyword-only `MeshData` preflight adapter and bounded typed result | Python bridge for FEM CPU/GPU | implemented and real-extension tested; managed runtime use not verified |
 | PyO3 symbol registration and export boundary | `crates/fullmag-py-core/src/lib.rs` | `fullmag_py_core` | registers the certificate, structural-preflight, and canonical topology-code functions that the existing single-build export script checks on its installed module | managed export boundary | registration implemented and host extension import-qualified; managed installed export execution not verified |

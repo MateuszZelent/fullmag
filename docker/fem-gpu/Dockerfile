@@ -4,7 +4,7 @@ FROM ${FULLMAG_CUDA_BASE_IMAGE} AS cuda-base-normalized
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-COPY docker/fem-gpu/normalize_cuda_dpkg_lists.sh /usr/local/sbin/
+COPY --chmod=755 docker/fem-gpu/normalize_cuda_dpkg_lists.sh /usr/local/sbin/
 RUN /usr/local/sbin/normalize_cuda_dpkg_lists.sh && \
     if [[ -f /var/lib/dpkg/info/.fullmag-cuda-dpkg-reinstall-required ]]; then \
       reinstall_packages=( \

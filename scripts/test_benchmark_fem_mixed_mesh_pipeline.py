@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import hashlib
+import importlib
 import importlib.util
 import io
 import json
@@ -68,6 +69,7 @@ def _run(
         "kind": kind,
         "index": 0,
         "timings": _timings(),
+        "python_audit_samples_s": [],
         "unavailable_phase_timings": ["cache_lookup_s"],
         "peak_rss_bytes": 1024 if memory_status == "measured" else None,
         "memory_status": memory_status,
@@ -81,19 +83,18 @@ def _summary() -> dict[str, object]:
     timings: dict[str, object] = {}
     for field in PHASE_TIMING_FIELDS:
         timings[field] = (
-            None
-            if field == "cache_lookup_s"
-            else {"p50": 0.001, "p95": 0.001, "max": 0.001}
+            None if field == "cache_lookup_s" else {"p50": 0.001, "p95": 0.001, "max": 0.001}
         )
     return {
         "timings": timings,
+        "python_audit_s": None,
         "peak_rss_bytes": {"p50": 1024.0, "p95": 1024.0, "max": 1024.0},
     }
 
 
 def _document() -> dict[str, object]:
     return {
-        "schema": "fullmag.fem-mixed-mesh-performance.v1",
+        "schema": "fullmag.fem-mixed-mesh-performance.v2",
         "generated_at": "2026-08-27T12:00:00Z",
         "source_identity": {
             "schema": "fullmag.source-snapshot.v2",
@@ -119,6 +120,7 @@ def _document() -> dict[str, object]:
             "repair_method": "Relocate3D",
             "gmsh_threads": 1,
             "rayon_threads": 1,
+            "python_audit_runs": 0,
         },
         "mesh": {
             "nodes": 10,
@@ -162,6 +164,83 @@ class _FakeMesh:
 
 
 class BenchmarkEvidenceTests(unittest.TestCase):
+    def test_fresh_sp4_authoring_import_is_mesh_free_and_returns_exact_mixed_study(
+        self,
+    ) -> None:
+        import fullmag.world as world
+
+        scenario_module = "tests.standard_problems.mumag.sp4.fem.problem"
+        parent_module_name, _, leaf_name = scenario_module.rpartition(".")
+        parent_package = importlib.import_module(parent_module_name)
+        missing = object()
+        previous_scenario_module = sys.modules.get(scenario_module, missing)
+        previous_problem_attribute = getattr(parent_package, leaf_name, missing)
+        previous_world_state = world._state
+        previous_build = world.build_domain_mesh
+        original_reset = world.reset
+        if previous_scenario_module is not missing:
+            sys.modules.pop(scenario_module)
+        if previous_problem_attribute is not missing:
+            delattr(parent_package, leaf_name)
+        build_calls: list[str] = []
+
+        def forbidden_build() -> None:
+            build_calls.append("build_domain_mesh")
+            raise AssertionError(
+                "SP4 scenario import built a mesh before the measured phase"
+            )
+
+        try:
+            with mock.patch.object(world, "build_domain_mesh", forbidden_build), mock.patch.object(
+                world,
+                "reset",
+                wraps=original_reset,
+            ) as reset:
+                study = benchmark._author_sp4_without_meshing()
+                self.assertIs(world.build_domain_mesh, forbidden_build)
+
+            self.assertEqual(build_calls, [])
+            self.assertEqual(reset.call_count, 2)
+            self.assertIsNotNone(study)
+            self.assertNotIsInstance(study, tuple)
+
+            state = world._state
+            self.assertEqual(state._api_surface, "study")
+            self.assertIn("_mixed_p1_layers-1", state._name)
+            self.assertEqual(len(state._magnets), 1)
+            self.assertEqual(len(state._declared_stages), 1)
+            self.assertEqual(state._declared_stages[0].stage_id, "relax")
+
+            mesh_spec = state._magnets[0]._mesh_spec
+            self.assertEqual(mesh_spec.topology, "prismatic")
+            self.assertEqual(mesh_spec.through_thickness_elements, 1)
+            self.assertEqual(mesh_spec.transition_policy, "pyramid_to_tetrahedra")
+            self.assertTrue(mesh_spec.exact_layer_count)
+        finally:
+            sys.modules.pop(scenario_module, None)
+            if previous_scenario_module is not missing:
+                sys.modules[scenario_module] = previous_scenario_module
+            if previous_problem_attribute is missing:
+                if hasattr(parent_package, leaf_name):
+                    delattr(parent_package, leaf_name)
+            else:
+                setattr(parent_package, leaf_name, previous_problem_attribute)
+            world._state = previous_world_state
+            world.build_domain_mesh = previous_build
+
+        self.assertIs(world._state, previous_world_state)
+        self.assertIs(world.build_domain_mesh, previous_build)
+        if previous_scenario_module is missing:
+            self.assertNotIn(scenario_module, sys.modules)
+        else:
+            self.assertIs(sys.modules[scenario_module], previous_scenario_module)
+        if previous_problem_attribute is missing:
+            self.assertFalse(hasattr(parent_package, leaf_name))
+        else:
+            self.assertIs(
+                getattr(parent_package, leaf_name), previous_problem_attribute
+            )
+
     def test_rejects_missing_phase_timing(self) -> None:
         document = _document()
         del document["runs"][0]["timings"]["gmsh_extract_s"]  # type: ignore[index]
@@ -201,7 +280,81 @@ class BenchmarkEvidenceTests(unittest.TestCase):
         summary = benchmark._summarize(runs)
 
         self.assertIsNone(summary["timings"]["cache_lookup_s"])
+        self.assertEqual(
+            summary["timings"]["certificate_python_s"],
+            {"p50": 0.001, "p95": 0.001, "max": 0.001},
+        )
+        self.assertIsNone(summary["python_audit_s"])
         self.assertIsNone(summary["peak_rss_bytes"])
+
+    def test_summary_keeps_producer_certificate_timing_separate_from_python_audits(
+        self,
+    ) -> None:
+        runs = [_run("cold"), _run("warm")]
+        runs[0]["timings"]["certificate_python_s"] = 12.5  # type: ignore[index]
+        runs[1]["timings"]["certificate_python_s"] = 12.5  # type: ignore[index]
+        runs[0]["python_audit_samples_s"] = [0.1, 0.2, 0.3]
+        runs[1]["python_audit_samples_s"] = [0.4, 0.5, 0.6]
+
+        summary = benchmark._summarize(runs)
+
+        self.assertEqual(
+            summary["timings"]["certificate_python_s"],
+            {"p50": 12.5, "p95": 12.5, "max": 12.5},
+        )
+        self.assertEqual(
+            summary["python_audit_s"],
+            {"p50": 0.35, "p95": 0.575, "max": 0.6},
+        )
+
+        document = _document()
+        document["scenario"]["python_audit_runs"] = 3  # type: ignore[index]
+        document["runs"] = runs
+        document["summary"] = summary
+        validate_evidence_document(document)
+
+    def test_validator_requires_exact_declared_python_audit_sample_count_per_run(
+        self,
+    ) -> None:
+        document = _document()
+        document["scenario"]["python_audit_runs"] = 3  # type: ignore[index]
+        for run in document["runs"]:  # type: ignore[union-attr]
+            run["python_audit_samples_s"] = [0.1, 0.2, 0.3]
+        document["summary"] = benchmark._summarize(document["runs"])  # type: ignore[arg-type]
+        validate_evidence_document(document)
+
+        for sample_count in (0, 1, 2):
+            with self.subTest(sample_count=sample_count):
+                incomplete = copy.deepcopy(document)
+                incomplete["runs"][0]["python_audit_samples_s"] = [  # type: ignore[index]
+                    0.1
+                ] * sample_count
+                with self.assertRaisesRegex(ValueError, "python_audit_samples_s"):
+                    validate_evidence_document(incomplete)
+
+    def test_quality_document_uses_certificate_plane_tolerance(self) -> None:
+        certificate = SimpleNamespace(
+            requested_layer_count=1,
+            realized_layer_count=1,
+            nonmanifold_face_count=0,
+            plane_tolerance_m=2.5e-12,
+            shared_domain_relative_volume_error=0.0,
+            scaled_jacobian_p05_by_family={
+                "prism6": 0.1,
+                "pyramid5": 0.2,
+                "tet4": 0.3,
+            },
+        )
+        mesh = SimpleNamespace(mixed_layer_topology_certificate=certificate)
+
+        with mock.patch(
+            "fullmag.meshing._gmsh_types._mixed_same_side_two_owner_face_count",
+            return_value=0,
+        ) as count:
+            quality = benchmark._quality_document(mesh)
+
+        count.assert_called_once_with(mesh, tolerance=certificate.plane_tolerance_m)
+        self.assertEqual(quality["same_side_two_owner_faces"], 0)
 
     def test_rejects_mixed_topology_fingerprint_across_warm_runs(self) -> None:
         document = _document()

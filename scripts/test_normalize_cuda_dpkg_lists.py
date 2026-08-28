@@ -170,6 +170,10 @@ def test_non_nul_corruption_fails_without_mutation(tmp_path: Path) -> None:
 def test_dockerfile_reinstalls_exact_installed_cuda_package_versions() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
 
+    assert (
+        "COPY --chmod=755 docker/fem-gpu/normalize_cuda_dpkg_lists.sh "
+        "/usr/local/sbin/"
+    ) in dockerfile
     assert "reinstall_specs+=(\"${package}=$(dpkg-query -W -f='${Version}'" in dockerfile
     assert '--reinstall "${reinstall_specs[@]}"' in dockerfile
 

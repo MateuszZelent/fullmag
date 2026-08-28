@@ -240,7 +240,7 @@ Nie wolno rozpoczynać cache fast path przed ukończeniem Rust parity i receipt 
 - Read-only generator: `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`
 - Read-only persistence: `packages/fullmag-py/src/fullmag/meshing/persistence.py`
 - Read-only source identity: `scripts/capture_source_snapshot_identity.py`
-- Runtime output, never commit: `.fullmag/reports/fem-mixed-mesh-performance/evidence.v1.json`
+- Runtime output, never commit: `.fullmag/reports/fem-mixed-mesh-performance/evidence.v2.json`
 
 ### Zadanie 0.1 Kontrakt harnessu
 
@@ -279,7 +279,7 @@ Nie wolno rozpoczynać cache fast path przed ukończeniem Rust parity i receipt 
 
 ```json
 {
-  "schema": "fullmag.fem-mixed-mesh-performance.v1",
+  "schema": "fullmag.fem-mixed-mesh-performance.v2",
   "generated_at": "RFC3339 UTC",
   "source_identity": {
     "schema": "fullmag.source-snapshot.v2",
@@ -304,7 +304,8 @@ Nie wolno rozpoczynać cache fast path przed ukończeniem Rust parity i receipt 
     "requested_layers": 1,
     "repair_method": "string",
     "gmsh_threads": 1,
-    "rayon_threads": 1
+    "rayon_threads": 1,
+    "python_audit_runs": 3
   },
   "mesh": {
     "nodes": 28010,
@@ -391,7 +392,7 @@ just ensure-managed-fem-runtime
 - [ ] Uruchom baseline:
 
 ```bash
-python3 scripts/benchmark_fem_mixed_mesh_pipeline.py --scenario sp4_mixed --mode baseline --cold-runs 5 --warm-runs 10 --native-audit-runs 0 --python-audit-runs 3 --warmup-runs 2 --artifact-dir /tmp/fullmag-fem-mixed-mesh-benchmark --output .fullmag/reports/fem-mixed-mesh-performance/baseline.v1.json --repair-method Relocate3D --rayon-threads 1 --gmsh-threads 1
+python3 scripts/benchmark_fem_mixed_mesh_pipeline.py --scenario sp4_mixed --mode baseline --cold-runs 5 --warm-runs 10 --native-audit-runs 0 --python-audit-runs 3 --warmup-runs 2 --artifact-dir /tmp/fullmag-fem-mixed-mesh-benchmark --output .fullmag/reports/fem-mixed-mesh-performance/baseline.v2.json --repair-method Relocate3D --rayon-threads 1 --gmsh-threads 1
 ```
 
 - [ ] Sprawdź, że summary zawiera p50, p95, max i peak RSS dla każdej fazy.
@@ -507,7 +508,7 @@ def _repair_mixed_tetrahedra(
 - [ ] Uruchom:
 
 ```bash
-python3 scripts/qualify_fem_mixed_repair_policy.py --scenario sp4_mixed --runs 10 --methods default,Relocate3D,Netgen --gmsh-threads 1 --output .fullmag/reports/fem-mixed-mesh-performance/repair-policy.v1.json
+python3 scripts/qualify_fem_mixed_repair_policy.py --scenario sp4_mixed --runs 10 --methods default,Relocate3D,Netgen --gmsh-threads 1 --output .fullmag/reports/fem-mixed-mesh-performance/repair-policy.v2.json
 ```
 
 - [ ] Jeżeli `Relocate3D` nie przejdzie N=10, nie wracaj automatycznie do default. Ustaw status `BLOCKED_MESHER_QUALITY`, dołącz failing topology fingerprint i zatrzymaj plan przed Zadaniem 5.
@@ -610,7 +611,7 @@ def _from_prevalidated_mixed_certificate(
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src python3 -m unittest discover -s packages/fullmag-py/tests -p 'test_mixed_certificate_execution_counts.py' -v
-PYTHONPATH=packages/fullmag-py/src python3 -m unittest discover -s packages/fullmag-py/tests -p 'test_mixed_element_meshing.py' -v
+PYTHONPATH=packages/fullmag-py/src pytest packages/fullmag-py/tests/test_mixed_element_meshing.py -v
 ```
 
 - [ ] Uruchom 3-run microbenchmark Python reference. Warunek: count pełnej rekalkulacji `1` i mediana certificate Python mniejsza od frozen baseline o co najmniej 25%. Brak 25% nie blokuje Rust work, ale zostaje zapisany jako `python_workspace_speedup_not_reached`.
@@ -934,11 +935,12 @@ git commit -m "feat: expose native mixed mesh certification"
 
 ### Zadanie 5.2 Receipt schema
 
-- [ ] Dodaj frozen `CertificationReceiptV1` z dokładnym JSON:
+- [ ] Zachowaj frozen legacy `CertificationReceiptV1` bez semantic-manifest
+  binding i dodaj frozen `CertificationReceiptV2` z dokładnym JSON:
 
 ```json
 {
-  "schema": "fullmag.mesh-certification-receipt.v1",
+  "schema": "fullmag.mesh-certification-receipt.v2",
   "artifact_schema": "fullmag.mesh-artifact.v2",
   "topology_member": {
     "name": "topology.npz",
@@ -951,6 +953,7 @@ git commit -m "feat: expose native mixed mesh certification"
     "sha256": "64 lowercase hex"
   },
   "topology_fingerprint_v3": "64 lowercase hex",
+  "semantic_manifest_sha256": "64 lowercase hex",
   "certificate": {
     "schema": "fullmag.mixed-layer-topology-certificate.v1",
     "payload_sha256": "64 lowercase hex",
@@ -978,9 +981,14 @@ git commit -m "feat: expose native mixed mesh certification"
 }
 ```
 
-- [ ] Receipt nie zawiera timestampu w semantic payload, aby dwa identyczne buildy mogły mieć identyczny digest.
+- [ ] Receipt v2 nie zawiera timestampu w semantic payload, aby dwa identyczne buildy mogły mieć identyczny digest.
+- [ ] `semantic_manifest_sha256` wiąże kanoniczną projekcję
+  `region_markers`, `object_region_markers` i `boundary_map`; nie obejmuje
+  timestampu, provenance ani member descriptors.
 - [ ] `manifest.json` v2 zawiera SHA i bytes dla `topology.npz`, `build-report.json` oraz `certification-receipt.json`.
 - [ ] Nie twórz cyklu digestów: receipt wiąże topology i build report; manifest wiąże receipt.
+- [ ] Artifact v2 z legacy receipt v1 przechodzi wyłącznie public full audit i
+  jest zawsze odrzucany przez trusted fast; nie wprowadzaj artifact v3.
 
 ### Zadanie 5.3 RED: tamper matrix
 
@@ -998,6 +1006,8 @@ git commit -m "feat: expose native mixed mesh certification"
   - receipt digest w manifest;
   - member length;
   - topology fingerprint.
+  - `region_markers[].geometry_name`, `object_region_markers` i zamianę znaczeń
+    w `boundary_map` przy zachowaniu tego samego zbioru markerów.
 - [ ] Każda mutacja musi zakończyć się fail-closed w fast i full mode.
 - [ ] Dodaj `test_v1_is_never_loaded_through_trusted_fast_path` i `test_unknown_future_schema_is_rejected`.
 
@@ -1391,7 +1401,7 @@ git commit -m "perf: vectorize mixed mesh extraction"
 - [ ] Uruchom:
 
 ```bash
-python3 scripts/qualify_fem_mixed_repair_policy.py --scenario sp4_mixed --runs 10 --methods Relocate3D --gmsh-threads 1,2,4,8 --output .fullmag/reports/fem-mixed-mesh-performance/gmsh-thread-matrix.v1.json
+python3 scripts/qualify_fem_mixed_repair_policy.py --scenario sp4_mixed --runs 10 --methods Relocate3D --gmsh-threads 1,2,4,8 --output .fullmag/reports/fem-mixed-mesh-performance/gmsh-thread-matrix.v2.json
 ```
 
 - [ ] Wynik `keep_single_thread` jest pełnoprawnym sukcesem tego zadania, jeżeli kryteria dla większej liczby wątków nie przechodzą. Nie nazywaj go brakiem optymalizacji.
@@ -1409,7 +1419,7 @@ python3 scripts/qualify_fem_mixed_repair_policy.py --scenario sp4_mixed --runs 1
 - Modify: `scripts/test_benchmark_fem_mixed_mesh_pipeline.py`
 - Modify: `scripts/run_fem_sp4_mixed_matrix.py`
 - Modify: `scripts/verify_fem_mixed_prism_airbox_runtime.py`
-- Runtime output, never commit: `.fullmag/reports/fem-mixed-mesh-performance/evidence.v1.json`
+- Runtime output, never commit: `.fullmag/reports/fem-mixed-mesh-performance/evidence.v2.json`
 
 ### Zadanie 10.1 Storage i source identity preflight
 

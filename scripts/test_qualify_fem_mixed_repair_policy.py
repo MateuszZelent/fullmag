@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr
 import copy
+from dataclasses import replace
 import io
 import json
 import subprocess
@@ -10,9 +11,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
+
 import benchmark_fem_mixed_mesh_pipeline as benchmark
 import qualify_fem_mixed_repair_policy as qualification
 from fullmag.meshing import _gmsh_swept as swept
+from fullmag.meshing._gmsh_types import MeshData
 
 
 def _candidate_document(
@@ -28,17 +32,46 @@ def _candidate_document(
     algorithm_id: str | None = None,
     policy_method: str | None = None,
     iterations: int = 1,
+    tet_minimum: float = 0.2,
+    mesh_nodes: int = 10,
+    mesh_cells: int = 20,
+    mesh_facets: int = 30,
+    topology_fingerprint: str = "a" * 64,
 ) -> dict[str, object]:
     quality = {
         "requested_layers": 1,
         "realized_layers": 1,
+        "magnetic_plane_count": 2,
+        "cell_family_counts_by_part": {
+            "magnetic": {"prism6": 4},
+            "transition_air": {"pyramid5": 8, "tet4": 4},
+            "far_air": {"tet4": 8},
+        },
+        "nonconforming_faces": 0,
+        "orphan_faces": 0,
         "non_manifold_faces": non_manifold_faces,
         "same_side_two_owner_faces": same_side_two_owner_faces,
+        "coincident_interface_faces": 0,
+        "duplicate_cells": 0,
+        "fallbacks_triggered": [],
+        "strict_jacobian_validation_passed": True,
+        "marker_coverage_complete": True,
+        "global_ordinals_complete": True,
         "relative_volume_error": relative_volume_error,
+        "jacobian_minima_m3_by_family": {
+            "prism6": 1.0e-24,
+            "pyramid5": 1.0e-24,
+            "tet4": 1.0e-24,
+        },
         "scaled_jacobian_p05_by_family": {
             "prism6": p05,
             "pyramid5": p05,
             "tet4": p05,
+        },
+        "scaled_jacobian_minima_by_family": {
+            "prism6": 0.2,
+            "pyramid5": 0.2,
+            "tet4": tet_minimum,
         },
     }
     run_rows = [
@@ -46,7 +79,7 @@ def _candidate_document(
             "kind": "cold",
             "index": index,
             "timings": {"total_s": total_s},
-            "topology_fingerprint_v3": "a" * 64,
+            "topology_fingerprint_v3": topology_fingerprint,
             "quality": copy.deepcopy(quality),
             "degraded": degraded,
             "memory_status": "measured",
@@ -54,19 +87,20 @@ def _candidate_document(
         for index in range(runs)
     ]
     benchmark_document = {
-        "schema": "fullmag.fem-mixed-mesh-performance.v1",
+        "schema": "fullmag.fem-mixed-mesh-performance.v2",
         "scenario": {
             "id": "sp4_mixed",
             "requested_layers": 1,
             "repair_method": method,
             "gmsh_threads": 1,
             "rayon_threads": 1,
+            "python_audit_runs": 0,
         },
         "mesh": {
-            "nodes": 10,
-            "cells": 20,
-            "facets": 30,
-            "topology_fingerprint_v3": "a" * 64,
+            "nodes": mesh_nodes,
+            "cells": mesh_cells,
+            "facets": mesh_facets,
+            "topology_fingerprint_v3": topology_fingerprint,
         },
         "quality": quality,
         "runs": run_rows,
@@ -99,11 +133,129 @@ def _candidate_document(
     }
 
 
+def _partial_failing_mesh() -> MeshData:
+    return MeshData(
+        nodes=np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0e-6, 0.0, 0.0],
+                [0.0, 1.0e-6, 0.0],
+                [0.0, 0.0, 1.0e-18],
+            ],
+            dtype=np.float64,
+        ),
+        cell_types=np.asarray(["tet4"]),
+        cell_offsets=np.asarray([0, 4], dtype=np.int64),
+        cell_nodes=np.asarray([0, 1, 2, 3], dtype=np.int32),
+        element_markers=np.asarray([0], dtype=np.int32),
+        facet_types=np.asarray([], dtype=np.str_),
+        facet_roles=np.asarray([], dtype=np.str_),
+        facet_offsets=np.asarray([0], dtype=np.int64),
+        facet_nodes=np.asarray([], dtype=np.int32),
+        boundary_markers=np.asarray([], dtype=np.int32),
+        cell_global_ordinals=np.asarray([0], dtype=np.int64),
+        facet_global_ordinals=np.asarray([], dtype=np.int64),
+    )
+
+
 class RepairPolicyQualificationTests(unittest.TestCase):
+    def test_hard_failing_worker_persists_real_partial_mesh_fingerprint(self) -> None:
+        partial_mesh = _partial_failing_mesh()
+        partial_mesh_si = replace(partial_mesh, nodes=partial_mesh.nodes * 1.0e-6)
+        gmsh = Mock()
+
+        def run_benchmark(
+            _config: benchmark.BenchmarkConfig,
+            *,
+            mode: str,
+        ) -> dict[str, object]:
+            self.assertEqual(mode, "qualification")
+            with benchmark._mesh_phase_probe({}, "Relocate3D"):
+                swept._repair_mixed_tetrahedra(gmsh)
+            raise AssertionError("repair failure must escape the benchmark")
+
+        with tempfile.TemporaryDirectory() as root_name:
+            root = Path(root_name)
+            evidence_path = root / "relocate.failure.json"
+            with (
+                patch.object(swept, "_import_gmsh", return_value=gmsh),
+                patch.object(
+                    swept,
+                    "_repair_mixed_tetrahedra_for_qualification",
+                    side_effect=RuntimeError("left degenerate tet4"),
+                ),
+                patch.object(swept, "_extract_mesh_data", return_value=partial_mesh),
+                patch.object(benchmark, "_run_benchmark", side_effect=run_benchmark),
+                self.assertRaisesRegex(RuntimeError, "left degenerate tet4"),
+            ):
+                qualification._run_worker(
+                    scenario="sp4_mixed",
+                    runs=10,
+                    method="Relocate3D",
+                    gmsh_threads=1,
+                    evidence_output=evidence_path,
+                    artifact_dir=root / "artifacts",
+                )
+
+            payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["schema"], qualification.WORKER_FAILURE_SCHEMA)
+        self.assertEqual(
+            payload["topology_fingerprint_v3"],
+            partial_mesh_si.topology_fingerprint_v3(),
+        )
+        self.assertEqual(
+            payload["mesh_counts"],
+            {"nodes": 4, "cells": 1, "facets": 0},
+        )
+
+    def test_hard_failing_relocate_payload_reaches_blocked_decision(self) -> None:
+        fingerprint = _partial_failing_mesh().topology_fingerprint_v3()
+        with tempfile.TemporaryDirectory() as root_name:
+            evidence_path = Path(root_name) / "relocate.failure.json"
+            evidence_path.write_text(
+                json.dumps(
+                    {
+                        "schema": qualification.WORKER_FAILURE_SCHEMA,
+                        "topology_fingerprint_v3": fingerprint,
+                        "mesh_counts": {"nodes": 4, "cells": 1, "facets": 0},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            row = qualification._worker_failure_row(
+                "Relocate3D",
+                evidence_path=evidence_path,
+                returncode=1,
+                stdout="",
+                stderr="left degenerate tet4",
+            )
+
+        decision = qualification.decide_matrix_status([row])
+
+        self.assertEqual(row["topology_fingerprint_v3"], fingerprint)
+        self.assertEqual(decision["status"], "BLOCKED_MESHER_QUALITY")
+        self.assertEqual(decision["failing_topology_fingerprint_v3"], fingerprint)
+
+    def test_candidate_matrix_executes_each_raw_gmsh_method(self) -> None:
+        for candidate, executed in (
+            ("default", ""),
+            ("Relocate3D", "Relocate3D"),
+            ("Netgen", "Netgen"),
+        ):
+            with self.subTest(candidate=candidate):
+                gmsh = Mock()
+                gmsh.model.mesh.getElementsByType.return_value = ([], [])
+                with qualification._qualification_probe_installed(candidate):
+                    with benchmark._mesh_phase_probe({}, None):
+                        swept._repair_mixed_tetrahedra(gmsh)
+                gmsh.model.mesh.optimize.assert_called_once_with(executed, niter=1)
+
     def test_worker_selector_executes_policy_while_probe_wraps_public_repair(
         self,
     ) -> None:
         gmsh = Mock()
+        gmsh.model.mesh.getElementsByType.return_value = ([], [])
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
 
@@ -189,7 +341,7 @@ class RepairPolicyQualificationTests(unittest.TestCase):
                 runs=10,
                 methods=("default", "Relocate3D", "Netgen"),
                 gmsh_threads=1,
-                output=(root / "repair-policy.v1.json").resolve(),
+                output=(root / "repair-policy.v2.json").resolve(),
             )
             commands: list[list[str]] = []
 
@@ -239,6 +391,45 @@ class RepairPolicyQualificationTests(unittest.TestCase):
                 )
                 self.assertTrue(any(message in failure for failure in failures))
 
+    def test_quality_gate_rejects_degenerate_tet_even_when_p05_passes(self) -> None:
+        failures = qualification.candidate_quality_failures(
+            _candidate_document("Relocate3D", p05=0.2, tet_minimum=0.0),
+            expected_runs=10,
+        )
+
+        self.assertTrue(any("minimum" in failure for failure in failures))
+
+    def test_quality_gate_requires_every_brief_3_3_evidence_field(self) -> None:
+        required = (
+            "magnetic_plane_count",
+            "cell_family_counts_by_part",
+            "nonconforming_faces",
+            "orphan_faces",
+            "coincident_interface_faces",
+            "duplicate_cells",
+            "fallbacks_triggered",
+            "strict_jacobian_validation_passed",
+            "marker_coverage_complete",
+            "global_ordinals_complete",
+            "relative_volume_error",
+            "jacobian_minima_m3_by_family",
+            "scaled_jacobian_minima_by_family",
+            "scaled_jacobian_p05_by_family",
+        )
+        for field in required:
+            with self.subTest(field=field):
+                document = _candidate_document("Relocate3D")
+                for run in document["benchmark"]["runs"]:
+                    del run["quality"][field]
+                failures = qualification.candidate_quality_failures(
+                    document,
+                    expected_runs=10,
+                )
+                self.assertTrue(
+                    any(field in failure for failure in failures),
+                    failures,
+                )
+
     def test_requires_exactly_ten_cold_runs_for_relocate3d(self) -> None:
         failures = qualification.candidate_quality_failures(
             _candidate_document("Relocate3D", runs=9),
@@ -283,6 +474,51 @@ class RepairPolicyQualificationTests(unittest.TestCase):
         ]
 
         self.assertEqual(qualification.fastest_legal_method(rows), "default")
+
+    def test_time_ranking_rejects_smaller_mesh_candidate(self) -> None:
+        rows = [
+            qualification.evaluate_candidate(
+                "default",
+                _candidate_document(
+                    "default", total_s=1.0, mesh_nodes=9, mesh_cells=19
+                ),
+                expected_runs=10,
+            ),
+            qualification.evaluate_candidate(
+                "Relocate3D",
+                _candidate_document("Relocate3D", total_s=10.0),
+                expected_runs=10,
+            ),
+        ]
+
+        self.assertIsNone(qualification.fastest_legal_method(rows))
+        failures = qualification.topology_equivalence_failures(rows)
+        self.assertTrue(any("element counts" in failure for failure in failures))
+
+    def test_time_ranking_rejects_different_topology_with_equal_counts(self) -> None:
+        rows = [
+            qualification.evaluate_candidate(
+                "default",
+                _candidate_document(
+                    "default", total_s=1.0, topology_fingerprint="b" * 64
+                ),
+                expected_runs=10,
+            ),
+            qualification.evaluate_candidate(
+                "Relocate3D",
+                _candidate_document("Relocate3D", total_s=10.0),
+                expected_runs=10,
+            ),
+        ]
+
+        decision = qualification.decide_matrix_status(rows)
+
+        self.assertEqual(decision["status"], "BLOCKED_TOPOLOGY_EQUIVALENCE")
+        self.assertIsNone(decision["selected_production_method"])
+        self.assertIsNone(decision["fastest_legal_method"])
+        self.assertTrue(
+            any("topology fingerprint" in failure for failure in decision["ranking_failures"])
+        )
 
     def test_relocate_candidate_evidence_uses_immutable_production_id(
         self,
