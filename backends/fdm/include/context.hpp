@@ -207,6 +207,21 @@ struct AdaptiveDeviceControl {
 static_assert(sizeof(AdaptiveDeviceControl) == 64);
 static_assert(sizeof(fullmag_fdm_adaptive_attempt_v1) == 56);
 
+constexpr uint32_t ADAPTIVE_ACCEPTED_BATCH_CAPACITY = 64;
+
+struct AdaptiveDeviceBatchState {
+    double current_time = 0.0;
+    double target_time = 0.0;
+    uint32_t max_steps = 0;
+    uint32_t accepted_count = 0;
+    uint32_t failed = 0;
+    uint32_t terminal_reason = 0;
+    uint32_t active_step = 0;
+    uint32_t reserved0 = 0;
+};
+
+static_assert(sizeof(AdaptiveDeviceBatchState) == 40);
+
 struct DeviceMultilayerFftWorkspace {
     fullmag_fdm_grid_desc fft_grid{};
     uint64_t cell_count = 0;
@@ -570,6 +585,8 @@ struct Context {
     double *reduction_scratch_aux = nullptr;
     uint64_t reduction_scratch_aux_len = 0;
     AdaptiveDeviceControl *adaptive_policy_scratch = nullptr;
+    AdaptiveDeviceBatchState *adaptive_batch_state = nullptr;
+    AdaptiveDeviceControl *adaptive_accepted_batch = nullptr;
     void *preview_download_scratch = nullptr;
     uint64_t preview_download_scratch_len_bytes = 0;
     std::vector<uint8_t> active_mask_host;
@@ -674,6 +691,15 @@ bool context_launch_adaptive_step_graph(
     Context &ctx,
     const AdaptiveDeviceControl &initial_control,
     AdaptiveDeviceControl &terminal_control);
+bool context_launch_adaptive_step_graph_batch(
+    Context &ctx,
+    const AdaptiveDeviceControl &initial_control,
+    double current_time,
+    double target_time,
+    uint32_t max_steps,
+    AdaptiveDeviceControl *accepted_steps,
+    uint32_t accepted_steps_capacity,
+    uint32_t &accepted_step_count);
 void context_destroy_adaptive_step_graph(Context &ctx);
 cudaError_t fullmag_fdm_receipt_cuda_memcpy(
     Context &ctx,

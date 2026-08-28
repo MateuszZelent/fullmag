@@ -1342,11 +1342,47 @@ static bool alloc_reduction_scratch(Context &ctx) {
         return false;
     }
     err = cudaMalloc(
+        reinterpret_cast<void **>(&ctx.adaptive_batch_state),
+        sizeof(AdaptiveDeviceBatchState));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(adaptive_batch_state)", err);
+        cudaFree(ctx.adaptive_policy_scratch);
+        ctx.adaptive_policy_scratch = nullptr;
+        cudaFree(ctx.reduction_scratch_aux);
+        ctx.reduction_scratch_aux = nullptr;
+        ctx.reduction_scratch_aux_len = 0;
+        cudaFree(ctx.reduction_scratch);
+        ctx.reduction_scratch = nullptr;
+        ctx.reduction_scratch_len = 0;
+        return false;
+    }
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&ctx.adaptive_accepted_batch),
+        ADAPTIVE_ACCEPTED_BATCH_CAPACITY * sizeof(AdaptiveDeviceControl));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(adaptive_accepted_batch)", err);
+        cudaFree(ctx.adaptive_batch_state);
+        ctx.adaptive_batch_state = nullptr;
+        cudaFree(ctx.adaptive_policy_scratch);
+        ctx.adaptive_policy_scratch = nullptr;
+        cudaFree(ctx.reduction_scratch_aux);
+        ctx.reduction_scratch_aux = nullptr;
+        ctx.reduction_scratch_aux_len = 0;
+        cudaFree(ctx.reduction_scratch);
+        ctx.reduction_scratch = nullptr;
+        ctx.reduction_scratch_len = 0;
+        return false;
+    }
+    err = cudaMalloc(
         reinterpret_cast<void **>(&ctx.adaptive_attempt_trace_device),
         FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 *
             sizeof(fullmag_fdm_adaptive_attempt_v1));
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMalloc(adaptive_attempt_trace_device)", err);
+        cudaFree(ctx.adaptive_accepted_batch);
+        ctx.adaptive_accepted_batch = nullptr;
+        cudaFree(ctx.adaptive_batch_state);
+        ctx.adaptive_batch_state = nullptr;
         cudaFree(ctx.adaptive_policy_scratch);
         ctx.adaptive_policy_scratch = nullptr;
         cudaFree(ctx.reduction_scratch_aux);
@@ -1375,6 +1411,14 @@ static void free_reduction_scratch(Context &ctx) {
     if (ctx.adaptive_policy_scratch) {
         cudaFree(ctx.adaptive_policy_scratch);
         ctx.adaptive_policy_scratch = nullptr;
+    }
+    if (ctx.adaptive_batch_state) {
+        cudaFree(ctx.adaptive_batch_state);
+        ctx.adaptive_batch_state = nullptr;
+    }
+    if (ctx.adaptive_accepted_batch) {
+        cudaFree(ctx.adaptive_accepted_batch);
+        ctx.adaptive_accepted_batch = nullptr;
     }
     if (ctx.adaptive_attempt_trace_device) {
         cudaFree(ctx.adaptive_attempt_trace_device);

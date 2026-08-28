@@ -18,12 +18,14 @@ using fullmag::fdm::ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED;
 using fullmag::fdm::ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
 using fullmag::fdm::ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED;
 using fullmag::fdm::AdaptiveDeviceControl;
+using fullmag::fdm::AdaptiveDeviceBatchState;
 using fullmag::fdm::Context;
 using fullmag::fdm::context_attach_adaptive_step_graph_body;
 using fullmag::fdm::context_begin_adaptive_step_graph_build;
 using fullmag::fdm::context_destroy_adaptive_step_graph;
 using fullmag::fdm::context_finish_adaptive_step_graph_build;
 using fullmag::fdm::context_launch_adaptive_step_graph;
+using fullmag::fdm::context_launch_adaptive_step_graph_batch;
 using fullmag::fdm::evaluate_adaptive_error_policy_loop_device;
 
 struct DeviceAllocation {
@@ -98,6 +100,8 @@ bool run_case(
 {
     DeviceAllocation errors_device;
     DeviceAllocation control_device;
+    DeviceAllocation batch_state_device;
+    DeviceAllocation accepted_batch_device;
     DeviceAllocation trace_device;
     if (!cuda_ok(cudaMalloc(&errors_device.value,
                             errors_sq.size() * sizeof(double)),
@@ -105,6 +109,13 @@ bool run_case(
         !cuda_ok(cudaMalloc(&control_device.value,
                             sizeof(AdaptiveDeviceControl)),
                  "cudaMalloc(control)") ||
+        !cuda_ok(cudaMalloc(&batch_state_device.value,
+                            sizeof(AdaptiveDeviceBatchState)),
+                 "cudaMalloc(batch state)") ||
+        !cuda_ok(cudaMalloc(&accepted_batch_device.value,
+                            fullmag::fdm::ADAPTIVE_ACCEPTED_BATCH_CAPACITY *
+                                sizeof(AdaptiveDeviceControl)),
+                 "cudaMalloc(accepted batch)") ||
         !cuda_ok(cudaMalloc(&trace_device.value,
                             FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 *
                                 sizeof(fullmag_fdm_adaptive_attempt_v1)),
@@ -123,6 +134,10 @@ bool run_case(
     auto *control = static_cast<AdaptiveDeviceControl *>(control_device.value);
     auto *trace = static_cast<fullmag_fdm_adaptive_attempt_v1 *>(trace_device.value);
     ctx.adaptive_policy_scratch = control;
+    ctx.adaptive_batch_state = static_cast<AdaptiveDeviceBatchState *>(
+        batch_state_device.value);
+    ctx.adaptive_accepted_batch = static_cast<AdaptiveDeviceControl *>(
+        accepted_batch_device.value);
     ctx.adaptive_attempt_trace_device = trace;
     cudaGraph_t conditional_body = nullptr;
     bool passed = context_begin_adaptive_step_graph_build(
@@ -164,11 +179,29 @@ bool run_case(
     initial.dt_candidate = initial_dt;
     initial.decision = ADAPTIVE_DEVICE_DECISION_RETRY;
     AdaptiveDeviceControl observed{};
-    passed = passed && context_launch_adaptive_step_graph(
-        ctx, initial, observed);
     AdaptiveDeviceControl observed_replay{};
-    passed = passed && context_launch_adaptive_step_graph(
-        ctx, initial, observed_replay);
+    uint32_t expected_graph_launches = 1;
+    if (expected_decision == ADAPTIVE_DEVICE_DECISION_ACCEPTED) {
+        std::array<AdaptiveDeviceControl, 2> accepted{};
+        uint32_t accepted_count = 0;
+        passed = passed && context_launch_adaptive_step_graph_batch(
+            ctx,
+            initial,
+            0.0,
+            1.0,
+            2,
+            accepted.data(),
+            static_cast<uint32_t>(accepted.size()),
+            accepted_count);
+        passed = passed && accepted_count == 2;
+        observed = accepted[0];
+        observed_replay = accepted[1];
+        expected_graph_launches = 2;
+    } else {
+        passed = passed && context_launch_adaptive_step_graph(
+            ctx, initial, observed);
+        observed_replay = observed;
+    }
     std::array<fullmag_fdm_adaptive_attempt_v1,
                FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1> trace_batch{};
     if (passed) {
@@ -181,10 +214,11 @@ bool run_case(
             "cudaMemcpy(one batched attempt trace D2H)");
     }
     passed = passed && ctx.adaptive_graph_build_count == 1 &&
-        ctx.adaptive_graph_launch_count == 2 &&
+        ctx.adaptive_graph_launch_count == expected_graph_launches &&
         ctx.adaptive_terminal_control_d2h_bytes ==
-            2 * sizeof(AdaptiveDeviceControl) &&
-        ctx.adaptive_terminal_control_host_sync_count == 2;
+            sizeof(AdaptiveDeviceBatchState) +
+                expected_graph_launches * sizeof(AdaptiveDeviceControl) &&
+        ctx.adaptive_terminal_control_host_sync_count == 1;
     context_destroy_adaptive_step_graph(ctx);
 
     if (!passed) return false;

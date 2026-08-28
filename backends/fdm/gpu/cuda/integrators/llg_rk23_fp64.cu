@@ -526,22 +526,6 @@ static void launch_rk23_adaptive_graph_step_fp64(
         return;
     }
 
-    const size_t bytes = ctx.cell_count * sizeof(double);
-    cudaError_t error = cudaMemcpyAsync(
-        ctx.tmp.x, ctx.m.x, bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (error == cudaSuccess) {
-        error = cudaMemcpyAsync(
-            ctx.tmp.y, ctx.m.y, bytes, cudaMemcpyDeviceToDevice, nullptr);
-    }
-    if (error == cudaSuccess) {
-        error = cudaMemcpyAsync(
-            ctx.tmp.z, ctx.m.z, bytes, cudaMemcpyDeviceToDevice, nullptr);
-    }
-    if (error != cudaSuccess) {
-        set_cuda_error(ctx, "cudaMemcpyAsync(adaptive_rk23 snapshot)", error);
-        return;
-    }
-
     AdaptiveDeviceControl initial{};
     initial.dt_candidate = dt;
     initial.previous_error = ctx.adaptive_previous_error;
@@ -552,6 +536,7 @@ static void launch_rk23_adaptive_graph_step_fp64(
     ctx.trial_dt = dt;
     if (!context_launch_adaptive_step_graph(ctx, initial, terminal)) return;
 
+    const size_t bytes = ctx.cell_count * sizeof(double);
     ctx.adaptive_attempt_trace_count = terminal.attempt_index + 1;
     ctx.adaptive_rejected_attempts = terminal.next_rejected_attempts;
     if (poll_interrupt(ctx)) {

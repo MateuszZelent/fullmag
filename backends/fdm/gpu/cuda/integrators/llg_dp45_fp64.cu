@@ -600,18 +600,6 @@ static void launch_dp45_adaptive_graph_step_fp64(
         !build_dp45_adaptive_graph_fp64(
             ctx, n, grid, gamma_bar, alpha, step_start_time)) return;
 
-    const size_t bytes = ctx.cell_count * sizeof(double);
-    cudaError_t error = cudaMemcpyAsync(
-        ctx.tmp.x, ctx.m.x, bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (error == cudaSuccess) error = cudaMemcpyAsync(
-        ctx.tmp.y, ctx.m.y, bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (error == cudaSuccess) error = cudaMemcpyAsync(
-        ctx.tmp.z, ctx.m.z, bytes, cudaMemcpyDeviceToDevice, nullptr);
-    if (error != cudaSuccess) {
-        set_cuda_error(ctx, "cudaMemcpyAsync(adaptive_dp45 snapshot)", error);
-        return;
-    }
-
     AdaptiveDeviceControl initial{};
     initial.dt_candidate = dt;
     initial.previous_error = ctx.adaptive_previous_error;

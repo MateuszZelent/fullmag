@@ -2,6 +2,8 @@
 
 #include <cuda_runtime.h>
 
+#include <cmath>
+
 namespace fullmag {
 namespace fdm {
 
@@ -10,9 +12,67 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 namespace {
 
 __global__ void reset_adaptive_loop_condition_kernel(
-    cudaGraphConditionalHandle loop_handle)
+    cudaGraphConditionalHandle loop_handle,
+    AdaptiveDeviceControl *control,
+    AdaptiveDeviceBatchState *batch)
 {
+    if (control == nullptr || batch == nullptr || batch->failed != 0 ||
+        batch->accepted_count >= batch->max_steps ||
+        !(batch->current_time < batch->target_time)) {
+        if (batch != nullptr) batch->active_step = 0;
+        cudaGraphSetConditional(loop_handle, 0U);
+        return;
+    }
+    const double remaining = batch->target_time - batch->current_time;
+    if (!(remaining > 0.0) || !isfinite(remaining) ||
+        !(control->dt_candidate > 0.0) || !isfinite(control->dt_candidate)) {
+        batch->failed = 1;
+        batch->terminal_reason = ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP;
+        batch->active_step = 0;
+        cudaGraphSetConditional(loop_handle, 0U);
+        return;
+    }
+    control->dt_candidate = fmin(control->dt_candidate, remaining);
+    control->error = 0.0;
+    control->ratio = 1.0;
+    control->dt_attempt = 0.0;
+    control->decision = ADAPTIVE_DEVICE_DECISION_RETRY;
+    control->reason = ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE;
+    control->attempt_index = 0;
+    control->next_rejected_attempts = 0;
+    batch->active_step = 1;
     cudaGraphSetConditional(loop_handle, 1U);
+}
+
+__global__ void finalize_adaptive_accepted_step_kernel(
+    AdaptiveDeviceControl *control,
+    AdaptiveDeviceBatchState *batch,
+    AdaptiveDeviceControl *accepted_steps)
+{
+    if (control == nullptr || batch == nullptr || accepted_steps == nullptr ||
+        batch->active_step == 0) {
+        return;
+    }
+    batch->active_step = 0;
+    if (control->decision != ADAPTIVE_DEVICE_DECISION_ACCEPTED) {
+        if (batch->accepted_count < batch->max_steps &&
+            batch->accepted_count < ADAPTIVE_ACCEPTED_BATCH_CAPACITY) {
+            accepted_steps[batch->accepted_count] = *control;
+        }
+        batch->failed = 1;
+        batch->terminal_reason = control->reason;
+        return;
+    }
+    const uint32_t index = batch->accepted_count;
+    if (index >= batch->max_steps ||
+        index >= ADAPTIVE_ACCEPTED_BATCH_CAPACITY) {
+        batch->failed = 1;
+        batch->terminal_reason = ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED;
+        return;
+    }
+    accepted_steps[index] = *control;
+    batch->current_time += control->dt_attempt;
+    batch->accepted_count = index + 1;
 }
 
 bool graph_ok(Context &ctx, const char *operation, cudaError_t error) {
@@ -71,7 +131,10 @@ bool context_begin_adaptive_step_graph_build(
     }
 
     cudaKernelNodeParams reset_params{};
-    void *reset_arguments[] = {&ctx.adaptive_loop_handle};
+    void *reset_arguments[] = {
+        &ctx.adaptive_loop_handle,
+        &ctx.adaptive_policy_scratch,
+        &ctx.adaptive_batch_state};
     reset_params.func = reinterpret_cast<void *>(
         reset_adaptive_loop_condition_kernel);
     reset_params.gridDim = dim3(1, 1, 1);
@@ -112,6 +175,29 @@ bool context_begin_adaptive_step_graph_build(
     ctx.adaptive_step_graph_body =
         conditional_params.conditional.phGraph_out[0];
     conditional_body = ctx.adaptive_step_graph_body;
+    cudaKernelNodeParams finalize_params{};
+    void *finalize_arguments[] = {
+        &ctx.adaptive_policy_scratch,
+        &ctx.adaptive_batch_state,
+        &ctx.adaptive_accepted_batch};
+    finalize_params.func = reinterpret_cast<void *>(
+        finalize_adaptive_accepted_step_kernel);
+    finalize_params.gridDim = dim3(1, 1, 1);
+    finalize_params.blockDim = dim3(1, 1, 1);
+    finalize_params.kernelParams = finalize_arguments;
+    cudaGraphNode_t finalize_node = nullptr;
+    if (!graph_ok(
+            ctx,
+            "cudaGraphAddKernelNode(adaptive_step_finalize)",
+            cudaGraphAddKernelNode(
+                &finalize_node,
+                ctx.adaptive_step_graph,
+                &conditional_node,
+                1,
+                &finalize_params))) {
+        context_destroy_adaptive_step_graph(ctx);
+        return false;
+    }
     if (!graph_ok(
             ctx,
             "cudaStreamCreateWithFlags(adaptive_graph_capture)",
@@ -280,11 +366,58 @@ bool context_launch_adaptive_step_graph(
     const AdaptiveDeviceControl &initial_control,
     AdaptiveDeviceControl &terminal_control)
 {
+    uint32_t accepted_step_count = 0;
+    if (!context_launch_adaptive_step_graph_batch(
+            ctx,
+            initial_control,
+            ctx.current_time,
+            ctx.current_time + initial_control.dt_candidate,
+            1,
+            &terminal_control,
+            1,
+            accepted_step_count)) {
+        return false;
+    }
+    if (accepted_step_count == 0 &&
+        terminal_control.decision == ADAPTIVE_DEVICE_DECISION_FAILED) {
+        return true;
+    }
+    if (accepted_step_count != 1) {
+        ctx.last_error = "adaptive_step_graph_single_step_not_accepted";
+        return false;
+    }
+    return true;
+}
+
+bool context_launch_adaptive_step_graph_batch(
+    Context &ctx,
+    const AdaptiveDeviceControl &initial_control,
+    double current_time,
+    double target_time,
+    uint32_t max_steps,
+    AdaptiveDeviceControl *accepted_steps,
+    uint32_t accepted_steps_capacity,
+    uint32_t &accepted_step_count)
+{
+    accepted_step_count = 0;
     if (ctx.adaptive_step_graph_exec == nullptr ||
-        ctx.adaptive_policy_scratch == nullptr) {
+        ctx.adaptive_policy_scratch == nullptr ||
+        ctx.adaptive_batch_state == nullptr ||
+        ctx.adaptive_accepted_batch == nullptr) {
         ctx.last_error = "adaptive_step_graph_not_ready";
         return false;
     }
+    if (accepted_steps == nullptr || max_steps == 0 ||
+        max_steps > ADAPTIVE_ACCEPTED_BATCH_CAPACITY ||
+        accepted_steps_capacity < max_steps || !isfinite(current_time) ||
+        !isfinite(target_time) || !(target_time > current_time)) {
+        ctx.last_error = "adaptive_step_graph_batch_invalid";
+        return false;
+    }
+    AdaptiveDeviceBatchState initial_batch{};
+    initial_batch.current_time = current_time;
+    initial_batch.target_time = target_time;
+    initial_batch.max_steps = max_steps;
     cudaError_t error = cudaMemcpyAsync(
         ctx.adaptive_policy_scratch,
         &initial_control,
@@ -294,17 +427,67 @@ bool context_launch_adaptive_step_graph(
     if (!graph_ok(ctx, "cudaMemcpyAsync(adaptive_control H2D)", error)) {
         return false;
     }
-    error = cudaGraphLaunch(ctx.adaptive_step_graph_exec, nullptr);
-    if (!graph_ok(ctx, "cudaGraphLaunch(adaptive_step)", error)) {
+    error = cudaMemcpyAsync(
+        ctx.adaptive_batch_state,
+        &initial_batch,
+        sizeof(initial_batch),
+        cudaMemcpyHostToDevice,
+        nullptr);
+    if (!graph_ok(ctx, "cudaMemcpyAsync(adaptive_batch H2D)", error)) {
+        return false;
+    }
+    const bool has_snapshot = ctx.m.x != nullptr && ctx.m.y != nullptr &&
+        ctx.m.z != nullptr && ctx.tmp.x != nullptr && ctx.tmp.y != nullptr &&
+        ctx.tmp.z != nullptr && ctx.cell_count != 0;
+    const size_t snapshot_bytes = static_cast<size_t>(ctx.cell_count) *
+        (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? sizeof(double) : sizeof(float));
+    for (uint32_t step = 0; step < max_steps; ++step) {
+        if (has_snapshot) {
+            error = cudaMemcpyAsync(
+                ctx.tmp.x, ctx.m.x, snapshot_bytes,
+                cudaMemcpyDeviceToDevice, nullptr);
+            if (error == cudaSuccess) {
+                error = cudaMemcpyAsync(
+                    ctx.tmp.y, ctx.m.y, snapshot_bytes,
+                    cudaMemcpyDeviceToDevice, nullptr);
+            }
+            if (error == cudaSuccess) {
+                error = cudaMemcpyAsync(
+                    ctx.tmp.z, ctx.m.z, snapshot_bytes,
+                    cudaMemcpyDeviceToDevice, nullptr);
+            }
+            if (!graph_ok(
+                    ctx,
+                    "cudaMemcpyAsync(adaptive_batch_snapshot)",
+                    error)) {
+                return false;
+            }
+        }
+        error = cudaGraphLaunch(ctx.adaptive_step_graph_exec, nullptr);
+        if (!graph_ok(ctx, "cudaGraphLaunch(adaptive_step)", error)) {
+            return false;
+        }
+        context_record_adaptive_execution_counter(
+            ctx, ctx.adaptive_graph_launch_count);
+    }
+    AdaptiveDeviceBatchState terminal_batch{};
+    error = cudaMemcpyAsync(
+        &terminal_batch,
+        ctx.adaptive_batch_state,
+        sizeof(terminal_batch),
+        cudaMemcpyDeviceToHost,
+        nullptr);
+    if (!graph_ok(ctx, "cudaMemcpyAsync(adaptive_batch_state D2H)", error)) {
         return false;
     }
     error = cudaMemcpyAsync(
-        &terminal_control,
-        ctx.adaptive_policy_scratch,
-        sizeof(terminal_control),
+        accepted_steps,
+        ctx.adaptive_accepted_batch,
+        max_steps * sizeof(AdaptiveDeviceControl),
         cudaMemcpyDeviceToHost,
         nullptr);
-    if (!graph_ok(ctx, "cudaMemcpyAsync(adaptive_control D2H)", error)) {
+    if (!graph_ok(ctx, "cudaMemcpyAsync(adaptive_batch_records D2H)", error)) {
         return false;
     }
     error = cudaStreamSynchronize(nullptr);
@@ -314,15 +497,20 @@ bool context_launch_adaptive_step_graph(
     context_record_adaptive_execution_counter(
         ctx,
         ctx.adaptive_terminal_control_d2h_bytes,
-        sizeof(terminal_control));
+        sizeof(terminal_batch) +
+            max_steps * sizeof(AdaptiveDeviceControl));
     context_record_adaptive_execution_counter(
         ctx, ctx.adaptive_terminal_control_host_sync_count);
     if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
         context_record_adaptive_execution_counter(
             ctx, ctx.adaptive_stats_none_host_sync_count);
     }
-    context_record_adaptive_execution_counter(
-        ctx, ctx.adaptive_graph_launch_count);
+    accepted_step_count = terminal_batch.accepted_count;
+    if (accepted_step_count > max_steps ||
+        (accepted_step_count == 0 && terminal_batch.failed == 0)) {
+        ctx.last_error = "adaptive_step_graph_batch_empty_or_overflow";
+        return false;
+    }
     return true;
 }
 
