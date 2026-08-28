@@ -717,7 +717,10 @@ __global__ void add_scaled_field_fp32_kernel(
     dst_z[i] += scale * src_z[i];
 }
 
-void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
+void launch_effective_field_fp32(
+    Context &ctx,
+    double evaluation_time,
+    cudaStream_t stream) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -733,7 +736,7 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
     }
     if (ctx.thermal_sigma > 0.0) ctx.thermal_rng_draws += 3 * ctx.cell_count;
 
-    combine_effective_field_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+    combine_effective_field_fp32_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
         static_cast<const float*>(ctx.m.x),
         static_cast<const float*>(ctx.m.y),
         static_cast<const float*>(ctx.m.z),
@@ -791,7 +794,7 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
 
     // ── Add a static external profile directly, or scale a dynamic Oersted profile by I(t). ──
     if (ctx.has_static_external_field_profile) {
-        add_scaled_field_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+        add_scaled_field_fp32_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
             static_cast<float*>(ctx.work.x),
             static_cast<float*>(ctx.work.y),
             static_cast<float*>(ctx.work.z),
@@ -804,7 +807,7 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
             n);
     } else if (ctx.has_oersted_field) {
         const double I_scale = oersted_field_scale(ctx, evaluation_time);
-        add_scaled_field_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+        add_scaled_field_fp32_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
             static_cast<float*>(ctx.work.x),
             static_cast<float*>(ctx.work.y),
             static_cast<float*>(ctx.work.z),
@@ -846,6 +849,10 @@ void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
     if (ctx.has_oersted_field) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_OERSTED);
     }
+}
+
+void launch_effective_field_fp32(Context &ctx, double evaluation_time) {
+    launch_effective_field_fp32(ctx, evaluation_time, nullptr);
 }
 
 void launch_anisotropy_field_fp32(Context &ctx) {

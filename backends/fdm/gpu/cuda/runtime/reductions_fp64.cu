@@ -12,8 +12,7 @@
  */
 
 #include "context.hpp"
-#include "adaptive_step_decision.hpp"
-
+#include "adaptive_controller.cuh"
 #include <cuda_runtime.h>
 #include <math_constants.h>
 #include <cmath>
@@ -27,7 +26,6 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 
 static constexpr double MU0 = 4.0 * M_PI * 1e-7;
 static constexpr int REDUCTION_BLOCK_SIZE = 256;
-static constexpr double ADAPTIVE_DT_MIN_ULP_FACTOR = 4.0 * 2.2204460492503130808e-16;
 
 template <typename T>
 __device__ __forceinline__ double to_f64(T value) {
@@ -105,39 +103,82 @@ __global__ void reduce_max_blocks_kernel(const double *input, double *output, ui
 
 __global__ void adaptive_error_policy_kernel(
     const double *max_error_sq,
-    double *policy_out,
+    AdaptiveDeviceControl *policy_out,
+    fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
     double dt,
-    double adaptive_threshold,
     double adaptive_dt_min,
     double adaptive_dt_max,
     double adaptive_safety,
     double adaptive_growth_limit,
     double adaptive_shrink_limit,
-    double exponent)
+    double exponent,
+    int order_est,
+    int canonical_controller,
+    double previous_error,
+    int has_previous_error,
+    uint32_t rejected_attempts,
+    int force_retry)
 {
-    double max_sq = max_error_sq != nullptr ? max_error_sq[0] : 0.0;
-    const bool finite_max_sq = isfinite(max_sq) && max_sq >= 0.0;
-    double error = finite_max_sq ? (max_sq > 0.0 ? sqrt(max_sq) : 0.0) : CUDART_INF;
-    double dt_candidate = dt;
-    if (error > 0.0) {
-        dt_candidate = adaptive_safety * dt * pow(adaptive_threshold / error, exponent);
-        double ratio = dt_candidate / dt;
-        ratio = fmin(ratio, adaptive_growth_limit);
-        ratio = fmax(ratio, adaptive_shrink_limit);
-        dt_candidate = dt * ratio;
-        dt_candidate = fmin(dt_candidate, adaptive_dt_max);
-        dt_candidate = fmax(dt_candidate, adaptive_dt_min);
-    } else {
-        dt_candidate = adaptive_dt_max;
+    evaluate_adaptive_error_policy_device(
+        max_error_sq != nullptr ? max_error_sq[0] : 0.0,
+        policy_out,
+        attempt_trace,
+        dt,
+        adaptive_dt_min,
+        adaptive_dt_max,
+        adaptive_safety,
+        adaptive_growth_limit,
+        adaptive_shrink_limit,
+        exponent,
+        order_est,
+        canonical_controller,
+        previous_error,
+        has_previous_error,
+        rejected_attempts,
+        force_retry);
+}
+
+__global__ void adaptive_error_policy_loop_kernel(
+    const double *max_error_sq,
+    AdaptiveDeviceControl *control,
+    fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
+    double adaptive_dt_min,
+    double adaptive_dt_max,
+    double adaptive_safety,
+    double adaptive_growth_limit,
+    double adaptive_shrink_limit,
+    double exponent,
+    int order_est,
+    int canonical_controller,
+    cudaGraphConditionalHandle loop_handle)
+{
+    evaluate_adaptive_error_policy_loop_device(
+        max_error_sq != nullptr ? max_error_sq[0] : 0.0,
+        control,
+        attempt_trace,
+        adaptive_dt_min,
+        adaptive_dt_max,
+        adaptive_safety,
+        adaptive_growth_limit,
+        adaptive_shrink_limit,
+        exponent,
+        order_est,
+        canonical_controller,
+        0,
+        loop_handle);
+}
+
+static const char *adaptive_device_reason_id(uint32_t reason) {
+    switch (reason) {
+        case ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE: return "within_tolerance";
+        case ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE: return "error_above_tolerance";
+        case ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED: return "dt_min_exhausted";
+        case ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP: return "invalid_timestep";
+        case ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR: return "invalid_current_error";
+        case ADAPTIVE_DEVICE_REASON_INVALID_PREVIOUS_ERROR: return "invalid_previous_error";
+        case ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED: return "retry_limit_exhausted";
+        default: return "invalid_decision_reason";
     }
-    const bool at_dt_min = dt <= adaptive_dt_min ||
-        fabs(dt - adaptive_dt_min) <= adaptive_dt_min * ADAPTIVE_DT_MIN_ULP_FACTOR;
-    // A failed attempt at the lower bound is terminal: dt_min_exhausted.
-    double accepted = isfinite(error) && error <= adaptive_threshold ? 1.0
-        : (at_dt_min ? -1.0 : 0.0);
-    policy_out[0] = error;
-    policy_out[1] = dt_candidate;
-    policy_out[2] = accepted;
 }
 
 template <typename Scalar>
@@ -823,61 +864,31 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         dst = tmp;
     }
 
-    if (ctx.adaptive_canonical_controller) {
-        double max_sq = 0.0;
-        cudaError_t err = cudaMemcpyAsync(&max_sq, src, sizeof(double), cudaMemcpyDeviceToHost, stream);
-        if (err != cudaSuccess) {
-            set_cuda_error(ctx, "cudaMemcpyAsync(reduce_adaptive_error_policy)", err);
-            context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
-            return policy;
-        }
-        err = cudaStreamSynchronize(stream);
-        if (err != cudaSuccess) {
-            set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
-            context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
-            return policy;
-        }
-        fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
-        fullmag_fdm_record_control_scalar_host_sync(ctx);
-        if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) return policy;
-        const bool finite_max_sq = std::isfinite(max_sq) && max_sq >= 0.0;
-        policy.error = finite_max_sq
-            ? (max_sq > 0.0 ? std::sqrt(max_sq) : 0.0)
-            : std::numeric_limits<double>::infinity();
-        fullmag_fdm_record_hot_loop_host_compute(ctx);
-        const int order_est = exponent == 0.2 ? 4 : 2;
-        const auto decision = adaptive::decide_adaptive_step(
-            {order_est, ctx.adaptive_dt_min, ctx.adaptive_dt_max, ctx.adaptive_safety,
-             ctx.adaptive_growth_limit, ctx.adaptive_shrink_limit},
-            {dt, policy.error, ctx.adaptive_previous_error, ctx.adaptive_has_previous_error});
-        policy.dt_candidate = decision.dt_next;
-        policy.accepted = decision.kind == adaptive::AdaptiveDecisionKind::accepted ? 1 : 0;
-        policy.dt_min_exhausted =
-            decision.reason == adaptive::AdaptiveDecisionReason::dt_min_exhausted;
-        if (policy.accepted) {
-            ctx.adaptive_has_previous_error = policy.error > 0.0;
-            ctx.adaptive_previous_error = policy.error > 0.0 ? policy.error : 0.0;
-        }
-        if (decision.kind == adaptive::AdaptiveDecisionKind::failed && !policy.dt_min_exhausted) {
-            ctx.last_error = adaptive::adaptive_decision_reason_id(decision.reason);
-        }
-        return policy;
-    }
-
+    const int force_retry = ctx.gpu_transport_test_force_adaptive_retry ? 1 : 0;
+    ctx.gpu_transport_test_force_adaptive_retry = false;
+    const int order_est = exponent == 0.2 ? 4 : 2;
     adaptive_error_policy_kernel<<<1, 1, 0, stream>>>(
         src,
         ctx.adaptive_policy_scratch,
+        ctx.adaptive_attempt_trace_device,
         dt,
-        1.0,
         ctx.adaptive_dt_min,
         ctx.adaptive_dt_max,
         ctx.adaptive_safety,
         ctx.adaptive_growth_limit,
         ctx.adaptive_shrink_limit,
-        exponent);
+        exponent,
+        order_est,
+        ctx.adaptive_canonical_controller ? 1 : 0,
+        ctx.adaptive_previous_error,
+        ctx.adaptive_has_previous_error ? 1 : 0,
+        ctx.adaptive_rejected_attempts,
+        force_retry);
 
-    double host_values[3] = {0.0, dt, 0.0};
-    cudaError_t err = cudaMemcpyAsync(&host_values, ctx.adaptive_policy_scratch, 3 * sizeof(double), cudaMemcpyDeviceToHost, stream);
+    AdaptiveDeviceControl host_control{};
+    cudaError_t err = cudaMemcpyAsync(
+        &host_control, ctx.adaptive_policy_scratch, sizeof(host_control),
+        cudaMemcpyDeviceToHost, stream);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMemcpyAsync(reduce_adaptive_error_policy)", err);
         context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
@@ -889,20 +900,103 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
         return policy;
     }
-    fullmag_fdm_record_control_scalar_d2h(ctx, 3 * sizeof(double));
+    fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(host_control));
     fullmag_fdm_record_control_scalar_host_sync(ctx);
     if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) {
         return policy;
     }
-    policy.error = host_values[0];
-    policy.dt_candidate = host_values[1];
-    policy.accepted = host_values[2] >= 0.5 ? 1 : 0;
-    policy.dt_min_exhausted = host_values[2] < -0.5;
-    if (!std::isfinite(policy.error)) {
-        policy.accepted = 0;
-        ctx.last_error = "non_finite_adaptive_error";
+    fullmag_fdm_note_operator_device_execution(
+        ctx, FULLMAG_FDM_OPERATOR_REDUCTION);
+    policy.error = host_control.error;
+    policy.dt_candidate = host_control.dt_candidate;
+    policy.ratio = host_control.ratio;
+    policy.accepted = host_control.decision == ADAPTIVE_DEVICE_DECISION_ACCEPTED ? 1 : 0;
+    policy.dt_min_exhausted =
+        host_control.reason == ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED;
+    policy.failed = host_control.decision == ADAPTIVE_DEVICE_DECISION_FAILED;
+    policy.reason = host_control.reason;
+    policy.rejected_attempts = host_control.next_rejected_attempts;
+    ctx.adaptive_rejected_attempts = host_control.next_rejected_attempts;
+    if (host_control.decision == ADAPTIVE_DEVICE_DECISION_ACCEPTED ||
+        host_control.decision == ADAPTIVE_DEVICE_DECISION_FAILED) {
+        ctx.adaptive_attempt_trace_count = host_control.attempt_index + 1;
+    }
+    if (policy.accepted && ctx.adaptive_canonical_controller) {
+        ctx.adaptive_has_previous_error = host_control.has_previous_error != 0;
+        ctx.adaptive_previous_error = host_control.previous_error;
+    }
+    if (host_control.decision == ADAPTIVE_DEVICE_DECISION_FAILED &&
+        !policy.dt_min_exhausted) {
+        ctx.last_error = adaptive_device_reason_id(host_control.reason);
     }
     return policy;
+}
+
+bool enqueue_adaptive_error_policy_device_loop(
+    Context &ctx,
+    double *device_values,
+    uint64_t n,
+    double exponent,
+    cudaGraphConditionalHandle loop_handle)
+{
+    if (device_values == nullptr || n == 0 ||
+        ctx.adaptive_policy_scratch == nullptr) {
+        ctx.last_error = "adaptive_device_loop_scratch_unavailable";
+        return false;
+    }
+    if (!context_begin_compute_stream_work(
+            ctx, "enqueue_adaptive_error_policy_device_loop")) {
+        return false;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+    double *src = device_values;
+    double *dst = ctx.reduction_scratch_aux;
+    uint64_t current = n;
+    while (current > 1) {
+        const uint64_t blocks =
+            (current + REDUCTION_BLOCK_SIZE * 2 - 1) /
+            (REDUCTION_BLOCK_SIZE * 2);
+        reduce_max_blocks_kernel<<<
+            static_cast<unsigned int>(blocks),
+            REDUCTION_BLOCK_SIZE,
+            0,
+            stream>>>(src, dst, current);
+        current = blocks;
+        double *temporary = src;
+        src = dst;
+        dst = temporary;
+    }
+    const int order_est = exponent == 0.2 ? 4 : 2;
+    adaptive_error_policy_loop_kernel<<<1, 1, 0, stream>>>(
+        src,
+        ctx.adaptive_policy_scratch,
+        ctx.adaptive_attempt_trace_device,
+        ctx.adaptive_dt_min,
+        ctx.adaptive_dt_max,
+        ctx.adaptive_safety,
+        ctx.adaptive_growth_limit,
+        ctx.adaptive_shrink_limit,
+        exponent,
+        order_est,
+        ctx.adaptive_canonical_controller ? 1 : 0,
+        loop_handle);
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(
+            ctx,
+            "adaptive_error_policy_loop_kernel",
+            launch_error);
+        context_end_compute_stream_work(
+            ctx, "enqueue_adaptive_error_policy_device_loop");
+        return false;
+    }
+    if (!context_end_compute_stream_work(
+            ctx, "enqueue_adaptive_error_policy_device_loop")) {
+        return false;
+    }
+    fullmag_fdm_note_operator_device_execution(
+        ctx, FULLMAG_FDM_OPERATOR_REDUCTION);
+    return true;
 }
 
 double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n) {

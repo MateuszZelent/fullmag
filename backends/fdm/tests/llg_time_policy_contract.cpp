@@ -41,6 +41,8 @@ int main() {
     const auto runner = read(root / "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs");
     const auto runtime = read(root / "backends/fdm/gpu/cuda/runtime/context.cu");
     const auto reductions = read(root / "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu");
+    const auto adaptive_controller = read(
+        root / "backends/fdm/gpu/cuda/runtime/adaptive_controller.cuh");
     const auto rk23 = read(root / "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu");
     const auto rk45 = read(root / "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu");
     const auto rk23_fp32 = read(root / "backends/fdm/gpu/cuda/integrators/llg_rk23_fp32.cu");
@@ -77,6 +79,13 @@ int main() {
 
     check(reductions.find("dt_min_exhausted") != std::string::npos,
           "CUDA adaptive policy returns typed dt_min_exhausted");
+    check(reductions.find("adaptive::decide_adaptive_step") == std::string::npos,
+          "checked-v2 canonical PI decision is not recomputed on the host");
+    check(adaptive_controller.find("ADAPTIVE_MAX_REJECTED_ATTEMPTS = 50") !=
+              std::string::npos &&
+              adaptive_controller.find("ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED") !=
+                  std::string::npos,
+          "CUDA adaptive policy owns the canonical bounded retry limit on device");
     check(reductions.find("dt <= adaptive_dt_min) ? 1.0") == std::string::npos,
           "CUDA policy never force-accepts at dt_min");
     check(rk23.find("if (!ctx.adaptive_enabled)") != std::string::npos,
@@ -97,6 +106,8 @@ int main() {
               "CUDA dt_min terminal return invalidates pre-attempt FSAL state");
         check(source->find("ctx.fsal_valid = fsal_valid_before_step") == std::string::npos,
               "CUDA dt_min terminal return never republishes pre-attempt FSAL state");
+        check(source->find("if (policy.failed)") != std::string::npos,
+              "every CUDA embedded RK path terminates typed device-policy failures");
     }
 
     for (const auto &golden : fullmag::adaptive::kAdaptiveDecisionGoldenVectors) {
@@ -161,6 +172,88 @@ int main() {
                              "advanced absolute-only tolerance is accepted by v2 behavior");
     check_advanced_tolerance(0.0, 1e-4,
                              "advanced relative-only tolerance is accepted by v2 behavior");
+
+    auto check_device_controller = [&](fullmag_fdm_precision precision,
+                                       fullmag_fdm_integrator integrator) {
+        auto plan = invalid;
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_ADVANCED, 1e-9, 0.0,
+                            1e-16, 2e-15, 0.9, 2.0, 0.2, 0, 0.0, 0, 0.0};
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        check(backend != nullptr, "device-controller fixture has a valid handle");
+        check(fullmag_fdm_backend_last_error(backend) == nullptr,
+              "device-controller fixture passes checked-v2 validation");
+        fullmag_fdm_step_stats stats{};
+        const auto step_status = fullmag_fdm_backend_step(backend, 1e-15, &stats);
+        if (step_status != FULLMAG_FDM_OK) {
+            const char *step_error = fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr, "adaptive CUDA step error: %s\n",
+                         step_error != nullptr ? step_error : "<none>");
+        }
+        check(step_status == FULLMAG_FDM_OK,
+              "device-controller fixture executes one adaptive CUDA step");
+        check(std::abs(stats.suggested_next_dt - 2e-15) <= 1e-30,
+              "zero-error device PI decision applies the canonical growth limit");
+        uint32_t attempt_count = UINT32_MAX;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, nullptr, 0, &attempt_count) == FULLMAG_FDM_OK &&
+                  attempt_count == 1,
+              "accepted device-controller step publishes one batched attempt record");
+        fullmag_fdm_adaptive_attempt_v1 attempts
+            [FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1]{};
+        uint32_t copied_attempts = 0;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, attempts, FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+                  &copied_attempts) == FULLMAG_FDM_OK &&
+                  copied_attempts == 1,
+              "adaptive attempt trace is copied in one observation-time batch");
+        check(attempts[0].abi_version == FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1 &&
+                  attempts[0].struct_size == sizeof(fullmag_fdm_adaptive_attempt_v1) &&
+                  attempts[0].attempt_index == 0 &&
+                  attempts[0].decision == FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED &&
+                  attempts[0].reason == FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE &&
+                  attempts[0].dt_attempt_seconds == 1e-15 &&
+                  attempts[0].normalized_error == 0.0 &&
+                  attempts[0].dt_next_seconds == 2e-15,
+              "batched attempt record preserves the accepted device decision");
+        fullmag_fdm_execution_receipt_v2 receipt{};
+        receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+        receipt.struct_size = sizeof(receipt);
+        check(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
+                  FULLMAG_FDM_OK,
+              "device-controller fixture publishes an execution receipt");
+        check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM,
+              "device-controller receipt proves CUDA execution");
+        check(receipt.precision == precision,
+              "device-controller receipt preserves precision");
+        check(receipt.integrator == integrator,
+              "device-controller receipt preserves integrator");
+        check(receipt.fallback_count == 0,
+              "device-controller receipt proves zero fallback");
+        check(receipt.accounting_valid == 1,
+              "device-controller receipt has valid accounting");
+        check(receipt.hot_loop_host_compute_count == 0,
+              "canonical adaptive PI decision performs zero hot-loop host compute");
+        const bool uses_conditional_graph =
+            integrator == FULLMAG_FDM_INTEGRATOR_RK23;
+        if (uses_conditional_graph) {
+            check(receipt.hot_loop_control_scalar_d2h_bytes == 0 &&
+                      receipt.hot_loop_control_scalar_host_sync_count == 0,
+                  "conditional graph performs zero per-attempt control readback");
+        } else {
+            check(receipt.hot_loop_control_scalar_d2h_bytes >= 56 &&
+                      receipt.hot_loop_control_scalar_host_sync_count >= 1,
+                  "legacy device policy readback remains explicitly accounted");
+        }
+        fullmag_fdm_backend_destroy(backend);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_device_controller(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_device_controller(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
 #endif
 
     std::puts("FDM LLG time-policy ABI/source contract: PASS");

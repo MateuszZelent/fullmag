@@ -278,6 +278,10 @@
       "validated_workloads": [],
       "qualification_binding": {
         "id": "source_bound_execution_receipt",
+        "fdm_gpu_status": "implemented/unvalidated",
+        "fdm_gpu_artifact_schema": "fdm_gpu_execution_receipt_evidence.v2",
+        "fdm_gpu_require_source_commit": true,
+        "fdm_gpu_require_source_diff_sha256": true,
         "fem_gpu_status": "implemented/unvalidated",
         "artifact_schema": "fullmag.fem_gpu_execution_receipt.native_projection.v1",
         "rust_projection": "FemGpuExecutionReceipt.v1",

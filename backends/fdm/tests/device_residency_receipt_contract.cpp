@@ -535,13 +535,21 @@ int main() {
 
     if (const char *evidence_path =
             std::getenv("FULLMAG_FDM_GPU_RESIDENCY_EVIDENCE_PATH")) {
+        const char *source_commit = std::getenv("FULLMAG_SOURCE_COMMIT");
+        const char *source_diff_sha256 = std::getenv("FULLMAG_SOURCE_DIFF_SHA256");
+        check(source_commit != nullptr && *source_commit != '\0',
+              "managed receipt evidence requires source commit");
+        check(source_diff_sha256 != nullptr && *source_diff_sha256 != '\0',
+              "managed receipt evidence requires source diff digest");
         std::ofstream evidence(evidence_path, std::ios::trunc);
         check(static_cast<bool>(evidence), "managed receipt evidence is writable");
         evidence
             << "{\n"
-            << "  \"schema_version\": \"fdm_gpu_execution_receipt_evidence.v1\",\n"
+            << "  \"schema_version\": \"fdm_gpu_execution_receipt_evidence.v2\",\n"
             << "  \"validation_state\": \"validated\",\n"
             << "  \"runtime_check\": \"passed\",\n"
+            << "  \"source_commit\": \"" << source_commit << "\",\n"
+            << "  \"source_diff_sha256\": \"" << source_diff_sha256 << "\",\n"
             << "  \"requested\": \"gpu\",\n"
             << "  \"resolved\": \"device_resident\",\n"
             << "  \"executed\": \"cuda_fdm\",\n"

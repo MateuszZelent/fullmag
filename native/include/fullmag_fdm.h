@@ -697,6 +697,38 @@ typedef struct {
     uint64_t multilayer_pair_accumulation_count;
 } fullmag_fdm_step_stats;
 
+#define FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1 1u
+#define FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 51u
+
+typedef enum {
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED = 1,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY = 2,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_FAILED = 3,
+} fullmag_fdm_adaptive_attempt_decision_v1;
+
+typedef enum {
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE = 1,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_ERROR_ABOVE_TOLERANCE = 2,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_DT_MIN_EXHAUSTED = 3,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_TIMESTEP = 4,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_CURRENT_ERROR = 5,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_PREVIOUS_ERROR = 6,
+    FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY_LIMIT_EXHAUSTED = 7,
+} fullmag_fdm_adaptive_attempt_reason_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t attempt_index;
+    fullmag_fdm_adaptive_attempt_decision_v1 decision;
+    fullmag_fdm_adaptive_attempt_reason_v1 reason;
+    uint32_t reserved0;
+    double dt_attempt_seconds;
+    double normalized_error;
+    double ratio;
+    double dt_next_seconds;
+} fullmag_fdm_adaptive_attempt_v1;
+
 #define FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1 1u
 typedef struct {
     uint32_t abi_version;
@@ -945,6 +977,17 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
     fullmag_fdm_step_stats *out_stats);
+
+/*
+ * Copy the completed adaptive-attempt trace in one observation-time D2H batch.
+ * A NULL output with capacity zero queries the required record count. The trace
+ * belongs to the most recent public step and is empty for fixed-step methods.
+ */
+int fullmag_fdm_backend_copy_adaptive_attempts_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_adaptive_attempt_v1 *out_attempts,
+    uint32_t capacity,
+    uint32_t *out_count);
 
 /* Caller initializes abi_version and struct_size. Invalid headers leave output unchanged. */
 int fullmag_fdm_backend_get_fsal_telemetry_v1(

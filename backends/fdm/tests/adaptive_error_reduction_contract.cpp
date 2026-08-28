@@ -66,11 +66,13 @@ std::string function_body(const std::string &source, const std::string &signatur
 
 void adaptive_error_reductions_stay_device_side() {
     const std::filesystem::path root = fdm_source_root();
-    const std::string reductions = read_text_file(root / "cuda" / "runtime" / "reductions_fp64.cu");
-    const std::string dp45_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp64.cu");
-    const std::string dp45_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp32.cu");
-    const std::string rk23_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp64.cu");
-    const std::string rk23_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp32.cu");
+    const auto cuda = root / "gpu" / "cuda";
+    const std::string reductions = read_text_file(cuda / "runtime" / "reductions_fp64.cu");
+    const std::string controller = read_text_file(cuda / "runtime" / "adaptive_controller.cuh");
+    const std::string dp45_fp64 = read_text_file(cuda / "integrators" / "llg_dp45_fp64.cu");
+    const std::string dp45_fp32 = read_text_file(cuda / "integrators" / "llg_dp45_fp32.cu");
+    const std::string rk23_fp64 = read_text_file(cuda / "integrators" / "llg_rk23_fp64.cu");
+    const std::string rk23_fp32 = read_text_file(cuda / "integrators" / "llg_rk23_fp32.cu");
 
     check(
         reductions.find("double reduce_max_scalar_sqrt(") != std::string::npos,
@@ -113,21 +115,24 @@ void adaptive_error_reductions_stay_device_side() {
             "adaptive error launches must pass both canonical masks");
     }
     check(
-        reductions.find("const bool finite_max_sq = isfinite(max_sq)") != std::string::npos,
+        controller.find("const bool finite_max_sq = isfinite(max_error_sq)") !=
+            std::string::npos,
         "device adaptive reduction must fail closed on non-finite max error");
     check(
-        reductions.find("non_finite_adaptive_error") != std::string::npos,
-        "host adaptive reduction must publish a typed non-finite error reason");
+        controller.find("ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR") !=
+                std::string::npos &&
+            reductions.find("adaptive_device_reason_id") != std::string::npos,
+        "device adaptive reduction must publish a typed non-finite error reason");
     check(
-        reductions.find("ADAPTIVE_DT_MIN_ULP_FACTOR") != std::string::npos &&
-            reductions.find("fabs(dt - adaptive_dt_min)") != std::string::npos,
+        controller.find("ADAPTIVE_DT_MIN_ULP_FACTOR") != std::string::npos &&
+            controller.find("fabs(dt - adaptive_dt_min)") != std::string::npos,
         "device adaptive policy must share the rounded dt_min exhaustion boundary");
 }
 
 void adaptive_error_scalar_reduction_uses_compute_stream() {
     const std::filesystem::path root = fdm_source_root();
     const std::string reduction = function_body(
-        read_text_file(root / "cuda" / "runtime" / "reductions_fp64.cu"),
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "reductions_fp64.cu"),
         "double reduce_max_scalar_sqrt(Context &ctx, double *device_values, uint64_t n)");
 
     check(
@@ -157,8 +162,12 @@ void adaptive_error_scalar_reduction_uses_compute_stream() {
 
 void adaptive_policy_calculation_uses_compute_stream() {
     const std::filesystem::path root = fdm_source_root();
+    const std::string source = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "reductions_fp64.cu");
+    const std::string controller = read_text_file(
+        root / "gpu" / "cuda" / "runtime" / "adaptive_controller.cuh");
     const std::string reduction = function_body(
-        read_text_file(root / "cuda" / "runtime" / "reductions_fp64.cu"),
+        source,
         "AdaptiveErrorPolicy reduce_adaptive_error_policy(");
 
     check(
@@ -170,8 +179,28 @@ void adaptive_policy_calculation_uses_compute_stream() {
             std::string::npos,
         "adaptive policy reduction must compute sqrt, accept predicate, and dt candidate on the Context compute stream");
     check(
-        reduction.find("cudaMemcpyAsync(&host_values") != std::string::npos,
-        "adaptive policy reduction must asynchronously copy only the compact policy result");
+        reduction.find("adaptive::decide_adaptive_step") == std::string::npos &&
+            reduction.find("fullmag_fdm_record_hot_loop_host_compute") == std::string::npos,
+        "canonical PI decision and retry accounting must not execute on the host");
+    check(
+        reduction.find("ctx.adaptive_previous_error") != std::string::npos &&
+            reduction.find("ctx.adaptive_rejected_attempts") != std::string::npos &&
+            controller.find("ADAPTIVE_MAX_REJECTED_ATTEMPTS") != std::string::npos,
+        "device policy must consume PI history and enforce the versioned retry budget");
+    check(
+        controller.find("ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED") !=
+            std::string::npos,
+        "device policy must publish a typed retry-limit terminal reason");
+    check(
+        controller.find("fullmag_fdm_adaptive_attempt_v1 *attempt_trace") !=
+                std::string::npos &&
+            controller.find("publish_adaptive_attempt(attempt_trace") !=
+                std::string::npos,
+        "device policy must append every decision to the preallocated attempt trace");
+    check(
+        reduction.find("cudaMemcpyAsync(\n        &host_control") != std::string::npos &&
+            reduction.find("sizeof(host_control)") != std::string::npos,
+        "adaptive policy reduction must asynchronously copy one typed control packet");
     check(
         reduction.find("context_end_compute_stream_work(ctx, \"reduce_adaptive_error_policy\")") !=
             std::string::npos,
@@ -180,10 +209,11 @@ void adaptive_policy_calculation_uses_compute_stream() {
 
 void adaptive_d2d_copies_use_compute_stream() {
     const std::filesystem::path root = fdm_source_root();
-    const std::string dp45_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp64.cu");
-    const std::string dp45_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_dp45_fp32.cu");
-    const std::string rk23_fp64 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp64.cu");
-    const std::string rk23_fp32 = read_text_file(root / "cuda" / "integrators" / "llg_rk23_fp32.cu");
+    const auto cuda = root / "gpu" / "cuda";
+    const std::string dp45_fp64 = read_text_file(cuda / "integrators" / "llg_dp45_fp64.cu");
+    const std::string dp45_fp32 = read_text_file(cuda / "integrators" / "llg_dp45_fp32.cu");
+    const std::string rk23_fp64 = read_text_file(cuda / "integrators" / "llg_rk23_fp64.cu");
+    const std::string rk23_fp32 = read_text_file(cuda / "integrators" / "llg_rk23_fp32.cu");
     const std::string adaptive_sources = dp45_fp64 + dp45_fp32 + rk23_fp64 + rk23_fp32;
 
     check(
@@ -238,6 +268,34 @@ void adaptive_d2d_copies_use_compute_stream() {
         "adaptive RK23/DP45 fp32 FSAL reuse copies must use the Context compute stream");
 }
 
+void adaptive_integrators_accept_device_owned_dt() {
+    const std::filesystem::path root = fdm_source_root();
+    const auto cuda = root / "gpu" / "cuda";
+    const std::string graph_runtime = read_text_file(
+        cuda / "runtime" / "adaptive_graph.cu");
+    const std::string graph_controller = read_text_file(
+        cuda / "runtime" / "adaptive_controller.cuh");
+    check(
+        graph_runtime.find("cudaGraphCondTypeWhile") != std::string::npos &&
+            graph_controller.find("cudaGraphSetConditional") != std::string::npos,
+        "adaptive controller must execute through a device-controlled CUDA while node");
+
+    for (const auto *path : {
+             "llg_rk23_fp64.cu",
+             "llg_rk23_fp32.cu",
+             "llg_dp45_fp64.cu",
+             "llg_dp45_fp32.cu",
+         }) {
+        const std::string source = read_text_file(cuda / "integrators" / path);
+        check(
+            source.find("const AdaptiveDeviceControl *adaptive_control") !=
+                    std::string::npos &&
+                source.find("adaptive_attempt_dt(adaptive_control, host_dt)") !=
+                    std::string::npos,
+            "every adaptive RK stage/error implementation must accept device-owned dt");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -245,6 +303,7 @@ int main() {
     adaptive_error_scalar_reduction_uses_compute_stream();
     adaptive_policy_calculation_uses_compute_stream();
     adaptive_d2d_copies_use_compute_stream();
+    adaptive_integrators_accept_device_owned_dt();
     std::printf("adaptive error reduction contract: PASS\n");
     return 0;
 }

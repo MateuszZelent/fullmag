@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -165,9 +166,46 @@ struct DeviceMultilayerTensorKernel {
 struct AdaptiveErrorPolicy {
     double error = 0.0;
     double dt_candidate = 0.0;
+    double ratio = 1.0;
     int accepted = 0;
     bool dt_min_exhausted = false;
+    bool failed = false;
+    uint32_t reason = 0;
+    uint32_t rejected_attempts = 0;
 };
+
+enum AdaptiveDeviceDecision : uint32_t {
+    ADAPTIVE_DEVICE_DECISION_ACCEPTED = 1,
+    ADAPTIVE_DEVICE_DECISION_RETRY = 2,
+    ADAPTIVE_DEVICE_DECISION_FAILED = 3,
+};
+
+enum AdaptiveDeviceReason : uint32_t {
+    ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE = 1,
+    ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE = 2,
+    ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED = 3,
+    ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP = 4,
+    ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR = 5,
+    ADAPTIVE_DEVICE_REASON_INVALID_PREVIOUS_ERROR = 6,
+    ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED = 7,
+};
+
+struct AdaptiveDeviceControl {
+    double error = 0.0;
+    double dt_candidate = 0.0;
+    double ratio = 1.0;
+    double previous_error = 0.0;
+    double dt_attempt = 0.0;
+    uint32_t decision = ADAPTIVE_DEVICE_DECISION_FAILED;
+    uint32_t reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
+    uint32_t has_previous_error = 0;
+    uint32_t attempt_index = 0;
+    uint32_t next_rejected_attempts = 0;
+    uint32_t reserved0 = 0;
+};
+
+static_assert(sizeof(AdaptiveDeviceControl) == 64);
+static_assert(sizeof(fullmag_fdm_adaptive_attempt_v1) == 56);
 
 struct DeviceMultilayerFftWorkspace {
     fullmag_fdm_grid_desc fft_grid{};
@@ -455,6 +493,25 @@ struct Context {
     bool adaptive_canonical_controller = false;
     bool adaptive_has_previous_error = false;
     double adaptive_previous_error = 0.0;
+    uint32_t adaptive_rejected_attempts = 0;
+    fullmag_fdm_adaptive_attempt_v1 *adaptive_attempt_trace_device = nullptr;
+    uint32_t adaptive_attempt_trace_count = 0;
+#if FULLMAG_HAS_CUDA
+    cudaGraph_t adaptive_step_graph = nullptr;
+    cudaGraphExec_t adaptive_step_graph_exec = nullptr;
+    cudaGraph_t adaptive_step_graph_body = nullptr;
+    cudaGraphConditionalHandle adaptive_loop_handle{};
+    cudaStream_t adaptive_graph_capture_stream = nullptr;
+#endif
+    bool adaptive_graph_capture_active = false;
+    uint32_t adaptive_graph_integrator = 0;
+    uint32_t adaptive_graph_precision = 0;
+    uint64_t adaptive_graph_source_revision = 0;
+    uint64_t adaptive_graph_field_revision = 0;
+    uint64_t adaptive_graph_transport_revision = 0;
+    uint64_t adaptive_graph_projection_policy_identity = 0;
+    uint64_t adaptive_graph_build_count = 0;
+    uint64_t adaptive_graph_launch_count = 0;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
     bool has_adaptive_norm_tolerance = false;
@@ -507,7 +564,7 @@ struct Context {
     uint64_t reduction_scratch_len = 0;
     double *reduction_scratch_aux = nullptr;
     uint64_t reduction_scratch_aux_len = 0;
-    double *adaptive_policy_scratch = nullptr;
+    AdaptiveDeviceControl *adaptive_policy_scratch = nullptr;
     void *preview_download_scratch = nullptr;
     uint64_t preview_download_scratch_len_bytes = 0;
     std::vector<uint8_t> active_mask_host;
@@ -579,6 +636,40 @@ struct Context {
 bool context_create_compute_stream(Context &ctx);
 void context_destroy_compute_stream(Context &ctx);
 cudaStream_t context_compute_stream(Context &ctx);
+cudaStream_t context_orchestration_stream(Context &ctx);
+bool enqueue_adaptive_error_policy_device_loop(
+    Context &ctx,
+    double *device_values,
+    uint64_t n,
+    double exponent,
+    cudaGraphConditionalHandle loop_handle);
+bool context_begin_adaptive_step_graph_build(
+    Context &ctx,
+    cudaGraph_t &conditional_body);
+bool context_adaptive_step_graph_key_matches(
+    const Context &ctx,
+    uint32_t integrator,
+    uint32_t precision);
+bool context_adaptive_step_graph_configuration_supported(Context &ctx);
+bool context_begin_adaptive_step_graph_body_capture(
+    Context &ctx,
+    cudaStream_t &capture_stream);
+bool context_finish_adaptive_step_graph_body_capture(
+    Context &ctx,
+    cudaStream_t capture_stream,
+    bool body_enqueued,
+    uint32_t integrator,
+    uint32_t precision);
+const char *adaptive_device_terminal_reason(uint32_t reason);
+bool context_attach_adaptive_step_graph_body(
+    Context &ctx,
+    cudaGraph_t captured_body);
+bool context_finish_adaptive_step_graph_build(Context &ctx);
+bool context_launch_adaptive_step_graph(
+    Context &ctx,
+    const AdaptiveDeviceControl &initial_control,
+    AdaptiveDeviceControl &terminal_control);
+void context_destroy_adaptive_step_graph(Context &ctx);
 cudaError_t fullmag_fdm_receipt_cuda_memcpy(
     Context &ctx,
     void *destination,

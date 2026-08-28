@@ -223,6 +223,14 @@ resolved device-resident operator modes and hot-loop synchronization audit are
 clean; it must not publish `validated` until the documented validation workload
 has passed.
 
+Dla FDM GPU istnieje ograniczony receipt strict residency
+`fdm_gpu_execution_receipt_evidence.v2`. Publikacja wymaga pełnego
+`source_commit`, SHA-256 diffu względem `HEAD`, `requested=gpu`,
+`resolved=device_resident`, `executed=cuda_fdm`, kompletnych masek device,
+zerowego fallbacku oraz zerowych pełnych transferów i host compute w hot loop.
+Aktualny artefakt obejmuje wyłącznie bounded fixture FP64/Heun; nie promuje
+publicznej ścieżki bez E2E, oracle trajektorii i time-to-accuracy.
+
 Dla natywnego FEM GPU kwalifikacja receipt ma stan
 `implemented/unvalidated`. Artefakt musi mieć dokładny schemat
 `fullmag.fem_gpu_execution_receipt.native_projection.v1`, projekcję Rust

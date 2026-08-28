@@ -15,9 +15,11 @@ class EvidencePublicationTests(unittest.TestCase):
     @staticmethod
     def complete_candidate() -> dict[str, object]:
         return {
-            "schema_version": "fdm_gpu_execution_receipt_evidence.v1",
+            "schema_version": "fdm_gpu_execution_receipt_evidence.v2",
             "validation_state": "validated",
             "runtime_check": "passed",
+            "source_commit": "a" * 40,
+            "source_diff_sha256": "b" * 64,
             "requested": "gpu",
             "resolved": "device_resident",
             "executed": "cuda_fdm",
@@ -62,7 +64,7 @@ class EvidencePublicationTests(unittest.TestCase):
     def test_candidate_is_never_the_final_evidence_before_publish(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            final = root / "execution-receipt.v1.json"
+            final = root / "execution-receipt.v2.json"
             candidate = root / "candidate.json"
             self.run_script("init", "--final", final, "--candidate", candidate)
             candidate.write_text(json.dumps(self.complete_candidate()), encoding="utf-8")
@@ -77,7 +79,7 @@ class EvidencePublicationTests(unittest.TestCase):
     def test_publish_atomically_replaces_final_only_for_validated_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            final = root / "execution-receipt.v1.json"
+            final = root / "execution-receipt.v2.json"
             candidate = root / "candidate.json"
             self.run_script("init", "--final", final, "--candidate", candidate)
             candidate.write_text(json.dumps(self.complete_candidate()), encoding="utf-8")
@@ -89,11 +91,19 @@ class EvidencePublicationTests(unittest.TestCase):
     def test_publish_rejects_incomplete_stale_and_contradictory_candidates(self) -> None:
         mutations = {
             "minimal": {
-                "schema_version": "fdm_gpu_execution_receipt_evidence.v1",
+                "schema_version": "fdm_gpu_execution_receipt_evidence.v2",
                 "validation_state": "validated",
                 "runtime_check": "passed",
             },
             "stale_schema": {**self.complete_candidate(), "schema_version": "stale.v0"},
+            "invalid_source_commit": {
+                **self.complete_candidate(),
+                "source_commit": "a010f27d8",
+            },
+            "invalid_source_diff": {
+                **self.complete_candidate(),
+                "source_diff_sha256": "unknown",
+            },
             "unknown_resolved": {
                 **self.complete_candidate(),
                 "resolved_unknown_operator_mask": 1,
@@ -131,7 +141,7 @@ class EvidencePublicationTests(unittest.TestCase):
         for name, document in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                final = root / "execution-receipt.v1.json"
+                final = root / "execution-receipt.v2.json"
                 candidate = root / "candidate.json"
                 self.run_script("init", "--final", final, "--candidate", candidate)
                 before = final.read_bytes()

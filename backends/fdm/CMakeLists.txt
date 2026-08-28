@@ -29,6 +29,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/runtime/telemetry.cu
         gpu/cuda/runtime/device_info.cpp
         gpu/cuda/runtime/streams.cu
+        gpu/cuda/runtime/adaptive_graph.cu
         gpu/cuda/runtime/reductions_fp64.cu
         gpu/cuda/interactions/exchange_fp64.cu
         gpu/cuda/interactions/exchange_fp32.cu
@@ -790,6 +791,19 @@ if(FULLMAG_ENABLE_CUDA)
 
     add_executable(adaptive_error_reduction_contract tests/adaptive_error_reduction_contract.cpp)
     add_test(NAME fdm_adaptive_error_reduction_contract COMMAND adaptive_error_reduction_contract)
+
+    add_executable(adaptive_conditional_graph_contract
+        tests/adaptive_conditional_graph_contract.cu)
+    target_include_directories(adaptive_conditional_graph_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/gpu/cuda/runtime)
+    target_link_libraries(adaptive_conditional_graph_contract PRIVATE
+        fullmag_fdm)
+    target_compile_definitions(adaptive_conditional_graph_contract PRIVATE
+        FULLMAG_HAS_CUDA=1)
+    add_test(NAME fdm_adaptive_conditional_graph_contract
+        COMMAND adaptive_conditional_graph_contract)
 
     add_executable(stats_mode_contract tests/stats_mode_contract.cpp)
     add_test(NAME fdm_stats_mode_contract COMMAND stats_mode_contract)

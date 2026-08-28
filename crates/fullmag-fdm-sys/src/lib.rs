@@ -637,6 +637,36 @@ pub struct fullmag_fdm_step_stats {
     pub multilayer_pair_accumulation_count: u64,
 }
 
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1: usize = 51;
+pub type fullmag_fdm_adaptive_attempt_decision_v1 = u32;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED: fullmag_fdm_adaptive_attempt_decision_v1 = 1;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY: fullmag_fdm_adaptive_attempt_decision_v1 = 2;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_FAILED: fullmag_fdm_adaptive_attempt_decision_v1 = 3;
+pub type fullmag_fdm_adaptive_attempt_reason_v1 = u32;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE: fullmag_fdm_adaptive_attempt_reason_v1 = 1;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_ERROR_ABOVE_TOLERANCE: fullmag_fdm_adaptive_attempt_reason_v1 = 2;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_DT_MIN_EXHAUSTED: fullmag_fdm_adaptive_attempt_reason_v1 = 3;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_TIMESTEP: fullmag_fdm_adaptive_attempt_reason_v1 = 4;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_CURRENT_ERROR: fullmag_fdm_adaptive_attempt_reason_v1 = 5;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_PREVIOUS_ERROR: fullmag_fdm_adaptive_attempt_reason_v1 = 6;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY_LIMIT_EXHAUSTED: fullmag_fdm_adaptive_attempt_reason_v1 = 7;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_adaptive_attempt_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub attempt_index: u32,
+    pub decision: fullmag_fdm_adaptive_attempt_decision_v1,
+    pub reason: fullmag_fdm_adaptive_attempt_reason_v1,
+    pub reserved0: u32,
+    pub dt_attempt_seconds: f64,
+    pub normalized_error: f64,
+    pub ratio: f64,
+    pub dt_next_seconds: f64,
+}
+
 // ── Device info ──
 
 #[repr(C)]
@@ -1530,6 +1560,13 @@ extern "C" {
         out_stats: *mut fullmag_fdm_step_stats,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_copy_adaptive_attempts_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_attempts: *mut fullmag_fdm_adaptive_attempt_v1,
+        capacity: u32,
+        out_count: *mut u32,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_get_fsal_telemetry_v1(
         handle: *mut fullmag_fdm_backend,
         out_telemetry: *mut fullmag_fdm_fsal_telemetry_v1,
@@ -2222,6 +2259,22 @@ mod tests {
         assert_eq!(stats.multilayer_forward_fft_count, 3);
         assert_eq!(stats.multilayer_inverse_fft_count, 3);
         assert_eq!(stats.multilayer_pair_accumulation_count, 9);
+    }
+
+    #[test]
+    fn adaptive_attempt_v1_is_a_fixed_batched_trace_record() {
+        assert_eq!(size_of::<fullmag_fdm_adaptive_attempt_v1>(), 56);
+        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, attempt_index), 8);
+        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, dt_attempt_seconds), 24);
+        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, dt_next_seconds), 48);
+        assert_eq!(FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1, 51);
+        let _copy: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_adaptive_attempt_v1,
+            u32,
+            *mut u32,
+        ) -> i32 = fullmag_fdm_backend_copy_adaptive_attempts_v1;
     }
 
     #[test]

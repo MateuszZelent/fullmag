@@ -138,7 +138,7 @@ __global__ void exchange_field_fp32_kernel(
 
 static const int BLOCK_SIZE = 256;
 
-void launch_exchange_field_fp32(Context &ctx) {
+void launch_exchange_field_fp32(Context &ctx, cudaStream_t stream) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -149,7 +149,7 @@ void launch_exchange_field_fp32(Context &ctx) {
     float inv_dy2 = static_cast<float>(1.0 / (ctx.dy * ctx.dy));
     float inv_dz2 = static_cast<float>(1.0 / (ctx.dz * ctx.dz));
 
-    exchange_field_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+    exchange_field_fp32_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
         static_cast<const float*>(ctx.m.x),
         static_cast<const float*>(ctx.m.y),
         static_cast<const float*>(ctx.m.z),
@@ -173,6 +173,10 @@ void launch_exchange_field_fp32(Context &ctx) {
         return;
     }
     fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
+}
+
+void launch_exchange_field_fp32(Context &ctx) {
+    launch_exchange_field_fp32(ctx, nullptr);
 }
 
 double launch_exchange_energy_fp32(Context &ctx) {

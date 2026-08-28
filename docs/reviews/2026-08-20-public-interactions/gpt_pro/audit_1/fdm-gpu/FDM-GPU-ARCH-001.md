@@ -5,7 +5,7 @@
 | Lane | **FDM GPU** |
 | Priorytet | **P0** |
 | Klasa | `architecture` |
-| Status | `implementation plan` |
+| Status | `partial remediation (source/test)` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FDM-GPU-ABI-001` |
@@ -148,11 +148,26 @@ Minimalne wymagania:
 
 - Zmiana może ujawnić, że część obecnych konfiguracji nie jest strict-GPU i przestanie się uruchamiać.
 
-## 11. Poza zakresem
+## 11. Stan remediacji na `master` — 2026-08-28
+
+Strict runtime odrzuca niepełny resolved/executed operator mask, hostową realizację,
+nieznaną realizację i fallback. Zarządzany kontrakt wykonuje rzeczywisty krok CUDA
+FP64/Heun, blokuje pełne transfery H2D/D2H oraz host compute w hot loop i publikuje
+atomowy receipt `fdm_gpu_execution_receipt_evidence.v2`. Receipt jest związany z
+pełnym 40-znakowym commitem oraz SHA-256 całego diffu względem `HEAD`; brak lub
+niepoprawny identyfikator źródła uniemożliwia publikację.
+
+To nie zamyka findingu. Wykonany tuple jest ograniczony do FP64/Heun oraz masek
+operatorów fixture. Nadal brakuje publicznego Python→IR→planner→runner E2E,
+niezależnego oracle trajektorii dla tego receiptu, macierzy integratorów i
+interakcji oraz powtarzalnego gate'u time-to-accuracy. Capability pozostaje
+`implemented/unvalidated` i nie może być promowana na podstawie tego artefaktu.
+
+## 12. Poza zakresem
 
 - Zakaz jawnie wybranego trybu hybrydowego do diagnostyki.
 
-## 12. Definition of Done
+## 13. Definition of Done
 
 Ustalenie `FDM-GPU-ARCH-001` jest zamknięte dopiero wtedy, gdy:
 

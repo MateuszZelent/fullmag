@@ -732,6 +732,7 @@ int context_llg_checkpoint_import_v3(
     ctx.adaptive_has_previous_error =
         header.info.adaptive_has_previous_error != 0;
     ctx.adaptive_previous_error = header.info.adaptive_previous_error;
+    ctx.adaptive_rejected_attempts = 0;
     ctx.fsal_pending = false;
     ctx.fsal_accepted_state_revision = header.info.fsal_accepted_state_revision;
     ctx.fsal_accepted_time_bits = header.info.fsal_accepted_time_bits;

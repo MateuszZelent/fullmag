@@ -76,6 +76,12 @@ cudaStream_t context_compute_stream(Context &ctx) {
     return reinterpret_cast<cudaStream_t>(ctx.compute_stream);
 }
 
+cudaStream_t context_orchestration_stream(Context &ctx) {
+    return ctx.adaptive_graph_capture_active
+        ? ctx.adaptive_graph_capture_stream
+        : nullptr;
+}
+
 bool context_begin_compute_stream_work(Context &ctx, const char *operation) {
     auto stream = context_compute_stream(ctx);
     auto ready_event = reinterpret_cast<cudaEvent_t>(ctx.compute_ready_event);
@@ -84,7 +90,8 @@ bool context_begin_compute_stream_work(Context &ctx, const char *operation) {
         return false;
     }
 
-    cudaError_t err = cudaEventRecord(ready_event, nullptr);
+    cudaError_t err = cudaEventRecord(
+        ready_event, context_orchestration_stream(ctx));
     if (err != cudaSuccess) {
         std::string label = std::string(operation) + ": cudaEventRecord(compute_ready_event)";
         set_cuda_error(ctx, label.c_str(), err);
@@ -113,7 +120,8 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation) {
         set_cuda_error(ctx, label.c_str(), err);
         return false;
     }
-    err = cudaStreamWaitEvent(nullptr, done_event, 0);
+    err = cudaStreamWaitEvent(
+        context_orchestration_stream(ctx), done_event, 0);
     if (err != cudaSuccess) {
         std::string label = std::string(operation) + ": cudaStreamWaitEvent(compute_done_event)";
         set_cuda_error(ctx, label.c_str(), err);

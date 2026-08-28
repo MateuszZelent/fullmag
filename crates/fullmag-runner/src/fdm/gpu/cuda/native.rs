@@ -290,6 +290,46 @@ fn validate_native_step_metrics(
     })
 }
 
+#[cfg(feature = "cuda")]
+fn validate_adaptive_attempt_batch(
+    records: &[ffi::fullmag_fdm_adaptive_attempt_v1],
+) -> Result<(u32, f64), RunError> {
+    if records.is_empty() || records.len() > ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 {
+        return Err(RunError {
+            message: format!("native FDM adaptive attempt count is invalid: {}", records.len()),
+        });
+    }
+    for (index, record) in records.iter().enumerate() {
+        if record.abi_version != ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1
+            || record.struct_size as usize
+                != std::mem::size_of::<ffi::fullmag_fdm_adaptive_attempt_v1>()
+            || record.attempt_index as usize != index
+            || !record.dt_attempt_seconds.is_finite()
+            || record.dt_attempt_seconds <= 0.0
+            || !record.normalized_error.is_finite()
+            || record.normalized_error < 0.0
+            || !record.ratio.is_finite()
+            || record.ratio <= 0.0
+            || !record.dt_next_seconds.is_finite()
+            || record.dt_next_seconds <= 0.0
+        {
+            return Err(RunError {
+                message: format!("native FDM adaptive attempt record {index} is invalid"),
+            });
+        }
+    }
+    let last = records.last().expect("non-empty adaptive trace");
+    if last.decision != ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED
+        || last.reason != ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE
+    {
+        return Err(RunError {
+            message: "successful native FDM step did not end with an accepted adaptive attempt"
+                .to_string(),
+        });
+    }
+    Ok((records.len() as u32 - 1, last.normalized_error))
+}
+
 #[cfg(any(feature = "cuda", test))]
 fn validate_multilayer_stage_telemetry(
     layer_count: u64,
@@ -455,6 +495,7 @@ pub(crate) struct NativeFdmBackend {
     damping: f64,
     precession_enabled: bool,
     gpu_transport_bound: bool,
+    adaptive_timestep_enabled: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -831,6 +872,7 @@ impl NativeFdmBackend {
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
+            adaptive_timestep_enabled: false,
         })
     }
 
@@ -1451,6 +1493,7 @@ impl NativeFdmBackend {
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
+            adaptive_timestep_enabled: adaptive.is_some(),
         })
     }
 
@@ -1550,6 +1593,8 @@ impl NativeFdmBackend {
             return Err(self.last_error_or("step failed"));
         }
 
+        let adaptive_summary = self.copy_adaptive_attempt_summary()?;
+
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
         let mut step_stats = StepStats {
@@ -1573,6 +1618,8 @@ impl NativeFdmBackend {
             hot_loop_host_sync_count: stats.hot_loop_host_sync_count,
             hot_loop_control_scalar_d2h_bytes: stats.hot_loop_control_scalar_d2h_bytes,
             hot_loop_control_scalar_host_sync_count: stats.hot_loop_control_scalar_host_sync_count,
+            error_estimate: adaptive_summary.map(|(_, error)| error),
+            rejected_attempts: adaptive_summary.map_or(0, |(rejected, _)| rejected),
             dt_suggested: if stats.suggested_next_dt > 0.0 {
                 Some(stats.suggested_next_dt)
             } else {
@@ -1582,6 +1629,51 @@ impl NativeFdmBackend {
         };
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(Some(step_stats))
+    }
+
+    fn copy_adaptive_attempt_summary(&self) -> Result<Option<(u32, f64)>, RunError> {
+        if !self.adaptive_timestep_enabled {
+            return Ok(None);
+        }
+        let mut count = 0u32;
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                self.handle,
+                std::ptr::null_mut(),
+                0,
+                &mut count,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("adaptive attempt count query failed"));
+        }
+        if count == 0 || count as usize > ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 {
+            return Err(RunError {
+                message: format!("native FDM adaptive attempt count is invalid: {count}"),
+            });
+        }
+
+        let mut records = [std::mem::MaybeUninit::<ffi::fullmag_fdm_adaptive_attempt_v1>::uninit();
+            ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1];
+        let mut copied = 0u32;
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                self.handle,
+                records.as_mut_ptr().cast(),
+                records.len() as u32,
+                &mut copied,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK || copied != count {
+            return Err(self.last_error_or("adaptive attempt batch copy failed"));
+        }
+        let records = unsafe {
+            std::slice::from_raw_parts(
+                records.as_ptr().cast::<ffi::fullmag_fdm_adaptive_attempt_v1>(),
+                copied as usize,
+            )
+        };
+        validate_adaptive_attempt_batch(records).map(Some)
     }
 
     pub fn apply_average_m_to_step_stats(&self, stats: &mut StepStats) -> Result<(), RunError> {
@@ -2978,6 +3070,40 @@ mod tests {
         CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, LlgConfig,
         MaterialParameters, TimeIntegrator, UniaxialAnisotropyConfig,
     };
+
+    #[test]
+    fn copy_adaptive_attempt_summary_validates_one_accepted_batch() {
+        let record = ffi::fullmag_fdm_adaptive_attempt_v1 {
+            abi_version: ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_adaptive_attempt_v1>() as u32,
+            attempt_index: 0,
+            decision: ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED,
+            reason: ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE,
+            reserved0: 0,
+            dt_attempt_seconds: 1e-15,
+            normalized_error: 0.25,
+            ratio: 1.5,
+            dt_next_seconds: 1.5e-15,
+        };
+        assert_eq!(validate_adaptive_attempt_batch(&[record]).unwrap(), (0, 0.25));
+    }
+
+    #[test]
+    fn copy_adaptive_attempt_summary_rejects_nonterminal_batch() {
+        let record = ffi::fullmag_fdm_adaptive_attempt_v1 {
+            abi_version: ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_adaptive_attempt_v1>() as u32,
+            attempt_index: 0,
+            decision: ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY,
+            reason: ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ERROR_ABOVE_TOLERANCE,
+            reserved0: 0,
+            dt_attempt_seconds: 1e-15,
+            normalized_error: 2.0,
+            ratio: 0.5,
+            dt_next_seconds: 5e-16,
+        };
+        assert!(validate_adaptive_attempt_batch(&[record]).is_err());
+    }
 
     #[test]
     fn native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane() {
