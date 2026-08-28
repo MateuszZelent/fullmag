@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +11,18 @@ import {
 } from "./communicationPolicy";
 
 describe("realtimeCommunicationPolicy", () => {
+  it("labels producer delivery and diagnostics refresh cadence precisely", () => {
+    const dialogSource = readFileSync(
+      new URL("../layout/CommunicationPolicyDialog.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(dialogSource).toContain('label: "Scalar delivery ms"');
+    expect(dialogSource).toContain('label: "Diagnostics refresh ms"');
+    expect(dialogSource).not.toContain('label: "Scalar sample ms"');
+    expect(dialogSource).not.toContain('label: "Diagnostics ms"');
+  });
+
   it("applies table row HTTP refetch cadence from realtime policy", () => {
     updateRealtimeCommunicationPolicy({
       field_samples_enabled: false,

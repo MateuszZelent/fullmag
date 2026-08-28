@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+mod mixed_certificate;
+
 #[pyfunction]
 fn validate_ir_json(ir_json: &str) -> PyResult<bool> {
     let ir: ProblemIR =
@@ -247,6 +249,18 @@ fn fullmag_py_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_function(wrap_pyfunction!(sample_preset_texture_v2_json, module)?)?;
     module.add_function(wrap_pyfunction!(resample_fem_to_fdm_grid_json, module)?)?;
     module.add_function(wrap_pyfunction!(extract_fem_mesh_ir_json, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        mixed_certificate::certify_mixed_mesh_arrays,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        mixed_certificate::preflight_mixed_mesh_arrays,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        mixed_certificate::mixed_mesh_topology_codes_json,
+        module
+    )?)?;
     Ok(())
 }
 

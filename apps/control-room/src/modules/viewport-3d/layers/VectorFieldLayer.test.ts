@@ -368,6 +368,42 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).not.toContain("setTimeout(callback, 0)");
   });
 
+  it("adopts glyph count and instance colors only with the completed matrix upload", () => {
+    const uploadHookStart = vectorFieldLayerSource.indexOf(
+      "function useVectorGlyphUpload(",
+    );
+    const componentStart = vectorFieldLayerSource.indexOf(
+      "export function VectorFieldLayer(",
+      uploadHookStart,
+    );
+    const uploadSource = vectorFieldLayerSource.slice(
+      uploadHookStart,
+      componentStart,
+    );
+    const colorVisibleStart = uploadSource.indexOf("onVisible: () => {");
+    const matrixVisibleStart = uploadSource.indexOf(
+      "onVisible: () => {",
+      colorVisibleStart + 1,
+    );
+    const colorVisibleSource = uploadSource.slice(
+      colorVisibleStart,
+      matrixVisibleStart,
+    );
+    const matrixVisibleSource = uploadSource.slice(matrixVisibleStart);
+
+    expect(colorVisibleSource).not.toContain("shaft.count = glyphCount");
+    expect(colorVisibleSource).not.toContain("head.count = glyphCount");
+    expect(colorVisibleSource).not.toMatch(
+      /markVectorGlyphAttributeRange\(\s*instanceColorAttr/,
+    );
+    expect(matrixVisibleSource).toMatch(
+      /markVectorGlyphAttributeRange\(\s*instanceColorAttr/,
+    );
+    expect(matrixVisibleSource).toContain(
+      "activeShaft.count = activeGlyphs.count",
+    );
+  });
+
   it("keeps glyph builds asynchronous and uploads only resolved build buffers", () => {
     const buildHookStart = vectorFieldLayerSource.indexOf(
       "function useVectorGlyphBuild(",

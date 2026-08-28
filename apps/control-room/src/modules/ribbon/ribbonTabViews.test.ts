@@ -115,7 +115,6 @@ describe("quantityItemsForVisualizationTarget", () => {
     expect(
       quantityItemsForVisualizationTarget("H_eff", "airbox", fieldCatalog),
     ).toEqual([
-      { disabled: true, label: "Unavailable / H_eff", value: "H_eff" },
       { label: "H_demag", value: "H_demag" },
       { label: "H_ant", value: "H_ant" },
     ]);
@@ -128,6 +127,21 @@ describe("quantityItemsForVisualizationTarget", () => {
     ]);
   });
 
+  it("does not preserve an incompatible active magnetization item in the Airbox list", () => {
+    const fieldCatalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        { available: true, domain: "magnetic_only", quantity_id: "m" },
+        { available: true, domain: "full_domain", quantity_id: "H_demag" },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+
+    expect(
+      quantityItemsForVisualizationTarget("m", "airbox", fieldCatalog),
+    ).toEqual([{ label: "H_demag", value: "H_demag" }]);
+  });
+
   it("uses every available spatial catalog quantity for objects, and only full-domain ones for an Airbox", () => {
     const fieldCatalog = {
       domain_generation_id: "fdm-generation-1",
@@ -136,7 +150,7 @@ describe("quantityItemsForVisualizationTarget", () => {
         { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "full_domain", quantity_id: "H_eff", label: "Effective field", unit: "A/m" },
         { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "full_domain", quantity_id: "H_demag", label: "Demag field", unit: "A/m" },
         { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "full_domain", quantity_id: "H_ext", label: "External field", unit: "A/m" },
-        { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "magnetic_only", quantity_id: "H_oe", label: "Oersted field", unit: "A/m" },
+        { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "full_domain", quantity_id: "H_oe", label: "Oersted field", unit: "A/m" },
         { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "magnetic_only", quantity_id: "H_dmi", label: "DMI field", unit: "A/m" },
         { available: true, ui_exposed: true, kind: "spatial_scalar", location: "cell", domain: "magnetic_only", quantity_id: "eden_demag", label: "Demag energy density", unit: "J/m³" },
         { available: false, ui_exposed: true, kind: "vector_field", location: "node", domain: "full_domain", quantity_id: "H_therm", label: "Thermal field", unit: "A/m" },
@@ -155,7 +169,7 @@ describe("quantityItemsForVisualizationTarget", () => {
       quantityItemsForVisualizationTarget("H_eff", "airbox", fieldCatalog).map(
         (item) => item.value,
       ),
-    ).toEqual(["H_eff", "H_demag", "H_ext"]);
+    ).toEqual(["H_eff", "H_demag", "H_ext", "H_oe"]);
     expect(
       quantityItemsForVisualizationTarget("H_therm", "object", fieldCatalog)[0],
     ).toEqual({ disabled: true, label: "Unavailable / H_therm", value: "H_therm" });

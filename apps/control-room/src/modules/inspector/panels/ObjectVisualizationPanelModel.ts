@@ -2286,7 +2286,7 @@ export function visualizationQuantityItems(
     const availability = targetAvailability?.get(
       resolveCanonicalQuantityId(item.value),
     );
-    return availability?.state === "unavailable"
+    return availability && !targetFieldAvailabilityIsSelectable(availability)
       ? { ...item, disabled: true }
       : item;
   });
@@ -2307,6 +2307,10 @@ export function visualizationQuantityItems(
         resolveCanonicalQuantityId(activeQuantityId),
     )
   ) {
+    return targetAwareItems;
+  }
+
+  if (targetKind === "airbox" && (fieldCatalog || quantityCatalog)) {
     return targetAwareItems;
   }
 

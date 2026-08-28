@@ -129,6 +129,9 @@ pub(crate) struct AppState {
     /// Pending backend-side coalesced realtime resource batches, before sequence assignment.
     pub current_live_realtime_pending_batches:
         Arc<Mutex<HashMap<String, CurrentLiveRealtimePendingBatch>>>,
+    /// Latest-only QoS owner for lightweight `scalar.sample` events.
+    pub current_live_realtime_scalar_sample_qos:
+        Arc<Mutex<crate::CurrentLiveRealtimeScalarSampleQosState>>,
     /// Backend-owned effective realtime communication policy.
     pub current_live_realtime_policy:
         Arc<RwLock<crate::realtime_policy::CurrentLiveRealtimePolicyState>>,

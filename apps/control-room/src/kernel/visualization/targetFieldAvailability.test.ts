@@ -183,6 +183,25 @@ describe("target field availability", () => {
     expect(targetFieldAvailabilityIsSelectable(result)).toBe(false);
   });
 
+  it("keeps a supported quantity selectable after a retryable materialization error", () => {
+    expect(
+      targetFieldAvailabilityIsSelectable({
+        adopted: false,
+        carrierId: null,
+        generationId: "generation-1",
+        materialized: false,
+        quantityId: "H_demag",
+        reasonCode: "field_materialization_error",
+        revision: null,
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        state: "unavailable",
+        supported: true,
+        targetId: "airbox",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps the single-grid outside-support target on its full-grid carrier scope", () => {
     const result = resolveTargetFieldAvailability("H_eff", {
       carrier: carrier({

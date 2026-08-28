@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { QuantityCatalogResource } from "./apiTypes";
 import {
   quantityCatalogEntryHasAdoptableSpatialCarrier,
+  quantityCatalogEntrySupportsAirbox,
   quantityCatalogEntrySupportsSpatialVisualization,
 } from "./quantityIds";
 
@@ -91,6 +92,29 @@ describe("quantity catalog visualization selector", () => {
     } as QuantityCatalogResource["quantities"][number];
 
     expect(quantityCatalogEntrySupportsSpatialVisualization(quantity)).toBe(false);
+    expect(quantityCatalogEntryHasAdoptableSpatialCarrier(quantity)).toBe(false);
+  });
+
+  it("keeps a requestable full-domain quantity selectable after a materialization error", () => {
+    const quantity = {
+      domain: "full_domain",
+      id: "H_demag",
+      resolved_capability: {
+        provider: "available",
+        request: "field_vector",
+        materialization: "unavailable",
+        render: "renderable",
+        publication: "interactive",
+        scope: "full_domain",
+        reason_code: "field_materialization_error",
+        lane: "fdm_cuda",
+        precision: "double",
+        carriers: [],
+      },
+    } as unknown as QuantityCatalogResource["quantities"][number];
+
+    expect(quantityCatalogEntrySupportsSpatialVisualization(quantity)).toBe(true);
+    expect(quantityCatalogEntrySupportsAirbox(quantity)).toBe(true);
     expect(quantityCatalogEntryHasAdoptableSpatialCarrier(quantity)).toBe(false);
   });
 });

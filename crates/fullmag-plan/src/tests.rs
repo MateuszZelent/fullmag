@@ -14943,7 +14943,7 @@ fn fem_planner_accepts_certified_mixed_p1_cpu_double_and_rebinds_packed_certific
             .mixed_layer_topology_certificate
             .expect("qualified mixed P1 plan must carry a final certificate");
         assert_eq!(certificate.topology_fingerprint, final_fingerprint);
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&certificate, &fem.mesh)
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&fem.mesh, &certificate)
             .expect("rebound certificate must validate against the final packed mesh");
         let provenance = report
             .mixed_topology_provenance
@@ -15038,8 +15038,8 @@ fn fem_planner_accepts_certified_cpu_and_gpu_exact_layer_matrix() {
                 "fixture must contain genuine stacked prism topology",
             );
             fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
-                certificate,
                 &fem.mesh,
+                certificate,
             )
             .expect("packed multi-layer certificate must remain bound to the mesh");
             let provenance = fem
@@ -15342,7 +15342,7 @@ fn fem_planner_rejects_valid_mixed_certificate_when_build_report_is_degraded() {
             .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
             .and_then(|asset| asset.mesh.as_ref())
             .expect("mixed fixture must retain its source mesh");
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh)
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(mesh, certificate)
             .expect("the regression must isolate enclosing build-report state");
 
         let error = plan(&ir).expect_err("strict mixed planning must reject a degraded report");

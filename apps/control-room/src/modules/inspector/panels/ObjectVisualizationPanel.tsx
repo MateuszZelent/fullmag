@@ -992,6 +992,9 @@ function useObjectVisualizationPanelState(
     multilayerAirbox: multilayerAirboxCapacity,
     target: resolvedTarget,
   });
+  const vectorSceneCap = resolveVisualizationVectorSceneCap(
+    displayVisualizationState,
+  );
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
       capacity: vectorCapacity,
@@ -999,6 +1002,7 @@ function useObjectVisualizationPanelState(
       manifestRegions: fdmTarget ? null : manifest.data?.regions,
       memberships: fdmTarget ? null : regionMemberships,
       meshParts: fdmTarget ? null : manifest.data?.mesh_parts,
+      sceneCap: vectorSceneCap,
       target: resolvedTarget,
     }),
     surface: resolveVisualizationVectorBudgetRange({
@@ -1007,6 +1011,7 @@ function useObjectVisualizationPanelState(
       manifestRegions: fdmTarget ? null : manifest.data?.regions,
       memberships: fdmTarget ? null : regionMemberships,
       meshParts: fdmTarget ? null : manifest.data?.mesh_parts,
+      sceneCap: vectorSceneCap,
       target: resolvedTarget,
     }),
   } satisfies Record<
@@ -1015,9 +1020,6 @@ function useObjectVisualizationPanelState(
   >;
   const vectorBudgetRange =
     vectorBudgetRanges[settings?.geometryScope ?? "full"];
-  const vectorSceneCap = resolveVisualizationVectorSceneCap(
-    displayVisualizationState,
-  );
   const vectorTopologyHash =
     vectorCapacity?.topologyHash ??
     (fdmTarget

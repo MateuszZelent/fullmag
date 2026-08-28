@@ -1467,6 +1467,7 @@ struct PendingScalarRow {
     id: u64,
     sequence: ScalarSequenceKey,
     row: CurrentLiveScalarRow,
+    finished: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1516,12 +1517,27 @@ impl PendingScalarRows {
                     pending.id = self.next_row_id;
                     self.next_row_id = self.next_row_id.wrapping_add(1);
                     pending.row = row;
+                    pending.finished = true;
+                    return;
+                }
+            } else if row.step > 1 {
+                if let Some(pending) = self.rows.iter_mut().rev().find(|pending| {
+                    pending.sequence == sequence && !pending.finished && pending.row.step > 1
+                }) {
+                    pending.id = self.next_row_id;
+                    self.next_row_id = self.next_row_id.wrapping_add(1);
+                    pending.row = row;
                     return;
                 }
             }
             let id = self.next_row_id;
             self.next_row_id = self.next_row_id.wrapping_add(1);
-            self.rows.push_back(PendingScalarRow { id, sequence, row });
+            self.rows.push_back(PendingScalarRow {
+                id,
+                sequence,
+                row,
+                finished,
+            });
         }
     }
 
@@ -2792,6 +2808,126 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 0]
         );
+    }
+
+    #[test]
+    fn pending_scalar_rows_keep_only_latest_intermediate_sample_per_sequence() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+
+        for step in 2..=10_000 {
+            pending.enqueue_if_new(sequence.clone(), scalar_row(step), false, &mut gate);
+            gate.last_scalar_publish_at = None;
+        }
+
+        assert_eq!(pending.rows.len(), 1);
+        assert_eq!(
+            pending.rows.front().map(|pending| pending.row.step),
+            Some(10_000)
+        );
+    }
+
+    #[test]
+    fn pending_scalar_rows_preserve_first_sample_before_latest() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+
+        for step in 1..=3 {
+            pending.enqueue_if_new(sequence.clone(), scalar_row(step), false, &mut gate);
+            gate.last_scalar_publish_at = None;
+        }
+
+        assert_eq!(
+            pending
+                .rows
+                .iter()
+                .map(|pending| pending.row.step)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+    }
+
+    #[test]
+    fn pending_scalar_rows_terminal_replaces_same_step_intermediate_once() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+
+        pending.enqueue_if_new(sequence.clone(), scalar_row(8), false, &mut gate);
+        let mut terminal = scalar_row(8);
+        terminal.mx = 0.5;
+        pending.enqueue_if_new(sequence, terminal, true, &mut gate);
+
+        assert_eq!(pending.rows.len(), 1);
+        assert_eq!(
+            pending.rows.front().map(|pending| pending.row.step),
+            Some(8)
+        );
+        assert_eq!(
+            pending.rows.front().map(|pending| pending.row.mx),
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn pending_scalar_rows_failed_sink_retains_first_and_latest_for_retry() {
+        let pending_rows = Arc::new(Mutex::new(PendingScalarRows::default()));
+        let mut gate = LiveTelemetryPublishGate::default();
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        {
+            let mut pending = pending_rows.lock().unwrap();
+            for step in 1..=3 {
+                pending.enqueue_if_new(sequence.clone(), scalar_row(step), false, &mut gate);
+                gate.last_scalar_publish_at = None;
+            }
+        }
+
+        let attempts = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let attempts_for_sink = Arc::clone(&attempts);
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let published_for_sink = Arc::clone(&published);
+        let sink: LivePublishSink = Arc::new(move |_, payload| {
+            if attempts_for_sink.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+                return Err(anyhow::anyhow!("transient scalar failure"));
+            }
+            published_for_sink
+                .lock()
+                .unwrap()
+                .push(payload.latest_scalar_row.as_ref().expect("scalar row").step);
+            Ok(())
+        });
+
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &sink).is_err());
+        assert_eq!(
+            pending_rows
+                .lock()
+                .unwrap()
+                .rows
+                .iter()
+                .map(|pending| pending.row.step)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &sink).is_ok());
+        assert_eq!(*published.lock().unwrap(), vec![1, 3]);
     }
 
     #[test]

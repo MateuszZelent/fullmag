@@ -1778,7 +1778,7 @@ fn require_supported_fem_topology(
             ),
         });
     }
-    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
+    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(mesh, certificate).map_err(
         |reasons| RunError {
             message: format!(
                 "fem_mixed_p1_runtime_certificate_rejected: {}; fallback=none",
@@ -5229,7 +5229,7 @@ mod tests {
                 .expect("mixed topology golden certificate should deserialize");
         let fingerprint = mesh.topology_fingerprint_v6();
         assert_eq!(certificate.topology_fingerprint, fingerprint);
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&certificate, &mesh)
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&mesh, &certificate)
             .expect("mixed topology golden certificate should bind to its mesh");
 
         let fem = topology_guard_frequency_plan_mut(&mut plan);
@@ -5446,8 +5446,8 @@ mod tests {
                 .as_ref()
                 .expect("mixed fixture must retain a valid certificate");
             fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
-                certificate,
                 &fem.mesh,
+                certificate,
             )
             .expect("the regression must isolate enclosing build-report state");
 
@@ -5756,8 +5756,8 @@ mod tests {
                 .and_then(|report| report.mixed_layer_topology_certificate.as_ref())
                 .expect("L=4 rejection fixture must carry a certificate");
             fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(
-                certificate,
                 &fem.mesh,
+                certificate,
             )
             .expect("L=4 rejection fixture must be correctly certificate-bound");
             let expected = topology_guard_error(&problem, &plan);

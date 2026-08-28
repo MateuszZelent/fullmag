@@ -85,7 +85,11 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
         class_name = re.escape(symbol.removeprefix("class ").rstrip(":"))
         pattern = re.compile(rf"^\s*class\s+{class_name}\b", re.MULTILINE)
     elif path.endswith(".py"):
-        pattern = re.compile(rf"^\s*(?:async\s+)?def\s+{escaped}\s*\(", re.MULTILINE)
+        pattern = re.compile(
+            rf"^(?:\s*(?:async\s+)?def\s+{escaped}\s*\("
+            rf"|{escaped}(?:\s*:\s*[^=\n]+)?\s*=(?!=))",
+            re.MULTILINE,
+        )
     elif path.endswith(".rs"):
         pattern = re.compile(
             rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:"

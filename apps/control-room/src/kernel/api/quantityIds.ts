@@ -16,8 +16,7 @@ export function quantityCatalogEntrySupportsSpatialVisualization(
       resolved.request === "field_vector" &&
       resolved.render === "renderable" &&
       resolved.publication === "interactive" &&
-      resolved.materialization !== "legacy_unverified" &&
-      resolved.materialization !== "unavailable"
+      resolved.materialization !== "legacy_unverified"
     );
   }
   return (

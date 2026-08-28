@@ -368,10 +368,119 @@
       "responsibility": "Generate exact stacked magnetic prisms and the conforming shared air domain."
     },
     {
+      "id": "mixed-tet-repair-policy",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_STRICT_MIXED_TET_REPAIR_POLICY",
+      "responsibility": "Freeze the private production repair algorithm ID, Relocate3D method, and one-iteration contract shared by FEM CPU and GPU meshing."
+    },
+    {
+      "id": "mixed-tet-repair",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "_repair_mixed_tetrahedra",
+      "responsibility": "Validate and execute the private mixed-tetrahedral repair policy before extraction and certificate generation."
+    },
+    {
       "id": "certificate",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py",
       "symbol": "_attach_mixed_layer_topology_certificate",
-      "responsibility": "Recompute and bind exact-layer and shared-domain evidence."
+      "responsibility": "Provide the current Python oracle and producer that recomputes and binds exact-layer and shared-domain evidence."
+    },
+    {
+      "id": "python-certificate-oracle",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_recompute_mixed_certificate_evidence",
+      "responsibility": "Compute the current readable reference evidence with the frozen equations, ordering, and tolerances."
+    },
+    {
+      "id": "mixed-certificate-canonical-schema",
+      "path": "crates/fullmag-ir/src/mesh_assets.rs",
+      "symbol": "MixedLayerTopologyCertificateV1IR",
+      "responsibility": "Own the complete typed mixed-certificate field set and reject unknown fields before bridge digest or canonical validation.",
+      "evidence_status": "implemented_unit_qualified"
+    },
+    {
+      "id": "mixed-certificate-evidence-computation",
+      "path": "crates/fullmag-ir/src/mixed_certificate.rs",
+      "symbol": "compute_mixed_certificate_evidence",
+      "responsibility": "Compute deterministic mixed-certificate evidence from typed MeshIR with immutable Rayon records and canonical ordered reductions.",
+      "evidence_status": "implemented_unit_qualified"
+    },
+    {
+      "id": "mixed-certificate-validation",
+      "path": "crates/fullmag-ir/src/mixed_certificate.rs",
+      "symbol": "validate_mixed_layer_topology_certificate_against_mesh",
+      "responsibility": "Validate the canonical (mesh, certificate) argument order against the exact topology fingerprint, counts, metrics, ownership, and unchanged tolerances.",
+      "evidence_status": "implemented_unit_qualified"
+    },
+    {
+      "id": "typed-pyo3-certificate-entry",
+      "path": "crates/fullmag-py-core/src/mixed_certificate.rs",
+      "symbol": "certify_mixed_mesh_arrays",
+      "responsibility": "Enforce the 1 MiB UTF-8 pre-parse cap, reject unknown certificate fields, and build owned typed MeshIR plus the Python-canonical typed certificate projection under the GIL, then hash and run canonical fullmag-ir certificate computation and validation while detached.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "typed-pyo3-structural-preflight",
+      "path": "crates/fullmag-py-core/src/mixed_certificate.rs",
+      "symbol": "preflight_mixed_mesh_arrays",
+      "responsibility": "Accept an exact separated metadata/expected envelope and validate structure plus counts and topology fingerprint without invoking certificate evidence computation or adjacency.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "python-native-certificate-adapter",
+      "path": "packages/fullmag-py/src/fullmag/_core.py",
+      "symbol": "certify_mixed_mesh_arrays",
+      "responsibility": "Provide the exact mandatory keyword-only MeshData certificate adapter, typed NumPy wire conversion, bounded result parsing, and fail-closed native selection.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "python-native-structural-preflight-adapter",
+      "path": "packages/fullmag-py/src/fullmag/_core.py",
+      "symbol": "preflight_mixed_mesh_arrays",
+      "responsibility": "Provide the exact mandatory keyword-only MeshData structural-preflight adapter and bounded result parsing.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-certification-receipt",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_certification_receipt.py",
+      "symbol": "class CertificationReceiptV1",
+      "responsibility": "Freeze the deterministic artifact-v2 topology, build-report, certificate, authoring, producer, and mesh-count bindings without a semantic timestamp.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-v2-writer",
+      "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
+      "symbol": "save_mesh_artifact",
+      "responsibility": "Emit certified mixed artifact v2 only from complete explicit bindings and a native-required certificate audit while preserving generic v1 full-audit compatibility.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-public-full-audit",
+      "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
+      "symbol": "load_mesh_artifact",
+      "responsibility": "Perform the portable full audit without public trust or skip flags and mark a missing-native Python reference fallback as non-production.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-trusted-cache-loader",
+      "path": "packages/fullmag-py/src/fullmag/meshing/persistence.py",
+      "symbol": "_load_trusted_cached_mesh_artifact",
+      "responsibility": "Verify exact expected v2 receipt and member bindings, require native structural preflight for fast trust, and bypass to public full audit when native preflight is unavailable.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "mixed-artifact-trusted-proof",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "_mint_trusted_native_preflight_receipt_proof",
+      "responsibility": "Mint an identity-bound proof for private certificate attachment after verified receipt bindings and native structural preflight without Python evidence recomputation.",
+      "evidence_status": "implemented_host_extension_qualified"
+    },
+    {
+      "id": "pyo3-mixed-certificate-export-registration",
+      "path": "crates/fullmag-py-core/src/lib.rs",
+      "symbol": "fullmag_py_core",
+      "responsibility": "Register the three mixed-certificate extension functions checked by the existing single-build managed export path; managed installed export execution remains not verified.",
+      "evidence_status": "implemented_host_extension_qualified"
     },
     {
       "id": "python-mixed-p1-scope",

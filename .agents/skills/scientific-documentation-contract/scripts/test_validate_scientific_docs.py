@@ -153,6 +153,36 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         errors = self.errors(manifest)
         self.assertTrue(any("declaration not found" in error for error in errors))
 
+    def test_python_module_constant_is_a_stable_source_symbol(self) -> None:
+        source = self.repo / "src/policy.py"
+        source.parent.mkdir(exist_ok=True)
+        source.write_text(
+            "# STRICT_POLICY is discussed here\n"
+            "STRICT_POLICY = Policy(\n"
+            "    method='Relocate3D',\n"
+            ")\n"
+            "use(STRICT_POLICY)\n",
+            encoding="utf-8",
+        )
+        manifest = copy.deepcopy(self.manifest)
+        manifest["sources"][0]["path"] = "src/policy.py"
+        manifest["sources"][0]["symbol"] = "STRICT_POLICY"
+        self.page_path.write_text(
+            self.page_path.read_text(encoding="utf-8")
+            + "\n| repair policy | src/policy.py | STRICT_POLICY |\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual([], self.errors(manifest))
+
+        source.write_text("# STRICT_POLICY only\nuse(STRICT_POLICY)\n", encoding="utf-8")
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration not found" in error for error in errors))
+
+        source.write_text("STRICT_POLICY == other_policy\n", encoding="utf-8")
+        errors = self.errors(manifest)
+        self.assertTrue(any("declaration not found" in error for error in errors))
+
     def test_generic_rust_function_is_a_stable_source_symbol(self) -> None:
         source = self.repo / "src/integrator.rs"
         source.parent.mkdir(exist_ok=True)

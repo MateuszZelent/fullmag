@@ -325,7 +325,14 @@ płaszczyzny i nadal jest pełnym trójwymiarowym P1, nie modelem 2.5D.
 Własność pozostaje backends-first:
 
 - typowany import topologii, bazisy, kwadratura, Jacobiany, exchange, Poisson,
-  recovery, energia, relaksacja i certyfikat mesha należą do `backends/fem`;
+  recovery, energia, relaksacja i finalny preflight wykonawczy należą do
+  `backends/fem`; zaimplementowany i zakwalifikowany testami jednostkowymi
+  językowo neutralny silnik rekalkulacji i walidacji certyfikatu należy do
+  `crates/fullmag-ir/src/mixed_certificate.rs` i nie przejmuje generowania
+  mesha, MFEM ani solvera; jego typowany bridge PyO3 jest zaimplementowany i
+  zakwalifikowany na hostowym rozszerzeniu, natomiast produkcyjny caller,
+  integracja provenance z oracle Python, artifact receipt i użycie w managed
+  FEM runtime pozostają niezweryfikowane;
 - runner posiada wyłącznie walidację planu przed startem, lowering typowanego
   ABI, requested/resolved provenance, artefakty i wywołanie backendu;
 - CPU MFEM/hypre i GPU MFEM/libCEED/CUDA realizują jeden kontrakt znaków,

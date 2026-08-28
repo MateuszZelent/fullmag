@@ -551,6 +551,14 @@ export class RealtimeInvalidationBridge {
               DATA_QUANTITIES_PATH,
               change.revision,
             );
+          } else if (
+            change.resource === "diagnostics" &&
+            (change.resource_id === "cpu" || change.resource_id === "gpu")
+          ) {
+            this.queueExactResourceInvalidation(
+              recommendedFetch,
+              change.revision,
+            );
           } else {
             this.queueResourceInvalidation(recommendedFetch, change.revision);
           }

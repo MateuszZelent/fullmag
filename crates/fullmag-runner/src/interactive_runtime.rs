@@ -5775,6 +5775,8 @@ fn fem_gpu_execution_provenance(
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
+        fdm_cpu_evaluation_telemetry: None,
+        fdm_fft_execution: None,
         fem_gpu_execution_receipt: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {

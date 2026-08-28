@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 import hashlib
 import itertools
 import json
@@ -9,7 +9,9 @@ import math
 import operator
 from pathlib import Path
 import struct
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
+from weakref import WeakSet
 
 import numpy as np
 from numpy.typing import NDArray
@@ -956,6 +958,46 @@ class MixedLayerTopologyCertificate:
         )
 
 
+def _certificate_payload_sha256(
+    certificate: MixedLayerTopologyCertificate,
+) -> str:
+    encoded = json.dumps(
+        certificate.to_dict(),
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+@dataclass(frozen=True)
+class _PrevalidatedMixedCertificate:
+    certificate: MixedLayerTopologyCertificate
+    topology_fingerprint_v3: str
+    certificate_payload_sha256: str
+    canonical_evidence: "_CanonicalMixedCertificateEvidence"
+    _validation_token: object = field(repr=False, compare=False)
+
+
+_PREVALIDATED_MIXED_CERTIFICATE_TOKEN = object()
+
+
+@dataclass(frozen=True, eq=False)
+class _TrustedNativePreflightReceiptProof:
+    mesh_without_certificate: "MeshData" = field(repr=False, compare=False)
+    certificate: MixedLayerTopologyCertificate
+    topology_fingerprint_v3: str
+    certificate_payload_sha256: str
+    counts: Mapping[str, int]
+    _capability: object = field(repr=False, compare=False)
+
+
+_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY = object()
+_MINTED_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_PROOFS: WeakSet[
+    _TrustedNativePreflightReceiptProof
+] = WeakSet()
+
+
 @dataclass(frozen=True, slots=True)
 class MeshData:
     """Canonical typed variable-arity FEM topology in CSR layout."""
@@ -1054,14 +1096,205 @@ class MeshData:
                 f"does not match actual layer count {actual_layers}"
             )
 
+    @classmethod
+    def _from_prevalidated_mixed_certificate(
+        cls,
+        *,
+        mesh_without_certificate: "MeshData",
+        validation: _PrevalidatedMixedCertificate,
+        token: object,
+    ) -> "MeshData":
+        if token is not _PREVALIDATED_MIXED_CERTIFICATE_TOKEN:
+            raise ValueError("prevalidated mixed certificate token is invalid")
+        if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+            raise ValueError("prevalidated mixed certificate requires an unsigned mesh")
+        if not isinstance(validation, _PrevalidatedMixedCertificate):
+            raise TypeError("prevalidated mixed certificate has invalid validation evidence")
+        if validation._validation_token is not _PREVALIDATED_MIXED_CERTIFICATE_TOKEN:
+            raise ValueError("prevalidated mixed certificate proof is not validated")
+        certificate = validation.certificate
+        carrier = validation.canonical_evidence
+        if (
+            not isinstance(carrier, _CanonicalMixedCertificateEvidence)
+            or carrier not in _MINTED_CANONICAL_MIXED_EVIDENCE
+            or carrier._capability is not _CANONICAL_MIXED_EVIDENCE_CAPABILITY
+        ):
+            raise ValueError("prevalidated mixed certificate evidence is not canonical")
+        context = _require_mixed_topology_workspace(
+            mesh_without_certificate,
+            carrier.context.workspace,
+            sweep_axis={"x": 0, "y": 1, "z": 2}[
+                certificate.resolved_sweep_direction
+            ],
+            interface_marker=certificate.interface_marker,
+            _bound_context=carrier.context,
+        )
+        actual_fingerprint = context.actual_topology_fingerprint_v3
+        if validation.topology_fingerprint_v3 != actual_fingerprint:
+            raise ValueError(
+                "prevalidated mixed certificate topology fingerprint does not match mesh"
+            )
+        if (
+            certificate.topology_fingerprint_version != "v3"
+            or certificate.topology_fingerprint != actual_fingerprint
+        ):
+            raise ValueError(
+                "prevalidated mixed certificate topology fingerprint is stale"
+            )
+        if (
+            _certificate_payload_sha256(certificate)
+            != validation.certificate_payload_sha256
+        ):
+            raise ValueError("prevalidated mixed certificate payload digest is stale")
+        mesh_without_certificate._validate_mixed_layer_topology_certificate_evidence(
+            certificate,
+            carrier.evidence,
+            workspace=context.workspace,
+            _bound_context=context,
+        )
+
+        result = object.__new__(cls)
+        for descriptor in fields(cls):
+            value = (
+                certificate
+                if descriptor.name == "mixed_layer_topology_certificate"
+                else getattr(mesh_without_certificate, descriptor.name)
+            )
+            object.__setattr__(result, descriptor.name, value)
+        return result
+
+    @classmethod
+    def _from_trusted_native_preflight_receipt(
+        cls,
+        *,
+        mesh_without_certificate: "MeshData",
+        certificate: MixedLayerTopologyCertificate,
+        proof: _TrustedNativePreflightReceiptProof,
+    ) -> "MeshData":
+        if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+            raise ValueError("trusted receipt construction requires an unsigned mesh")
+        if not isinstance(certificate, MixedLayerTopologyCertificate):
+            raise TypeError("trusted receipt certificate has an invalid type")
+        if not isinstance(proof, _TrustedNativePreflightReceiptProof):
+            raise TypeError("trusted native preflight proof has an invalid type")
+        if proof not in _MINTED_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_PROOFS:
+            raise ValueError("trusted native preflight proof is not owner-minted")
+        if proof._capability is not _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY:
+            raise ValueError("trusted native preflight proof capability is invalid")
+        if (
+            proof.mesh_without_certificate is not mesh_without_certificate
+            or proof.certificate is not certificate
+        ):
+            raise ValueError("trusted native preflight proof identity is stale")
+        current_counts = {
+            "nodes": mesh_without_certificate.n_nodes,
+            "cells": mesh_without_certificate.n_elements,
+            "facets": mesh_without_certificate.n_boundary_faces,
+        }
+        if dict(proof.counts) != current_counts:
+            raise ValueError("trusted native preflight proof counts are stale")
+        if (
+            proof.topology_fingerprint_v3
+            != mesh_without_certificate.topology_fingerprint_v3()
+        ):
+            raise ValueError("trusted native preflight proof topology is stale")
+        if proof.certificate_payload_sha256 != _certificate_payload_sha256(certificate):
+            raise ValueError("trusted native preflight proof certificate is stale")
+
+        result = object.__new__(cls)
+        for descriptor in fields(cls):
+            value = (
+                certificate
+                if descriptor.name == "mixed_layer_topology_certificate"
+                else getattr(mesh_without_certificate, descriptor.name)
+            )
+            object.__setattr__(result, descriptor.name, value)
+        return result
+
     def _validate_mixed_layer_topology_certificate(self) -> None:
         certificate = self.mixed_layer_topology_certificate
         if certificate is None:
             return
+        axis = {"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction]
+        actual_topology_fingerprint_v3 = (
+            self._validate_mixed_layer_topology_certificate_topology(certificate)
+        )
+        workspace = _build_mixed_topology_workspace(
+            self,
+            sweep_axis=axis,
+            interface_marker=certificate.interface_marker,
+            _topology_fingerprint_v3=actual_topology_fingerprint_v3,
+        )
+        context = _require_mixed_topology_workspace(
+            self,
+            workspace,
+            sweep_axis=axis,
+            interface_marker=certificate.interface_marker,
+            _actual_topology_fingerprint_v3=actual_topology_fingerprint_v3,
+        )
+        self._validate_mixed_layer_topology_certificate_binding(
+            certificate,
+            workspace=workspace,
+            validate_topology=False,
+            _bound_context=context,
+        )
+        evidence = _recompute_mixed_certificate_evidence(
+            self,
+            sweep_axis=axis,
+            interface_marker=certificate.interface_marker,
+            outer_boundary_marker=certificate.outer_boundary_marker,
+            magnetic_bounds_min_m=certificate.magnetic_bounds_min_m,
+            magnetic_bounds_max_m=certificate.magnetic_bounds_max_m,
+            airbox_bounds_min_m=certificate.airbox_bounds_min_m,
+            airbox_bounds_max_m=certificate.airbox_bounds_max_m,
+            workspace=workspace,
+            _bound_context=context,
+        )
+        self._validate_mixed_layer_topology_certificate_evidence(
+            certificate,
+            evidence,
+            workspace=workspace,
+            _bound_context=context,
+        )
+
+    def _validate_mixed_layer_topology_certificate_binding(
+        self,
+        certificate: MixedLayerTopologyCertificate,
+        *,
+        workspace: "_MixedTopologyWorkspace | None" = None,
+        validate_topology: bool = True,
+        _bound_context: "_BoundMixedTopologyContext | None" = None,
+    ) -> None:
+        if validate_topology:
+            self._validate_mixed_layer_topology_certificate_topology(certificate)
+        context = _bound_context
+        if workspace is not None:
+            context = _require_mixed_topology_workspace(
+                self,
+                workspace,
+                sweep_axis={"x": 0, "y": 1, "z": 2}[
+                    certificate.resolved_sweep_direction
+                ],
+                interface_marker=certificate.interface_marker,
+                _bound_context=_bound_context,
+            )
+        _validate_mixed_pyramid_bases(
+            self,
+            interface_marker=certificate.interface_marker,
+            workspace=workspace,
+            _bound_context=context,
+        )
+
+    def _validate_mixed_layer_topology_certificate_topology(
+        self,
+        certificate: MixedLayerTopologyCertificate,
+        *,
+        topology_fingerprint_v3: str | None = None,
+    ) -> str:
         if certificate.topology_fingerprint_version == "v2":
             expected = self.topology_fingerprint_v2()
         elif certificate.topology_fingerprint_version == "v3":
-            expected = self.topology_fingerprint_v3()
+            expected = topology_fingerprint_v3 or self.topology_fingerprint_v3()
         else:
             raise ValueError(
                 "mixed layer topology certificate has an unsupported topology fingerprint version"
@@ -1071,23 +1304,31 @@ class MeshData:
                 "mixed layer topology certificate topology fingerprint is stale: "
                 f"certificate={certificate.topology_fingerprint}, actual={expected}"
             )
-        _validate_mixed_pyramid_bases(
-            self,
-            interface_marker=certificate.interface_marker,
-        )
-        evidence = _recompute_mixed_certificate_evidence(
-            self,
-            sweep_axis={"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction],
-            interface_marker=certificate.interface_marker,
-            outer_boundary_marker=certificate.outer_boundary_marker,
-            magnetic_bounds_min_m=certificate.magnetic_bounds_min_m,
-            magnetic_bounds_max_m=certificate.magnetic_bounds_max_m,
-            airbox_bounds_min_m=certificate.airbox_bounds_min_m,
-            airbox_bounds_max_m=certificate.airbox_bounds_max_m,
-        )
+        if certificate.topology_fingerprint_version == "v3":
+            return expected
+        return topology_fingerprint_v3 or self.topology_fingerprint_v3()
+
+    def _validate_mixed_layer_topology_certificate_evidence(
+        self,
+        certificate: MixedLayerTopologyCertificate,
+        evidence: Mapping[str, object],
+        *,
+        workspace: "_MixedTopologyWorkspace | None" = None,
+        _bound_context: "_BoundMixedTopologyContext | None" = None,
+    ) -> None:
+        if workspace is not None:
+            _require_mixed_topology_workspace(
+                self,
+                workspace,
+                sweep_axis={"x": 0, "y": 1, "z": 2}[
+                    certificate.resolved_sweep_direction
+                ],
+                interface_marker=certificate.interface_marker,
+                _bound_context=_bound_context,
+            )
         for name, actual in evidence.items():
             claimed = getattr(certificate, name)
-            if isinstance(actual, dict):
+            if isinstance(actual, Mapping):
                 matches = claimed == actual
             elif isinstance(actual, tuple):
                 matches = len(claimed) == len(actual) and np.allclose(
@@ -1103,14 +1344,26 @@ class MeshData:
                 )
             if not matches:
                 raise ValueError(f"mixed layer topology certificate {name} is stale")
-        axis = {"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction]
-        magnetic_ordinals = np.flatnonzero(self.element_markers == 1)
-        if not len(magnetic_ordinals):
-            raise ValueError("mixed layer topology certificate requires magnetic marker 1")
-        magnetic_nodes = np.unique(
-            np.concatenate([self.cell_node_ids(int(index)) for index in magnetic_ordinals])
-        )
-        planes, tolerance = _cluster_coordinate_planes(self.nodes[magnetic_nodes], axis)
+        if workspace is None:
+            axis = {"x": 0, "y": 1, "z": 2}[
+                certificate.resolved_sweep_direction
+            ]
+            magnetic_ordinals = np.flatnonzero(self.element_markers == 1)
+            if not len(magnetic_ordinals):
+                raise ValueError(
+                    "mixed layer topology certificate requires magnetic marker 1"
+                )
+            magnetic_nodes = np.unique(
+                np.concatenate([
+                    self.cell_node_ids(int(index)) for index in magnetic_ordinals
+                ])
+            )
+            planes, tolerance = _cluster_coordinate_planes(
+                self.nodes[magnetic_nodes], axis
+            )
+        else:
+            planes = workspace.magnetic_layer_coordinates
+            tolerance = workspace.magnetic_layer_tolerance
         if len(planes) != certificate.realized_layer_count + 1 or not np.allclose(
             planes,
             certificate.magnetic_plane_coordinates_m,
@@ -1138,6 +1391,7 @@ class MeshData:
             raise ValueError("mixed layer topology certificate transition partition is stale")
         if _facet_counts_by_role_marker(self) != certificate.facet_family_counts_by_role_marker:
             raise ValueError("mixed layer topology certificate facet counts are stale")
+
     def topology_fingerprint_v2(self) -> str:
         payload = {
             "nodes": self.nodes.tolist(),
@@ -2150,6 +2404,342 @@ _MIXED_CELL_LOCAL_FACETS: dict[str, tuple[tuple[int, ...], ...]] = {
 }
 
 
+@dataclass(frozen=True)
+class _MixedTopologyWorkspace:
+    topology_fingerprint_v3: str
+    sweep_axis: int
+    interface_marker: int
+    cell_nodes_per_ordinal: tuple[NDArray[np.int32], ...]
+    canonical_faces_per_cell: tuple[tuple[tuple[int, ...], ...], ...]
+    face_owners: Mapping[tuple[int, ...], tuple[int, ...]]
+    cell_family_ordinals: Mapping[str, tuple[int, ...]]
+    cell_signed_volumes: NDArray[np.float64]
+    cell_absolute_volumes: NDArray[np.float64]
+    pyramid_base_classification: Mapping[tuple[int, ...], bool]
+    magnetic_layer_coordinates: tuple[float, ...]
+    magnetic_layer_tolerance: float
+
+
+@dataclass(frozen=True, eq=False)
+class _BoundMixedTopologyContext:
+    mesh: MeshData = field(repr=False, compare=False)
+    workspace: _MixedTopologyWorkspace
+    actual_topology_fingerprint_v3: str
+    sweep_axis: int
+    interface_marker: int
+    _capability: object = field(repr=False, compare=False)
+
+
+_BOUND_MIXED_TOPOLOGY_CAPABILITY = object()
+_MINTED_BOUND_MIXED_TOPOLOGY_CONTEXTS: WeakSet[_BoundMixedTopologyContext] = (
+    WeakSet()
+)
+
+
+@dataclass(frozen=True, eq=False)
+class _CanonicalMixedCertificateEvidence:
+    evidence: Mapping[str, object]
+    context: _BoundMixedTopologyContext
+    _capability: object = field(repr=False, compare=False)
+
+
+_CANONICAL_MIXED_EVIDENCE_CAPABILITY = object()
+_MINTED_CANONICAL_MIXED_EVIDENCE: WeakSet[
+    _CanonicalMixedCertificateEvidence
+] = WeakSet()
+
+
+def _build_mixed_topology_workspace(
+    mesh: MeshData,
+    *,
+    sweep_axis: int,
+    interface_marker: int,
+    _topology_fingerprint_v3: str | None = None,
+) -> _MixedTopologyWorkspace:
+    cell_nodes_per_ordinal_list: list[NDArray[np.int32]] = []
+    for ordinal in range(mesh.n_elements):
+        cell = mesh.cell_node_ids(ordinal)
+        cell.setflags(write=False)
+        cell_nodes_per_ordinal_list.append(cell)
+    cell_nodes_per_ordinal = tuple(cell_nodes_per_ordinal_list)
+    canonical_faces_per_cell = tuple(
+        tuple(
+            tuple(sorted(int(cell[index]) for index in local_face))
+            for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]
+        )
+        for family, cell in zip(
+            mesh.cell_types.tolist(), cell_nodes_per_ordinal, strict=True
+        )
+    )
+    face_owners = {
+        face: tuple(owners)
+        for face, owners in _mixed_face_adjacency(
+            mesh,
+            canonical_faces_per_cell=canonical_faces_per_cell,
+        ).items()
+    }
+    family_ordinals: dict[str, list[int]] = {}
+    signed_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+    absolute_volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+    for ordinal, (family, cell) in enumerate(zip(
+        mesh.cell_types.tolist(), cell_nodes_per_ordinal, strict=True
+    )):
+        family_ordinals.setdefault(str(family), []).append(ordinal)
+        coordinates = mesh.nodes[cell]
+        signed, absolute = _mixed_cell_signed_and_absolute_volume(
+            str(family), coordinates
+        )
+        signed_volumes[ordinal] = signed
+        absolute_volumes[ordinal] = absolute
+
+    interface_quads = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
+        for ordinal, (family, role, marker) in enumerate(zip(
+            mesh.facet_types.tolist(),
+            mesh.facet_roles.tolist(),
+            mesh.boundary_markers.tolist(),
+            strict=True,
+        ))
+        if family == "quad4"
+        and role == "material_interface"
+        and int(marker) == interface_marker
+    }
+    pyramid_bases = {
+        tuple(sorted(int(cell[index]) for index in (0, 1, 2, 3)))
+        for ordinal in family_ordinals.get("pyramid5", [])
+        for cell in (cell_nodes_per_ordinal[ordinal],)
+    }
+    magnetic_ordinals = np.flatnonzero(mesh.element_markers == 1)
+    if len(magnetic_ordinals):
+        magnetic_nodes = np.unique(np.concatenate([
+            cell_nodes_per_ordinal[int(ordinal)] for ordinal in magnetic_ordinals
+        ]))
+        magnetic_planes, magnetic_tolerance = _cluster_coordinate_planes(
+            mesh.nodes[magnetic_nodes], sweep_axis
+        )
+    else:
+        magnetic_planes = ()
+        magnetic_tolerance = FEM_EXACT_LAYER_PLANE_ABS_TOLERANCE_M
+    signed_volumes.setflags(write=False)
+    absolute_volumes.setflags(write=False)
+    return _MixedTopologyWorkspace(
+        topology_fingerprint_v3=(
+            _topology_fingerprint_v3 or mesh.topology_fingerprint_v3()
+        ),
+        sweep_axis=sweep_axis,
+        interface_marker=interface_marker,
+        cell_nodes_per_ordinal=cell_nodes_per_ordinal,
+        canonical_faces_per_cell=canonical_faces_per_cell,
+        face_owners=MappingProxyType(face_owners),
+        cell_family_ordinals=MappingProxyType({
+            family: tuple(ordinals)
+            for family, ordinals in sorted(family_ordinals.items())
+        }),
+        cell_signed_volumes=signed_volumes,
+        cell_absolute_volumes=absolute_volumes,
+        pyramid_base_classification=MappingProxyType({
+            face: face in interface_quads for face in sorted(pyramid_bases)
+        }),
+        magnetic_layer_coordinates=magnetic_planes,
+        magnetic_layer_tolerance=magnetic_tolerance,
+    )
+
+
+def _require_mixed_topology_workspace(
+    mesh: MeshData,
+    workspace: _MixedTopologyWorkspace,
+    *,
+    sweep_axis: int | None = None,
+    interface_marker: int | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
+    _actual_topology_fingerprint_v3: str | None = None,
+) -> _BoundMixedTopologyContext:
+    if not isinstance(workspace, _MixedTopologyWorkspace):
+        raise TypeError("mixed topology workspace has an invalid type")
+    if _bound_context is not None:
+        if (
+            not isinstance(_bound_context, _BoundMixedTopologyContext)
+            or _bound_context not in _MINTED_BOUND_MIXED_TOPOLOGY_CONTEXTS
+        ):
+            raise ValueError("mixed topology bound context is not owner-minted")
+        if (
+            _bound_context._capability is not _BOUND_MIXED_TOPOLOGY_CAPABILITY
+            or _bound_context.mesh is not mesh
+            or _bound_context.workspace is not workspace
+        ):
+            raise ValueError("mixed topology bound context is invalid")
+        if sweep_axis is not None and _bound_context.sweep_axis != sweep_axis:
+            raise ValueError("mixed topology workspace sweep axis does not match")
+        if (
+            interface_marker is not None
+            and _bound_context.interface_marker != interface_marker
+        ):
+            raise ValueError("mixed topology workspace interface marker does not match")
+        return _bound_context
+    actual_fingerprint = (
+        _actual_topology_fingerprint_v3 or mesh.topology_fingerprint_v3()
+    )
+    if workspace.topology_fingerprint_v3 != actual_fingerprint:
+        raise ValueError("mixed topology workspace topology fingerprint is stale")
+    if sweep_axis is not None and workspace.sweep_axis != sweep_axis:
+        raise ValueError("mixed topology workspace sweep axis does not match")
+    if interface_marker is not None and workspace.interface_marker != interface_marker:
+        raise ValueError("mixed topology workspace interface marker does not match")
+    context = _BoundMixedTopologyContext(
+        mesh=mesh,
+        workspace=workspace,
+        actual_topology_fingerprint_v3=actual_fingerprint,
+        sweep_axis=workspace.sweep_axis,
+        interface_marker=workspace.interface_marker,
+        _capability=_BOUND_MIXED_TOPOLOGY_CAPABILITY,
+    )
+    _MINTED_BOUND_MIXED_TOPOLOGY_CONTEXTS.add(context)
+    return context
+
+
+def _immutable_mixed_certificate_evidence(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            str(key): _immutable_mixed_certificate_evidence(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, list):
+        return tuple(_immutable_mixed_certificate_evidence(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_immutable_mixed_certificate_evidence(item) for item in value)
+    return value
+
+
+def _mixed_certificate_evidence_payload(
+    evidence: Mapping[str, object],
+) -> dict[str, object]:
+    def mutable(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {str(key): mutable(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return tuple(mutable(item) for item in value)
+        return value
+
+    return {str(key): mutable(value) for key, value in evidence.items()}
+
+
+def _validate_and_create_prevalidated_mixed_certificate(
+    mesh_without_certificate: MeshData,
+    *,
+    certificate: MixedLayerTopologyCertificate,
+    canonical_evidence: _CanonicalMixedCertificateEvidence,
+) -> _PrevalidatedMixedCertificate:
+    if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+        raise ValueError("prevalidated mixed certificate requires an unsigned mesh")
+    if not isinstance(canonical_evidence, _CanonicalMixedCertificateEvidence):
+        raise TypeError("mixed certificate evidence requires a canonical carrier")
+    if canonical_evidence not in _MINTED_CANONICAL_MIXED_EVIDENCE:
+        raise ValueError("mixed certificate evidence carrier is not owner-minted")
+    if canonical_evidence._capability is not _CANONICAL_MIXED_EVIDENCE_CAPABILITY:
+        raise ValueError("mixed certificate evidence carrier is not canonical")
+    context = canonical_evidence.context
+    workspace = context.workspace
+    mesh_without_certificate._validate_mixed_layer_topology_certificate_binding(
+        certificate,
+        workspace=workspace,
+        validate_topology=False,
+        _bound_context=context,
+    )
+    mesh_without_certificate._validate_mixed_layer_topology_certificate_topology(
+        certificate,
+        topology_fingerprint_v3=workspace.topology_fingerprint_v3,
+    )
+    mesh_without_certificate._validate_mixed_layer_topology_certificate_evidence(
+        certificate,
+        canonical_evidence.evidence,
+        workspace=workspace,
+        _bound_context=context,
+    )
+    return _PrevalidatedMixedCertificate(
+        certificate=certificate,
+        topology_fingerprint_v3=workspace.topology_fingerprint_v3,
+        certificate_payload_sha256=_certificate_payload_sha256(certificate),
+        canonical_evidence=canonical_evidence,
+        _validation_token=_PREVALIDATED_MIXED_CERTIFICATE_TOKEN,
+    )
+
+
+def _mint_trusted_native_preflight_receipt_proof(
+    *,
+    mesh_without_certificate: MeshData,
+    certificate: MixedLayerTopologyCertificate,
+    native_preflight: object,
+    expected_topology_fingerprint_v3: str,
+    expected_certificate_payload_sha256: str,
+    expected_counts: Mapping[str, int],
+    _receipt_capability: object,
+) -> _TrustedNativePreflightReceiptProof:
+    """Mint the narrow proof consumed only after trusted-cache receipt checks."""
+    from fullmag._core import NativeMixedPreflightResult
+
+    if _receipt_capability is not _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY:
+        raise ValueError("trusted receipt capability is invalid")
+    if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+        raise ValueError("trusted native preflight proof requires an unsigned mesh")
+    if not isinstance(certificate, MixedLayerTopologyCertificate):
+        raise TypeError("trusted receipt certificate has an invalid type")
+    if not isinstance(native_preflight, NativeMixedPreflightResult):
+        raise TypeError("native preflight result has an invalid type")
+
+    actual_counts = {
+        "nodes": mesh_without_certificate.n_nodes,
+        "cells": mesh_without_certificate.n_elements,
+        "facets": mesh_without_certificate.n_boundary_faces,
+    }
+    normalized_expected_counts = {
+        str(name): int(value) for name, value in expected_counts.items()
+    }
+    if normalized_expected_counts != actual_counts:
+        raise ValueError("trusted receipt mesh counts do not match the mesh")
+    if native_preflight.counts != actual_counts:
+        raise ValueError("native preflight mesh counts do not match the mesh")
+
+    actual_fingerprint = mesh_without_certificate.topology_fingerprint_v3()
+    expected_fingerprint = (
+        expected_topology_fingerprint_v3
+        if expected_topology_fingerprint_v3.startswith("sha256:")
+        else f"sha256:{expected_topology_fingerprint_v3}"
+    )
+    native_fingerprint = (
+        native_preflight.topology_fingerprint_v3
+        if native_preflight.topology_fingerprint_v3.startswith("sha256:")
+        else f"sha256:{native_preflight.topology_fingerprint_v3}"
+    )
+    if actual_fingerprint != expected_fingerprint:
+        raise ValueError("trusted receipt topology fingerprint does not match the mesh")
+    if native_fingerprint != expected_fingerprint:
+        raise ValueError("native preflight topology fingerprint does not match receipt")
+    if certificate.topology_fingerprint_version != "v3" or (
+        certificate.topology_fingerprint != actual_fingerprint
+    ):
+        raise ValueError("trusted receipt certificate topology fingerprint is stale")
+
+    actual_payload_sha256 = _certificate_payload_sha256(certificate)
+    expected_payload_sha256 = (
+        expected_certificate_payload_sha256
+        if expected_certificate_payload_sha256.startswith("sha256:")
+        else f"sha256:{expected_certificate_payload_sha256}"
+    )
+    if actual_payload_sha256 != expected_payload_sha256:
+        raise ValueError("trusted receipt certificate payload digest is stale")
+
+    proof = _TrustedNativePreflightReceiptProof(
+        mesh_without_certificate=mesh_without_certificate,
+        certificate=certificate,
+        topology_fingerprint_v3=actual_fingerprint,
+        certificate_payload_sha256=actual_payload_sha256,
+        counts=MappingProxyType(actual_counts),
+        _capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+    )
+    _MINTED_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_PROOFS.add(proof)
+    return proof
+
+
 def _mixed_face_frequencies(
     faces: list[tuple[int, ...]],
 ) -> Counter[tuple[int, ...]]:
@@ -2163,15 +2753,27 @@ def _mixed_mesh_conformity_counts(
     tolerance: float,
     interface_marker: int = MIXED_INTERFACE_MARKER,
     outer_boundary_marker: int | None = None,
+    workspace: _MixedTopologyWorkspace | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
 ) -> dict[str, int]:
-    adjacency: dict[tuple[int, ...], list[tuple[int, str]]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        cell = mesh.cell_node_ids(ordinal)
-        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
-            key = tuple(sorted(int(cell[index]) for index in local_face))
-            adjacency.setdefault(key, []).append(
-                (int(mesh.element_markers[ordinal]), str(family))
-            )
+    workspace_was_built = workspace is None
+    resolved_workspace = workspace or _build_mixed_topology_workspace(
+        mesh,
+        sweep_axis=0,
+        interface_marker=interface_marker,
+    )
+    context = _require_mixed_topology_workspace(
+        mesh,
+        resolved_workspace,
+        interface_marker=interface_marker,
+        _bound_context=_bound_context,
+        _actual_topology_fingerprint_v3=(
+            resolved_workspace.topology_fingerprint_v3
+            if workspace_was_built
+            else None
+        ),
+    )
+    adjacency = resolved_workspace.face_owners
 
     explicit: dict[tuple[int, ...], list[int]] = {}
     exterior: list[tuple[int, ...]] = []
@@ -2196,14 +2798,17 @@ def _mixed_mesh_conformity_counts(
             interfaces.append(key)
             if (
                 len(owners) != 2
-                or {marker for marker, _ in owners} != {0, 1}
+                or {int(mesh.element_markers[owner]) for owner in owners} != {0, 1}
                 or int(mesh.boundary_markers[ordinal]) != interface_marker
             ):
                 nonconforming += 1
 
     nonmanifold = sum(1 for owners in adjacency.values() if len(owners) > 2)
     same_side_two_owner_faces = _mixed_same_side_two_owner_face_count(
-        mesh, tolerance=tolerance
+        mesh,
+        tolerance=tolerance,
+        workspace=resolved_workspace,
+        _bound_context=context,
     )
     exterior_frequencies = _mixed_face_frequencies(exterior)
     interface_frequencies = _mixed_face_frequencies(interfaces)
@@ -2217,7 +2822,8 @@ def _mixed_mesh_conformity_counts(
         1
         for key, owners in adjacency.items()
         if len(owners) == 2
-        and owners[0][0] != owners[1][0]
+        and int(mesh.element_markers[owners[0]])
+        != int(mesh.element_markers[owners[1]])
         and interface_frequencies[key] != 1
     )
     nonconforming += sum(
@@ -2248,21 +2854,47 @@ def _mixed_mesh_conformity_counts(
 
 
 def _mixed_same_side_two_owner_face_count(
-    mesh: MeshData, *, tolerance: float
+    mesh: MeshData,
+    *,
+    tolerance: float,
+    workspace: _MixedTopologyWorkspace | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
 ) -> int:
     """Count shared faces whose two owner interiors lie on the same plane side."""
-    return len(_mixed_same_side_two_owner_face_details(mesh, tolerance=tolerance))
+    if workspace is not None:
+        context = _require_mixed_topology_workspace(
+            mesh,
+            workspace,
+            _bound_context=_bound_context,
+        )
+    else:
+        context = None
+    return len(_mixed_same_side_two_owner_face_details(
+        mesh,
+        tolerance=tolerance,
+        workspace=workspace,
+        _bound_context=context,
+    ))
 
 
 def _mixed_same_side_two_owner_face_details(
-    mesh: MeshData, *, tolerance: float
+    mesh: MeshData,
+    *,
+    tolerance: float,
+    workspace: _MixedTopologyWorkspace | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
 ) -> list[tuple[tuple[int, ...], list[int], list[float]]]:
-    adjacency: dict[tuple[int, ...], list[int]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        cell = mesh.cell_node_ids(ordinal)
-        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
-            key = tuple(sorted(int(cell[index]) for index in local_face))
-            adjacency.setdefault(key, []).append(ordinal)
+    if workspace is not None:
+        _require_mixed_topology_workspace(
+            mesh,
+            workspace,
+            _bound_context=_bound_context,
+        )
+    adjacency = (
+        workspace.face_owners
+        if workspace is not None
+        else _mixed_face_adjacency(mesh)
+    )
 
     issues: list[tuple[tuple[int, ...], list[int], list[float]]] = []
     for face, owners in adjacency.items():
@@ -2280,7 +2912,7 @@ def _mixed_same_side_two_owner_face_details(
                 normal = candidate / candidate_norm
                 break
         if normal is None:
-            issues.append((face, owners, [0.0, 0.0]))
+            issues.append((face, list(owners), [0.0, 0.0]))
             continue
         face_scale = max(
             float(np.linalg.norm(right - left))
@@ -2292,7 +2924,11 @@ def _mixed_same_side_two_owner_face_details(
         )
         distances: list[float] = []
         for owner in owners:
-            owner_nodes = mesh.cell_node_ids(owner)
+            owner_nodes = (
+                workspace.cell_nodes_per_ordinal[owner]
+                if workspace is not None
+                else mesh.cell_node_ids(owner)
+            )
             opposite_nodes = [int(node) for node in owner_nodes if int(node) not in face]
             if not opposite_nodes:
                 distances.append(0.0)
@@ -2306,7 +2942,7 @@ def _mixed_same_side_two_owner_face_details(
             and abs(distances[1]) > side_tolerance
             and distances[0] * distances[1] > 0.0
         ):
-            issues.append((face, owners, distances))
+            issues.append((face, list(owners), distances))
     return issues
 
 
@@ -2463,21 +3099,42 @@ def _mixed_mesh_conformity_diagnostics(
     return diagnostics
 
 
-def _mixed_cell_volume(family: str, coordinates: NDArray[np.float64]) -> float:
-    def tet(indices: tuple[int, int, int, int]) -> float:
-        points = coordinates[list(indices)]
-        return abs(float(np.linalg.det(np.stack(
-            [points[1] - points[0], points[2] - points[0], points[3] - points[0]],
-            axis=1,
-        )))) / 6.0
+_MIXED_CELL_TETRA_DECOMPOSITIONS = {
+    "tet4": ((0, 1, 2, 3),),
+    "prism6": ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)),
+    "pyramid5": ((0, 1, 2, 4), (0, 2, 3, 4)),
+    "hex8": (
+        (0, 1, 3, 4),
+        (1, 2, 3, 6),
+        (1, 3, 4, 6),
+        (1, 4, 5, 6),
+        (3, 4, 6, 7),
+    ),
+}
 
-    if family == "tet4":
-        return tet((0, 1, 2, 3))
-    if family == "prism6":
-        return sum(tet(indices) for indices in ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)))
-    if family == "pyramid5":
-        return tet((0, 1, 2, 4)) + tet((0, 2, 3, 4))
-    raise ValueError(f"mixed shared-domain certificate does not support {family}")
+
+def _mixed_cell_signed_and_absolute_volume(
+    family: str,
+    coordinates: NDArray[np.float64],
+) -> tuple[float, float]:
+    try:
+        decompositions = _MIXED_CELL_TETRA_DECOMPOSITIONS[family]
+    except KeyError as error:
+        raise ValueError(
+            f"mixed shared-domain certificate does not support {family}"
+        ) from error
+    signed_tetra_volumes = tuple(
+        float(np.linalg.det(np.stack(
+            [
+                coordinates[indices[1]] - coordinates[indices[0]],
+                coordinates[indices[2]] - coordinates[indices[0]],
+                coordinates[indices[3]] - coordinates[indices[0]],
+            ],
+            axis=1,
+        ))) / 6.0
+        for indices in decompositions
+    )
+    return sum(signed_tetra_volumes), sum(abs(value) for value in signed_tetra_volumes)
 
 
 def _mixed_cell_scaled_jacobians(
@@ -2500,12 +3157,23 @@ def _mixed_cell_scaled_jacobians(
     return np.asarray(values, dtype=np.float64)
 
 
-def _mixed_face_adjacency(mesh: MeshData) -> dict[tuple[int, ...], list[int]]:
+def _mixed_face_adjacency(
+    mesh: MeshData,
+    *,
+    canonical_faces_per_cell: tuple[tuple[tuple[int, ...], ...], ...] | None = None,
+) -> dict[tuple[int, ...], list[int]]:
     adjacency: dict[tuple[int, ...], list[int]] = {}
-    for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        cell = mesh.cell_node_ids(ordinal)
-        for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]:
-            key = tuple(sorted(int(cell[index]) for index in local_face))
+    if canonical_faces_per_cell is None:
+        canonical_faces_per_cell = tuple(
+            tuple(
+                tuple(sorted(int(cell[index]) for index in local_face))
+                for local_face in _MIXED_CELL_LOCAL_FACETS[str(family)]
+            )
+            for ordinal, family in enumerate(mesh.cell_types.tolist())
+            for cell in (mesh.cell_node_ids(ordinal),)
+        )
+    for ordinal, faces in enumerate(canonical_faces_per_cell):
+        for key in faces:
             adjacency.setdefault(key, []).append(ordinal)
     return adjacency
 
@@ -2514,7 +3182,23 @@ def _validate_mixed_pyramid_bases(
     mesh: MeshData,
     *,
     interface_marker: int,
+    workspace: _MixedTopologyWorkspace | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
 ) -> None:
+    if workspace is not None:
+        _require_mixed_topology_workspace(
+            mesh,
+            workspace,
+            interface_marker=interface_marker,
+            _bound_context=_bound_context,
+        )
+        classification = workspace.pyramid_base_classification
+        if not classification or not all(classification.values()):
+            raise ValueError(
+                "mixed layer topology certificate pyramid bases must be exact quad4 "
+                f"material-interface facets with marker {interface_marker}"
+            )
+        return
     interface_quads = {
         tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
         for ordinal, (family, role, marker) in enumerate(zip(
@@ -2564,6 +3248,8 @@ def _recompute_mixed_certificate_evidence(
     magnetic_bounds_max_m: tuple[float, float, float],
     airbox_bounds_min_m: tuple[float, float, float],
     airbox_bounds_max_m: tuple[float, float, float],
+    workspace: _MixedTopologyWorkspace | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
 ) -> dict[str, object]:
     if mesh.cell_mesh_parts.shape != (mesh.n_elements,):
         raise ValueError("mixed layer topology certificate requires per-cell mesh parts")
@@ -2584,12 +3270,29 @@ def _recompute_mixed_certificate_evidence(
     if set(part_counts) != set(allowed) or not all(part_counts[part] for part in allowed):
         raise ValueError("mixed layer topology certificate mesh parts are incomplete")
 
-    volumes = np.zeros(mesh.n_elements, dtype=np.float64)
+    workspace_was_built = workspace is None
+    resolved_workspace = workspace or _build_mixed_topology_workspace(
+        mesh,
+        sweep_axis=sweep_axis,
+        interface_marker=interface_marker,
+    )
+    context = _require_mixed_topology_workspace(
+        mesh,
+        resolved_workspace,
+        sweep_axis=sweep_axis,
+        interface_marker=interface_marker,
+        _bound_context=_bound_context,
+        _actual_topology_fingerprint_v3=(
+            resolved_workspace.topology_fingerprint_v3
+            if workspace_was_built
+            else None
+        ),
+    )
+    volumes = resolved_workspace.cell_absolute_volumes
     jacobians: dict[str, list[float]] = {}
     scaled: dict[str, list[float]] = {}
     for ordinal, family in enumerate(mesh.cell_types.tolist()):
-        coordinates = mesh.nodes[mesh.cell_node_ids(ordinal)]
-        volumes[ordinal] = _mixed_cell_volume(family, coordinates)
+        coordinates = mesh.nodes[resolved_workspace.cell_nodes_per_ordinal[ordinal]]
         jacobians.setdefault(family, []).extend(
             _cell_jacobian_determinants(family, coordinates).tolist()
         )
@@ -2603,10 +3306,12 @@ def _recompute_mixed_certificate_evidence(
     magnetic = mesh.cell_mesh_parts == "magnetic"
     transition = mesh.cell_mesh_parts == "transition_air"
     magnetic_nodes = np.unique(np.concatenate([
-        mesh.cell_node_ids(int(index)) for index in np.flatnonzero(magnetic)
+        resolved_workspace.cell_nodes_per_ordinal[int(index)]
+        for index in np.flatnonzero(magnetic)
     ]))
     transition_nodes = np.unique(np.concatenate([
-        mesh.cell_node_ids(int(index)) for index in np.flatnonzero(transition)
+        resolved_workspace.cell_nodes_per_ordinal[int(index)]
+        for index in np.flatnonzero(transition)
     ]))
     magnetic_bounds = (np.min(mesh.nodes[magnetic_nodes], axis=0), np.max(mesh.nodes[magnetic_nodes], axis=0))
     transition_bounds = (np.min(mesh.nodes[transition_nodes], axis=0), np.max(mesh.nodes[transition_nodes], axis=0))
@@ -2631,7 +3336,7 @@ def _recompute_mixed_certificate_evidence(
     ):
         raise ValueError("mixed layer topology certificate transition shell thickness is not uniform")
 
-    adjacency = _mixed_face_adjacency(mesh)
+    adjacency = resolved_workspace.face_owners
     shell_faces = [
         key for key, owners in adjacency.items()
         if len(owners) == 2
@@ -2639,7 +3344,8 @@ def _recompute_mixed_certificate_evidence(
     ]
     if not shell_faces or any(len(face) != 3 for face in shell_faces):
         raise ValueError("mixed layer topology certificate transition shell interface is not tri3")
-    planes, plane_tolerance = _cluster_coordinate_planes(mesh.nodes[magnetic_nodes], sweep_axis)
+    planes = resolved_workspace.magnetic_layer_coordinates
+    plane_tolerance = resolved_workspace.magnetic_layer_tolerance
     magnetic_volume = float(np.sum(volumes[magnetic]))
     shared_volume = float(np.sum(volumes))
     expected_magnetic = float(np.prod(
@@ -2653,6 +3359,8 @@ def _recompute_mixed_certificate_evidence(
         tolerance=plane_tolerance,
         interface_marker=interface_marker,
         outer_boundary_marker=outer_boundary_marker,
+        workspace=resolved_workspace,
+        _bound_context=context,
     )
     return {
         "magnetic_plane_coordinates_m": planes,
@@ -2677,6 +3385,64 @@ def _recompute_mixed_certificate_evidence(
         "marker_coverage_complete": True,
         **conformity,
     }
+
+
+def _recompute_and_bind_mixed_certificate_evidence(
+    mesh: MeshData,
+    *,
+    sweep_axis: int,
+    interface_marker: int,
+    outer_boundary_marker: int,
+    magnetic_bounds_min_m: tuple[float, float, float],
+    magnetic_bounds_max_m: tuple[float, float, float],
+    airbox_bounds_min_m: tuple[float, float, float],
+    airbox_bounds_max_m: tuple[float, float, float],
+    workspace: _MixedTopologyWorkspace | None = None,
+    _bound_context: _BoundMixedTopologyContext | None = None,
+) -> _CanonicalMixedCertificateEvidence:
+    if workspace is None:
+        workspace = _build_mixed_topology_workspace(
+            mesh,
+            sweep_axis=sweep_axis,
+            interface_marker=interface_marker,
+        )
+        context = _require_mixed_topology_workspace(
+            mesh,
+            workspace,
+            sweep_axis=sweep_axis,
+            interface_marker=interface_marker,
+            _actual_topology_fingerprint_v3=workspace.topology_fingerprint_v3,
+        )
+    else:
+        context = _require_mixed_topology_workspace(
+            mesh,
+            workspace,
+            sweep_axis=sweep_axis,
+            interface_marker=interface_marker,
+            _bound_context=_bound_context,
+        )
+    evidence = _recompute_mixed_certificate_evidence(
+        mesh,
+        sweep_axis=sweep_axis,
+        interface_marker=interface_marker,
+        outer_boundary_marker=outer_boundary_marker,
+        magnetic_bounds_min_m=magnetic_bounds_min_m,
+        magnetic_bounds_max_m=magnetic_bounds_max_m,
+        airbox_bounds_min_m=airbox_bounds_min_m,
+        airbox_bounds_max_m=airbox_bounds_max_m,
+        workspace=workspace,
+        _bound_context=context,
+    )
+    immutable_evidence = _immutable_mixed_certificate_evidence(evidence)
+    if not isinstance(immutable_evidence, Mapping):
+        raise TypeError("mixed certificate evidence must be a mapping")
+    carrier = _CanonicalMixedCertificateEvidence(
+        evidence=immutable_evidence,
+        context=context,
+        _capability=_CANONICAL_MIXED_EVIDENCE_CAPABILITY,
+    )
+    _MINTED_CANONICAL_MIXED_EVIDENCE.add(carrier)
+    return carrier
 
 
 def _rebuild_mixed_layer_topology_certificate(

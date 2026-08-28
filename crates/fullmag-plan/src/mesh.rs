@@ -1587,7 +1587,7 @@ pub(crate) fn reject_unsupported_mixed_topology(
              accepted topology certificate is missing; fallback=none"
         ));
     };
-    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, mesh).map_err(
+    fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(mesh, certificate).map_err(
         |reasons| {
             format!(
                 "fem_mixed_p1_certificate_rejected: {}; fallback=none",
@@ -1661,7 +1661,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
                 format!("fem_mixed_p1_packed_certificate_rejected: {error}; fallback=none")
             })?;
         certificate.topology_fingerprint = fingerprint.clone();
-        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(certificate, &mesh)
+        fullmag_ir::validate_mixed_layer_topology_certificate_against_mesh(&mesh, certificate)
             .map_err(|reasons| {
                 format!(
                     "fem_mixed_p1_packed_certificate_rejected: {}; fallback=none",

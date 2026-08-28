@@ -1,0 +1,470 @@
+"""Deterministic schema for certified mixed-mesh artifact bindings."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import re
+from hashlib import sha256
+from typing import Mapping
+
+
+RECEIPT_SCHEMA = "fullmag.mesh-certification-receipt.v1"
+ARTIFACT_SCHEMA_V2 = "fullmag.mesh-artifact.v2"
+MIXED_CERTIFICATE_SCHEMA = "fullmag.mixed-layer-topology-certificate.v1"
+MIXED_CERTIFIER_ALGORITHM = "fullmag.mixed-certificate.rust-rayon.v1"
+MIXED_REPAIR_ALGORITHM = "fullmag.mixed-tet-repair.v1"
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _require_exact_keys(
+    value: Mapping[str, object],
+    expected: set[str],
+    *,
+    label: str,
+) -> None:
+    actual = set(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unknown = sorted(actual - expected)
+        raise ValueError(f"{label} fields differ: missing={missing}, unknown={unknown}")
+
+
+def _require_sha256(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise ValueError(f"{label} must be 64 lowercase hexadecimal characters")
+    return value
+
+
+def _require_positive_int(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{label} must be a positive integer")
+    return value
+
+
+def _mapping(value: object, *, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactMemberBindingV1:
+    name: str
+    bytes: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if self.name not in {"topology.npz", "build-report.json"}:
+            raise ValueError("receipt member name is unsupported")
+        _require_positive_int(self.bytes, label=f"{self.name}.bytes")
+        _require_sha256(self.sha256, label=f"{self.name}.sha256")
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object], *, expected_name: str):
+        _require_exact_keys(value, {"name", "bytes", "sha256"}, label=expected_name)
+        if value["name"] != expected_name:
+            raise ValueError(f"member name must be {expected_name!r}")
+        return cls(
+            name=expected_name,
+            bytes=_require_positive_int(value["bytes"], label=f"{expected_name}.bytes"),
+            sha256=_require_sha256(value["sha256"], label=f"{expected_name}.sha256"),
+        )
+
+    @classmethod
+    def from_bytes(cls, name: str, payload: bytes):
+        return cls(name=name, bytes=len(payload), sha256=sha256(payload).hexdigest())
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name, "bytes": self.bytes, "sha256": self.sha256}
+
+
+@dataclass(frozen=True, slots=True)
+class CertificateBindingV1:
+    schema: str
+    payload_sha256: str
+    algorithm_id: str
+
+    def __post_init__(self) -> None:
+        if self.schema != MIXED_CERTIFICATE_SCHEMA:
+            raise ValueError("certificate schema is unsupported")
+        _require_sha256(self.payload_sha256, label="certificate.payload_sha256")
+        if self.algorithm_id != MIXED_CERTIFIER_ALGORITHM:
+            raise ValueError("certificate algorithm_id is unsupported")
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]):
+        _require_exact_keys(
+            value,
+            {"schema", "payload_sha256", "algorithm_id"},
+            label="certificate",
+        )
+        if value["schema"] != MIXED_CERTIFICATE_SCHEMA:
+            raise ValueError("certificate schema is unsupported")
+        if value["algorithm_id"] != MIXED_CERTIFIER_ALGORITHM:
+            raise ValueError("certificate algorithm_id is unsupported")
+        return cls(
+            schema=MIXED_CERTIFICATE_SCHEMA,
+            payload_sha256=_require_sha256(
+                value["payload_sha256"], label="certificate.payload_sha256"
+            ),
+            algorithm_id=MIXED_CERTIFIER_ALGORITHM,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "payload_sha256": self.payload_sha256,
+            "algorithm_id": self.algorithm_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoringBindingV1:
+    document_sha256: str
+    resolved_policy_sha256: str
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.document_sha256, label="authoring.document_sha256")
+        _require_sha256(
+            self.resolved_policy_sha256,
+            label="authoring.resolved_policy_sha256",
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]):
+        _require_exact_keys(
+            value,
+            {"document_sha256", "resolved_policy_sha256"},
+            label="authoring",
+        )
+        return cls(
+            document_sha256=_require_sha256(
+                value["document_sha256"], label="authoring.document_sha256"
+            ),
+            resolved_policy_sha256=_require_sha256(
+                value["resolved_policy_sha256"],
+                label="authoring.resolved_policy_sha256",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "document_sha256": self.document_sha256,
+            "resolved_policy_sha256": self.resolved_policy_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProducerBindingV1:
+    source_snapshot_sha256: str
+    gmsh_version: str
+    repair_algorithm_id: str
+    repair_method: str
+    repair_iterations: int
+    gmsh_threads: int
+    certifier_backend: str
+    certifier_threads: int
+
+    def __post_init__(self) -> None:
+        _require_sha256(
+            self.source_snapshot_sha256,
+            label="producer.source_snapshot_sha256",
+        )
+        if self.gmsh_version != "4.15.2":
+            raise ValueError("producer.gmsh_version must be '4.15.2'")
+        if self.repair_algorithm_id != MIXED_REPAIR_ALGORITHM:
+            raise ValueError("producer.repair_algorithm_id is unsupported")
+        if self.repair_method != "Relocate3D":
+            raise ValueError("producer.repair_method must be 'Relocate3D'")
+        repair_iterations = _require_positive_int(
+            self.repair_iterations,
+            label="producer.repair_iterations",
+        )
+        if repair_iterations != 1:
+            raise ValueError("producer.repair_iterations must be 1")
+        gmsh_threads = _require_positive_int(
+            self.gmsh_threads,
+            label="producer.gmsh_threads",
+        )
+        if gmsh_threads != 1:
+            raise ValueError("producer.gmsh_threads must be 1")
+        if self.certifier_backend != "rust_rayon":
+            raise ValueError("producer.certifier_backend must be 'rust_rayon'")
+        _require_positive_int(
+            self.certifier_threads, label="producer.certifier_threads"
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]):
+        expected = {
+            "source_snapshot_sha256",
+            "gmsh_version",
+            "repair_algorithm_id",
+            "repair_method",
+            "repair_iterations",
+            "gmsh_threads",
+            "certifier_backend",
+            "certifier_threads",
+        }
+        _require_exact_keys(value, expected, label="producer")
+        if value["gmsh_version"] != "4.15.2":
+            raise ValueError("producer.gmsh_version must be '4.15.2'")
+        if value["repair_algorithm_id"] != MIXED_REPAIR_ALGORITHM:
+            raise ValueError("producer.repair_algorithm_id is unsupported")
+        if value["repair_method"] != "Relocate3D":
+            raise ValueError("producer.repair_method must be 'Relocate3D'")
+        repair_iterations = _require_positive_int(
+            value["repair_iterations"],
+            label="producer.repair_iterations",
+        )
+        if repair_iterations != 1:
+            raise ValueError("producer.repair_iterations must be 1")
+        gmsh_threads = _require_positive_int(
+            value["gmsh_threads"],
+            label="producer.gmsh_threads",
+        )
+        if gmsh_threads != 1:
+            raise ValueError("producer.gmsh_threads must be 1")
+        if value["certifier_backend"] != "rust_rayon":
+            raise ValueError("producer.certifier_backend must be 'rust_rayon'")
+        return cls(
+            source_snapshot_sha256=_require_sha256(
+                value["source_snapshot_sha256"],
+                label="producer.source_snapshot_sha256",
+            ),
+            gmsh_version="4.15.2",
+            repair_algorithm_id=MIXED_REPAIR_ALGORITHM,
+            repair_method="Relocate3D",
+            repair_iterations=repair_iterations,
+            gmsh_threads=gmsh_threads,
+            certifier_backend="rust_rayon",
+            certifier_threads=_require_positive_int(
+                value["certifier_threads"], label="producer.certifier_threads"
+            ),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source_snapshot_sha256": self.source_snapshot_sha256,
+            "gmsh_version": self.gmsh_version,
+            "repair_algorithm_id": self.repair_algorithm_id,
+            "repair_method": self.repair_method,
+            "repair_iterations": self.repair_iterations,
+            "gmsh_threads": self.gmsh_threads,
+            "certifier_backend": self.certifier_backend,
+            "certifier_threads": self.certifier_threads,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MeshCountsV1:
+    nodes: int
+    cells: int
+    facets: int
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.nodes, label="mesh_counts.nodes")
+        _require_positive_int(self.cells, label="mesh_counts.cells")
+        _require_positive_int(self.facets, label="mesh_counts.facets")
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]):
+        _require_exact_keys(value, {"nodes", "cells", "facets"}, label="mesh_counts")
+        return cls(
+            nodes=_require_positive_int(value["nodes"], label="mesh_counts.nodes"),
+            cells=_require_positive_int(value["cells"], label="mesh_counts.cells"),
+            facets=_require_positive_int(value["facets"], label="mesh_counts.facets"),
+        )
+
+    def to_dict(self) -> dict[str, int]:
+        return {"nodes": self.nodes, "cells": self.cells, "facets": self.facets}
+
+
+@dataclass(frozen=True, slots=True)
+class CertificationReceiptBindingsV1:
+    resolved_policy_sha256: str
+    source_snapshot_sha256: str
+    gmsh_version: str
+    repair_algorithm_id: str
+    repair_method: str
+    repair_iterations: int
+    gmsh_threads: int
+    certifier_algorithm_id: str
+    certifier_backend: str
+    certifier_threads: int
+
+    def __post_init__(self) -> None:
+        _require_sha256(self.resolved_policy_sha256, label="resolved_policy_sha256")
+        ProducerBindingV1.from_dict(
+            {
+                "source_snapshot_sha256": self.source_snapshot_sha256,
+                "gmsh_version": self.gmsh_version,
+                "repair_algorithm_id": self.repair_algorithm_id,
+                "repair_method": self.repair_method,
+                "repair_iterations": self.repair_iterations,
+                "gmsh_threads": self.gmsh_threads,
+                "certifier_backend": self.certifier_backend,
+                "certifier_threads": self.certifier_threads,
+            }
+        )
+        if self.certifier_algorithm_id != MIXED_CERTIFIER_ALGORITHM:
+            raise ValueError("certifier_algorithm_id is unsupported")
+
+    def producer(self) -> ProducerBindingV1:
+        return ProducerBindingV1.from_dict(
+            {
+                "source_snapshot_sha256": self.source_snapshot_sha256,
+                "gmsh_version": self.gmsh_version,
+                "repair_algorithm_id": self.repair_algorithm_id,
+                "repair_method": self.repair_method,
+                "repair_iterations": self.repair_iterations,
+                "gmsh_threads": self.gmsh_threads,
+                "certifier_backend": self.certifier_backend,
+                "certifier_threads": self.certifier_threads,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CertificationReceiptV1:
+    topology_member: ArtifactMemberBindingV1
+    build_report_member: ArtifactMemberBindingV1
+    topology_fingerprint_v3: str
+    certificate: CertificateBindingV1
+    authoring: AuthoringBindingV1
+    producer: ProducerBindingV1
+    mesh_counts: MeshCountsV1
+    schema: str = RECEIPT_SCHEMA
+    artifact_schema: str = ARTIFACT_SCHEMA_V2
+
+    def __post_init__(self) -> None:
+        if self.schema != RECEIPT_SCHEMA:
+            raise ValueError("certification receipt schema is unsupported")
+        if self.artifact_schema != ARTIFACT_SCHEMA_V2:
+            raise ValueError("certification receipt artifact_schema is unsupported")
+        if not isinstance(self.topology_member, ArtifactMemberBindingV1) or (
+            self.topology_member.name != "topology.npz"
+        ):
+            raise ValueError("certification receipt topology_member is invalid")
+        if not isinstance(self.build_report_member, ArtifactMemberBindingV1) or (
+            self.build_report_member.name != "build-report.json"
+        ):
+            raise ValueError("certification receipt build_report_member is invalid")
+        _require_sha256(self.topology_fingerprint_v3, label="topology_fingerprint_v3")
+        if not isinstance(self.certificate, CertificateBindingV1):
+            raise TypeError("certification receipt certificate is invalid")
+        if not isinstance(self.authoring, AuthoringBindingV1):
+            raise TypeError("certification receipt authoring is invalid")
+        if not isinstance(self.producer, ProducerBindingV1):
+            raise TypeError("certification receipt producer is invalid")
+        if not isinstance(self.mesh_counts, MeshCountsV1):
+            raise TypeError("certification receipt mesh_counts is invalid")
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]):
+        expected = {
+            "schema",
+            "artifact_schema",
+            "topology_member",
+            "build_report_member",
+            "topology_fingerprint_v3",
+            "certificate",
+            "authoring",
+            "producer",
+            "mesh_counts",
+        }
+        _require_exact_keys(value, expected, label="certification receipt")
+        if value["schema"] != RECEIPT_SCHEMA:
+            raise ValueError("certification receipt schema is unsupported")
+        if value["artifact_schema"] != ARTIFACT_SCHEMA_V2:
+            raise ValueError("certification receipt artifact_schema is unsupported")
+        return cls(
+            topology_member=ArtifactMemberBindingV1.from_dict(
+                _mapping(value["topology_member"], label="topology_member"),
+                expected_name="topology.npz",
+            ),
+            build_report_member=ArtifactMemberBindingV1.from_dict(
+                _mapping(value["build_report_member"], label="build_report_member"),
+                expected_name="build-report.json",
+            ),
+            topology_fingerprint_v3=_require_sha256(
+                value["topology_fingerprint_v3"], label="topology_fingerprint_v3"
+            ),
+            certificate=CertificateBindingV1.from_dict(
+                _mapping(value["certificate"], label="certificate")
+            ),
+            authoring=AuthoringBindingV1.from_dict(
+                _mapping(value["authoring"], label="authoring")
+            ),
+            producer=ProducerBindingV1.from_dict(
+                _mapping(value["producer"], label="producer")
+            ),
+            mesh_counts=MeshCountsV1.from_dict(
+                _mapping(value["mesh_counts"], label="mesh_counts")
+            ),
+        )
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        topology_bytes: bytes,
+        build_report_bytes: bytes,
+        topology_fingerprint_v3: str,
+        certificate_payload_sha256: str,
+        authoring_document_sha256: str,
+        bindings: CertificationReceiptBindingsV1,
+        mesh_counts: Mapping[str, object],
+    ):
+        return cls(
+            topology_member=ArtifactMemberBindingV1.from_bytes(
+                "topology.npz", topology_bytes
+            ),
+            build_report_member=ArtifactMemberBindingV1.from_bytes(
+                "build-report.json", build_report_bytes
+            ),
+            topology_fingerprint_v3=_require_sha256(
+                topology_fingerprint_v3.removeprefix("sha256:"),
+                label="topology_fingerprint_v3",
+            ),
+            certificate=CertificateBindingV1.from_dict(
+                {
+                    "schema": MIXED_CERTIFICATE_SCHEMA,
+                    "payload_sha256": certificate_payload_sha256.removeprefix(
+                        "sha256:"
+                    ),
+                    "algorithm_id": bindings.certifier_algorithm_id,
+                }
+            ),
+            authoring=AuthoringBindingV1.from_dict(
+                {
+                    "document_sha256": authoring_document_sha256,
+                    "resolved_policy_sha256": bindings.resolved_policy_sha256,
+                }
+            ),
+            producer=bindings.producer(),
+            mesh_counts=MeshCountsV1.from_dict(mesh_counts),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "artifact_schema": self.artifact_schema,
+            "topology_member": self.topology_member.to_dict(),
+            "build_report_member": self.build_report_member.to_dict(),
+            "topology_fingerprint_v3": self.topology_fingerprint_v3,
+            "certificate": self.certificate.to_dict(),
+            "authoring": self.authoring.to_dict(),
+            "producer": self.producer.to_dict(),
+            "mesh_counts": self.mesh_counts.to_dict(),
+        }
+
+    def to_json_bytes(self) -> bytes:
+        return json.dumps(
+            self.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")

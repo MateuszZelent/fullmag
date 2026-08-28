@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
@@ -20,6 +20,8 @@ import {
   DATA_PLANAR_FIELD_META_PATH,
   DATA_SCALARS_PATH,
   DATA_TABLE_ROWS_PATH,
+  DIAGNOSTICS_CPU_PATH,
+  DIAGNOSTICS_GPU_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
   ANALYSIS_HYSTERESIS_BOOKMARKS_PATH,
@@ -78,6 +80,45 @@ function dependentRevision(resourceKey: string, revision: string | number): stri
 }
 
 describe("RealtimeInvalidationBridge", () => {
+  it("invalidates CPU and GPU diagnostic resources exactly", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const invalidatePrefix = vi.spyOn(resources, "invalidatePrefix");
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: DIAGNOSTICS_CPU_PATH,
+            resource: "diagnostics",
+            resource_id: "cpu",
+            revision: 42,
+          },
+          {
+            recommended_fetch: DIAGNOSTICS_GPU_PATH,
+            resource: "diagnostics",
+            resource_id: "gpu",
+            revision: 42,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(DIAGNOSTICS_CPU_PATH)).toBe(42);
+    expect(resources.getRevision(DIAGNOSTICS_GPU_PATH)).toBe(42);
+    expect(invalidatePrefix).not.toHaveBeenCalledWith(
+      DIAGNOSTICS_CPU_PATH,
+      42,
+    );
+    expect(invalidatePrefix).not.toHaveBeenCalledWith(
+      DIAGNOSTICS_GPU_PATH,
+      42,
+    );
+  });
+
   it("invalidates preparation from the exact backend revision-only change", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

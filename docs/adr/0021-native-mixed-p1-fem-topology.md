@@ -89,7 +89,20 @@ Remaining costs and risks:
    order greater than one, arbitrary OCC shapes, multiple bodies, and
    multilayers.
 3. Keep production element import, H1 spaces, basis/quadrature, exchange,
-   Poisson, relaxation, and certificate generation under `backends/fem`.
+   Poisson, relaxation, and final execution preflight under `backends/fem`.
+   Keep language-neutral certificate evidence computation and validation in
+   `fullmag-ir`, with the implemented, host-unit-qualified owner
+   `crates/fullmag-ir/src/mixed_certificate.rs`; it consumes typed realized
+   topology and does not own meshing, MFEM assembly, or solver execution. Its
+   typed PyO3 bridge is implemented and host-extension qualified. Artifact v2
+   persistence calls that validator with explicit native-required save
+   semantics and binds its result in a deterministic receipt; public full audit
+   records a Python fallback as non-production, and private fast trust requires
+   native structural preflight. Managed FEM runtime use remains not verified.
+   This persistence boundary does not move element import,
+   basis/quadrature, operators, or execution acceptance out of `backends/fem`.
+   The final backend preflight remains mandatory before MFEM state or operators
+   are allocated.
 4. Implement CPU/MFEM/hypre and GPU/MFEM/libCEED/CUDA as separate realizations
    of the same contract. Forced unsupported lanes fail closed.
 5. Bind the exact-layer/shared-domain certificate to mesh and material hashes,
@@ -112,6 +125,12 @@ Remaining costs and risks:
    production dependence on the v1-only runtime path.
 8. Publish implementation, executable, and validated states independently.
    The checked-in Gmsh fixture is feasibility evidence only.
+9. Restrict receipt-based fast loading to internal content-addressed v2 cache
+   entries with exact expected bindings and native structural preflight. Public,
+   imported, forced-audit, and legacy-v1 loads perform a full audit. Missing
+   native preflight bypasses fast trust; managed and release audits fail closed
+   without the native certifier. Generic/non-mixed persistence or incomplete
+   producer provenance remains v1 rather than inventing receipt fields.
 
 ## Migration and rollback
 

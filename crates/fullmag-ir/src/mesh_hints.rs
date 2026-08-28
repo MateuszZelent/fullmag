@@ -2659,6 +2659,110 @@ impl Default for MeshValidationPolicy {
     }
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct MeshGeometryValidationErrors {
+    node_errors: Vec<String>,
+    cell_errors: Vec<String>,
+}
+
+impl MeshGeometryValidationErrors {
+    pub(crate) fn into_errors(self) -> Vec<String> {
+        self.node_errors
+            .into_iter()
+            .chain(self.cell_errors)
+            .collect()
+    }
+}
+
+pub(crate) fn validate_mesh_geometry_from_jacobian_samples<I, S>(
+    nodes: &[[f64; 3]],
+    samples: I,
+    policy: &MeshValidationPolicy,
+) -> Result<(), MeshGeometryValidationErrors>
+where
+    I: IntoIterator<Item = (u64, FemCellTypeIR, S)>,
+    S: AsRef<[f64]>,
+{
+    let mut node_errors = Vec::new();
+    for (index, node) in nodes.iter().enumerate() {
+        if node.iter().any(|value| !value.is_finite()) {
+            node_errors.push(format!("mesh node {index} contains non-finite coordinates"));
+        }
+    }
+
+    let bbox_scale = nodes
+        .iter()
+        .fold(None::<([f64; 3], [f64; 3])>, |acc, node| match acc {
+            Some((mut min, mut max)) => {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(node[axis]);
+                    max[axis] = max[axis].max(node[axis]);
+                }
+                Some((min, max))
+            }
+            None => Some((*node, *node)),
+        })
+        .map(|(min, max)| {
+            (max[0] - min[0])
+                .abs()
+                .max((max[1] - min[1]).abs())
+                .max((max[2] - min[2]).abs())
+        })
+        .unwrap_or(1.0);
+    let eps = policy
+        .eps_volume
+        .unwrap_or_else(|| {
+            let scale = if bbox_scale > 0.0 { bbox_scale } else { 1.0 };
+            scale.powi(3) * 1e-18
+        })
+        .max(f64::MIN_POSITIVE);
+
+    let mut cell_errors = Vec::new();
+    for (global_ordinal, cell_type, determinants) in samples {
+        let determinants = determinants.as_ref();
+        if cell_type == FemCellTypeIR::Tet4 {
+            let determinant = determinants[0];
+            let volume = determinant / 6.0;
+            if volume.abs() <= eps {
+                cell_errors.push(format!(
+                    "mesh element {global_ordinal} has degenerate tetra volume {volume:.6e} <= eps {eps:.6e}"
+                ));
+            } else if policy.require_positive_orientation && volume < 0.0 {
+                cell_errors.push(format!(
+                    "mesh element {global_ordinal} has negative tetra orientation {volume:.6e}"
+                ));
+            }
+            continue;
+        }
+        let determinant_eps = eps * 6.0;
+        let minimum_abs = determinants
+            .iter()
+            .map(|value| value.abs())
+            .fold(f64::INFINITY, f64::min);
+        if minimum_abs <= determinant_eps {
+            cell_errors.push(format!(
+                "mesh cell {global_ordinal} has degenerate {cell_type:?} Jacobian {minimum_abs:.6e} <= eps {determinant_eps:.6e}"
+            ));
+        } else if policy.require_positive_orientation
+            && determinants.iter().any(|determinant| *determinant < 0.0)
+        {
+            let minimum = determinants.iter().copied().fold(f64::INFINITY, f64::min);
+            cell_errors.push(format!(
+                "mesh cell {global_ordinal} has negative {cell_type:?} Jacobian {minimum:.6e}"
+            ));
+        }
+    }
+
+    if node_errors.is_empty() && cell_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(MeshGeometryValidationErrors {
+            node_errors,
+            cell_errors,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshPeriodicBoundaryPairIR {
     pub pair_id: String,
@@ -3473,93 +3577,30 @@ impl MeshIR {
     pub fn validate_strict(&self, policy: &MeshValidationPolicy) -> Result<(), Vec<String>> {
         let mut errors = self.validate().err().unwrap_or_default();
 
-        for (index, node) in self.nodes.iter().enumerate() {
-            if node.iter().any(|value| !value.is_finite()) {
-                errors.push(format!("mesh node {index} contains non-finite coordinates"));
-            }
-        }
-
-        if self.element_markers.len() != self.cells.len() {
-            errors.push("mesh.element_markers must cover every FEM cell".to_string());
-        }
-
-        let bbox_scale = self
-            .nodes
-            .iter()
-            .fold(None::<([f64; 3], [f64; 3])>, |acc, node| match acc {
-                Some((mut min, mut max)) => {
-                    for axis in 0..3 {
-                        min[axis] = min[axis].min(node[axis]);
-                        max[axis] = max[axis].max(node[axis]);
-                    }
-                    Some((min, max))
-                }
-                None => Some((*node, *node)),
-            })
-            .map(|(min, max)| {
-                (max[0] - min[0])
-                    .abs()
-                    .max((max[1] - min[1]).abs())
-                    .max((max[2] - min[2]).abs())
-            })
-            .unwrap_or(1.0);
-        let eps = policy
-            .eps_volume
-            .unwrap_or_else(|| {
-                let scale = if bbox_scale > 0.0 { bbox_scale } else { 1.0 };
-                scale.powi(3) * 1e-18
-            })
-            .max(f64::MIN_POSITIVE);
-
-        for cell in self.cells.iter() {
+        let geometry_samples = self.cells.iter().filter_map(|cell| {
             if cell.nodes.len() != cell.cell_type.arity() {
-                continue;
+                return None;
             }
-            let Some(coordinates) = cell
+            let coordinates = cell
                 .nodes
                 .iter()
                 .map(|node| self.nodes.get(*node as usize).copied())
-                .collect::<Option<Vec<_>>>()
-            else {
-                continue;
-            };
-            let determinants = cell_jacobian_determinants(cell.cell_type, &coordinates);
-            if cell.cell_type == FemCellTypeIR::Tet4 {
-                let determinant = determinants[0];
-                let volume = determinant / 6.0;
-                if volume.abs() <= eps {
-                    errors.push(format!(
-                        "mesh element {} has degenerate tetra volume {volume:.6e} <= eps {eps:.6e}",
-                        cell.global_ordinal
-                    ));
-                } else if policy.require_positive_orientation && volume < 0.0 {
-                    errors.push(format!(
-                        "mesh element {} has negative tetra orientation {volume:.6e}",
-                        cell.global_ordinal
-                    ));
-                }
-                continue;
-            }
-            let determinant_eps = eps * 6.0;
-            let minimum_abs = determinants
-                .iter()
-                .map(|value| value.abs())
-                .fold(f64::INFINITY, f64::min);
-            if minimum_abs <= determinant_eps {
-                errors.push(format!(
-                    "mesh cell {} has degenerate {:?} Jacobian {minimum_abs:.6e} <= eps {determinant_eps:.6e}",
-                    cell.global_ordinal, cell.cell_type
-                ));
-            } else if policy.require_positive_orientation
-                && determinants.iter().any(|determinant| *determinant < 0.0)
-            {
-                let minimum = determinants.iter().copied().fold(f64::INFINITY, f64::min);
-                errors.push(format!(
-                    "mesh cell {} has negative {:?} Jacobian {minimum:.6e}",
-                    cell.global_ordinal, cell.cell_type
-                ));
-            }
+                .collect::<Option<Vec<_>>>()?;
+            Some((
+                cell.global_ordinal,
+                cell.cell_type,
+                cell_jacobian_determinants(cell.cell_type, &coordinates),
+            ))
+        });
+        let geometry_errors =
+            validate_mesh_geometry_from_jacobian_samples(&self.nodes, geometry_samples, policy)
+                .err()
+                .unwrap_or_default();
+        errors.extend(geometry_errors.node_errors);
+        if self.element_markers.len() != self.cells.len() {
+            errors.push("mesh.element_markers must cover every FEM cell".to_string());
         }
+        errors.extend(geometry_errors.cell_errors);
 
         if errors.is_empty() {
             Ok(())
