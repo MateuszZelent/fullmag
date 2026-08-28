@@ -138,6 +138,9 @@ pub(crate) fn reject_cuda_multilayer_containment(
 fn validate_native_adaptive_policy(
     integrator: fullmag_ir::IntegratorChoice,
     adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+    thermal_active: bool,
+    dynamic_oersted_active: bool,
+    spin_transport_active: bool,
 ) -> Result<(), RunError> {
     let Some(policy) = adaptive else {
         return Ok(());
@@ -167,6 +170,21 @@ fn validate_native_adaptive_policy(
     }
     if policy.max_spin_rotation.is_some() || policy.norm_tolerance.is_some() {
         return Err(RunError { message: "adaptive CUDA FDM norm/rotation guards are transported but unsupported until native enforcement is implemented".to_string() });
+    }
+    if thermal_active {
+        return Err(RunError {
+            message: "adaptive_cuda_fdm_thermal_unsupported: Brown thermal noise requires a qualified accepted-step SDE replay contract".to_string(),
+        });
+    }
+    if dynamic_oersted_active {
+        return Err(RunError {
+            message: "adaptive_cuda_fdm_dynamic_oersted_unsupported: every adaptive RK stage requires a device-resident source-time contract".to_string(),
+        });
+    }
+    if spin_transport_active {
+        return Err(RunError {
+            message: "adaptive_cuda_fdm_spin_transport_unsupported: device-side retry cannot bind the current host-owned transport transaction".to_string(),
+        });
     }
     Ok(())
 }
@@ -242,23 +260,51 @@ mod adaptive_policy_validation_tests {
     fn incompatible_adaptive_cuda_policies_fail_before_ffi() {
         assert!(validate_native_adaptive_policy(
             fullmag_ir::IntegratorChoice::Heun,
-            Some(&policy(fullmag_ir::AdaptiveToleranceModeIR::MaxError))
+            Some(&policy(fullmag_ir::AdaptiveToleranceModeIR::MaxError)),
+            false,
+            false,
+            false,
         )
         .is_err());
         let absolute = policy(fullmag_ir::AdaptiveToleranceModeIR::Advanced);
-        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&absolute))
-            .unwrap();
+        validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Rk45,
+            Some(&absolute),
+            false,
+            false,
+            false,
+        )
+        .unwrap();
         let mut relative = absolute.clone();
         relative.atol = 0.0;
         relative.rtol = 1e-4;
-        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&relative))
-            .unwrap();
+        validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Rk45,
+            Some(&relative),
+            false,
+            false,
+            false,
+        )
+        .unwrap();
         relative.rtol = 0.0;
         assert!(validate_native_adaptive_policy(
             fullmag_ir::IntegratorChoice::Rk45,
-            Some(&relative)
+            Some(&relative),
+            false,
+            false,
+            false,
         )
         .is_err());
+        for unsupported in [(true, false, false), (false, true, false), (false, false, true)] {
+            assert!(validate_native_adaptive_policy(
+                fullmag_ir::IntegratorChoice::Rk45,
+                Some(&absolute),
+                unsupported.0,
+                unsupported.1,
+                unsupported.2,
+            )
+            .is_err());
+        }
     }
 }
 
@@ -877,6 +923,16 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        let integrator_choice = plan
+            .integrator
+            .unwrap_or(fullmag_ir::IntegratorChoice::Heun);
+        validate_native_adaptive_policy(
+            integrator_choice,
+            plan.adaptive_timestep.as_ref(),
+            plan.temperature.unwrap_or(0.0) > 0.0,
+            plan.oersted_time_dep_kind != 0,
+            !plan.spin_transport_plans.is_empty(),
+        )?;
         let frozen_capabilities = if plan.frozen_spins.is_some() {
             unsafe { ffi::fullmag_fdm_capability_bits_v1() }
         } else {
@@ -923,10 +979,7 @@ impl NativeFdmBackend {
 
         // The native descriptor retains an ABI-only slot that direct
         // minimizers do not consume.
-        let integrator = match plan
-            .integrator
-            .unwrap_or(fullmag_ir::IntegratorChoice::Heun)
-        {
+        let integrator = match integrator_choice {
             fullmag_ir::IntegratorChoice::Heun => {
                 ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN
             }

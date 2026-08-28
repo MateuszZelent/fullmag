@@ -2586,6 +2586,15 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
+    if adaptive_timestep.is_some()
+        && runtime_requests_cuda(problem)
+        && !active_transport_graph.spin_module_ids.is_empty()
+    {
+        errors.push(
+            "adaptive_cuda_fdm_spin_transport_unsupported: device-side RK23/RK45 retry cannot bind the current host-owned spin-transport transaction; use a fixed timestep or device='cpu'"
+                .to_string(),
+        );
+    }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }

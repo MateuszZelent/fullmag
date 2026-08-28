@@ -547,7 +547,7 @@ pub(crate) fn planned_study_controls(
             if resolved_backend == BackendTarget::Fdm
                 && !matches!(requested_device, Some("cpu" | "cuda" | "gpu"))
             {
-                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu'; auto selection cannot silently change the qualified adaptive lane".to_string());
+                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu', 'cuda', or 'gpu'; auto selection cannot silently change the qualified adaptive lane".to_string());
             }
             if adaptive.dt_max.is_none() {
                 errors.push("adaptive_timestep.dt_max is required; planner will not invent a hidden upper bound".to_string());

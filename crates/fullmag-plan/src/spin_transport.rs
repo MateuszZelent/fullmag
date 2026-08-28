@@ -3899,6 +3899,66 @@ mod tests {
         problem
     }
 
+    #[test]
+    fn adaptive_cuda_fdm_spin_transport_fails_in_planner_before_runtime() {
+        let mut problem = problem(ExecutionDevice::Gpu);
+        let CurrentModuleIR::CurrentTransport {
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!("fixture uses current transport")
+        };
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({"device": "cuda", "device_index": 0}),
+        );
+        let dynamics = match &mut problem.study {
+            StudyIR::TimeEvolution { dynamics, .. }
+            | StudyIR::Eigenmodes { dynamics, .. }
+            | StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
+            StudyIR::Relaxation {
+                dynamics: Some(dynamics),
+                ..
+            } => dynamics,
+            _ => unreachable!("fixture uses LLG dynamics"),
+        };
+        let DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep,
+            ..
+        } = dynamics;
+        *integrator = "rk45".into();
+        *fixed_timestep = None;
+        *adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: AdaptiveToleranceModeIR::Advanced,
+            atol: 1.0e-6,
+            rtol: 1.0e-4,
+            dt_initial: Some(1.0e-15),
+            dt_min: 1.0e-18,
+            dt_max: Some(1.0e-12),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        });
+
+        let error = crate::plan(&problem)
+            .expect_err("adaptive CUDA spin transport must fail before runtime");
+        assert!(
+            error.reasons.iter().any(|reason| {
+                reason.contains("adaptive_cuda_fdm_spin_transport_unsupported")
+            }),
+            "unexpected planner errors: {:?}",
+            error.reasons
+        );
+    }
+
     fn reciprocal_problem(device: ExecutionDevice) -> ProblemIR {
         let mut problem = problem(device);
         let CurrentModuleIR::CurrentTransport {
