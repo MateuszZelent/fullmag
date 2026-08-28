@@ -133,3 +133,4 @@ cargo-targets/
 pnpm-store/
 playwright-browsers/
 *.diff
+/patch.tmp
