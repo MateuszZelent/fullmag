@@ -1,4 +1,5 @@
 #include "../gpu/cuda/runtime/adaptive_controller.cuh"
+#include "fullmag_adaptive_step_decision.hpp"
 
 #include <cuda_runtime.h>
 
@@ -96,7 +97,10 @@ bool run_case(
     double dt_min,
     uint32_t expected_decision,
     uint32_t expected_reason,
-    uint32_t expected_attempt_count)
+    uint32_t expected_attempt_count,
+    uint32_t expected_first_decision = std::numeric_limits<uint32_t>::max(),
+    uint32_t expected_first_reason = std::numeric_limits<uint32_t>::max(),
+    double expected_first_error = std::numeric_limits<double>::quiet_NaN())
 {
     DeviceAllocation errors_device;
     DeviceAllocation control_device;
@@ -241,6 +245,18 @@ bool run_case(
             return false;
         }
     }
+    if (expected_first_decision != std::numeric_limits<uint32_t>::max() &&
+        (trace_batch[0].decision != expected_first_decision ||
+         trace_batch[0].reason != expected_first_reason ||
+         !std::isfinite(trace_batch[0].normalized_error) ||
+         std::abs(trace_batch[0].normalized_error - expected_first_error) >
+             2.0e-15)) {
+        std::cerr << "near-threshold CPU/device divergence: decision="
+                  << trace_batch[0].decision << " reason="
+                  << trace_batch[0].reason << " error="
+                  << trace_batch[0].normalized_error << '\n';
+        return false;
+    }
     return true;
 }
 
@@ -276,6 +292,37 @@ int main() {
         ADAPTIVE_DEVICE_DECISION_FAILED,
         ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED,
         FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1) && passed;
+    const auto check_threshold = [&](double error) {
+        const double error_sq = error * error;
+        const double reduced_error = std::sqrt(error_sq);
+        const auto cpu = fullmag::adaptive::decide_adaptive_step(
+            {2, 1.0e-18, 1.0e-9, 0.8, 2.0, 0.2},
+            {1.0e-12, reduced_error, 0.0, false});
+        const bool accepted =
+            cpu.kind == fullmag::adaptive::AdaptiveDecisionKind::accepted;
+        const uint32_t first_decision = accepted
+            ? ADAPTIVE_DEVICE_DECISION_ACCEPTED
+            : ADAPTIVE_DEVICE_DECISION_RETRY;
+        const uint32_t first_reason = accepted
+            ? fullmag::fdm::ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE
+            : fullmag::fdm::ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE;
+        const std::vector<double> device_errors = accepted
+            ? std::vector<double>{error_sq}
+            : std::vector<double>{error_sq, 0.25};
+        return run_case(
+            device_errors,
+            1.0e-12,
+            1.0e-18,
+            ADAPTIVE_DEVICE_DECISION_ACCEPTED,
+            fullmag::fdm::ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE,
+            accepted ? 1U : 2U,
+            first_decision,
+            first_reason,
+            reduced_error);
+    };
+    passed = check_threshold(std::nextafter(1.0, 0.0)) && passed;
+    passed = check_threshold(1.0) && passed;
+    passed = check_threshold(std::nextafter(1.0, 2.0)) && passed;
     if (!passed) return 1;
     std::cout << "FDM_ADAPTIVE_CONDITIONAL_GRAPH_PASS\n";
     return 0;
