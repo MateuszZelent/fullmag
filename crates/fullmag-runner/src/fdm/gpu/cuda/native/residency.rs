@@ -764,8 +764,8 @@ mod tests {
             graph_launch_count: 2,
             terminal_control_d2h_bytes: 128,
             terminal_control_host_sync_count: 2,
-            step_completion_host_sync_count: 2,
-            stats_none_host_sync_count: 4,
+            step_completion_host_sync_count: 0,
+            stats_none_host_sync_count: 2,
         };
         let telemetry = super::adaptive_execution_telemetry_from_native(native)
             .expect("known realization must map");
@@ -775,8 +775,8 @@ mod tests {
         assert_eq!(telemetry.graph_launch_count, 2);
         assert_eq!(telemetry.terminal_control_d2h_bytes, 128);
         assert_eq!(telemetry.terminal_control_host_sync_count, 2);
-        assert_eq!(telemetry.step_completion_host_sync_count, 2);
-        assert_eq!(telemetry.stats_none_host_sync_count, 4);
+        assert_eq!(telemetry.step_completion_host_sync_count, 0);
+        assert_eq!(telemetry.stats_none_host_sync_count, 2);
     }
 
     #[cfg(feature = "cuda")]

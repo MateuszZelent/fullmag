@@ -318,9 +318,9 @@ int main() {
               "two production steps reuse one cached adaptive graph");
         check(adaptive_telemetry.terminal_control_d2h_bytes > 0 &&
                   adaptive_telemetry.terminal_control_host_sync_count == 2 &&
-                  adaptive_telemetry.step_completion_host_sync_count == 2 &&
-                  adaptive_telemetry.stats_none_host_sync_count == 4,
-              "adaptive telemetry accounts every current terminal and completion sync");
+                  adaptive_telemetry.step_completion_host_sync_count == 0 &&
+                  adaptive_telemetry.stats_none_host_sync_count == 2,
+              "stats-none adaptive steps do not repeat the completed graph sync");
 
         fullmag_fdm_execution_receipt_v2 receipt{};
         receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;

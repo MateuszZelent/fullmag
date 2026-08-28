@@ -131,6 +131,16 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation) {
 }
 
 bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation) {
+    const bool adaptive_graph_already_completed =
+        ctx.adaptive_enabled &&
+        ctx.stats_mode == FULLMAG_FDM_STATS_NONE &&
+        (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
+         ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) &&
+        ctx.adaptive_graph_launch_count != 0 &&
+        ctx.last_error.empty();
+    if (adaptive_graph_already_completed) {
+        return true;
+    }
     const cudaError_t err = cudaStreamSynchronize(nullptr);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, operation, err);
