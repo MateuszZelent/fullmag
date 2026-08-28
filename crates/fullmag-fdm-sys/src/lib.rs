@@ -803,6 +803,8 @@ pub const FULLMAG_FDM_ADAPTIVE_CONTROL_LEGACY_HOST_READBACK:
     fullmag_fdm_adaptive_control_realization_v1 = 1;
 pub const FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH:
     fullmag_fdm_adaptive_control_realization_v1 = 2;
+pub const FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH_BATCHED:
+    fullmag_fdm_adaptive_control_realization_v1 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -2343,6 +2345,10 @@ mod tests {
 
     #[test]
     fn adaptive_batch_step_v1_has_stable_layout_and_ffi_symbol() {
+        assert_eq!(
+            FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH_BATCHED,
+            3
+        );
         assert_eq!(size_of::<fullmag_fdm_adaptive_batch_step_v1>(), 64);
         assert_eq!(offset_of!(fullmag_fdm_adaptive_batch_step_v1, step), 16);
         assert_eq!(

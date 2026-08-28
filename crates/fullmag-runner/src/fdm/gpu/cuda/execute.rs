@@ -32,7 +32,10 @@ use crate::scalar_metrics::{
     apply_average_m_to_step_stats_with_active_mask, scalar_row_due, single_object_scalars,
 };
 #[cfg(feature = "cuda")]
-use crate::schedules::{collect_field_schedules, collect_scalar_schedules};
+use crate::schedules::{
+    collect_field_schedules, collect_scalar_schedules, is_due, OutputSchedule,
+    OUTPUT_TIME_TOLERANCE,
+};
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::{ExecutionProvenance, RunResult, RunStatus, StepAction, StepStats, StepUpdate};
@@ -92,6 +95,43 @@ fn public_gpu_device_ordinal() -> Result<i32, RunError> {
 }
 
 #[cfg(feature = "cuda")]
+fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
+    plan.adaptive_timestep.is_some()
+        && plan.relaxation.is_none()
+        && plan.spin_transport_plans.is_empty()
+        && !live
+}
+
+#[cfg(feature = "cuda")]
+fn adaptive_batch_target(
+    current_time: f64,
+    current_dt: f64,
+    until_seconds: f64,
+    scalar_schedules: &[OutputSchedule],
+    field_schedules: &[OutputSchedule],
+) -> (f64, u32) {
+    let mut due_now = false;
+    let mut next_boundary = until_seconds;
+    for schedule in scalar_schedules.iter().chain(field_schedules) {
+        if is_due(current_time, schedule.next_time) {
+            due_now = true;
+        } else if schedule.next_time < next_boundary {
+            next_boundary = schedule.next_time;
+        }
+    }
+    if due_now {
+        (
+            (current_time + current_dt)
+                .min(next_boundary)
+                .min(until_seconds),
+            1,
+        )
+    } else {
+        (next_boundary, 64)
+    }
+}
+
+#[cfg(feature = "cuda")]
 pub(crate) fn execute_cuda_fdm(
     requested_backend: fullmag_ir::BackendTarget,
     requested_device: &str,
@@ -130,7 +170,12 @@ pub(crate) fn execute_cuda_fdm(
         })?;
         Some(session)
     };
-    let mut backend = NativeFdmBackend::create(plan)?;
+    let use_adaptive_batch = adaptive_batch_execution_eligible(plan, live.is_some());
+    let mut backend = if use_adaptive_batch {
+        NativeFdmBackend::create_for_adaptive_batch(plan)?
+    } else {
+        NativeFdmBackend::create(plan)?
+    };
     if let Some(session) = gpu_transport.as_ref() {
         let binding = session.llg_binding().map_err(|error| RunError {
             message: format!("materializing public GPU M1 LLG binding failed: {error}"),
@@ -267,8 +312,54 @@ pub(crate) fn execute_cuda_fdm(
         direct_minimizer_torque_confirmed = outcome.torque_confirmed;
         numerical_stagnation = outcome.numerical_stagnation;
     } else {
-        let dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
+        let mut dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         while current_time < until_seconds {
+            if use_adaptive_batch {
+                if current_time + OUTPUT_TIME_TOLERANCE >= until_seconds {
+                    break;
+                }
+                let (target_time, max_steps) = adaptive_batch_target(
+                    current_time,
+                    dt,
+                    until_seconds,
+                    &scalar_schedules,
+                    &field_schedules,
+                );
+                let Some(batch) =
+                    backend.step_adaptive_batch_interruptible(dt, target_time, max_steps, None)?
+                else {
+                    continue;
+                };
+                let terminal = *batch
+                    .last()
+                    .expect("native batch is validated as non-empty");
+                current_time = terminal.time;
+                dt = terminal.suggested_next_dt;
+
+                let observation_due = max_steps == 1 || is_due(current_time, target_time);
+                if !observation_due {
+                    continue;
+                }
+                backend.refresh_observables()?;
+                let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                stats.error_estimate = Some(terminal.normalized_error);
+                stats.rejected_attempts = terminal.rejected_attempts;
+                stats.dt_suggested = Some(terminal.suggested_next_dt);
+                ensure_single_object_scalars(&mut stats, "free");
+                latest_stats = Some(stats.clone());
+                current_stats = stats.clone();
+                record_cuda_due_outputs(
+                    &backend,
+                    cell_count,
+                    &stats,
+                    None,
+                    &mut scalar_schedules,
+                    &mut field_schedules,
+                    &mut steps,
+                    &mut artifacts,
+                )?;
+                continue;
+            }
             if let Some(live) = live.as_mut() {
                 if let Some(display_selection) = live.display_selection.map(|get| get()) {
                     let preview_due = display_refresh_due(
@@ -556,4 +647,139 @@ pub(crate) fn execute_cuda_fdm(
             "CUDA FDM backend requested but fullmag-runner was built without the 'cuda' feature"
                 .to_string(),
     })
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod adaptive_batch_tests {
+    use super::{adaptive_batch_target, execute_cuda_fdm, OutputSchedule};
+    use fullmag_ir::{
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, BackendTarget, ExchangeBoundaryCondition,
+        ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
+        IntegratorChoice, OutputIR,
+    };
+
+    fn schedule(next_time: f64) -> OutputSchedule {
+        OutputSchedule {
+            name: "E_total".to_string(),
+            every_seconds: 2.0e-12,
+            next_time,
+            last_sampled_time: None,
+        }
+    }
+
+    #[test]
+    fn due_output_forces_one_accepted_step_before_observation() {
+        let (target, max_steps) =
+            adaptive_batch_target(0.0, 2.0e-15, 1.0e-11, &[schedule(0.0)], &[]);
+
+        assert_eq!(target, 2.0e-15);
+        assert_eq!(max_steps, 1);
+    }
+
+    #[test]
+    fn batch_stops_at_earliest_future_output_boundary() {
+        let scalar = schedule(8.0e-12);
+        let field = schedule(5.0e-12);
+        let (target, max_steps) =
+            adaptive_batch_target(2.0e-12, 2.0e-15, 1.0e-11, &[scalar], &[field]);
+
+        assert_eq!(target, 5.0e-12);
+        assert_eq!(max_steps, 64);
+    }
+
+    #[test]
+    fn batch_without_outputs_targets_stage_end() {
+        let (target, max_steps) = adaptive_batch_target(2.0e-12, 2.0e-15, 1.0e-11, &[], &[]);
+
+        assert_eq!(target, 1.0e-11);
+        assert_eq!(max_steps, 64);
+    }
+
+    #[test]
+    fn headless_adaptive_runner_batches_between_output_boundaries() {
+        if !super::super::native::is_cuda_available() {
+            eprintln!("skipping CUDA adaptive runner batch contract: native CUDA unavailable");
+            return;
+        }
+        let mut plan = FdmPlanIR::default();
+        plan.grid = GridDimensions { cells: [1, 1, 1] };
+        plan.cell_size = [5.0e-9; 3];
+        plan.region_mask = vec![0];
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        plan.material = FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 8.0e5,
+            exchange_stiffness: 13.0e-12,
+            damping: 0.1,
+            ..Default::default()
+        };
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.precision = ExecutionPrecision::Double;
+        plan.exchange_bc = ExchangeBoundaryCondition::Neumann;
+        plan.integrator = Some(IntegratorChoice::Rk23);
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+            atol: 1.0e-6,
+            rtol: 0.0,
+            dt_initial: Some(1.0e-15),
+            dt_min: 1.0e-16,
+            dt_max: Some(2.0e-15),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        });
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+        plan.external_field = Some([0.0, 0.0, 8.0e5]);
+        plan.relaxation = None;
+        let outputs = vec![
+            OutputIR::Scalar {
+                name: "E_total".to_string(),
+                every_seconds: 5.0e-15,
+            },
+            OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 5.0e-15,
+            },
+        ];
+
+        let executed = execute_cuda_fdm(
+            BackendTarget::Fdm,
+            "gpu",
+            ExecutionMode::Strict,
+            &plan,
+            2.0e-14,
+            &outputs,
+            None,
+            None,
+        )
+        .expect("headless adaptive CUDA execution must complete");
+
+        let final_step = executed
+            .result
+            .steps
+            .last()
+            .expect("scheduled scalar observations must be published");
+        assert!((final_step.time - 2.0e-14).abs() <= 1.0e-18);
+        assert!(final_step.e_total.is_finite());
+        assert!(final_step.max_h_eff.is_finite());
+        assert_eq!(executed.field_snapshot_count, 5);
+        let adaptive = executed
+            .provenance
+            .fdm_gpu_execution_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.adaptive_execution.as_ref())
+            .expect("adaptive execution telemetry must be published");
+        assert_eq!(adaptive.realization, "cuda_conditional_graph_batched_v1");
+        assert!(adaptive.accounting_valid);
+        assert!(adaptive.graph_launch_count > adaptive.terminal_control_host_sync_count);
+        assert_eq!(adaptive.step_completion_host_sync_count, 0);
+        assert_eq!(
+            adaptive.stats_none_host_sync_count,
+            adaptive.terminal_control_host_sync_count
+        );
+    }
 }

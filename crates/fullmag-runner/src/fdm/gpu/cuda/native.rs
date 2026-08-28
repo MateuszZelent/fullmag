@@ -545,6 +545,34 @@ pub(crate) struct NativeFdmBackend {
 }
 
 #[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AdaptiveBatchStep {
+    pub step: u64,
+    pub time: f64,
+    pub dt: f64,
+    pub suggested_next_dt: f64,
+    pub normalized_error: f64,
+    pub rejected_attempts: u32,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeStatsMode {
+    Full,
+    None,
+}
+
+#[cfg(feature = "cuda")]
+impl NativeStatsMode {
+    fn as_ffi(self) -> ffi::fullmag_fdm_stats_mode {
+        match self {
+            Self::Full => ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
+            Self::None => ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_NONE,
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
 mod device;
 #[cfg(any(feature = "cuda", test))]
 pub(crate) mod residency;
@@ -923,6 +951,25 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        Self::create_with_stats_mode(plan, NativeStatsMode::Full)
+    }
+
+    pub(crate) fn create_for_adaptive_batch(
+        plan: &fullmag_ir::FdmPlanIR,
+    ) -> Result<Self, RunError> {
+        if plan.adaptive_timestep.is_none() {
+            return Err(RunError {
+                message: "batched CUDA FDM construction requires an adaptive timestep policy"
+                    .to_string(),
+            });
+        }
+        Self::create_with_stats_mode(plan, NativeStatsMode::None)
+    }
+
+    fn create_with_stats_mode(
+        plan: &fullmag_ir::FdmPlanIR,
+        stats_mode: NativeStatsMode,
+    ) -> Result<Self, RunError> {
         let integrator_choice = plan
             .integrator
             .unwrap_or(fullmag_ir::IntegratorChoice::Heun);
@@ -1450,7 +1497,7 @@ impl NativeFdmBackend {
             adaptive_dt_min: 0.0,
             adaptive_dt_max: 0.0,
             adaptive_headroom: 0.0,
-            stats_mode: ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
+            stats_mode: stats_mode.as_ffi(),
             stats_stride: 1,
             frozen_mask: frozen_mask_flat
                 .as_ref()
@@ -1682,6 +1729,109 @@ impl NativeFdmBackend {
         };
         step_stats.per_object_scalars = single_object_scalars("free", &step_stats);
         Ok(Some(step_stats))
+    }
+
+    pub(crate) fn step_adaptive_batch_interruptible(
+        &mut self,
+        initial_dt: f64,
+        target_time: f64,
+        max_steps: u32,
+        interrupt_signal: Option<&AtomicBool>,
+    ) -> Result<Option<Vec<AdaptiveBatchStep>>, RunError> {
+        self.set_interrupt_signal(interrupt_signal)?;
+        if !self.adaptive_timestep_enabled {
+            return Err(RunError {
+                message: "adaptive CUDA batch requested for a fixed-step backend".to_string(),
+            });
+        }
+        if max_steps == 0 || max_steps as usize > ffi::FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1 {
+            return Err(RunError {
+                message: format!(
+                    "adaptive CUDA batch max_steps must be in 1..={}, got {max_steps}",
+                    ffi::FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1
+                ),
+            });
+        }
+
+        let mut records =
+            [std::mem::MaybeUninit::<ffi::fullmag_fdm_adaptive_batch_step_v1>::uninit();
+                ffi::FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1];
+        let mut count = 0u32;
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_step_adaptive_batch_v1(
+                self.handle,
+                initial_dt,
+                target_time,
+                max_steps,
+                records.as_mut_ptr().cast(),
+                records.len() as u32,
+                &mut count,
+            )
+        };
+        if rc == ffi::FULLMAG_FDM_ERR_INTERRUPTED {
+            return Ok(None);
+        }
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("adaptive CUDA batch step failed"));
+        }
+        if count == 0 || count > max_steps {
+            return Err(RunError {
+                message: format!(
+                    "native adaptive CUDA batch returned invalid record count {count} for max_steps={max_steps}"
+                ),
+            });
+        }
+        let records = unsafe {
+            std::slice::from_raw_parts(
+                records
+                    .as_ptr()
+                    .cast::<ffi::fullmag_fdm_adaptive_batch_step_v1>(),
+                count as usize,
+            )
+        };
+        let mut batch = Vec::with_capacity(records.len());
+        let mut previous_step = None;
+        let mut previous_time = None;
+        for record in records {
+            if record.abi_version != ffi::FULLMAG_FDM_ADAPTIVE_BATCH_STEP_ABI_V1
+                || record.struct_size
+                    != std::mem::size_of::<ffi::fullmag_fdm_adaptive_batch_step_v1>() as u32
+                || record.decision != ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED
+                || record.reason != ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE
+                || !record.time_seconds.is_finite()
+                || !record.dt_seconds.is_finite()
+                || record.dt_seconds <= 0.0
+                || !record.suggested_next_dt_seconds.is_finite()
+                || record.suggested_next_dt_seconds <= 0.0
+                || !record.normalized_error.is_finite()
+                || record.normalized_error < 0.0
+                || previous_step.is_some_and(|step| record.step != step + 1)
+                || previous_time.is_some_and(|time| record.time_seconds <= time)
+            {
+                return Err(RunError {
+                    message: "native adaptive CUDA batch returned an invalid accepted-step trace"
+                        .to_string(),
+                });
+            }
+            previous_step = Some(record.step);
+            previous_time = Some(record.time_seconds);
+            batch.push(AdaptiveBatchStep {
+                step: record.step,
+                time: record.time_seconds,
+                dt: record.dt_seconds,
+                suggested_next_dt: record.suggested_next_dt_seconds,
+                normalized_error: record.normalized_error,
+                rejected_attempts: record.rejected_attempts,
+            });
+        }
+        if batch.last().is_some_and(|record| {
+            record.time > target_time + crate::schedules::OUTPUT_TIME_TOLERANCE
+        }) {
+            return Err(RunError {
+                message: "native adaptive CUDA batch advanced beyond its target time".to_string(),
+            });
+        }
+        Ok(Some(batch))
     }
 
     fn copy_adaptive_attempt_summary(&self) -> Result<Option<(u32, f64)>, RunError> {

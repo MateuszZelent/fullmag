@@ -1402,6 +1402,8 @@ int fullmag_fdm_backend_step_adaptive_batch_v1(
     if (poll_interrupt(*ctx)) return FULLMAG_FDM_ERR_INTERRUPTED;
 
     ctx->last_error.clear();
+    context_record_adaptive_execution_counter(
+        *ctx, ctx->adaptive_public_batch_call_count);
     ctx->step_interrupted = false;
     ctx->adaptive_rejected_attempts = 0;
     ctx->adaptive_attempt_trace_count = 0;

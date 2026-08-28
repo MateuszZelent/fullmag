@@ -424,6 +424,9 @@ fn adaptive_execution_telemetry_from_native(
         ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE => "not_applicable",
         ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_LEGACY_HOST_READBACK => "legacy_host_readback",
         ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH => "cuda_conditional_graph_v1",
+        ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH_BATCHED => {
+            "cuda_conditional_graph_batched_v1"
+        }
         other => {
             return Err(preflight_error(format!(
                 "unknown adaptive control realization={other}"
@@ -777,6 +780,16 @@ mod tests {
         assert_eq!(telemetry.terminal_control_host_sync_count, 2);
         assert_eq!(telemetry.step_completion_host_sync_count, 0);
         assert_eq!(telemetry.stats_none_host_sync_count, 2);
+
+        let batched = super::adaptive_execution_telemetry_from_native(
+            super::ffi::fullmag_fdm_adaptive_execution_telemetry_v1 {
+                realization:
+                    super::ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH_BATCHED,
+                ..native
+            },
+        )
+        .expect("batched realization must map");
+        assert_eq!(batched.realization, "cuda_conditional_graph_batched_v1");
     }
 
     #[cfg(feature = "cuda")]

@@ -531,6 +531,7 @@ struct Context {
     uint64_t adaptive_terminal_control_host_sync_count = 0;
     uint64_t adaptive_step_completion_host_sync_count = 0;
     uint64_t adaptive_stats_none_host_sync_count = 0;
+    uint64_t adaptive_public_batch_call_count = 0;
     bool adaptive_execution_accounting_valid = true;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
@@ -879,6 +880,9 @@ inline bool context_get_adaptive_execution_telemetry_v1(
     result.struct_size = sizeof(result);
     if (!ctx.adaptive_enabled) {
         result.realization = FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE;
+    } else if (ctx.adaptive_public_batch_call_count != 0) {
+        result.realization =
+            FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH_BATCHED;
     } else if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
                ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) {
         result.realization =

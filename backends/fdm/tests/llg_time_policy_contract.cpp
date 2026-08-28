@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -299,6 +302,8 @@ int main() {
         telemetry.struct_size = sizeof(telemetry);
         check(fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
                   backend, &telemetry) == FULLMAG_FDM_OK &&
+                  telemetry.realization ==
+                      FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH_BATCHED &&
                   telemetry.graph_build_count == 1 &&
                   telemetry.graph_launch_count == 2 &&
                   telemetry.terminal_control_host_sync_count == 1 &&
@@ -321,6 +326,197 @@ int main() {
                                  FULLMAG_FDM_PRECISION_SINGLE}) {
         check_device_batch(precision, FULLMAG_FDM_INTEGRATOR_RK23);
         check_device_batch(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
+
+    auto check_failed_batch_rollback = [&](fullmag_fdm_precision precision,
+                                           fullmag_fdm_integrator integrator) {
+        auto plan = invalid;
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.base.has_external_field = 1;
+        plan.base.external_field_am[1] = 1.0e6;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_MAX_ERROR, 1.0e-30, 0.0,
+                            1.0e-12, 1.0e-12, 0.9, 2.0, 0.2, 0, 0.0, 0, 0.0};
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        check(backend != nullptr && fullmag_fdm_backend_last_error(backend) == nullptr,
+              "failed-batch rollback fixture passes checked-v2 validation");
+        double before[3]{};
+        double after[3]{};
+        check(fullmag_fdm_backend_copy_field_f64(
+                  backend, FULLMAG_FDM_OBSERVABLE_M, before, 3) == FULLMAG_FDM_OK,
+              "failed-batch rollback fixture captures pre-attempt magnetization");
+        fullmag_fdm_adaptive_batch_step_v1 output[2]{};
+        std::memset(output, 0x5a, sizeof(output));
+        fullmag_fdm_adaptive_batch_step_v1 output_before[2]{};
+        std::memcpy(output_before, output, sizeof(output));
+        uint32_t output_count = UINT32_MAX;
+        const int status = fullmag_fdm_backend_step_adaptive_batch_v1(
+            backend, 1.0e-12, 2.0e-12, 2, output, 2, &output_count);
+        check(status == FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED && output_count == 0,
+              "dt_min exhaustion fails the complete adaptive batch atomically");
+        check(std::memcmp(output, output_before, sizeof(output)) == 0,
+              "failed adaptive batch leaves caller records unpublished");
+        check(fullmag_fdm_backend_copy_field_f64(
+                  backend, FULLMAG_FDM_OBSERVABLE_M, after, 3) == FULLMAG_FDM_OK &&
+                  std::memcmp(before, after, sizeof(before)) == 0,
+              "failed adaptive batch restores byte-identical accepted magnetization");
+        fullmag_fdm_step_transaction_telemetry_v1 transaction{};
+        transaction.abi_version = FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+        transaction.struct_size = sizeof(transaction);
+        check(fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+                  backend, &transaction) == FULLMAG_FDM_OK &&
+                  transaction.capture_count == 1 &&
+                  transaction.rollback_count == 1 &&
+                  transaction.accepted_step_index == 0,
+              "failed adaptive batch publishes one capture and one rollback only");
+        fullmag_fdm_backend_destroy(backend);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_failed_batch_rollback(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_failed_batch_rollback(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
+
+    auto check_steady_state_performance = [&](fullmag_fdm_precision precision,
+                                              fullmag_fdm_integrator integrator) {
+        auto plan = invalid;
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.base.has_external_field = 1;
+        plan.base.external_field_am[1] = 1.0e6;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_MAX_ERROR, 1.0e-9, 0.0,
+                            1.0e-18, 1.0e-15, 0.9, 2.0, 0.2, 0, 0.0, 0, 0.0};
+        auto *legacy = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        auto *batched = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        check(legacy != nullptr && batched != nullptr &&
+                  fullmag_fdm_backend_last_error(legacy) == nullptr &&
+                  fullmag_fdm_backend_last_error(batched) == nullptr,
+              "steady-state performance fixtures pass checked-v2 validation");
+        fullmag_fdm_step_stats warm_legacy{};
+        check(fullmag_fdm_backend_step(legacy, 1.0e-15, &warm_legacy) ==
+                  FULLMAG_FDM_OK,
+              "legacy performance fixture warms its cached graph");
+        fullmag_fdm_adaptive_batch_step_v1 warm_batch[1]{};
+        uint32_t warm_count = 0;
+        check(fullmag_fdm_backend_step_adaptive_batch_v1(
+                  batched, 1.0e-15, 1.0e-15, 1, warm_batch, 1,
+                  &warm_count) == FULLMAG_FDM_OK &&
+                  warm_count == 1,
+              "batched performance fixture warms its cached graph");
+
+        constexpr uint32_t measured_steps = 256;
+        double legacy_time = warm_legacy.time_seconds;
+        const double measurement_target =
+            warm_legacy.time_seconds + measured_steps * 1.0e-15;
+        uint32_t legacy_step_count = 0;
+        const auto legacy_start = std::chrono::steady_clock::now();
+        while (measurement_target - legacy_time > 1.0e-18) {
+            fullmag_fdm_step_stats stats{};
+            const double dt = std::min(1.0e-15, measurement_target - legacy_time);
+            const int status = fullmag_fdm_backend_step(legacy, dt, &stats);
+            if (status != FULLMAG_FDM_OK) {
+                const char *message = fullmag_fdm_backend_last_error(legacy);
+                std::fprintf(stderr,
+                             "legacy performance step=%u status=%d error=%s\n",
+                             legacy_step_count, status,
+                             message != nullptr ? message : "<none>");
+            }
+            check(status == FULLMAG_FDM_OK,
+                  "legacy performance fixture advances one accepted step");
+            legacy_time = stats.time_seconds;
+            ++legacy_step_count;
+        }
+        const auto legacy_elapsed = std::chrono::steady_clock::now() - legacy_start;
+
+        double current_time = warm_batch[0].time_seconds;
+        uint32_t batch_step_count = 0;
+        uint32_t batch_call_count = 0;
+        const auto batch_start = std::chrono::steady_clock::now();
+        while (measurement_target - current_time > 1.0e-18) {
+            fullmag_fdm_adaptive_batch_step_v1 records[64]{};
+            uint32_t count = 0;
+            check(fullmag_fdm_backend_step_adaptive_batch_v1(
+                      batched, 1.0e-15, measurement_target, 64, records, 64,
+                      &count) == FULLMAG_FDM_OK &&
+                      count > 0 && count <= 64,
+                  "batched performance fixture advances a bounded accepted-step batch");
+            current_time = records[count - 1].time_seconds;
+            batch_step_count += count;
+            ++batch_call_count;
+        }
+        const auto batch_elapsed = std::chrono::steady_clock::now() - batch_start;
+        const auto legacy_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            legacy_elapsed).count();
+        const auto batch_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            batch_elapsed).count();
+        std::fprintf(stdout,
+                     "adaptive batch performance precision=%u integrator=%u legacy_ns=%lld batch_ns=%lld\n",
+                     static_cast<unsigned>(precision),
+                     static_cast<unsigned>(integrator),
+                     static_cast<long long>(legacy_ns),
+                     static_cast<long long>(batch_ns));
+        check(batch_ns * 100 <= legacy_ns * 90,
+              "batched steady-state latency stays at least 10 percent below per-step synchronization");
+
+        double legacy_m[3]{};
+        double batch_m[3]{};
+        check(fullmag_fdm_backend_copy_field_f64(
+                  legacy, FULLMAG_FDM_OBSERVABLE_M, legacy_m, 3) == FULLMAG_FDM_OK &&
+                  fullmag_fdm_backend_copy_field_f64(
+                      batched, FULLMAG_FDM_OBSERVABLE_M, batch_m, 3) == FULLMAG_FDM_OK,
+              "performance gate reads both final physics states");
+        const double field_budget = precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? 1.0e-12 : 1.0e-4;
+        bool field_within_budget = true;
+        double max_field_difference = 0.0;
+        for (uint32_t component = 0; component < 3; ++component) {
+            max_field_difference = std::max(
+                max_field_difference,
+                std::abs(legacy_m[component] - batch_m[component]));
+            field_within_budget = field_within_budget &&
+                std::abs(legacy_m[component] - batch_m[component]) <= field_budget;
+        }
+        std::fprintf(stdout,
+                     "adaptive batch accuracy precision=%u integrator=%u time_diff=%.17e field_diff=%.17e budget=%.17e\n",
+                     static_cast<unsigned>(precision),
+                     static_cast<unsigned>(integrator),
+                     std::abs(legacy_time - current_time),
+                     max_field_difference, field_budget);
+        check(field_within_budget &&
+                  std::abs(legacy_time - current_time) <= 1.0e-18,
+              "performance gate preserves final time and field within the precision budget");
+        fullmag_fdm_adaptive_execution_telemetry_v1 legacy_telemetry{};
+        legacy_telemetry.abi_version =
+            FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1;
+        legacy_telemetry.struct_size = sizeof(legacy_telemetry);
+        fullmag_fdm_adaptive_execution_telemetry_v1 batch_telemetry =
+            legacy_telemetry;
+        check(fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+                  legacy, &legacy_telemetry) == FULLMAG_FDM_OK &&
+                  fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+                      batched, &batch_telemetry) == FULLMAG_FDM_OK &&
+                  legacy_telemetry.graph_launch_count == legacy_step_count + 1 &&
+                  batch_telemetry.graph_launch_count ==
+                      static_cast<uint64_t>(batch_call_count) * 64 + 1 &&
+                  legacy_telemetry.terminal_control_host_sync_count ==
+                      legacy_step_count + 1 &&
+                  batch_telemetry.terminal_control_host_sync_count ==
+                      batch_call_count + 1 &&
+                  batch_telemetry.stats_none_host_sync_count ==
+                      batch_call_count + 1 &&
+                  batch_step_count >= measured_steps &&
+                  batch_telemetry.terminal_control_host_sync_count * 10 <
+                      legacy_telemetry.terminal_control_host_sync_count,
+              "performance gate proves equivalent target time with at least tenfold fewer host syncs");
+        fullmag_fdm_backend_destroy(legacy);
+        fullmag_fdm_backend_destroy(batched);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_steady_state_performance(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_steady_state_performance(precision, FULLMAG_FDM_INTEGRATOR_DP45);
     }
 
     auto check_device_retry = [&](fullmag_fdm_precision precision,
