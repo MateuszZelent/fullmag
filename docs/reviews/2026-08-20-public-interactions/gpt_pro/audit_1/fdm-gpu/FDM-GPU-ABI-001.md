@@ -5,10 +5,35 @@
 | Lane | **FDM GPU** |
 | Priorytet | **P0** |
 | Klasa | `architecture` |
-| Status | `implementation plan` |
+| Status | `source/test remediated; global qualification open` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | brak twardych zależności |
+
+## Stan implementacji — 2026-08-28
+
+Stan ogólny: **SOURCE/TEST REMEDIATED, GLOBAL QUALIFICATION OPEN**.
+
+- `fullmag_fdm_plan_desc_v2` ma jawne `abi_version` i `struct_size`, a wspólny
+  manifest obejmuje 167 pól nagłówka, agregatów, bazowego descriptoru oraz
+  polityki czasu. C++ `static_assert` i generowane asercje Rust sprawdzają
+  rozmiar, wyrównanie i każdy offset z tego samego źródła.
+- Sentinel contract nadaje odrębne wartości wszystkim polom semantycznym i
+  sprawdza receipt kanonicznego ownera. Nieznana wersja oraz za mały lub za duży
+  rozmiar zwracają `FULLMAG_FDM_ERR_ABI` przed alokacją backendu.
+- Runner tworzy pełny descriptor v2 i używa wyłącznie typed checked constructor;
+  `cargo check -p fullmag-runner --features cuda` przechodzi z linkowaniem do
+  tego samego natywnego builda.
+- Managed CUDA gate wykonuje przez checked-v2 rzeczywisty krok Heuna. Analityczny
+  macrospin przechodzi, a receipt potwierdza `executed_backend=cuda_fdm`, zero
+  fallbacku i poprawne accounting.
+- Recepta `verify-fdm-gpu-abi-contract` używa osobnych ścieżek host/container,
+  więc na Windows trafia do zatwierdzonego wolumenu WSL zamiast cicho budować
+  bez CUDA. Targety i binaria pozostają poza repozytorium.
+
+Nie promowano całej capability: pełny publiczny planner→runner E2E dla macierzy
+sentineli, osobny hot-loop performance gate i szersza macierz interakcji nadal
+pozostają otwarte.
 
 ## 1. Cel dokumentu
 
@@ -133,15 +158,15 @@ Minimalne wymagania:
 
 ## 9. Kryteria akceptacyjne
 
-- [ ] Istnieje minimalny test, który przed poprawką odtwarza problem.
+- [x] Istnieje minimalny test, który przed poprawką odtwarza problem.
 - [ ] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
-- [ ] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
+- [x] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
 - [ ] Accepted/rejected/failure semantics są objęte fault-injection.
-- [ ] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
+- [x] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
 - [ ] CPU/GPU albo AoS/SoA parity przechodzi na poziomie pola, RHS, stage i kroku, jeśli dotyczy.
 - [ ] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
 - [ ] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
-- [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
+- [x] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
 - [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.
 
 ## 10. Ryzyka

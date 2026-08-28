@@ -1,6 +1,7 @@
 #include "fullmag_fdm.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -304,6 +305,10 @@ void incompatible_version_and_size_fail_before_backend_allocation() {
 
 #if FULLMAG_FDM_CONTRACT_HAS_CUDA
 void checked_backend_constructor_accepts_a_runtime_valid_plan() {
+    constexpr double dt = 5.0e-13;
+    constexpr double alpha = 0.1;
+    constexpr double gamma = 2.211e5;
+    constexpr double field = 2.0e5;
     double magnetization[3] = {1.0, 0.0, 0.0};
     fullmag_fdm_plan_desc_v2 plan{};
     plan.abi_version = FULLMAG_FDM_PLAN_DESC_ABI_V2;
@@ -312,6 +317,8 @@ void checked_backend_constructor_accepts_a_runtime_valid_plan() {
     plan.base.material = {8e5, 1.3e-11, 0.1, 2.211e5};
     plan.base.precision = FULLMAG_FDM_PRECISION_DOUBLE;
     plan.base.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.base.has_external_field = 1;
+    plan.base.external_field_am[2] = field;
     plan.base.initial_magnetization_xyz = magnetization;
     plan.base.initial_magnetization_len = 3;
     plan.base.exchange_pair_default = FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN;
@@ -329,6 +336,35 @@ void checked_backend_constructor_accepts_a_runtime_valid_plan() {
     check(handle != nullptr, "successful checked constructor must return a backend handle");
     check(fullmag_fdm_backend_last_error(handle) == nullptr,
           "runtime-valid descriptor must complete backend ingestion without deferred error");
+
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, dt, &stats) == FULLMAG_FDM_OK,
+          "checked v2 descriptor must execute a CUDA step");
+    std::array<double, 3> actual{};
+    check(fullmag_fdm_backend_copy_field_f64(
+              handle, FULLMAG_FDM_OBSERVABLE_M, actual.data(), actual.size()) ==
+              FULLMAG_FDM_OK,
+          "checked v2 descriptor must expose the accepted CUDA state");
+    const double phase = gamma * field * dt / (1.0 + alpha * alpha);
+    const double transverse = 1.0 / std::cosh(alpha * phase);
+    const std::array<double, 3> expected = {
+        transverse * std::cos(phase),
+        transverse * std::sin(phase),
+        std::tanh(alpha * phase),
+    };
+    for (std::size_t component = 0; component < actual.size(); ++component) {
+        check(std::abs(actual[component] - expected[component]) <= 2.0e-5,
+              "checked v2 descriptor CUDA step failed the macrospin oracle");
+    }
+
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt.struct_size = sizeof(receipt);
+    check(fullmag_fdm_backend_execution_receipt_v2(handle, &receipt) == FULLMAG_FDM_OK,
+          "checked v2 descriptor must publish an execution receipt");
+    check(receipt.executed_backend == FULLMAG_FDM_EXECUTED_CUDA_FDM &&
+              receipt.fallback_count == 0 && receipt.accounting_valid == 1,
+          "checked v2 descriptor receipt must prove accounted CUDA execution without fallback");
     fullmag_fdm_backend_destroy(handle);
 }
 #endif

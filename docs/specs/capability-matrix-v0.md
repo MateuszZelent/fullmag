@@ -562,7 +562,7 @@ timestep policy. Missing or mismatched artifact/source evidence fails closed to
 |---|---|---|---|---|---|---|---|
 | explicit fixed | FDM | CPU | double | `reference_executable` | executable | unvalidated | RK23/RK45 AoS/SoA exact fixed-step contract tests pass; no adaptive retry or next-step suggestion; scientific qualification pending |
 | explicit fixed | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
-| explicit fixed | FDM | CUDA | double | `production_executable` | executable | unvalidated | source contract preserves exact fixed RK23/RK45 semantics; no CUDA runtime evidence in Task 7; Task 12 qualification pending |
+| explicit fixed | FDM | CUDA | double | `production_executable` | executable | unvalidated | A managed CUDA checked-v2 ABI gate proves the complete versioned descriptor layout, fail-closed version/size rejection, full runner feature build, an actual-device fixed Heun macrospin oracle and zero-fallback execution receipt. Fixed RK23/RK45 semantics remain source-covered; broader integrator/interaction and time-to-accuracy qualification is still pending. |
 | explicit fixed | FDM | CUDA | single | `production_executable` | executable | unvalidated | source contract preserves exact fixed RK23/RK45 semantics; FP32 runtime budget remains separate and unproven |
 | explicit fixed | FEM | CPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; full interaction matrix not implied |
 | explicit fixed | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
