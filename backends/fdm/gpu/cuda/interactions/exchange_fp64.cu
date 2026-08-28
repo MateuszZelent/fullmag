@@ -174,7 +174,7 @@ extern "C" __global__ void exchange_field_t1_fp64_kernel(
     double, double, double, double, double, double, double,
     uint32_t, uint32_t, uint32_t);
 
-void launch_exchange_field_fp64(Context &ctx) {
+void launch_exchange_field_fp64(Context &ctx, cudaStream_t stream) {
     // ── T0: face-link-weighted exchange ──
     if (ctx.boundary_tier == 1 && ctx.volume_fraction != nullptr
         && ctx.face_link_xp != nullptr) {
@@ -186,7 +186,7 @@ void launch_exchange_field_fp64(Context &ctx) {
         double inv_dx2 = 1.0 / (ctx.dx * ctx.dx);
         double inv_dy2 = 1.0 / (ctx.dy * ctx.dy);
         double inv_dz2 = 1.0 / (ctx.dz * ctx.dz);
-        exchange_field_t0_fp64_kernel<<<grid_3d, block>>>(
+        exchange_field_t0_fp64_kernel<<<grid_3d, block, 0, stream>>>(
             static_cast<double*>(ctx.h_ex.x),
             static_cast<double*>(ctx.h_ex.y),
             static_cast<double*>(ctx.h_ex.z),
@@ -225,7 +225,7 @@ void launch_exchange_field_fp64(Context &ctx) {
             (ctx.nx + block.x - 1) / block.x,
             (ctx.ny + block.y - 1) / block.y,
             (ctx.nz + block.z - 1) / block.z);
-        exchange_field_t1_fp64_kernel<<<grid_3d, block>>>(
+        exchange_field_t1_fp64_kernel<<<grid_3d, block, 0, stream>>>(
             static_cast<double*>(ctx.h_ex.x),
             static_cast<double*>(ctx.h_ex.y),
             static_cast<double*>(ctx.h_ex.z),
@@ -268,7 +268,7 @@ void launch_exchange_field_fp64(Context &ctx) {
     double inv_dy2 = 1.0 / (ctx.dy * ctx.dy);
     double inv_dz2 = 1.0 / (ctx.dz * ctx.dz);
 
-    exchange_field_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+    exchange_field_fp64_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
         static_cast<const double*>(ctx.m.z),
@@ -292,6 +292,10 @@ void launch_exchange_field_fp64(Context &ctx) {
         return;
     }
     fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
+}
+
+void launch_exchange_field_fp64(Context &ctx) {
+    launch_exchange_field_fp64(ctx, nullptr);
 }
 
 double launch_exchange_energy_fp64(Context &ctx) {

@@ -18,6 +18,12 @@ using fullmag::fdm::ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED;
 using fullmag::fdm::ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
 using fullmag::fdm::ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED;
 using fullmag::fdm::AdaptiveDeviceControl;
+using fullmag::fdm::Context;
+using fullmag::fdm::context_attach_adaptive_step_graph_body;
+using fullmag::fdm::context_begin_adaptive_step_graph_build;
+using fullmag::fdm::context_destroy_adaptive_step_graph;
+using fullmag::fdm::context_finish_adaptive_step_graph_build;
+using fullmag::fdm::context_launch_adaptive_step_graph;
 using fullmag::fdm::evaluate_adaptive_error_policy_loop_device;
 
 struct DeviceAllocation {
@@ -32,17 +38,6 @@ bool cuda_ok(cudaError_t status, const char *operation) {
     if (status == cudaSuccess) return true;
     std::cerr << operation << ": " << cudaGetErrorString(status) << '\n';
     return false;
-}
-
-__global__ void initialize_controller_kernel(
-    AdaptiveDeviceControl *control,
-    double initial_dt,
-    cudaGraphConditionalHandle loop_handle)
-{
-    *control = AdaptiveDeviceControl{};
-    control->dt_candidate = initial_dt;
-    control->decision = ADAPTIVE_DEVICE_DECISION_RETRY;
-    cudaGraphSetConditional(loop_handle, 1U);
 }
 
 __global__ void evaluate_attempt_kernel(
@@ -124,51 +119,23 @@ bool run_case(
         return false;
     }
 
-    cudaGraph_t graph = nullptr;
-    cudaGraphExec_t executable = nullptr;
-    bool passed = cuda_ok(cudaGraphCreate(&graph, 0), "cudaGraphCreate");
-    cudaGraphConditionalHandle loop_handle{};
-    passed = passed && cuda_ok(
-        cudaGraphConditionalHandleCreate(&loop_handle, graph, 0, 0),
-        "cudaGraphConditionalHandleCreate");
-
+    Context ctx{};
     auto *control = static_cast<AdaptiveDeviceControl *>(control_device.value);
     auto *trace = static_cast<fullmag_fdm_adaptive_attempt_v1 *>(trace_device.value);
-    cudaGraphNode_t initialize_node = nullptr;
-    void *initialize_arguments[] = {&control, &initial_dt, &loop_handle};
-    passed = passed && add_kernel_node(
-        &initialize_node,
-        graph,
-        nullptr,
-        0,
-        reinterpret_cast<void *>(initialize_controller_kernel),
-        initialize_arguments);
-
-    cudaGraph_t *body_graphs = nullptr;
-    cudaGraphNodeParams conditional_params{};
-    conditional_params.type = cudaGraphNodeTypeConditional;
-    conditional_params.conditional.handle = loop_handle;
-    conditional_params.conditional.type = cudaGraphCondTypeWhile;
-    conditional_params.conditional.size = 1;
-    conditional_params.conditional.phGraph_out = body_graphs;
-    cudaGraphNode_t conditional_node = nullptr;
-    passed = passed && cuda_ok(
-        cudaGraphAddNode(
-            &conditional_node,
-            graph,
-            &initialize_node,
-            1,
-            &conditional_params),
-        "cudaGraphAddNode(while)");
-    body_graphs = conditional_params.conditional.phGraph_out;
-    if (body_graphs == nullptr) {
-        std::cerr << "conditional body graph was not created\n";
-        passed = false;
-    }
+    ctx.adaptive_policy_scratch = control;
+    ctx.adaptive_attempt_trace_device = trace;
+    cudaGraph_t conditional_body = nullptr;
+    bool passed = context_begin_adaptive_step_graph_build(
+        ctx, conditional_body);
+    if (!passed) std::cerr << ctx.last_error << '\n';
 
     const auto error_count = static_cast<uint32_t>(errors_sq.size());
     const double dt_max = 1.0e-9;
     auto *errors = static_cast<const double *>(errors_device.value);
+    cudaGraph_t captured_body = nullptr;
+    passed = passed && cuda_ok(
+        cudaGraphCreate(&captured_body, 0),
+        "cudaGraphCreate(captured attempt body)");
     cudaGraphNode_t attempt_node = nullptr;
     void *attempt_arguments[] = {
         &errors,
@@ -177,38 +144,30 @@ bool run_case(
         &trace,
         &dt_min,
         const_cast<double *>(&dt_max),
-        &loop_handle,
+        &ctx.adaptive_loop_handle,
     };
-    if (body_graphs != nullptr) {
+    if (captured_body != nullptr) {
         passed = passed && add_kernel_node(
             &attempt_node,
-            body_graphs[0],
+            captured_body,
             nullptr,
             0,
             reinterpret_cast<void *>(evaluate_attempt_kernel),
             attempt_arguments);
     }
-    passed = passed && cuda_ok(
-        cudaGraphInstantiate(&executable, graph, 0),
-        "cudaGraphInstantiate");
-    passed = passed && cuda_ok(
-        cudaGraphLaunch(executable, nullptr),
-        "cudaGraphLaunch");
-    passed = passed && cuda_ok(
-        cudaStreamSynchronize(nullptr),
-        "cudaStreamSynchronize(after complete adaptive graph)");
+    passed = passed && context_attach_adaptive_step_graph_body(
+        ctx, captured_body);
+    if (captured_body != nullptr) cudaGraphDestroy(captured_body);
+    passed = passed && context_finish_adaptive_step_graph_build(ctx);
 
+    AdaptiveDeviceControl initial{};
+    initial.dt_candidate = initial_dt;
+    initial.decision = ADAPTIVE_DEVICE_DECISION_RETRY;
     AdaptiveDeviceControl observed{};
+    passed = passed && context_launch_adaptive_step_graph(
+        ctx, initial, observed);
     std::array<fullmag_fdm_adaptive_attempt_v1,
                FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1> trace_batch{};
-    if (passed) {
-        passed = cuda_ok(
-            cudaMemcpy(&observed,
-                       control_device.value,
-                       sizeof(observed),
-                       cudaMemcpyDeviceToHost),
-            "cudaMemcpy(one terminal control package D2H)");
-    }
     if (passed) {
         passed = cuda_ok(
             cudaMemcpy(trace_batch.data(),
@@ -218,9 +177,9 @@ bool run_case(
                        cudaMemcpyDeviceToHost),
             "cudaMemcpy(one batched attempt trace D2H)");
     }
-
-    if (executable != nullptr) cudaGraphExecDestroy(executable);
-    if (graph != nullptr) cudaGraphDestroy(graph);
+    passed = passed && ctx.adaptive_graph_build_count == 1 &&
+        ctx.adaptive_graph_launch_count == 1;
+    context_destroy_adaptive_step_graph(ctx);
 
     if (!passed) return false;
     if (observed.decision != expected_decision ||

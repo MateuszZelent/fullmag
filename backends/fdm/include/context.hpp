@@ -496,6 +496,22 @@ struct Context {
     uint32_t adaptive_rejected_attempts = 0;
     fullmag_fdm_adaptive_attempt_v1 *adaptive_attempt_trace_device = nullptr;
     uint32_t adaptive_attempt_trace_count = 0;
+#if FULLMAG_HAS_CUDA
+    cudaGraph_t adaptive_step_graph = nullptr;
+    cudaGraphExec_t adaptive_step_graph_exec = nullptr;
+    cudaGraph_t adaptive_step_graph_body = nullptr;
+    cudaGraphConditionalHandle adaptive_loop_handle{};
+    cudaStream_t adaptive_graph_capture_stream = nullptr;
+#endif
+    bool adaptive_graph_capture_active = false;
+    uint32_t adaptive_graph_integrator = 0;
+    uint32_t adaptive_graph_precision = 0;
+    uint64_t adaptive_graph_source_revision = 0;
+    uint64_t adaptive_graph_field_revision = 0;
+    uint64_t adaptive_graph_transport_revision = 0;
+    uint64_t adaptive_graph_projection_policy_identity = 0;
+    uint64_t adaptive_graph_build_count = 0;
+    uint64_t adaptive_graph_launch_count = 0;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
     bool has_adaptive_norm_tolerance = false;
@@ -620,12 +636,25 @@ struct Context {
 bool context_create_compute_stream(Context &ctx);
 void context_destroy_compute_stream(Context &ctx);
 cudaStream_t context_compute_stream(Context &ctx);
+cudaStream_t context_orchestration_stream(Context &ctx);
 bool enqueue_adaptive_error_policy_device_loop(
     Context &ctx,
     double *device_values,
     uint64_t n,
     double exponent,
     cudaGraphConditionalHandle loop_handle);
+bool context_begin_adaptive_step_graph_build(
+    Context &ctx,
+    cudaGraph_t &conditional_body);
+bool context_attach_adaptive_step_graph_body(
+    Context &ctx,
+    cudaGraph_t captured_body);
+bool context_finish_adaptive_step_graph_build(Context &ctx);
+bool context_launch_adaptive_step_graph(
+    Context &ctx,
+    const AdaptiveDeviceControl &initial_control,
+    AdaptiveDeviceControl &terminal_control);
+void context_destroy_adaptive_step_graph(Context &ctx);
 cudaError_t fullmag_fdm_receipt_cuda_memcpy(
     Context &ctx,
     void *destination,

@@ -1361,6 +1361,7 @@ static bool alloc_reduction_scratch(Context &ctx) {
 }
 
 static void free_reduction_scratch(Context &ctx) {
+    context_destroy_adaptive_step_graph(ctx);
     if (ctx.reduction_scratch) {
         cudaFree(ctx.reduction_scratch);
         ctx.reduction_scratch = nullptr;

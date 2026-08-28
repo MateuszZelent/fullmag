@@ -271,11 +271,13 @@ void adaptive_d2d_copies_use_compute_stream() {
 void adaptive_integrators_accept_device_owned_dt() {
     const std::filesystem::path root = fdm_source_root();
     const auto cuda = root / "gpu" / "cuda";
-    const std::string graph_contract = read_text_file(
-        root / "tests" / "adaptive_conditional_graph_contract.cu");
+    const std::string graph_runtime = read_text_file(
+        cuda / "runtime" / "adaptive_graph.cu");
+    const std::string graph_controller = read_text_file(
+        cuda / "runtime" / "adaptive_controller.cuh");
     check(
-        graph_contract.find("cudaGraphCondTypeWhile") != std::string::npos &&
-            graph_contract.find("cudaGraphSetConditional") != std::string::npos,
+        graph_runtime.find("cudaGraphCondTypeWhile") != std::string::npos &&
+            graph_controller.find("cudaGraphSetConditional") != std::string::npos,
         "adaptive controller must execute through a device-controlled CUDA while node");
 
     for (const auto *path : {

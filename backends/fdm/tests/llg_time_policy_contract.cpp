@@ -186,7 +186,13 @@ int main() {
         check(fullmag_fdm_backend_last_error(backend) == nullptr,
               "device-controller fixture passes checked-v2 validation");
         fullmag_fdm_step_stats stats{};
-        check(fullmag_fdm_backend_step(backend, 1e-15, &stats) == FULLMAG_FDM_OK,
+        const auto step_status = fullmag_fdm_backend_step(backend, 1e-15, &stats);
+        if (step_status != FULLMAG_FDM_OK) {
+            const char *step_error = fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr, "adaptive CUDA step error: %s\n",
+                         step_error != nullptr ? step_error : "<none>");
+        }
+        check(step_status == FULLMAG_FDM_OK,
               "device-controller fixture executes one adaptive CUDA step");
         check(std::abs(stats.suggested_next_dt - 2e-15) <= 1e-30,
               "zero-error device PI decision applies the canonical growth limit");
@@ -230,9 +236,18 @@ int main() {
               "device-controller receipt has valid accounting");
         check(receipt.hot_loop_host_compute_count == 0,
               "canonical adaptive PI decision performs zero hot-loop host compute");
-        check(receipt.hot_loop_control_scalar_d2h_bytes >= 56 &&
-                  receipt.hot_loop_control_scalar_host_sync_count >= 1,
-              "remaining typed control-packet readback is explicitly accounted");
+        const bool uses_conditional_graph =
+            precision == FULLMAG_FDM_PRECISION_DOUBLE &&
+            integrator == FULLMAG_FDM_INTEGRATOR_RK23;
+        if (uses_conditional_graph) {
+            check(receipt.hot_loop_control_scalar_d2h_bytes == 0 &&
+                      receipt.hot_loop_control_scalar_host_sync_count == 0,
+                  "conditional graph performs zero per-attempt control readback");
+        } else {
+            check(receipt.hot_loop_control_scalar_d2h_bytes >= 56 &&
+                      receipt.hot_loop_control_scalar_host_sync_count >= 1,
+                  "legacy device policy readback remains explicitly accounted");
+        }
         fullmag_fdm_backend_destroy(backend);
     };
     for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
