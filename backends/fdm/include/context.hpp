@@ -646,6 +646,21 @@ bool enqueue_adaptive_error_policy_device_loop(
 bool context_begin_adaptive_step_graph_build(
     Context &ctx,
     cudaGraph_t &conditional_body);
+bool context_adaptive_step_graph_key_matches(
+    const Context &ctx,
+    uint32_t integrator,
+    uint32_t precision);
+bool context_adaptive_step_graph_configuration_supported(Context &ctx);
+bool context_begin_adaptive_step_graph_body_capture(
+    Context &ctx,
+    cudaStream_t &capture_stream);
+bool context_finish_adaptive_step_graph_body_capture(
+    Context &ctx,
+    cudaStream_t capture_stream,
+    bool body_enqueued,
+    uint32_t integrator,
+    uint32_t precision);
+const char *adaptive_device_terminal_reason(uint32_t reason);
 bool context_attach_adaptive_step_graph_body(
     Context &ctx,
     cudaGraph_t captured_body);

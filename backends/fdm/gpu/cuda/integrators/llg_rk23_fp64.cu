@@ -325,37 +325,6 @@ static void finish_rk23_accepted_step_fp64(
     stats->suggested_next_dt = dt_next;
 }
 
-static bool rk23_adaptive_graph_key_matches(const Context &ctx) {
-    return ctx.adaptive_step_graph_exec != nullptr &&
-        ctx.adaptive_graph_integrator == FULLMAG_FDM_INTEGRATOR_RK23 &&
-        ctx.adaptive_graph_precision == FULLMAG_FDM_PRECISION_DOUBLE &&
-        ctx.adaptive_graph_source_revision == ctx.rhs_source_revision &&
-        ctx.adaptive_graph_field_revision == ctx.rhs_field_revision &&
-        ctx.adaptive_graph_transport_revision == ctx.rhs_transport_revision &&
-        ctx.adaptive_graph_projection_policy_identity ==
-            ctx.projection_policy_identity;
-}
-
-static bool rk23_adaptive_graph_configuration_supported(Context &ctx) {
-    if (ctx.temperature > 0.0) {
-        ctx.last_error = "adaptive_device_loop_thermal_unsupported";
-        return false;
-    }
-    if (ctx.has_oersted_field && ctx.oersted_time_dep_kind != 0) {
-        ctx.last_error = "adaptive_device_loop_dynamic_oersted_unsupported";
-        return false;
-    }
-    if (ctx.gpu_transport_rhs.active) {
-        ctx.last_error = "adaptive_device_loop_gpu_transport_unsupported";
-        return false;
-    }
-    if (ctx.gpu_transport_test_force_adaptive_retry) {
-        ctx.last_error = "adaptive_device_loop_host_fault_injection_unsupported";
-        return false;
-    }
-    return true;
-}
-
 static bool enqueue_rk23_adaptive_attempt_fp64(
     Context &ctx,
     int n,
@@ -518,66 +487,19 @@ static bool build_rk23_adaptive_graph_fp64(
     double alpha,
     double step_start_time)
 {
-    cudaGraph_t conditional_body = nullptr;
-    if (!context_begin_adaptive_step_graph_build(ctx, conditional_body)) {
+    cudaStream_t capture_stream = nullptr;
+    if (!context_begin_adaptive_step_graph_body_capture(
+            ctx, capture_stream)) {
         return false;
     }
-    cudaStream_t capture_stream = ctx.adaptive_graph_capture_stream;
-    cudaError_t error = cudaStreamBeginCaptureToGraph(
-        capture_stream,
-        conditional_body,
-        nullptr,
-        nullptr,
-        0,
-        cudaStreamCaptureModeRelaxed);
-    if (error != cudaSuccess) {
-        set_cuda_error(ctx, "cudaStreamBeginCapture(adaptive_rk23)", error);
-        context_destroy_adaptive_step_graph(ctx);
-        return false;
-    }
-    ctx.adaptive_graph_capture_active = true;
     const bool enqueued = enqueue_rk23_adaptive_attempt_fp64(
         ctx, n, grid, gamma_bar, alpha, step_start_time, capture_stream);
-    error = cudaStreamEndCapture(capture_stream, nullptr);
-    ctx.adaptive_graph_capture_active = false;
-    if (error != cudaSuccess || !enqueued) {
-        if (error != cudaSuccess) {
-            set_cuda_error(ctx, "cudaStreamEndCapture(adaptive_rk23)", error);
-        } else if (ctx.last_error.empty()) {
-            ctx.last_error = "adaptive_rk23_graph_capture_failed";
-        }
-        context_destroy_adaptive_step_graph(ctx);
-        return false;
-    }
-    if (!context_finish_adaptive_step_graph_build(ctx)) {
-        context_destroy_adaptive_step_graph(ctx);
-        return false;
-    }
-    ctx.adaptive_graph_integrator = FULLMAG_FDM_INTEGRATOR_RK23;
-    ctx.adaptive_graph_precision = FULLMAG_FDM_PRECISION_DOUBLE;
-    ctx.adaptive_graph_source_revision = ctx.rhs_source_revision;
-    ctx.adaptive_graph_field_revision = ctx.rhs_field_revision;
-    ctx.adaptive_graph_transport_revision = ctx.rhs_transport_revision;
-    ctx.adaptive_graph_projection_policy_identity =
-        ctx.projection_policy_identity;
-    return true;
-}
-
-static const char *rk23_adaptive_terminal_reason(uint32_t reason) {
-    switch (reason) {
-        case ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED:
-            return "dt_min_exhausted";
-        case ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP:
-            return "invalid_timestep";
-        case ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR:
-            return "invalid_current_error";
-        case ADAPTIVE_DEVICE_REASON_INVALID_PREVIOUS_ERROR:
-            return "invalid_previous_error";
-        case ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED:
-            return "retry_limit_exhausted";
-        default:
-            return "invalid_adaptive_device_loop_terminal_reason";
-    }
+    return context_finish_adaptive_step_graph_body_capture(
+        ctx,
+        capture_stream,
+        enqueued,
+        FULLMAG_FDM_INTEGRATOR_RK23,
+        FULLMAG_FDM_PRECISION_DOUBLE);
 }
 
 static void launch_rk23_adaptive_graph_step_fp64(
@@ -590,12 +512,15 @@ static void launch_rk23_adaptive_graph_step_fp64(
     double alpha,
     double step_start_time)
 {
-    if (!rk23_adaptive_graph_configuration_supported(ctx)) return;
+    if (!context_adaptive_step_graph_configuration_supported(ctx)) return;
     if (poll_interrupt(ctx)) {
         ctx.step_interrupted = true;
         return;
     }
-    if (!rk23_adaptive_graph_key_matches(ctx) &&
+    if (!context_adaptive_step_graph_key_matches(
+            ctx,
+            FULLMAG_FDM_INTEGRATOR_RK23,
+            FULLMAG_FDM_PRECISION_DOUBLE) &&
         !build_rk23_adaptive_graph_fp64(
             ctx, n, grid, gamma_bar, alpha, step_start_time)) {
         return;
@@ -651,7 +576,7 @@ static void launch_rk23_adaptive_graph_step_fp64(
         cudaMemcpyAsync(
             ctx.m.z, ctx.tmp.z, bytes, cudaMemcpyDeviceToDevice, nullptr);
         context_refresh_observables(ctx);
-        ctx.last_error = rk23_adaptive_terminal_reason(terminal.reason);
+        ctx.last_error = adaptive_device_terminal_reason(terminal.reason);
         return;
     }
     ctx.adaptive_has_previous_error = terminal.has_previous_error != 0;

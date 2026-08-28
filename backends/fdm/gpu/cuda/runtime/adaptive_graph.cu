@@ -124,6 +124,117 @@ bool context_begin_adaptive_step_graph_build(
     return true;
 }
 
+bool context_adaptive_step_graph_key_matches(
+    const Context &ctx,
+    uint32_t integrator,
+    uint32_t precision)
+{
+    return ctx.adaptive_step_graph_exec != nullptr &&
+        ctx.adaptive_graph_integrator == integrator &&
+        ctx.adaptive_graph_precision == precision &&
+        ctx.adaptive_graph_source_revision == ctx.rhs_source_revision &&
+        ctx.adaptive_graph_field_revision == ctx.rhs_field_revision &&
+        ctx.adaptive_graph_transport_revision == ctx.rhs_transport_revision &&
+        ctx.adaptive_graph_projection_policy_identity ==
+            ctx.projection_policy_identity;
+}
+
+bool context_adaptive_step_graph_configuration_supported(Context &ctx) {
+    if (ctx.temperature > 0.0) {
+        ctx.last_error = "adaptive_device_loop_thermal_unsupported";
+        return false;
+    }
+    if (ctx.has_oersted_field && ctx.oersted_time_dep_kind != 0) {
+        ctx.last_error = "adaptive_device_loop_dynamic_oersted_unsupported";
+        return false;
+    }
+    if (ctx.gpu_transport_rhs.active) {
+        ctx.last_error = "adaptive_device_loop_gpu_transport_unsupported";
+        return false;
+    }
+    if (ctx.gpu_transport_test_force_adaptive_retry) {
+        ctx.last_error = "adaptive_device_loop_host_fault_injection_unsupported";
+        return false;
+    }
+    return true;
+}
+
+bool context_begin_adaptive_step_graph_body_capture(
+    Context &ctx,
+    cudaStream_t &capture_stream)
+{
+    cudaGraph_t conditional_body = nullptr;
+    if (!context_begin_adaptive_step_graph_build(ctx, conditional_body)) {
+        return false;
+    }
+    capture_stream = ctx.adaptive_graph_capture_stream;
+    const cudaError_t error = cudaStreamBeginCaptureToGraph(
+        capture_stream,
+        conditional_body,
+        nullptr,
+        nullptr,
+        0,
+        cudaStreamCaptureModeRelaxed);
+    if (!graph_ok(
+            ctx,
+            "cudaStreamBeginCaptureToGraph(adaptive_step)",
+            error)) {
+        context_destroy_adaptive_step_graph(ctx);
+        return false;
+    }
+    ctx.adaptive_graph_capture_active = true;
+    return true;
+}
+
+bool context_finish_adaptive_step_graph_body_capture(
+    Context &ctx,
+    cudaStream_t capture_stream,
+    bool body_enqueued,
+    uint32_t integrator,
+    uint32_t precision)
+{
+    const cudaError_t error = cudaStreamEndCapture(capture_stream, nullptr);
+    ctx.adaptive_graph_capture_active = false;
+    if (error != cudaSuccess || !body_enqueued) {
+        if (error != cudaSuccess) {
+            set_cuda_error(ctx, "cudaStreamEndCapture(adaptive_step)", error);
+        } else if (ctx.last_error.empty()) {
+            ctx.last_error = "adaptive_step_graph_body_capture_failed";
+        }
+        context_destroy_adaptive_step_graph(ctx);
+        return false;
+    }
+    if (!context_finish_adaptive_step_graph_build(ctx)) {
+        context_destroy_adaptive_step_graph(ctx);
+        return false;
+    }
+    ctx.adaptive_graph_integrator = integrator;
+    ctx.adaptive_graph_precision = precision;
+    ctx.adaptive_graph_source_revision = ctx.rhs_source_revision;
+    ctx.adaptive_graph_field_revision = ctx.rhs_field_revision;
+    ctx.adaptive_graph_transport_revision = ctx.rhs_transport_revision;
+    ctx.adaptive_graph_projection_policy_identity =
+        ctx.projection_policy_identity;
+    return true;
+}
+
+const char *adaptive_device_terminal_reason(uint32_t reason) {
+    switch (reason) {
+        case ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED:
+            return "dt_min_exhausted";
+        case ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP:
+            return "invalid_timestep";
+        case ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR:
+            return "invalid_current_error";
+        case ADAPTIVE_DEVICE_REASON_INVALID_PREVIOUS_ERROR:
+            return "invalid_previous_error";
+        case ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED:
+            return "retry_limit_exhausted";
+        default:
+            return "invalid_adaptive_device_loop_terminal_reason";
+    }
+}
+
 bool context_attach_adaptive_step_graph_body(
     Context &ctx,
     cudaGraph_t captured_body)
