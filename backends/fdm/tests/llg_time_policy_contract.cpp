@@ -253,6 +253,67 @@ int main() {
         check_device_controller(precision, FULLMAG_FDM_INTEGRATOR_RK23);
         check_device_controller(precision, FULLMAG_FDM_INTEGRATOR_DP45);
     }
+
+    auto check_device_retry = [&](fullmag_fdm_precision precision,
+                                  fullmag_fdm_integrator integrator) {
+        auto plan = invalid;
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.base.has_external_field = 1;
+        plan.base.external_field_am[0] = 0.0;
+        plan.base.external_field_am[1] = 1.0e6;
+        plan.base.external_field_am[2] = 0.0;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_ADVANCED, 1e-8, 0.0,
+                            1e-18, 1e-12, 0.9, 2.0, 0.2, 0, 0.0, 0, 0.0};
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        check(backend != nullptr, "device retry fixture has a valid handle");
+        check(fullmag_fdm_backend_last_error(backend) == nullptr,
+              "device retry fixture passes checked-v2 validation");
+        fullmag_fdm_step_stats stats{};
+        const auto step_status = fullmag_fdm_backend_step(backend, 1e-12, &stats);
+        if (step_status != FULLMAG_FDM_OK) {
+            const char *step_error = fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr, "adaptive CUDA retry error: %s\n",
+                         step_error != nullptr ? step_error : "<none>");
+        }
+        check(step_status == FULLMAG_FDM_OK,
+              "device retry fixture accepts after one or more retries");
+
+        fullmag_fdm_adaptive_attempt_v1 attempts
+            [FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1]{};
+        uint32_t attempt_count = 0;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, attempts, FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+                  &attempt_count) == FULLMAG_FDM_OK,
+              "device retry fixture publishes one terminal attempt batch");
+        check(attempt_count > 1,
+              "production conditional graph executes at least one retry");
+        check(attempts[0].decision == FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY &&
+                  attempts[attempt_count - 1].decision ==
+                      FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED,
+              "production attempt batch preserves rejected-to-accepted order");
+        check(attempts[0].dt_next_seconds < attempts[0].dt_attempt_seconds &&
+                  attempts[attempt_count - 1].dt_attempt_seconds < 1e-12,
+              "device retry shrinks dt before the accepted attempt");
+
+        fullmag_fdm_execution_receipt_v2 receipt{};
+        receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+        receipt.struct_size = sizeof(receipt);
+        check(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
+                  FULLMAG_FDM_OK,
+              "device retry fixture publishes an execution receipt");
+        check(receipt.hot_loop_control_scalar_d2h_bytes == 0 &&
+                  receipt.hot_loop_control_scalar_host_sync_count == 0 &&
+                  receipt.hot_loop_host_compute_count == 0,
+              "production retries perform zero hot-loop host control work");
+        fullmag_fdm_backend_destroy(backend);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_device_retry(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_device_retry(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
 #endif
 
     std::puts("FDM LLG time-policy ABI/source contract: PASS");
