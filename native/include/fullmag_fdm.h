@@ -776,6 +776,32 @@ typedef struct {
     uint64_t stale_publication_count;
 } fullmag_fdm_step_transaction_telemetry_v1;
 
+#define FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE = 0,
+    FULLMAG_FDM_ADAPTIVE_CONTROL_LEGACY_HOST_READBACK = 1,
+    FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH = 2,
+} fullmag_fdm_adaptive_control_realization_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fdm_adaptive_control_realization_v1 realization;
+    uint32_t accounting_valid;
+    uint64_t graph_build_count;
+    uint64_t graph_launch_count;
+    uint64_t terminal_control_d2h_bytes;
+    uint64_t terminal_control_host_sync_count;
+    uint64_t step_completion_host_sync_count;
+    uint64_t stats_none_host_sync_count;
+} fullmag_fdm_adaptive_execution_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_adaptive_execution_telemetry_v1) == 64,
+              "adaptive execution telemetry v1 ABI size changed");
+#endif
+
 /* ── Device info ── */
 
 typedef struct {
@@ -1001,6 +1027,11 @@ int fullmag_fdm_backend_get_fsal_telemetry_v2(
 int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_step_transaction_telemetry_v1 *out_telemetry);
+
+/* Caller initializes abi_version and struct_size. */
+int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_adaptive_execution_telemetry_v1 *out_telemetry);
 
 /* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
 int fullmag_fdm_context_bind_gpu_transport_v1(

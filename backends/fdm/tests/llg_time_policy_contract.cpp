@@ -297,6 +297,31 @@ int main() {
                   attempts[attempt_count - 1].dt_attempt_seconds < 1e-12,
               "device retry shrinks dt before the accepted attempt");
 
+        fullmag_fdm_step_stats replay_stats{};
+        check(fullmag_fdm_backend_step(backend, 1e-12, &replay_stats) ==
+                  FULLMAG_FDM_OK,
+              "production adaptive graph supports a second accepted step");
+
+        fullmag_fdm_adaptive_execution_telemetry_v1 adaptive_telemetry{};
+        adaptive_telemetry.abi_version =
+            FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1;
+        adaptive_telemetry.struct_size = sizeof(adaptive_telemetry);
+        check(fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+                  backend, &adaptive_telemetry) == FULLMAG_FDM_OK,
+              "adaptive execution telemetry is queryable through versioned ABI");
+        check(adaptive_telemetry.realization ==
+                  FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH,
+              "adaptive execution telemetry identifies the executed conditional graph");
+        check(adaptive_telemetry.accounting_valid == 1 &&
+                  adaptive_telemetry.graph_build_count == 1 &&
+                  adaptive_telemetry.graph_launch_count == 2,
+              "two production steps reuse one cached adaptive graph");
+        check(adaptive_telemetry.terminal_control_d2h_bytes > 0 &&
+                  adaptive_telemetry.terminal_control_host_sync_count == 2 &&
+                  adaptive_telemetry.step_completion_host_sync_count == 2 &&
+                  adaptive_telemetry.stats_none_host_sync_count == 4,
+              "adaptive telemetry accounts every current terminal and completion sync");
+
         fullmag_fdm_execution_receipt_v2 receipt{};
         receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
         receipt.struct_size = sizeof(receipt);

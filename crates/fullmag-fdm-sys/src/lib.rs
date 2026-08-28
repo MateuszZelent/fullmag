@@ -776,6 +776,30 @@ pub struct fullmag_fdm_step_transaction_telemetry_v1 {
     pub stale_publication_count: u64,
 }
 
+pub const FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1: u32 = 1;
+pub type fullmag_fdm_adaptive_control_realization_v1 = u32;
+pub const FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE: fullmag_fdm_adaptive_control_realization_v1 =
+    0;
+pub const FULLMAG_FDM_ADAPTIVE_CONTROL_LEGACY_HOST_READBACK:
+    fullmag_fdm_adaptive_control_realization_v1 = 1;
+pub const FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH:
+    fullmag_fdm_adaptive_control_realization_v1 = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_adaptive_execution_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub realization: fullmag_fdm_adaptive_control_realization_v1,
+    pub accounting_valid: u32,
+    pub graph_build_count: u64,
+    pub graph_launch_count: u64,
+    pub terminal_control_d2h_bytes: u64,
+    pub terminal_control_host_sync_count: u64,
+    pub step_completion_host_sync_count: u64,
+    pub stats_none_host_sync_count: u64,
+}
+
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2: u32 = 2;
 pub type fullmag_fdm_execution_class_v1 = u32;
@@ -1803,6 +1827,11 @@ extern "C" {
         out_receipt: *mut fullmag_fdm_execution_receipt_v2,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_adaptive_execution_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
     pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);
@@ -1836,6 +1865,12 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::*;
+
+    #[test]
+    fn adaptive_execution_telemetry_v1_has_stable_layout() {
+        assert_eq!(size_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 64);
+        assert_eq!(align_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 8);
+    }
 
     fn layout_record<'a>(
         records: &'a [fullmag_fdm_cpu_transport_abi_layout_record_v1],

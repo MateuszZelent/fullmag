@@ -136,6 +136,14 @@ bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation
         set_cuda_error(ctx, operation, err);
         return false;
     }
+    if (ctx.adaptive_enabled) {
+        context_record_adaptive_execution_counter(
+            ctx, ctx.adaptive_step_completion_host_sync_count);
+        if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
+            context_record_adaptive_execution_counter(
+                ctx, ctx.adaptive_stats_none_host_sync_count);
+        }
+    }
     return true;
 }
 

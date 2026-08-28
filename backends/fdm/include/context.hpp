@@ -512,6 +512,11 @@ struct Context {
     uint64_t adaptive_graph_projection_policy_identity = 0;
     uint64_t adaptive_graph_build_count = 0;
     uint64_t adaptive_graph_launch_count = 0;
+    uint64_t adaptive_terminal_control_d2h_bytes = 0;
+    uint64_t adaptive_terminal_control_host_sync_count = 0;
+    uint64_t adaptive_step_completion_host_sync_count = 0;
+    uint64_t adaptive_stats_none_host_sync_count = 0;
+    bool adaptive_execution_accounting_valid = true;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
     bool has_adaptive_norm_tolerance = false;
@@ -829,6 +834,59 @@ inline bool context_get_step_transaction_telemetry_v1(
     result.thermal_rng_draws = ctx.thermal_rng_draws;
     result.stale_publication_count = ctx.stale_publication_count;
     *out_telemetry = result;
+    return true;
+}
+
+inline bool context_get_adaptive_execution_telemetry_v1(
+    const Context &ctx,
+    fullmag_fdm_adaptive_execution_telemetry_v1 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version !=
+            FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size !=
+            sizeof(fullmag_fdm_adaptive_execution_telemetry_v1)) {
+        return false;
+    }
+    fullmag_fdm_adaptive_execution_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    if (!ctx.adaptive_enabled) {
+        result.realization = FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE;
+    } else if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
+               ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) {
+        result.realization =
+            FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH;
+    } else {
+        result.realization =
+            FULLMAG_FDM_ADAPTIVE_CONTROL_LEGACY_HOST_READBACK;
+    }
+    result.accounting_valid =
+        ctx.adaptive_execution_accounting_valid ? 1U : 0U;
+    result.graph_build_count = ctx.adaptive_graph_build_count;
+    result.graph_launch_count = ctx.adaptive_graph_launch_count;
+    result.terminal_control_d2h_bytes =
+        ctx.adaptive_terminal_control_d2h_bytes;
+    result.terminal_control_host_sync_count =
+        ctx.adaptive_terminal_control_host_sync_count;
+    result.step_completion_host_sync_count =
+        ctx.adaptive_step_completion_host_sync_count;
+    result.stats_none_host_sync_count =
+        ctx.adaptive_stats_none_host_sync_count;
+    *out_telemetry = result;
+    return true;
+}
+
+inline bool context_record_adaptive_execution_counter(
+    Context &ctx,
+    uint64_t &counter,
+    uint64_t increment = 1)
+{
+    if (counter > std::numeric_limits<uint64_t>::max() - increment) {
+        ctx.adaptive_execution_accounting_valid = false;
+        return false;
+    }
+    counter += increment;
     return true;
 }
 bool context_capture_pre_step_state(Context &ctx);

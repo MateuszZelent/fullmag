@@ -3,7 +3,10 @@ use crate::types::{FdmGpuExecutionReceipt, RunError};
 #[cfg(feature = "cuda")]
 use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
-use crate::types::{FdmGpuOperatorResidency, FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts};
+use crate::types::{
+    FdmGpuAdaptiveExecutionTelemetry, FdmGpuOperatorResidency, FdmGpuStepTransactionTelemetry,
+    FdmGpuTransferCounts,
+};
 
 fn preflight_error(detail: impl AsRef<str>) -> RunError {
     RunError {
@@ -398,6 +401,75 @@ fn step_transaction_telemetry_v1_request() -> ffi::fullmag_fdm_step_transaction_
 }
 
 #[cfg(feature = "cuda")]
+fn adaptive_execution_telemetry_v1_request() -> ffi::fullmag_fdm_adaptive_execution_telemetry_v1 {
+    ffi::fullmag_fdm_adaptive_execution_telemetry_v1 {
+        abi_version: ffi::FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_adaptive_execution_telemetry_v1>() as u32,
+        realization: ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE,
+        accounting_valid: 0,
+        graph_build_count: 0,
+        graph_launch_count: 0,
+        terminal_control_d2h_bytes: 0,
+        terminal_control_host_sync_count: 0,
+        step_completion_host_sync_count: 0,
+        stats_none_host_sync_count: 0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn adaptive_execution_telemetry_from_native(
+    native: ffi::fullmag_fdm_adaptive_execution_telemetry_v1,
+) -> Result<FdmGpuAdaptiveExecutionTelemetry, RunError> {
+    let realization = match native.realization {
+        ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_NOT_APPLICABLE => "not_applicable",
+        ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_LEGACY_HOST_READBACK => "legacy_host_readback",
+        ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH => "cuda_conditional_graph_v1",
+        other => {
+            return Err(preflight_error(format!(
+                "unknown adaptive control realization={other}"
+            )))
+        }
+    };
+    Ok(FdmGpuAdaptiveExecutionTelemetry {
+        realization: realization.to_string(),
+        accounting_valid: native.accounting_valid == 1,
+        graph_build_count: native.graph_build_count,
+        graph_launch_count: native.graph_launch_count,
+        terminal_control_d2h_bytes: native.terminal_control_d2h_bytes,
+        terminal_control_host_sync_count: native.terminal_control_host_sync_count,
+        step_completion_host_sync_count: native.step_completion_host_sync_count,
+        stats_none_host_sync_count: native.stats_none_host_sync_count,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn query_adaptive_execution_telemetry(
+    backend: &NativeFdmBackend,
+) -> Result<FdmGpuAdaptiveExecutionTelemetry, RunError> {
+    let mut native = adaptive_execution_telemetry_v1_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+            backend.handle as *mut _,
+            &mut native,
+        )
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(RunError {
+            message: "fdm_gpu_adaptive_execution_telemetry_query_failed".to_string(),
+        });
+    }
+    if native.abi_version != ffi::FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1
+        || native.struct_size
+            != std::mem::size_of::<ffi::fullmag_fdm_adaptive_execution_telemetry_v1>() as u32
+    {
+        return Err(RunError {
+            message: "fdm_gpu_adaptive_execution_telemetry_abi_mismatch".to_string(),
+        });
+    }
+    adaptive_execution_telemetry_from_native(native)
+}
+
+#[cfg(feature = "cuda")]
 fn step_transaction_telemetry_from_native(
     native: ffi::fullmag_fdm_step_transaction_telemetry_v1,
 ) -> FdmGpuStepTransactionTelemetry {
@@ -633,6 +705,7 @@ pub(super) fn query_execution_receipt(
         location: control_location.to_string(),
     });
 
+    let adaptive_execution = query_adaptive_execution_telemetry(backend)?;
     let receipt = FdmGpuExecutionReceipt {
         requested: requested_device_name(requested_device)?.to_string(),
         resolved: execution_class_name(native.execution_class)?.to_string(),
@@ -666,6 +739,7 @@ pub(super) fn query_execution_receipt(
             hot_loop_control_scalar_d2h_bytes: native.hot_loop_control_scalar_d2h_bytes,
             hot_loop_control_scalar_host_sync_count: native.hot_loop_control_scalar_host_sync_count,
         },
+        adaptive_execution: Some(adaptive_execution),
         validation_state: "unvalidated".to_string(),
         accounting_valid: native.accounting_valid == 1,
     };
@@ -676,6 +750,34 @@ pub(super) fn query_execution_receipt(
 #[cfg(test)]
 mod tests {
     use crate::types::{FdmGpuExecutionReceipt, FdmGpuOperatorResidency, FdmGpuTransferCounts};
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn adaptive_execution_telemetry_maps_realization_and_all_counters() {
+        let native = super::ffi::fullmag_fdm_adaptive_execution_telemetry_v1 {
+            abi_version: super::ffi::FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1,
+            struct_size: std::mem::size_of::<super::ffi::fullmag_fdm_adaptive_execution_telemetry_v1>(
+            ) as u32,
+            realization: super::ffi::FULLMAG_FDM_ADAPTIVE_CONTROL_CUDA_CONDITIONAL_GRAPH,
+            accounting_valid: 1,
+            graph_build_count: 1,
+            graph_launch_count: 2,
+            terminal_control_d2h_bytes: 128,
+            terminal_control_host_sync_count: 2,
+            step_completion_host_sync_count: 2,
+            stats_none_host_sync_count: 4,
+        };
+        let telemetry = super::adaptive_execution_telemetry_from_native(native)
+            .expect("known realization must map");
+        assert_eq!(telemetry.realization, "cuda_conditional_graph_v1");
+        assert!(telemetry.accounting_valid);
+        assert_eq!(telemetry.graph_build_count, 1);
+        assert_eq!(telemetry.graph_launch_count, 2);
+        assert_eq!(telemetry.terminal_control_d2h_bytes, 128);
+        assert_eq!(telemetry.terminal_control_host_sync_count, 2);
+        assert_eq!(telemetry.step_completion_host_sync_count, 2);
+        assert_eq!(telemetry.stats_none_host_sync_count, 4);
+    }
 
     #[cfg(feature = "cuda")]
     #[test]

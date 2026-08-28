@@ -2854,8 +2854,22 @@ pub struct FdmGpuExecutionReceipt {
     pub operator_residency: Vec<FdmGpuOperatorResidency>,
     pub fallback_count: u64,
     pub transfer_counts: FdmGpuTransferCounts,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_execution: Option<FdmGpuAdaptiveExecutionTelemetry>,
     pub validation_state: String,
     pub accounting_valid: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuAdaptiveExecutionTelemetry {
+    pub realization: String,
+    pub accounting_valid: bool,
+    pub graph_build_count: u64,
+    pub graph_launch_count: u64,
+    pub terminal_control_d2h_bytes: u64,
+    pub terminal_control_host_sync_count: u64,
+    pub step_completion_host_sync_count: u64,
+    pub stats_none_host_sync_count: u64,
 }
 
 /// Native CUDA step-transaction counters captured after FDM GPU execution.
@@ -2947,6 +2961,7 @@ impl FdmGpuExecutionReceipt {
             operator_residency: Vec::new(),
             fallback_count: 0,
             transfer_counts: FdmGpuTransferCounts::default(),
+            adaptive_execution: None,
             validation_state: "unvalidated".to_string(),
             accounting_valid: false,
         }
@@ -3120,6 +3135,16 @@ mod fdm_gpu_execution_receipt_contract_tests {
                 hot_loop_control_scalar_host_sync_count: 1,
                 ..Default::default()
             },
+            adaptive_execution: Some(FdmGpuAdaptiveExecutionTelemetry {
+                realization: "cuda_conditional_graph_v1".into(),
+                accounting_valid: true,
+                graph_build_count: 1,
+                graph_launch_count: 2,
+                terminal_control_d2h_bytes: 128,
+                terminal_control_host_sync_count: 2,
+                step_completion_host_sync_count: 2,
+                stats_none_host_sync_count: 4,
+            }),
             validation_state: "unvalidated".into(),
             accounting_valid: true,
         });
@@ -3143,6 +3168,12 @@ mod fdm_gpu_execution_receipt_contract_tests {
             0
         );
         assert_eq!(receipt["validation_state"], "unvalidated");
+        assert_eq!(
+            receipt["adaptive_execution"]["realization"],
+            "cuda_conditional_graph_v1"
+        );
+        assert_eq!(receipt["adaptive_execution"]["graph_build_count"], 1);
+        assert_eq!(receipt["adaptive_execution"]["graph_launch_count"], 2);
     }
 }
 

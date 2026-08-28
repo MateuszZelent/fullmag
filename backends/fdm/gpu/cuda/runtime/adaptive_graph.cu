@@ -270,7 +270,8 @@ bool context_finish_adaptive_step_graph_build(Context &ctx) {
         context_destroy_adaptive_step_graph(ctx);
         return false;
     }
-    ++ctx.adaptive_graph_build_count;
+    context_record_adaptive_execution_counter(
+        ctx, ctx.adaptive_graph_build_count);
     return true;
 }
 
@@ -310,7 +311,18 @@ bool context_launch_adaptive_step_graph(
     if (!graph_ok(ctx, "cudaStreamSynchronize(adaptive_step)", error)) {
         return false;
     }
-    ++ctx.adaptive_graph_launch_count;
+    context_record_adaptive_execution_counter(
+        ctx,
+        ctx.adaptive_terminal_control_d2h_bytes,
+        sizeof(terminal_control));
+    context_record_adaptive_execution_counter(
+        ctx, ctx.adaptive_terminal_control_host_sync_count);
+    if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
+        context_record_adaptive_execution_counter(
+            ctx, ctx.adaptive_stats_none_host_sync_count);
+    }
+    context_record_adaptive_execution_counter(
+        ctx, ctx.adaptive_graph_launch_count);
     return true;
 }
 

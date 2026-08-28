@@ -166,6 +166,9 @@ bool run_case(
     AdaptiveDeviceControl observed{};
     passed = passed && context_launch_adaptive_step_graph(
         ctx, initial, observed);
+    AdaptiveDeviceControl observed_replay{};
+    passed = passed && context_launch_adaptive_step_graph(
+        ctx, initial, observed_replay);
     std::array<fullmag_fdm_adaptive_attempt_v1,
                FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1> trace_batch{};
     if (passed) {
@@ -178,13 +181,19 @@ bool run_case(
             "cudaMemcpy(one batched attempt trace D2H)");
     }
     passed = passed && ctx.adaptive_graph_build_count == 1 &&
-        ctx.adaptive_graph_launch_count == 1;
+        ctx.adaptive_graph_launch_count == 2 &&
+        ctx.adaptive_terminal_control_d2h_bytes ==
+            2 * sizeof(AdaptiveDeviceControl) &&
+        ctx.adaptive_terminal_control_host_sync_count == 2;
     context_destroy_adaptive_step_graph(ctx);
 
     if (!passed) return false;
     if (observed.decision != expected_decision ||
         observed.reason != expected_reason ||
-        observed.attempt_index + 1 != expected_attempt_count) {
+        observed.attempt_index + 1 != expected_attempt_count ||
+        observed_replay.decision != expected_decision ||
+        observed_replay.reason != expected_reason ||
+        observed_replay.attempt_index + 1 != expected_attempt_count) {
         std::cerr << "unexpected terminal control: decision="
                   << observed.decision << " reason=" << observed.reason
                   << " attempts=" << observed.attempt_index + 1 << '\n';
