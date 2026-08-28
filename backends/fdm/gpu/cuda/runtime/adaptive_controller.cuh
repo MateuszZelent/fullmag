@@ -72,6 +72,7 @@ __device__ __forceinline__ void evaluate_adaptive_error_policy_device(
     policy_out->dt_candidate = dt;
     policy_out->ratio = 1.0;
     policy_out->previous_error = previous_error;
+    policy_out->dt_attempt = dt;
     policy_out->decision = ADAPTIVE_DEVICE_DECISION_FAILED;
     policy_out->reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
     policy_out->has_previous_error = has_previous_error != 0 ? 1U : 0U;
@@ -158,6 +159,44 @@ __device__ __forceinline__ void evaluate_adaptive_error_policy_device(
     policy_out->reason = ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE;
     policy_out->next_rejected_attempts = rejected_attempts + 1;
     publish_adaptive_attempt(attempt_trace, *policy_out, dt);
+}
+
+__device__ __forceinline__ void evaluate_adaptive_error_policy_loop_device(
+    double max_error_sq,
+    AdaptiveDeviceControl *control,
+    fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
+    double adaptive_dt_min,
+    double adaptive_dt_max,
+    double adaptive_safety,
+    double adaptive_growth_limit,
+    double adaptive_shrink_limit,
+    double exponent,
+    int order_est,
+    int canonical_controller,
+    int force_retry,
+    cudaGraphConditionalHandle loop_handle)
+{
+    const uint32_t attempt = control->next_rejected_attempts;
+    evaluate_adaptive_error_policy_device(
+        max_error_sq,
+        control,
+        attempt_trace,
+        control->dt_candidate,
+        adaptive_dt_min,
+        adaptive_dt_max,
+        adaptive_safety,
+        adaptive_growth_limit,
+        adaptive_shrink_limit,
+        exponent,
+        order_est,
+        canonical_controller,
+        control->previous_error,
+        static_cast<int>(control->has_previous_error),
+        attempt,
+        force_retry);
+    cudaGraphSetConditional(
+        loop_handle,
+        control->decision == ADAPTIVE_DEVICE_DECISION_RETRY ? 1U : 0U);
 }
 
 } // namespace fdm

@@ -138,6 +138,36 @@ __global__ void adaptive_error_policy_kernel(
         force_retry);
 }
 
+__global__ void adaptive_error_policy_loop_kernel(
+    const double *max_error_sq,
+    AdaptiveDeviceControl *control,
+    fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
+    double adaptive_dt_min,
+    double adaptive_dt_max,
+    double adaptive_safety,
+    double adaptive_growth_limit,
+    double adaptive_shrink_limit,
+    double exponent,
+    int order_est,
+    int canonical_controller,
+    cudaGraphConditionalHandle loop_handle)
+{
+    evaluate_adaptive_error_policy_loop_device(
+        max_error_sq != nullptr ? max_error_sq[0] : 0.0,
+        control,
+        attempt_trace,
+        adaptive_dt_min,
+        adaptive_dt_max,
+        adaptive_safety,
+        adaptive_growth_limit,
+        adaptive_shrink_limit,
+        exponent,
+        order_est,
+        canonical_controller,
+        0,
+        loop_handle);
+}
+
 static const char *adaptive_device_reason_id(uint32_t reason) {
     switch (reason) {
         case ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE: return "within_tolerance";
@@ -900,6 +930,73 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         ctx.last_error = adaptive_device_reason_id(host_control.reason);
     }
     return policy;
+}
+
+bool enqueue_adaptive_error_policy_device_loop(
+    Context &ctx,
+    double *device_values,
+    uint64_t n,
+    double exponent,
+    cudaGraphConditionalHandle loop_handle)
+{
+    if (device_values == nullptr || n == 0 ||
+        ctx.adaptive_policy_scratch == nullptr) {
+        ctx.last_error = "adaptive_device_loop_scratch_unavailable";
+        return false;
+    }
+    if (!context_begin_compute_stream_work(
+            ctx, "enqueue_adaptive_error_policy_device_loop")) {
+        return false;
+    }
+    cudaStream_t stream = context_compute_stream(ctx);
+    double *src = device_values;
+    double *dst = ctx.reduction_scratch_aux;
+    uint64_t current = n;
+    while (current > 1) {
+        const uint64_t blocks =
+            (current + REDUCTION_BLOCK_SIZE * 2 - 1) /
+            (REDUCTION_BLOCK_SIZE * 2);
+        reduce_max_blocks_kernel<<<
+            static_cast<unsigned int>(blocks),
+            REDUCTION_BLOCK_SIZE,
+            0,
+            stream>>>(src, dst, current);
+        current = blocks;
+        double *temporary = src;
+        src = dst;
+        dst = temporary;
+    }
+    const int order_est = exponent == 0.2 ? 4 : 2;
+    adaptive_error_policy_loop_kernel<<<1, 1, 0, stream>>>(
+        src,
+        ctx.adaptive_policy_scratch,
+        ctx.adaptive_attempt_trace_device,
+        ctx.adaptive_dt_min,
+        ctx.adaptive_dt_max,
+        ctx.adaptive_safety,
+        ctx.adaptive_growth_limit,
+        ctx.adaptive_shrink_limit,
+        exponent,
+        order_est,
+        ctx.adaptive_canonical_controller ? 1 : 0,
+        loop_handle);
+    const cudaError_t launch_error = cudaGetLastError();
+    if (launch_error != cudaSuccess) {
+        set_cuda_error(
+            ctx,
+            "adaptive_error_policy_loop_kernel",
+            launch_error);
+        context_end_compute_stream_work(
+            ctx, "enqueue_adaptive_error_policy_device_loop");
+        return false;
+    }
+    if (!context_end_compute_stream_work(
+            ctx, "enqueue_adaptive_error_policy_device_loop")) {
+        return false;
+    }
+    fullmag_fdm_note_operator_device_execution(
+        ctx, FULLMAG_FDM_OPERATOR_REDUCTION);
+    return true;
 }
 
 double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy, const void *vz, uint64_t n) {

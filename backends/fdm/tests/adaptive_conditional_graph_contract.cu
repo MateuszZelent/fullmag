@@ -18,7 +18,7 @@ using fullmag::fdm::ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED;
 using fullmag::fdm::ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
 using fullmag::fdm::ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED;
 using fullmag::fdm::AdaptiveDeviceControl;
-using fullmag::fdm::evaluate_adaptive_error_policy_device;
+using fullmag::fdm::evaluate_adaptive_error_policy_loop_device;
 
 struct DeviceAllocation {
     void *value = nullptr;
@@ -58,11 +58,10 @@ __global__ void evaluate_attempt_kernel(
     const double error_sq = attempt < error_count
         ? error_sq_by_attempt[attempt]
         : CUDART_INF;
-    evaluate_adaptive_error_policy_device(
+    evaluate_adaptive_error_policy_loop_device(
         error_sq,
         control,
         trace,
-        control->dt_candidate,
         dt_min,
         dt_max,
         0.8,
@@ -71,13 +70,8 @@ __global__ void evaluate_attempt_kernel(
         1.0 / 3.0,
         2,
         1,
-        control->previous_error,
-        static_cast<int>(control->has_previous_error),
-        attempt,
-        0);
-    cudaGraphSetConditional(
-        loop_handle,
-        control->decision == ADAPTIVE_DEVICE_DECISION_RETRY ? 1U : 0U);
+        0,
+        loop_handle);
 }
 
 bool add_kernel_node(

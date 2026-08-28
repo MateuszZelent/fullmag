@@ -195,6 +195,7 @@ struct AdaptiveDeviceControl {
     double dt_candidate = 0.0;
     double ratio = 1.0;
     double previous_error = 0.0;
+    double dt_attempt = 0.0;
     uint32_t decision = ADAPTIVE_DEVICE_DECISION_FAILED;
     uint32_t reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
     uint32_t has_previous_error = 0;
@@ -203,7 +204,7 @@ struct AdaptiveDeviceControl {
     uint32_t reserved0 = 0;
 };
 
-static_assert(sizeof(AdaptiveDeviceControl) == 56);
+static_assert(sizeof(AdaptiveDeviceControl) == 64);
 static_assert(sizeof(fullmag_fdm_adaptive_attempt_v1) == 56);
 
 struct DeviceMultilayerFftWorkspace {
@@ -619,6 +620,12 @@ struct Context {
 bool context_create_compute_stream(Context &ctx);
 void context_destroy_compute_stream(Context &ctx);
 cudaStream_t context_compute_stream(Context &ctx);
+bool enqueue_adaptive_error_policy_device_loop(
+    Context &ctx,
+    double *device_values,
+    uint64_t n,
+    double exponent,
+    cudaGraphConditionalHandle loop_handle);
 cudaError_t fullmag_fdm_receipt_cuda_memcpy(
     Context &ctx,
     void *destination,
