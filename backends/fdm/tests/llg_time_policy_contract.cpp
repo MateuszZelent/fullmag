@@ -188,6 +188,28 @@ int main() {
               "device-controller fixture executes one adaptive CUDA step");
         check(std::abs(stats.suggested_next_dt - 2e-15) <= 1e-30,
               "zero-error device PI decision applies the canonical growth limit");
+        uint32_t attempt_count = UINT32_MAX;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, nullptr, 0, &attempt_count) == FULLMAG_FDM_OK &&
+                  attempt_count == 1,
+              "accepted device-controller step publishes one batched attempt record");
+        fullmag_fdm_adaptive_attempt_v1 attempts
+            [FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1]{};
+        uint32_t copied_attempts = 0;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, attempts, FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+                  &copied_attempts) == FULLMAG_FDM_OK &&
+                  copied_attempts == 1,
+              "adaptive attempt trace is copied in one observation-time batch");
+        check(attempts[0].abi_version == FULLMAG_FDM_ADAPTIVE_ATTEMPT_ABI_V1 &&
+                  attempts[0].struct_size == sizeof(fullmag_fdm_adaptive_attempt_v1) &&
+                  attempts[0].attempt_index == 0 &&
+                  attempts[0].decision == FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED &&
+                  attempts[0].reason == FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE &&
+                  attempts[0].dt_attempt_seconds == 1e-15 &&
+                  attempts[0].normalized_error == 0.0 &&
+                  attempts[0].dt_next_seconds == 2e-15,
+              "batched attempt record preserves the accepted device decision");
         fullmag_fdm_execution_receipt_v2 receipt{};
         receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
         receipt.struct_size = sizeof(receipt);
@@ -206,7 +228,7 @@ int main() {
               "device-controller receipt has valid accounting");
         check(receipt.hot_loop_host_compute_count == 0,
               "canonical adaptive PI decision performs zero hot-loop host compute");
-        check(receipt.hot_loop_control_scalar_d2h_bytes >= 48 &&
+        check(receipt.hot_loop_control_scalar_d2h_bytes >= 56 &&
                   receipt.hot_loop_control_scalar_host_sync_count >= 1,
               "remaining typed control-packet readback is explicitly accounted");
         fullmag_fdm_backend_destroy(backend);

@@ -1294,6 +1294,8 @@ int fullmag_fdm_backend_step(
     // not poison the next explicit public step.
     if (ctx->gpu_transport_rhs.active) ctx->last_error.clear();
     ctx->step_interrupted = false;
+    ctx->adaptive_rejected_attempts = 0;
+    ctx->adaptive_attempt_trace_count = 0;
     fullmag_fdm_reset_hot_loop_audit(*ctx);
     ReceiptSolverPhaseGuard receipt_solver_phase(*ctx);
     if (ctx->has_multilayer_plan_v2) {
@@ -2187,6 +2189,45 @@ int fullmag_fdm_backend_get_fsal_telemetry_v1(
     auto *ctx = reinterpret_cast<Context*>(handle);
     return context_get_fsal_telemetry_v1(*ctx, out_telemetry)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+}
+
+int fullmag_fdm_backend_copy_adaptive_attempts_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_adaptive_attempt_v1 *out_attempts,
+    uint32_t capacity,
+    uint32_t *out_count)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_count) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    const uint32_t count = ctx->adaptive_attempt_trace_count;
+    if (out_attempts == nullptr && capacity == 0) {
+        *out_count = count;
+        return FULLMAG_FDM_OK;
+    }
+    if (capacity < count || (count != 0 && out_attempts == nullptr)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (count != 0) {
+        const cudaError_t err = cudaMemcpy(
+            out_attempts,
+            ctx->adaptive_attempt_trace_device,
+            static_cast<size_t>(count) * sizeof(*out_attempts),
+            cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            set_cuda_error(*ctx, "cudaMemcpy(adaptive_attempt_trace)", err);
+            return FULLMAG_FDM_ERR_CUDA;
+        }
+    }
+    *out_count = count;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)out_attempts;
+    (void)capacity;
+    (void)out_count;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
 }
 
 int fullmag_fdm_backend_get_fsal_telemetry_v2(

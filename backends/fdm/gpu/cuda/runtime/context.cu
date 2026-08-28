@@ -1341,6 +1341,22 @@ static bool alloc_reduction_scratch(Context &ctx) {
         ctx.reduction_scratch_len = 0;
         return false;
     }
+    err = cudaMalloc(
+        reinterpret_cast<void **>(&ctx.adaptive_attempt_trace_device),
+        FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 *
+            sizeof(fullmag_fdm_adaptive_attempt_v1));
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(adaptive_attempt_trace_device)", err);
+        cudaFree(ctx.adaptive_policy_scratch);
+        ctx.adaptive_policy_scratch = nullptr;
+        cudaFree(ctx.reduction_scratch_aux);
+        ctx.reduction_scratch_aux = nullptr;
+        ctx.reduction_scratch_aux_len = 0;
+        cudaFree(ctx.reduction_scratch);
+        ctx.reduction_scratch = nullptr;
+        ctx.reduction_scratch_len = 0;
+        return false;
+    }
     return true;
 }
 
@@ -1358,6 +1374,10 @@ static void free_reduction_scratch(Context &ctx) {
     if (ctx.adaptive_policy_scratch) {
         cudaFree(ctx.adaptive_policy_scratch);
         ctx.adaptive_policy_scratch = nullptr;
+    }
+    if (ctx.adaptive_attempt_trace_device) {
+        cudaFree(ctx.adaptive_attempt_trace_device);
+        ctx.adaptive_attempt_trace_device = nullptr;
     }
 }
 

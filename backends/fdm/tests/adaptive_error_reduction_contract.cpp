@@ -188,6 +188,12 @@ void adaptive_policy_calculation_uses_compute_stream() {
             std::string::npos,
         "device policy must publish a typed retry-limit terminal reason");
     check(
+        source.find("fullmag_fdm_adaptive_attempt_v1 *attempt_trace") !=
+                std::string::npos &&
+            source.find("publish_adaptive_attempt(attempt_trace") !=
+                std::string::npos,
+        "device policy must append every decision to the preallocated attempt trace");
+    check(
         reduction.find("cudaMemcpyAsync(\n        &host_control") != std::string::npos &&
             reduction.find("sizeof(host_control)") != std::string::npos,
         "adaptive policy reduction must asynchronously copy one typed control packet");

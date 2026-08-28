@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -197,10 +198,13 @@ struct AdaptiveDeviceControl {
     uint32_t decision = ADAPTIVE_DEVICE_DECISION_FAILED;
     uint32_t reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
     uint32_t has_previous_error = 0;
-    uint32_t rejected_attempts = 0;
+    uint32_t attempt_index = 0;
+    uint32_t next_rejected_attempts = 0;
+    uint32_t reserved0 = 0;
 };
 
-static_assert(sizeof(AdaptiveDeviceControl) == 48);
+static_assert(sizeof(AdaptiveDeviceControl) == 56);
+static_assert(sizeof(fullmag_fdm_adaptive_attempt_v1) == 56);
 
 struct DeviceMultilayerFftWorkspace {
     fullmag_fdm_grid_desc fft_grid{};
@@ -489,6 +493,8 @@ struct Context {
     bool adaptive_has_previous_error = false;
     double adaptive_previous_error = 0.0;
     uint32_t adaptive_rejected_attempts = 0;
+    fullmag_fdm_adaptive_attempt_v1 *adaptive_attempt_trace_device = nullptr;
+    uint32_t adaptive_attempt_trace_count = 0;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
     bool has_adaptive_norm_tolerance = false;
