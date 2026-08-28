@@ -1182,6 +1182,7 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
     ctx->adaptive_canonical_controller = true;
     ctx->adaptive_has_previous_error = false;
     ctx->adaptive_previous_error = 0.0;
+    ctx->adaptive_rejected_attempts = 0;
     ctx->has_adaptive_max_spin_rotation = policy.has_adaptive_max_spin_rotation != 0;
     ctx->adaptive_max_spin_rotation = policy.adaptive_max_spin_rotation;
     ctx->has_adaptive_norm_tolerance = policy.has_adaptive_norm_tolerance != 0;

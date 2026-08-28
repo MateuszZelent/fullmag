@@ -267,6 +267,13 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             ctx.last_error = "dt_min_exhausted";
             return;
         }
+        if (policy.failed) {
+            context_invalidate_fsal_cache(
+                ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
+            copy_field_d2d_fp32(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            context_refresh_observables(ctx);
+            return;
+        }
 
         if (policy.accepted) {
             context_stage_fsal_accepted_step(ctx, dt);

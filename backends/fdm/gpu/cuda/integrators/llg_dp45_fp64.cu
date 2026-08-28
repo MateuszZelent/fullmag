@@ -411,19 +411,19 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
-        if (ctx.gpu_transport_test_force_adaptive_retry) {
-            ctx.gpu_transport_test_force_adaptive_retry = false;
-            policy.accepted = 0;
-            policy.dt_candidate = fmax(ctx.adaptive_dt_min, 0.5 * dt);
-            policy.dt_min_exhausted = false;
-        }
-
         if (policy.dt_min_exhausted) {
             context_invalidate_fsal_cache(
                 ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
             copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
             context_refresh_observables(ctx);
             ctx.last_error = "dt_min_exhausted";
+            return;
+        }
+        if (policy.failed) {
+            context_invalidate_fsal_cache(
+                ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
+            copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+            context_refresh_observables(ctx);
             return;
         }
 

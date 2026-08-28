@@ -1330,7 +1330,7 @@ static bool alloc_reduction_scratch(Context &ctx) {
     }
     ctx.reduction_scratch_aux_len = ctx.cell_count;
     err = cudaMalloc(reinterpret_cast<void **>(&ctx.adaptive_policy_scratch),
-        3 * sizeof(double));
+        sizeof(AdaptiveDeviceControl));
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMalloc(adaptive_policy_scratch)", err);
         cudaFree(ctx.reduction_scratch_aux);

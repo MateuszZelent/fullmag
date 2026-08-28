@@ -165,9 +165,42 @@ struct DeviceMultilayerTensorKernel {
 struct AdaptiveErrorPolicy {
     double error = 0.0;
     double dt_candidate = 0.0;
+    double ratio = 1.0;
     int accepted = 0;
     bool dt_min_exhausted = false;
+    bool failed = false;
+    uint32_t reason = 0;
+    uint32_t rejected_attempts = 0;
 };
+
+enum AdaptiveDeviceDecision : uint32_t {
+    ADAPTIVE_DEVICE_DECISION_ACCEPTED = 1,
+    ADAPTIVE_DEVICE_DECISION_RETRY = 2,
+    ADAPTIVE_DEVICE_DECISION_FAILED = 3,
+};
+
+enum AdaptiveDeviceReason : uint32_t {
+    ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE = 1,
+    ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE = 2,
+    ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED = 3,
+    ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP = 4,
+    ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR = 5,
+    ADAPTIVE_DEVICE_REASON_INVALID_PREVIOUS_ERROR = 6,
+    ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED = 7,
+};
+
+struct AdaptiveDeviceControl {
+    double error = 0.0;
+    double dt_candidate = 0.0;
+    double ratio = 1.0;
+    double previous_error = 0.0;
+    uint32_t decision = ADAPTIVE_DEVICE_DECISION_FAILED;
+    uint32_t reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
+    uint32_t has_previous_error = 0;
+    uint32_t rejected_attempts = 0;
+};
+
+static_assert(sizeof(AdaptiveDeviceControl) == 48);
 
 struct DeviceMultilayerFftWorkspace {
     fullmag_fdm_grid_desc fft_grid{};
@@ -455,6 +488,7 @@ struct Context {
     bool adaptive_canonical_controller = false;
     bool adaptive_has_previous_error = false;
     double adaptive_previous_error = 0.0;
+    uint32_t adaptive_rejected_attempts = 0;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
     bool has_adaptive_norm_tolerance = false;
@@ -507,7 +541,7 @@ struct Context {
     uint64_t reduction_scratch_len = 0;
     double *reduction_scratch_aux = nullptr;
     uint64_t reduction_scratch_aux_len = 0;
-    double *adaptive_policy_scratch = nullptr;
+    AdaptiveDeviceControl *adaptive_policy_scratch = nullptr;
     void *preview_download_scratch = nullptr;
     uint64_t preview_download_scratch_len_bytes = 0;
     std::vector<uint8_t> active_mask_host;
