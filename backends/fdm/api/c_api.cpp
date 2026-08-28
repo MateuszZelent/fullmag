@@ -18,6 +18,8 @@
 #include <optional>
 #include <algorithm>
 #include <random>
+#include <array>
+#include <cmath>
 
 using namespace fullmag::fdm;
 
@@ -33,6 +35,18 @@ extern void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats
 extern void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
+extern bool launch_rk23_adaptive_batch_fp64(
+    Context &, double, double, uint32_t, AdaptiveDeviceControl *, uint32_t,
+    uint32_t &);
+extern bool launch_rk23_adaptive_batch_fp32(
+    Context &, double, double, uint32_t, AdaptiveDeviceControl *, uint32_t,
+    uint32_t &);
+extern bool launch_dp45_adaptive_batch_fp64(
+    Context &, double, double, uint32_t, AdaptiveDeviceControl *, uint32_t,
+    uint32_t &);
+extern bool launch_dp45_adaptive_batch_fp32(
+    Context &, double, double, uint32_t, AdaptiveDeviceControl *, uint32_t,
+    uint32_t &);
 extern void launch_multilayer_demag_field_fp64(Context &ctx);
 extern void launch_multilayer_demag_field_fp32(Context &ctx);
 extern void launch_multilayer_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
@@ -1350,6 +1364,141 @@ int fullmag_fdm_backend_step(
         *ctx, dt_seconds, trial_stats, *out_stats, receipt_solver_phase);
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_step_adaptive_batch_v1(
+    fullmag_fdm_backend *handle,
+    double initial_dt_seconds,
+    double target_time_seconds,
+    uint32_t max_steps,
+    fullmag_fdm_adaptive_batch_step_v1 *out_steps,
+    uint32_t capacity,
+    uint32_t *out_count)
+{
+#if FULLMAG_HAS_CUDA
+    if (out_count != nullptr) *out_count = 0;
+    if (handle == nullptr || out_steps == nullptr || out_count == nullptr ||
+        !std::isfinite(initial_dt_seconds) || initial_dt_seconds <= 0.0 ||
+        !std::isfinite(target_time_seconds) || max_steps == 0 ||
+        max_steps > FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1 ||
+        capacity < max_steps) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (ctx->has_multilayer_plan_v2 || !ctx->adaptive_enabled ||
+        ctx->stats_mode != FULLMAG_FDM_STATS_NONE ||
+        (ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK23 &&
+         ctx->integrator != FULLMAG_FDM_INTEGRATOR_DP45) ||
+        !(target_time_seconds > ctx->current_time)) {
+        ctx->last_error =
+            "adaptive_batch_v1_requires_stats_none_single_grid_rk23_or_rk45";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!context_adaptive_step_graph_configuration_supported(*ctx)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (poll_interrupt(*ctx)) return FULLMAG_FDM_ERR_INTERRUPTED;
+
+    ctx->last_error.clear();
+    ctx->step_interrupted = false;
+    ctx->adaptive_rejected_attempts = 0;
+    ctx->adaptive_attempt_trace_count = 0;
+    ctx->accepted_step_pending = false;
+    ctx->fsal_pending = false;
+    ctx->step_fsal_reused = false;
+    fullmag_fdm_reset_hot_loop_audit(*ctx);
+    ReceiptSolverPhaseGuard receipt_solver_phase(*ctx);
+    if (!context_begin_step_transaction_attempt(*ctx)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!context_capture_pre_step_state(*ctx)) {
+        (void)rollback_step_transaction(*ctx);
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+
+    std::array<AdaptiveDeviceControl,
+               FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1> accepted{};
+    uint32_t accepted_count = 0;
+    bool launched = false;
+    if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        launched = ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23
+            ? launch_rk23_adaptive_batch_fp64(
+                  *ctx, initial_dt_seconds, target_time_seconds, max_steps,
+                  accepted.data(), static_cast<uint32_t>(accepted.size()),
+                  accepted_count)
+            : launch_dp45_adaptive_batch_fp64(
+                  *ctx, initial_dt_seconds, target_time_seconds, max_steps,
+                  accepted.data(), static_cast<uint32_t>(accepted.size()),
+                  accepted_count);
+    } else {
+        launched = ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23
+            ? launch_rk23_adaptive_batch_fp32(
+                  *ctx, initial_dt_seconds, target_time_seconds, max_steps,
+                  accepted.data(), static_cast<uint32_t>(accepted.size()),
+                  accepted_count)
+            : launch_dp45_adaptive_batch_fp32(
+                  *ctx, initial_dt_seconds, target_time_seconds, max_steps,
+                  accepted.data(), static_cast<uint32_t>(accepted.size()),
+                  accepted_count);
+    }
+    if (!launched || accepted_count == 0 || !ctx->last_error.empty()) {
+        const bool dt_min_exhausted = ctx->last_error == "dt_min_exhausted";
+        (void)rollback_step_transaction(*ctx);
+        return dt_min_exhausted
+            ? FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED : FULLMAG_FDM_ERR_CUDA;
+    }
+    if (poll_interrupt(*ctx)) {
+        (void)rollback_step_transaction(*ctx);
+        return FULLMAG_FDM_ERR_INTERRUPTED;
+    }
+
+    std::array<fullmag_fdm_adaptive_batch_step_v1,
+               FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1> published{};
+    for (uint32_t index = 0; index < accepted_count; ++index) {
+        const auto &control = accepted[index];
+        if (index + 1 == accepted_count) {
+            context_stage_fsal_accepted_step(*ctx, control.dt_attempt);
+        } else {
+            context_stage_accepted_step(*ctx, control.dt_attempt);
+        }
+        context_commit_accepted_step(*ctx);
+        auto &record = published[index];
+        record.abi_version = FULLMAG_FDM_ADAPTIVE_BATCH_STEP_ABI_V1;
+        record.struct_size = sizeof(record);
+        record.decision = FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED;
+        record.reason = static_cast<fullmag_fdm_adaptive_attempt_reason_v1>(
+            control.reason);
+        record.step = ctx->step_count;
+        record.time_seconds = ctx->current_time;
+        record.dt_seconds = control.dt_attempt;
+        record.suggested_next_dt_seconds = control.dt_candidate;
+        record.normalized_error = control.error;
+        record.rejected_attempts = control.next_rejected_attempts;
+    }
+    context_publish_pending_fsal(*ctx);
+    context_discard_pre_step_state(*ctx);
+    context_invalidate_observables(*ctx);
+    fullmag_fdm_step_stats audit_stats{};
+    fullmag_fdm_publish_hot_loop_audit(*ctx, &audit_stats);
+    fullmag_fdm_note_operator_device_execution(
+        *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+    receipt_solver_phase.commit();
+    std::memcpy(
+        out_steps,
+        published.data(),
+        accepted_count * sizeof(fullmag_fdm_adaptive_batch_step_v1));
+    *out_count = accepted_count;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)initial_dt_seconds;
+    (void)target_time_seconds;
+    (void)max_steps;
+    (void)out_steps;
+    (void)capacity;
+    if (out_count != nullptr) *out_count = 0;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }

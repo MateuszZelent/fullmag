@@ -506,6 +506,10 @@ bool context_launch_adaptive_step_graph_batch(
             ctx, ctx.adaptive_stats_none_host_sync_count);
     }
     accepted_step_count = terminal_batch.accepted_count;
+    if (terminal_batch.failed != 0) {
+        ctx.last_error = adaptive_device_terminal_reason(
+            terminal_batch.terminal_reason);
+    }
     if (accepted_step_count > max_steps ||
         (accepted_step_count == 0 && terminal_batch.failed == 0)) {
         ctx.last_error = "adaptive_step_graph_batch_empty_or_overflow";

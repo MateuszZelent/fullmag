@@ -570,6 +570,48 @@ static void launch_rk23_adaptive_graph_step_fp64(
         ctx, terminal.dt_attempt, terminal.dt_candidate, stats);
 }
 
+bool launch_rk23_adaptive_batch_fp64(
+    Context &ctx,
+    double initial_dt,
+    double target_time,
+    uint32_t max_steps,
+    AdaptiveDeviceControl *accepted_steps,
+    uint32_t accepted_steps_capacity,
+    uint32_t &accepted_step_count)
+{
+    if (!context_adaptive_step_graph_configuration_supported(ctx)) return false;
+    const int n = static_cast<int>(ctx.cell_count);
+    const int grid = (n + 255) / 256;
+    const double alpha = ctx.alpha;
+    const double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    if (!context_adaptive_step_graph_key_matches(
+            ctx,
+            FULLMAG_FDM_INTEGRATOR_RK23,
+            FULLMAG_FDM_PRECISION_DOUBLE) &&
+        !build_rk23_adaptive_graph_fp64(
+            ctx, n, grid, gamma_bar, alpha, ctx.current_time)) {
+        return false;
+    }
+    AdaptiveDeviceControl initial{};
+    initial.dt_candidate = initial_dt;
+    initial.previous_error = ctx.adaptive_previous_error;
+    initial.has_previous_error = ctx.adaptive_has_previous_error ? 1U : 0U;
+    initial.decision = ADAPTIVE_DEVICE_DECISION_RETRY;
+    ctx.trial_dt = initial_dt;
+    if (!context_launch_adaptive_step_graph_batch(
+            ctx, initial, ctx.current_time, target_time, max_steps,
+            accepted_steps, accepted_steps_capacity, accepted_step_count) ||
+        !ctx.last_error.empty() || accepted_step_count == 0) {
+        return false;
+    }
+    const auto &last = accepted_steps[accepted_step_count - 1];
+    ctx.adaptive_attempt_trace_count = last.attempt_index + 1;
+    ctx.adaptive_rejected_attempts = last.next_rejected_attempts;
+    ctx.adaptive_has_previous_error = last.has_previous_error != 0;
+    ctx.adaptive_previous_error = last.previous_error;
+    return true;
+}
+
 /* ── Full RK23+FSAL step ── */
 
 void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {

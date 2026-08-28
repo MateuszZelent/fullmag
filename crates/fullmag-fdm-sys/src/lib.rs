@@ -667,6 +667,25 @@ pub struct fullmag_fdm_adaptive_attempt_v1 {
     pub dt_next_seconds: f64,
 }
 
+pub const FULLMAG_FDM_ADAPTIVE_BATCH_STEP_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1: usize = 64;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_adaptive_batch_step_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub decision: fullmag_fdm_adaptive_attempt_decision_v1,
+    pub reason: fullmag_fdm_adaptive_attempt_reason_v1,
+    pub step: u64,
+    pub time_seconds: f64,
+    pub dt_seconds: f64,
+    pub suggested_next_dt_seconds: f64,
+    pub normalized_error: f64,
+    pub rejected_attempts: u32,
+    pub reserved0: u32,
+}
+
 // ── Device info ──
 
 #[repr(C)]
@@ -1584,6 +1603,16 @@ extern "C" {
         out_stats: *mut fullmag_fdm_step_stats,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_step_adaptive_batch_v1(
+        handle: *mut fullmag_fdm_backend,
+        initial_dt_seconds: f64,
+        target_time_seconds: f64,
+        max_steps: u32,
+        out_steps: *mut fullmag_fdm_adaptive_batch_step_v1,
+        capacity: u32,
+        out_count: *mut u32,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_copy_adaptive_attempts_v1(
         handle: *mut fullmag_fdm_backend,
         out_attempts: *mut fullmag_fdm_adaptive_attempt_v1,
@@ -2310,6 +2339,30 @@ mod tests {
             u32,
             *mut u32,
         ) -> i32 = fullmag_fdm_backend_copy_adaptive_attempts_v1;
+    }
+
+    #[test]
+    fn adaptive_batch_step_v1_has_stable_layout_and_ffi_symbol() {
+        assert_eq!(size_of::<fullmag_fdm_adaptive_batch_step_v1>(), 64);
+        assert_eq!(offset_of!(fullmag_fdm_adaptive_batch_step_v1, step), 16);
+        assert_eq!(
+            offset_of!(fullmag_fdm_adaptive_batch_step_v1, time_seconds),
+            24
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_adaptive_batch_step_v1, rejected_attempts),
+            56
+        );
+        assert_eq!(FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1, 64);
+        let _step: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            f64,
+            f64,
+            u32,
+            *mut fullmag_fdm_adaptive_batch_step_v1,
+            u32,
+            *mut u32,
+        ) -> i32 = fullmag_fdm_backend_step_adaptive_batch_v1;
     }
 
     #[test]

@@ -254,6 +254,75 @@ int main() {
         check_device_controller(precision, FULLMAG_FDM_INTEGRATOR_DP45);
     }
 
+    auto check_device_batch = [&](fullmag_fdm_precision precision,
+                                  fullmag_fdm_integrator integrator) {
+        auto plan = invalid;
+        plan.base.precision = precision;
+        plan.base.integrator = integrator;
+        plan.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        plan.time_policy = {1, FULLMAG_FDM_ADAPTIVE_ADVANCED, 1e-9, 0.0,
+                            1e-16, 2e-15, 0.9, 2.0, 0.2, 0, 0.0, 0, 0.0};
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&plan);
+        check(backend != nullptr && fullmag_fdm_backend_last_error(backend) == nullptr,
+              "adaptive batch fixture passes checked-v2 validation");
+        fullmag_fdm_adaptive_batch_step_v1 steps
+            [FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1]{};
+        uint32_t step_count = 0;
+        const int status = fullmag_fdm_backend_step_adaptive_batch_v1(
+            backend,
+            1e-15,
+            3e-15,
+            2,
+            steps,
+            FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1,
+            &step_count);
+        if (status != FULLMAG_FDM_OK) {
+            const char *batch_error = fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr, "adaptive CUDA batch error: %s\n",
+                         batch_error != nullptr ? batch_error : "<none>");
+        }
+        check(status == FULLMAG_FDM_OK && step_count == 2,
+              "adaptive batch publishes two accepted steps");
+        check(steps[0].abi_version == FULLMAG_FDM_ADAPTIVE_BATCH_STEP_ABI_V1 &&
+                  steps[0].struct_size == sizeof(steps[0]) &&
+                  steps[0].step == 1 &&
+                  std::abs(steps[0].time_seconds - 1e-15) <= 1e-30 &&
+                  std::abs(steps[0].dt_seconds - 1e-15) <= 1e-30 &&
+                  std::abs(steps[0].suggested_next_dt_seconds - 2e-15) <= 1e-30 &&
+                  steps[1].step == 2 &&
+                  std::abs(steps[1].time_seconds - 3e-15) <= 1e-30 &&
+                  std::abs(steps[1].dt_seconds - 2e-15) <= 1e-30,
+              "adaptive batch preserves accepted time and dt sequence");
+
+        fullmag_fdm_adaptive_execution_telemetry_v1 telemetry{};
+        telemetry.abi_version = FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1;
+        telemetry.struct_size = sizeof(telemetry);
+        check(fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
+                  backend, &telemetry) == FULLMAG_FDM_OK &&
+                  telemetry.graph_build_count == 1 &&
+                  telemetry.graph_launch_count == 2 &&
+                  telemetry.terminal_control_host_sync_count == 1 &&
+                  telemetry.step_completion_host_sync_count == 0 &&
+                  telemetry.stats_none_host_sync_count == 1,
+              "two production adaptive steps cross one host synchronization boundary");
+
+        fullmag_fdm_step_transaction_telemetry_v1 transaction{};
+        transaction.abi_version = FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+        transaction.struct_size = sizeof(transaction);
+        check(fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+                  backend, &transaction) == FULLMAG_FDM_OK &&
+                  transaction.capture_count == 1 &&
+                  transaction.rollback_count == 0 &&
+                  transaction.accepted_step_index == 2,
+              "adaptive batch commits two accepted steps through one transaction capture");
+        fullmag_fdm_backend_destroy(backend);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_device_batch(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_device_batch(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
+
     auto check_device_retry = [&](fullmag_fdm_precision precision,
                                   fullmag_fdm_integrator integrator) {
         auto plan = invalid;

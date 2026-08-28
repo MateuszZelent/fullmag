@@ -729,6 +729,28 @@ typedef struct {
     double dt_next_seconds;
 } fullmag_fdm_adaptive_attempt_v1;
 
+#define FULLMAG_FDM_ADAPTIVE_BATCH_STEP_ABI_V1 1u
+#define FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1 64u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fdm_adaptive_attempt_decision_v1 decision;
+    fullmag_fdm_adaptive_attempt_reason_v1 reason;
+    uint64_t step;
+    double time_seconds;
+    double dt_seconds;
+    double suggested_next_dt_seconds;
+    double normalized_error;
+    uint32_t rejected_attempts;
+    uint32_t reserved0;
+} fullmag_fdm_adaptive_batch_step_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_adaptive_batch_step_v1) == 64,
+              "adaptive batch step v1 ABI size changed");
+#endif
+
 #define FULLMAG_FDM_FSAL_TELEMETRY_ABI_V1 1u
 typedef struct {
     uint32_t abi_version;
@@ -1003,6 +1025,21 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
     fullmag_fdm_step_stats *out_stats);
+
+/*
+ * Execute a bounded, atomic batch of adaptive CUDA steps through one terminal
+ * D2H/synchronization boundary. This API is valid only for stats-none,
+ * single-grid RK23/RK45 configurations accepted by device-loop preflight.
+ * On failure the complete batch is rolled back and *out_count remains zero.
+ */
+int fullmag_fdm_backend_step_adaptive_batch_v1(
+    fullmag_fdm_backend *handle,
+    double initial_dt_seconds,
+    double target_time_seconds,
+    uint32_t max_steps,
+    fullmag_fdm_adaptive_batch_step_v1 *out_steps,
+    uint32_t capacity,
+    uint32_t *out_count);
 
 /*
  * Copy the completed adaptive-attempt trace in one observation-time D2H batch.
