@@ -65,9 +65,14 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
 
 FROM ubuntu:22.04 AS fem-cpu-dev
 
+ARG NODE_VERSION=24.18.0
+ARG NODE_SHA256_AMD64=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
+ARG NODE_SHA256_ARM64=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
+
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PNPM_HOME=/pnpm
 ENV INSTALL_PREFIX=/opt/fullmag-deps
-ENV PATH=/root/.cargo/bin:${INSTALL_PREFIX}/bin:${PATH}
+ENV PATH=/root/.cargo/bin:${PNPM_HOME}:${INSTALL_PREFIX}/bin:${PATH}
 ENV CMAKE_PREFIX_PATH=${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}
 ENV LD_LIBRARY_PATH=${INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH}
 ENV FULLMAG_MANAGED_FEM_DEVICE=cpu
@@ -89,10 +94,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     python3 \
     python3-pip \
+    xz-utils \
+    && architecture="$(dpkg --print-architecture)" \
+    && case "${architecture}" in \
+         amd64) node_arch="x64"; node_sha256="${NODE_SHA256_AMD64}" ;; \
+         arm64) node_arch="arm64"; node_sha256="${NODE_SHA256_ARM64}" ;; \
+         *) echo "Unsupported Node architecture: ${architecture}" >&2; exit 1 ;; \
+       esac \
+    && node_archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+    && curl -fsSLo "/tmp/${node_archive}" "https://nodejs.org/dist/v${NODE_VERSION}/${node_archive}" \
+    && echo "${node_sha256}  /tmp/${node_archive}" | sha256sum -c - \
+    && tar -xJf "/tmp/${node_archive}" -C /usr/local --strip-components=1 \
+    && rm -f "/tmp/${node_archive}" \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir cmake==3.30.5
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable
+RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 

@@ -19,31 +19,31 @@ services:
         source: ${FULLMAG_WINDOWS_REPO:-.}
         target: /workspace
       - type: bind
-        source: ${FULLMAG_WINDOWS_STATE_ROOT:-D:/fullmag-cache/state}
+        source: ${FULLMAG_WINDOWS_STATE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/.fullmag
       - type: bind
-        source: ${FULLMAG_WINDOWS_BUILD_ROOT:-D:/fullmag-build}
+        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/.fullmag-build
       - type: bind
-        source: ${FULLMAG_WINDOWS_CACHE_ROOT:-D:/fullmag-cache}
+        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/.fullmag-cache
       - type: bind
-        source: ${FULLMAG_WINDOWS_CARGO_HOME:-D:/fullmag-cache/cargo}
+        source: ${FULLMAG_WINDOWS_CARGO_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/.fullmag-cargo
       - type: bind
-        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:-D:/fullmag-cache/rustup}
+        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/.fullmag-rustup
       - type: bind
-        source: ${FULLMAG_WINDOWS_PNPM_ROOT:-D:/fullmag-cache/pnpm}
+        source: ${FULLMAG_WINDOWS_PNPM_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /pnpm
       - type: bind
-        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:-D:/fullmag-cache/node-modules}
+        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/node_modules
       - type: bind
-        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:-D:/fullmag-cache/control-room-node_modules}
+        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
-        source: ${FULLMAG_WINDOWS_TEMP_ROOT:-D:/fullmag-tmp}
+        source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
         target: /tmp/fullmag-windows
     environment:
       RUST_LOG: ${RUST_LOG:-info}
@@ -52,6 +52,11 @@ services:
       RUSTUP_HOME: /workspace/.fullmag-rustup
       CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
       FULLMAG_CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
+      CARGO_BUILD_JOBS: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
+      CMAKE_BUILD_PARALLEL_LEVEL: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
+      FULLMAG_SOURCE_GIT_COMMIT: "${FULLMAG_SOURCE_GIT_COMMIT:-}"
+      FULLMAG_SOURCE_WORKTREE_STATE: "${FULLMAG_SOURCE_WORKTREE_STATE:-}"
+      FULLMAG_SOURCE_SNAPSHOT_SHA256: "${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}"
       FULLMAG_PYTHON: /usr/bin/python3
       FULLMAG_USE_MFEM_STACK: "ON"
       FULLMAG_FEM_REQUIRE_GPU: "1"
@@ -74,5 +79,76 @@ services:
       TEMP: /tmp/fullmag-windows
       TMP: /tmp/fullmag-windows
     gpus: all
+    ports:
+      - "${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"
+
+  fullmag-windows-fem-cpu:
+    build:
+      context: .
+      dockerfile: docker/fem-cpu/Dockerfile
+    image: ${FULLMAG_WINDOWS_FEM_CPU_IMAGE:-fullmag/fem-cpu:windows-local}
+    working_dir: /workspace
+    entrypoint: []
+    command: ["sleep", "infinity"]
+    volumes:
+      - type: bind
+        source: ${FULLMAG_WINDOWS_REPO:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace
+      - type: bind
+        source: ${FULLMAG_WINDOWS_STATE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/.fullmag
+      - type: bind
+        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/.fullmag-build
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/.fullmag-cache
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CARGO_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/.fullmag-cargo
+      - type: bind
+        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/.fullmag-rustup
+      - type: bind
+        source: ${FULLMAG_WINDOWS_PNPM_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /pnpm
+      - type: bind
+        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/node_modules
+      - type: bind
+        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /workspace/apps/control-room/node_modules
+      - type: bind
+        source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        target: /tmp/fullmag-windows
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      HOME: /root
+      CARGO_HOME: /workspace/.fullmag-cargo
+      RUSTUP_HOME: /workspace/.fullmag-rustup
+      CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
+      FULLMAG_CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
+      CARGO_BUILD_JOBS: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
+      CMAKE_BUILD_PARALLEL_LEVEL: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
+      FULLMAG_SOURCE_GIT_COMMIT: "${FULLMAG_SOURCE_GIT_COMMIT:-}"
+      FULLMAG_SOURCE_WORKTREE_STATE: "${FULLMAG_SOURCE_WORKTREE_STATE:-}"
+      FULLMAG_SOURCE_SNAPSHOT_SHA256: "${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}"
+      FULLMAG_PYTHON: /usr/bin/python3
+      FULLMAG_USE_MFEM_STACK: "ON"
+      FULLMAG_FEM_REQUIRE_GPU: "0"
+      FULLMAG_FEM_REQUIRE_CEED: "0"
+      FULLMAG_FEM_WITH_SLEPC: "OFF"
+      FULLMAG_MANAGED_FEM_DEVICE: cpu
+      CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      LD_LIBRARY_PATH: /opt/fullmag-deps/lib
+      PATH: /root/.cargo/bin:/pnpm:/opt/fullmag-deps/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PNPM_HOME: /pnpm
+      npm_config_store_dir: /pnpm/store
+      COREPACK_HOME: /workspace/.fullmag-cache/corepack
+      PLAYWRIGHT_BROWSERS_PATH: /workspace/.fullmag-cache/playwright-browsers
+      PYTHONPYCACHEPREFIX: /workspace/.fullmag-cache/python-bytecode
+      TMPDIR: /tmp/fullmag-windows
+      TEMP: /tmp/fullmag-windows
+      TMP: /tmp/fullmag-windows
     ports:
       - "${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"

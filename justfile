@@ -13,6 +13,19 @@ default:
 help:
     @just --list
 
+windows-doctor:
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/setup_fullmag.ps1"
+
+windows-setup:
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/setup_fullmag.ps1" -InstallMissing
+
+windows-build backend="fdm" device="cpu" frontend="dev":
+    if [ "{{backend}}" = "fem" ]; then \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode true -BuildOnly -Frontend "{{frontend}}" -Backend fem -Device "{{device}}"; \
+    else \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "{{frontend}}" -Backend "{{backend}}" -Device "{{device}}"; \
+    fi
+
 ensure-python:
     mkdir -p "{{repo_root}}/.fullmag/local"
     if [ ! -x "{{repo_python}}" ]; then if ! python3 -m venv "{{repo_root}}/.fullmag/local/python"; then echo "cannot create the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; fi; fi
@@ -4690,10 +4703,10 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       if [ ! -f "$script" ]; then echo "script not found: $script" >&2; exit 2; fi; \
       host_windows="false"; \
       case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
-      if [ "$backend" = "fem" ] && [ "$device" = "gpu" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
+      if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
       fi; \
-      if [ "$windows" = "true" ]; then \
+      if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
       fi; \
       if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "{{repo_python}}" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \

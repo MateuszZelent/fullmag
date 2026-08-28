@@ -10,14 +10,15 @@ param(
   [ValidateSet("fem")]
   [string]$Backend = "fem",
 
-  [ValidateSet("gpu")]
+  [ValidateSet("auto", "cpu", "gpu")]
   [string]$Device = "gpu",
 
   [ValidateSet("interactive", "headless")]
   [string]$RunMode = "interactive",
 
-  [Parameter(Mandatory = $true)]
   [string]$ScriptPath,
+
+  [switch]$BuildOnly,
 
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
@@ -27,9 +28,10 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$defaultCacheRoot = "D:\fullmag-cache"
-$defaultBuildRoot = "D:\fullmag-build"
-$defaultTempRoot = "D:\fullmag-tmp"
+$RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
+$defaultCacheRoot = Join-Path $RepoDriveRoot "fullmag-cache"
+$defaultBuildRoot = Join-Path $RepoDriveRoot "fullmag-build"
+$defaultTempRoot = Join-Path $RepoDriveRoot "fullmag-tmp"
 $CudaBaseImage = if ($env:FULLMAG_CUDA_BASE_IMAGE) {
   $env:FULLMAG_CUDA_BASE_IMAGE
 } else {
@@ -42,14 +44,22 @@ function Resolve-AbsolutePath {
   return [System.IO.Path]::GetFullPath($Path)
 }
 
-function Require-DPath {
+function Require-ExternalBuildPath {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
     [Parameter(Mandatory = $true)][string]$Label
   )
-  $resolved = Resolve-AbsolutePath $Path
-  if ($resolved -notmatch "^[dD]:\\") {
-    throw "$Label must be on drive D:, got $resolved"
+  $resolved = (Resolve-AbsolutePath $Path).TrimEnd("\")
+  $repo = $RepoRoot.TrimEnd("\")
+  if (-not [System.IO.Path]::IsPathRooted($resolved)) {
+    throw "$Label must be an absolute Windows path, got $resolved"
+  }
+  if ($resolved -eq [System.IO.Path]::GetPathRoot($resolved).TrimEnd("\")) {
+    throw "$Label must not use a drive root directly, got $resolved"
+  }
+  if ($resolved.Equals($repo, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $resolved.StartsWith($repo + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "$Label must be outside the repository, got $resolved"
   }
 }
 
@@ -98,38 +108,13 @@ function Get-RelativeUriPath {
   return [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($pathUri).ToString())
 }
 
-function Test-DockerStorageOnD {
+function Test-ExplicitDockerStorageRoot {
   $explicitRoot = $env:FULLMAG_DOCKER_STORAGE_ROOT
   if ($explicitRoot) {
-    Require-DPath $explicitRoot "FULLMAG_DOCKER_STORAGE_ROOT"
+    Require-ExternalBuildPath $explicitRoot "FULLMAG_DOCKER_STORAGE_ROOT"
     if (-not (Test-Path -LiteralPath $explicitRoot)) {
       throw "FULLMAG_DOCKER_STORAGE_ROOT does not exist: $explicitRoot"
     }
-    return
-  }
-
-  $dockerDiskDirectory = Join-Path $env:LOCALAPPDATA "Docker\wsl\disk"
-  if (Test-Path -LiteralPath $dockerDiskDirectory -PathType Container) {
-    $directory = Get-Item -LiteralPath $dockerDiskDirectory
-    if (($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-      $target = @($directory.Target) -join ""
-      if ($target -match "^[dD]:\\") {
-        return
-      }
-    }
-    $dockerVhdx = Join-Path $dockerDiskDirectory "docker_data.vhdx"
-    if (Test-Path -LiteralPath $dockerVhdx -PathType Leaf) {
-      throw "Docker Desktop disk image is still on C: ($dockerVhdx). Move Docker Desktop's disk image to D: or set FULLMAG_DOCKER_STORAGE_ROOT to its D: root before a CUDA build."
-    }
-  }
-
-  $knownDRoots = @(
-    "D:\DockerDesktop\wsl",
-    "D:\DockerDesktop",
-    "D:\docker-desktop"
-  ) | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-  if (-not $knownDRoots) {
-    throw "Docker Desktop storage location is not proven to be on D:. Set FULLMAG_DOCKER_STORAGE_ROOT to the configured D: storage root before a CUDA build."
   }
 }
 
@@ -146,7 +131,22 @@ function Invoke-DockerCompose {
 function Ensure-BuildxBuilder {
   $builderName = "fullmag-windows"
   $env:BUILDX_BUILDER = $builderName
-  $builderList = (& docker buildx ls 2>$null | Out-String)
+  # Docker Desktop reports an unavailable Windows-engine builder on stderr even
+  # when the active Linux builder list succeeds with exit code 0. With the
+  # script-wide ErrorActionPreference=Stop, PowerShell otherwise promotes that
+  # diagnostic to a terminating NativeCommandError.
+  $savedErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $builderList = (& docker buildx ls 2>$null | Out-String)
+    $builderListExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $savedErrorActionPreference
+  }
+  if ($builderListExitCode -ne 0) {
+    throw "docker buildx ls failed with exit code $builderListExitCode"
+  }
   if ($builderList -notmatch "(?m)^\s*fullmag-windows(?:\*|\s)") {
     Invoke-External "docker" @("buildx", "create", "--name", $builderName, "--driver", "docker-container", "--use")
   } else {
@@ -156,6 +156,46 @@ function Ensure-BuildxBuilder {
 }
 
 function Invoke-DockerImageBuild {
+  $image = if ($Device -eq "cpu") {
+    if ($env:FULLMAG_WINDOWS_FEM_CPU_IMAGE) {
+      $env:FULLMAG_WINDOWS_FEM_CPU_IMAGE
+    } else {
+      "fullmag/fem-cpu:windows-local"
+    }
+  } else {
+    if ($env:FULLMAG_WINDOWS_FEM_GPU_IMAGE) {
+      $env:FULLMAG_WINDOWS_FEM_GPU_IMAGE
+    } else {
+      "fullmag/fem-gpu:windows-local"
+    }
+  }
+  $savedErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    & docker image inspect $image --format '{{.Id}}' 2>$null | Out-Null
+    $imageInspectExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $savedErrorActionPreference
+  }
+  if ($imageInspectExitCode -eq 0 -and $env:FULLMAG_WINDOWS_REBUILD_FEM_IMAGE -ne "1") {
+    Write-Host "Reusing FEM image $image (set FULLMAG_WINDOWS_REBUILD_FEM_IMAGE=1 to rebuild)"
+    return
+  }
+
+  Ensure-BuildxBuilder
+  if ($Device -eq "cpu") {
+    Invoke-External "docker" @(
+      "buildx", "build",
+      "--builder", "fullmag-windows",
+      "--load",
+      "--progress=plain",
+      "--file", (Join-Path $RepoRoot "docker\fem-cpu\Dockerfile"),
+      "--tag", $image,
+      $RepoRoot
+    )
+    return
+  }
   $cudaArchitectures = if ($env:FULLMAG_CUDA_ARCHITECTURES) {
     $env:FULLMAG_CUDA_ARCHITECTURES
   } else {
@@ -172,11 +212,6 @@ function Invoke-DockerImageBuild {
     "baseline"
   }
   $dockerfile = Join-Path $RepoRoot "docker\fem-gpu\Dockerfile"
-  $image = if ($env:FULLMAG_WINDOWS_FEM_GPU_IMAGE) {
-    $env:FULLMAG_WINDOWS_FEM_GPU_IMAGE
-  } else {
-    "fullmag/fem-gpu:windows-local"
-  }
   $arguments = @(
     "buildx", "build",
     "--builder", "fullmag-windows",
@@ -193,22 +228,32 @@ function Invoke-DockerImageBuild {
   Invoke-External "docker" $arguments
 }
 
-if ($Backend -ne "fem" -or $Device -ne "gpu") {
-  throw "WSL2 FEM launcher requires backend=fem and device=gpu; CPU fallback is forbidden"
+if ($Backend -ne "fem") {
+  throw "Windows FEM container launcher requires backend=fem"
 }
 
-Require-DPath $RepoRoot "Fullmag repository"
-Require-Command "wsl.exe"
 Require-Command "docker"
-Test-DockerStorageOnD
+Test-ExplicitDockerStorageRoot
 
-Invoke-External "wsl.exe" @("--status")
 $dockerOsType = (& docker info --format '{{.OSType}}').Trim()
 if ($LASTEXITCODE -ne 0 -or $dockerOsType -ne "linux") {
-  throw "FEM GPU on Windows requires Docker Desktop's Linux/WSL2 backend; detected OSTYPE=$dockerOsType"
+  throw "FEM on Windows requires Docker Desktop's Linux engine; detected OSTYPE=$dockerOsType"
 }
-Require-Command "nvidia-smi"
-Invoke-External "nvidia-smi" @("-L")
+$RequestedDevice = $Device
+if ($Device -eq "auto") {
+  $nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue
+  if ($nvidiaSmi) {
+    & $nvidiaSmi.Path -L 2>$null | Out-Null
+  }
+  $Device = if ($nvidiaSmi -and $LASTEXITCODE -eq 0) { "gpu" } else { "cpu" }
+  Write-Host "Resolved FEM device auto -> $Device"
+}
+if ($Device -eq "gpu") {
+  if (-not (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)) {
+    throw "FEM GPU requires nvidia-smi; CPU fallback is forbidden for an explicit GPU request"
+  }
+  Invoke-External "nvidia-smi" @("-L")
+}
 
 $CacheRoot = if ($env:FULLMAG_WINDOWS_CACHE_ROOT) {
   Resolve-AbsolutePath $env:FULLMAG_WINDOWS_CACHE_ROOT
@@ -225,21 +270,25 @@ $TempRoot = if ($env:FULLMAG_WINDOWS_TEMP_ROOT) {
 } else {
   $defaultTempRoot
 }
-$StateRoot = Join-Path $CacheRoot "state"
+$RuntimeKey = "fem-$Device"
+$StateRoot = Join-Path $CacheRoot "state\$RuntimeKey"
 $CargoHome = Join-Path $CacheRoot "cargo"
 $RustupHome = Join-Path $CacheRoot "rustup"
 $PnpmRoot = Join-Path $CacheRoot "pnpm"
 $NodeModulesRoot = Join-Path $CacheRoot "node-modules"
 $ControlRoomNodeModulesRoot = Join-Path $CacheRoot "control-room-node-modules"
-$TargetRoot = Join-Path $BuildRoot "cargo-targets\$CudaCacheKey"
+$TargetKey = if ($Device -eq "gpu") { $CudaCacheKey } else { "fem-cpu" }
+$TargetRoot = Join-Path $BuildRoot "cargo-targets\$TargetKey"
 $ComposeFile = Join-Path $RepoRoot "compose.windows.yaml"
+$ServiceName = "fullmag-windows-fem-$Device"
+$RuntimeImage = if ($Device -eq "gpu") { "fullmag/fem-gpu:windows-local" } else { "fullmag/fem-cpu:windows-local" }
 
 foreach ($path in @($CacheRoot, $BuildRoot, $TempRoot, $StateRoot, $CargoHome, $RustupHome, $PnpmRoot, $NodeModulesRoot, $ControlRoomNodeModulesRoot, $TargetRoot)) {
-  Require-DPath $path "Fullmag build/cache path"
+  Require-ExternalBuildPath $path "Fullmag build/cache path"
   Ensure-Directory $path
 }
 if (-not (Test-Path -LiteralPath $ComposeFile -PathType Leaf)) {
-  throw "Windows WSL compose file is missing: $ComposeFile"
+  throw "Windows FEM compose file is missing: $ComposeFile"
 }
 
 $env:FULLMAG_WINDOWS_REPO = To-ComposePath $RepoRoot
@@ -254,39 +303,68 @@ $env:FULLMAG_WINDOWS_NODE_MODULES_ROOT = To-ComposePath $NodeModulesRoot
 $env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT = To-ComposePath $ControlRoomNodeModulesRoot
 $env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()
 $env:COMPOSE_PROJECT_NAME = "fullmag-windows-fem"
-Ensure-BuildxBuilder
+$identityPython = Get-Command "python" -ErrorAction SilentlyContinue
+if (-not $identityPython) {
+  throw "Python is required to capture the exact Fullmag source identity"
+}
+$identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot | Out-String)
+if ($LASTEXITCODE -ne 0) {
+  throw "Fullmag source identity capture failed with exit code $LASTEXITCODE"
+}
+$sourceIdentity = $identityOutput | ConvertFrom-Json
+$env:FULLMAG_SOURCE_GIT_COMMIT = [string]$sourceIdentity.head_commit_full
+$env:FULLMAG_SOURCE_WORKTREE_STATE = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+$env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = [string]$sourceIdentity.source_snapshot_sha256
 
-$resolvedScript = if ([System.IO.Path]::IsPathRooted($ScriptPath)) {
-  Resolve-AbsolutePath $ScriptPath
-} else {
-  Resolve-AbsolutePath (Join-Path $RepoRoot $ScriptPath)
+$resolvedScript = $null
+$containerScript = $null
+if ($ScriptPath) {
+  $resolvedScript = if ([System.IO.Path]::IsPathRooted($ScriptPath)) {
+    Resolve-AbsolutePath $ScriptPath
+  } else {
+    Resolve-AbsolutePath (Join-Path $RepoRoot $ScriptPath)
+  }
+  if (-not (Test-Path -LiteralPath $resolvedScript -PathType Leaf)) {
+    throw "Fullmag script not found: $resolvedScript"
+  }
+  $relativeScript = (Get-RelativeUriPath $RepoRoot $resolvedScript).Replace("\", "/")
+  if ($relativeScript.StartsWith("../") -or $relativeScript -eq "..") {
+    throw "Fullmag script must be inside the repository: $resolvedScript"
+  }
+  $containerScript = "/workspace/$relativeScript"
+} elseif (-not $BuildOnly) {
+  throw "ScriptPath is required unless -BuildOnly is used"
 }
-if (-not (Test-Path -LiteralPath $resolvedScript -PathType Leaf)) {
-  throw "Fullmag script not found: $resolvedScript"
-}
-$relativeScript = (Get-RelativeUriPath $RepoRoot $resolvedScript).Replace("\", "/")
-if ($relativeScript.StartsWith("../") -or $relativeScript -eq "..") {
-  throw "Fullmag script must be inside the repository: $resolvedScript"
-}
-$containerScript = "/workspace/$relativeScript"
 
 $makeTarget = if ($Frontend -eq "static") { "install-cli-static" } else { "install-cli-dev" }
 Push-Location $RepoRoot
 try {
   if ($BuildMode -eq "true") {
     Invoke-DockerImageBuild
-    $buildCommand = @"
+    $buildCommand = if ($Device -eq "gpu") { @"
 set -euo pipefail
 cd /workspace
-mkdir -p /workspace/.fullmag-build/cargo-targets/$CudaCacheKey /workspace/.fullmag-cache /workspace/.fullmag-cargo /workspace/.fullmag-rustup /tmp/fullmag-windows
+mkdir -p /workspace/.fullmag-build/cargo-targets/$TargetKey /workspace/.fullmag-cache /workspace/.fullmag-cargo /workspace/.fullmag-rustup /tmp/fullmag-windows
 rustup toolchain install nightly --profile minimal --no-self-update
 if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ]; then
   pnpm --dir /workspace/apps/control-room install --frozen-lockfile
 fi
-FULLMAG_CUDA_BASE_IMAGE=$CudaBaseImage FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$CudaCacheKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$CudaCacheKey FULLMAG_FORCE_LOCAL_FEM_GPU=1 make $makeTarget
+FULLMAG_CUDA_BASE_IMAGE=$CudaBaseImage FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_GPU=1 make $makeTarget
 test -x /workspace/.fullmag/local/bin/fullmag
 grep -Fxq cuda-fem-gpu /workspace/.fullmag/local/launcher-build-mode
 "@
+    } else { @"
+set -euo pipefail
+cd /workspace
+mkdir -p /workspace/.fullmag-build/cargo-targets/$TargetKey /workspace/.fullmag-cache /workspace/.fullmag-cargo /workspace/.fullmag-rustup /tmp/fullmag-windows
+rustup toolchain install nightly --profile minimal --no-self-update
+if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ]; then
+  pnpm --dir /workspace/apps/control-room install --frozen-lockfile
+fi
+FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_CPU=1 make $makeTarget
+test -x /workspace/.fullmag/local/bin/fullmag
+grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
+"@ }
     # PowerShell here-strings use CRLF on Windows; bash treats the trailing
     # carriage return in `pipefail` as part of the option name.
     $buildCommand = $buildCommand.Replace("`r`n", "`n").Replace("`r", "`n")
@@ -296,18 +374,19 @@ grep -Fxq cuda-fem-gpu /workspace/.fullmag/local/launcher-build-mode
     $buildCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($buildCommand)
     $buildCommandBase64 = [Convert]::ToBase64String($buildCommandBytes)
     $buildCommandPayload = "printf '%s' '$buildCommandBase64' | base64 --decode | bash"
-    Invoke-DockerCompose @("run", "--rm", "--no-deps", "fullmag-windows-fem-gpu", "bash", "-lc", $buildCommandPayload)
+    Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $buildCommandPayload)
   } elseif (-not (Test-Path -LiteralPath (Join-Path $StateRoot "local\bin\fullmag") -PathType Leaf)) {
-    throw "Container-local FEM GPU launcher is missing at $StateRoot\local\bin\fullmag; rerun with build=True"
+    throw "Container-local FEM $Device launcher is missing at $StateRoot\local\bin\fullmag; rerun with build=True"
   }
 
   $manifest = [ordered]@{
     schema_version = 1
     backend = "fem"
-    device = "gpu"
-    runtime = "wsl2-docker-container-local"
+    requested_device = $RequestedDevice
+    device = $Device
+    runtime = "docker-desktop-linux-container-local"
     compose_file = $ComposeFile
-    image = "fullmag/fem-gpu:windows-local"
+    image = $RuntimeImage
     repository = $RepoRoot
     state_root = $StateRoot
     build_root = $BuildRoot
@@ -316,23 +395,38 @@ grep -Fxq cuda-fem-gpu /workspace/.fullmag/local/launcher-build-mode
     script = $resolvedScript
     built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
   }
-  $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $StateRoot "windows-wsl-fem-gpu-manifest.json") -Encoding UTF8
+  $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $StateRoot "windows-fem-$Device-manifest.json") -Encoding UTF8
 
-  Invoke-DockerCompose @("run", "--rm", "--no-deps", "fullmag-windows-fem-gpu", "nvidia-smi", "-L")
+  if ($BuildOnly) {
+    Write-Host "Windows FEM $Device container build is ready"
+    Write-Host "- image: $RuntimeImage"
+    Write-Host "- state root: $StateRoot"
+    Write-Host "- build root: $BuildRoot"
+    exit 0
+  }
+
+  if ($Device -eq "gpu") {
+    Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "nvidia-smi", "-L")
+  }
 
   $runArguments = @(
-    "run", "--rm", "--no-deps", "--service-ports",
-    "-e", "FULLMAG_FEM_EXECUTION=gpu",
-    "-e", "FULLMAG_RELAX_DEVICE=gpu",
-    "-e", "FULLMAG_FEM_MFEM_DEVICE=cuda",
-    "-e", "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson",
-    "-e", "FULLMAG_FEM_REQUIRE_GPU=1",
-    "-e", "FULLMAG_FEM_REQUIRE_CEED=1",
-    "-e", "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1",
-    "-e", "FULLMAG_FDM_EXECUTION=cpu",
-    "fullmag-windows-fem-gpu",
-    "bash", "-lc"
+    "run", "--rm", "--no-deps", "--service-ports"
   )
+  foreach ($entry in @(
+    "FULLMAG_FEM_EXECUTION=$Device",
+    "FULLMAG_RELAX_DEVICE=$Device",
+    $(if ($Device -eq "gpu") { "FULLMAG_FEM_MFEM_DEVICE=cuda" } else { "FULLMAG_FEM_MFEM_DEVICE=cpu" }),
+    $(if ($Device -eq "gpu") { "FULLMAG_FEM_REQUIRE_GPU=1" } else { "FULLMAG_FEM_REQUIRE_GPU=0" }),
+    $(if ($Device -eq "gpu") { "FULLMAG_FEM_REQUIRE_CEED=1" } else { "FULLMAG_FEM_REQUIRE_CEED=0" }),
+    "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1",
+    "FULLMAG_FDM_EXECUTION=cpu"
+  )) {
+    $runArguments += @("-e", $entry)
+  }
+  if ($Device -eq "gpu") {
+    $runArguments += @("-e", "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson")
+  }
+  $runArguments += @($ServiceName, "bash", "-lc")
   $cliArguments = @()
   if ($Frontend -eq "dev") { $cliArguments += "--dev" }
   if ($RunMode -eq "interactive") { $cliArguments += "-i" }
