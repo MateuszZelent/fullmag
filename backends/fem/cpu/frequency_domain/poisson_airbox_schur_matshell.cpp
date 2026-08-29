@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <new>
 #include <vector>
@@ -3198,24 +3199,29 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         out_result->window_failed_subwindow_count = 0;
         out_result->window_empty_subwindow_count = 0;
         out_result->window_complete = false;
-        char executed_subwindows_json[sizeof(out_result->executed_subwindows_json)]{};
+        // This schedule can be hundreds of KiB. Keep it off the caller's
+        // (often Rust worker) stack, where it otherwise combines with the
+        // large modal result records and can overflow a 2 MiB thread stack.
+        std::vector<char> executed_subwindows_json(
+            sizeof(out_result->executed_subwindows_json),
+            '\0');
         std::size_t executed_subwindows_size = 1u;
         executed_subwindows_json[0] = '[';
         bool subwindow_json_complete = true;
         auto append_subwindow_json = [&](const char *format, auto... values) {
             if (!subwindow_json_complete ||
-                executed_subwindows_size >= sizeof(executed_subwindows_json)) {
+                executed_subwindows_size >= executed_subwindows_json.size()) {
                 subwindow_json_complete = false;
                 return;
             }
             const int written = std::snprintf(
-                executed_subwindows_json + executed_subwindows_size,
-                sizeof(executed_subwindows_json) - executed_subwindows_size,
+                executed_subwindows_json.data() + executed_subwindows_size,
+                executed_subwindows_json.size() - executed_subwindows_size,
                 format,
                 values...);
             if (written < 0 ||
                 static_cast<std::size_t>(written) >=
-                    sizeof(executed_subwindows_json) - executed_subwindows_size) {
+                    executed_subwindows_json.size() - executed_subwindows_size) {
                 subwindow_json_complete = false;
                 return;
             }
@@ -3225,14 +3231,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             append_subwindow_json("%s", "]");
             if (!subwindow_json_complete) {
                 std::snprintf(
-                    executed_subwindows_json,
-                    sizeof(executed_subwindows_json),
+                    executed_subwindows_json.data(),
+                    executed_subwindows_json.size(),
                     "[{\"status\":\"diagnostics_truncated\"}]");
             }
             copy_message(
                 out_result->executed_subwindows_json,
                 sizeof(out_result->executed_subwindows_json),
-                executed_subwindows_json);
+                executed_subwindows_json.data());
         };
         const double window_width = problem.frequency_max_hz - problem.frequency_min_hz;
         const double refinement_spacing =
@@ -3266,7 +3272,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 shifted_problem.requested_mode_count = pass_index == 0u
                     ? problem.requested_mode_count
                     : refined_requested_mode_count;
-                PoissonAirboxModalEigenResult shifted_result{};
+                auto shifted_result_storage =
+                    std::make_unique<PoissonAirboxModalEigenResult>();
+                PoissonAirboxModalEigenResult &shifted_result =
+                    *shifted_result_storage;
                 const FrequencyDomainStatus shifted_status =
                     solve_poisson_airbox_modal_eigen_cpu_schur(
                         shifted_problem,
@@ -3834,7 +3843,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             copy_message(
                 out_result->executed_subwindows_json,
                 sizeof(out_result->executed_subwindows_json),
-                executed_subwindows_json);
+                executed_subwindows_json.data());
             const int empty_selection_certificate_written = std::snprintf(
                 out_result->window_certificate_json,
                 sizeof(out_result->window_certificate_json),
@@ -3972,7 +3981,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 sizeof(cluster_ranks_json),
                 "[]");
         }
-        PoissonAirboxModalEigenResult aggregate = window_candidates.front().source;
+        auto aggregate_storage = std::make_unique<PoissonAirboxModalEigenResult>(
+            window_candidates.front().source);
+        PoissonAirboxModalEigenResult &aggregate = *aggregate_storage;
         aggregate.accepted_modes.clear();
         aggregate.accepted_modes.reserve(window_candidates.size());
         for (const WindowCandidate &candidate : window_candidates) {
@@ -4199,7 +4210,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         copy_message(
             aggregate.executed_subwindows_json,
             sizeof(aggregate.executed_subwindows_json),
-            executed_subwindows_json);
+            executed_subwindows_json.data());
         *out_result = std::move(aggregate);
         write_production_schur_diagnostics(
             problem,

@@ -1216,3 +1216,30 @@ Manifest tego przebiegu prawidłowo wskazuje dedykowany Windowsowy worktree.
 Ponieważ poprawka launchera była jeszcze niezatwierdzona podczas tego builda,
 manifest ma jawny `worktree_state=dirty`; po commicie wymagany jest krótki
 recapture/rebuild tożsamości przed realnym przebiegiem R7.
+
+### 17.9. Regresja stosu ujawniona przez realny frequency window
+
+Po czystym buildzie Windows uruchomiono realny antydot `frequency_window`
+0,5–30 GHz na tym samym cache equilibrium v2 i meshu 5156/27384. Pierwsza próba
+na obrazie `fem-cpu:windows-local` została prawidłowo odrzucona jako
+`slepc_not_available`; ten obraz pozostaje runtime'em FEM CPU time-domain, ale
+nie jest runtime'em modalnym. Bieżący commit przebudowano następnie w obrazie
+Docker Desktop `fullmag/fem-gpu:local`, używanym jako nośnik PETSc/SLEPc, z
+wykonaniem modalnym nadal ustawionym na CPU.
+
+Właściwy solve PETSc/SLEPc ujawnił `stack overflow` przed pierwszym subwindowem.
+Przyczyną było zagnieżdżenie w produkcyjnym wątku Rust kilku lokalnych
+`PoissonAirboxModalEigenResult` (każdy zawiera 256 KiB schedule i 512 KiB
+diagnostics) oraz dodatkowego 256-KiB bufora schedule. Syntetyczny natywny test
+uruchamiany z większego stosu procesu nie ujawniał tej regresji.
+
+Naprawa zachowuje rozmiary i treść dowodu, ale przenosi poza stos:
+
+- wynik modalny na granicy `modal_eigen_solver`;
+- wynik każdego CPU subwindow;
+- agregat pełnego okna;
+- roboczy bufor `executed_subwindows_json`.
+
+Focused native complete-window po zmianie — **PASS**. Realny Windows CPU window
+musi zostać powtórzony po commicie i clean source recapture; do tego czasu R7
+pozostaje `PARTIAL`.

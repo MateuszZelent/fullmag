@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -2003,7 +2004,15 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
             return result;
         }
 
-        PoissonAirboxModalEigenResult poisson_result{};
+        // The complete-window diagnostics make this result substantially
+        // larger than a typical Rust worker stack can safely nest with the
+        // native window solver's own state. Keep the production result on the
+        // heap and retain a reference so the existing result mapping remains
+        // explicit and unchanged.
+        auto poisson_result_storage =
+            std::make_unique<PoissonAirboxModalEigenResult>();
+        PoissonAirboxModalEigenResult &poisson_result =
+            *poisson_result_storage;
         FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_FEM_WITH_SLEPC
         if (request.execution_target == ModalExecutionTarget::production_gpu) {
