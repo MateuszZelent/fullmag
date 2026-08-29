@@ -170,6 +170,7 @@ import {
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
+  SIMULATION_COMMAND_FAILURE_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_PREPARATION_PATH,
@@ -210,6 +211,7 @@ import type {
   CheckpointRestoreRequest,
   CheckpointRestoreResponse,
   CommandDetailResource,
+  CommandFailureRequest,
   CommandQueueStatusResource,
   CommandResponse,
   CouplingListResource,
@@ -780,6 +782,17 @@ export class ControlRoomApi {
     detail: (commandId: string, options?: RequestOptions) =>
       this.requestJson<CommandDetailResource>(
         SIMULATION_COMMAND_DETAIL_PATH,
+        options,
+        { path: { command_id: commandId } },
+      ),
+    failure: (
+      commandId: string,
+      request: CommandFailureRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<CommandDetailResource, CommandFailureRequest>(
+        SIMULATION_COMMAND_FAILURE_PATH,
+        request,
         options,
         { path: { command_id: commandId } },
       ),

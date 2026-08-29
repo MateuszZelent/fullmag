@@ -44,7 +44,10 @@ import {
   useSolverStatusResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
-import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  SESSION_STATUS_RESOURCE_KEY,
+  useSessionStatusSelector,
+} from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 import {
@@ -316,6 +319,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
             solverStatus: needsRuntimeResources ? solverStatus.data : null,
             stageExecution: needsRuntimeResources ? stageExecution.data : null,
           }),
+          [SESSION_STATUS_RESOURCE_KEY]: needsSessionStatusResources
+            ? sessionStatusData
+            : null,
           [MESHING_BUILDS_LATEST_SUCCESSFUL_PATH]: meshBuildLatest.data,
           [MESHING_CAPABILITIES_PATH]: meshCapabilities.data,
           [MESHING_SUMMARY_PATH]: meshSummary.data,

@@ -58,6 +58,7 @@ const sessionStatusMock = {
 };
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  SESSION_STATUS_RESOURCE_KEY: "session:status",
   useSessionStatus: () => sessionStatusMock,
   useSessionStatusSelector: (selector: (status: typeof sessionStatusMock) => unknown) =>
     selector(sessionStatusMock),

@@ -7,11 +7,22 @@ import type {
   Viewport3DPrimitiveRenderModel,
   Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
+import type { Viewport3DColors } from "./viewport3dTypes";
 import { useViewport3DColors } from "./hooks/useViewport3DColors";
 export { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 export type MoveAxis = "x" | "y" | "z";
 export type Translation3 = [number, number, number];
+
+const FALLBACK_MOVE_GIZMO_COLORS: Viewport3DColors = {
+  accent: "#89b4fa",
+  background: "#11111b",
+  danger: "#f38ba8",
+  field: "#a6e3a1",
+  mesh: "#313244",
+  success: "#a6e3a1",
+  wire: "#6c7086",
+};
 
 export interface MoveDraft {
   objectId: string;
@@ -120,7 +131,8 @@ export function MoveObjectGizmo({
   onDraftChange?: (draft: MoveDraft | null) => void;
   onGestureActiveChange?: (active: boolean) => void;
 }) {
-  const { colors } = useViewport3DColors();
+  const { colors: themeColors } = useViewport3DColors();
+  const colors = themeColors ?? FALLBACK_MOVE_GIZMO_COLORS;
   const origin = object.translation ?? object.bounds.center;
   const [originX, originY, originZ] = origin;
   const [draft, setDraft] = useState<MoveDraft | null>(null);
@@ -152,8 +164,6 @@ export function MoveObjectGizmo({
   useEffect(() => {
     return installMoveGestureTerminalListeners(controller, window);
   }, [controller]);
-
-  if (!colors) return null;
 
   const offset: Translation3 = draft
     ? [

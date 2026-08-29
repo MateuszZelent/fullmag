@@ -45,6 +45,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  SESSION_STATUS_RESOURCE_KEY: "session:status",
   useSessionStatusSelector: (selector: (status: unknown) => unknown) =>
     selector({
       data: {
