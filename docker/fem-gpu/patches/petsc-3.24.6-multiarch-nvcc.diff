@@ -2,13 +2,14 @@ diff --git a/config/BuildSystem/config/packages/CUDA.py b/config/BuildSystem/con
 index 120175968e..0324ee721f 100644
 --- a/config/BuildSystem/config/packages/CUDA.py
 +++ b/config/BuildSystem/config/packages/CUDA.py
-@@ -108,9 +108,15 @@ class Configure(config.package.Package):
-     else:
+@@ -109,7 +109,13 @@ class Configure(config.package.Package):
        arg_sep = ' '
-
+-
 -    # generate both SASS and PTX for the arch, see https://stackoverflow.com/a/35657430/3447299
 -    # e.g., '-arch=sm_50' is equivalent to '-arch=compute_50 -code=sm_50,compute_50'.
 -    return ''.join(' -arch=sm_'+gen for gen in self.cudaArchList())
+-
++
 +    # Repeating -arch makes nvcc retain only the final architecture. Generate
 +    # one SASS image per qualified architecture and retain PTX for the newest
 +    # architecture for forward-compatible driver JIT.
@@ -18,6 +19,5 @@ index 120175968e..0324ee721f 100644
 +    )
 +    highest_arch = max(arch_list, key=int)
 +    return sass_flags + ' -gencode arch=compute_{0},code=compute_{0}'.format(highest_arch)
-
++
    def clangArchFlags(self):
-     if not self.cudaArchIsVersionList():
