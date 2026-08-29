@@ -8,14 +8,64 @@
 #include "cpu/mfem/runtime/aos_field.hpp"
 
 #include "context.hpp"
+#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "fem_common.hpp"
 
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
+#endif
+
+#include <algorithm>
 #include <cstdint>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace fullmag::fem {
 namespace {
+
+bool validate_periodic_local_values(
+    const PeriodicNodeMapView &map,
+    const double *data,
+    std::string &error)
+{
+    if (!map.reduced()) {
+        return true;
+    }
+    for (size_t node = 0; node < map.local_node_count; ++node) {
+        const auto true_node = static_cast<size_t>(map.local_to_true[node]);
+        const auto representative =
+            static_cast<size_t>(map.true_representatives[true_node]);
+        if (representative == node) {
+            continue;
+        }
+        const size_t base = node * 3u;
+        const size_t representative_base = representative * 3u;
+        if (data[base + 0u] != data[representative_base + 0u] ||
+            data[base + 1u] != data[representative_base + 1u] ||
+            data[base + 2u] != data[representative_base + 2u]) {
+            error = "local-node AoS field is inconsistent within periodic class at node " +
+                std::to_string(node) + " representative " +
+                std::to_string(representative);
+            return false;
+        }
+    }
+    return true;
+}
+
+void record_representation_conversion(
+    const Context &ctx,
+    std::uint64_t copies,
+    std::uint64_t bytes)
+{
+    auto &audit = ctx.representation_audit.counters;
+    audit.representation_copy_count += copies;
+    audit.gather_scatter_bytes += bytes;
+    if (ctx.transfer_audit.audit.hot_loop_depth > 0) {
+        audit.hot_loop_representation_copy_count += copies;
+        audit.hot_loop_gather_scatter_bytes += bytes;
+    }
+}
 
 size_t active_node_count(const Context &ctx, size_t nodes)
 {
@@ -49,27 +99,37 @@ std::string magnetization_node_context(
         "/" + std::to_string(nodes);
 }
 
-bool validate_periodic_node_map(const Context &ctx, std::string &error)
+} // namespace
+
+bool bind_periodic_node_map(
+    const Context &ctx,
+    PeriodicNodeMapView &view,
+    std::string &error)
 {
+    view = {};
     const size_t nodes = static_cast<size_t>(ctx.mesh.n_nodes);
     const auto &reduced = ctx.mesh.periodic_reduced_node;
     const auto &representatives = ctx.mesh.periodic_representative_nodes;
+    view.local_node_count = nodes;
     if (reduced.empty()) {
         if (!representatives.empty() || ctx.mesh.periodic_reduced_node_count != 0) {
             error = "periodic AoS map has representatives without a reduced-node map";
             return false;
         }
+        view.true_node_count = nodes;
         return true;
     }
     if (reduced.size() != nodes) {
         error = "periodic AoS reduced-node map size mismatch";
         return false;
     }
-    const size_t class_count = ctx.mesh.periodic_reduced_node_count != 0
-        ? static_cast<size_t>(ctx.mesh.periodic_reduced_node_count)
-        : representatives.size();
+    const size_t class_count = static_cast<size_t>(ctx.mesh.periodic_reduced_node_count);
     if (class_count == 0 || representatives.size() != class_count) {
         error = "periodic AoS representative map size mismatch";
+        return false;
+    }
+    if (ctx.mesh.periodic_map_revision == 0) {
+        error = "periodic AoS map has no revision";
         return false;
     }
     for (uint32_t representative : representatives) {
@@ -80,14 +140,23 @@ bool validate_periodic_node_map(const Context &ctx, std::string &error)
     }
     for (uint32_t class_index : reduced) {
         if (static_cast<size_t>(class_index) >= class_count) {
-            error = "periodic AoS reduced-node class index is out of range";
+            error = "periodic AoS true-node index is out of range";
             return false;
         }
     }
+    for (size_t true_node = 0; true_node < class_count; ++true_node) {
+        const uint32_t representative = representatives[true_node];
+        if (reduced[static_cast<size_t>(representative)] != true_node) {
+            error = "periodic AoS representative does not belong to its true-node class";
+            return false;
+        }
+    }
+    view.local_to_true = reduced.data();
+    view.true_representatives = representatives.data();
+    view.true_node_count = class_count;
+    view.revision = ctx.mesh.periodic_map_revision;
     return true;
 }
-
-} // namespace
 
 bool bind_local_node_aos_vector_field(
     const Context &ctx,
@@ -101,17 +170,8 @@ bool bind_local_node_aos_vector_field(
         error = "local-node AoS field length mismatch";
         return false;
     }
-    if (!validate_periodic_node_map(ctx, error)) {
-        return false;
-    }
-    if (!ctx.mesh.periodic_reduced_node.empty() &&
-        ctx.mesh.periodic_reduced_node_count == 0) {
-        error = "local-node AoS field has no periodic-node class count";
-        return false;
-    }
-    if (!ctx.mesh.periodic_reduced_node.empty() &&
-        ctx.mesh.periodic_map_revision == 0) {
-        error = "local-node AoS field has no periodic-map revision";
+    PeriodicNodeMapView periodic_map;
+    if (!bind_periodic_node_map(ctx, periodic_map, error)) {
         return false;
     }
     view.data = field_xyz.empty() ? nullptr : field_xyz.data();
@@ -120,6 +180,190 @@ bool bind_local_node_aos_vector_field(
     view.periodic_map_revision = ctx.mesh.periodic_map_revision;
     return true;
 }
+
+bool bind_local_node_aos_vector_field(
+    const Context &ctx,
+    const std::vector<double> &field_xyz,
+    ConstAosVectorFieldView &view,
+    std::string &error)
+{
+    view = {};
+    const size_t nodes = static_cast<size_t>(ctx.mesh.n_nodes);
+    if (nodes > std::numeric_limits<size_t>::max() / 3u ||
+        field_xyz.size() != nodes * 3u) {
+        error = "local-node AoS field length mismatch";
+        return false;
+    }
+    PeriodicNodeMapView periodic_map;
+    if (!bind_periodic_node_map(ctx, periodic_map, error)) {
+        return false;
+    }
+    view.data = field_xyz.empty() ? nullptr : field_xyz.data();
+    view.node_count = nodes;
+    view.space = AosVectorFieldSpace::local_nodes;
+    view.periodic_map = periodic_map;
+    return true;
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+namespace {
+
+bool bind_mfem_state_buffers(
+    Context &ctx,
+    mfem::FiniteElementSpace *&fes,
+    mfem::GridFunction *&mx,
+    mfem::GridFunction *&my,
+    mfem::GridFunction *&mz,
+    mfem::Vector *&true_mx,
+    mfem::Vector *&true_my,
+    mfem::Vector *&true_mz,
+    bool require_true_workspaces,
+    std::string &error)
+{
+    fes = ctx.mfem_context.fes;
+    mx = ctx.mfem_context.gf_mx;
+    my = ctx.mfem_context.gf_my;
+    mz = ctx.mfem_context.gf_mz;
+    true_mx = ctx.mfem_context.true_mx;
+    true_my = ctx.mfem_context.true_my;
+    true_mz = ctx.mfem_context.true_mz;
+    if (!ctx.mfem_context.ready || fes == nullptr || mx == nullptr || my == nullptr ||
+        mz == nullptr ||
+        (require_true_workspaces &&
+         (true_mx == nullptr || true_my == nullptr || true_mz == nullptr))) {
+        error = "MFEM state adapter requires initialized GridFunctions and true-DOF workspaces";
+        return false;
+    }
+    if (ctx.mesh.n_nodes > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+        error = "MFEM state adapter local extent exceeds MFEM integer range";
+        return false;
+    }
+    const int local_size = static_cast<int>(ctx.mesh.n_nodes);
+    const int true_size = fes->GetTrueVSize();
+    if (fes->GetNDofs() != local_size || mx->Size() != local_size ||
+        my->Size() != local_size || mz->Size() != local_size ||
+        (require_true_workspaces &&
+         (true_mx->Size() != true_size || true_my->Size() != true_size ||
+          true_mz->Size() != true_size))) {
+        error = "MFEM state adapter local/true extent mismatch";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool copy_local_node_aos_to_mfem_state(
+    Context &ctx,
+    const std::vector<double> &local_aos,
+    std::string &error)
+{
+    ConstAosVectorFieldView view;
+    if (!bind_local_node_aos_vector_field(ctx, local_aos, view, error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+    if (!validate_periodic_local_values(view.periodic_map, view.data, error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+    mfem::FiniteElementSpace *fes = nullptr;
+    mfem::GridFunction *mx = nullptr;
+    mfem::GridFunction *my = nullptr;
+    mfem::GridFunction *mz = nullptr;
+    mfem::Vector *true_mx = nullptr;
+    mfem::Vector *true_my = nullptr;
+    mfem::Vector *true_mz = nullptr;
+    if (!bind_mfem_state_buffers(
+            ctx, fes, mx, my, mz, true_mx, true_my, true_mz, false, error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+    (void)fes;
+    (void)true_mx;
+    (void)true_my;
+    (void)true_mz;
+
+    unpack_aos_to_existing_components(
+        local_aos,
+        ctx.mfem_context.m_x,
+        ctx.mfem_context.m_y,
+        ctx.mfem_context.m_z);
+    const auto copy_component = [](const std::vector<double> &source, mfem::GridFunction &target) {
+        double *host = audited_host_write(target);
+        std::copy(source.begin(), source.end(), host);
+    };
+    copy_component(ctx.mfem_context.m_x, *mx);
+    copy_component(ctx.mfem_context.m_y, *my);
+    copy_component(ctx.mfem_context.m_z, *mz);
+    const std::uint64_t bytes =
+        2u * 3u * static_cast<std::uint64_t>(view.node_count) * sizeof(double);
+    record_representation_conversion(ctx, 1u, bytes);
+    return true;
+}
+
+bool copy_mfem_state_to_local_node_aos(
+    Context &ctx,
+    std::vector<double> &local_aos,
+    std::string &error)
+{
+    PeriodicNodeMapView map;
+    if (!bind_periodic_node_map(ctx, map, error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+    mfem::FiniteElementSpace *fes = nullptr;
+    mfem::GridFunction *mx = nullptr;
+    mfem::GridFunction *my = nullptr;
+    mfem::GridFunction *mz = nullptr;
+    mfem::Vector *true_mx = nullptr;
+    mfem::Vector *true_my = nullptr;
+    mfem::Vector *true_mz = nullptr;
+    if (!bind_mfem_state_buffers(
+            ctx, fes, mx, my, mz, true_mx, true_my, true_mz, true, error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+
+    const auto round_trip_component = [](
+        mfem::GridFunction &field,
+        mfem::Vector &true_values,
+        std::vector<double> &host_values) {
+        field.GetTrueDofs(true_values);
+        field.SetFromTrueDofs(true_values);
+        const double *host = audited_host_read(field);
+        std::copy(host, host + field.Size(), host_values.begin());
+    };
+    if (ctx.mfem_context.m_x.size() != map.local_node_count ||
+        ctx.mfem_context.m_y.size() != map.local_node_count ||
+        ctx.mfem_context.m_z.size() != map.local_node_count) {
+        error = "MFEM state adapter host component workspace extent mismatch";
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+    round_trip_component(*mx, *true_mx, ctx.mfem_context.m_x);
+    round_trip_component(*my, *true_my, ctx.mfem_context.m_y);
+    round_trip_component(*mz, *true_mz, ctx.mfem_context.m_z);
+
+    std::vector<double> recovered;
+    pack_components_to_aos(
+        ctx.mfem_context.m_x,
+        ctx.mfem_context.m_y,
+        ctx.mfem_context.m_z,
+        recovered);
+    if (!validate_periodic_local_values(map, recovered.data(), error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
+        return false;
+    }
+    const std::uint64_t local_nodes = static_cast<std::uint64_t>(map.local_node_count);
+    const std::uint64_t mfem_true_dofs = static_cast<std::uint64_t>(fes->GetTrueVSize());
+    const std::uint64_t bytes =
+        (12u * local_nodes + 6u * mfem_true_dofs) * sizeof(double);
+    record_representation_conversion(ctx, 3u, bytes);
+    local_aos = std::move(recovered);
+    return true;
+}
+#endif
 
 void unpack_aos_to_components(
     const std::vector<double> &aos,
@@ -222,30 +466,6 @@ bool normalize_active_magnetization_aos(
     return true;
 }
 
-void project_static_periodic_aos(
-    const Context &ctx,
-    std::vector<double> &field_xyz)
-{
-    if (ctx.mesh.periodic_reduced_node.empty()) {
-        return;
-    }
-    std::string error;
-    if (!validate_periodic_node_map(ctx, error) ||
-        field_xyz.size() != static_cast<size_t>(ctx.mesh.n_nodes) * 3u) {
-        return;
-    }
-    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
-        const uint32_t reduced = ctx.mesh.periodic_reduced_node[static_cast<size_t>(node)];
-        const uint32_t representative =
-            ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
-        const size_t dst = static_cast<size_t>(node) * 3u;
-        const size_t src = static_cast<size_t>(representative) * 3u;
-        field_xyz[dst + 0u] = field_xyz[src + 0u];
-        field_xyz[dst + 1u] = field_xyz[src + 1u];
-        field_xyz[dst + 2u] = field_xyz[src + 2u];
-    }
-}
-
 bool project_static_periodic_aos_checked(
     const Context &ctx,
     std::vector<double> &field_xyz,
@@ -253,22 +473,42 @@ bool project_static_periodic_aos_checked(
 {
     AosVectorFieldView view;
     if (!bind_local_node_aos_vector_field(ctx, field_xyz, view, error)) {
+        ++ctx.representation_audit.counters.invalid_space_assertion_count;
         return false;
     }
     if (view.periodic_map_revision == 0) {
         return true;
     }
+    auto &audit = ctx.representation_audit.counters;
+    ++audit.representation_copy_count;
+    const bool in_hot_loop = ctx.transfer_audit.audit.hot_loop_depth > 0;
+    if (in_hot_loop) {
+        ++audit.hot_loop_representation_copy_count;
+    }
     for (size_t node = 0; node < view.node_count; ++node) {
         const uint32_t reduced = ctx.mesh.periodic_reduced_node[node];
         const uint32_t representative =
             ctx.mesh.periodic_representative_nodes[static_cast<size_t>(reduced)];
+        if (representative == node) {
+            continue;
+        }
         const size_t dst = node * 3u;
         const size_t src = static_cast<size_t>(representative) * 3u;
         view.data[dst + 0u] = view.data[src + 0u];
         view.data[dst + 1u] = view.data[src + 1u];
         view.data[dst + 2u] = view.data[src + 2u];
+        constexpr uint64_t vector_copy_bytes = 2u * 3u * sizeof(double);
+        audit.gather_scatter_bytes += vector_copy_bytes;
+        if (in_hot_loop) {
+            audit.hot_loop_gather_scatter_bytes += vector_copy_bytes;
+        }
     }
     return true;
+}
+
+RepresentationAuditCounters representation_audit_snapshot(const Context &ctx)
+{
+    return ctx.representation_audit.counters;
 }
 
 } // namespace fullmag::fem

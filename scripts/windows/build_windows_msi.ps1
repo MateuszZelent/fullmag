@@ -1,3 +1,8 @@
+[CmdletBinding()]
+param(
+  [string]$Version
+)
+
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -7,12 +12,18 @@ $StageRoot = Join-Path $DistRoot "windows-msi-root"
 $WixRoot = Join-Path $DistRoot "windows-msi-wix"
 $ManifestPath = Join-Path $DistRoot "windows-msi-manifest.json"
 $TargetTriple = "x86_64-pc-windows-msvc"
+$RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
 $TargetRoot = if ($env:CARGO_TARGET_DIR) {
   [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
 } else {
-  Join-Path $RepoRoot "target"
+  Join-Path $RepoDriveRoot "fullmag-build\cargo-targets\fullmag-windows-msi"
 }
 $ReleaseDir = Join-Path $TargetRoot "$TargetTriple\release"
+$ProductVersion = if ($Version) { $Version } elseif ($env:FULLMAG_WINDOWS_MSI_VERSION) { $env:FULLMAG_WINDOWS_MSI_VERSION } else { "0.1.0" }
+if ($ProductVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+  throw "MSI version must be a numeric x.y.z value, got $ProductVersion"
+}
+$BuildCuda = $env:FULLMAG_WINDOWS_MSI_CUDA -eq "1"
 
 function Require-Command {
   param([string]$Name)
@@ -91,6 +102,19 @@ function Copy-OrAliasLauncher {
   }
 }
 
+function Find-NativeFdmDll {
+  $searchRoot = Join-Path $TargetRoot "$TargetTriple\release\build"
+  $candidates = @(Get-ChildItem -LiteralPath $searchRoot -Directory -Filter "fullmag-fdm-sys-*" -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $candidate = Join-Path $_.FullName "out\native-build\backends\fdm\fullmag_fdm.dll"
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) { Get-Item -LiteralPath $candidate }
+    })
+  if ($candidates.Count -ne 1) {
+    throw "CUDA MSI build must produce exactly one canonical fullmag_fdm.dll below $searchRoot; found $($candidates.Count)"
+  }
+  return $candidates[0]
+}
+
 function Require-File {
   param([string]$Path)
   if (-not (Test-Path $Path)) {
@@ -106,9 +130,14 @@ function Write-VersionMetadata {
   $payload = @{
     product = "fullmag"
     artifact = "fullmag-windows-x86_64-msi"
-    preproduction = $true
+    product_version = $ProductVersion
+    release_channel = if ($env:FULLMAG_RELEASE_CHANNEL) { $env:FULLMAG_RELEASE_CHANNEL } else { "internal" }
     git_sha = $gitSha
     git_short = $gitShort
+    source_identity = $sourceIdentity
+    build_features = if ($BuildCuda) { @("cuda") } else { @() }
+    python_runtime = "external-python-3.12-or-newer"
+    node_runtime = "external-node-24.18-or-newer"
     built_at_utc = $builtAt
   } | ConvertTo-Json -Depth 4
   Set-Content -Path $Path -Value $payload -Encoding UTF8
@@ -119,48 +148,52 @@ function Write-RuntimeManifests {
   $cpuDir = Join-Path $RuntimesRoot "cpu-reference"
   $fdmCudaDir = Join-Path $RuntimesRoot "fdm-cuda"
   Ensure-Dir $cpuDir
-  Ensure-Dir $fdmCudaDir
+  if ($BuildCuda) { Ensure-Dir $fdmCudaDir }
 
-  @'
+  @"
 {
   "family": "cpu-reference",
-  "version": "0.1.0-preprod",
+  "version": "$ProductVersion",
   "worker": "../../bin/fullmag-bin.exe",
   "engines": [
-    { "backend": "fdm", "device": "cpu", "mode": "strict", "precision": "double", "public": true },
-    { "backend": "fem", "device": "cpu", "mode": "strict", "precision": "double", "public": true }
+    { "backend": "fdm", "device": "cpu", "mode": "strict", "precision": "double", "public": true }
   ]
 }
-'@ | Set-Content -Path (Join-Path $cpuDir "manifest.json") -Encoding UTF8
+"@ | Set-Content -Path (Join-Path $cpuDir "manifest.json") -Encoding UTF8
 
-  @'
+  if ($BuildCuda) {
+  @"
 {
   "family": "fdm-cuda",
-  "version": "0.1.0-preprod",
+  "version": "$ProductVersion",
   "worker": "../../bin/fullmag-bin.exe",
   "engines": [
     { "backend": "fdm", "device": "gpu", "mode": "strict", "precision": "double", "public": true },
     { "backend": "fdm", "device": "gpu", "mode": "strict", "precision": "single", "public": false }
   ]
 }
-'@ | Set-Content -Path (Join-Path $fdmCudaDir "manifest.json") -Encoding UTF8
+"@ | Set-Content -Path (Join-Path $fdmCudaDir "manifest.json") -Encoding UTF8
+  }
 }
 
 function Write-StageManifest {
   param([string]$Path)
+  $runtimePaths = @("runtimes/cpu-reference/manifest.json")
+  if ($BuildCuda) { $runtimePaths += "runtimes/fdm-cuda/manifest.json" }
   $manifest = [ordered]@{
+    schema_version = 2
     stage_root = $StageRoot
     generated_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    product_version = $ProductVersion
+    source_identity = $sourceIdentity
+    build_features = if ($BuildCuda) { @("cuda") } else { @() }
     bin = @(
       "bin/fullmag.exe",
       "bin/fullmag-api.exe",
       "bin/fullmag-ui.exe",
       "bin/fullmag-bin.exe"
     )
-    runtimes = @(
-      "runtimes/cpu-reference/manifest.json",
-      "runtimes/fdm-cuda/manifest.json"
-    )
+    runtimes = $runtimePaths
     share = @(
       "share/version.json"
     )
@@ -174,10 +207,11 @@ function Test-StagedLayout {
     (Join-Path $StageRoot "bin\fullmag-api.exe"),
     (Join-Path $StageRoot "bin\fullmag-ui.exe"),
     (Join-Path $StageRoot "web\index.html"),
+    (Join-Path $StageRoot "python\site-packages\fullmag\__init__.py"),
     (Join-Path $StageRoot "share\version.json"),
-    (Join-Path $StageRoot "runtimes\cpu-reference\manifest.json"),
-    (Join-Path $StageRoot "runtimes\fdm-cuda\manifest.json")
+    (Join-Path $StageRoot "runtimes\cpu-reference\manifest.json")
   )
+  if ($BuildCuda) { $required += (Join-Path $StageRoot "runtimes\fdm-cuda\manifest.json") }
   foreach ($path in $required) {
     Require-File $path
   }
@@ -232,11 +266,48 @@ function Harvest-Directory {
 
 Require-Command cargo
 Require-Command rustup
+Require-Command node
 Require-Command pnpm
+Require-Command python
 Require-Command heat.exe
 Require-Command candle.exe
 Require-Command light.exe
 Require-Command git
+
+$PinnedPnpmVersion = "10.8.1"
+$resolvedPnpmVersion = (& pnpm --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $resolvedPnpmVersion -ne $PinnedPnpmVersion) {
+  throw "Pinned pnpm validation failed; expected $PinnedPnpmVersion, got $resolvedPnpmVersion"
+}
+$nodeVersion = (& node --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v24\.(1[89]|2[0-9]|[3-9][0-9])(?:\.[0-9]+)?$') {
+  throw "Fullmag release requires Node 24.18.x through 24.99.x, got $nodeVersion"
+}
+
+$identityOutput = (& python (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) {
+  throw "Fullmag source identity capture failed with exit code ${LASTEXITCODE}: $identityOutput"
+}
+try {
+  $sourceIdentity = $identityOutput | ConvertFrom-Json
+} catch {
+  throw "Fullmag source identity capture returned invalid JSON: $identityOutput"
+}
+if ([string]$sourceIdentity.head_commit_full -notmatch '^[0-9a-f]{40}$' -or
+    [string]$sourceIdentity.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
+    $sourceIdentity.source_snapshot_dirty -isnot [bool]) {
+  throw "Fullmag source identity is incomplete or invalid"
+}
+$env:FULLMAG_SOURCE_GIT_COMMIT = [string]$sourceIdentity.head_commit_full
+$env:FULLMAG_SOURCE_WORKTREE_STATE = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+$env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = [string]$sourceIdentity.source_snapshot_sha256
+$env:CARGO_TARGET_DIR = $TargetRoot
+Ensure-Dir $TargetRoot
+
+if ($BuildCuda) {
+  Require-Command nvcc
+  $env:CUDACXX = (Get-Command nvcc).Source
+}
 
 Import-VsEnvironment
 
@@ -257,18 +328,26 @@ try {
     throw "rustup target add failed with exit code $LASTEXITCODE"
   }
 
-  cargo build --release --target $TargetTriple -p fullmag-cli
+  $launcherBuildArgs = @("build", "--locked", "--release", "--target", $TargetTriple, "-p", "fullmag-cli")
+  if ($BuildCuda) { $launcherBuildArgs += @("--features", "cuda") }
+  & cargo @launcherBuildArgs
   if ($LASTEXITCODE -ne 0) {
     throw "fullmag-cli build failed with exit code $LASTEXITCODE"
   }
-  cargo build --release --target $TargetTriple -p fullmag-api
+  $apiBuildArgs = @("build", "--locked", "--release", "--target", $TargetTriple, "-p", "fullmag-api")
+  if ($BuildCuda) { $apiBuildArgs += @("--features", "cuda") }
+  & cargo @apiBuildArgs
   if ($LASTEXITCODE -ne 0) {
     throw "fullmag-api build failed with exit code $LASTEXITCODE"
   }
-  cargo build --release --target $TargetTriple -p fullmag-desktop
+  & cargo build --locked --release --target $TargetTriple -p fullmag-desktop
   if ($LASTEXITCODE -ne 0) {
     throw "fullmag-desktop build failed with exit code $LASTEXITCODE"
   }
+  & python -m pip install --disable-pip-version-check --quiet build
+  if ($LASTEXITCODE -ne 0) { throw "Python build frontend installation failed with exit code $LASTEXITCODE" }
+  & python -m build packages/fullmag-py
+  if ($LASTEXITCODE -ne 0) { throw "Python wheel build failed with exit code $LASTEXITCODE" }
 
   Remove-Item -Recurse -Force $StageRoot, $WixRoot -ErrorAction SilentlyContinue
   Ensure-Dir $StageRoot
@@ -277,6 +356,7 @@ try {
   $binDir = Join-Path $StageRoot "bin"
   $libDir = Join-Path $StageRoot "lib"
   $pythonDir = Join-Path $StageRoot "python"
+  $pythonSiteDir = Join-Path $pythonDir "site-packages"
   $webDir = Join-Path $StageRoot "web"
   $runtimesDir = Join-Path $StageRoot "runtimes"
   $examplesDir = Join-Path $StageRoot "examples"
@@ -291,18 +371,37 @@ try {
   Ensure-Dir $examplesDir
   Ensure-Dir $licensesDir
 
-  Copy-IfExists (Join-Path $ReleaseDir "fullmag.exe") (Join-Path $binDir "fullmag.exe")
-  Copy-IfExists (Join-Path $ReleaseDir "fullmag-api.exe") (Join-Path $binDir "fullmag-api.exe")
-  Copy-IfExists (Join-Path $ReleaseDir "fullmag-ui.exe") (Join-Path $binDir "fullmag-ui.exe")
+  foreach ($binary in @("fullmag.exe", "fullmag-api.exe", "fullmag-ui.exe")) {
+    $sourceBinary = Join-Path $ReleaseDir $binary
+    Require-File $sourceBinary
+    Copy-Item -Force $sourceBinary (Join-Path $binDir $binary)
+  }
   Copy-OrAliasLauncher (Join-Path $ReleaseDir "fullmag-bin.exe") (Join-Path $ReleaseDir "fullmag.exe") (Join-Path $binDir "fullmag-bin.exe")
+  Require-File (Join-Path $binDir "fullmag-bin.exe")
 
   Get-ChildItem -Path $ReleaseDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
     Copy-Item -Force $_.FullName (Join-Path $libDir $_.Name)
   }
+  if ($BuildCuda) {
+    $nativeFdmDll = Find-NativeFdmDll
+    Copy-Item -Force $nativeFdmDll.FullName (Join-Path $libDir "fullmag_fdm.dll")
+  }
 
+  Require-File (Join-Path $RepoRoot "apps\control-room\out\index.html")
   Copy-Tree (Join-Path $RepoRoot "apps\control-room\out") $webDir
+  Copy-Item -Force (Join-Path $RepoRoot "apps\control-room\dev-server.mjs") (Join-Path $webDir "dev-server.mjs")
+  Ensure-Dir (Join-Path $webDir "scripts")
+  Copy-Item -Force (Join-Path $RepoRoot "apps\control-room\scripts\resolve-pnpm-invocation.mjs") (Join-Path $webDir "scripts\resolve-pnpm-invocation.mjs")
   Copy-Tree (Join-Path $RepoRoot "examples") $examplesDir
-  Copy-Tree (Join-Path $RepoRoot ".fullmag\local\python") $pythonDir
+  $wheel = Get-ChildItem -LiteralPath (Join-Path $RepoRoot "packages\fullmag-py\dist") -Filter "*.whl" -File |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+  if (-not $wheel) { throw "Python wheel was not produced under packages\fullmag-py\dist" }
+  Ensure-Dir $pythonSiteDir
+  Copy-Item -Force $wheel.FullName (Join-Path $pythonDir $wheel.Name)
+  & python -m pip install --disable-pip-version-check --target $pythonSiteDir $wheel.FullName
+  if ($LASTEXITCODE -ne 0) { throw "staging Python wheel dependencies failed with exit code $LASTEXITCODE" }
+  & python -c "import sys; sys.path.insert(0, r'$pythonSiteDir'); import fullmag"
+  if ($LASTEXITCODE -ne 0) { throw "staged Python package import smoke failed with exit code $LASTEXITCODE" }
 
   if (Test-Path (Join-Path $RepoRoot "external_solvers\tetrax\logo_large.png")) {
     Ensure-Dir (Join-Path $shareDir "icons")
@@ -310,21 +409,35 @@ try {
       (Join-Path $shareDir "icons\fullmag.png")
   }
 
-  @'
-Third-party license aggregation is not bundled yet in this preproduction artifact.
-This MSI is for internal validation of the Windows install layout.
-'@ | Set-Content -Path (Join-Path $licensesDir "README.txt") -Encoding UTF8
+  @"
+Fullmag Windows MSI license inventory.
+
+This artifact carries the runtime's Python wheel and JavaScript/Rust lockfiles
+used to reproduce dependency versions. Third-party license text is not
+automatically generated by this script; review the dependency lockfiles before
+redistribution outside the internal release channel.
+"@ | Set-Content -Path (Join-Path $licensesDir "README.txt") -Encoding UTF8
 
   Write-VersionMetadata (Join-Path $shareDir "version.json")
   Write-RuntimeManifests $runtimesDir
   Write-StageManifest $ManifestPath
   Test-StagedLayout
 
+  $fdmCudaDirectoryXml = if ($BuildCuda) {
+    '            <Directory Id="RuntimeFdmCudaDir" Name="fdm-cuda" />'
+  } else { "" }
+  $fdmCudaFeatureXml = if ($BuildCuda) {
+    @"
+    <Feature Id="FdmCuda" Title="FDM CUDA Runtime" Level="1000">
+      <ComponentGroupRef Id="RuntimeFdmCudaFiles" />
+    </Feature>
+"@
+  } else { "" }
   $productWxs = Join-Path $WixRoot "Product.wxs"
   @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="Fullmag" Language="1033" Version="0.1.0" Manufacturer="Fullmag" UpgradeCode="F4E7E24A-BB4D-4C8E-BD4A-0C4C9B3AF001">
+  <Product Id="*" Name="Fullmag" Language="1033" Version="$ProductVersion" Manufacturer="Fullmag" UpgradeCode="F4E7E24A-BB4D-4C8E-BD4A-0C4C9B3AF001">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
@@ -341,7 +454,7 @@ This MSI is for internal validation of the Windows install layout.
           <Directory Id="WebDir" Name="web" />
           <Directory Id="RuntimesDir" Name="runtimes">
             <Directory Id="RuntimeCpuReferenceDir" Name="cpu-reference" />
-            <Directory Id="RuntimeFdmCudaDir" Name="fdm-cuda" />
+$fdmCudaDirectoryXml
           </Directory>
           <Directory Id="ExamplesDir" Name="examples" />
           <Directory Id="ShareDir" Name="share" />
@@ -381,9 +494,7 @@ This MSI is for internal validation of the Windows install layout.
     <Feature Id="CpuReference" Title="CPU Reference Runtime" Level="1">
       <ComponentGroupRef Id="RuntimeCpuReferenceFiles" />
     </Feature>
-    <Feature Id="FdmCuda" Title="FDM CUDA Runtime" Level="1000">
-      <ComponentGroupRef Id="RuntimeFdmCudaFiles" />
-    </Feature>
+$fdmCudaFeatureXml
     <Feature Id="Examples" Title="Examples" Level="1000">
       <ComponentGroupRef Id="ExampleFiles" />
     </Feature>

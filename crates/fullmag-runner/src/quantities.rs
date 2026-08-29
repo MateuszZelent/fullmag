@@ -125,6 +125,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
 fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
     match id {
         QuantityId::M | QuantityId::HEff | QuantityId::Torque => true,
+        QuantityId::FrozenSpins => plan.frozen_spins.is_some(),
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => has_nonzero_external_field(plan.external_field),
@@ -205,6 +206,7 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
         // The multilayer IR does not yet retain drive, antenna, thermal,
         // magnetoelastic, transport, or electric-field terms.  They must stay
         // unavailable rather than being inferred from another plan family.
+        QuantityId::FrozenSpins => plan.frozen_spins.is_some(),
         QuantityId::HDrive
         | QuantityId::HOe
         | QuantityId::HAnt
@@ -253,6 +255,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
 fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
     match id {
         QuantityId::M | QuantityId::HEff | QuantityId::Torque => true,
+        QuantityId::FrozenSpins => plan.frozen_spins.is_some(),
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::DemagPhi => plan.enable_demag,
@@ -345,7 +348,9 @@ mod tests {
     use fullmag_ir::{
         DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR,
         FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR,
-        IntegratorChoice, MeshIR, RegionalFieldDriveIR, TimeDependenceIR,
+        IntegratorChoice, MeshIR, RegionalFieldDriveIR, ResolvedFrozenSpinsPlanIR,
+        SelectionAuthoredFingerprintIR, SelectionCertificateIR, TimeDependenceIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use std::collections::HashMap;
 
@@ -354,6 +359,44 @@ mod tests {
             enable_exchange: true,
             enable_demag: false,
             ..FdmPlanIR::default()
+        }
+    }
+
+    fn frozen_spins_plan(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+        let active_dof_count = mask.len() as u64;
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["viewport-mask".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: "a".repeat(64),
+            grid_or_mesh_fingerprint: "quantity-carrier".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.dof_point.v1".to_string(),
+                constraint_ids: vec!["viewport-mask".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "viewport-mask".to_string(),
+                    selector_sha256: "b".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "quantity-carrier".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256: "a".repeat(64),
+                resolved_reference_sha256: "c".repeat(64),
+                warnings: Vec::new(),
+            },
         }
     }
 
@@ -498,6 +541,36 @@ mod tests {
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
             vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff", "H_oe"]
+        );
+    }
+
+    #[test]
+    fn frozen_spins_quantity_is_advertised_only_for_plans_with_a_resolved_mask() {
+        let requested = ["frozen_spins"];
+        let mut fdm = fdm_plan();
+        assert!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &requested).is_empty()
+        );
+        fdm.frozen_spins = Some(frozen_spins_plan(vec![true]));
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &requested),
+            vec!["frozen_spins"]
+        );
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &requested),
+            vec!["frozen_spins"]
+        );
+
+        let mut fem = fem_plan();
+        assert!(active_fem_preview_quantities(FemEngine::CpuNative, &fem, &requested).is_empty());
+        fem.frozen_spins = Some(frozen_spins_plan(vec![true, false, false, true]));
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::CpuNative, &fem, &requested),
+            vec!["frozen_spins"]
+        );
+        assert_eq!(
+            active_fem_preview_quantities(FemEngine::NativeGpu, &fem, &requested),
+            vec!["frozen_spins"]
         );
     }
 

@@ -13,6 +13,7 @@ use crate::solvers::fdm::interactions::capabilities::unsupported_cpu_fdm_terms;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError, StepAction, StepUpdate};
 
 /// Execute an FDM plan using the selected engine.
+#[cfg(test)]
 pub(crate) fn execute_fdm<'a>(
     engine: FdmEngine,
     plan: &FdmPlanIR,
@@ -153,6 +154,12 @@ pub(crate) fn execute_fdm_multilayer<'a>(
             artifact_writer,
         ),
         FdmEngine::CudaFdm => {
+            if plan.frozen_spins.is_some() {
+                return Err(RunError {
+                    message: "frozen_spins_fdm_multilayer_cuda_unqualified: resolved Frozen Spins carriers are executable only by the CPU double-precision multilayer lane"
+                        .to_string(),
+                });
+            }
             #[cfg(feature = "cuda")]
             {
                 return multilayer_cuda::execute_cuda_fdm_multilayer_with_live(

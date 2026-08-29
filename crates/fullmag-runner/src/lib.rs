@@ -70,23 +70,6 @@ use types::TimestepExecutionLane;
 #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 pub(crate) const NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER: f64 = 1e-13;
 
-/// Default initial timestep seed when adaptive stepping has no meaningful seed.
-pub(crate) const DEFAULT_ADAPTIVE_DT_INITIAL: f64 = 1e-13;
-
-pub(crate) fn resolve_initial_timestep(
-    fixed_timestep: Option<f64>,
-    adaptive_timestep: Option<&fullmag_ir::AdaptiveTimeStepIR>,
-) -> Option<f64> {
-    fixed_timestep.or_else(|| {
-        adaptive_timestep.map(|adaptive| {
-            adaptive
-                .dt_initial
-                .filter(|dt_initial| (*dt_initial - adaptive.dt_min).abs() > f64::EPSILON)
-                .unwrap_or(DEFAULT_ADAPTIVE_DT_INITIAL)
-        })
-    })
-}
-
 pub(crate) fn resolve_timestep_policy(
     integrator: Option<fullmag_ir::IntegratorChoice>,
     fixed_timestep: Option<f64>,

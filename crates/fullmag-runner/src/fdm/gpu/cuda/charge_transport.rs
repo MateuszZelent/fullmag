@@ -657,6 +657,7 @@ fn checked_face_count(grid: [u64; 3]) -> Result<usize, GpuChargeTransportError> 
         .ok_or_else(|| GpuChargeTransportError::validation("oriented face count overflows usize"))
 }
 
+#[cfg(feature = "cuda")]
 pub(crate) fn input_from_resolved(
     plan: &fullmag_ir::FdmPlanIR,
     descriptor: &fullmag_ir::ResolvedFdmGpuChargeTransportIR,
@@ -1612,6 +1613,7 @@ pub(crate) fn execute_public_gpu_charge_only(
     })
 }
 
+#[cfg(feature = "cuda")]
 fn hex_bytes(bytes: &[u8]) -> String {
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

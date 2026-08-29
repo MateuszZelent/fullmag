@@ -12,7 +12,6 @@
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
-#include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -27,20 +26,7 @@
 namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
-namespace {
-
 constexpr int kInterruptPollStride = 256;
-
-void copy_host_vector_to_mfem(const std::vector<double> &src, mfem::Vector &dst, bool use_device) {
-    dst.SetSize(static_cast<int>(src.size()));
-    dst.UseDevice(use_device);
-    double *host = audited_host_write(dst);
-    for (size_t i = 0; i < src.size(); ++i) {
-        host[static_cast<int>(i)] = src[i];
-    }
-}
-
-} // namespace
 
 bool compute_exchange_for_magnetization(
     Context &ctx,
@@ -99,11 +85,10 @@ bool compute_exchange_for_magnetization(
         ctx.transfer_audit.audit,
         TransferAuditScopeKind::ExchangeInterop);
 
-    const bool use_device = mfem::Device::IsEnabled();
-    unpack_aos_to_existing_components(m_xyz, ctx.mfem_context.m_x, ctx.mfem_context.m_y, ctx.mfem_context.m_z);
-    copy_host_vector_to_mfem(ctx.mfem_context.m_x, *gf_mx, use_device);
-    copy_host_vector_to_mfem(ctx.mfem_context.m_y, *gf_my, use_device);
-    copy_host_vector_to_mfem(ctx.mfem_context.m_z, *gf_mz, use_device);
+    if (!copy_local_node_aos_to_mfem_state(ctx, m_xyz, error)) {
+        error = "MFEM exchange state adapter failed: " + error;
+        return false;
+    }
 
     double exchange_energy_accum = 0.0;
     double component_energy = 0.0;

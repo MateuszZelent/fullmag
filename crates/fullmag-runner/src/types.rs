@@ -4,6 +4,9 @@ use fullmag_ir::{
     FemEigenExecutionResolutionIR, FemMeshPartRole, FemMeshPartSelector, MeshQualityIR,
     StageCompletionIR,
 };
+pub use fullmag_quantities::{
+    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
+};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -811,6 +814,10 @@ pub struct StepStats {
     /// Optional native CPU RK accepted-endpoint cache receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_cache_telemetry: Option<fullmag_quantities::EndpointCacheTelemetry>,
+    /// Versioned receipt of the native FEM state/material representation and
+    /// cumulative conversion traffic observed by this backend handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_representation_receipt: Option<FemRepresentationReceipt>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub solver_attempts: Vec<SolverAttemptRecord>,
     /// Number of PCG iterations in the last Poisson demag solve.
@@ -1019,6 +1026,7 @@ impl Default for StepStats {
             demag_solves: 0,
             fsal_reused: false,
             endpoint_cache_telemetry: None,
+            fem_representation_receipt: None,
             solver_attempts: Vec::new(),
             poisson_iterations: 0,
             poisson_final_residual: 0.0,
@@ -1047,7 +1055,8 @@ impl Default for StepStats {
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
-        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry, StepStats,
+        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
+        FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, StepStats,
     };
 
     #[test]
@@ -1100,6 +1109,20 @@ mod all_in_gpu_fem_transfer_audit_tests {
                 endpoint_refreshes: 5,
                 accepted_step_wall_time_ns: 6,
             }),
+            fem_representation_receipt: Some(FemRepresentationReceipt {
+                schema_version: 1,
+                state_space: FemStateRepresentation::LocalNodeAos,
+                ms_location: FemMaterialFieldLocation::NodalP1,
+                a_location: FemMaterialFieldLocation::ElementDg0,
+                local_node_count: 12,
+                true_node_count: 9,
+                periodic_map_revision: 4,
+                representation_copy_count: 7,
+                gather_scatter_bytes: 288,
+                invalid_space_assertion_count: 0,
+                hot_loop_representation_copy_count: 2,
+                hot_loop_gather_scatter_bytes: 96,
+            }),
             ..StepStats::default()
         };
 
@@ -1116,6 +1139,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(diagnostics.extra_energy_wall_time_ns, 29);
         let endpoint = diagnostics
             .endpoint_cache_telemetry
+            .as_ref()
             .expect("endpoint receipt should reach canonical diagnostics");
         assert_eq!(endpoint.final_refresh_reason, "cache_hit");
         assert_eq!(endpoint.final_rhs_evaluations, 2);
@@ -1123,6 +1147,30 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(endpoint.endpoint_cache_hits, 4);
         assert_eq!(endpoint.endpoint_refreshes, 5);
         assert_eq!(endpoint.accepted_step_wall_time_ns, 6);
+        let receipt = diagnostics
+            .fem_representation_receipt
+            .as_ref()
+            .expect("representation receipt should reach canonical diagnostics");
+        assert_eq!(receipt.state_space, FemStateRepresentation::LocalNodeAos);
+        assert_eq!(receipt.ms_location, FemMaterialFieldLocation::NodalP1);
+        assert_eq!(receipt.a_location, FemMaterialFieldLocation::ElementDg0);
+        assert_eq!(receipt.local_node_count, 12);
+        assert_eq!(receipt.true_node_count, 9);
+        assert_eq!(receipt.periodic_map_revision, 4);
+        assert_eq!(receipt.representation_copy_count, 7);
+        assert_eq!(receipt.gather_scatter_bytes, 288);
+        assert_eq!(receipt.hot_loop_representation_copy_count, 2);
+        assert_eq!(receipt.hot_loop_gather_scatter_bytes, 96);
+        let serialized = serde_json::to_value(&diagnostics)
+            .expect("canonical diagnostics should serialize with representation receipt");
+        assert_eq!(
+            serialized["fem_representation_receipt"]["state_space"],
+            "local_node_aos"
+        );
+        assert_eq!(
+            serialized["fem_representation_receipt"]["gather_scatter_bytes"],
+            288
+        );
         assert_eq!(diagnostics.relaxation_preconditioner_wall_time_ns, 0);
     }
 
@@ -1564,6 +1612,7 @@ impl StepStats {
             demag_solves: self.demag_solves,
             fsal_reused: self.fsal_reused,
             endpoint_cache_telemetry: self.endpoint_cache_telemetry.clone(),
+            fem_representation_receipt: self.fem_representation_receipt.clone(),
             poisson_iterations: self.poisson_iterations,
             poisson_final_residual: self.poisson_final_residual,
             demag_refreshed: self.demag_refreshed,

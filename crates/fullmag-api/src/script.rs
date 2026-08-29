@@ -23,6 +23,16 @@ pub(crate) fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Resolve the writable per-user state root supplied by the launcher.  A
+/// packaged install may live below Program Files, so generated live-workspace
+/// files and mesh caches must not be placed next to the read-only binaries.
+pub(crate) fn state_root(repo_root: &Path) -> PathBuf {
+    std::env::var_os("FULLMAG_STATE_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root.join(".fullmag"))
+}
+
 pub(crate) async fn sync_current_live_script_with_request(
     state: &Arc<AppState>,
     req: ScriptSyncRequest,
@@ -320,9 +330,9 @@ pub(crate) fn run_python_helper(
     }
 
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
+    let packaged_site_packages = real_root.join("python").join("site-packages");
     let python_extension_root = real_root.join(".fullmag").join("local");
-    let fem_mesh_cache_dir = real_root
-        .join(".fullmag")
+    let fem_mesh_cache_dir = state_root(&real_root)
         .join("local")
         .join("cache")
         .join("fem_mesh_assets");
@@ -334,19 +344,26 @@ pub(crate) fn run_python_helper(
         command.args(args);
         command.env("PYTHONUNBUFFERED", "1");
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
-        if pythonpath.exists() {
-            let mut merged = pythonpath.display().to_string();
-            if let Some(existing) = &inherited_pythonpath {
-                if !existing.is_empty() {
-                    merged.push(if cfg!(windows) { ';' } else { ':' });
-                    merged.push_str(existing);
-                }
+        let mut python_paths = Vec::new();
+        if pythonpath.is_dir() {
+            python_paths.push(pythonpath.display().to_string());
+        }
+        if packaged_site_packages.is_dir() {
+            python_paths.push(packaged_site_packages.display().to_string());
+        }
+        if python_extension_root.is_dir() {
+            python_paths.push(python_extension_root.display().to_string());
+        }
+        if let Some(existing) = &inherited_pythonpath {
+            if !existing.is_empty() {
+                python_paths.push(existing.clone());
             }
-            if python_extension_root.is_dir() {
-                merged.push(if cfg!(windows) { ';' } else { ':' });
-                merged.push_str(&python_extension_root.display().to_string());
-            }
-            command.env("PYTHONPATH", merged);
+        }
+        if !python_paths.is_empty() {
+            command.env(
+                "PYTHONPATH",
+                python_paths.join(if cfg!(windows) { ";" } else { ":" }),
+            );
         }
 
         match command.output() {
@@ -390,6 +407,8 @@ fn python_path_candidates(repo_root: &Path) -> Vec<PathBuf> {
             .join(".venv")
             .join("Scripts")
             .join("python.exe"),
+        repo_root.join("python").join("python.exe"),
+        repo_root.join("python").join("Scripts").join("python.exe"),
     ]
 }
 

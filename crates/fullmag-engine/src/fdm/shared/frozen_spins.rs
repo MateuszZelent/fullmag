@@ -2,6 +2,7 @@
 
 use crate::{EngineError, Result, Vector3, VectorFieldSoA};
 use fullmag_ir::ResolvedFrozenSpinsPlanIR;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Dense reference-state constraint captured atomically at stage activation.
 #[derive(Debug, Clone, PartialEq)]
@@ -11,6 +12,9 @@ pub struct FrozenSpinsState {
     frozen_dof_count: usize,
     free_dof_count: usize,
     activation_epoch: u64,
+    constraint_activation_epochs: BTreeMap<String, u64>,
+    active_constraint_ids: BTreeSet<String>,
+    resolved_constraint_set_revision: u64,
 }
 
 impl FrozenSpinsState {
@@ -52,7 +56,55 @@ impl FrozenSpinsState {
             frozen_dof_count,
             free_dof_count,
             activation_epoch: 1,
+            constraint_activation_epochs: plan
+                .constraint_ids
+                .iter()
+                .cloned()
+                .map(|id| (id, 1))
+                .collect(),
+            active_constraint_ids: plan.constraint_ids.iter().cloned().collect(),
+            resolved_constraint_set_revision: 1,
         })
+    }
+
+    /// Atomically prepare the constraint state for a later stage activation.
+    /// Constraints that remain active keep their epoch; newly active or
+    /// re-entering constraints advance their own epoch. The caller publishes
+    /// the returned value only after its revision/topology commit check.
+    pub fn transition_at_activation(
+        previous: &Self,
+        plan: &ResolvedFrozenSpinsPlanIR,
+        active_mask: Option<&[bool]>,
+        state: &[Vector3],
+    ) -> Result<Self> {
+        let mut next = Self::capture_at_activation(plan, active_mask, state)?;
+        next.constraint_activation_epochs = previous.constraint_activation_epochs.clone();
+        next.active_constraint_ids = plan.constraint_ids.iter().cloned().collect();
+        for id in &next.active_constraint_ids {
+            if !previous.active_constraint_ids.contains(id) {
+                let epoch = next
+                    .constraint_activation_epochs
+                    .get(id)
+                    .copied()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| EngineError::new("frozen_spins_activation_epoch_overflow"))?;
+                next.constraint_activation_epochs.insert(id.clone(), epoch);
+            }
+        }
+        next.resolved_constraint_set_revision = previous
+            .resolved_constraint_set_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                EngineError::new("frozen_spins_resolved_constraint_set_revision_overflow")
+            })?;
+        next.activation_epoch = next
+            .active_constraint_ids
+            .iter()
+            .filter_map(|id| next.constraint_activation_epochs.get(id).copied())
+            .max()
+            .unwrap_or(1);
+        Ok(next)
     }
 
     /// Restore a previously activated constraint from a durable checkpoint.
@@ -99,7 +151,50 @@ impl FrozenSpinsState {
             frozen_dof_count,
             free_dof_count,
             activation_epoch,
+            constraint_activation_epochs: BTreeMap::new(),
+            active_constraint_ids: BTreeSet::new(),
+            resolved_constraint_set_revision: activation_epoch,
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_checkpoint_with_activation_set(
+        frozen_mask: Vec<bool>,
+        reference: Vec<Vector3>,
+        frozen_dof_count: usize,
+        free_dof_count: usize,
+        constraint_activation_epochs: BTreeMap<String, u64>,
+        active_constraint_ids: BTreeSet<String>,
+        resolved_constraint_set_revision: u64,
+    ) -> Result<Self> {
+        if resolved_constraint_set_revision == 0
+            || constraint_activation_epochs
+                .values()
+                .any(|epoch| *epoch == 0)
+            || active_constraint_ids
+                .iter()
+                .any(|id| !constraint_activation_epochs.contains_key(id))
+        {
+            return Err(EngineError::new(
+                "frozen_spins_checkpoint_activation_set_invalid",
+            ));
+        }
+        let activation_epoch = active_constraint_ids
+            .iter()
+            .filter_map(|id| constraint_activation_epochs.get(id).copied())
+            .max()
+            .unwrap_or(1);
+        let mut state = Self::from_checkpoint(
+            frozen_mask,
+            reference,
+            frozen_dof_count,
+            free_dof_count,
+            activation_epoch,
+        )?;
+        state.constraint_activation_epochs = constraint_activation_epochs;
+        state.active_constraint_ids = active_constraint_ids;
+        state.resolved_constraint_set_revision = resolved_constraint_set_revision;
+        Ok(state)
     }
 
     pub fn mask_final_rhs(&self, rhs: &mut [Vector3]) {
@@ -159,6 +254,18 @@ impl FrozenSpinsState {
         self.activation_epoch
     }
 
+    pub fn constraint_activation_epochs(&self) -> &BTreeMap<String, u64> {
+        &self.constraint_activation_epochs
+    }
+
+    pub fn active_constraint_ids(&self) -> &BTreeSet<String> {
+        &self.active_constraint_ids
+    }
+
+    pub fn resolved_constraint_set_revision(&self) -> u64 {
+        self.resolved_constraint_set_revision
+    }
+
     pub fn max_norm_free(&self, values: &[Vector3]) -> f64 {
         values
             .iter()
@@ -216,5 +323,58 @@ impl FrozenSpinsState {
                 ])
             })
             .fold(0.0, f64::max)
+    }
+
+    /// Maximum representational distance from the captured reference over
+    /// frozen components. A valid hard-restore acceptance gate requires zero.
+    pub fn max_reference_ulp_drift(&self, state: &[Vector3]) -> u64 {
+        fn ordered(bits: u64) -> u64 {
+            if bits & (1_u64 << 63) == 0 {
+                bits | (1_u64 << 63)
+            } else {
+                !bits
+            }
+        }
+
+        state
+            .iter()
+            .zip(&self.reference)
+            .zip(&self.frozen_mask)
+            .filter(|(_, frozen)| **frozen)
+            .flat_map(|((value, reference), _)| value.iter().zip(reference))
+            .map(|(value, reference)| {
+                ordered(value.to_bits()).abs_diff(ordered(reference.to_bits()))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hard_restore_is_zero_ulp_and_metric_detects_one_ulp() {
+        let frozen = FrozenSpinsState::from_checkpoint(
+            vec![true, false],
+            vec![[1.0, -0.0, 0.5], [0.0, 1.0, 0.0]],
+            1,
+            1,
+            1,
+        )
+        .unwrap();
+        let mut candidate = vec![
+            [f64::from_bits(1.0_f64.to_bits() + 1), 0.0, 0.5],
+            [0.0, 0.0, 1.0],
+        ];
+        assert_eq!(frozen.max_reference_ulp_drift(&candidate), 1);
+
+        frozen.restore_reference(&mut candidate);
+        assert_eq!(frozen.max_reference_ulp_drift(&candidate), 0);
+        assert_eq!(
+            candidate[0].map(f64::to_bits),
+            [1.0_f64, -0.0, 0.5].map(f64::to_bits)
+        );
     }
 }

@@ -1,33 +1,39 @@
 # Macierz kwalifikacji `frozen_spins.v1`
 
-- Status: in-progress qualification (FDM CPU/CUDA runtime contracts verified, FEM CPU P1 RK verified)
-- Ostatnia aktualizacja: 2026-08-21
+- Status: `SOURCE_CONFIRMED / RUNTIME QUALIFICATION INCOMPLETE`
+- Ostatnia aktualizacja: 2026-08-29
 - Kontrakt: `docs/physics/0996-frozen-spins-constraint.md`
+- Normatywny zakres: `docs/validation/frozen-spins-v1-scope.yaml`
 - Zasada: obecność źródła, wykonanie i kwalifikacja produkcyjna są odrębnymi osiami
 
 ## Statusy
 
-| Status | Znaczenie |
-|---|---|
-| `UNQUALIFIED` | Brak kompletnego dowodu wymaganej osi; nie wolno publikować capability jako kwalifikowanej |
-| `PARTIAL` | Istnieje ograniczony dowód, ale nie zamyka osi ani lane |
-| `QUALIFIED` | Wszystkie nazwane gate'y osi przeszły na bieżącej rewizji i mają immutable evidence |
-| `BLOCKED` | Jawny blocker uniemożliwia wykonanie gate'u; nie jest to status sukcesu |
+| Oś | Dozwolone wartości | Znaczenie |
+|---|---|---|
+| `scope_status` | `REQUIRED`, `OUT_OF_SCOPE` | Decyzja produktowa z normatywnego scope ledgeru |
+| `implementation_status` | `NOT_IMPLEMENTED`, `SOURCE_CONFIRMED`, `RUNTIME_CONFIRMED` | Stan kodu i wykonania; nie jest kwalifikacją release |
+| `qualification_status` | `UNQUALIFIED`, `BLOCKED`, `QUALIFIED` | `QUALIFIED` wymaga ważnego immutable receiptu |
+| `gate_result` | `PASS`, `FAIL`, `SKIP`, `NOT_RUN` | Wynik dokładnie nazwanej bramki |
 
 Stan początkowy jest celowo czerwony. Dokumentacja Task 1 zamyka semantykę, ale
 nie jest dowodem IR, plannera, runtime, fizyki, managed runtime ani browsera.
 
 ## Główna macierz lane
 
-| Lane | Zakres | IR | planner | runtime | scientific | managed | browser |
-|---|---|---|---|---|---|---|---|
-| FDM CPU/reference FP64 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FDM CUDA FP64 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FDM CUDA FP32 | single-grid relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FDM multilayer CPU/reference | aligned shared grid | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FDM multilayer CUDA | aligned shared grid | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
-| FEM CPU/MFEM FP64 | magnetic true DOF, P1 relaksacja i dynamika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | device-resident true DOF | `QUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` |
+Poniższe statusy opisują stan bieżącego, brudnego checkoutu. Historyczne testy
+runtime nie są immutable receiptami i dlatego nie podnoszą żadnego lane do
+`QUALIFIED`.
+
+| Lane | `scope_status` | `implementation_status` | `qualification_status` | `gate_result` | Stan dowodu |
+|---|---|---|---|---|---|
+| FDM CPU/reference FP64 single-grid | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Testy źródłowe/runtime istnieją; brak czystego source identity i receiptu P7 |
+| FDM CPU/reference FP64 multilayer + ABM3 | `REQUIRED` | `NOT_IMPLEMENTED` | `UNQUALIFIED` | `NOT_RUN` | Planner nadal fail-closed; wymagane P8 |
+| FDM CUDA FP64 single-grid | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Historyczny runtime CUDA nie ma trwałego receiptu, pełnej identity ani zero-ULP P9 |
+| FDM CUDA FP32 | `REQUIRED` | `NOT_IMPLEMENTED` | `UNQUALIFIED` | `NOT_RUN` | Obecnie fail-closed; wymagane P10 |
+| FEM CPU/MFEM FP64 explicit/minimizer/TPI | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Źródła explicit/minimizer istnieją, TPI i managed receipt wymagają P11 |
+| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Kompilowalne fragmenty nie są device-resident dowodem P12 |
+| API v2 + standard quantity FDM/FEM | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Testy kontraktowe payloadu przechodzą; brak aktywacyjnej transakcji i CSR P13 |
+| Control Room + browser/WebGL | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Testy jednostkowe quantity przechodzą; brak pełnego workflow i live smoke P14/P15 |
 
 Żadna komórka nie może zostać podniesiona przez samą zmianę tego dokumentu.
 Awans wymaga wpisu: pełny commit SHA, dokładna komenda, wynik, urządzenie/runtime
@@ -106,20 +112,21 @@ identity, artefakt, workload i reviewer.
 - browser smoke: aktualny resource, canvas visible, WebGL context healthy,
   drawing buffer niezerowy.
 
-## Macierz algorytmów
+## Macierz algorytmów i predykatów wykonania
+
+Tabela nie publikuje statusu kwalifikacji. Jest wejściem do testów capability
+covering-array; każda wymagana dodatnia komórka pozostaje `UNQUALIFIED`, dopóki
+agregator nie znajdzie receiptu dla jej pełnej krotki.
 
 | Algorytm / efekt | FDM CPU | FDM CUDA | FEM CPU | FEM GPU |
 |---|---|---|---|---|
-| dynamika LLG fixed-step | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| wszystkie wykonywalne explicit RK | `QUALIFIED` | `QUALIFIED` (Heun/RK4) | `QUALIFIED` (Heun/RK23/RK4/RK45) | `QUALIFIED` (Heun/RK23/RK4/RK45) |
-| adaptive RK error reduction po free DOF | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| `projected_gradient_bb` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| `nonlinear_cg` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| `tangent_plane_implicit` | `UNQUALIFIED` | `UNQUALIFIED` | `UNQUALIFIED` (gated) | `UNQUALIFIED` |
-| STT | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| SOT | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| termika | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
-| all-active-frozen | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` | `QUALIFIED` |
+| explicit LLG fixed/adaptive RK | źródło/runtime częściowo potwierdzone | FP64 runtime historyczny, FP32 brak | źródło potwierdzone | źródło częściowo potwierdzone |
+| `projected_gradient_bb` / `nonlinear_cg` | źródło/runtime częściowo potwierdzone | wymaga macierzy P9/P10 | źródło potwierdzone | wymaga P12 |
+| ABM3/history | brak implementacji P8 | brak implementacji P8/P9 | nie dotyczy | nie dotyczy |
+| `tangent_plane_implicit` | nie dotyczy | nie dotyczy | brak implementacji P11 | brak implementacji P12 |
+| STT / SOT / termika | wymagane testy pairwise P7 | wymagane testy pairwise P9/P10 | wymagane testy pairwise P11 | wymagane testy pairwise P12 |
+| all-frozen relaxation | wymagane zero-ULP P7 | wymagane zero-ULP P9/P10 | wymagane zero-ULP P11 | wymagane zero-ULP P12 |
+| all-frozen time evolution | wymagany analityczny advance P7 | wymagany analityczny advance P9/P10 | wymagany analityczny advance P11 | wymagany analityczny advance P12 |
 
 ## Kryterium promocji capability
 
@@ -148,15 +155,20 @@ jawnie zadeklarowanego legalnego resolved lane i zapisuje fallback; forced
 backend/device/precision nie może się zmienić. `auto` nie może użyć lane'u,
 który nie obsługuje constraintu, ani pominąć constraintu.
 
-## Stan dowodów kwalifikacyjnych 2026-08-21
+## Stan infrastruktury dowodowej 2026-08-29
 
-| Lane | Wykonane dowody | Status |
-|---|---|---|
-| FDM CPU/reference single-grid | IR/planner materialization, runtime final-RHS/candidate restore, testy planner, testy runner, Python/IR testy, skrypty kwalifikacji | `QUALIFIED` |
-| FDM CUDA FP64 single-grid | Targety kwalifikacji `fdm_frozen_spins_abi_contract`, `fdm_frozen_spins_cuda_runtime_contract`, Heun i RK4 max defect = 0.00e+00 (< 1e-14), checkpoint preservation defect = 0, zweryfikowane przez `just verify-frozen-spins-fdm-cuda` | `QUALIFIED` |
-| FDM CUDA FP32 | Fail-closed z kodem `frozen_spins_cuda_fp32_unqualified` (wymóg determinizmu FP64) | `UNQUALIFIED` |
-| FDM multilayer | Brak kwalifikacji wielowarstwowej dla frozen spins | `UNQUALIFIED` |
-| FEM CPU P1 (RK & Minimizers) | Moduł `FrozenSpins`, integracja w `Context`, `fem_context_builder.cpp`, `rk_stage_rhs.cpp`, `rk_explicit_step.cpp`, `projected_gradient_bb.cpp`, `nonlinear_cg.cpp`, `relaxation_math.cpp`, kontrakt `fem_frozen_spins_contract` w `just verify-fem-time-domain-native-contract` | `QUALIFIED` |
-| FEM GPU (Device-resident) | Fail-closed z kodem `frozen_spins_fem_gpu_unqualified` przed kwalifikacją runtime GPU | `UNQUALIFIED` |
-| Control Room FDM/FEM & E2E | resource-first API, ribbon/Explorer/Inspector/overlay, testy jednostkowe Vitest (`ribbonStructure.test.ts`, `explorerSelection.test.ts`, `PhysicsInteractionPanel.dom.test.tsx`), smoke test browser/WebGL `smoke:frozen-spins` | `QUALIFIED` |
-| Publiczne przykłady i skrypty | `examples/frozen_spins/pinned_region_relaxation.py`, `examples/frozen_spins/pinned_region_dynamics.py`, `scripts/verify_frozen_spins_ir.py`, `scripts/verify_frozen_spins_python.py`, `scripts/verify_frozen_spins_qualification.py` | `QUALIFIED` |
+| Element | `implementation_status` | `qualification_status` | `gate_result` | Dowód bieżący |
+|---|---|---|---|---|
+| P0 scope ledger | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | 27 funkcji `REQUIRED`, 1 jawnie `OUT_OF_SCOPE`; walidator i 4 testy negatywne/dodatnie przechodzą |
+| Authoring IR/Python | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | `verify_frozen_spins_authoring.py` przechodzi i jawnie nie deklaruje runtime qualification |
+| Agregator receiptów | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | 6 testów: kompletne pokrycie, brak receiptów, dirty/fallback/SKIP/unknown driver/bad hash, mixed tree/duplicate evidence ID, source binding i append-only ledger |
+| Finalny zestaw receiptów | `NOT_IMPLEMENTED` | `UNQUALIFIED` | `NOT_RUN` | 0/47 obowiązkowych test case IDs ma obecnie ważny trwały receipt bieżącego clean tree |
+| FDM CUDA obserwacja historyczna | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Efemeryczny artefakt nie spełnia nowego schematu i nie dowodzi zero ULP |
+| FEM CPU obserwacja historyczna | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Brak ukończonego managed receiptu przypisanego do clean tree |
+| API/Control Room quantity | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | Ukierunkowane testy źródłowe przechodzą; live browser/WebGL pozostaje `NOT_RUN` |
+
+`just verify-frozen-spins-qualification` jest bramką fail-closed. Najpierw
+waliduje P0 i authoring oraz własne testy agregatora, a następnie kończy się
+niezerowym kodem, dopóki trwały katalog
+`artifacts/qualification/frozen-spins/receipts` nie zawiera poprawnych receiptów
+pokrywających wszystkie 47 obowiązkowych test case IDs na jednym clean tree.

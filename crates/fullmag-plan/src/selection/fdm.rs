@@ -55,6 +55,41 @@ pub fn compile_fdm_frozen_spins(
     )
 }
 
+/// Compile a resolved Frozen Spins carrier over an ordered set of physical
+/// FDM cell centres. This is the multilayer counterpart of the rectangular
+/// single-grid adapter; ordering is the canonical native-layer order.
+pub fn compile_fdm_points_frozen_spins(
+    points_m: &[[f64; 3]],
+    active_mask: &[bool],
+    memberships: &[SelectionDofMembership],
+    grid_fingerprint: &str,
+    request: &FrozenSpinsCompileRequest<'_>,
+) -> Result<ResolvedFrozenSpinsPlanIR, SelectionError> {
+    if points_m.len() != active_mask.len() || memberships.len() != active_mask.len() {
+        return Err(SelectionError::new(
+            "selection_domain_size_mismatch",
+            "multilayer FDM points, active mask, and memberships must have identical lengths",
+        ));
+    }
+    if grid_fingerprint.is_empty() || grid_fingerprint != request.expected_grid_or_mesh_fingerprint
+    {
+        return Err(SelectionError::new(
+            "selection_topology_mismatch",
+            "multilayer FDM topology fingerprint does not match the compile request",
+        ));
+    }
+    compile_domain_frozen_spins(
+        SelectionDomainView {
+            points_m,
+            active_mask,
+            memberships,
+            topology_fingerprint: grid_fingerprint,
+            evaluator_id: FDM_SELECTION_EVALUATOR_ID,
+        },
+        request,
+    )
+}
+
 fn validate_grid(
     domain: &FdmFrozenSpinsDomain<'_>,
     request: &FrozenSpinsCompileRequest<'_>,

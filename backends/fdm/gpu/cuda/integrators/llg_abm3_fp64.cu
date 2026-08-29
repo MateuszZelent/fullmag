@@ -30,6 +30,7 @@ extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy,
 extern double reduce_max_cross_norm_fp64(Context &ctx,
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz, uint64_t n);
+extern void launch_project_frozen_fp64(Context &ctx, cudaStream_t stream);
 
 extern __global__ void llg_rhs_fp64_kernel(
     const double * __restrict__ mx, const double * __restrict__ my, const double * __restrict__ mz,
@@ -182,6 +183,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
     const double step_start_time = ctx.current_time;
+    launch_project_frozen_fp64(ctx, nullptr);
 
     // Check for dt change — restart if > 10% different
     if (ctx.abm_last_dt > 0.0 && fabs(dt - ctx.abm_last_dt) / ctx.abm_last_dt > 0.1) {
@@ -233,6 +235,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.m.y),
             static_cast<double*>(ctx.m.z),
             n, dt);
+        launch_project_frozen_fp64(ctx, nullptr);
         if (abort_step_from_tmp(ctx, false)) return;
 
         // k2 = RHS(m_pred)
@@ -275,6 +278,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.h_ex.y),
             static_cast<const double*>(ctx.h_ex.z),
             n, 0.5 * dt);
+        launch_project_frozen_fp64(ctx, nullptr);
         if (abort_step_from_tmp(ctx, false)) return;
 
         // Compute RHS at accepted point and store in history
@@ -341,6 +345,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.m.y),
         static_cast<double*>(ctx.m.z),
         n, dt);
+    launch_project_frozen_fp64(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Evaluate RHS at predicted point (the ONLY new RHS eval)
@@ -386,6 +391,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.m.y),
         static_cast<double*>(ctx.m.z),
         n, dt);
+    launch_project_frozen_fp64(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Re-evaluate at the corrected accepted endpoint.  The predictor

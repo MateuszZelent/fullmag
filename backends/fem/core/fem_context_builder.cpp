@@ -23,6 +23,7 @@
 #include "cpu/mfem/interactions/dmi.hpp"
 #include "cpu/mfem/interactions/effective_field.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
+#include "cpu/mfem/interactions/frozen_spins.hpp"
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
@@ -38,7 +39,6 @@
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <new>
@@ -108,27 +108,7 @@ bool build_context_from_plan(
     if (!initialize_state_plan_fields(ctx, plan, error)) {
         return false;
     }
-    const std::size_t true_dofs = static_cast<std::size_t>(
-        ctx.mesh.periodic_reduced_node_count > 0
-            ? ctx.mesh.periodic_reduced_node_count
-            : ctx.mesh.n_nodes);
-    const std::size_t active_candidates = ctx.mesh.magnetic_node_mask.empty()
-        ? true_dofs
-        : static_cast<std::size_t>(std::count_if(
-            ctx.mesh.magnetic_node_mask.begin(),
-            ctx.mesh.magnetic_node_mask.end(),
-            [](uint8_t v) { return v != 0; }));
-
-    const char *fingerprint = "mesh_p1_v1";
-    if (!ctx.frozen_spins.import_descriptor(
-            plan.frozen_mask,
-            plan.frozen_mask_len,
-            plan.frozen_reference_xyz,
-            plan.frozen_reference_len,
-            true_dofs,
-            active_candidates,
-            fingerprint,
-            error)) {
+    if (!initialize_frozen_spins_plan_fields(ctx, plan, error)) {
         return false;
     }
     if (ctx.frozen_spins.enabled()) {
@@ -195,6 +175,7 @@ bool build_context_from_plan(
         try {
             ctx.stepper.workspace.attempt_checkpoint =
                 std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
+            ctx.stepper.transaction_telemetry.attempt_cache_allocation_count += 1;
         } catch (const std::bad_alloc &) {
             error = "RK attempt cache checkpoint allocation failed during setup";
             return false;

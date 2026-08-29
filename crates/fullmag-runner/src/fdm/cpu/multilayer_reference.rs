@@ -138,6 +138,21 @@ pub(crate) fn execute_reference_fdm_multilayer(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
+    let active_mask = multilayer_active_mask(plan);
+    let frozen_spins = plan
+        .frozen_spins
+        .as_ref()
+        .map(|frozen_plan| {
+            fullmag_engine::FrozenSpinsState::capture_at_activation(
+                frozen_plan,
+                active_mask.as_deref(),
+                &initial_magnetization,
+            )
+            .map_err(|error| RunError {
+                message: format!("multilayer Frozen Spins activation: {error}"),
+            })
+        })
+        .transpose()?;
     let timestep_policy = crate::resolve_timestep_policy(
         Some(plan.integrator),
         plan.fixed_timestep,
@@ -281,6 +296,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
             demag_runtime.as_ref(),
             dt_step,
             plan.integrator,
+            frozen_spins.as_ref(),
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
@@ -512,6 +528,36 @@ fn build_multilayer_live_preview_fields(
     if plan.enable_demag {
         push_field("H_demag", &observables.demag_field);
     }
+    drop(push_field);
+    if let Some(frozen) = plan.frozen_spins.as_ref() {
+        fields.push(LivePreviewField {
+            config_revision: 0,
+            source_step,
+            source_time_seconds: None,
+            source_revision: source_step,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
+            quantity: "frozen_spins".to_string(),
+            unit: quantity_unit("frozen_spins").to_string(),
+            spatial_kind: "fdm_multilayer".to_string(),
+            quantity_domain: quantity_spatial_domain("frozen_spins").to_string(),
+            preview_grid: carrier_grid,
+            original_grid: carrier_grid,
+            vector_field_values: frozen
+                .frozen_mask
+                .iter()
+                .map(|value| if *value { 1.0 } else { 0.0 })
+                .collect(),
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            applied_x_chosen_size: 0,
+            applied_y_chosen_size: 0,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: active_mask.clone(),
+        });
+    }
     fields
 }
 
@@ -571,7 +617,7 @@ fn snapshot_fields(
     };
     let observables = observe_multilayer(&contexts, &states, demag_runtime.as_ref())?;
     let native_point_count = observables.magnetization.len();
-    let scalar_fields = build_multilayer_scalar_fields(&contexts, &states, &observables)?;
+    let scalar_fields = build_multilayer_scalar_fields(plan, &contexts, &states, &observables)?;
     let active_mask = multilayer_active_mask(plan);
     let active_quantities = active_fdm_multilayer_preview_quantities(plan, quantities);
     let mut result = Vec::new();
@@ -624,7 +670,7 @@ fn snapshot_fields(
                             message: format!(
                             "multilayer scalar quantity '{}' is unavailable for the current plan",
                             quantity
-                            ),
+                        ),
                         })?;
             }
             fullmag_quantities::QuantityShape::VectorField => {
@@ -697,6 +743,7 @@ fn multilayer_carrier_grid(plan: &FdmMultilayerPlanIR) -> [u32; 3] {
 }
 
 fn build_multilayer_scalar_fields(
+    plan: &FdmMultilayerPlanIR,
     contexts: &[LayerContext],
     states: &[ExchangeLlgState],
     observables: &StateObservables,
@@ -711,7 +758,19 @@ fn build_multilayer_scalar_fields(
         ("mat_ms", Vec::new()),
         ("mat_aex", Vec::new()),
         ("mat_alpha", Vec::new()),
+        ("frozen_spins", Vec::new()),
     ]);
+    if let Some(frozen) = plan.frozen_spins.as_ref() {
+        fields
+            .get_mut("frozen_spins")
+            .unwrap()
+            .extend(
+                frozen
+                    .frozen_mask
+                    .iter()
+                    .map(|value| if *value { 1.0 } else { 0.0 }),
+            );
+    }
     let mut offset = 0usize;
     for (context, state) in contexts.iter().zip(states) {
         let local = context.problem.observe(state).map_err(|error| RunError {
@@ -942,7 +1001,7 @@ fn build_multilayer_demag_runtime(
         other => {
             return Err(RunError {
                 message: format!("unsupported resolved multilayer mode '{other}'"),
-            })
+            });
         }
     };
     let conv_grid = [
@@ -1011,7 +1070,7 @@ fn build_multilayer_demag_runtime(
                             "layer '{}' has unsupported transfer_kind '{other}'",
                             layer.layer_id
                         ),
-                    })
+                    });
                 }
             };
             FdmLayerDescriptor::new(
@@ -1339,15 +1398,31 @@ fn step_multilayer(
     demag_runtime: Option<&MultilayerDemagRuntime>,
     dt: f64,
     integrator: IntegratorChoice,
+    frozen_spins: Option<&fullmag_engine::FrozenSpinsState>,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization().to_vec())
         .collect::<Vec<_>>();
     let corrected = crate::fdm::multilayer::explicit_rk_step(&m0, dt, integrator, |m| {
-        llg_rhs_multilayer(contexts, m, demag_runtime).map_err(|error| error.message)
+        let mut constrained = m.to_vec();
+        if let Some(frozen) = frozen_spins {
+            restore_frozen_reference_by_layer_offsets(frozen, &mut constrained)
+                .map_err(|error| error.message)?;
+        }
+        let mut rhs = llg_rhs_multilayer(contexts, &constrained, demag_runtime)
+            .map_err(|error| error.message)?;
+        if let Some(frozen) = frozen_spins {
+            zero_frozen_rhs_by_layer_offsets(frozen, &mut rhs).map_err(|error| error.message)?;
+        }
+        Ok(rhs)
     })
     .map_err(|message| RunError { message })?;
+
+    let mut corrected = corrected;
+    if let Some(frozen) = frozen_spins {
+        restore_frozen_reference_by_layer_offsets(frozen, &mut corrected)?;
+    }
 
     for (state, new_layer) in states.iter_mut().zip(corrected.into_iter()) {
         state
@@ -1625,6 +1700,31 @@ fn restore_frozen_reference_by_layer_offsets(
     Ok(())
 }
 
+fn zero_frozen_rhs_by_layer_offsets(
+    frozen: &fullmag_engine::FrozenSpinsState,
+    layers: &mut [Vec<[f64; 3]>],
+) -> Result<(), RunError> {
+    let total_len = layers.iter().map(Vec::len).sum::<usize>();
+    if total_len != frozen.len() {
+        return Err(RunError {
+            message: format!(
+                "frozen_spins_multilayer_rhs_size_mismatch: flattened layer length {total_len} differs from frozen state length {}",
+                frozen.len()
+            ),
+        });
+    }
+    let mut offset = 0usize;
+    for layer in layers {
+        for value in layer {
+            if frozen.mask()[offset] {
+                *value = [0.0; 3];
+            }
+            offset += 1;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1635,22 +1735,33 @@ mod tests {
         SelectionAuthoredFingerprintIR, SelectionCertificateIR,
         RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+    use sha2::Digest;
 
     fn frozen_spins_state(
         mask: Vec<bool>,
         reference: &[[f64; 3]],
     ) -> fullmag_engine::FrozenSpinsState {
+        let plan = frozen_spins_plan(mask);
+        fullmag_engine::FrozenSpinsState::capture_at_activation(&plan, None, reference)
+            .expect("valid multilayer frozen-spin fixture")
+    }
+
+    fn frozen_spins_plan(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
         let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
         let active_dof_count = mask.len() as u64;
         let free_dof_count = active_dof_count - frozen_dof_count;
-        let plan = ResolvedFrozenSpinsPlanIR {
+        let mut mask_hash = sha2::Sha256::new();
+        mask_hash.update((mask.len() as u64).to_le_bytes());
+        mask_hash.update(mask.iter().copied().map(u8::from).collect::<Vec<_>>());
+        let mask_sha256 = format!("{:x}", mask_hash.finalize());
+        ResolvedFrozenSpinsPlanIR {
             schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
             constraint_ids: vec!["multilayer-test".to_string()],
             frozen_mask: mask,
             active_dof_count,
             frozen_dof_count,
             free_dof_count,
-            mask_sha256: "a".repeat(64),
+            mask_sha256: mask_sha256.clone(),
             grid_or_mesh_fingerprint: "multilayer-test-grid".to_string(),
             source_state_revision: Some(1),
             all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
@@ -1670,13 +1781,11 @@ mod tests {
                 bounds_m: None,
                 grid_or_mesh_fingerprint: "multilayer-test-grid".to_string(),
                 source_state_revision: Some(1),
-                mask_sha256: "a".repeat(64),
+                mask_sha256,
                 resolved_reference_sha256: "c".repeat(64),
                 warnings: Vec::new(),
             },
-        };
-        fullmag_engine::FrozenSpinsState::capture_at_activation(&plan, None, reference)
-            .expect("valid multilayer frozen-spin fixture")
+        }
     }
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
@@ -1735,6 +1844,7 @@ mod tests {
             grid_certificate: None,
             resolved_periodic_images: None,
             layers,
+            frozen_spins: None,
             enable_exchange: true,
             enable_demag,
             fft: None,
@@ -1815,6 +1925,60 @@ mod tests {
 
         assert_eq!(layers[0], vec![moved, reference[1]]);
         assert_eq!(layers[1], vec![reference[2], moved, reference[4]]);
+    }
+
+    #[test]
+    fn multilayer_frozen_spins_are_hard_restored_through_rk_stages() {
+        let mut plan = make_plan(false);
+        plan.enable_exchange = false;
+        plan.external_field = Some([0.0, 0.0, 2.0e5]);
+        plan.relaxation = None;
+        let mut mask = vec![false; 32];
+        mask[0] = true;
+        mask[20] = true;
+        plan.frozen_spins = Some(frozen_spins_plan(mask));
+        let reference0 = plan.layers[0].initial_magnetization[0].map(f64::to_bits);
+        let reference20 = plan.layers[1].initial_magnetization[4].map(f64::to_bits);
+
+        let executed = execute_reference_fdm_multilayer(&plan, 2.0e-13, &[], None, None)
+            .expect("multilayer Frozen Spins execution");
+        assert_eq!(
+            executed.result.final_magnetization[0].map(f64::to_bits),
+            reference0
+        );
+        assert_eq!(
+            executed.result.final_magnetization[20].map(f64::to_bits),
+            reference20
+        );
+        assert_ne!(
+            executed.result.final_magnetization[1].map(f64::to_bits),
+            plan.layers[0].initial_magnetization[1].map(f64::to_bits),
+            "an unfrozen site must remain dynamically active"
+        );
+    }
+
+    #[test]
+    fn multilayer_snapshot_exposes_frozen_spins_on_the_native_layer_carrier() {
+        let mut plan = make_plan(false);
+        let mask = (0..32).map(|index| index % 3 == 0).collect::<Vec<_>>();
+        plan.frozen_spins = Some(frozen_spins_plan(mask.clone()));
+        let preview = snapshot_preview(
+            &plan,
+            &LivePreviewRequest {
+                quantity: "frozen_spins".to_string(),
+                ..LivePreviewRequest::default()
+            },
+        )
+        .expect("multilayer Frozen Spins snapshot");
+
+        assert_eq!(preview.spatial_kind, "fdm_multilayer");
+        assert_eq!(preview.preview_grid, [32, 1, 1]);
+        assert_eq!(
+            preview.vector_field_values,
+            mask.into_iter()
+                .map(|value| if value { 1.0 } else { 0.0 })
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -294,6 +294,7 @@ def _mixed_tet_degeneracy_report(
     gmsh: Any,
     *,
     element_tags: frozenset[int] | None = None,
+    use_global_scale: bool = False,
 ) -> _MixedTetDegeneracyReport:
     """Return strict tet4 degeneracies without extracting the complete mesh."""
     gmsh_element_tags, element_nodes = gmsh.model.mesh.getElementsByType(4)
@@ -310,6 +311,11 @@ def _mixed_tet_degeneracy_report(
     node_tags, node_coordinates, _ = gmsh.model.mesh.getNodes()
     node_tags_array = np.asarray(node_tags, dtype=np.int64)
     coordinates = np.asarray(node_coordinates, dtype=np.float64).reshape((-1, 3))
+    global_threshold = (
+        _mixed_tet_global_determinant_threshold(coordinates)
+        if use_global_scale
+        else None
+    )
     order = np.argsort(node_tags_array)
     sorted_tags = node_tags_array[order]
     degenerate_tags: set[int] = set()
@@ -338,9 +344,13 @@ def _mixed_tet_degeneracy_report(
         determinants = np.abs(np.linalg.det(matrices))
         pairwise = points[:, :, np.newaxis, :] - points[:, np.newaxis, :, :]
         characteristic_lengths = np.max(np.linalg.norm(pairwise, axis=3), axis=(1, 2))
-        thresholds = np.maximum(
-            np.finfo(np.float64).tiny,
-            FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_lengths**3,
+        thresholds = (
+            np.full_like(determinants, global_threshold)
+            if global_threshold is not None
+            else np.maximum(
+                np.finfo(np.float64).tiny,
+                FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_lengths**3,
+            )
         )
         invalid = determinants <= thresholds
         if not np.any(invalid):
@@ -363,19 +373,331 @@ def _mixed_tet_degeneracy_report(
     )
 
 
+def _mixed_tet_global_determinant_threshold(
+    node_coordinates: NDArray[np.float64],
+) -> float | None:
+    """Return the determinant threshold used by the native mixed-mesh gate."""
+    coordinates = np.asarray(node_coordinates, dtype=np.float64).reshape((-1, 3))
+    if coordinates.size == 0:
+        return None
+    global_scale = float(np.max(np.ptp(coordinates, axis=0)))
+    return max(np.finfo(np.float64).tiny, 6.0e-18 * global_scale**3)
+
+
+_MIXED_TET_LOCAL_REPAIR_RELATIVE_STEPS = (
+    1.0e-6,
+    3.0e-6,
+    1.0e-5,
+    3.0e-5,
+    1.0e-4,
+)
+_MIXED_TET_LOCAL_REPAIR_MAX_PASSES = 8
+_MIXED_TET_LOCAL_REPAIR_ALLOWED_QUALITY_DROP = 0.05
+
+
+def _mixed_tet_local_quality(
+    coordinates: NDArray[np.float64],
+    *,
+    determinant_threshold: float | None = None,
+) -> tuple[float, float, float]:
+    """Return signed determinant, strict threshold, and scaled quality."""
+    matrix = np.stack(
+        (
+            coordinates[1] - coordinates[0],
+            coordinates[2] - coordinates[0],
+            coordinates[3] - coordinates[0],
+        ),
+        axis=1,
+    )
+    determinant = float(np.linalg.det(matrix))
+    characteristic = float(
+        np.max(
+            np.linalg.norm(
+                coordinates[:, np.newaxis, :] - coordinates[np.newaxis, :, :],
+                axis=2,
+            )
+        )
+    )
+    threshold = (
+        max(
+            np.finfo(np.float64).tiny,
+            FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic**3,
+        )
+        if determinant_threshold is None
+        else float(determinant_threshold)
+    )
+    denominator = float(np.prod(np.linalg.norm(matrix, axis=0)))
+    quality = abs(determinant) / denominator if denominator > 0.0 else 0.0
+    return determinant, threshold, quality
+
+
+def _mixed_tet_local_repair_directions(
+    coordinates: dict[int, NDArray[np.float64]],
+    cell: NDArray[np.int64],
+    node_tag: int,
+    incident_cells: NDArray[np.int64],
+) -> list[NDArray[np.float64]]:
+    """Build deterministic directions for one interior transition node."""
+    directions: list[NDArray[np.float64]] = []
+    for axis in range(3):
+        direction = np.zeros(3, dtype=np.float64)
+        direction[axis] = 1.0
+        directions.extend((direction, -direction))
+
+    opposite = np.asarray(
+        [coordinates[int(tag)] for tag in cell if int(tag) != node_tag],
+        dtype=np.float64,
+    )
+    if opposite.shape == (3, 3):
+        normal = np.cross(opposite[1] - opposite[0], opposite[2] - opposite[0])
+        normal_length = float(np.linalg.norm(normal))
+        if normal_length > 0.0 and math.isfinite(normal_length):
+            normal = normal / normal_length
+            directions.extend((normal, -normal))
+
+    neighbours = np.asarray(
+        [
+            coordinates[int(tag)]
+            for incident_cell in incident_cells
+            for tag in incident_cell
+            if int(tag) != node_tag
+        ],
+        dtype=np.float64,
+    )
+    if len(neighbours):
+        local = np.mean(neighbours, axis=0) - coordinates[node_tag]
+        local_length = float(np.linalg.norm(local))
+        if local_length > 0.0 and math.isfinite(local_length):
+            local = local / local_length
+            directions.extend((local, -local))
+
+    unique: list[NDArray[np.float64]] = []
+    for direction in directions:
+        length = float(np.linalg.norm(direction))
+        if length == 0.0 or not math.isfinite(length):
+            continue
+        normalized = direction / length
+        if not any(
+            np.allclose(normalized, previous, rtol=0.0, atol=1.0e-14)
+            for previous in unique
+        ):
+            unique.append(normalized)
+    return unique
+
+
+def _mixed_gmsh_node_metadata(
+    gmsh: Any,
+    node_tag: int,
+) -> tuple[list[float], int] | None:
+    """Return parametric coordinates and entity dimension for one Gmsh node."""
+    try:
+        _point, parameters, dimension, _entity = gmsh.model.mesh.getNode(node_tag)
+        return list(parameters), int(dimension)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        # Small test doubles and older Gmsh bindings may not expose node
+        # ownership metadata.  In that case the bounded local pass simply
+        # declines the node and the configured Gmsh policy remains available.
+        return None
+
+
+def _repair_remaining_mixed_tet_slivers(gmsh: Any) -> bool:
+    """Repair residual slivers with a bounded local interior-node move.
+
+    This fallback considers only volume nodes of the offending tet, checks
+    every incident tet, preserves their orientation and rejects any candidate
+    that lowers a healthy neighbour's scaled quality by more than five percent.
+    The boolean result tells the caller whether at least one node moved; a
+    caller may still select a slower global qualification method if residual
+    degeneracies remain.
+    """
+    moved_any = False
+    for _pass in range(_MIXED_TET_LOCAL_REPAIR_MAX_PASSES):
+        report = _mixed_tet_degeneracy_report(gmsh, use_global_scale=True)
+        if not report.element_tags:
+            return moved_any
+        element_tags, element_nodes = gmsh.model.mesh.getElementsByType(4)
+        tags = np.asarray(element_tags, dtype=np.int64)
+        connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, 4))
+        node_tags, node_coordinates, _ = gmsh.model.mesh.getNodes()
+        coordinates = {
+            int(tag): np.array(point, dtype=np.float64, copy=True)
+            for tag, point in zip(
+                node_tags,
+                np.asarray(node_coordinates, dtype=np.float64).reshape((-1, 3)),
+                strict=True,
+            )
+        }
+        global_threshold = _mixed_tet_global_determinant_threshold(node_coordinates)
+        if global_threshold is None:
+            raise RuntimeError(
+                "mixed local tet repair could not determine a global threshold"
+            )
+        moved = False
+        for bad_tag in sorted(report.element_tags):
+            bad_indices = np.flatnonzero(tags == bad_tag)
+            if len(bad_indices) != 1:
+                continue
+            bad_cell = connectivity[int(bad_indices[0])]
+            movable_nodes: list[int] = []
+            for tag in bad_cell:
+                metadata = _mixed_gmsh_node_metadata(gmsh, int(tag))
+                if metadata is not None and metadata[1] == 3:
+                    movable_nodes.append(int(tag))
+            if not movable_nodes:
+                continue
+            best: tuple[float, float, int, int, NDArray[np.float64]] | None = None
+            for node_tag in sorted(movable_nodes):
+                incident_cells = connectivity[
+                    np.any(connectivity == node_tag, axis=1)
+                ]
+                baseline: list[tuple[float, float, float]] = []
+                for incident_cell in incident_cells:
+                    baseline.append(
+                        _mixed_tet_local_quality(
+                            np.asarray(
+                                [coordinates[int(tag)] for tag in incident_cell],
+                                dtype=np.float64,
+                            ),
+                            determinant_threshold=global_threshold,
+                        )
+                    )
+                bad_points = np.asarray(
+                    [coordinates[int(tag)] for tag in bad_cell],
+                    dtype=np.float64,
+                )
+                characteristic = float(
+                    np.max(
+                        np.linalg.norm(
+                            bad_points[:, np.newaxis, :]
+                            - bad_points[np.newaxis, :, :],
+                            axis=2,
+                        )
+                    )
+                )
+                if characteristic <= 0.0 or not math.isfinite(characteristic):
+                    continue
+                metadata = _mixed_gmsh_node_metadata(gmsh, node_tag)
+                if metadata is None:
+                    continue
+                parameters, _dimension = metadata
+                original = coordinates[node_tag]
+                for relative_step in _MIXED_TET_LOCAL_REPAIR_RELATIVE_STEPS:
+                    displacement = characteristic * relative_step
+                    for direction_index, direction in enumerate(
+                        _mixed_tet_local_repair_directions(
+                            coordinates,
+                            bad_cell,
+                            node_tag,
+                            incident_cells,
+                        )
+                    ):
+                        candidate = original + displacement * direction
+                        candidate_quality: list[float] = []
+                        valid = True
+                        for base, incident_cell in zip(
+                            baseline, incident_cells, strict=True
+                        ):
+                            points = np.asarray(
+                                [
+                                    candidate
+                                    if int(tag) == node_tag
+                                    else coordinates[int(tag)]
+                                    for tag in incident_cell
+                                ],
+                                dtype=np.float64,
+                            )
+                            determinant, threshold, quality = _mixed_tet_local_quality(
+                                points,
+                                determinant_threshold=global_threshold,
+                            )
+                            if (
+                                not math.isfinite(determinant)
+                                or abs(determinant) <= threshold
+                            ):
+                                valid = False
+                                break
+                            base_determinant, base_threshold, base_quality = base
+                            if (
+                                abs(base_determinant) > base_threshold
+                                and determinant * base_determinant <= 0.0
+                            ):
+                                valid = False
+                                break
+                            if (
+                                base_quality > 0.0
+                                and quality
+                                < base_quality
+                                * (1.0 - _MIXED_TET_LOCAL_REPAIR_ALLOWED_QUALITY_DROP)
+                            ):
+                                valid = False
+                                break
+                            candidate_quality.append(quality)
+                        if not valid:
+                            continue
+                        score = min(candidate_quality)
+                        candidate_key = (
+                            relative_step,
+                            -score,
+                            direction_index,
+                            node_tag,
+                            candidate,
+                        )
+                        if best is None or candidate_key[:4] < best[:4]:
+                            best = candidate_key
+                if best is not None and best[0] == _MIXED_TET_LOCAL_REPAIR_RELATIVE_STEPS[0]:
+                    # The smallest accepted movement is preferred globally;
+                    # there is no reason to inspect larger steps for another
+                    # node once this one already repairs the sliver.
+                    break
+            if best is None:
+                continue
+            (
+                _relative_step,
+                _negative_quality,
+                _direction_index,
+                node_tag,
+                candidate,
+            ) = best
+            metadata = _mixed_gmsh_node_metadata(gmsh, node_tag)
+            if metadata is None:
+                continue
+            parameters, _dimension = metadata
+            gmsh.model.mesh.setNode(node_tag, candidate.tolist(), parameters)
+            coordinates[node_tag] = np.array(candidate, copy=True)
+            moved = True
+            moved_any = True
+            emit_progress(
+                "Gmsh mixed local tet repair: "
+                f"element={bad_tag} node={node_tag} "
+                f"relative_step={_relative_step:.1e}"
+            )
+        if not moved:
+            break
+    return moved_any
+
+
 def _mixed_cell_has_degenerate_jacobian(
     family: str,
     coordinates: NDArray[np.float64],
+    *,
+    determinant_threshold: float | None = None,
 ) -> bool:
     determinants = _cell_jacobian_determinants(family, coordinates)
-    characteristic_length = float(np.max(np.linalg.norm(
-        coordinates[:, np.newaxis, :] - coordinates[np.newaxis, :, :],
-        axis=2,
-    )))
-    threshold = max(
-        np.finfo(np.float64).tiny,
-        FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_length**3,
-    )
+    if determinant_threshold is None:
+        characteristic_length = float(
+            np.max(
+                np.linalg.norm(
+                    coordinates[:, np.newaxis, :] - coordinates[np.newaxis, :, :],
+                    axis=2,
+                )
+            )
+        )
+        threshold = max(
+            np.finfo(np.float64).tiny,
+            FEM_TOPOLOGY_RELATIVE_DETERMINANT_EPS * characteristic_length**3,
+        )
+    else:
+        threshold = float(determinant_threshold)
     return bool(np.min(np.abs(determinants)) <= threshold)
 
 
@@ -690,6 +1012,7 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
             strict=True,
         )
     }
+    global_tet_threshold = _mixed_tet_global_determinant_threshold(node_coordinates)
     apex_tags = sorted({int(tag) for tag in pyramids[:, 4]})
     original_apex_coordinates = {
         tag: np.array(coordinates[tag], copy=True) for tag in apex_tags
@@ -813,6 +1136,7 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
                         ],
                         dtype=np.float64,
                     ),
+                    determinant_threshold=global_tet_threshold,
                 )
                 for family, cell in incident_by_apex[apex]
             ):
@@ -846,7 +1170,10 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         coordinates[apex] = np.array(best_candidate, copy=True)
         selected_factors.append(best_factor)
 
-    degenerate_tets = _mixed_tet_degeneracy_report(gmsh)
+    degenerate_tets = _mixed_tet_degeneracy_report(
+        gmsh,
+        use_global_scale=True,
+    )
     if degenerate_tets.element_tags:
         for apex in sorted(mean_direction):
             gmsh.model.mesh.setNode(
@@ -891,15 +1218,17 @@ class _MixedTetRepairPolicy:
     iterations: int
     optimize_threshold: float = 1.0e-6
     force: bool = True
+    local_first: bool = False
 
 
 _MIXED_TET_REPAIR_METHODS = frozenset({"", "Relocate3D", "Netgen"})
 _STRICT_MIXED_TET_REPAIR_POLICY = _MixedTetRepairPolicy(
-    algorithm_id="fullmag.mixed-tet-repair.v2",
-    method="",
+    algorithm_id="fullmag.mixed-tet-repair.v1",
+    method="Relocate3D",
     iterations=1,
     optimize_threshold=1.0e-6,
     force=True,
+    local_first=True,
 )
 
 
@@ -927,6 +1256,8 @@ def _validate_mixed_tet_repair_policy(policy: _MixedTetRepairPolicy) -> None:
         )
     if not isinstance(policy.force, bool):
         raise ValueError("mixed tetrahedral repair force flag must be boolean")
+    if not isinstance(policy.local_first, bool):
+        raise ValueError("mixed tetrahedral repair local-first flag must be boolean")
 
 
 def _qualification_mixed_tet_repair_algorithm_id(
@@ -934,13 +1265,14 @@ def _qualification_mixed_tet_repair_algorithm_id(
     iterations: int,
 ) -> str:
     """Return the deterministic ID for one non-production repair candidate."""
+    selected_method = "" if method == "default" else method
     candidate = _MixedTetRepairPolicy(
         algorithm_id="qualification",
-        method=method,
+        method=selected_method,
         iterations=iterations,
     )
     _validate_mixed_tet_repair_policy(candidate)
-    method_id = method if method else "default"
+    method_id = selected_method if selected_method else "default"
     return (
         "fullmag.mixed-tet-repair.qualification.v2"
         f".method-{method_id}.niter-{iterations}"
@@ -955,39 +1287,71 @@ def _execute_mixed_tet_repair_policy(
     if not isinstance(policy, _MixedTetRepairPolicy):
         raise TypeError("mixed tetrahedral repair policy has an invalid type")
     _validate_mixed_tet_repair_policy(policy)
+    before = _mixed_tet_degeneracy_report(
+        gmsh,
+        use_global_scale=True,
+    )
+    if policy.local_first:
+        if not before.element_tags:
+            return
+        local_repair_moved = _repair_remaining_mixed_tet_slivers(gmsh)
+        after = _mixed_tet_degeneracy_report(
+            gmsh,
+            use_global_scale=True,
+        )
+        if not after.element_tags:
+            if local_repair_moved:
+                emit_progress(
+                    "Gmsh mixed local tet repair completed without global optimization"
+                )
+            return
+    else:
+        after = before
+    emit_progress("Gmsh: repairing mixed-domain tetrahedra")
     previous_threshold = gmsh.option.getNumber("Mesh.OptimizeThreshold")
     try:
         gmsh.option.setNumber(
             "Mesh.OptimizeThreshold", policy.optimize_threshold
         )
-        before = _mixed_tet_degeneracy_report(gmsh)
-        emit_progress("Gmsh: repairing mixed-domain tetrahedra")
         gmsh.model.mesh.optimize(
             policy.method,
             force=policy.force,
             niter=policy.iterations,
         )
-        after = _mixed_tet_degeneracy_report(gmsh)
-        if after.element_tags:
-            created = after.element_tags - before.element_tags
-            left = after.element_tags & before.element_tags
-            reports = []
-            for label, subset in (("created", created), ("left", left)):
-                if not subset:
-                    continue
-                report = _mixed_tet_degeneracy_report(gmsh, element_tags=subset)
-                reports.append(
-                    f"{label}: count={len(report.element_tags)}, "
-                    f"worst_element_tag={report.worst_element_tag}, "
-                    f"determinant={report.worst_determinant:.6e}, "
-                    f"threshold={report.worst_threshold:.6e}"
-                )
-            raise RuntimeError(
-                "mixed tetrahedral repair left or created degenerate tet4; "
-                + "; ".join(reports)
-            )
     finally:
         gmsh.option.setNumber("Mesh.OptimizeThreshold", previous_threshold)
+    after = _mixed_tet_degeneracy_report(
+        gmsh,
+        use_global_scale=True,
+    )
+    if after.element_tags:
+        _repair_remaining_mixed_tet_slivers(gmsh)
+        after = _mixed_tet_degeneracy_report(
+            gmsh,
+            use_global_scale=True,
+        )
+    if after.element_tags:
+        created = after.element_tags - before.element_tags
+        left = after.element_tags & before.element_tags
+        reports = []
+        for label, subset in (("created", created), ("left", left)):
+            if not subset:
+                continue
+            report = _mixed_tet_degeneracy_report(
+                gmsh,
+                element_tags=subset,
+                use_global_scale=True,
+            )
+            reports.append(
+                f"{label}: count={len(subset)}, "
+                f"worst_element_tag={report.worst_element_tag}, "
+                f"determinant={report.worst_determinant:.6e}, "
+                f"threshold={report.worst_threshold:.6e}"
+            )
+        raise RuntimeError(
+            "mixed tetrahedral repair left or created degenerate tet4; "
+            + "; ".join(reports)
+        )
 
 
 def _repair_mixed_tetrahedra(
@@ -1007,13 +1371,20 @@ def _repair_mixed_tetrahedra_for_qualification(
 ) -> None:
     """Run one private qualification candidate through the canonical repair."""
     selected_method = "" if method == "default" else method
-    policy = (
-        _STRICT_MIXED_TET_REPAIR_POLICY
-        if (
-            selected_method == _STRICT_MIXED_TET_REPAIR_POLICY.method
-            and iterations == _STRICT_MIXED_TET_REPAIR_POLICY.iterations
+    if (
+        selected_method == _STRICT_MIXED_TET_REPAIR_POLICY.method
+        and iterations == _STRICT_MIXED_TET_REPAIR_POLICY.iterations
+    ):
+        policy = _MixedTetRepairPolicy(
+            algorithm_id=_STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id,
+            method=selected_method,
+            iterations=iterations,
+            optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
+            force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
+            local_first=False,
         )
-        else _MixedTetRepairPolicy(
+    else:
+        policy = _MixedTetRepairPolicy(
             algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
                 selected_method,
                 iterations,
@@ -1022,8 +1393,8 @@ def _repair_mixed_tetrahedra_for_qualification(
             iterations=iterations,
             optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
             force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
+            local_first=False,
         )
-    )
     _execute_mixed_tet_repair_policy(gmsh, policy)
 
 

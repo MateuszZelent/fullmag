@@ -1851,6 +1851,7 @@ impl ExchangeLlgProblem {
         self.effective_field_into_soa_fft_backend_at_time(magnetization, ws, h_eff, time_seconds);
     }
 
+    #[cfg(test)]
     pub(crate) fn effective_field_into_soa_fft_backend(
         &self,
         magnetization: &VectorFieldSoA,
@@ -4055,6 +4056,7 @@ impl ExchangeLlgProblem {
         (rhs, eval)
     }
 
+    #[cfg(test)]
     pub(crate) fn llg_rhs_from_field(&self, magnetization: Vector3, field: Vector3) -> Vector3 {
         let alpha = self.material.damping;
         let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);

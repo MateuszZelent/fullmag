@@ -77,7 +77,7 @@ function Invoke-External {
   Write-Host ("> " + $Command + " " + ($Arguments -join " "))
   & $Command @Arguments
   if ($LASTEXITCODE -ne 0) {
-    throw "$Command failed with exit code $LASTEXITCODE"
+    throw "$Command failed with exit code ${LASTEXITCODE}"
   }
 }
 
@@ -157,7 +157,7 @@ function Ensure-PythonEnvironment {
 }
 
 function Ensure-ControlRoomDependencies {
-  Require-Command "pnpm"
+  Ensure-PinnedPnpm
   $pnpmArguments = @("install", "--frozen-lockfile")
   $windowsSwc = Get-ChildItem `
     -LiteralPath (Join-Path $RepoRoot "node_modules\.pnpm") `
@@ -174,11 +174,11 @@ function Ensure-ControlRoomDependencies {
   $env:CI = "1"
   Push-Location $RepoRoot
   try {
-    Invoke-External "pnpm" $pnpmArguments
+    Invoke-External "node" (@($PinnedPnpmCli) + $pnpmArguments)
     if ($Frontend -eq "static") {
       $env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT = "1"
       try {
-        Invoke-External "pnpm" @("--dir", "apps/control-room", "build")
+        Invoke-External "node" (@($PinnedPnpmCli) + @("--dir", "apps/control-room", "build"))
       }
       finally {
         Remove-Item Env:FULLMAG_CONTROL_ROOM_STATIC_EXPORT -ErrorAction SilentlyContinue
@@ -193,6 +193,77 @@ function Ensure-ControlRoomDependencies {
       $env:CI = $previousCi
     }
   }
+}
+
+function Ensure-PinnedPnpm {
+  Require-Command "node"
+  if (-not (Test-Path -LiteralPath $PinnedPnpmCli -PathType Leaf)) {
+    throw "Pinned pnpm $PinnedPnpmVersion is missing at $PinnedPnpmCli; run scripts/windows/setup_fullmag.ps1 -InstallMissing or build=True"
+  }
+  $resolvedPnpmVersion = (& node $PinnedPnpmCli --version 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $resolvedPnpmVersion -ne $PinnedPnpmVersion) {
+    throw "Pinned pnpm validation failed at $PinnedPnpmCli; expected $PinnedPnpmVersion, got $resolvedPnpmVersion"
+  }
+  $env:FULLMAG_PNPM_CLI = $PinnedPnpmCli
+}
+
+function Ensure-NodeToolchain {
+  Require-Command "node"
+  $nodeVersion = (& node --version 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $nodeVersion -notmatch '^v24\.(1[89]|2[0-9]|[3-9][0-9])(?:\.[0-9]+)?$') {
+    throw "Fullmag Control Room requires Node 24.18.x through 24.99.x, got $nodeVersion"
+  }
+  Ensure-PinnedPnpm
+}
+
+function Get-SourceIdentity {
+  if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
+    throw "Fullmag Python environment is missing at $PythonExe; source identity cannot be captured"
+  }
+  $identityScript = Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py"
+  $identityOutput = (& $PythonExe $identityScript --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Fullmag source identity capture failed with exit code ${LASTEXITCODE}: $identityOutput"
+  }
+  try {
+    $identity = $identityOutput | ConvertFrom-Json
+  }
+  catch {
+    throw "Fullmag source identity capture returned invalid JSON: $identityOutput"
+  }
+  if ([string]$identity.head_commit_full -notmatch '^[0-9a-f]{40}$' -or
+      [string]$identity.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
+      $identity.source_snapshot_dirty -isnot [bool]) {
+    throw "Fullmag source identity is incomplete or invalid"
+  }
+  return $identity
+}
+
+function Write-JsonAtomic {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)]$Value
+  )
+  $temporary = "$Path.tmp.$PID"
+  $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $temporary -Encoding UTF8
+  Move-Item -LiteralPath $temporary -Destination $Path -Force
+}
+
+function Get-DirectorySha256 {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+    return $null
+  }
+  $records = @(Get-ChildItem -LiteralPath $Path -File -Recurse -ErrorAction Stop |
+    Sort-Object FullName |
+    ForEach-Object {
+      $relative = [System.IO.Path]::GetRelativePath($Path, $_.FullName).Replace('\', '/')
+      $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+      "$relative|$hash"
+    })
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes(($records -join "`n") + "`n")
+  $digest = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+  return ([System.BitConverter]::ToString($digest) -replace '-', '').ToLowerInvariant()
 }
 
 function Resolve-CudaCompiler {
@@ -239,13 +310,19 @@ function Get-GitCommit {
 }
 
 function Stage-NativeFdmDll {
-  $searchRoot = Join-Path $TargetRoot "release\build"
-  $dll = Get-ChildItem -LiteralPath $searchRoot -Filter "fullmag_fdm.dll" -File -Recurse -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTimeUtc -Descending |
-    Select-Object -First 1
-  if (-not $dll) {
-    throw "CUDA build did not produce fullmag_fdm.dll below $searchRoot"
+  # Cargo places build-script output below the target triple directory.  Only
+  # accept the canonical fullmag-fdm-sys output; selecting an arbitrary newest
+  # DLL from the whole target tree can silently stage a stale feature build.
+  $searchRoot = Join-Path $TargetRoot "$TargetTriple\release\build"
+  $dllCandidates = @(Get-ChildItem -LiteralPath $searchRoot -Directory -Filter "fullmag-fdm-sys-*" -ErrorAction SilentlyContinue |
+    ForEach-Object {
+      $candidate = Join-Path $_.FullName "out\native-build\backends\fdm\fullmag_fdm.dll"
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) { Get-Item -LiteralPath $candidate }
+    })
+  if ($dllCandidates.Count -ne 1) {
+    throw "CUDA build must produce exactly one canonical fullmag_fdm.dll below $searchRoot; found $($dllCandidates.Count)"
   }
+  $dll = $dllCandidates[0]
   $destination = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
   Copy-Item -LiteralPath $dll.FullName -Destination $destination -Force
   return (Resolve-AbsolutePath $destination)
@@ -276,6 +353,8 @@ $RustupHome = if ($env:FULLMAG_WINDOWS_RUSTUP_HOME) {
 }
 $PnpmHome = Join-Path $CacheRoot "pnpm-home"
 $PnpmStore = Join-Path $CacheRoot "pnpm-store"
+$PinnedPnpmVersion = "10.8.1"
+$PinnedPnpmCli = Join-Path $CacheRoot "corepack\v1\pnpm\$PinnedPnpmVersion\bin\pnpm.cjs"
 $NpmCache = Join-Path $CacheRoot "npm-cache"
 $PipCache = Join-Path $CacheRoot "pip-cache"
 $UvCache = Join-Path $CacheRoot "uv"
@@ -287,6 +366,7 @@ $PythonVenv = Join-Path $PythonRoot "fullmag"
 $PythonExe = Join-Path $PythonVenv "Scripts\python.exe"
 $ManifestPath = Join-Path $BuildRoot "windows-runtime\build-manifest.json"
 $FullmagExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag.exe"
+$FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-api.exe"
 $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
 
 foreach ($item in @(
@@ -310,7 +390,7 @@ $env:CARGO_HOME = $CargoHome
 $env:RUSTUP_HOME = $RustupHome
 $env:RUSTUP_PERMIT_COPY_RENAME = "1"
 $env:CARGO_TARGET_DIR = $TargetRoot
-$env:CARGO_INCREMENTAL = "0"
+$env:CARGO_INCREMENTAL = if ($Frontend -eq "dev" -and -not $BuildOnly) { "1" } else { "0" }
 $env:PNPM_HOME = $PnpmHome
 $env:npm_config_store_dir = $PnpmStore
 $env:npm_config_cache = $NpmCache
@@ -340,7 +420,27 @@ if ($useCuda -and $Backend -notin @("auto", "fdm")) {
 $cudaCompiler = $null
 $cudaBin = $null
 Require-Command "git"
-Require-Command "node"
+
+if ($BuildMode -eq "true") {
+  Ensure-PythonEnvironment
+}
+elseif (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
+  throw "Fullmag Python environment is missing at $PythonExe; rerun with build=True"
+}
+
+$sourceIdentity = Get-SourceIdentity
+$sourceCommit = [string]$sourceIdentity.head_commit_full
+$sourceWorktreeState = if ([bool]$sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+$sourceSnapshotSha256 = [string]$sourceIdentity.source_snapshot_sha256
+$env:FULLMAG_SOURCE_GIT_COMMIT = $sourceCommit
+$env:FULLMAG_SOURCE_WORKTREE_STATE = $sourceWorktreeState
+$env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
+
+$needsControlRoomToolchain = $Frontend -eq "static" -or -not $BuildOnly
+if ($needsControlRoomToolchain) {
+  Ensure-NodeToolchain
+}
+
 if ($BuildMode -eq "true") {
   Require-Command "cargo"
   Require-Command "rustc"
@@ -353,8 +453,9 @@ if ($BuildMode -eq "true") {
     $env:CUDACXX = $cudaCompiler
     Prepend-PathEntry $cudaBin
   }
-  Ensure-PythonEnvironment
-  Ensure-ControlRoomDependencies
+  if ($needsControlRoomToolchain) {
+    Ensure-ControlRoomDependencies
+  }
   $activeToolchain = (& rustup show active-toolchain 2>&1 | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $activeToolchain -notmatch "x86_64-pc-windows-msvc") {
     throw "An existing x86_64-pc-windows-msvc Rust toolchain is required; found: $activeToolchain"
@@ -363,7 +464,8 @@ if ($BuildMode -eq "true") {
   Invoke-External "cargo" @("--version")
 
   $cargoArguments = @(
-    "build", "--release", "--target", $TargetTriple, "-p", "fullmag-cli"
+    "build", "--release", "--target", $TargetTriple,
+    "-p", "fullmag-cli", "-p", "fullmag-api"
   )
   if ($useCuda) {
     $cargoArguments += @("--features", "cuda")
@@ -379,6 +481,9 @@ if ($BuildMode -eq "true") {
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
     throw "Native Fullmag binary was not produced at $FullmagExe"
   }
+  if (-not (Test-Path -LiteralPath $FullmagApiExe -PathType Leaf)) {
+    throw "Native Fullmag API binary was not produced at $FullmagApiExe"
+  }
   $nativeFdmDll = $null
   if ($useCuda) {
     $nativeFdmDll = Stage-NativeFdmDll
@@ -387,6 +492,7 @@ if ($BuildMode -eq "true") {
     schema_version = 1
     target_triple = $TargetTriple
     binary = $FullmagExe
+    api_binary = $FullmagApiExe
     backend = if ($Backend -eq "auto") { "auto" } else { $Backend }
     cuda = $useCuda
     features = if ($useCuda) { @("cuda") } else { @() }
@@ -394,32 +500,67 @@ if ($BuildMode -eq "true") {
     cuda_bin = $cudaBin
     cargo_target_dir = $TargetRoot
     cache_root = $CacheRoot
-    git_commit = Get-GitCommit
+    git_commit = $sourceCommit
+    worktree_state = $sourceWorktreeState
+    source_snapshot_sha256 = $sourceSnapshotSha256
+    node_version = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
+    pnpm_version = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
+    static_web_sha256 = if ($Frontend -eq "static") { Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom) } else { $null }
+    binary_sha256 = (Get-FileHash -LiteralPath $FullmagExe -Algorithm SHA256).Hash.ToLowerInvariant()
+    api_binary_sha256 = (Get-FileHash -LiteralPath $FullmagApiExe -Algorithm SHA256).Hash.ToLowerInvariant()
+    native_fdm_dll_sha256 = if ($nativeFdmDll) { (Get-FileHash -LiteralPath $nativeFdmDll -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
     built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
   }
-  $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+  Write-JsonAtomic -Path $ManifestPath -Value $manifest
 }
 else {
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
     throw "Native Windows Fullmag binary is missing at $FullmagExe; rerun with build=True"
   }
-  if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
-    throw "Fullmag Python environment is missing at $PythonExe; rerun with build=True"
+  if (-not (Test-Path -LiteralPath $FullmagApiExe -PathType Leaf)) {
+    throw "Native Windows Fullmag API binary is missing at $FullmagApiExe; rerun with build=True"
   }
   if ($Frontend -eq "static" -and -not (Test-Path -LiteralPath $StaticControlRoom -PathType Leaf)) {
     throw "Static Control Room is missing at $StaticControlRoom; rerun with build=True or use dev"
   }
+  if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+    throw "Windows runtime build manifest is missing at $ManifestPath; rerun with build=True"
+  }
+  $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+  $expectedNodeVersion = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
+  $expectedPnpmVersion = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
+  if ([int]$manifest.schema_version -ne 1 -or
+      [string]$manifest.git_commit -notmatch '^[0-9a-f]{40}$' -or
+      [string]$manifest.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
+      [string]$manifest.git_commit -ne $sourceCommit -or
+      [string]$manifest.worktree_state -ne $sourceWorktreeState -or
+      [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256 -or
+      [string]$manifest.target_triple -ne $TargetTriple -or
+      [string]$manifest.node_version -ne [string]$expectedNodeVersion -or
+      [string]$manifest.pnpm_version -ne [string]$expectedPnpmVersion) {
+    throw "Existing Windows runtime does not match the current source identity; rerun with build=True"
+  }
+  $binaryHash = (Get-FileHash -LiteralPath $FullmagExe -Algorithm SHA256).Hash.ToLowerInvariant()
+  $apiBinaryHash = (Get-FileHash -LiteralPath $FullmagApiExe -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ([string]$manifest.binary_sha256 -ne $binaryHash -or
+      [string]$manifest.api_binary_sha256 -ne $apiBinaryHash) {
+    throw "Existing Windows runtime binary hash does not match its manifest; rerun with build=True"
+  }
+  if ($Frontend -eq "static" -and
+      [string]$manifest.static_web_sha256 -ne (Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom))) {
+    throw "Existing static Control Room assets do not match the build manifest; rerun with build=True"
+  }
   if ($useCuda) {
-    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-      throw "CUDA build manifest is missing at $ManifestPath; rerun with build=True"
-    }
-    $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     if (-not [bool]$manifest.cuda) {
       throw "Existing Windows runtime was not built with CUDA; rerun with build=True; CPU fallback is forbidden"
     }
     $nativeDll = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
     if (-not (Test-Path -LiteralPath $nativeDll -PathType Leaf)) {
       throw "Native CUDA backend DLL is missing at $nativeDll; rerun with build=True"
+    }
+    $nativeDllHash = (Get-FileHash -LiteralPath $nativeDll -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]$manifest.native_fdm_dll_sha256 -ne $nativeDllHash) {
+      throw "Native CUDA backend DLL hash does not match the build manifest; rerun with build=True"
     }
     if ($manifest.cuda_bin -and (Test-Path -LiteralPath $manifest.cuda_bin -PathType Container)) {
       Prepend-PathEntry $manifest.cuda_bin

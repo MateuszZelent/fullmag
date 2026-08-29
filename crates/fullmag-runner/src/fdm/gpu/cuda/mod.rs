@@ -13,6 +13,7 @@ pub(crate) mod multilayer;
 pub(crate) mod native;
 pub(crate) mod route;
 #[cfg(any(feature = "cuda", test))]
+#[allow(dead_code)]
 pub(crate) mod spin_transport;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(test)]
 pub(crate) mod transport_publication;

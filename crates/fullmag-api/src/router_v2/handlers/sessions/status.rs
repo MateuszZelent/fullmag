@@ -718,6 +718,37 @@ fn active_lane_operations(
     let eigen_engine = planner.engine_id.as_str().contains("eigen");
     let frequency_engine = planner.engine_id.as_str().contains("frequency_response");
     let time_domain_engine = !eigen_engine && !frequency_engine;
+    let frozen_spins = planner.feature_capabilities.get("constraint.frozen_spins");
+    let frozen_spins_executable = frozen_spins.is_some_and(|feature| {
+        matches!(
+            feature.status,
+            fullmag_ir::FemMixedTopologyCapabilityStatusIR::ReferenceExecutable
+                | fullmag_ir::FemMixedTopologyCapabilityStatusIR::DevelopmentExecutable
+                | fullmag_ir::FemMixedTopologyCapabilityStatusIR::PartialProductionExecutable
+                | fullmag_ir::FemMixedTopologyCapabilityStatusIR::Implemented
+                | fullmag_ir::FemMixedTopologyCapabilityStatusIR::ProductionExecutable
+                | fullmag_ir::FemMixedTopologyCapabilityStatusIR::Validated
+        )
+    });
+    let frozen_spins_operation = || {
+        if frozen_spins_executable {
+            supported(
+                frozen_spins
+                    .map(|feature| feature.reason.as_str())
+                    .unwrap_or("Frozen Spins execution is available for the resolved lane."),
+                &["planner_feature:constraint.frozen_spins"],
+            )
+        } else {
+            unsupported(
+                frozen_spins
+                    .map(|feature| feature.reason.as_str())
+                    .unwrap_or(
+                    "The resolved planner profile does not publish Frozen Spins execution support.",
+                ),
+                &["planner_feature:constraint.frozen_spins"],
+            )
+        }
+    };
 
     BTreeMap::from([
         (
@@ -930,17 +961,11 @@ fn active_lane_operations(
         ),
         (
             "interaction.frozen_spins".into(),
-            supported(
-                "Frozen spins constraints are supported for the active lane.",
-                &["constraint:frozen_spins"],
-            ),
+            frozen_spins_operation(),
         ),
         (
             "constraint.frozen_spins".into(),
-            supported(
-                "Frozen spins constraints are supported for the active lane.",
-                &["constraint:frozen_spins"],
-            ),
+            frozen_spins_operation(),
         ),
         (
             "study.relaxation".into(),

@@ -331,18 +331,6 @@ pub(crate) fn reject_frozen_spins_fem_execution(problem: &ProblemIR) -> Result<(
                 message: "frozen_spins_fem_fe_order_unsupported: fe_order > 1 is not supported with frozen spins without explicit high-order true-DOF map".to_string(),
             });
         }
-        if let fullmag_ir::StudyIR::Relaxation { algorithm, .. } = &problem.study {
-            match algorithm {
-                fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit => {
-                    return Err(RunError {
-                        message: format!("frozen_spins_fem_tpi_unqualified: native FEM direct minimizer '{algorithm:?}' does not support frozen spins constraints"),
-                    });
-                }
-                fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
-                | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
-                | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => {}
-            }
-        }
     }
     Ok(())
 }

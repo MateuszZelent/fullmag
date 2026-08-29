@@ -1183,6 +1183,35 @@ typedef struct {
     uint32_t cache_projection_valid;
 } fullmag_fem_endpoint_cache_telemetry_v1;
 
+#define FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION 1u
+
+typedef enum {
+    FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS = 1,
+} fullmag_fem_representation_space;
+
+typedef enum {
+    FULLMAG_FEM_MATERIAL_LOCATION_SCALAR = 1,
+    FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1 = 2,
+    FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0 = 3,
+} fullmag_fem_material_location;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t state_space;
+    uint32_t ms_location;
+    uint32_t a_location;
+    uint32_t reserved0;
+    uint64_t local_node_count;
+    uint64_t true_node_count;
+    uint64_t periodic_map_revision;
+    uint64_t representation_copy_count;
+    uint64_t gather_scatter_bytes;
+    uint64_t invalid_space_assertion_count;
+    uint64_t hot_loop_representation_copy_count;
+    uint64_t hot_loop_gather_scatter_bytes;
+} fullmag_fem_representation_receipt_v1;
+
 #define FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION 1u
 
 typedef struct {
@@ -3160,6 +3189,11 @@ int fullmag_fem_backend_snapshot_stats(
 int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_endpoint_cache_telemetry_v1 *out_telemetry
+);
+
+int fullmag_fem_backend_snapshot_representation_receipt_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_representation_receipt_v1 *out_receipt
 );
 
 int fullmag_fem_backend_solver_attempt_count_v1(

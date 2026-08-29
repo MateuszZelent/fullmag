@@ -488,6 +488,11 @@ fn execute_projected_gradient_bb_soa(
             line_search_backtracks += 1;
         }
         let Some(e_trial) = accepted_energy else {
+            // Exhausting the backtracking budget is a numerical stopping
+            // condition, not a successful stage completion.  Preserve the
+            // distinction so the runner reports a deterministic gradient /
+            // stagnation reason instead of the generic backend error.
+            numerical_stagnation = true;
             break;
         };
 
@@ -720,6 +725,10 @@ fn execute_projected_gradient_bb_aos(
             line_search_backtracks += 1;
         }
         let Some((m_trial, e_trial)) = accepted_trial else {
+            // No Armijo candidate survived the complete backtracking budget.
+            // This is recoverable numerical stagnation and must be surfaced
+            // as such in the completion contract.
+            numerical_stagnation = true;
             break;
         };
 
@@ -971,6 +980,7 @@ fn execute_nonlinear_cg_soa(
             line_search_backtracks += 1;
         }
         let Some(e_new) = accepted_energy else {
+            numerical_stagnation = true;
             break;
         };
 
@@ -1186,6 +1196,7 @@ fn execute_nonlinear_cg_aos(
             line_search_backtracks += 1;
         }
         let Some((m_new, e_new)) = accepted_trial else {
+            numerical_stagnation = true;
             break;
         };
 

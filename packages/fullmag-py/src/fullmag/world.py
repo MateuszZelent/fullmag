@@ -5033,12 +5033,17 @@ class StudyMeshHandle:
         mesh_ir = domain["mesh"]
         mesh = mesh_data_from_ir(mesh_ir)
         boundary_map = _boundary_semantic_map(mesh)
-        return MeshArtifact(
+        certificate = mesh.mixed_layer_topology_certificate
+        artifact = MeshArtifact(
             mesh=mesh,
             mesh_name=str(mesh_ir.get("mesh_name", "study_domain")),
             authoring_document=current_authoring,
-            authoring_fingerprint="",
-            topology_fingerprint=mesh.topology_fingerprint_v3(),
+            authoring_fingerprint=mesh_authoring_fingerprint(current_authoring),
+            topology_fingerprint=(
+                certificate.topology_fingerprint
+                if certificate is not None
+                else mesh.topology_fingerprint_v3()
+            ),
             region_markers=[dict(entry) for entry in domain.get("region_markers", [])],
             object_region_markers=[
                 dict(entry) for entry in domain.get("object_region_markers", [])
@@ -5051,6 +5056,14 @@ class StudyMeshHandle:
             ),
             provenance={"origin": "generated"},
         )
+        # Keep the realized typed artifact bound to the current study.  The
+        # asset cache stores a large JSON CSR payload; without this binding the
+        # next ``study.mesh.save()`` call converts that payload back into NumPy
+        # arrays, only to serialize it again immediately.  The authoring
+        # fingerprint is part of the reuse guard above, so changing any mesh
+        # input invalidates this in-memory artifact before it can be reused.
+        _state._active_mesh_artifact = artifact
+        return artifact
 
     def save(self, path: str | Path) -> Path:
         from fullmag.meshing.persistence import save_mesh_artifact
@@ -7438,7 +7451,7 @@ def _clear_bound_mesh_artifact() -> None:
 
 
 def _build_explicit_mesh_assets() -> dict[str, Any] | None:
-    from fullmag.meshing.persistence import MeshArtifact
+    from fullmag.meshing.persistence import MeshArtifact, mesh_authoring_fingerprint
 
     active = _state._active_mesh_artifact
     if isinstance(active, MeshArtifact):
@@ -7470,6 +7483,7 @@ def _build_explicit_mesh_assets() -> dict[str, Any] | None:
         resolve_geometry_sources(geometry, source_root=_mesh_source_root())
         for geometry in geometries
     ]
+    realized_domain_meshes: list[tuple[object, list[dict[str, object]], object | None]] = []
     discretization_kwargs: dict[str, Any] = {"fem": fem_hint}
     if _state._cell is not None:
         discretization_kwargs["fdm"] = FDM(cell=_state._cell)
@@ -7496,7 +7510,54 @@ def _build_explicit_mesh_assets() -> dict[str, Any] | None:
         # payload on every cache hit makes large mixed meshes spend minutes in
         # ``copy.deepcopy`` before persistence even starts.
         _copy_cached_assets=False,
+        _realized_domain_mesh_sink=realized_domain_meshes,
     )
+    if len(realized_domain_meshes) == 1:
+        # ``build_geometry_assets_for_request`` must still return JSON MeshIR
+        # for ProblemIR consumers, but keep the exact typed object for the
+        # state-owned persistence path.  Rehydrating the just-built 800k-cell
+        # CSR payload from JSON would repeat validation and native bridging.
+        mesh, region_markers, build_report = realized_domain_meshes[0]
+        certificate = getattr(mesh, "mixed_layer_topology_certificate", None)
+        if certificate is not None:
+            topology_fingerprint = str(certificate.topology_fingerprint)
+        else:
+            topology_fingerprint = str(mesh.topology_fingerprint_v3())
+        authoring_document = _current_mesh_authoring_document()
+        report_payload = None
+        if build_report is not None:
+            to_dict = getattr(build_report, "to_dict", None)
+            if callable(to_dict):
+                report_payload = dict(to_dict())
+            elif isinstance(build_report, Mapping):
+                report_payload = dict(build_report)
+        if isinstance(build_report, Mapping):
+            object_region_markers = [
+                dict(entry)
+                for entry in build_report.get("object_region_markers", [])
+                if isinstance(entry, Mapping)
+            ]
+        else:
+            object_region_markers = (
+                [
+                    dict(entry)
+                    for entry in getattr(build_report, "object_region_markers", [])
+                ]
+                if build_report is not None
+                else []
+            )
+        _state._active_mesh_artifact = MeshArtifact(
+            mesh=mesh,
+            mesh_name="study_domain",
+            authoring_document=authoring_document,
+            authoring_fingerprint=mesh_authoring_fingerprint(authoring_document),
+            topology_fingerprint=topology_fingerprint,
+            region_markers=[dict(entry) for entry in region_markers],
+            object_region_markers=object_region_markers,
+            boundary_map=_boundary_semantic_map(mesh),
+            build_report=report_payload,
+            provenance={"origin": "generated"},
+        )
     _cache_mesh_quality_reports(assets)
     return assets
 

@@ -3462,6 +3462,13 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
                 "engine_id": "fdm_cpu_reference",
                 "capability_profile_version": "test-profile",
                 "supported_terms": ["exchange", "demag_tensor_fft_newell", "thermal", "stt"],
+                "feature_capabilities": {
+                    "constraint.frozen_spins": {
+                        "status": "development_executable",
+                        "reason": "Frozen Spins test lane is executable but not qualified.",
+                        "scope": "single_grid; precision=double"
+                    }
+                },
                 "supported_demag_realizations": ["tensor_fft_newell"],
                 "preview_quantities": ["m", "H_eff"],
                 "snapshot_quantities": ["m", "H_eff"],
@@ -3545,6 +3552,15 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         "capability_supported"
     );
     assert_eq!(
+        active_lane["operations"]["constraint.frozen_spins"]["state"],
+        "supported"
+    );
+    assert_eq!(
+        active_lane["operations"]["constraint.frozen_spins"]["requires"][0],
+        "planner_feature:constraint.frozen_spins"
+    );
+    assert_eq!(active_lane["qualification"]["status"], "not_asserted");
+    assert_eq!(
         active_lane["operations"]["initial_magnetization.uniform"]["state"],
         "supported"
     );
@@ -3577,6 +3593,33 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
+
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .expect("live session")
+        .capabilities
+        .as_mut()
+        .expect("planner capabilities")
+        .feature_capabilities
+        .remove("constraint.frozen_spins");
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(
+        json["capabilities"]["active_lane"]["operations"]["constraint.frozen_spins"]["state"],
+        "unsupported"
+    );
 }
 
 #[tokio::test]
@@ -8729,6 +8772,217 @@ async fn quantity_capability_is_separate_from_unmaterialized_field_cache() {
     assert!(meta["observation_frame"]["observation_frame_id"]
         .as_str()
         .is_some_and(|value| value.starts_with("obs:test-session@1700000000000:")));
+}
+
+#[tokio::test]
+async fn frozen_spins_uses_quantity_catalog_field_catalog_and_fmvp_scalar_data_plane() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {
+                "backend_plan": {
+                    "kind": "fdm",
+                    "grid_certificate": { "grid_fingerprint": "00".repeat(32) }
+                }
+            },
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 2],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["frozen_spins"]));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "frozen_spins": {
+                "quantity": "frozen_spins",
+                "unit": "1",
+                "values": [1.0, 0.0, 0.0, 1.0],
+                "source_step": 17,
+                "source_time_seconds": 1.7e-12,
+                "source_revision": 23,
+                "materialized_at_unix_ms": 1_700_000_000_123_u64,
+                "layout": {
+                    "grid_cells": [2, 1, 2],
+                    "original_grid_cells": [2, 1, 2],
+                    "spatial_kind": "grid",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("Frozen Spins scalar field fixture should deserialize");
+    }
+    let quantities_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/quantities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quantities_response.status(), StatusCode::OK);
+    let quantities = body_json(quantities_response).await;
+    let quantity = quantities["quantities"]
+        .as_array()
+        .expect("quantity catalog array")
+        .iter()
+        .find(|entry| entry["id"] == "frozen_spins")
+        .expect("Frozen Spins quantity catalog entry");
+    assert_eq!(quantity["shape"], "spatial_scalar");
+    assert_eq!(quantity["unit"], "1");
+    assert_eq!(quantity["location"], "node");
+    assert_eq!(quantity["domain"], "magnetic_only");
+    assert_eq!(quantity["materialization_state"], "complete");
+    assert_eq!(quantity["resolved_capability"]["provider"], "available");
+    assert_eq!(quantity["resolved_capability"]["request"], "field_vector");
+    assert_eq!(
+        quantity["resolved_capability"]["materialization"],
+        "materialized"
+    );
+    assert_eq!(quantity["resolved_capability"]["render"], "renderable");
+    assert_eq!(
+        quantity["resolved_capability"]["publication"],
+        "interactive"
+    );
+
+    let fields_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fields_response.status(), StatusCode::OK);
+    let fields = body_json(fields_response).await;
+    let field = fields["quantities"]
+        .as_array()
+        .expect("field catalog array")
+        .iter()
+        .find(|entry| entry["quantity_id"] == "frozen_spins")
+        .expect("Frozen Spins field catalog entry");
+    assert_eq!(field["available"], true);
+    assert_eq!(field["spatial"], true);
+    assert_eq!(field["ui_exposed"], true);
+    assert_eq!(field["location"], "node");
+    assert_eq!(field["domain"], "magnetic_only");
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/frozen_spins/meta?component=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["components"], 1);
+    assert_eq!(meta["unit"], "1");
+    assert_eq!(meta["source_step"], 17);
+    assert_eq!(meta["source_time_seconds"], 1.7e-12);
+    assert_eq!(meta["stats"]["min"], 0.0);
+    assert_eq!(meta["stats"]["max"], 1.0);
+
+    let vector_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/frozen_spins/samples/vector?component=full&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::OK);
+    assert_eq!(
+        vector_response.headers()["x-fullmag-encoding"],
+        "FMVP;version=3"
+    );
+    assert_eq!(
+        vector_response.headers()["x-fullmag-quantity-id"],
+        "frozen_spins"
+    );
+    assert_eq!(vector_response.headers()["x-fullmag-scope-kind"], "object");
+    assert_eq!(vector_response.headers()["x-fullmag-scope-id"], "body");
+    assert_eq!(
+        vector_response.headers()["x-fullmag-field-indexing"],
+        "explicit_node_indices"
+    );
+    assert_eq!(vector_response.headers()["x-fullmag-node-index-count"], "4");
+    assert_eq!(vector_response.headers()["x-fullmag-n-comp"], "1");
+    assert_eq!(vector_response.headers()["x-fullmag-point-count"], "4");
+    let bytes = body_bytes(vector_response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3);
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0, 1.0]);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fem_frozen_spins_object_scope_uses_true_mesh_node_carrier() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.resolved_backend = Some("fem-cpu".to_string());
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": { "backend_plan": { "kind": "fem" } }
+        }));
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.mesh_revision = 11;
+        snapshot.capabilities = Some(resolved_compute_fields_capabilities(&["frozen_spins"]));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "frozen_spins": {
+                "quantity": "frozen_spins",
+                "unit": "1",
+                "values": [1.0, 0.0, 1.0, 0.0],
+                "source_step": 19,
+                "source_time_seconds": 1.9e-12,
+                "source_revision": 29,
+                "materialized_at_unix_ms": 1_700_000_000_321_u64,
+                "layout": {
+                    "grid_cells": [4, 1, 1],
+                    "original_grid_cells": [4, 1, 1],
+                    "spatial_kind": "fem_nodes",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("FEM Frozen Spins scalar field fixture should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/frozen_spins/samples/vector?component=full&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(response.headers()["x-fullmag-quantity-id"], "frozen_spins");
+    assert_eq!(response.headers()["x-fullmag-scope-kind"], "object");
+    assert_eq!(response.headers()["x-fullmag-scope-id"], "body");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "explicit_node_indices"
+    );
+    assert_eq!(response.headers()["x-fullmag-node-index-count"], "4");
+    assert_eq!(response.headers()["x-fullmag-n-comp"], "1");
+    assert_eq!(response.headers()["x-fullmag-point-count"], "4");
+    let bytes = body_bytes(response).await;
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 1.0, 0.0]);
 }
 
 // ─── display endpoint ───────────────────────────────────────────────────────

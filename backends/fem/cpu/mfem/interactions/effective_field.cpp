@@ -128,9 +128,13 @@ bool compute_effective_fields_for_magnetization(
             compute_uniaxial_anisotropy_field(
                 ctx, m_xyz, ctx.anisotropy.h_uniaxial_xyz,
                 &anisotropy_energy);
-            if (!ctx.mesh.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.anisotropy.h_uniaxial_xyz);
+            if (!project_static_periodic_aos_checked(
+                    ctx, ctx.anisotropy.h_uniaxial_xyz, error)) {
+                error = "uniaxial anisotropy periodic projection failed: " + error;
+                return false;
             }
+        } else {
+            ctx.anisotropy.h_uniaxial_xyz.assign(m_xyz.size(), 0.0);
         }
 
         double dmi = 0.0;
@@ -139,9 +143,13 @@ bool compute_effective_fields_for_magnetization(
                     ctx, m_xyz, ctx.dmi.h_interfacial_xyz, &dmi, error)) {
                 return false;
             }
-            if (!ctx.mesh.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.dmi.h_interfacial_xyz);
+            if (!project_static_periodic_aos_checked(
+                    ctx, ctx.dmi.h_interfacial_xyz, error)) {
+                error = "interfacial DMI periodic projection failed: " + error;
+                return false;
             }
+        } else {
+            ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0);
         }
 
         if (ctx.anisotropy.cubic_enabled) {
@@ -149,9 +157,13 @@ bool compute_effective_fields_for_magnetization(
             compute_cubic_anisotropy_field(
                 ctx, m_xyz, ctx.anisotropy.h_cubic_xyz, &cubic_energy);
             anisotropy_energy += cubic_energy;
-            if (!ctx.mesh.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.anisotropy.h_cubic_xyz);
+            if (!project_static_periodic_aos_checked(
+                    ctx, ctx.anisotropy.h_cubic_xyz, error)) {
+                error = "cubic anisotropy periodic projection failed: " + error;
+                return false;
             }
+        } else {
+            ctx.anisotropy.h_cubic_xyz.assign(m_xyz.size(), 0.0);
         }
 
         double bulk_dmi = 0.0;
@@ -160,9 +172,13 @@ bool compute_effective_fields_for_magnetization(
                     ctx, m_xyz, ctx.dmi.h_bulk_xyz, &bulk_dmi, error)) {
                 return false;
             }
-            if (!ctx.mesh.periodic_reduced_node.empty()) {
-                project_static_periodic_aos(ctx, ctx.dmi.h_bulk_xyz);
+            if (!project_static_periodic_aos_checked(
+                    ctx, ctx.dmi.h_bulk_xyz, error)) {
+                error = "bulk DMI periodic projection failed: " + error;
+                return false;
             }
+        } else {
+            ctx.dmi.h_bulk_xyz.assign(m_xyz.size(), 0.0);
         }
 
         for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
@@ -203,8 +219,9 @@ bool compute_effective_fields_for_magnetization(
         } else {
             ctx.magnetoelastic.energy_joules = 0.0;
         }
-        if (!ctx.mesh.periodic_reduced_node.empty()) {
-            project_static_periodic_aos(ctx, h_eff_xyz);
+        if (!project_static_periodic_aos_checked(ctx, h_eff_xyz, error)) {
+            error = "effective-field periodic projection failed: " + error;
+            return false;
         }
         if (allow_interrupt && poll_interrupt(ctx)) {
             return false;

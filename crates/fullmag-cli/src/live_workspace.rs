@@ -131,6 +131,7 @@ impl LocalLiveWorkspaceState {
         }
     }
 
+    #[cfg(test)]
     pub fn snapshot(&self) -> CurrentLiveSnapshotPayload {
         self.build_publish_payload(
             true,

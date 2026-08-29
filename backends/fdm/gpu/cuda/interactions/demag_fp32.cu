@@ -8,6 +8,7 @@
  */
 
 #include "context.hpp"
+#include "dmi_boundary.cuh"
 
 #include <cuda_runtime.h>
 #include <cufft.h>
@@ -380,56 +381,13 @@ __global__ void combine_effective_field_fp32_kernel(
         float mu0 = 4.0f * static_cast<float>(M_PI) * 1e-7f;
         float dmi_pf = 2.0f / (mu0 * ms);
 
+        const DmiMissingFaces missing{
+            missing_xp, missing_xm, missing_yp, missing_ym, missing_zp, missing_zm};
         if (has_interfacial_dmi) {
-            float mxm = m_x[xm], mym = m_y[xm], mzm = m_z[xm];
-            float mxp = m_x[xp], myp = m_y[xp], mzp = m_z[xp];
-            float mxym = m_x[ym], myym = m_y[ym], mzym = m_z[ym];
-            float mxyP = m_x[yp], myyP = m_y[yp], mzyP = m_z[yp];
-            if (exchange_stiffness > 0.0f) {
-                const float d_over_2a = D_int / (2.0f * exchange_stiffness);
-                const float dx = 0.5f / inv_2dx;
-                const float dy = 0.5f / inv_2dy;
-                if (missing_xm) {
-                    mxm = mx + dx * d_over_2a * mz;
-                    mzm = mz - dx * d_over_2a * mx;
-                }
-                if (missing_xp) {
-                    mxp = mx - dx * d_over_2a * mz;
-                    mzp = mz + dx * d_over_2a * mx;
-                }
-                if (missing_ym) {
-                    myym = my + dy * d_over_2a * mz;
-                    mzym = mz - dy * d_over_2a * my;
-                }
-                if (missing_yp) {
-                    myyP = my - dy * d_over_2a * mz;
-                    mzyP = mz + dy * d_over_2a * my;
-                }
-
-                const float exchange_pf = 2.0f * exchange_stiffness / (mu0 * ms);
-                const float inv_dx2 = 4.0f * inv_2dx * inv_2dx;
-                const float inv_dy2 = 4.0f * inv_2dy * inv_2dy;
-                if (missing_xm) {
-                    hx += exchange_pf * (mxm - mx) * inv_dx2;
-                    hy += exchange_pf * (mym - my) * inv_dx2;
-                    hz += exchange_pf * (mzm - mz) * inv_dx2;
-                }
-                if (missing_xp) {
-                    hx += exchange_pf * (mxp - mx) * inv_dx2;
-                    hy += exchange_pf * (myp - my) * inv_dx2;
-                    hz += exchange_pf * (mzp - mz) * inv_dx2;
-                }
-                if (missing_ym) {
-                    hx += exchange_pf * (mxym - mx) * inv_dy2;
-                    hy += exchange_pf * (myym - my) * inv_dy2;
-                    hz += exchange_pf * (mzym - mz) * inv_dy2;
-                }
-                if (missing_yp) {
-                    hx += exchange_pf * (mxyP - mx) * inv_dy2;
-                    hy += exchange_pf * (myyP - my) * inv_dy2;
-                    hz += exchange_pf * (mzyP - mz) * inv_dy2;
-                }
-            }
+            const float mxm = m_x[xm], mzm = m_z[xm];
+            const float mxp = m_x[xp], mzp = m_z[xp];
+            const float myym = m_y[ym], mzym = m_z[ym];
+            const float myyP = m_y[yp], mzyP = m_z[yp];
             float dmz_dx = (mzp - mzm) * inv_2dx;
             float dmz_dy = (mzyP - mzym) * inv_2dy;
             float dmx_dx = (mxp - mxm) * inv_2dx;
@@ -438,6 +396,8 @@ __global__ void combine_effective_field_fp32_kernel(
             hx += dmi_pf * D_int * dmz_dx;
             hy += dmi_pf * D_int * dmz_dy;
             hz -= dmi_pf * D_int * (dmx_dx + dmy_dy);
+            add_interfacial_dmi_boundary_correction(
+                mx, my, mz, dmi_pf, D_int, inv_2dx, inv_2dy, missing, hx, hy, hz);
         }
 
         if (has_bulk_dmi) {
@@ -451,6 +411,9 @@ __global__ void combine_effective_field_fp32_kernel(
             hx -= dmi_pf * D_bulk * (dmz_dy - dmy_dz);
             hy -= dmi_pf * D_bulk * (dmx_dz - dmz_dx);
             hz -= dmi_pf * D_bulk * (dmy_dx - dmx_dy);
+            add_bulk_dmi_boundary_correction(
+                mx, my, mz, dmi_pf, D_bulk, inv_2dx, inv_2dy, inv_2dz,
+                missing, hx, hy, hz);
         }
     }
 

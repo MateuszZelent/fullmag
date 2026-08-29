@@ -1082,6 +1082,22 @@ class MeshData:
             raise TypeError(
                 "mixed_layer_topology_certificate must be a MixedLayerTopologyCertificate"
             )
+
+        # A native mixed certificate is emitted only after the Rust bridge has
+        # parsed and validated the complete typed CSR mesh (including node
+        # references, arities, ordinals, mesh parts, facet roles, orientation,
+        # degeneracy, conformity, and the certificate evidence).  Repeating
+        # the Python per-cell/per-facet validation here is therefore redundant
+        # for the accepted production path and costs several seconds for the
+        # large SP4 mesh.  Keep the ordinary Python validation as the
+        # fail-closed fallback when the optional extension is unavailable or
+        # rejects the certificate.
+        if (
+            self.mixed_layer_topology_certificate is not None
+            and self._native_mixed_certificate_valid()
+        ):
+            self._validate_realization_report()
+            return
         self.validate()
         self._validate_realization_report()
         self._validate_mixed_layer_topology_certificate()
@@ -1143,7 +1159,12 @@ class MeshData:
             interface_marker=certificate.interface_marker,
             _bound_context=carrier.context,
         )
-        actual_fingerprint = mesh_without_certificate.topology_fingerprint_v3()
+        # The prevalidated carrier is minted only after the native (or
+        # reference) topology fingerprint has been bound to this exact mesh.
+        # Re-running the Python byte-by-byte hash here duplicates a linear
+        # pass over the large SP4 CSR arrays and provides no additional
+        # protection over that identity-bound carrier.
+        actual_fingerprint = validation.topology_fingerprint_v3
         if (
             context.actual_topology_fingerprint_v3 != actual_fingerprint
             or context.workspace.topology_fingerprint_v3 != actual_fingerprint
@@ -1264,8 +1285,7 @@ class MeshData:
             require_native=False,
         )
         if native is not None and native.validated_claimed_certificate:
-            expected_fingerprint = self.topology_fingerprint_v3()
-            if native.topology_fingerprint_v3 != expected_fingerprint:
+            if native.topology_fingerprint_v3 != certificate.topology_fingerprint:
                 raise ValueError(
                     "native mixed layer topology certificate fingerprint is stale"
                 )
@@ -1897,7 +1917,7 @@ class MeshData:
         if native is None or not native.validated_claimed_certificate:
             return False
         return (
-            native.topology_fingerprint_v3 == self.topology_fingerprint_v3()
+            native.topology_fingerprint_v3 == certificate.topology_fingerprint
             and native.certificate_payload_sha256
             == _certificate_payload_sha256(certificate)
         )
@@ -3751,19 +3771,47 @@ def _validate_typed_csr(
         raise ValueError(f"{kind}_offsets must be monotone")
     if int(offsets[-1]) != len(nodes):
         raise ValueError(f"{kind}_offsets final value must match {kind}_nodes length")
-    for index, item_type in enumerate(types.tolist()):
-        expected = arities.get(item_type)
-        if expected is None:
-            raise ValueError(f"unknown {kind} type: {item_type}")
-        start, stop = int(offsets[index]), int(offsets[index + 1])
-        if stop - start != expected:
-            raise ValueError(
-                f"{kind} {index} type {item_type} has wrong arity {stop - start}; expected {expected}"
-            )
-        item_nodes = nodes[start:stop]
-        if np.any(item_nodes < 0) or np.any(item_nodes >= node_count):
-            raise ValueError(f"{kind} {index} contains invalid node index")
-        if len(set(int(node) for node in item_nodes)) != expected:
+
+    # This validation runs for every MeshData construction, including the
+    # 800k-cell SP4 artifact load path.  Keep the same fail-closed checks and
+    # diagnostics, but operate on contiguous NumPy blocks instead of a Python
+    # loop over every cell/facet.
+    expected_arities = np.zeros(types.shape, dtype=np.int64)
+    recognized = np.zeros(types.shape, dtype=np.bool_)
+    for item_type, arity in arities.items():
+        selected = types == item_type
+        expected_arities[selected] = int(arity)
+        recognized |= selected
+    unknown = np.flatnonzero(~recognized)
+    if unknown.size:
+        index = int(unknown[0])
+        raise ValueError(f"unknown {kind} type: {types[index]}")
+
+    lengths = np.diff(offsets)
+    wrong_arity = np.flatnonzero(lengths != expected_arities)
+    if wrong_arity.size:
+        index = int(wrong_arity[0])
+        raise ValueError(
+            f"{kind} {index} type {types[index]} has wrong arity "
+            f"{int(lengths[index])}; expected {int(expected_arities[index])}"
+        )
+
+    invalid_nodes = np.flatnonzero((nodes < 0) | (nodes >= node_count))
+    if invalid_nodes.size:
+        index = int(np.searchsorted(offsets[1:], int(invalid_nodes[0]), side="right"))
+        raise ValueError(f"{kind} {index} contains invalid node index")
+
+    for arity in np.unique(expected_arities):
+        item_indices = np.flatnonzero(expected_arities == arity)
+        if not item_indices.size:
+            continue
+        width = int(arity)
+        starts = offsets[item_indices]
+        block = nodes[starts[:, np.newaxis] + np.arange(width, dtype=np.int64)]
+        sorted_block = np.sort(block, axis=1)
+        duplicate_rows = np.flatnonzero(np.any(np.diff(sorted_block, axis=1) == 0, axis=1))
+        if duplicate_rows.size:
+            index = int(item_indices[int(duplicate_rows[0])])
             raise ValueError(f"{kind} {index} contains duplicate node indices")
 
 
@@ -3776,7 +3824,7 @@ def _validate_global_ordinals(
         raise ValueError(f"{kind}_global_ordinals must have shape ({kind} count,)")
     if np.any(ordinals < 0):
         raise ValueError(f"{kind}_global_ordinals must be non-negative")
-    if len(set(int(value) for value in ordinals)) != item_count:
+    if np.unique(ordinals).size != item_count:
         raise ValueError(f"{kind}_global_ordinals must be unique")
 
 

@@ -276,6 +276,7 @@ enum ArtifactJob {
         provenance: ExecutionProvenance,
         acknowledgement: mpsc::Sender<Result<(), String>>,
     },
+    #[cfg(any(feature = "cuda", test))]
     FailedRunProvenance {
         provenance: ExecutionProvenance,
         primary_error: String,
@@ -301,6 +302,7 @@ impl ArtifactJob {
             ArtifactJob::NativeFieldSnapshot { .. } => 0,
             #[cfg(feature = "fem-gpu")]
             ArtifactJob::NativeFemFieldSnapshot { .. } => 0,
+            #[cfg(any(feature = "cuda", test))]
             ArtifactJob::FailedRunProvenance { .. } => 0,
             ArtifactJob::TerminalCpuAdaptiveAttempts { batch, .. } => batch
                 .count
@@ -356,6 +358,7 @@ impl ArtifactPipelineSender {
         })
     }
 
+    #[cfg(any(feature = "cuda", test))]
     fn publish_failed_run_provenance(
         &self,
         provenance: ExecutionProvenance,
@@ -485,6 +488,7 @@ impl ArtifactPipelineSender {
         }
     }
 
+    #[cfg(any(feature = "cuda", test))]
     fn publish_failed_run_provenance_with_timeout(
         &self,
         provenance: ExecutionProvenance,
@@ -572,6 +576,7 @@ impl ArtifactPipeline {
     /// older runner call sites.  The production path should prefer
     /// `start_for_problem_with_autosave_root`, but this wrapper preserves the
     /// same writer contract without enabling stage autosave.
+    #[cfg(test)]
     pub(crate) fn start(
         output_dir: PathBuf,
         field_context: FieldArtifactContext,
@@ -584,21 +589,6 @@ impl ArtifactPipeline {
             capacity,
             None,
             None,
-        )
-    }
-
-    pub(crate) fn start_for_problem(
-        problem: &fullmag_ir::ProblemIR,
-        output_dir: PathBuf,
-        field_context: FieldArtifactContext,
-        capacity: usize,
-    ) -> Result<Self, RunError> {
-        Self::start_for_problem_with_autosave_root(
-            problem,
-            output_dir.clone(),
-            output_dir,
-            field_context,
-            capacity,
         )
     }
 
@@ -616,38 +606,6 @@ impl ArtifactPipeline {
             output_dir,
             field_context,
             capacity,
-        )
-    }
-
-    pub(crate) fn start_for_problem_with_autosave_root(
-        problem: &fullmag_ir::ProblemIR,
-        output_dir: PathBuf,
-        autosave_root: PathBuf,
-        field_context: FieldArtifactContext,
-        capacity: usize,
-    ) -> Result<Self, RunError> {
-        let stage_autosave = problem
-            .study
-            .sampling()
-            .stage_autosave
-            .clone()
-            .map(|policy| StageAutosavePipelineConfig {
-                stage_id: problem
-                    .problem_meta
-                    .runtime_metadata
-                    .get("active_stage_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&problem.problem_meta.entrypoint_kind)
-                    .to_string(),
-                policy,
-            });
-        Self::start_with_stage_autosave_roots(
-            output_dir,
-            autosave_root,
-            field_context,
-            capacity,
-            stage_autosave,
-            None,
         )
     }
 
@@ -685,23 +643,6 @@ impl ArtifactPipeline {
             capacity,
             stage_autosave,
             Some(physics_execution_context),
-        )
-    }
-
-    #[cfg(test)]
-    fn start_with_stage_autosave(
-        output_dir: PathBuf,
-        field_context: FieldArtifactContext,
-        capacity: usize,
-        stage_autosave: Option<StageAutosavePipelineConfig>,
-    ) -> Result<Self, RunError> {
-        Self::start_with_stage_autosave_roots(
-            output_dir.clone(),
-            output_dir,
-            field_context,
-            capacity,
-            stage_autosave,
-            None,
         )
     }
 
@@ -1261,6 +1202,7 @@ impl ArtifactRecorder {
     /// Replaces runtime provenance after a run has measured counters that are
     /// unavailable before the first step. Existing queued field snapshots keep
     /// their immutable capture-time provenance.
+    #[cfg(any(feature = "cuda", feature = "fem-gpu", test))]
     pub(crate) fn update_provenance(&mut self, provenance: ExecutionProvenance) {
         self.provenance = provenance;
     }
@@ -1280,6 +1222,7 @@ impl ArtifactRecorder {
         Ok(())
     }
 
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn publish_failed_run_provenance(
         &mut self,
         primary: &RunError,
@@ -1996,6 +1939,7 @@ fn writer_loop(
                     job_start.elapsed(),
                 );
             }
+            #[cfg(any(feature = "cuda", test))]
             ArtifactJob::FailedRunProvenance {
                 provenance,
                 primary_error,
@@ -2072,6 +2016,7 @@ impl StageAutosaveWriter {
     }
 }
 
+#[cfg(any(feature = "cuda", test))]
 fn write_failed_run_provenance_atomic(
     output_dir: &Path,
     provenance: &ExecutionProvenance,

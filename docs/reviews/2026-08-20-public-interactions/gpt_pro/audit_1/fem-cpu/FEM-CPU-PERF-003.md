@@ -5,7 +5,7 @@
 | Lane | **FEM CPU** |
 | Priorytet | **P1** |
 | Klasa | `performance` |
-| Status | `implementation plan` |
+| Status | `source/test remediation complete; qualification pending` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FEM-CPU-PERF-002` |
@@ -130,15 +130,15 @@ Minimalne wymagania:
 
 ## 9. Kryteria akceptacyjne
 
-- [ ] Istnieje minimalny test, który przed poprawką odtwarza problem.
+- [x] Istnieje minimalny test, który przed poprawką odtwarza problem.
 - [ ] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
 - [ ] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
-- [ ] Accepted/rejected/failure semantics są objęte fault-injection.
-- [ ] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
+- [x] Accepted/rejected/failure semantics są objęte fault-injection.
+- [x] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
 - [ ] CPU/GPU albo AoS/SoA parity przechodzi na poziomie pola, RHS, stage i kroku, jeśli dotyczy.
 - [ ] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
 - [ ] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
-- [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
+- [x] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
 - [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.
 
 ## 10. Ryzyka
@@ -159,3 +159,47 @@ Ustalenie `FEM-CPU-PERF-003` jest zamknięte dopiero wtedy, gdy:
 3. wynik fizyczny i numeryczny przechodzi niezależny oracle;
 4. hot-loop telemetry spełnia budżet;
 5. capability jest promowana w rejestrze wyłącznie dla dokładnie przetestowanych kombinacji backendu, precision, integratora i interakcji.
+
+## 13. Wynik remediacji źródłowej i testowej — 2026-08-29
+
+Audyt aktualnego call graphu potwierdził, że produkcyjny builder kontekstu już
+tworzył `StepperWorkspace::attempt_checkpoint` w setupie, a `capture()` nie
+kopiował payloadu O(N). Pozostawała jednak druga realizacja: gdy checkpointu
+brakowało, `context_step_explicit_rk_mfem()` tworzył
+`fallback_attempt_cache` podczas publicznego kroku. Była to ukryta alokacja i
+silent fallback sprzeczny z docelowym kontraktem.
+
+Test RED zakończył się komunikatem:
+
+```text
+FAIL: adaptive RK step execution must not allocate a compatibility checkpoint
+```
+
+Fallback został usunięty. Adaptive RK23/RK45 używa wyłącznie obiektu
+utworzonego podczas setupu; brak obiektu kończy się jednoznacznym błędem przed
+rozpoczęciem pętli prób. Dodano `attempt_cache_allocation_count`, a test z
+wymuszonymi rejectami potwierdza jednocześnie:
+
+- ten sam adres checkpointu przed i po wszystkich próbach;
+- `attempt_cache_allocation_count == 0` w mierzonym hot loop;
+- `attempt_cache_snapshot_payload_bytes == 0`;
+- `attempt_cache_restore_payload_bytes == 0`;
+- dokładnie jeden capture na próbę i jeden restore na reject;
+- zachowanie accepted state oraz zgodność endpointu z niezależnym oracle RK.
+
+Naprawiono również ujawnioną przez GREEN regresję telemetrii: checkpoint nie
+zapamiętuje już stanu profilera z chwili setupu. Capture i restore odczytują
+bieżącą politykę profilowania, dlatego włączenie profilera po utworzeniu
+kontekstu nie gubi liczników retry.
+
+Managed `just verify-fem-gpu-rk-transaction-contract` przeszedł:
+
+- CTest: **5/5**;
+- `fullmag-fem-sys`: **41/41**;
+- `cargo check -p fullmag-runner`: PASS;
+- mixed-P1 PGBB/NCG dla `exchange_only` i `device_hypre`: PASS.
+
+Remediacja źródłowa/testowa jest zakończona. Status pozostaje
+`qualification pending`, ponieważ osobny hash-bound publiczny E2E/provenance
+oraz benchmark reject overhead/time-to-accuracy na reprezentatywnej siatce nie
+zostały jeszcze wykonane. Capability nie została promowana.

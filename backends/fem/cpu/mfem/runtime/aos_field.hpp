@@ -14,6 +14,21 @@ enum class AosVectorFieldSpace : std::uint8_t {
 };
 
 /*
+ * Immutable typed map between the full local-node state space and the
+ * periodic reduced (true-node) space. Empty periodic topology is represented
+ * as an identity map with null index arrays and equal local/true extents.
+ */
+struct PeriodicNodeMapView {
+    const std::uint32_t *local_to_true = nullptr;
+    const std::uint32_t *true_representatives = nullptr;
+    std::size_t local_node_count = 0;
+    std::size_t true_node_count = 0;
+    std::uint64_t revision = 0;
+
+    bool reduced() const noexcept { return local_to_true != nullptr; }
+};
+
+/*
  * Typed boundary for a mutable AoS vector field.
  *
  * The view is only valid for the storage and map revision checked by
@@ -27,11 +42,60 @@ struct AosVectorFieldView {
     std::uint64_t periodic_map_revision = 0;
 };
 
+struct ConstAosVectorFieldView {
+    const double *data = nullptr;
+    std::size_t node_count = 0;
+    AosVectorFieldSpace space = AosVectorFieldSpace::local_nodes;
+    PeriodicNodeMapView periodic_map{};
+};
+
+struct RepresentationAuditCounters {
+    std::uint64_t representation_copy_count = 0;
+    std::uint64_t gather_scatter_bytes = 0;
+    std::uint64_t invalid_space_assertion_count = 0;
+    std::uint64_t hot_loop_representation_copy_count = 0;
+    std::uint64_t hot_loop_gather_scatter_bytes = 0;
+};
+
+struct RepresentationAuditRuntimeState {
+    mutable RepresentationAuditCounters counters{};
+};
+
+bool bind_periodic_node_map(
+    const Context &ctx,
+    PeriodicNodeMapView &view,
+    std::string &error);
+
 bool bind_local_node_aos_vector_field(
     const Context &ctx,
     std::vector<double> &field_xyz,
     AosVectorFieldView &view,
     std::string &error);
+
+bool bind_local_node_aos_vector_field(
+    const Context &ctx,
+    const std::vector<double> &field_xyz,
+    ConstAosVectorFieldView &view,
+    std::string &error);
+
+#if FULLMAG_HAS_MFEM_STACK
+/*
+ * Canonical adapter between authoritative local-node AoS state and the three
+ * scalar MFEM GridFunctions. The reverse direction performs an explicit
+ * GridFunction local -> MFEM true DOF -> local -> AoS round-trip using
+ * setup-owned workspaces. Both directions reject inconsistent periodic
+ * classes before publishing a converted state.
+ */
+bool copy_local_node_aos_to_mfem_state(
+    Context &ctx,
+    const std::vector<double> &local_aos,
+    std::string &error);
+
+bool copy_mfem_state_to_local_node_aos(
+    Context &ctx,
+    std::vector<double> &local_aos,
+    std::string &error);
+#endif
 
 /*
  * Split an AoS-3 vector field into component arrays.
@@ -80,23 +144,15 @@ bool normalize_active_magnetization_aos(
     std::string &error);
 
 /*
- * Project an AoS-3 field onto static periodic node classes.
- *
- * Each node receives the vector value of its class representative. Empty
- * periodic maps leave the field unchanged. The helper is used for local fields
- * and magnetization staging, not for solving the Poisson system itself.
- */
-void project_static_periodic_aos(
-    const Context &ctx,
-    std::vector<double> &field_xyz);
-
-/*
- * Checked state-boundary variant. It validates the local-node AoS shape and
- * the periodic map before changing the field, and fails closed on mismatch.
+ * Project an AoS-3 local-node field onto static periodic node classes. It
+ * validates the local-node shape and periodic map before changing the field,
+ * and fails closed on mismatch.
  */
 bool project_static_periodic_aos_checked(
     const Context &ctx,
     std::vector<double> &field_xyz,
     std::string &error);
+
+RepresentationAuditCounters representation_audit_snapshot(const Context &ctx);
 
 } // namespace fullmag::fem

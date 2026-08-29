@@ -48,10 +48,14 @@ struct OperatorDependencyKey {
 };
 
 /*
- * Setup/apply receipt owned by one operator runtime.  A successful setup is
- * published only after every form, matrix, preconditioner, and workspace is
- * ready.  Applies then reuse that published state; an invalidated key fails
- * closed until a new setup is committed.
+ * Ownership boundary: the enclosing exchange-operator runtime owns this
+ * value receipt together with its assembled forms, matrices, preconditioner,
+ * and workspace.  The receipt itself owns only scalar counters and a copied
+ * dependency key; it does not own MFEM objects, Context, Mesh, or device
+ * storage.  A successful setup is published only after every owned runtime
+ * resource is ready.  Applies then reuse that published state; an invalidated
+ * key fails closed until a new setup is committed.  One runtime mutates its
+ * receipt serially; callers must not share it across concurrent applies.
  */
 struct OperatorLifecycleReceipt {
     OperatorDependencyKey active_key{};
@@ -67,6 +71,8 @@ struct OperatorLifecycleReceipt {
  * Recompute the dependency key observed by the public MFEM runtime.  The
  * exchange field path uses this before every apply so mutations of an
  * operator input fail closed instead of silently reusing stale assembly.
+ * This function only borrows Context and Mesh for the duration of the call;
+ * it does not own, retain, mutate, or extend the lifetime of either object.
  */
 OperatorDependencyKey make_exchange_operator_dependency_key(
     const Context &ctx,

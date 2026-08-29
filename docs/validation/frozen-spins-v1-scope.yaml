@@ -1,0 +1,153 @@
+{
+  "schema_version": "fullmag.frozen_spins.scope.v1",
+  "scope_revision": 1,
+  "product_version": "frozen_spins.v1",
+  "policy": {
+    "default_scope_status": "REQUIRED",
+    "out_of_scope_requires_product_approval": true,
+    "missing_entry_is_error": true
+  },
+  "features": [
+    {
+      "id": "selector.geometry_static",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-GEOMETRY-STATIC", "FS-P4-SHAPES-MATRIX"]
+    },
+    {
+      "id": "selector.state_snapshot_at_activation",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-MZ-SNAPSHOT", "FS-P5-SINGLE-REVISION-ACTIVATION"]
+    },
+    {
+      "id": "selector.callable_eval_live",
+      "scope_status": "OUT_OF_SCOPE",
+      "reason_code": "frozen_selector_live_dynamic_unsupported",
+      "required_test_case_ids": ["FS-P4-LIVE-SELECTOR-FAIL-CLOSED"]
+    },
+    {
+      "id": "reference.capture_current_at_activation",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P5-CAPTURE-CURRENT", "FS-P5-REACTIVATION-REFERENCE"]
+    },
+    {
+      "id": "reference.initial_state",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-REFERENCE-INITIAL-STATE", "FS-P6-REFERENCE-RESUME"]
+    },
+    {
+      "id": "reference.explicit_field_asset",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-REFERENCE-ASSET", "FS-P13-REFERENCE-ASSET-ROUNDTRIP"]
+    },
+    {
+      "id": "policy.empty_selection_error",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-EMPTY-ERROR"]
+    },
+    {
+      "id": "policy.empty_selection_allow_noop",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-EMPTY-ALLOW-NOOP"]
+    },
+    {
+      "id": "policy.inactive_selection_error",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-INACTIVE-ERROR"]
+    },
+    {
+      "id": "policy.inactive_selection_warn_and_intersect",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-INACTIVE-INTERSECT"]
+    },
+    {
+      "id": "geometry.world_and_object_frames",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-WORLD-FRAME", "FS-P4-OBJECT-FRAME", "FS-P4-TRANSFORMED-OBJECT"]
+    },
+    {
+      "id": "geometry.finite_disk_cylinder",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-DISK-THROUGH-OBJECT", "FS-P4-OFFSET-CYLINDER"]
+    },
+    {
+      "id": "geometry.boolean_csg",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P4-CSG-UNION", "FS-P4-CSG-INTERSECTION", "FS-P4-CSG-DIFFERENCE", "FS-P4-CSG-XOR-NOT"]
+    },
+    {
+      "id": "lane.fdm_cpu_single_grid_fp64",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P7-FDM-CPU-FP64"]
+    },
+    {
+      "id": "lane.fdm_cpu_multilayer_fp64",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P8-FDM-MULTILAYER"]
+    },
+    {
+      "id": "algorithm.fdm_abm3",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P8-ABM3-HISTORY-RESUME"]
+    },
+    {
+      "id": "lane.fdm_cuda_fp64",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P9-CUDA-FP64", "FS-P9-CUDA-NO-PER-STEP-TRANSFER"]
+    },
+    {
+      "id": "lane.fdm_cuda_fp32",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P10-CUDA-FP32", "FS-P10-FP32-ZERO-ULP-RESTORE"]
+    },
+    {
+      "id": "lane.fem_cpu_explicit_and_minimizer",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P11-FEM-CPU-EXPLICIT", "FS-P11-FEM-CPU-MINIMIZER"]
+    },
+    {
+      "id": "algorithm.fem_tpi",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P11-FEM-TPI"]
+    },
+    {
+      "id": "lane.fem_gpu",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P12-FEM-GPU", "FS-P12-FEM-GPU-NO-FALLBACK"]
+    },
+    {
+      "id": "behavior.all_frozen_relaxation",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P7-ALL-FROZEN-RELAXATION"]
+    },
+    {
+      "id": "behavior.all_frozen_time_evolution",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P7-ALL-FROZEN-TIME-ADVANCE"]
+    },
+    {
+      "id": "resume.exact",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P6-EXACT-RESUME"]
+    },
+    {
+      "id": "resume.portable_state_import",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P6-PORTABLE-STATE-IMPORT"]
+    },
+    {
+      "id": "visualization.standard_quantity_fdm_fem",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P13-FROZEN-QUANTITY-FDM", "FS-P13-FROZEN-QUANTITY-FEM", "FS-P15-BROWSER-QUANTITY"]
+    },
+    {
+      "id": "visualization.fem_true_dof_render_carrier",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P13-FEM-CSR-CARRIER", "FS-P14-FEM-CSR-OVERLAY"]
+    },
+    {
+      "id": "qualification.performance",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": ["FS-P15-PERFORMANCE", "FS-P15-MILLION-SITES"]
+    }
+  ]
+}

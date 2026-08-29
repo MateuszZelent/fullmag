@@ -12,6 +12,7 @@ class FiniteElementCollection;
 class FiniteElementSpace;
 class GridFunction;
 class Mesh;
+class Vector;
 }
 
 namespace fullmag::fem {
@@ -39,6 +40,9 @@ struct MfemContextRuntimeState {
     mfem::GridFunction *gf_mx = nullptr;
     mfem::GridFunction *gf_my = nullptr;
     mfem::GridFunction *gf_mz = nullptr;
+    mfem::Vector *true_mx = nullptr;
+    mfem::Vector *true_my = nullptr;
+    mfem::Vector *true_mz = nullptr;
     mfem::GridFunction *gf_a = nullptr;
     mfem::GridFunction *gf_ms = nullptr;
     mfem::Coefficient *a_coeff = nullptr;

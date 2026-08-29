@@ -138,6 +138,7 @@ pub(crate) fn build_resolved_stage_event_schedule(
 /// physical time. Building sub-picosecond output events across their synthetic
 /// `until_seconds` horizon can therefore allocate an unbounded vector that the
 /// minimizer never consumes.
+#[cfg(any(feature = "fem-gpu", test))]
 pub(crate) fn build_native_fem_stage_event_schedule(
     drives: &[RegionalFieldDriveIR],
     stage_start_s: f64,

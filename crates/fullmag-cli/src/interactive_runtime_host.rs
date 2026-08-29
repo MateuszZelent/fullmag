@@ -79,10 +79,6 @@ pub(super) enum InteractiveStageInterrupt {
 }
 
 impl CurrentLiveDisplaySelectionHandle {
-    pub(super) fn spawn() -> Self {
-        Self::spawn_for_session(None)
-    }
-
     pub(super) fn spawn_for_session(session_id: Option<String>) -> Self {
         let initial_display_selection = current_live_display_selection().unwrap_or_default();
         let handle = Self {

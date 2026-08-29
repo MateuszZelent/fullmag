@@ -13,6 +13,7 @@
 #include "context.hpp"
 
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -109,6 +110,62 @@ void test_frozen_spins_unit_contract() {
     check(std::abs(rhs[5] - 60.0) < 1e-15, "node 1 rhs_z must remain 60.0");
 }
 
+void test_periodic_frozen_spins_descriptor_uses_local_state_space() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 4;
+    ctx.mesh.magnetic_node_mask = {1u, 0u, 1u, 0u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 0u, 1u};
+    ctx.mesh.periodic_representative_nodes = {2u, 3u};
+    ctx.mesh.periodic_reduced_node_count = 2u;
+    ctx.mesh.periodic_map_revision = 9u;
+    ctx.state.m_xyz = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    const uint8_t mask[] = {1u, 0u, 1u, 0u};
+    const double reference[] = {
+        0.0, 0.0, 1.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        0.0, 1.0, 0.0,
+    };
+    fullmag_fem_plan_desc plan{};
+    plan.frozen_mask = mask;
+    plan.frozen_mask_len = 4u;
+    plan.frozen_reference_xyz = reference;
+    plan.frozen_reference_len = 12u;
+    std::string error;
+
+    check(
+        fullmag::fem::initialize_frozen_spins_plan_fields(ctx, plan, error),
+        error.c_str());
+    check(ctx.frozen_spins.mask().size() == 4u,
+          "periodic frozen descriptor is stored in local state-node space");
+    check(ctx.frozen_spins.frozen_count() == 2u,
+          "periodic frozen descriptor retains both local members of one true class");
+    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+    check(ctx.state.m_xyz[2] == 1.0 && ctx.state.m_xyz[8] == 1.0,
+          "periodic frozen class projects every local member to one reference");
+
+    const uint8_t inconsistent_mask[] = {1u, 0u, 0u, 0u};
+    plan.frozen_mask = inconsistent_mask;
+    check(
+        !fullmag::fem::initialize_frozen_spins_plan_fields(ctx, plan, error),
+        "periodic frozen descriptor must reject inconsistent class membership");
+    check(error.find("periodic_class_membership_mismatch") != std::string::npos,
+          "periodic frozen membership mismatch has a typed reason");
+
+    const uint8_t airbox_mask[] = {0u, 1u, 0u, 1u};
+    plan.frozen_mask = airbox_mask;
+    check(
+        !fullmag::fem::initialize_frozen_spins_plan_fields(ctx, plan, error),
+        "frozen descriptor must reject an inactive Airbox class");
+    check(error.find("inactive_node") != std::string::npos,
+          "Airbox frozen selection has a typed inactive-node reason");
+}
+
 void test_frozen_spins_architecture_contract() {
     const std::filesystem::path root = fem_source_root();
     const std::string context_h = read_text_file(root / "include" / "context.hpp");
@@ -120,8 +177,9 @@ void test_frozen_spins_architecture_contract() {
 
     check(context_h.find("FrozenSpins frozen_spins") != std::string::npos,
           "Context must declare frozen_spins module");
-    check(builder_cpp.find("ctx.frozen_spins.import_descriptor") != std::string::npos,
-          "fem_context_builder must import frozen_spins descriptor");
+    check(builder_cpp.find("initialize_frozen_spins_plan_fields(ctx, plan, error)") !=
+              std::string::npos,
+          "fem_context_builder must delegate frozen_spins representation import");
     check(builder_cpp.find("ctx.frozen_spins.project_onto_reference") != std::string::npos,
           "fem_context_builder must project initial state onto reference");
     check(api_cpp.find("frozen_spins_fem_unqualified") == std::string::npos,
@@ -134,7 +192,7 @@ void test_frozen_spins_architecture_contract() {
           "backend_step must project state onto reference before attempt and on rollback");
 }
 
-void test_frozen_spins_solver_step_contract() {
+void test_frozen_spins_solver_step_contract(const char *device) {
     const double nodes[] = {
         0.0, 0.0, 0.0,
         1.0e-9, 0.0, 0.0,
@@ -163,18 +221,18 @@ void test_frozen_spins_solver_step_contract() {
     const uint64_t facet_ordinals[] = {0, 1, 2, 3};
     const uint32_t boundary_markers[] = {1, 1, 1, 1};
 
-    // Initial magnetization: node 0 along +z, nodes 1,2,3 along +x
+    // Non-axis-aligned frozen reference catches normalize-only drift.
     const double m_init[] = {
-        0.0, 0.0, 1.0,
+        0.36, 0.48, 0.8,
         1.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
         1.0, 0.0, 0.0,
     };
 
-    // Node 0 frozen to [0, 0, 1], others free
+    // Node 0 frozen to its captured reference, others free.
     const uint8_t frozen_mask[] = {1, 0, 0, 0};
     const double frozen_reference[] = {
-        0.0, 0.0, 1.0,
+        0.36, 0.48, 0.8,
         0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,
         0.0, 0.0, 0.0,
@@ -225,8 +283,9 @@ void test_frozen_spins_solver_step_contract() {
     plan.dt_seconds = 1.0e-13;
     plan.hmax = 1.0;
     plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
-    plan.gpu_device_index = -1;
-    plan.mfem_device_string = "cpu";
+    const bool gpu = std::strcmp(device, "cpu") != 0;
+    plan.gpu_device_index = gpu ? 0 : -1;
+    plan.mfem_device_string = device;
     plan.frozen_mask = frozen_mask;
     plan.frozen_mask_len = 4;
     plan.frozen_reference_xyz = frozen_reference;
@@ -234,6 +293,28 @@ void test_frozen_spins_solver_step_contract() {
 
     fullmag_fem_backend *handle = fullmag_fem_backend_create(&plan);
     check(handle != nullptr, "FEM backend create for frozen spins P1 Heun must succeed");
+
+    fullmag_fem_representation_receipt_v1 representation{};
+    check(
+        fullmag_fem_backend_snapshot_representation_receipt_v1(
+            handle, &representation) == FULLMAG_FEM_OK,
+        "public FEM backend exposes the executed representation receipt");
+    check(
+        representation.abi_version == FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION &&
+            representation.struct_size == sizeof(representation),
+        "representation receipt has the frozen v1 ABI identity");
+    check(sizeof(representation) == 88u,
+          "representation receipt v1 has the frozen 88-byte C ABI layout");
+    check(
+        representation.state_space == FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS &&
+            representation.local_node_count == 4u &&
+            representation.true_node_count == 4u &&
+            representation.periodic_map_revision == 0u,
+        "representation receipt proves the executed identity local/true map");
+    check(
+        representation.ms_location == FULLMAG_FEM_MATERIAL_LOCATION_SCALAR &&
+            representation.a_location == FULLMAG_FEM_MATERIAL_LOCATION_SCALAR,
+        "representation receipt reports executed scalar material locations");
 
     fullmag_fem_step_stats stats = {};
     constexpr double dt = 1.0e-13;
@@ -247,12 +328,8 @@ void test_frozen_spins_solver_step_contract() {
               handle, FULLMAG_FEM_OBSERVABLE_M, m_out.data(), m_out.size()) == FULLMAG_FEM_OK,
           "copy magnetization field must succeed");
 
-    // Check frozen node 0 defect
-    const double defect_x = std::abs(m_out[0] - 0.0);
-    const double defect_y = std::abs(m_out[1] - 0.0);
-    const double defect_z = std::abs(m_out[2] - 1.0);
-    const double max_defect = std::max({defect_x, defect_y, defect_z});
-    check(max_defect < 1.0e-14, "frozen node 0 defect must be < 1e-14 in FEM explicit RK");
+    check(std::memcmp(m_out.data(), frozen_reference, 3 * sizeof(double)) == 0,
+          "frozen node 0 must be bitwise equal to its reference after FEM explicit RK");
 
     // Check free node 1 displacement
     const double disp_x = m_out[3] - 1.0;
@@ -260,6 +337,14 @@ void test_frozen_spins_solver_step_contract() {
     const double disp_z = m_out[5] - 0.0;
     const double disp = std::sqrt(disp_x * disp_x + disp_y * disp_y + disp_z * disp_z);
     check(disp > 1.0e-4, "free node 1 must evolve under exchange and Zeeman field");
+
+    if (gpu) {
+        fullmag_fem_step_stats relax_stats = {};
+        check(fullmag_fem_backend_relax_step(
+                  handle, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, &relax_stats) ==
+                  FULLMAG_FEM_ERR_UNAVAILABLE,
+              "FEM GPU Frozen Spins relaxation must fail closed until free-DOF reductions and restore are device-resident");
+    }
 
     fullmag_fem_backend_destroy(handle);
 }
@@ -294,7 +379,7 @@ void test_frozen_spins_direct_minimizer_contract() {
     const uint32_t boundary_markers[] = {1, 1, 1, 1};
 
     const double m_init[] = {
-        0.0, 0.0, 1.0,
+        0.36, 0.48, 0.8,
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         1.0, 0.0, 0.0,
@@ -302,7 +387,7 @@ void test_frozen_spins_direct_minimizer_contract() {
 
     const uint8_t frozen_mask[] = {1, 0, 0, 0};
     const double frozen_reference[] = {
-        0.0, 0.0, 1.0,
+        0.36, 0.48, 0.8,
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
         1.0, 0.0, 0.0,
@@ -374,17 +459,29 @@ void test_frozen_spins_direct_minimizer_contract() {
         handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &stats);
     check(rc_ncg == FULLMAG_FEM_OK, "NCG relax step with frozen spins must succeed");
 
+    // TPI uses identity rows for frozen tangent DOFs and must share the same
+    // hard-reference and free-only convergence semantics as direct methods.
+    const int rc_tpi = fullmag_fem_backend_relax_step(
+        handle, FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT, &stats);
+    check(rc_tpi == FULLMAG_FEM_OK, "TPI relax step with frozen spins must succeed");
+
     std::vector<double> m_out(12, 0.0);
     check(fullmag_fem_backend_copy_field_f64(
               handle, FULLMAG_FEM_OBSERVABLE_M, m_out.data(), m_out.size()) == FULLMAG_FEM_OK,
           "copy magnetization field must succeed");
 
-    // Frozen node 0 invariant verification
-    const double defect_x = std::abs(m_out[0] - 0.0);
-    const double defect_y = std::abs(m_out[1] - 0.0);
-    const double defect_z = std::abs(m_out[2] - 1.0);
-    const double max_defect = std::max({defect_x, defect_y, defect_z});
-    check(max_defect < 1.0e-14, "frozen node 0 defect must be < 1e-14 in FEM direct minimizers");
+    // A non-axis-aligned reference detects implementations that merely
+    // normalize the candidate.  The production invariant is bitwise restore,
+    // not a numerical tolerance around the requested vector.
+    check(std::memcmp(m_out.data(), frozen_reference, 3 * sizeof(double)) == 0,
+          "frozen node 0 must be bitwise equal to its reference after PG-BB, NCG and TPI");
+
+    const double free_displacement = std::sqrt(
+        (m_out[3] - m_init[3]) * (m_out[3] - m_init[3]) +
+        (m_out[4] - m_init[4]) * (m_out[4] - m_init[4]) +
+        (m_out[5] - m_init[5]) * (m_out[5] - m_init[5]));
+    check(free_displacement > 0.0,
+          "at least one free node must remain mobile while the frozen reference is restored exactly");
 
     fullmag_fem_backend_destroy(handle);
 }
@@ -395,10 +492,14 @@ int main() {
     std::printf("Running native FEM Frozen Spins contract tests...\n");
     test_frozen_spins_unit_contract();
     std::printf("PASS: FrozenSpins unit contract\n");
+    test_periodic_frozen_spins_descriptor_uses_local_state_space();
+    std::printf("PASS: FrozenSpins periodic representation contract\n");
     test_frozen_spins_architecture_contract();
     std::printf("PASS: FrozenSpins architecture contract\n");
-    test_frozen_spins_solver_step_contract();
-    std::printf("PASS: FrozenSpins solver step contract\n");
+    test_frozen_spins_solver_step_contract("cpu");
+    std::printf("PASS: FrozenSpins CPU solver step contract\n");
+    test_frozen_spins_solver_step_contract("cuda");
+    std::printf("PASS: FrozenSpins GPU solver step contract\n");
     test_frozen_spins_direct_minimizer_contract();
     std::printf("PASS: FrozenSpins direct minimizer contract\n");
     return 0;

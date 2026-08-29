@@ -24,18 +24,18 @@ def verify_frozen_spins_python_dsl() -> None:
     assert geometric.to_ir()["membership"] == {"kind": "static"}
     assert geometric.to_ir()["reference"] == {"kind": "capture_current_at_activation"}
     assert geometric.to_ir()["activation"] == {"kind": "all_stages"}
-    print("  ✓ Geometric selector defaults to static membership")
+    print("  PASS: Geometric selector defaults to static membership")
 
     # 2. State-dependent selector defaults to snapshot_at_activation
     state = fm.FrozenSpins(id="state", selector=fm.select.m.z > 0.5)
     assert state.to_ir()["membership"] == {"kind": "snapshot_at_activation"}
-    print("  ✓ State-dependent selector defaults to snapshot_at_activation")
+    print("  PASS: State-dependent selector defaults to snapshot_at_activation")
 
     # 3. Round-trip from_ir and to_ir
     ir_dict = geometric.to_ir()
     restored = fm.FrozenSpins.from_ir(ir_dict)
     assert restored.to_ir() == ir_dict
-    print("  ✓ Strict from_ir / to_ir round-trip")
+    print("  PASS: Strict from_ir / to_ir round-trip")
 
     print("PASS: verify_frozen_spins_python_dsl")
 

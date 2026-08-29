@@ -432,25 +432,29 @@ make the two validation contracts interchangeable.
 
 After Gmsh generates the mixed shared-domain mesh and before Fullmag extracts
 and certifies it, the bounded mixed-P1 realization applies the private repair
-policy `fullmag.mixed-tet-repair.v1`: Gmsh method `Relocate3D` with `niter=1`.
-This remains the selected Fullmag candidate for this bounded workload, not a
-claim that `Relocate3D` is universally the best tetrahedral optimizer and not a
-production-qualification claim before its managed ten-cold-run matrix passes.
+policy `fullmag.mixed-tet-repair.v1`. The policy first runs a deterministic,
+bounded local interior-node pre-pass. Only if a strict global determinant
+failure remains does it invoke the Gmsh method `Relocate3D` with `niter=1` as
+the fallback. The receipt ID and fallback method remain fixed for compatibility
+with the existing production contract; this is not a claim that `Relocate3D`
+is universally the best tetrahedral optimizer or a production-qualification
+claim before its managed ten-cold-run matrix passes.
 The previous `Netgen` choice is rejected because it reproducibly lost
 conformity for the canonical SP4 mixed mesh, including same-side two-owner
 tetrahedral faces and non-manifold far-air faces.
 
-The repair boundary uses the same relative determinant threshold as strict
-`MeshData` validation before and after `Relocate3D`. A canonical SP4 stage
-probe confirmed that one far-air sliver already existed after `generate(3)`;
-`Relocate3D` left it in place and the pyramid-apex optimizer had not run. Gmsh
-`minSJ` reported a false-safe value for this element, so neither `minSJ` nor a
+The repair boundary uses the same global relative determinant threshold as
+strict `MeshData` validation before and after the local pass and any fallback
+`Relocate3D`. A canonical SP4 stage probe confirmed that far-air slivers can
+already exist after `generate(3)`; the bounded local pass repairs those
+residuals without invoking the multi-minute global optimizer. Gmsh `minSJ`
+reported a false-safe value for one such element, so neither `minSJ` nor a
 family p05 is an admissible substitute for the strict per-element determinant
-gate. A sliver created by `Relocate3D` fails immediately. A generated sliver
-left by `Relocate3D` also fails immediately before extraction; v1 performs no
-additional node movement beyond the single Gmsh `Relocate3D` iteration. The
-separate pyramid-apex line search applies the same absolute nondegeneracy guard
-to every incident `tet4` and performs a global postcondition check.
+gate. Every candidate local move checks all incident tetrahedra, preserves
+orientation, and rejects an excessive quality loss. A sliver created or left
+by the fallback `Relocate3D` is still rejected immediately before extraction.
+The separate pyramid-apex line search applies the same absolute nondegeneracy
+guard to every incident `tet4` and performs a global postcondition check.
 
 Repair is topology-quality work inside realization. It must not change the
 requested or realized cell families, exact magnetic layer count, region or
@@ -460,12 +464,13 @@ capability, runtime-selection, or CPU/GPU operator branch. Production always
 uses the canonical private policy; alternative methods exist only in the
 qualification harness and remain subject to the same fail-closed certificate.
 
-Changing either the repair method or iteration count requires a new algorithm
-ID, a ten-cold-run canonical SP4 candidate matrix, and a managed FEM receipt.
-The qualification-only algorithm ID is derived deterministically from both
-values so evidence for distinct policies cannot collide with the immutable
-production ID. Gmsh remains fixed at one thread until the separate thread
-determinism and quality qualification passes.
+Changing the fallback repair method or iteration count, or changing the local
+pre-pass bounds or acceptance policy, requires a new algorithm ID, a ten-cold-run
+canonical SP4 candidate matrix, and a managed FEM receipt. The qualification-
+only algorithm ID is derived deterministically from the fallback method and
+iteration count so evidence for distinct Gmsh policies cannot collide with the
+immutable production ID. Gmsh remains fixed at one thread until the separate
+thread determinism and quality qualification passes.
 
 #### 3.4.2 Language-neutral topology fingerprint v3
 
@@ -612,8 +617,9 @@ backend and thread count, source snapshot, exact mesh counts, topology
 fingerprint, and certificate payload digest. The receipt additionally binds the
 topology and build-report member lengths and SHA-256 digests, exact node/cell/
 facet counts, authoring-document and resolved-policy digests, Gmsh `4.15.2`,
-the production repair ID `fullmag.mixed-tet-repair.v1`, `Relocate3D`, and one
-iteration. Receipt schema `fullmag.mesh-certification-receipt.v2` also binds
+the production repair ID `fullmag.mixed-tet-repair.v1`, its `Relocate3D`
+fallback, and one fallback iteration. Receipt schema
+`fullmag.mesh-certification-receipt.v2` also binds
 `semantic_manifest_sha256`, computed from canonical
 compact JSON containing exactly `region_markers`, `object_region_markers`, and
 the sorted `boundary_map`. Consequently, changing a geometry/object name or
@@ -1380,7 +1386,7 @@ No lower level implies a higher one.
 | Public exact-layer authoring | `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | validates and lowers prismatic thin-film intent | FEM CPU/GPU | Python round-trip and real-mesh tests |
 | Published Python-to-IR example | `packages/fullmag-py/tests/test_api.py` | `test_mixed_p1_publication_example_lowers_complete_mesh_entry_to_problem_ir` | executes the documented authoring path and compares the complete per-geometry mesh entry | FEM CPU/GPU shared contract | focused executable lowering test |
 | Shared-domain prism realization | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `generate_swept_box_mesh` | generates exact stacked prisms and conforming air | FEM CPU/GPU | Gmsh 4.15.2 topology/certificate tests |
-| Production mixed-tetrahedral repair policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_STRICT_MIXED_TET_REPAIR_POLICY` | freezes candidate algorithm ID `fullmag.mixed-tet-repair.v1`, `Relocate3D`, and one iteration | FEM CPU/GPU shared meshing contract | focused source/contract tests and one exact stage diagnosis; candidate N=10 and managed receipt pending |
+| Production mixed-tetrahedral repair policy | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_STRICT_MIXED_TET_REPAIR_POLICY` | freezes candidate algorithm ID `fullmag.mixed-tet-repair.v1`, bounded local pre-pass, and `Relocate3D`/one-iteration fallback | FEM CPU/GPU shared meshing contract | focused source/contract tests and one exact stage diagnosis; candidate N=10 and managed receipt pending |
 | Mixed-tetrahedral repair policy validation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_validate_mixed_tet_repair_policy` | fail-closed validation owner for the source-mapped production constant `_STRICT_MIXED_TET_REPAIR_POLICY` | FEM CPU/GPU shared meshing contract | focused valid/invalid private-policy tests |
 | Mixed-tetrahedral repair execution | `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` | `_repair_mixed_tetrahedra` | validates the private policy and invokes the non-overridable fail-closed policy executor before extraction and certification | FEM CPU/GPU shared meshing contract | focused selector/probe integration, strict created/left degeneracy tests, and Netgen certificate-boundary tests; candidate N=10 pending |
 | Certificate generation, current Python oracle | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `_attach_mixed_layer_topology_certificate` | recomputes and binds realized topology evidence during meshing; artifact persistence independently revalidates the claimed certificate natively | FEM CPU/GPU | current Python source/contract evidence; Rust engine, host bridge, and artifact caller are host-tested; managed runtime remains not verified |

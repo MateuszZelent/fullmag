@@ -1268,6 +1268,12 @@ pub const FULLMAG_FEM_ENDPOINT_REFRESH_TRANSPORT_SOURCE_CHANGED: u32 = 6;
 pub const FULLMAG_FEM_ENDPOINT_REFRESH_PROJECTION_MISMATCH: u32 = 7;
 pub const FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE: u32 = 8;
 
+pub const FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS: u32 = 1;
+pub const FULLMAG_FEM_MATERIAL_LOCATION_SCALAR: u32 = 1;
+pub const FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1: u32 = 2;
+pub const FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0: u32 = 3;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fem_solver_attempt_record_v2 {
@@ -1313,6 +1319,25 @@ pub struct fullmag_fem_endpoint_cache_telemetry_v1 {
     pub cache_dynamic_sources_valid: u32,
     pub cache_transport_valid: u32,
     pub cache_projection_valid: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_representation_receipt_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub state_space: u32,
+    pub ms_location: u32,
+    pub a_location: u32,
+    pub reserved0: u32,
+    pub local_node_count: u64,
+    pub true_node_count: u64,
+    pub periodic_map_revision: u64,
+    pub representation_copy_count: u64,
+    pub gather_scatter_bytes: u64,
+    pub invalid_space_assertion_count: u64,
+    pub hot_loop_representation_copy_count: u64,
+    pub hot_loop_gather_scatter_bytes: u64,
 }
 
 #[repr(C)]
@@ -2856,6 +2881,11 @@ extern "C" {
         out_telemetry: *mut fullmag_fem_endpoint_cache_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_snapshot_representation_receipt_v1(
+        handle: *mut fullmag_fem_backend,
+        out_receipt: *mut fullmag_fem_representation_receipt_v1,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_solver_attempt_count_v1(
         handle: *mut fullmag_fem_backend,
         out_count: *mut u64,
@@ -3162,6 +3192,30 @@ mod tests {
         );
         assert_eq!(FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT, 1);
         assert_eq!(FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_UNAVAILABLE, 8);
+    }
+
+    #[test]
+    fn representation_receipt_v1_layout_is_versioned_and_stable() {
+        assert_eq!(FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_representation_receipt_v1>(),
+            88
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_representation_receipt_v1, local_node_count),
+            24
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_representation_receipt_v1,
+                hot_loop_gather_scatter_bytes
+            ),
+            80
+        );
+        assert_eq!(FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS, 1);
+        assert_eq!(FULLMAG_FEM_MATERIAL_LOCATION_SCALAR, 1);
+        assert_eq!(FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1, 2);
+        assert_eq!(FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0, 3);
     }
 
     /// Verify the Rust observable enum has the expected number of variants

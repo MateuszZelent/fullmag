@@ -75,7 +75,11 @@ SERIALIZER_VERSION = "0.3.0"
 _FDM_M2_OPERATOR_VERSION = "fdm_coupled_charge_spin_fv_block_gmres.v1"
 _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 
-_FEM_MESH_CACHE_VERSION = "v5"
+# Keep the shared-domain cache namespace separate from the older per-object
+# ``.npz`` cache.  The version is part of the digest, so changing the cache
+# document or the generation contract cannot silently reuse an old artifact.
+_FEM_MESH_CACHE_VERSION = "v6"
+_FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +354,74 @@ def _fem_mesh_cache_key(
     return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def _fem_shared_domain_cache_document(
+    geometries: Sequence[object],
+    hints: FEM,
+    *,
+    study_universe: dict[str, object] | None,
+    mesh_workflow: dict[str, object] | None,
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
+    object_regions: Sequence[dict[str, object]] | None,
+) -> tuple[str, dict[str, object]]:
+    """Return the persistent identity for a generated shared FEM domain.
+
+    The cache is deliberately keyed from the resolved source geometry
+    fingerprints (including imported-file stat data), not only from object
+    names.  This keeps a stale cache from surviving an STL/STEP replacement
+    while avoiding a repository-wide source scan on every run.
+    """
+    document: dict[str, object] = {
+        "schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
+        "version": _FEM_MESH_CACHE_VERSION,
+        "geometries": [
+            _geometry_cache_fingerprint(geometry) for geometry in geometries
+        ],
+        "fem": hints.to_ir(),
+        "study_universe": study_universe,
+        "mesh_workflow": mesh_workflow,
+        "per_object_recipes": {
+            str(name): recipe.to_ir()
+            for name, recipe in (per_object_recipes or {}).items()
+        },
+        "object_regions": [dict(region) for region in (object_regions or [])],
+    }
+    encoded = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest(), document
+
+
+def _mesh_boundary_semantic_map(mesh: object) -> dict[str, int]:
+    """Build a stable boundary map without importing the world module.
+
+    Cache persistence only needs semantic marker coverage.  Preserve a role in
+    the name where the typed mesh exposes one, and fall back to a marker-only
+    name for legacy meshes.
+    """
+    raw_markers = getattr(mesh, "boundary_markers", None)
+    if raw_markers is None:
+        return {}
+    markers = [int(value) for value in raw_markers.tolist()]
+    raw_roles = getattr(mesh, "facet_roles", None)
+    roles = [str(value) for value in raw_roles.tolist()] if raw_roles is not None else []
+    result: dict[str, int] = {}
+    for marker in sorted(set(markers)):
+        marker_roles = sorted(
+            {
+                roles[index]
+                for index, value in enumerate(markers)
+                if value == marker and index < len(roles)
+            }
+        )
+        role = marker_roles[0] if len(marker_roles) == 1 else "boundary"
+        result[f"{role}_{marker}"] = marker
+    return result
+
+
 def resolve_geometry_sources(
     geometry: object,
     *,
@@ -416,6 +488,9 @@ def build_geometry_assets_for_request(
     object_regions: Sequence[dict[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
     _copy_cached_assets: bool = True,
+    _realized_domain_mesh_sink: list[
+        tuple[object, list[dict[str, object]], object | None]
+    ] | None = None,
 ) -> dict[str, Any] | None:
     if discretization is None:
         return None
@@ -688,23 +763,147 @@ def build_geometry_assets_for_request(
                 }
         elif study_universe is not None:
             authored_regions = list(object_regions or [])
-            domain_mesh, region_markers, build_report = (
-                realize_fem_domain_mesh_asset_from_components_with_report(
-                    list(geometries),
+
+            # A generated shared-domain mesh is much more expensive than the
+            # surrounding Python model assembly. Reuse a certified native
+            # artifact between independent runs, while retaining the full
+            # portable audit on every cache read. The cache is best-effort: a
+            # corrupt, interrupted, or old entry is ignored and replaced only
+            # after a fresh mesh has completed successfully.
+            if fem_mesh_cache_dir is None:
+                fem_mesh_cache_dir = _fem_mesh_cache_dir()
+            shared_cache_path: Path | None = None
+            shared_cache_document: dict[str, object] | None = None
+            shared_cache_key: str | None = None
+            if fem_mesh_cache_dir is not None:
+                (
+                    shared_cache_key,
+                    shared_cache_document,
+                ) = _fem_shared_domain_cache_document(
+                    geometries,
                     discretization.fem,
                     study_universe=study_universe,
                     mesh_workflow=mesh_workflow,
-                    per_object_recipes=dict(per_object_recipes or {}),
+                    per_object_recipes=per_object_recipes,
                     object_regions=authored_regions,
                 )
-            )
+                shared_cache_dir = fem_mesh_cache_dir / "shared_domains"
+                shared_cache_dir.mkdir(parents=True, exist_ok=True)
+                shared_cache_path = shared_cache_dir / f"{shared_cache_key}.fullmag-mesh"
+
+            cached_shared_domain = False
+            domain_mesh = None
+            region_markers = None
+            build_report = None
+            if shared_cache_path is not None and shared_cache_path.exists():
+                from fullmag.meshing.persistence import (
+                    MeshArtifactError,
+                    load_mesh_artifact,
+                )
+
+                try:
+                    cached_artifact = load_mesh_artifact(
+                        shared_cache_path,
+                        expected_authoring_document=shared_cache_document,
+                    )
+                    cached_provenance = dict(cached_artifact.provenance or {})
+                    if cached_provenance.get("cache_key") != shared_cache_key:
+                        raise MeshArtifactError(
+                            "shared-domain cache provenance does not match cache key"
+                        )
+                except (MeshArtifactError, OSError, ValueError, TypeError, KeyError) as exc:
+                    emit_progress(
+                        "Ignoring invalid cached shared-domain FEM mesh "
+                        f"'{shared_cache_path}': {exc}"
+                    )
+                else:
+                    domain_mesh = cached_artifact.mesh
+                    region_markers = [
+                        dict(entry) for entry in cached_artifact.region_markers
+                    ]
+                    build_report = cached_artifact.build_report
+                    cached_shared_domain = True
+                    emit_progress(
+                        "Reusing cached shared-domain FEM mesh "
+                        f"({domain_mesh.n_nodes} nodes, {domain_mesh.n_elements} elements)"
+                    )
+
+            if not cached_shared_domain:
+                domain_mesh, region_markers, build_report = (
+                    realize_fem_domain_mesh_asset_from_components_with_report(
+                        list(geometries),
+                        discretization.fem,
+                        study_universe=study_universe,
+                        mesh_workflow=mesh_workflow,
+                        per_object_recipes=dict(per_object_recipes or {}),
+                        object_regions=authored_regions,
+                    )
+                )
+                if shared_cache_path is not None:
+                    from fullmag.meshing.persistence import save_mesh_artifact
+
+                    if build_report is not None:
+                        report_payload = (
+                            dict(build_report.to_dict())
+                            if callable(getattr(build_report, "to_dict", None))
+                            else dict(build_report)
+                        )
+                    else:
+                        report_payload = None
+                    object_region_markers = (
+                        report_payload.get("object_region_markers", [])
+                        if report_payload is not None
+                        else []
+                    )
+                    save_mesh_artifact(
+                        shared_cache_path,
+                        mesh=domain_mesh,
+                        mesh_name="study_domain",
+                        authoring_document=shared_cache_document or {},
+                        region_markers=region_markers,
+                        object_region_markers=object_region_markers,
+                        boundary_map=_mesh_boundary_semantic_map(domain_mesh),
+                        build_report=report_payload,
+                        provenance={
+                            "origin": "generated_shared_domain_cache",
+                            "cache_key": shared_cache_key,
+                            "cache_schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
+                        },
+                    )
+                    emit_progress(f"Cached shared-domain FEM mesh at '{shared_cache_path}'")
+
+            assert domain_mesh is not None
+            assert region_markers is not None
+            if _realized_domain_mesh_sink is not None:
+                # The public asset remains JSON MeshIR for the ProblemIR
+                # contract, while the state owner can retain this exact typed
+                # mesh for the immediately-following persistence operation.
+                # This avoids a JSON -> NumPy rehydration of the same large
+                # mixed CSR payload.
+                _realized_domain_mesh_sink.append(
+                    (
+                        domain_mesh,
+                        [dict(entry) for entry in region_markers],
+                        build_report,
+                    )
+                )
             with indeterminate_progress_phase(
                 phase="postprocessing",
                 progress_label="serializing and validating shared-domain mesh",
                 message="Serializing and validating the shared-domain mesh",
             ):
                 domain_mesh_ir = domain_mesh.to_ir("study_domain")
-                is_valid = validate_mesh_ir(domain_mesh_ir)
+                # ``MeshData.to_ir`` already performs the native mixed-mesh
+                # certificate audit for a certified prism/pyramid/tet mesh.
+                # Running the generic JSON validator immediately afterwards
+                # reparses and walks the same 800k-cell payload.  Keep that
+                # preflight for source-only/generic meshes, where no mixed
+                # certificate provides the stronger proof.
+                is_valid = (
+                    True
+                    if domain_mesh.mixed_layer_topology_certificate is not None
+                    else validate_mesh_ir(domain_mesh_ir)
+                )
             if is_valid is False:
                 raise ValueError(
                     "generated shared FEM domain mesh asset failed Rust validation"
@@ -714,13 +913,21 @@ def build_geometry_assets_for_request(
                 "mesh": domain_mesh_ir,
                 "region_markers": region_markers,
                 "object_region_markers": (
-                    build_report.object_region_markers
-                    if build_report is not None
-                    else []
+                    list(build_report.get("object_region_markers", []))
+                    if isinstance(build_report, Mapping)
+                    else (
+                        list(build_report.object_region_markers)
+                        if build_report is not None
+                        else []
+                    )
                 ),
             }
             if build_report is not None:
-                domain_asset["build_report"] = build_report.to_dict()
+                domain_asset["build_report"] = (
+                    dict(build_report)
+                    if isinstance(build_report, Mapping)
+                    else build_report.to_dict()
+                )
             assets["fem_domain_mesh_asset"] = domain_asset
 
     if (

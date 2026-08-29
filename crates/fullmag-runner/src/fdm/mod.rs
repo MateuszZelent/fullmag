@@ -4,8 +4,11 @@ pub(crate) mod gpu;
 pub(crate) mod multilayer;
 pub(crate) mod schedules;
 
-use crate::types::{FdmFftExecutionProvenance, RunError};
+#[cfg(feature = "cuda")]
+use crate::types::FdmFftExecutionProvenance;
+use crate::types::RunError;
 
+#[cfg(feature = "cuda")]
 pub(crate) fn resolve_cuda_fft_execution_for_demag(
     demag_enabled: bool,
     fft: Option<&fullmag_ir::FdmFftPlanIR>,
@@ -40,7 +43,7 @@ pub(crate) fn resolve_cuda_fft_execution_for_demag(
     }))
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(test)]
 pub(crate) fn next_fdm_attempt_dt(
     adaptive: bool,
     current_dt: f64,
@@ -556,7 +559,8 @@ pub(crate) fn validate_multilayer_grid_budget(
         return Err(RunError {
             message: format!(
                 "FDM multilayer kernel estimate mismatch: model={} summary={} recomputed={computed_kernel_bytes}",
-                admission_model.as_str(), plan.planner_summary.estimated_kernel_bytes
+                admission_model.as_str(),
+                plan.planner_summary.estimated_kernel_bytes
             ),
         });
     }
@@ -637,6 +641,7 @@ mod tests {
                 layer("free", 0.0, [1.0, 0.0, 0.0]),
                 layer("ref", 2.0, [0.0, 1.0, 0.0]),
             ],
+            frozen_spins: None,
             enable_exchange: true,
             enable_demag: true,
             fft: None,

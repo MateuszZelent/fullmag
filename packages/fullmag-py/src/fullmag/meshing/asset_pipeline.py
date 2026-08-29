@@ -3123,41 +3123,49 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 )
 
         tet4_only = bool(np.all(mesh.cell_types == "tet4"))
-        classified_mesh = MeshData(
-            nodes=mesh.nodes,
-            cell_types=mesh.cell_types,
-            cell_offsets=mesh.cell_offsets,
-            cell_nodes=mesh.cell_nodes,
-            element_markers=assigned_markers,
-            facet_types=mesh.facet_types,
-            facet_roles=mesh.facet_roles,
-            facet_offsets=mesh.facet_offsets,
-            facet_nodes=mesh.facet_nodes,
-            boundary_markers=mesh.boundary_markers,
-            cell_global_ordinals=mesh.cell_global_ordinals,
-            facet_global_ordinals=mesh.facet_global_ordinals,
-            cell_mesh_parts=mesh.cell_mesh_parts,
-            periodic_boundary_pairs=mesh.periodic_boundary_pairs,
-            periodic_node_pairs=mesh.periodic_node_pairs,
-            periodic_mesh_certificate=mesh.periodic_mesh_certificate,
-            quality=mesh.quality,
-            per_domain_quality=(
-                build_per_domain_quality_from_mesh_arrays(
-                    mesh.nodes,
-                    mesh.elements,
-                    assigned_markers,
-                    mesh.quality,
-                )
-                if tet4_only
-                else None
-            ) or mesh.per_domain_quality,
-            realization_report=mesh.realization_report,
-            mixed_layer_topology_certificate=(
-                mesh.mixed_layer_topology_certificate
-                if np.array_equal(assigned_markers, mesh.element_markers)
-                else None
-            ),
-        )
+        markers_unchanged = np.array_equal(assigned_markers, mesh.element_markers)
+        if markers_unchanged and not tet4_only:
+            # The canonical mixed shared-domain route already carries the
+            # complete certificate on this exact MeshData.  Classification
+            # only re-discovers the existing 0/1 partition, so constructing a
+            # second object would repeat native certification and CSR setup.
+            classified_mesh = mesh
+        else:
+            classified_mesh = MeshData(
+                nodes=mesh.nodes,
+                cell_types=mesh.cell_types,
+                cell_offsets=mesh.cell_offsets,
+                cell_nodes=mesh.cell_nodes,
+                element_markers=assigned_markers,
+                facet_types=mesh.facet_types,
+                facet_roles=mesh.facet_roles,
+                facet_offsets=mesh.facet_offsets,
+                facet_nodes=mesh.facet_nodes,
+                boundary_markers=mesh.boundary_markers,
+                cell_global_ordinals=mesh.cell_global_ordinals,
+                facet_global_ordinals=mesh.facet_global_ordinals,
+                cell_mesh_parts=mesh.cell_mesh_parts,
+                periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+                periodic_node_pairs=mesh.periodic_node_pairs,
+                periodic_mesh_certificate=mesh.periodic_mesh_certificate,
+                quality=mesh.quality,
+                per_domain_quality=(
+                    build_per_domain_quality_from_mesh_arrays(
+                        mesh.nodes,
+                        mesh.elements,
+                        assigned_markers,
+                        mesh.quality,
+                    )
+                    if tet4_only
+                    else None
+                ) or mesh.per_domain_quality,
+                realization_report=mesh.realization_report,
+                mixed_layer_topology_certificate=(
+                    mesh.mixed_layer_topology_certificate
+                    if markers_unchanged
+                    else None
+                ),
+            )
         requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
             geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
             per_object_recipes=per_object_recipes,

@@ -5,9 +5,10 @@
 
 mod fft_backend;
 
+#[cfg(test)]
+pub(crate) use fft_backend::resolve_cpu_fft_backend_for_demag;
 pub(crate) use fft_backend::{
-    resolve_cpu_fft_backend_for_demag, resolve_cpu_fft_backend_name_for_demag,
-    resolve_cpu_fft_execution_for_demag,
+    resolve_cpu_fft_backend_name_for_demag, resolve_cpu_fft_execution_for_demag,
 };
 
 use fullmag_engine::{
@@ -76,6 +77,8 @@ struct FdmAbm3RunnerCheckpointV1 {
     thermal_seed: u64,
     thermal_counter: u64,
     solver: FdmCpuSolverCheckpointV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frozen_spins: Option<FrozenSpinsCheckpointV1>,
 }
 
 fn fdm_abm3_plan_sha256(plan: &FdmPlanIR) -> Result<String, RunError> {
@@ -108,6 +111,14 @@ fn fdm_abm3_checkpoint_value(
         thermal_seed: problem.thermal_seed,
         thermal_counter: problem.thermal_step(),
         solver,
+        frozen_spins: frozen_spins_checkpoint(
+            plan,
+            problem,
+            state,
+            step,
+            state.time_seconds,
+            last_dt,
+        )?,
     })
     .map(Some)
     .map_err(|error| RunError {
@@ -898,13 +909,20 @@ fn apply_cpu_adaptive_attempt_telemetry(
 pub(crate) fn build_snapshot_problem_and_state(
     plan: &FdmPlanIR,
 ) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
-    let problem = build_reference_problem(plan)?;
+    let mut problem = build_reference_problem(plan)?;
     let mut state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
     state.time_seconds = plan.time_stage.start_time_s;
+    if let Some(frozen_plan) = plan.frozen_spins.as_ref() {
+        problem
+            .capture_frozen_spins_at_activation(frozen_plan, &mut state)
+            .map_err(|error| RunError {
+                message: format!("Frozen Spins snapshot activation: {error}"),
+            })?;
+    }
     Ok((problem, state))
 }
 
@@ -1146,49 +1164,49 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let (mut problem, mut state) = build_snapshot_problem_and_state(plan)?;
     let mut restored_frozen_checkpoint = None;
     let mut restored_abm3_checkpoint = None;
-    let mut restored_checkpoint = if let Some(value) = coupled_checkpoint {
-        if value.get("schema").and_then(serde_json::Value::as_str)
-            == Some(FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA)
-        {
-            restored_abm3_checkpoint = Some(
-                serde_json::from_value::<FdmAbm3RunnerCheckpointV1>(value).map_err(|error| {
-                    RunError {
+    let mut restored_checkpoint =
+        if let Some(value) = coupled_checkpoint {
+            if value.get("schema").and_then(serde_json::Value::as_str)
+                == Some(FDM_ABM3_RUNNER_CHECKPOINT_SCHEMA)
+            {
+                let checkpoint = serde_json::from_value::<FdmAbm3RunnerCheckpointV1>(value)
+                    .map_err(|error| RunError {
                         message: format!("invalid FDM CPU ABM3 checkpoint payload: {error}"),
-                    }
-                })?,
-            );
-            None
-        } else if value.get("schema").and_then(serde_json::Value::as_str)
-            == Some(FROZEN_SPINS_CHECKPOINT_SCHEMA)
-        {
-            restored_frozen_checkpoint = Some(
-                serde_json::from_value::<FrozenSpinsCheckpointV1>(value).map_err(|error| {
-                    RunError {
-                        message: format!("invalid Frozen Spins checkpoint payload: {error}"),
-                    }
-                })?,
-            );
-            None
+                    })?;
+                restored_frozen_checkpoint = checkpoint.frozen_spins.clone();
+                restored_abm3_checkpoint = Some(checkpoint);
+                None
+            } else if value.get("schema").and_then(serde_json::Value::as_str)
+                == Some(FROZEN_SPINS_CHECKPOINT_SCHEMA)
+            {
+                restored_frozen_checkpoint = Some(
+                    serde_json::from_value::<FrozenSpinsCheckpointV1>(value).map_err(|error| {
+                        RunError {
+                            message: format!("invalid Frozen Spins checkpoint payload: {error}"),
+                        }
+                    })?,
+                );
+                None
+            } else {
+                super::spin_transport::validate_coupled_m3_checkpoint_value(
+                    &value,
+                    plan.grid
+                        .cells
+                        .iter()
+                        .map(|cells| *cells as usize)
+                        .product(),
+                )?;
+                Some(
+                    serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| {
+                        RunError {
+                            message: format!("invalid coupled M3 checkpoint payload: {error}"),
+                        }
+                    })?,
+                )
+            }
         } else {
-            super::spin_transport::validate_coupled_m3_checkpoint_value(
-                &value,
-                plan.grid
-                    .cells
-                    .iter()
-                    .map(|cells| *cells as usize)
-                    .product(),
-            )?;
-            Some(
-                serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| {
-                    RunError {
-                        message: format!("invalid coupled M3 checkpoint payload: {error}"),
-                    }
-                })?,
-            )
-        }
-    } else {
-        None
-    };
+            None
+        };
     let mut resume_timestep = None;
     let mut resume_previous_timestep = None;
     let mut resume_step_count = None;
@@ -1217,6 +1235,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         let frozen_plan = plan.frozen_spins.as_ref().ok_or_else(|| RunError {
             message: "Frozen Spins checkpoint requires a Frozen Spins plan".to_string(),
         })?;
+        checkpoint
+            .validate_problem_sha256(&fdm_abm3_plan_sha256(plan)?)
+            .map_err(|error| RunError {
+                message: format!("Frozen Spins ExactResume problem identity: {error}"),
+            })?;
         checkpoint
             .validate_for_plan(frozen_plan)
             .map_err(|error| RunError {
@@ -1253,9 +1276,16 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 message: "FDM CPU ABM3 checkpoint requires an ABM3 execution plan".to_string(),
             });
         }
-        if spin_transport.is_some() || plan.frozen_spins.is_some() {
+        if spin_transport.is_some() {
             return Err(RunError {
-                message: "FDM CPU ABM3 checkpoint cannot restore an unqualified spin-transport or Frozen Spins combination".to_string(),
+                message: "FDM CPU ABM3 checkpoint cannot restore an unqualified spin-transport combination".to_string(),
+            });
+        }
+        if plan.frozen_spins.is_some() != checkpoint.frozen_spins.is_some() {
+            return Err(RunError {
+                message:
+                    "FDM CPU ABM3 checkpoint Frozen Spins payload does not match the execution plan"
+                        .to_string(),
             });
         }
         let expected_plan_sha256 = fdm_abm3_plan_sha256(plan)?;
@@ -2205,6 +2235,19 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         }
     }
 
+    // A fully constrained dynamics stage is an analytical constant-state
+    // evolution, not an immediate-time convergence. Advance the physical
+    // clock to the requested endpoint without invoking RHS kernels. Relaxation
+    // retains immediate completion semantics and does not manufacture time.
+    if all_active_dofs_frozen
+        && plan.relaxation.is_none()
+        && !is_direct_minimization
+        && !paused
+        && !cancelled
+    {
+        state.time_seconds = stage_end_time_s;
+    }
+
     let finalization_field_snapshot_metrics = record_final_outputs(
         &problem,
         &state,
@@ -2418,7 +2461,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             converged: true,
             reason: None,
             metric: None,
-            metric_name: Some("all_active_dofs_frozen".to_string()),
+            metric_name: Some(
+                if plan.relaxation.is_some() || is_direct_minimization {
+                    "all_active_dofs_frozen_relaxation"
+                } else {
+                    "all_active_dofs_frozen_time_advance"
+                }
+                .to_string(),
+            ),
             metric_value: Some(0.0),
             threshold: None,
         }
@@ -2518,6 +2568,22 @@ fn frozen_spins_checkpoint_value(
     time_s: f64,
     dt: f64,
 ) -> Result<Option<serde_json::Value>, RunError> {
+    frozen_spins_checkpoint(plan, problem, state, step, time_s, dt)?
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| RunError {
+            message: format!("serializing Frozen Spins checkpoint state: {error}"),
+        })
+}
+
+fn frozen_spins_checkpoint(
+    plan: &FdmPlanIR,
+    problem: &ExchangeLlgProblem,
+    state: &ExchangeLlgState,
+    step: u64,
+    time_s: f64,
+    dt: f64,
+) -> Result<Option<FrozenSpinsCheckpointV1>, RunError> {
     let (Some(frozen_plan), Some(frozen_state)) =
         (plan.frozen_spins.as_ref(), problem.frozen_spins())
     else {
@@ -2536,12 +2602,9 @@ fn frozen_spins_checkpoint_value(
     )
     .map_err(|error| RunError {
         message: format!("serializing Frozen Spins checkpoint state: {error}"),
-    })?;
-    serde_json::to_value(checkpoint)
-        .map(Some)
-        .map_err(|error| RunError {
-            message: format!("serializing Frozen Spins checkpoint state: {error}"),
-        })
+    })?
+    .with_problem_sha256(fdm_abm3_plan_sha256(plan)?);
+    Ok(Some(checkpoint))
 }
 
 fn fdm_step_evaluation_request(
@@ -3305,7 +3368,8 @@ fn direct_field_values_available(name: &str) -> bool {
 fn direct_scalar_values_available(name: &str) -> bool {
     matches!(
         name,
-        "eden_ex"
+        "frozen_spins"
+            | "eden_ex"
             | "eden_demag"
             | "eden_ext"
             | "eden_ani"
@@ -3374,6 +3438,20 @@ impl<'a> DirectFieldSnapshotCache<'a> {
 
     fn select_scalar(&mut self, name: &str) -> Result<Vec<f64>, RunError> {
         match name {
+            "frozen_spins" => self
+                .problem
+                .frozen_spins()
+                .map(|frozen_spins| {
+                    frozen_spins
+                        .mask()
+                        .iter()
+                        .map(|frozen| f64::from(*frozen))
+                        .collect()
+                })
+                .ok_or_else(|| RunError {
+                    message: "CPU FDM snapshot 'frozen_spins': constraint is not active"
+                        .to_string(),
+                }),
             "eden_ex" => {
                 let magnetization = self.base_values("m", name)?.to_vec();
                 let field = self.base_values("H_ex", name)?.to_vec();
@@ -3726,6 +3804,74 @@ mod tests {
             bulk_dmi: None,
             ..Default::default()
         }
+    }
+
+    fn resolved_frozen_spins_test_plan(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+        let active_dof_count = mask.len() as u64;
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let mut hash = Sha256::new();
+        hash.update(active_dof_count.to_le_bytes());
+        hash.update(
+            mask.iter()
+                .map(|frozen| u8::from(*frozen))
+                .collect::<Vec<_>>(),
+        );
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["viewport-mask".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: mask_sha256.clone(),
+            grid_or_mesh_fingerprint: "viewport-test-grid".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["viewport-mask".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "viewport-mask".to_string(),
+                    selector_sha256: "a".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "viewport-test-grid".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256,
+                resolved_reference_sha256: "b".repeat(64),
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn all_frozen_time_evolution_advances_clock_without_changing_state() {
+        let mut plan = make_test_plan();
+        plan.frozen_spins = Some(resolved_frozen_spins_test_plan(vec![true; 16]));
+        let initial = plan.initial_magnetization.clone();
+        let endpoint = 5.0e-14;
+
+        let executed = execute_reference_fdm(&plan, endpoint, &[], None, None)
+            .expect("all-frozen analytical time advance");
+
+        assert_eq!(executed.result.final_magnetization, initial);
+        let completion = executed.result.completion.expect("stage completion");
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("all_active_dofs_frozen_time_advance")
+        );
+        assert_eq!(
+            executed.result.steps.last().map(|step| step.time),
+            Some(endpoint)
+        );
     }
 
     #[test]
@@ -4574,6 +4720,36 @@ mod tests {
         assert!(err
             .message
             .contains("supported CPU FDM FFT backends: auto, rustfft"));
+    }
+
+    #[test]
+    fn snapshot_preview_exposes_resolved_frozen_spins_as_binary_scalar_quantity() {
+        let mut mask = vec![false; 16];
+        mask[1] = true;
+        mask[14] = true;
+        let plan = FdmPlanIR {
+            frozen_spins: Some(resolved_frozen_spins_test_plan(mask.clone())),
+            ..make_test_plan()
+        };
+
+        let preview = snapshot_preview(
+            &plan,
+            &LivePreviewRequest {
+                quantity: "frozen_spins".to_string(),
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("Frozen Spins scalar preview should build from the active runtime mask");
+
+        assert_eq!(preview.quantity, "frozen_spins");
+        assert_eq!(preview.unit, "1");
+        assert_eq!(preview.spatial_kind, "grid");
+        assert_eq!(
+            preview.vector_field_values,
+            mask.into_iter().map(f64::from).collect::<Vec<_>>()
+        );
+        assert!(can_materialize_preview_quantity(QuantityId::FrozenSpins));
     }
 
     #[test]
@@ -7530,6 +7706,25 @@ mod tests {
         checkpoint["reference_sha256"] =
             serde_json::Value::String(format!("{:x}", reference_hash.finalize()));
 
+        let mut changed_problem = plan.clone();
+        changed_problem.initial_magnetization[1] = [0.0, 0.0, 1.0];
+        let mismatch = execute_reference_fdm_with_coupled_checkpoint(
+            &changed_problem,
+            1e-14,
+            &[],
+            None,
+            None,
+            Some(checkpoint.clone()),
+        )
+        .expect_err("ExactResume must reject a checkpoint from another problem");
+        assert!(
+            mismatch
+                .message
+                .contains("frozen_spins_checkpoint_problem_hash_mismatch"),
+            "unexpected mismatch: {}",
+            mismatch.message
+        );
+
         let resumed = execute_reference_fdm_with_coupled_checkpoint(
             &plan,
             1e-14,
@@ -7633,5 +7828,63 @@ mod tests {
         )
         .expect_err("changed physics must invalidate the ABM3 checkpoint");
         assert!(error.message.contains("plan identity mismatch"));
+    }
+
+    #[test]
+    fn abm3_frozen_spins_checkpoint_resume_is_bitwise_identical() {
+        let mut plan = abm3_runner_plan();
+        let mut mask = vec![false; plan.initial_magnetization.len()];
+        mask[0] = true;
+        plan.frozen_spins = Some(resolved_frozen_spins_test_plan(mask));
+        let frozen_reference_bits = plan.initial_magnetization[0].map(f64::to_bits);
+
+        let first = execute_reference_fdm(&plan, 4.0e-14, &[], None, None)
+            .expect("ABM3 plus Frozen Spins checkpoint seed run");
+        let checkpoint_artifact = first
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "solver/fdm_cpu_abm3_checkpoint.v1.json")
+            .expect("combined ABM3 checkpoint must be emitted");
+        let checkpoint: serde_json::Value = serde_json::from_slice(&checkpoint_artifact.bytes)
+            .expect("combined ABM3 checkpoint JSON");
+        assert_eq!(
+            checkpoint["frozen_spins"]["schema"],
+            FROZEN_SPINS_CHECKPOINT_SCHEMA
+        );
+
+        let uninterrupted = execute_reference_fdm(&plan, 5.0e-14, &[], None, None)
+            .expect("uninterrupted ABM3 plus Frozen Spins run");
+        let resumed = execute_reference_fdm_with_coupled_checkpoint(
+            &plan,
+            5.0e-14,
+            &[],
+            None,
+            None,
+            Some(checkpoint),
+        )
+        .expect("resumed ABM3 plus Frozen Spins run");
+
+        assert_eq!(
+            resumed.result.final_magnetization[0].map(f64::to_bits),
+            frozen_reference_bits,
+            "hard restore must preserve the frozen site at zero ULP"
+        );
+        assert_eq!(
+            resumed
+                .result
+                .final_magnetization
+                .iter()
+                .flatten()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            uninterrupted
+                .result
+                .final_magnetization
+                .iter()
+                .flatten()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            "ExactResume must preserve the combined multistep and constraint state"
+        );
     }
 }

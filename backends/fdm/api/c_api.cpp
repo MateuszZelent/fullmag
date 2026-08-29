@@ -51,6 +51,14 @@ extern bool launch_dp45_adaptive_batch_fp32(
     uint32_t &);
 extern void launch_multilayer_demag_field_fp64(Context &ctx);
 extern void launch_multilayer_demag_field_fp32(Context &ctx);
+extern void launch_multilayer_exchange_field_fp64(Context &ctx);
+extern void launch_multilayer_exchange_field_fp32(Context &ctx);
+extern bool launch_multilayer_dmi_field_fp64(Context &ctx);
+extern bool launch_multilayer_dmi_field_fp32(Context &ctx);
+extern bool launch_multilayer_anisotropy_field_fp64(Context &ctx);
+extern bool launch_multilayer_anisotropy_field_fp32(Context &ctx);
+extern bool launch_multilayer_effective_field_fp64(Context &ctx);
+extern bool launch_multilayer_effective_field_fp32(Context &ctx);
 extern void launch_multilayer_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_multilayer_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
 extern void launch_multilayer_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats);
@@ -209,6 +217,47 @@ bool select_cuda_device_if_requested(Context &ctx) {
     return true;
 }
 
+bool refresh_multilayer_transaction_observables(Context &ctx)
+{
+    ctx.last_error.clear();
+    if (ctx.enable_demag) {
+        if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            launch_multilayer_demag_field_fp64(ctx);
+        } else {
+            launch_multilayer_demag_field_fp32(ctx);
+        }
+        if (!ctx.last_error.empty()) return false;
+    }
+    if (ctx.enable_exchange) {
+        if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            launch_multilayer_exchange_field_fp64(ctx);
+        } else {
+            launch_multilayer_exchange_field_fp32(ctx);
+        }
+        if (!ctx.last_error.empty()) return false;
+    }
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+        const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_dmi_field_fp64(ctx)
+            : launch_multilayer_dmi_field_fp32(ctx);
+        if (!ok) return false;
+    }
+    bool has_anisotropy = false;
+    for (const auto &layer : ctx.multilayer_layers) {
+        has_anisotropy = has_anisotropy || layer.has_uniaxial_anisotropy ||
+            layer.has_cubic_anisotropy;
+    }
+    if (has_anisotropy) {
+        const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_multilayer_anisotropy_field_fp64(ctx)
+            : launch_multilayer_anisotropy_field_fp32(ctx);
+        if (!ok) return false;
+    }
+    return ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? launch_multilayer_effective_field_fp64(ctx)
+        : launch_multilayer_effective_field_fp32(ctx);
+}
+
 bool rollback_step_transaction(Context &ctx)
 {
     const std::string primary_error = ctx.last_error;
@@ -217,8 +266,10 @@ bool rollback_step_transaction(Context &ctx)
         ctx, FULLMAG_FDM_FSAL_INVALIDATION_STEP_ERROR);
     const bool transport_restored = context_rollback_gpu_transport_step(ctx);
     context_invalidate_observables(ctx);
-    const bool observables_restored =
-        state_restored && context_refresh_observables(ctx);
+    const bool observables_restored = state_restored &&
+        (ctx.has_multilayer_plan_v2
+            ? refresh_multilayer_transaction_observables(ctx)
+            : context_refresh_observables(ctx));
     const bool rollback_succeeded =
         state_restored && transport_restored && observables_restored;
     if (rollback_succeeded) {
@@ -343,6 +394,93 @@ int execute_single_grid_step_transaction(
                     ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
                 context_publish_endpoint_stats(ctx, trial_stats);
             }
+            context_finish_endpoint_step_accounting(ctx);
+            (void)context_publish_accepted_step_stats(
+                true, trial_stats, &out_stats);
+        },
+        [&]() {
+            return rollback_step_transaction(ctx)
+                ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
+        });
+    if (status != FULLMAG_FDM_OK && injected_phase != 0 &&
+        ctx.last_error.empty()) {
+        ctx.last_error = "injected step transaction failure";
+    }
+    return status;
+}
+
+int execute_multilayer_step_transaction(
+    Context &ctx,
+    double dt_seconds,
+    fullmag_fdm_step_stats &trial_stats,
+    fullmag_fdm_step_stats &out_stats,
+    ReceiptSolverPhaseGuard &receipt_solver_phase)
+{
+    const uint32_t injected_phase = ctx.step_transaction_test_failure_phase;
+    ctx.step_transaction_test_failure_phase = 0;
+    StepTransactionController transaction(
+        static_cast<StepTransactionPhase>(injected_phase),
+        injected_phase != 0,
+        FULLMAG_FDM_ERR_CUDA);
+    const int status = transaction.run(
+        [&]() {
+            ctx.accepted_step_pending = false;
+            if (!context_begin_step_transaction_attempt(ctx)) {
+                return FULLMAG_FDM_ERR_INVALID;
+            }
+            return FULLMAG_FDM_OK;
+        },
+        [&]() {
+            if (!context_capture_pre_step_state(ctx)) return FULLMAG_FDM_ERR_CUDA;
+            ctx.trial_dt = dt_seconds;
+            return FULLMAG_FDM_OK;
+        },
+        [&]() {
+            if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
+                    launch_multilayer_rk23_step_fp64(ctx, dt_seconds, &trial_stats);
+                } else if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
+                    launch_multilayer_rk4_step_fp64(ctx, dt_seconds, &trial_stats);
+                } else {
+                    launch_multilayer_heun_step_fp64(ctx, dt_seconds, &trial_stats);
+                }
+            } else {
+                if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
+                    launch_multilayer_rk23_step_fp32(ctx, dt_seconds, &trial_stats);
+                } else if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
+                    launch_multilayer_rk4_step_fp32(ctx, dt_seconds, &trial_stats);
+                } else {
+                    launch_multilayer_heun_step_fp32(ctx, dt_seconds, &trial_stats);
+                }
+            }
+            if (!ctx.last_error.empty()) return FULLMAG_FDM_ERR_CUDA;
+            const cudaError_t error = cudaGetLastError();
+            if (error != cudaSuccess) {
+                set_cuda_error(ctx, "multilayer_integrator_step", error);
+                return FULLMAG_FDM_ERR_CUDA;
+            }
+            return FULLMAG_FDM_OK;
+        },
+        [&]() {
+            return poll_interrupt(ctx)
+                ? FULLMAG_FDM_ERR_INTERRUPTED : FULLMAG_FDM_OK;
+        },
+        [&]() {
+            return context_complete_solver_receipt_attempt(
+                ctx, "cudaStreamSynchronize(multilayer receipt attempt)")
+                ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
+        },
+        []() { return FULLMAG_FDM_OK; },
+        [&]() {
+            context_commit_accepted_step(ctx);
+            context_discard_pre_step_state(ctx);
+        },
+        [&]() {
+            fullmag_fdm_publish_hot_loop_audit(ctx, &trial_stats);
+            fullmag_fdm_note_operator_device_execution(
+                ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
+            receipt_solver_phase.commit();
+            fullmag_fdm_publish_multilayer_demag_stage_counters(ctx, &trial_stats);
             context_finish_endpoint_step_accounting(ctx);
             (void)context_publish_accepted_step_stats(
                 true, trial_stats, &out_stats);
@@ -1542,38 +1680,8 @@ int fullmag_fdm_backend_step(
             return FULLMAG_FDM_ERR_INVALID;
         }
 
-        if (ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
-                launch_multilayer_rk23_step_fp64(*ctx, dt_seconds, &trial_stats);
-            } else if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
-                launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, &trial_stats);
-            } else {
-                launch_multilayer_heun_step_fp64(*ctx, dt_seconds, &trial_stats);
-            }
-        } else {
-            if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
-                launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, &trial_stats);
-            } else if (ctx->integrator == FULLMAG_FDM_INTEGRATOR_RK4) {
-                launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, &trial_stats);
-            } else {
-                launch_multilayer_heun_step_fp32(*ctx, dt_seconds, &trial_stats);
-            }
-        }
-        if (!ctx->last_error.empty()) {
-            return FULLMAG_FDM_ERR_CUDA;
-        }
-        if (!context_complete_solver_receipt_attempt(
-                *ctx, "cudaStreamSynchronize(multilayer receipt attempt)")) {
-            return FULLMAG_FDM_ERR_CUDA;
-        }
-        fullmag_fdm_publish_hot_loop_audit(*ctx, &trial_stats);
-        fullmag_fdm_note_operator_device_execution(
-            *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
-        receipt_solver_phase.commit();
-        fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, &trial_stats);
-        context_finish_endpoint_step_accounting(*ctx);
-        (void)context_publish_accepted_step_stats(true, trial_stats, out_stats);
-        return FULLMAG_FDM_OK;
+        return execute_multilayer_step_transaction(
+            *ctx, dt_seconds, trial_stats, *out_stats, receipt_solver_phase);
     }
 
     return execute_single_grid_step_transaction(

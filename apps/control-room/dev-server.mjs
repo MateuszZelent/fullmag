@@ -13,7 +13,9 @@ import { spawn } from "node:child_process";
 import {
   createReadStream,
   existsSync,
+  readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   unlinkSync,
 } from "node:fs";
@@ -47,6 +49,7 @@ const staticRoot =
   staticRootIdx >= 0
     ? (args[staticRootIdx + 1] ?? process.env.FULLMAG_STATIC_WEB_ROOT)
     : process.env.FULLMAG_STATIC_WEB_ROOT;
+const devDistDir = `.next-control-room-${port}`;
 
 function formatUrlHost(host) {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
@@ -60,7 +63,8 @@ if (staticRoot) {
 
 function startDevServer() {
   process.stderr.write(`[control-room dev-server] starting on :${port}\n`);
-  removeStaleNextDevLock();
+  pruneIsolatedNextCaches();
+  removeStaleNextDevLock(devDistDir);
 
   let pnpm;
   try {
@@ -107,7 +111,7 @@ function startDevServer() {
         ...process.env,
         FULLMAG_API_PROXY_TARGET: apiTarget,
         FULLMAG_API_URL: apiTarget,
-        FULLMAG_NEXT_DIST_DIR: `.next-control-room-${port}`,
+        FULLMAG_NEXT_DIST_DIR: devDistDir,
         FULLMAG_WEB_PUBLIC_HOST: browserHost,
         NEXT_PUBLIC_API_URL: browserOrigin,
         NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin,
@@ -173,8 +177,8 @@ function startDevServer() {
   });
 }
 
-function removeStaleNextDevLock() {
-  const lockPath = join(appDir, ".next", "dev", "lock");
+function removeStaleNextDevLock(distDir) {
+  const lockPath = join(appDir, distDir, "dev", "lock");
   if (!existsSync(lockPath)) {
     return;
   }
@@ -201,6 +205,40 @@ function removeStaleNextDevLock() {
     );
   } catch {
     // If the lock disappears concurrently, let Next handle the remaining state.
+  }
+}
+
+function pruneIsolatedNextCaches() {
+  const retentionDays = Math.min(
+    365,
+    Math.max(
+      1,
+      Number.parseInt(process.env.FULLMAG_NEXT_CACHE_RETENTION_DAYS ?? "7", 10) || 7,
+    ),
+  );
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  let entries;
+  try {
+    entries = readdirSync(appDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\.next-control-room-\d{1,5}$/.test(entry.name)) {
+      continue;
+    }
+    if (entry.name === devDistDir) {
+      continue;
+    }
+    const path = join(appDir, entry.name);
+    try {
+      if (statSync(path).mtimeMs < cutoff) {
+        rmSync(path, { recursive: true, force: true });
+        process.stderr.write(`[control-room dev-server] pruned stale Next cache ${entry.name}\n`);
+      }
+    } catch {
+      // Another process may be compiling or removing this cache concurrently.
+    }
   }
 }
 

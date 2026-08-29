@@ -157,10 +157,6 @@ bool context_step_explicit_rk_mfem(
     }
 
     if (mfem_device_requests_gpu(ctx)) {
-        if (ctx.frozen_spins.enabled()) {
-            error = "GPU RK cannot execute frozen spins constraints before a device-resident lane is qualified (frozen_spins_fem_gpu_unqualified)";
-            return false;
-        }
         if (ctx.oersted.has_stage_callback) {
             error = "GPU RK cannot use the CPU-only stage Oersted callback before a device-resident lane is qualified";
             return false;
@@ -208,24 +204,13 @@ bool context_step_explicit_rk_mfem(
     const bool fsal_reuse_allowed = rk_rhs_allows_fsal_reuse(ctx);
     double exchange_energy_final = 0.0;
     double demag_energy_final = 0.0;
-    std::unique_ptr<RkAttemptCacheSnapshot> fallback_attempt_cache;
     RkAttemptCacheSnapshot *attempt_cache = nullptr;
     if (adaptive) {
-        if (ws.attempt_checkpoint != nullptr) {
-            attempt_cache = ws.attempt_checkpoint.get();
-        } else {
-            try {
-                fallback_attempt_cache =
-                    std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
-            } catch (const std::bad_alloc &) {
-                error = "RK attempt cache snapshot allocation failed";
-                return false;
-            }
-            if (!fallback_attempt_cache->prepare(error)) {
-                return false;
-            }
-            attempt_cache = fallback_attempt_cache.get();
+        if (ws.attempt_checkpoint == nullptr) {
+            error = "adaptive RK attempt checkpoint was not prepared during Context setup";
+            return false;
         }
+        attempt_cache = ws.attempt_checkpoint.get();
     }
 
     for (;;) {
@@ -301,7 +286,11 @@ bool context_step_explicit_rk_mfem(
                 error = "explicit RK stage candidate normalization failed: " + error;
                 return false;
             }
-            project_static_periodic_aos(ctx, ws.m_stage);
+            if (!project_static_periodic_aos_checked(ctx, ws.m_stage, error)) {
+                ws.fsal_valid = false;
+                error = "explicit RK stage periodic projection failed: " + error;
+                return false;
+            }
             if (ctx.frozen_spins.enabled()) {
                 ctx.frozen_spins.project_onto_reference(ws.m_stage);
             }
@@ -347,7 +336,11 @@ bool context_step_explicit_rk_mfem(
             }
             ws.m_candidate[i] = ctx.state.m_xyz[i] + dt * accum;
         }
-        project_static_periodic_aos(ctx, ws.m_candidate);
+        if (!project_static_periodic_aos_checked(ctx, ws.m_candidate, error)) {
+            ws.fsal_valid = false;
+            error = "explicit RK embedded candidate periodic projection failed: " + error;
+            return false;
+        }
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }
@@ -500,7 +493,11 @@ bool context_step_explicit_rk_mfem(
             error = "explicit RK high-order candidate normalization failed: " + error;
             return false;
         }
-        project_static_periodic_aos(ctx, ws.m_candidate);
+        if (!project_static_periodic_aos_checked(ctx, ws.m_candidate, error)) {
+            ws.fsal_valid = false;
+            error = "explicit RK high-order candidate periodic projection failed: " + error;
+            return false;
+        }
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }

@@ -88,7 +88,19 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+
+      - name: Capture source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/capture_source_snapshot_identity.py \
+            --repo-root . --ignore-non-runtime-dirty --output source-identity.json
+          {
+            echo "FULLMAG_SOURCE_GIT_COMMIT=$(python -c 'import json; print(json.load(open("source-identity.json"))["head_commit_full"])')"
+            echo "FULLMAG_SOURCE_WORKTREE_STATE=$(python -c 'import json; print("dirty" if json.load(open("source-identity.json"))["source_snapshot_dirty"] else "clean")')"
+            echo "FULLMAG_SOURCE_SNAPSHOT_SHA256=$(python -c 'import json; print(json.load(open("source-identity.json"))["source_snapshot_sha256"])')"
+          } >> "$GITHUB_ENV"
 
       - name: Install Linux desktop dependencies
         run: |
@@ -111,7 +123,13 @@ jobs:
           pnpm --dir apps/control-room build
 
       - name: Build Rust binaries (CLI, API & UI)
-        run: cargo build --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
+        run: cargo build --locked --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
+
+      - name: Run release binary smoke tests
+        run: |
+          cargo test --locked -p fullmag-build-info -p fullmag-cli --lib
+          target/release/fullmag --help >/dev/null
+          target/release/fullmag-api --help >/dev/null
 
       - name: Build Python wheel package
         run: |
@@ -121,13 +139,14 @@ jobs:
       - name: Assemble Linux release bundle
         env:
           TAG: ${{ needs.prepare-release.outputs.tag_name }}
+          VERSION_PREFIX: ${{ needs.prepare-release.outputs.version_prefix }}
           GIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           BUNDLE="fullmag-${TAG}-linux-x86_64"
           DIST_DIR="dist/${BUNDLE}"
           WEB_DIR="${DIST_DIR}/.fullmag/local/web"
-          mkdir -p "${DIST_DIR}/bin" "${WEB_DIR}" "${DIST_DIR}/python"
+          mkdir -p "${DIST_DIR}/bin" "${WEB_DIR}" "${DIST_DIR}/python" "${DIST_DIR}/python/site-packages"
 
           cp target/release/fullmag "${DIST_DIR}/bin/fullmag"
           cp target/release/fullmag-api "${DIST_DIR}/bin/fullmag-api"
@@ -137,17 +156,36 @@ jobs:
           test -x "${DIST_DIR}/bin/fullmag-ui"
           test -f apps/control-room/out/index.html
           cp -a apps/control-room/out/. "${WEB_DIR}/"
+          cp apps/control-room/dev-server.mjs "${WEB_DIR}/"
+          mkdir -p "${WEB_DIR}/scripts"
+          cp apps/control-room/scripts/resolve-pnpm-invocation.mjs "${WEB_DIR}/scripts/"
           test -f "${WEB_DIR}/index.html"
           compgen -G "packages/fullmag-py/dist/*.whl" >/dev/null
           cp packages/fullmag-py/dist/*.whl "${DIST_DIR}/python/"
+          python -m pip install --disable-pip-version-check --target "${DIST_DIR}/python/site-packages" packages/fullmag-py/dist/*.whl
+          python -c "import sys; sys.path.insert(0, '${DIST_DIR}/python/site-packages'); import fullmag; print('fullmag import ok')"
           if [ -f "README.md" ]; then cp README.md "${DIST_DIR}/"; fi
-          printf '{"product":"fullmag","tag":"%s","git_sha":"%s","platform":"linux-x86_64"}\n' \
-            "$TAG" "$GIT_SHA" > "${DIST_DIR}/release-manifest.json"
+          python - "$DIST_DIR" "$TAG" "$GIT_SHA" <<'PY'
+          import hashlib, json, os, pathlib, sys
+          dist = pathlib.Path(sys.argv[1])
+          tag = sys.argv[2]
+          git_sha = sys.argv[3]
+          version_prefix = os.environ.get("VERSION_PREFIX", "")
+          identity = json.loads(pathlib.Path("source-identity.json").read_text())
+          files = {}
+          for path in sorted(dist.rglob("*")):
+              if path.is_file() and path.name != "release-manifest.json":
+                  files[str(path.relative_to(dist)).replace("\\", "/")] = hashlib.sha256(path.read_bytes()).hexdigest()
+          payload = {"product": "fullmag", "tag": str(tag), "version_prefix": version_prefix, "git_sha": str(git_sha), "platform": "linux-x86_64", "source_identity": identity, "files_sha256": files}
+          (dist / "release-manifest.json").write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+          PY
 
           ARCHIVE="${BUNDLE}.tar.gz"
           tar -czf "$ARCHIVE" -C dist "$BUNDLE"
           tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/bin/fullmag-api" >/dev/null
           tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/.fullmag/local/web/index.html" >/dev/null
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/.fullmag/local/web/dev-server.mjs" >/dev/null
+          tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/python/site-packages/fullmag/__init__.py" >/dev/null
           tar -tzf "$ARCHIVE" | grep -Fx "${BUNDLE}/release-manifest.json" >/dev/null
 
       - name: Upload Linux artifact
@@ -179,9 +217,36 @@ jobs:
         with:
           version: 10.8.1
 
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Capture source identity
+        shell: powershell
+        run: |
+          python scripts/capture_source_snapshot_identity.py --repo-root . --ignore-non-runtime-dirty --output source-identity.json
+          $identity = Get-Content source-identity.json -Raw | ConvertFrom-Json
+          "FULLMAG_SOURCE_GIT_COMMIT=$($identity.head_commit_full)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FULLMAG_SOURCE_WORKTREE_STATE=$(if ($identity.source_snapshot_dirty) { 'dirty' } else { 'clean' })" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FULLMAG_SOURCE_SNAPSHOT_SHA256=$($identity.source_snapshot_sha256)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build Python wheel package
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check build
+          python -m build packages/fullmag-py
+
       - name: Build Rust binaries (CLI & UI)
         shell: powershell
-        run: cargo build --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
+        run: cargo build --locked --release -p fullmag-cli -p fullmag-api -p fullmag-desktop
+
+      - name: Run release binary smoke tests
+        shell: powershell
+        run: |
+          cargo test --locked -p fullmag-build-info -p fullmag-cli --lib
+          .\target\release\fullmag.exe --help | Out-Null
+          .\target\release\fullmag-api.exe --help | Out-Null
 
       - name: Build Control Room Web App
         shell: powershell
@@ -195,13 +260,14 @@ jobs:
         shell: powershell
         env:
           TAG: ${{ needs.prepare-release.outputs.tag_name }}
+          VERSION_PREFIX: ${{ needs.prepare-release.outputs.version_prefix }}
           GIT_SHA: ${{ github.sha }}
         run: |
           $TAG = $env:TAG
           $BUNDLE = "fullmag-$TAG-windows-x86_64"
           $DIST = "dist\$BUNDLE"
           $WEB = "$DIST\.fullmag\local\web"
-          New-Item -ItemType Directory -Force -Path "$DIST\bin", $WEB
+          New-Item -ItemType Directory -Force -Path "$DIST\bin", $WEB, "$DIST\python"
 
           Copy-Item target\release\fullmag.exe "$DIST\bin\"
           Copy-Item target\release\fullmag-api.exe "$DIST\bin\"
@@ -210,8 +276,22 @@ jobs:
             throw "Static Control Room export is missing apps\control-room\out\index.html"
           }
           Copy-Item -Recurse apps\control-room\out\* "$WEB\"
+          Copy-Item apps\control-room\dev-server.mjs "$WEB\"
+          New-Item -ItemType Directory -Force -Path "$WEB\scripts" | Out-Null
+          Copy-Item apps\control-room\scripts\resolve-pnpm-invocation.mjs "$WEB\scripts\"
+          $wheel = Get-ChildItem packages\fullmag-py\dist\*.whl | Select-Object -First 1
+          if (-not $wheel) { throw "Python wheel was not produced" }
+          Copy-Item $wheel.FullName "$DIST\python\"
+          python -m pip install --disable-pip-version-check --target "$DIST\python\site-packages" $wheel.FullName
+          python -c "import sys; sys.path.insert(0, r'$DIST\python\site-packages'); import fullmag; print(fullmag.__version__ if hasattr(fullmag, '__version__') else 'fullmag import ok')"
           if (Test-Path README.md) { Copy-Item README.md "$DIST\" }
-          @{ product = "fullmag"; tag = $TAG; git_sha = $env:GIT_SHA; platform = "windows-x86_64" } |
+          $identity = Get-Content source-identity.json -Raw | ConvertFrom-Json
+          $files = @{}
+          Get-ChildItem "$DIST" -File -Recurse | Where-Object { $_.Name -ne "release-manifest.json" } | ForEach-Object {
+            $relative = [System.IO.Path]::GetRelativePath((Resolve-Path $DIST).Path, $_.FullName).Replace('\', '/')
+            $files[$relative] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          @{ product = "fullmag"; tag = $TAG; version_prefix = $env:VERSION_PREFIX; git_sha = $env:GIT_SHA; platform = "windows-x86_64"; source_identity = $identity; files_sha256 = $files } |
             ConvertTo-Json -Compress | Set-Content "$DIST\release-manifest.json" -Encoding UTF8
 
           $required = @(
@@ -219,6 +299,7 @@ jobs:
             "$DIST\bin\fullmag-api.exe",
             "$DIST\bin\fullmag-ui.exe",
             "$WEB\index.html",
+            "$DIST\python\site-packages\fullmag\__init__.py",
             "$DIST\release-manifest.json"
           )
           foreach ($path in $required) {
@@ -243,6 +324,8 @@ jobs:
               "$BUNDLE/bin/fullmag-api.exe",
               "$BUNDLE/bin/fullmag-ui.exe",
               "$BUNDLE/.fullmag/local/web/index.html",
+              "$BUNDLE/.fullmag/local/web/dev-server.mjs",
+              "$BUNDLE/python/site-packages/fullmag/__init__.py",
               "$BUNDLE/release-manifest.json"
             )) {
               if (-not ($archiveEntries -contains $entry)) {

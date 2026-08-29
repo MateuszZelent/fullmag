@@ -585,6 +585,7 @@ pub(crate) struct MixedExplicitRoleCounts {
     pub(crate) interface: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn mixed_explicit_role_counts(
     faces: &[(Vec<u32>, FemFacetRoleIR)],
 ) -> BTreeMap<Vec<u32>, MixedExplicitRoleCounts> {
@@ -718,6 +719,7 @@ fn mixed_conformity_counts_fast(
 /// historical helper exposed an ordered `BTreeMap<Vec<u32>, ...>` to tests and
 /// mesh-asset validation, so keep that narrow API while converting once at the
 /// boundary instead of paying the tree cost in the hot path.
+#[cfg(test)]
 pub(crate) fn mixed_conformity_counts(
     mesh: &MeshIR,
     adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,

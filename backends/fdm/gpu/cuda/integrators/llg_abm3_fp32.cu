@@ -27,6 +27,7 @@ extern double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy,
 extern double reduce_max_cross_norm_fp32(Context &ctx,
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz, uint64_t n);
+extern void launch_project_frozen_fp32(Context &ctx, cudaStream_t stream);
 
 extern __global__ void llg_rhs_fp32_kernel(
     const float * __restrict__ mx, const float * __restrict__ my, const float * __restrict__ mz,
@@ -157,6 +158,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f = static_cast<float>(dt);
     const double step_start_time = ctx.current_time;
+    launch_project_frozen_fp32(ctx, nullptr);
 
     if (ctx.abm_last_dt > 0.0 && fabs(dt - ctx.abm_last_dt) / ctx.abm_last_dt > 0.1) {
         ctx.abm_startup = 0;
@@ -187,6 +189,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k1.x), static_cast<const float*>(ctx.k1.y), static_cast<const float*>(ctx.k1.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f);
+        launch_project_frozen_fp32(ctx, nullptr);
         if (abort_step_from_tmp(ctx, false)) return;
 
         if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
@@ -209,6 +212,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k1.x), static_cast<const float*>(ctx.k1.y), static_cast<const float*>(ctx.k1.z),
             static_cast<const float*>(ctx.h_ex.x), static_cast<const float*>(ctx.h_ex.y), static_cast<const float*>(ctx.h_ex.z),
             n, 0.5f * dt_f);
+        launch_project_frozen_fp32(ctx, nullptr);
         if (abort_step_from_tmp(ctx, false)) return;
 
         context_stage_accepted_step(ctx, dt);
@@ -245,6 +249,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<const float*>(ctx.abm_f_n2.x), static_cast<const float*>(ctx.abm_f_n2.y), static_cast<const float*>(ctx.abm_f_n2.z),
         static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
         n, dt_f);
+    launch_project_frozen_fp32(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
@@ -268,6 +273,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<const float*>(ctx.abm_f_n1.x), static_cast<const float*>(ctx.abm_f_n1.y), static_cast<const float*>(ctx.abm_f_n1.z),
         static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
         n, dt_f);
+    launch_project_frozen_fp32(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
     context_stage_accepted_step(ctx, dt);

@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum QuantityId {
     M,
+    /// Resolved Frozen Spins degree-of-freedom mask (`1` frozen, `0` free).
+    FrozenSpins,
     HEx,
     HDemag,
     HExt,
@@ -87,6 +89,7 @@ impl QuantityId {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::M => "m",
+            Self::FrozenSpins => "frozen_spins",
             Self::HEx => "H_ex",
             Self::HDemag => "H_demag",
             Self::HExt => "H_ext",
@@ -145,6 +148,7 @@ impl QuantityId {
     /// All defined quantity IDs.
     pub const ALL: &'static [QuantityId] = &[
         Self::M,
+        Self::FrozenSpins,
         Self::HEx,
         Self::HDemag,
         Self::HExt,
@@ -227,6 +231,7 @@ impl std::error::Error for QuantityIdError {}
 pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdError> {
     match requested {
         "m" | "M" => Ok(QuantityId::M),
+        "frozen_spins" | "frozen_mask" => Ok(QuantityId::FrozenSpins),
         "H_ex" | "h_ex" => Ok(QuantityId::HEx),
         "H_demag" | "h_demag" => Ok(QuantityId::HDemag),
         "H_ext" | "h_ext" => Ok(QuantityId::HExt),

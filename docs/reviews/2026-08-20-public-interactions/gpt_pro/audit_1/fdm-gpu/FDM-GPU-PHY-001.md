@@ -5,7 +5,7 @@
 | Lane | **FDM GPU** |
 | Priorytet | **P1** |
 | Klasa | `physics` |
-| Status | `implementation plan` |
+| Status | `source/test remediated; global qualification pending` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FDM-GPU-ABI-001`, `FDM-CPU-PHY-001`, `FDM-CPU-PHY-002` |
@@ -23,6 +23,32 @@ ABI przewiduje `Ms/A/alpha` oraz pola DMI, ale konstrukcja runnera i Context/hot
 ### Skutek
 
 Jedna publiczna konfiguracja może wykonywać inną fizykę na CPU i GPU, szczególnie w heterogenicznych regionach i przy boundary twist.
+
+### Stan remediacji 2026-08-29
+
+- CUDA stosuje wspólną korektę brakujących ścian dla iDMI i bulk DMI w
+  pojedynczej siatce oraz w staged multilayer RHS/observable. Korekta obejmuje
+  granice otwarte i wewnętrzne granice aktywnej maski; osie periodyczne nie
+  otrzymują sztucznej korekty brzegu.
+- `Ms/A/alpha/Dind/Dbulk` pozostają kontraktem fail-closed, dopóki CUDA nie ma
+  pełnej realizacji pól komórkowych. Backend natywny odrzuca je przed krokiem;
+  nie są już traktowane jako rzekomo obsługiwane skalary.
+- Receipt staged multilayer księguje rzeczywiście wykonane DMI, maski,
+  oddziaływania multilayer, anizotropię i pole zewnętrzne. Maska wymagana
+  uwzględnia również lokalne `layer.active_mask`, dzięki czemu brak dowodu nie
+  może zostać sklasyfikowany jako CUDA.
+- Zarządzana recepta `just verify-fdm-gpu-dmi-boundary-runtime` wykonała na
+  NVIDIA GeForce RTX 3070 Laptop GPU testy FP64/FP32 dla single-grid oraz
+  staged multilayer Heun/RK4/RK23. Niezależny oracle CPU pola, rzeczywisty krok,
+  zero fallbacku, kompletna maska device i brak pełnych transferów/host compute
+  w hot loop przeszły. Razem z kontraktem fail-closed: CTest **2/2**.
+- `just verify-fdm-gpu-abi-contract` przeszedł: layout Rust **2/2**, natywny
+  sentinel **1/1** i `cargo check -p fullmag-runner --features cuda`.
+
+To zamyka błąd źródłowy i jego test regresyjny, ale nie promuje szerokiej
+capability. Nadal brakuje hash-bound publicznego Python→IR→planner→runner E2E,
+directional-derivative/energy parity na CUDA, sanitizera, reprezentatywnego
+time-to-accuracy oraz szerszej macierzy łączonych interakcji.
 
 ## 3. Docelowy kontrakt
 
@@ -132,13 +158,13 @@ Minimalne wymagania:
 
 ## 9. Kryteria akceptacyjne
 
-- [ ] Istnieje minimalny test, który przed poprawką odtwarza problem.
+- [x] Istnieje minimalny test, który przed poprawką odtwarza problem.
 - [ ] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
-- [ ] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
+- [x] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
 - [ ] Accepted/rejected/failure semantics są objęte fault-injection.
-- [ ] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
+- [x] Physics oracle pola przechodzi w zadanej tolerancji.
 - [ ] CPU/GPU albo AoS/SoA parity przechodzi na poziomie pola, RHS, stage i kroku, jeśli dotyczy.
-- [ ] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
+- [x] Telemetryka dowodzi wykonania operatorów oraz braku pełnych transferów i host compute w badanym hot loop.
 - [ ] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
 - [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
 - [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.

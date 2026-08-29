@@ -183,6 +183,41 @@ class NativeMixedCertificateTests(unittest.TestCase):
         self.assertTrue(result.validated_claimed_certificate)
 
     @unittest.skipUnless(_native_available(), "real _fullmag_core extension is unavailable")
+    def test_native_certificate_validity_does_not_rehash_in_python(self) -> None:
+        mesh, certificate, _ = _fixture()
+        signed = replace(
+            mesh,
+            mixed_layer_topology_certificate=MixedLayerTopologyCertificate.from_dict(
+                certificate
+            ),
+        )
+
+        with mock.patch.object(
+            MeshData,
+            "topology_fingerprint_v3",
+            side_effect=AssertionError("native certificate validity must not rehash in Python"),
+        ):
+            self.assertTrue(signed._native_mixed_certificate_valid())
+
+    @unittest.skipUnless(_native_available(), "real _fullmag_core extension is unavailable")
+    def test_native_certified_construction_skips_duplicate_python_csr_walk(self) -> None:
+        mesh, certificate, _ = _fixture()
+        with mock.patch.object(
+            MeshData,
+            "validate",
+            side_effect=AssertionError(
+                "accepted native mixed certificates must not repeat Python CSR validation"
+            ),
+        ):
+            signed = replace(
+                mesh,
+                mixed_layer_topology_certificate=MixedLayerTopologyCertificate.from_dict(
+                    certificate
+                ),
+            )
+        self.assertIsNotNone(signed.mixed_layer_topology_certificate)
+
+    @unittest.skipUnless(_native_available(), "real _fullmag_core extension is unavailable")
     def test_certificate_digest_is_canonical_across_json_formatting(self) -> None:
         mesh, certificate, _ = _fixture()
         wire = _core._build_native_mixed_mesh_wire(mesh, {"mesh_name": "python-golden"})

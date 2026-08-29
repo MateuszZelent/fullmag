@@ -1379,6 +1379,7 @@ impl InteractiveFdmPreviewRuntime {
         requested_device: &str,
         execution_mode: fullmag_ir::ExecutionMode,
     ) -> Result<Self, RunError> {
+        let _ = (requested_device, execution_mode);
         let inner = match engine {
             FdmEngine::CpuReference => {
                 let (problem, state) = cpu_reference::build_snapshot_problem_and_state(plan)?;

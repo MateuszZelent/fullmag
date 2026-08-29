@@ -3190,7 +3190,8 @@ fn push_field_descriptor(
             .unwrap_or_else(|| "vector_field".into()),
         components: n_comp,
         location: location
-            .unwrap_or_else(|| quantity_spatial_domain(quantity_id))
+            .or_else(|| spec.map(|quantity| quantity.location.as_str()))
+            .unwrap_or("node")
             .to_string(),
         unit: unit.to_string(),
         field_revision,
@@ -8872,6 +8873,8 @@ mod tests {
 
         assert_eq!(quantities[0].domain, "full_domain");
         assert_eq!(quantities[1].domain, "magnetic_only");
+        assert_eq!(quantities[0].location, "node");
+        assert_eq!(quantities[1].location, "node");
         assert_eq!(quantities[0].source_time_seconds, Some(2.5e-12));
     }
 

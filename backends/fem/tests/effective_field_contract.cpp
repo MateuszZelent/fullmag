@@ -200,6 +200,10 @@ void disabled_local_field_buffers_are_zeroed_before_composition() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.cpp");
 
     check(
+        effective.find("ctx.anisotropy.h_uniaxial_xyz.assign(m_xyz.size(), 0.0)") !=
+            std::string::npos,
+        "disabled uniaxial anisotropy buffer must be zeroed before H_eff composition");
+    check(
         effective.find("ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0)") != std::string::npos,
         "disabled interfacial DMI buffer must be zeroed before H_eff composition");
     check(

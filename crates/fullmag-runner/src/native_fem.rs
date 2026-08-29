@@ -96,7 +96,8 @@ use crate::quantities::QuantityId;
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{
-    LivePreviewField, LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
+    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, LivePreviewField,
+    LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
 };
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::{dot, MU0};
@@ -280,6 +281,79 @@ fn endpoint_cache_telemetry_from_ffi(
         endpoint_refreshes: raw.endpoint_refreshes,
         accepted_step_wall_time_ns: raw.accepted_step_wall_time_ns,
     }))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn representation_material_location_from_ffi(
+    label: &str,
+    value: u32,
+) -> Result<FemMaterialFieldLocation, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_MATERIAL_LOCATION_SCALAR => Ok(FemMaterialFieldLocation::Scalar),
+        ffi::FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1 => Ok(FemMaterialFieldLocation::NodalP1),
+        ffi::FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0 => Ok(FemMaterialFieldLocation::ElementDg0),
+        _ => Err(RunError {
+            message: format!("native FEM returned unknown {label} material location {value}"),
+        }),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn representation_receipt_from_ffi(
+    raw: &ffi::fullmag_fem_representation_receipt_v1,
+) -> Result<FemRepresentationReceipt, RunError> {
+    if raw.abi_version != ffi::FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION
+        || raw.struct_size as usize
+            != std::mem::size_of::<ffi::fullmag_fem_representation_receipt_v1>()
+    {
+        return Err(RunError {
+            message: "native FEM returned an incompatible representation receipt ABI v1 record"
+                .to_string(),
+        });
+    }
+    let state_space = match raw.state_space {
+        ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS => {
+            FemStateRepresentation::LocalNodeAos
+        }
+        value => {
+            return Err(RunError {
+                message: format!("native FEM returned unknown state representation {value}"),
+            })
+        }
+    };
+    if raw.local_node_count == 0
+        || raw.true_node_count == 0
+        || raw.true_node_count > raw.local_node_count
+        || (raw.true_node_count < raw.local_node_count && raw.periodic_map_revision == 0)
+        || raw.reserved0 != 0
+        || raw.hot_loop_representation_copy_count > raw.representation_copy_count
+        || raw.hot_loop_gather_scatter_bytes > raw.gather_scatter_bytes
+    {
+        return Err(RunError {
+            message: "native FEM returned an internally inconsistent representation receipt"
+                .to_string(),
+        });
+    }
+    Ok(FemRepresentationReceipt {
+        schema_version: raw.abi_version,
+        state_space,
+        ms_location: representation_material_location_from_ffi(
+            "saturation magnetisation",
+            raw.ms_location,
+        )?,
+        a_location: representation_material_location_from_ffi(
+            "exchange stiffness",
+            raw.a_location,
+        )?,
+        local_node_count: raw.local_node_count,
+        true_node_count: raw.true_node_count,
+        periodic_map_revision: raw.periodic_map_revision,
+        representation_copy_count: raw.representation_copy_count,
+        gather_scatter_bytes: raw.gather_scatter_bytes,
+        invalid_space_assertion_count: raw.invalid_space_assertion_count,
+        hot_loop_representation_copy_count: raw.hot_loop_representation_copy_count,
+        hot_loop_gather_scatter_bytes: raw.hot_loop_gather_scatter_bytes,
+    })
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -881,6 +955,7 @@ pub(crate) struct NativeFemBackend {
     stage_oersted_provider: Option<Box<StageOerstedProvider>>,
     stage_transport_provider: Option<Box<StageTransportProvider>>,
     magnetic_node_mask: Arc<[bool]>,
+    frozen_mask: Option<Arc<[bool]>>,
     saturation_magnetisation_by_node: Arc<[f64]>,
     dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
     energy_density_terms: NativeFemEnergyDensityTerms,
@@ -1464,7 +1539,8 @@ pub(crate) fn can_materialize_preview_quantity(
     plan: &fullmag_ir::FemPlanIR,
     id: QuantityId,
 ) -> bool {
-    NativeFemPreviewObservable::from_quantity(id).is_some()
+    (id == QuantityId::FrozenSpins && plan.frozen_spins.is_some())
+        || NativeFemPreviewObservable::from_quantity(id).is_some()
         || NativeFemEnergyDensityTerms::from_plan(plan)
             .observables_for(id.as_str())
             .is_some()
@@ -1717,11 +1793,38 @@ fn build_native_fem_energy_density_preview_field(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn build_native_fem_frozen_spins_preview_field(
+    request: &LivePreviewRequest,
+    frozen_mask: &[bool],
+    active_mask: &[bool],
+) -> Result<LivePreviewField, RunError> {
+    if frozen_mask.len() != active_mask.len() {
+        return Err(RunError {
+            message: format!(
+                "native FEM Frozen Spins mask length {} differs from magnetic node mask length {}",
+                frozen_mask.len(),
+                active_mask.len()
+            ),
+        });
+    }
+    let values = frozen_mask
+        .iter()
+        .map(|frozen| f64::from(*frozen))
+        .collect::<Vec<_>>();
+    Ok(build_mesh_scalar_preview_field_with_active_mask(
+        request,
+        &values,
+        Some(active_mask.to_vec()),
+    ))
+}
+
+#[cfg(feature = "fem-gpu")]
 #[derive(Debug)]
 pub(crate) struct NativeFemPreviewSnapshot {
     handle: *mut ffi::fullmag_fem_preview_snapshot,
     request: LivePreviewRequest,
     active_mask: Option<Arc<[bool]>>,
+    host_frozen_mask: Option<Arc<[bool]>>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2846,6 +2949,10 @@ impl NativeFemBackend {
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()])
                 .into(),
+            frozen_mask: plan
+                .frozen_spins
+                .as_ref()
+                .map(|frozen_spins| Arc::<[bool]>::from(frozen_spins.frozen_mask.clone())),
             saturation_magnetisation_by_node: saturation_magnetisation_by_node.into(),
             dg0_energy_projection,
             energy_density_terms: NativeFemEnergyDensityTerms::from_plan(plan),
@@ -3063,6 +3170,18 @@ impl NativeFemBackend {
         stats.hot_loop_control_scalar_d2h_bytes = audit.hot_loop_control_scalar_d2h_bytes;
         stats.hot_loop_control_scalar_host_sync_count =
             audit.hot_loop_control_scalar_host_sync_count;
+        Ok(())
+    }
+
+    fn attach_representation_receipt(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        let mut raw = ffi::fullmag_fem_representation_receipt_v1::default();
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_snapshot_representation_receipt_v1(self.handle, &mut raw)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM representation receipt read failed"));
+        }
+        stats.fem_representation_receipt = Some(representation_receipt_from_ffi(&raw)?);
         Ok(())
     }
 
@@ -3329,6 +3448,7 @@ impl NativeFemBackend {
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
+        self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -3770,6 +3890,7 @@ impl NativeFemBackend {
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
+        self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -4118,6 +4239,7 @@ impl NativeFemBackend {
         copy_demag_diagnostics(&mut step_stats, &stats);
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
+        self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -4224,6 +4346,18 @@ impl NativeFemBackend {
         &self,
         request: &LivePreviewRequest,
     ) -> Result<NativeFemPreviewSnapshot, RunError> {
+        let quantity = crate::quantities::normalize_quantity_id(&request.quantity)?;
+        if quantity == QuantityId::FrozenSpins {
+            let frozen_mask = self.frozen_mask.clone().ok_or_else(|| RunError {
+                message: "native FEM preview 'frozen_spins': constraint is not active".to_string(),
+            })?;
+            return Ok(NativeFemPreviewSnapshot {
+                handle: ptr::null_mut(),
+                request: request.clone(),
+                active_mask: Some(self.magnetic_node_mask.clone()),
+                host_frozen_mask: Some(frozen_mask),
+            });
+        }
         let observable = fem_preview_observable(&request.quantity)?;
         let handle =
             unsafe { ffi::fullmag_fem_backend_begin_preview_snapshot(self.handle, observable) };
@@ -4237,6 +4371,7 @@ impl NativeFemBackend {
             handle,
             request: request.clone(),
             active_mask,
+            host_frozen_mask: None,
         })
     }
 
@@ -4304,6 +4439,24 @@ impl NativeFemBackend {
         request: &LivePreviewRequest,
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
+        if crate::quantities::normalize_quantity_id(&request.quantity)? == QuantityId::FrozenSpins {
+            if node_count != self.magnetic_node_mask.len() {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM Frozen Spins preview requested {node_count} nodes for a {}-node carrier",
+                        self.magnetic_node_mask.len()
+                    ),
+                });
+            }
+            let frozen_mask = self.frozen_mask.as_deref().ok_or_else(|| RunError {
+                message: "native FEM preview 'frozen_spins': constraint is not active".to_string(),
+            })?;
+            return build_native_fem_frozen_spins_preview_field(
+                request,
+                frozen_mask,
+                &self.magnetic_node_mask,
+            );
+        }
         let conservative_dg0_energy = self.dg0_energy_projection.is_some()
             && matches!(
                 crate::quantities::normalized_quantity_name(&request.quantity)?,
@@ -4451,6 +4604,17 @@ impl NativeFemBackend {
 #[cfg(feature = "fem-gpu")]
 impl NativeFemPreviewSnapshot {
     pub fn into_live_preview_field(mut self) -> Result<LivePreviewField, RunError> {
+        if let Some(frozen_mask) = self.host_frozen_mask.take() {
+            let active_mask = self.active_mask.take().ok_or_else(|| RunError {
+                message: "native FEM Frozen Spins preview is missing its magnetic carrier mask"
+                    .to_string(),
+            })?;
+            return build_native_fem_frozen_spins_preview_field(
+                &self.request,
+                &frozen_mask,
+                &active_mask,
+            );
+        }
         let mut data: *const std::ffi::c_void = ptr::null();
         let mut len_bytes = 0u64;
         let mut desc = ffi::fullmag_fem_snapshot_desc {
@@ -5255,6 +5419,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn frozen_spins_preview_is_a_binary_scalar_on_the_magnetic_fem_carrier() {
+        let request = LivePreviewRequest {
+            quantity: "frozen_spins".to_string(),
+            auto_scale_enabled: false,
+            ..Default::default()
+        };
+        let active_mask = Arc::<[bool]>::from(vec![true, true, false, true]);
+        let frozen_mask = Arc::<[bool]>::from(vec![true, false, false, true]);
+
+        let direct =
+            build_native_fem_frozen_spins_preview_field(&request, &frozen_mask, &active_mask)
+                .expect("direct FEM Frozen Spins preview");
+        let asynchronous = NativeFemPreviewSnapshot {
+            handle: ptr::null_mut(),
+            request,
+            active_mask: Some(active_mask),
+            host_frozen_mask: Some(frozen_mask),
+        }
+        .into_live_preview_field()
+        .expect("host-backed FEM Frozen Spins preview snapshot");
+
+        assert_eq!(direct.quantity, "frozen_spins");
+        assert_eq!(direct.unit, "1");
+        assert_eq!(direct.vector_field_values, vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(direct.active_mask, Some(vec![true, true, false, true]));
+        assert_eq!(asynchronous, direct);
+    }
+
+    #[test]
     fn demag_diagnostics_mapping_preserves_each_ffi_field() {
         let mut ffi_stats =
             unsafe { std::mem::MaybeUninit::<ffi::fullmag_fem_step_stats>::zeroed().assume_init() };
@@ -5318,6 +5511,88 @@ mod tests {
         raw.final_refresh_reason = ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT;
         raw.cache_state_valid = 2;
         assert!(endpoint_cache_telemetry_from_ffi(&raw).is_err());
+    }
+
+    #[test]
+    fn representation_receipt_mapping_preserves_public_provenance() {
+        let raw = ffi::fullmag_fem_representation_receipt_v1 {
+            abi_version: ffi::FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_representation_receipt_v1>() as u32,
+            state_space: ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS,
+            ms_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0,
+            a_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1,
+            reserved0: 0,
+            local_node_count: 8,
+            true_node_count: 6,
+            periodic_map_revision: 17,
+            representation_copy_count: 11,
+            gather_scatter_bytes: 1_056,
+            invalid_space_assertion_count: 0,
+            hot_loop_representation_copy_count: 7,
+            hot_loop_gather_scatter_bytes: 672,
+        };
+
+        let receipt = representation_receipt_from_ffi(&raw).unwrap();
+        assert_eq!(receipt.schema_version, 1);
+        assert_eq!(receipt.state_space, FemStateRepresentation::LocalNodeAos);
+        assert_eq!(receipt.ms_location, FemMaterialFieldLocation::ElementDg0);
+        assert_eq!(receipt.a_location, FemMaterialFieldLocation::NodalP1);
+        assert_eq!(receipt.local_node_count, 8);
+        assert_eq!(receipt.true_node_count, 6);
+        assert_eq!(receipt.periodic_map_revision, 17);
+        assert_eq!(receipt.representation_copy_count, 11);
+        assert_eq!(receipt.gather_scatter_bytes, 1_056);
+        assert_eq!(receipt.hot_loop_representation_copy_count, 7);
+        assert_eq!(receipt.hot_loop_gather_scatter_bytes, 672);
+    }
+
+    #[test]
+    fn representation_receipt_mapping_rejects_corrupt_provenance() {
+        let mut raw = ffi::fullmag_fem_representation_receipt_v1 {
+            abi_version: ffi::FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_representation_receipt_v1>() as u32,
+            state_space: ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS,
+            ms_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_SCALAR,
+            a_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_SCALAR,
+            local_node_count: 4,
+            true_node_count: 2,
+            periodic_map_revision: 0,
+            ..Default::default()
+        };
+        assert!(representation_receipt_from_ffi(&raw).is_err());
+
+        raw.periodic_map_revision = 1;
+        raw.reserved0 = 1;
+        assert!(representation_receipt_from_ffi(&raw).is_err());
+
+        raw.reserved0 = 0;
+        raw.hot_loop_representation_copy_count = 2;
+        raw.representation_copy_count = 1;
+        assert!(representation_receipt_from_ffi(&raw).is_err());
+    }
+
+    #[test]
+    fn representation_receipt_reaches_public_step_stats() {
+        if !is_gpu_available() {
+            eprintln!("skipping representation receipt E2E: native MFEM stack unavailable");
+            return;
+        }
+        let plan = make_exchange_only_plan();
+        let mut backend = NativeFemBackend::create(&plan).expect("native FEM receipt create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed timestep"))
+            .expect("native FEM receipt step");
+        let receipt = stats
+            .fem_representation_receipt
+            .expect("public StepStats representation receipt");
+        assert_eq!(receipt.schema_version, 1);
+        assert_eq!(receipt.state_space, FemStateRepresentation::LocalNodeAos);
+        assert_eq!(receipt.ms_location, FemMaterialFieldLocation::Scalar);
+        assert_eq!(receipt.a_location, FemMaterialFieldLocation::Scalar);
+        assert_eq!(receipt.local_node_count, plan.mesh.nodes.len() as u64);
+        assert_eq!(receipt.true_node_count, plan.mesh.nodes.len() as u64);
+        assert_eq!(receipt.periodic_map_revision, 0);
+        assert_eq!(receipt.invalid_space_assertion_count, 0);
     }
 
     #[test]

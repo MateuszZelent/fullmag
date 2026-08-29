@@ -23,6 +23,7 @@
 #include "cpu/mfem/interactions/thermal_brown_sampler.hpp"
 #include "cpu/mfem/interactions/zeeman.hpp"
 #include "cpu/mfem/runtime/cpu_threads.hpp"
+#include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
@@ -107,6 +108,7 @@ struct Context {
 #endif
 
     TransferAuditRuntimeState transfer_audit{};
+    RepresentationAuditRuntimeState representation_audit{};
     GpuStateRuntimeState gpu_state{};
 
     // ── Unified RK stepper runtime workspace ──

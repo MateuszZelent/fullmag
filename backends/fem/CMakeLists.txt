@@ -1248,6 +1248,13 @@ add_test(NAME fem_field_refresh_contract COMMAND fem_field_refresh_contract)
 
 add_executable(fem_aos_field_contract tests/aos_field_contract.cpp)
 target_link_libraries(fem_aos_field_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_aos_field_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_aos_field_contract PRIVATE mfem)
+    endif()
+endif()
 target_include_directories(fem_aos_field_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

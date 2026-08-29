@@ -8290,15 +8290,19 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
 }
 
 #[test]
-fn multilayer_fdm_rejects_authored_frozen_spins_before_runtime_selection() {
+fn multilayer_fdm_lowers_frozen_spins_in_native_layer_order() {
     let mut ir = stacked_two_body_multilayer_problem();
+    ir.magnets[0].object_id = Some("free".to_string());
+    ir.magnets[1].object_id = Some("ref".to_string());
     ir.magnetization_constraints
         .push(MagnetizationConstraintIR::FrozenSpins(FrozenSpinsIR {
             schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
             id: "pin-stack".to_string(),
             name: "Pinned stack".to_string(),
             enabled: true,
-            selector: SelectionExprIR::AllMagnetic {},
+            selector: SelectionExprIR::InObject {
+                object_id: "free".to_string(),
+            },
             reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
             membership: SelectionMembershipPolicyIR::Static {},
             activation: ConstraintActivationIR::AllStages {},
@@ -8306,11 +8310,22 @@ fn multilayer_fdm_rejects_authored_frozen_spins_before_runtime_selection() {
             inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
         }));
 
-    let error = plan(&ir).expect_err("multilayer must not drop authored frozen spins");
-    assert!(error
-        .reasons
+    let execution = plan(&ir).expect("multilayer Frozen Spins must lower");
+    let BackendPlanIR::FdmMultilayer(multilayer) = execution.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    let frozen = multilayer
+        .frozen_spins
+        .expect("multilayer plan must carry the resolved mask");
+    let first_layer_len = multilayer.layers[0].initial_magnetization.len();
+    assert_eq!(frozen.frozen_mask.len(), 2 * first_layer_len);
+    assert!(frozen.frozen_mask[..first_layer_len]
         .iter()
-        .any(|reason| { reason.starts_with("frozen_spins_fdm_multilayer_lowering_missing:") }));
+        .all(|value| *value));
+    assert!(frozen.frozen_mask[first_layer_len..]
+        .iter()
+        .all(|value| !*value));
+    assert_eq!(frozen.frozen_dof_count as usize, first_layer_len);
 }
 
 #[test]
@@ -9374,7 +9389,7 @@ fn fixed_step_abm3_rejects_brown_thermal_noise_until_replay_is_qualified() {
 }
 
 #[test]
-fn fixed_step_abm3_rejects_frozen_spins_until_combined_checkpoint_is_qualified() {
+fn fixed_step_abm3_lowers_frozen_spins_for_combined_checkpoint_execution() {
     let mut ir = ProblemIR::bootstrap_example();
     select_fixed_step_abm3(&mut ir);
     ir.magnets[0].object_id = Some("strip-object".to_string());
@@ -9394,12 +9409,17 @@ fn fixed_step_abm3_rejects_frozen_spins_until_combined_checkpoint_is_qualified()
             inactive_selection: InactiveSelectionPolicyIR::WarnAndIntersect,
         }));
 
-    let error = plan(&ir).expect_err("ABM3 Frozen Spins must fail closed");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("ABM3")
-            && reason.contains("Frozen Spins")
-            && reason.contains("checkpoint/revision")
-    }));
+    let execution =
+        plan(&ir).expect("ABM3 Frozen Spins must lower after combined checkpoint support");
+    let BackendPlanIR::Fdm(fdm) = execution.backend_plan else {
+        panic!("expected single-grid FDM plan");
+    };
+    assert_eq!(fdm.integrator, Some(IntegratorChoice::Abm3));
+    let frozen = fdm
+        .frozen_spins
+        .expect("planner must retain the resolved Frozen Spins carrier");
+    assert_eq!(frozen.constraint_ids, vec!["pin-strip"]);
+    assert!(frozen.all_active_dofs_frozen);
 }
 
 #[test]

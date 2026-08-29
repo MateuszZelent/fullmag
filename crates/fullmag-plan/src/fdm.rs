@@ -32,8 +32,8 @@ use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::region_textures::sample_region_initial_on_mask;
 use crate::selection::geometry::{contains_point, geometry_entry_bounds, normalize_axis};
 use crate::selection::{
-    compile_fdm_frozen_spins, FdmFrozenSpinsDomain, FrozenSpinsCompileRequest,
-    ResolvedFrozenSpinsReference, SelectionDofMembership,
+    compile_fdm_frozen_spins, compile_fdm_points_frozen_spins, FdmFrozenSpinsDomain,
+    FrozenSpinsCompileRequest, ResolvedFrozenSpinsReference, SelectionDofMembership,
 };
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
@@ -1142,6 +1142,196 @@ fn frozen_spins_active_in_stage(
             active_stage.is_some_and(|stage| stage_ids.iter().any(|id| id == stage))
         }
     }
+}
+
+fn resolve_fdm_multilayer_frozen_spins(
+    problem: &ProblemIR,
+    layers: &[FdmLayerPlanIR],
+    topology_fingerprint: &str,
+) -> Result<Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>, PlanError> {
+    let active_stage = active_stage_id(problem);
+    let constraints: Vec<_> = problem
+        .magnetization_constraints
+        .iter()
+        .filter_map(|constraint| {
+            let frozen = constraint.frozen_spins();
+            (frozen.enabled && frozen_spins_active_in_stage(frozen, active_stage))
+                .then(|| frozen.clone())
+        })
+        .collect();
+    if constraints.is_empty() {
+        return Ok(None);
+    }
+    let mut errors = Vec::new();
+    for constraint in &constraints {
+        if !matches!(
+            constraint.reference,
+            FrozenReferencePolicyIR::CaptureCurrentAtActivation {}
+        ) {
+            errors.push(format!(
+                "frozen_spins_fdm_multilayer_reference_policy_unsupported: constraint '{}' requires capture_current_at_activation",
+                constraint.id
+            ));
+        }
+        if !matches!(
+            constraint.membership,
+            SelectionMembershipPolicyIR::Static {}
+        ) {
+            errors.push(format!(
+                "frozen_spins_fdm_multilayer_membership_policy_unsupported: constraint '{}' requires static membership",
+                constraint.id
+            ));
+        }
+        if fullmag_ir::selection_is_state_dependent(&constraint.selector, &problem.selections) {
+            errors.push(format!(
+                "frozen_spins_fdm_multilayer_state_dependent_selection_unsupported: constraint '{}' requires an activation snapshot",
+                constraint.id
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(PlanError { reasons: errors });
+    }
+
+    let geometry_by_name: BTreeMap<&str, &GeometryEntryIR> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|entry| (entry.name(), entry))
+        .collect();
+    let region_to_geometry: BTreeMap<&str, &str> = problem
+        .regions
+        .iter()
+        .map(|region| (region.name.as_str(), region.geometry.as_str()))
+        .collect();
+    let magnet_by_name: BTreeMap<&str, &fullmag_ir::MagnetIR> = problem
+        .magnets
+        .iter()
+        .map(|magnet| (magnet.name.as_str(), magnet))
+        .collect();
+
+    let mut points = Vec::new();
+    let mut active_mask = Vec::new();
+    let mut memberships = Vec::new();
+    let mut initial_magnetization = Vec::new();
+    let mut object_ids = BTreeSet::new();
+    let mut object_transforms = BTreeMap::new();
+    for layer in layers {
+        let layer_points = resolved_fdm_cell_centers(
+            layer.native_grid,
+            layer.native_cell_size,
+            layer.native_origin,
+        );
+        let layer_active = layer
+            .native_active_mask
+            .clone()
+            .unwrap_or_else(|| vec![true; layer_points.len()]);
+        if layer_active.len() != layer_points.len()
+            || layer.initial_magnetization.len() != layer_points.len()
+        {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "frozen_spins_fdm_multilayer_domain_size_mismatch: layer '{}' has inconsistent native payload lengths",
+                    layer.layer_id
+                )],
+            });
+        }
+        let magnet = magnet_by_name.get(layer.magnet_name.as_str()).copied();
+        let geometry_name =
+            magnet.and_then(|magnet| region_to_geometry.get(magnet.region.as_str()).copied());
+        let translation = geometry_name
+            .and_then(|name| geometry_by_name.get(name).copied())
+            .map(top_level_geometry_translation)
+            .unwrap_or([0.0; 3]);
+        let aliases = [
+            Some(layer.magnet_name.as_str()),
+            Some(layer.object_id.as_str()),
+            Some(layer.layer_id.as_str()),
+            geometry_name,
+        ];
+        for alias in aliases.into_iter().flatten() {
+            object_ids.insert(alias.to_string());
+            object_transforms.insert(
+                alias.to_string(),
+                AffineTransform3 {
+                    translation_m: translation,
+                    ..AffineTransform3::identity()
+                },
+            );
+        }
+        let legend: BTreeMap<u32, (String, String)> = layer
+            .native_region_legend
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|entry| {
+                (
+                    entry.numeric_id,
+                    (entry.object_id.clone(), entry.region_id.clone()),
+                )
+            })
+            .collect();
+        for index in 0..layer_points.len() {
+            let mut membership = SelectionDofMembership::default();
+            if layer_active[index] {
+                membership.object_ids = aliases.into_iter().flatten().map(str::to_string).collect();
+            }
+            if let Some(region_numeric_id) = layer
+                .native_region_mask
+                .as_deref()
+                .and_then(|mask| mask.get(index))
+            {
+                if let Some(region) = legend.get(region_numeric_id) {
+                    membership.region_ids.push(region.clone());
+                }
+            }
+            memberships.push(membership);
+        }
+        points.extend(layer_points);
+        active_mask.extend(layer_active);
+        initial_magnetization.extend_from_slice(&layer.initial_magnetization);
+    }
+
+    let known_entities = fullmag_ir::SelectionValidationContext::new(
+        object_ids,
+        problem
+            .object_regions
+            .iter()
+            .map(|region| (region.owner_object.clone(), region.region_id.clone())),
+    );
+    let references: Vec<_> = constraints
+        .iter()
+        .map(|constraint| ResolvedFrozenSpinsReference {
+            constraint_id: constraint.id.as_str(),
+            values: &initial_magnetization,
+            source_state_revision: None,
+            topology_fingerprint,
+        })
+        .collect();
+    let request = FrozenSpinsCompileRequest {
+        constraints: &constraints,
+        selections: &problem.selections,
+        activation_stage_id: active_stage,
+        object_transforms: &object_transforms,
+        known_entities: &known_entities,
+        state_snapshot: None,
+        resolved_references: &references,
+        expected_source_state_revision: None,
+        expected_grid_or_mesh_fingerprint: topology_fingerprint,
+    };
+    compile_fdm_points_frozen_spins(
+        &points,
+        &active_mask,
+        &memberships,
+        topology_fingerprint,
+        &request,
+    )
+    .map(Some)
+    .map_err(|error| PlanError {
+        reasons: vec![format!(
+            "frozen_spins_fdm_multilayer_lowering_failed: {error}"
+        )],
+    })
 }
 
 fn region_predicate_contains(
@@ -2543,17 +2733,6 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
-    if integrator == Some(IntegratorChoice::Abm3)
-        && problem
-            .magnetization_constraints
-            .iter()
-            .any(|constraint| constraint.frozen_spins().enabled)
-    {
-        errors.push(
-            "ABM3 is not executable with Frozen Spins until the combined constraint and multistep checkpoint/revision contract is qualified; use heun, rk4, rk23, or rk45"
-                .to_string(),
-        );
-    }
     if runtime_requests_cuda(problem)
         && problem
             .field_drives
@@ -3712,18 +3891,6 @@ pub(crate) fn plan_fdm_multilayer(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
-    if problem
-        .magnetization_constraints
-        .iter()
-        .any(|constraint| constraint.frozen_spins().enabled)
-    {
-        return Err(PlanError {
-            reasons: vec![
-                "frozen_spins_fdm_multilayer_lowering_missing: multilayer FDM has no canonical per-layer frozen mask carrier yet; execution is rejected before runtime selection"
-                    .to_string(),
-            ],
-        });
-    }
     let mut errors = Vec::new();
     let active_transport_graph =
         crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
@@ -4527,7 +4694,12 @@ pub(crate) fn plan_fdm_multilayer(
         .into_iter()
         .map(|body| {
             let layer_id = format!("layer:{}", body.magnet_name);
-            let object_id = body.magnet_name.clone();
+            let object_id = problem
+                .magnets
+                .iter()
+                .find(|magnet| magnet.name == body.magnet_name)
+                .and_then(|magnet| magnet.object_id.clone())
+                .unwrap_or_else(|| body.magnet_name.clone());
             // Keep each layer's physical Z placement (the shifted kernel
             // convention is based on native/scratch Z origins), while sharing
             // the union-derived computational XY scratch origin.  A layer is
@@ -4677,6 +4849,8 @@ pub(crate) fn plan_fdm_multilayer(
             "invalid resolved multilayer FDM grid certificate: {message}"
         )],
     })?;
+    let frozen_spins =
+        resolve_fdm_multilayer_frozen_spins(problem, &layers, &grid_certificate.grid_fingerprint)?;
 
     let plan = FdmMultilayerPlanIR {
         mode: selected_mode.clone(),
@@ -4684,6 +4858,7 @@ pub(crate) fn plan_fdm_multilayer(
         requested_common_cell_size: demag_hints.and_then(|hints| hints.common_cell_size),
         grid_certificate: Some(grid_certificate),
         layers,
+        frozen_spins,
         enable_exchange,
         enable_demag,
         fft,

@@ -263,7 +263,17 @@ mod tests {
     #[test]
     fn api_catalog_preserves_all_canonical_quantities_and_shape_planes() {
         let catalog = QuantityCatalogResponse::build();
-        assert_eq!(catalog.quantities.len(), 52);
+        assert_eq!(catalog.quantities.len(), 53);
+
+        let frozen_spins = catalog
+            .quantities
+            .iter()
+            .find(|quantity| quantity.id == "frozen_spins")
+            .expect("frozen_spins quantity");
+        assert_eq!(frozen_spins.shape, "spatial_scalar");
+        assert_eq!(frozen_spins.unit, "1");
+        assert!(frozen_spins.interactive_preview);
+        assert!(frozen_spins.supports_preview_3d);
 
         let tensor = catalog
             .quantities

@@ -263,6 +263,7 @@ pub(crate) fn fdm_transport_execution_provenance(
     fdm_transport_execution_provenance_for_lane(plan, false)
 }
 
+#[cfg(feature = "cuda")]
 pub(crate) fn fdm_gpu_transport_execution_provenance(
     plan: &FdmPlanIR,
 ) -> Vec<crate::types::TransportExecutionProvenance> {

@@ -129,8 +129,15 @@ std::vector<TangentFrame> build_tangent_frames(
 {
     const size_t nodes = m_xyz.size() / 3u;
     std::vector<TangentFrame> frames(nodes);
+    const auto &frozen_mask = ctx.frozen_spins.mask();
     for (size_t node = 0; node < nodes; ++node) {
-        if (!magnetic_node(ctx, node)) {
+        // Inactive frames are represented by two identity rows in the tangent
+        // operator and are skipped as columns and by every matrix-free term.
+        // This is the exact Dirichlet elimination needed for a hard-frozen
+        // tangent DOF: q=0 without letting the constrained unknown perturb the
+        // free-node solution through exchange, DMI, or demag coupling.
+        if (!magnetic_node(ctx, node) ||
+            (ctx.frozen_spins.enabled() && frozen_mask[node] != 0u)) {
             continue;
         }
         const size_t base = node * 3u;
@@ -1004,7 +1011,9 @@ bool solve_tangent_plane_hypre_system(
         break;
     case FULLMAG_FEM_PRECONDITIONER_NONE: {
         auto identity = std::make_unique<mfem::HypreIdentity>();
-        identity->SetOperator(A_par);
+        // HypreIdentity is operator-independent. HypreSolver::SetOperator is
+        // intentionally unsupported for this class and aborts the MPI job;
+        // the outer PCG/GMRES owns the A_par binding.
         preconditioner = std::move(identity);
         break;
     }

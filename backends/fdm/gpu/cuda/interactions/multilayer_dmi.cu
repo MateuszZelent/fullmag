@@ -6,6 +6,7 @@
  */
 
 #include "context.hpp"
+#include "dmi_boundary.cuh"
 
 #include <cuda_runtime.h>
 #include <limits>
@@ -69,19 +70,34 @@ __global__ void multilayer_dmi_field_kernel(
     uint64_t zm = iz > 0 ? idx - plane : idx;
     uint64_t zp = iz + 1 < nz ? idx + plane : idx;
 
+    bool missing_xm = ix == 0;
+    bool missing_xp = ix + 1 == nx;
+    bool missing_ym = iy == 0;
+    bool missing_yp = iy + 1 == ny;
+    bool missing_zm = iz == 0;
+    bool missing_zp = iz + 1 == nz;
+
     if (active_mask) {
-        if (active_mask[xm] == 0) xm = idx;
-        if (active_mask[xp] == 0) xp = idx;
-        if (active_mask[ym] == 0) ym = idx;
-        if (active_mask[yp] == 0) yp = idx;
-        if (active_mask[zm] == 0) zm = idx;
-        if (active_mask[zp] == 0) zp = idx;
+        missing_xm = missing_xm || active_mask[xm] == 0;
+        missing_xp = missing_xp || active_mask[xp] == 0;
+        missing_ym = missing_ym || active_mask[ym] == 0;
+        missing_yp = missing_yp || active_mask[yp] == 0;
+        missing_zm = missing_zm || active_mask[zm] == 0;
+        missing_zp = missing_zp || active_mask[zp] == 0;
+        if (missing_xm) xm = idx;
+        if (missing_xp) xp = idx;
+        if (missing_ym) ym = idx;
+        if (missing_yp) yp = idx;
+        if (missing_zm) zm = idx;
+        if (missing_zp) zp = idx;
     }
 
     double h0 = 0.0;
     double h1 = 0.0;
     double h2 = 0.0;
     const double dmi_pf = 2.0 / (MU0 * ms);
+    const DmiMissingFaces missing{
+        missing_xp, missing_xm, missing_yp, missing_ym, missing_zp, missing_zm};
 
     if (has_interfacial_dmi) {
         const double dmz_dx =
@@ -95,6 +111,18 @@ __global__ void multilayer_dmi_field_kernel(
         h0 += dmi_pf * dmi_d_interfacial * dmz_dx;
         h1 += dmi_pf * dmi_d_interfacial * dmz_dy;
         h2 -= dmi_pf * dmi_d_interfacial * (dmx_dx + dmy_dy);
+        add_interfacial_dmi_boundary_correction(
+            static_cast<double>(mx[idx]),
+            static_cast<double>(my[idx]),
+            static_cast<double>(mz[idx]),
+            dmi_pf,
+            dmi_d_interfacial,
+            inv_2dx,
+            inv_2dy,
+            missing,
+            h0,
+            h1,
+            h2);
     }
 
     if (has_bulk_dmi) {
@@ -113,6 +141,19 @@ __global__ void multilayer_dmi_field_kernel(
         h0 -= dmi_pf * dmi_d_bulk * (dmz_dy - dmy_dz);
         h1 -= dmi_pf * dmi_d_bulk * (dmx_dz - dmz_dx);
         h2 -= dmi_pf * dmi_d_bulk * (dmy_dx - dmx_dy);
+        add_bulk_dmi_boundary_correction(
+            static_cast<double>(mx[idx]),
+            static_cast<double>(my[idx]),
+            static_cast<double>(mz[idx]),
+            dmi_pf,
+            dmi_d_bulk,
+            inv_2dx,
+            inv_2dy,
+            inv_2dz,
+            missing,
+            h0,
+            h1,
+            h2);
     }
 
     hx[idx] = static_cast<Scalar>(h0);

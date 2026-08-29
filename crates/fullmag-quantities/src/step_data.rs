@@ -22,9 +22,42 @@ pub struct EndpointCacheTelemetry {
     pub accepted_step_wall_time_ns: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemStateRepresentation {
+    LocalNodeAos,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemMaterialFieldLocation {
+    Scalar,
+    NodalP1,
+    ElementDg0,
+}
+
+/// Executed native FEM state/material representation and cumulative conversion
+/// traffic for one backend handle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemRepresentationReceipt {
+    pub schema_version: u32,
+    pub state_space: FemStateRepresentation,
+    pub ms_location: FemMaterialFieldLocation,
+    pub a_location: FemMaterialFieldLocation,
+    pub local_node_count: u64,
+    pub true_node_count: u64,
+    pub periodic_map_revision: u64,
+    pub representation_copy_count: u64,
+    pub gather_scatter_bytes: u64,
+    pub invalid_space_assertion_count: u64,
+    pub hot_loop_representation_copy_count: u64,
+    pub hot_loop_gather_scatter_bytes: u64,
+}
+
 /// Solver-internal telemetry for one integration step.
 ///
 /// This is _not_ physics — it is implementation and performance metadata.
+#[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StepDiagnostics {
     pub step: u64,
@@ -118,6 +151,9 @@ pub struct StepDiagnostics {
     /// Optional native CPU RK accepted-endpoint cache receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_cache_telemetry: Option<EndpointCacheTelemetry>,
+    /// Optional native FEM representation receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_representation_receipt: Option<FemRepresentationReceipt>,
 }
 
 /// Per-step physical scalar observations.
