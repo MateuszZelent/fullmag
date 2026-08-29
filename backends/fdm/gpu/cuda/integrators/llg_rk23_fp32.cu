@@ -506,7 +506,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     const float A32 = 0.75f;
     const float B1 = 2.0f/9.0f, B2 = 1.0f/3.0f, B3 = 4.0f/9.0f;
 
-    if (ctx.adaptive_enabled) {
+    if (context_should_use_adaptive_device_graph(ctx)) {
         launch_rk23_adaptive_graph_step_fp32(
             ctx,
             dt,

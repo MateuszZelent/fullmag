@@ -711,7 +711,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
     const double step_start_time = ctx.current_time;
 
-    if (ctx.adaptive_enabled) {
+    if (context_should_use_adaptive_device_graph(ctx)) {
         launch_dp45_adaptive_graph_step_fp64(
             ctx,
             dt,

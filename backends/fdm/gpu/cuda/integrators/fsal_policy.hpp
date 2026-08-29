@@ -113,6 +113,15 @@ inline FsalReuseDecision rhs_allows_fsal_reuse(const Context &ctx, double dt) {
     return rhs_allows_fsal_reuse(input);
 }
 
+inline bool context_should_use_adaptive_device_graph(const Context &ctx) {
+    return ctx.adaptive_enabled &&
+           ctx.stats_mode == FULLMAG_FDM_STATS_NONE &&
+           ctx.temperature <= 0.0 &&
+           !(ctx.has_oersted_field && ctx.oersted_time_dep_kind != 0) &&
+           !ctx.gpu_transport_rhs.active &&
+           !ctx.gpu_transport_test_force_adaptive_retry;
+}
+
 inline void context_record_fsal_invalidation(
     Context &ctx, fullmag_fdm_fsal_invalidation_reason reason) {
     ctx.fsal_invalidation_reason = reason;

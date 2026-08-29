@@ -655,7 +655,7 @@ int main() {
         rollback_transaction_api_end - rollback_transaction_api_begin);
     const auto step_api_begin = api.find("int fullmag_fdm_backend_step(");
     const auto step_api_end = api.find(
-        "int fullmag_fdm_context_bind_gpu_transport_v1", step_api_begin);
+        "int fullmag_fdm_backend_step_adaptive_batch_v1", step_api_begin);
     const auto step_api = api.substr(step_api_begin, step_api_end - step_api_begin);
     const auto inactive_legacy_begin = step_api.find("#if 0");
     const auto active_step_api = step_api.substr(0, inactive_legacy_begin);
@@ -815,6 +815,19 @@ int main() {
             contains(dp45_32, "rhs_allows_fsal_reuse"),
         "FDM-GPU-NUM-003-A",
         "one fail-closed FSAL policy owns all four adaptive realizations",
+        failures);
+    report(
+        contains(policy, "context_should_use_adaptive_device_graph") &&
+            contains(policy, "ctx.stats_mode == FULLMAG_FDM_STATS_NONE") &&
+            contains(policy, "ctx.temperature <= 0.0") &&
+            contains(policy, "!ctx.gpu_transport_rhs.active") &&
+            contains(rk23_64, "context_should_use_adaptive_device_graph(ctx)") &&
+            contains(rk23_32, "context_should_use_adaptive_device_graph(ctx)") &&
+            contains(dp45_64, "context_should_use_adaptive_device_graph(ctx)") &&
+            contains(dp45_32, "context_should_use_adaptive_device_graph(ctx)") &&
+            !contains(integrators, "if (ctx.adaptive_enabled)"),
+        "FDM-GPU-NUM-003-A2",
+        "conditional device graph is restricted to supported headless steps",
         failures);
     const std::string all_single_grid_integrators =
         heun64 + heun32 + rk4_64 + rk4_32 + abm3_64 + abm3_32 + integrators;

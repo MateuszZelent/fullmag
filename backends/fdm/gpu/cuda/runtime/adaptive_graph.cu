@@ -1,4 +1,5 @@
 #include "context.hpp"
+#include "adaptive_controller.cuh"
 
 #include <cuda_runtime.h>
 
@@ -32,7 +33,14 @@ __global__ void reset_adaptive_loop_condition_kernel(
         cudaGraphSetConditional(loop_handle, 0U);
         return;
     }
-    control->dt_candidate = fmin(control->dt_candidate, remaining);
+    const double endpoint_scale = fmax(
+        fabs(control->dt_candidate), fabs(remaining));
+    const bool same_endpoint_within_roundoff =
+        fabs(remaining - control->dt_candidate) <=
+            endpoint_scale * ADAPTIVE_DT_MIN_ULP_FACTOR;
+    if (!same_endpoint_within_roundoff) {
+        control->dt_candidate = fmin(control->dt_candidate, remaining);
+    }
     control->error = 0.0;
     control->ratio = 1.0;
     control->dt_attempt = 0.0;

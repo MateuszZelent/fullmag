@@ -1,9 +1,11 @@
 #include "fullmag_fdm.h"
+#include "../gpu/cuda/runtime/step_transaction_controller.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -15,6 +17,10 @@ namespace {
 
 constexpr double kDt = 5.0e-13;
 constexpr int kDeterministicSteps = 20;
+
+extern "C" int fullmag_fdm_test_inject_step_transaction_failure_once(
+    fullmag_fdm_backend *handle,
+    uint32_t phase);
 
 void check(bool condition, const char *message) {
     if (!condition) {
@@ -181,7 +187,16 @@ Result run_deterministic(
     uint64_t wall_time_ns = 0;
     for (int step = 0; step < kDeterministicSteps; ++step) {
         fullmag_fdm_step_stats stats{};
-        check(fullmag_fdm_backend_step(backend, kDt, &stats) == FULLMAG_FDM_OK,
+        const int status = fullmag_fdm_backend_step(backend, kDt, &stats);
+        if (status != FULLMAG_FDM_OK) {
+            const char *error = fullmag_fdm_backend_last_error(backend);
+            std::fprintf(stderr,
+                         "deterministic step=%d status=%d precision=%s integrator=%s error=%s\n",
+                         step + 1, status, precision_name(precision),
+                         integrator_name(integrator),
+                         error != nullptr ? error : "<none>");
+        }
+        check(status == FULLMAG_FDM_OK,
               "deterministic adaptive step failed");
         check(stats.step == static_cast<uint64_t>(step + 1),
               "deterministic accepted-step index mismatch");
@@ -200,6 +215,18 @@ Result run_deterministic(
         ? (integrator == FULLMAG_FDM_INTEGRATOR_RK23 ? 2.0e-5 : 2.0e-8)
         : 5.0e-4;
     check(max_error <= tolerance, "constant-field macrospin oracle mismatch");
+    if (telemetry.fsal_reused != 1 ||
+        telemetry.rhs_evaluations_saved != kDeterministicSteps - 1) {
+        std::fprintf(stderr,
+                     "deterministic FSAL precision=%s integrator=%s reused=%u reason=%u invalidations=%llu saved=%llu accepted=%llu commits=%llu\n",
+                     precision_name(precision), integrator_name(integrator),
+                     telemetry.fsal_reused,
+                     static_cast<unsigned>(telemetry.fsal_invalidation_reason),
+                     static_cast<unsigned long long>(telemetry.fsal_invalidation_count),
+                     static_cast<unsigned long long>(telemetry.rhs_evaluations_saved),
+                     static_cast<unsigned long long>(telemetry.accepted_step_index),
+                     static_cast<unsigned long long>(telemetry.transaction_commit_count));
+    }
     check(telemetry.fsal_reused == 1, "deterministic final step did not reuse FSAL");
     check(telemetry.rhs_evaluations_saved == kDeterministicSteps - 1,
           "deterministic FSAL did not save exactly one RHS after startup");
@@ -255,6 +282,94 @@ Result run_thermal(
     fullmag_fdm_backend_destroy(backend);
     return {"brown_thermal", precision_name(precision), integrator_name(integrator),
             0.0, wall_time_ns, telemetry, transaction, receipt};
+}
+
+Result run_thermal_retry_replay(
+    fullmag_fdm_precision precision,
+    fullmag_fdm_integrator integrator)
+{
+    auto plan = base_plan(precision, integrator);
+    plan.temperature = 300.0;
+    plan.thermal_seed = 0x5a17u;
+
+    auto *control = create_backend(plan);
+    fullmag_fdm_step_stats control_stats{};
+    check(fullmag_fdm_backend_step(control, kDt, &control_stats) ==
+              FULLMAG_FDM_OK,
+          "thermal retry control step failed");
+    const auto control_m = copy_m(control, precision);
+    const auto control_transaction = transaction_telemetry(control);
+
+    auto *replayed = create_backend(plan);
+    const auto accepted_before = copy_m(replayed, precision);
+    check(fullmag_fdm_test_inject_step_transaction_failure_once(
+              replayed,
+              static_cast<uint32_t>(
+                  fullmag::fdm::StepTransactionPhase::FinalStats)) ==
+              FULLMAG_FDM_OK,
+          "thermal retry fault setup failed");
+    fullmag_fdm_step_stats failed_stats{};
+    std::memset(&failed_stats, 0x5a, sizeof(failed_stats));
+    const auto failed_stats_before = failed_stats;
+    check(fullmag_fdm_backend_step(replayed, kDt, &failed_stats) ==
+              FULLMAG_FDM_ERR_CUDA,
+          "thermal final-stats fault did not fail the transaction");
+    const char *fault_error = fullmag_fdm_backend_last_error(replayed);
+    check(fault_error != nullptr &&
+              std::string(fault_error).find("injected step transaction failure") !=
+                  std::string::npos,
+          "thermal fault did not publish its diagnostic");
+    check(std::memcmp(&failed_stats, &failed_stats_before, sizeof(failed_stats)) == 0,
+          "failed thermal transaction published caller step stats");
+    check(copy_m(replayed, precision) == accepted_before,
+          "failed thermal transaction did not restore accepted magnetization exactly");
+    const auto failed_transaction = transaction_telemetry(replayed);
+    const uint64_t scalar_bytes = precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? sizeof(double) : sizeof(float);
+    const uint64_t payload_bytes = 3 * scalar_bytes;
+    check(failed_transaction.accounting_valid == 1 &&
+              failed_transaction.capture_count == 1 &&
+              failed_transaction.rollback_count == 1 &&
+              failed_transaction.capture_d2d_bytes == payload_bytes &&
+              failed_transaction.rollback_d2d_bytes == payload_bytes &&
+              failed_transaction.accepted_step_index == 0 &&
+              failed_transaction.attempt_generation == 1 &&
+              failed_transaction.stale_publication_count == 0,
+          "failed thermal transaction did not publish an exact D2D rollback receipt");
+
+    fullmag_fdm_step_stats retry_stats{};
+    check(fullmag_fdm_backend_step(replayed, kDt, &retry_stats) == FULLMAG_FDM_OK,
+          "thermal retry after rollback failed");
+    check(copy_m(replayed, precision) == control_m,
+          "thermal retry did not replay the accepted-interval RNG key exactly");
+    const auto telemetry = fsal_telemetry(replayed);
+    const auto transaction = transaction_telemetry(replayed);
+    const auto receipt = execution_receipt(replayed);
+    check(transaction.accounting_valid == 1 &&
+              transaction.capture_count == 2 &&
+              transaction.rollback_count == 1 &&
+              transaction.capture_d2d_bytes == 2 * payload_bytes &&
+              transaction.rollback_d2d_bytes == payload_bytes &&
+              transaction.accepted_step_index == 1 &&
+              transaction.attempt_generation == 2 &&
+              transaction.thermal_rng_draws >
+                  control_transaction.thermal_rng_draws &&
+              transaction.stale_publication_count == 0,
+          "thermal retry telemetry did not distinguish replay work from accepted state");
+    check(telemetry.accepted_step_index == 1 &&
+              telemetry.transaction_commit_count == 1 &&
+              telemetry.fsal_reused == 0 &&
+              telemetry.fsal_invalidation_reason ==
+                  FULLMAG_FDM_FSAL_INVALIDATION_THERMAL_ACTIVE,
+          "thermal retry committed exactly one accepted interval without FSAL");
+    check(receipt.precision == precision && receipt.integrator == integrator,
+          "thermal retry execution receipt identity mismatch");
+
+    fullmag_fdm_backend_destroy(control);
+    fullmag_fdm_backend_destroy(replayed);
+    return {"brown_thermal_retry_replay", precision_name(precision),
+            integrator_name(integrator), 0.0, retry_stats.wall_time_ns,
+            telemetry, transaction, receipt};
 }
 
 Result run_dynamic_oersted(
@@ -383,6 +498,7 @@ int main() {
         for (const auto integrator : integrators) {
             results.push_back(run_deterministic(precision, integrator));
             results.push_back(run_thermal(precision, integrator));
+            results.push_back(run_thermal_retry_replay(precision, integrator));
             results.push_back(run_dynamic_oersted(precision, integrator));
             if (!device_captured) {
                 auto plan = base_plan(precision, integrator);

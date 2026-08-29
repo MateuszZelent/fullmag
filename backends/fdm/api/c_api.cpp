@@ -238,8 +238,13 @@ int execute_single_grid_step_transaction(
     ReceiptSolverPhaseGuard &receipt_solver_phase)
 {
     uint64_t transport_attempt_id = 0;
-    StepTransactionController transaction;
-    return transaction.run(
+    const uint32_t injected_phase = ctx.step_transaction_test_failure_phase;
+    ctx.step_transaction_test_failure_phase = 0;
+    StepTransactionController transaction(
+        static_cast<StepTransactionPhase>(injected_phase),
+        injected_phase != 0,
+        FULLMAG_FDM_ERR_CUDA);
+    const int status = transaction.run(
         [&]() {
             ctx.step_fsal_reused = false;
             ctx.accepted_step_pending = false;
@@ -340,6 +345,11 @@ int execute_single_grid_step_transaction(
             return rollback_step_transaction(ctx)
                 ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_CUDA;
         });
+    if (status != FULLMAG_FDM_OK && injected_phase != 0 &&
+        ctx.last_error.empty()) {
+        ctx.last_error = "injected step transaction failure";
+    }
+    return status;
 }
 #endif
 
@@ -1405,9 +1415,10 @@ int fullmag_fdm_backend_step(
         return FULLMAG_FDM_ERR_INVALID;
     }
     fullmag_fdm_step_stats trial_stats{};
-    // A rejected transport-coupled attempt is retryable. Its diagnostic must
-    // not poison the next explicit public step.
-    if (ctx->gpu_transport_rhs.active) ctx->last_error.clear();
+    // A rejected or failed attempt is retryable. Its diagnostic remains
+    // observable until the next explicit public step begins, but must not
+    // poison that next transaction.
+    ctx->last_error.clear();
     ctx->step_interrupted = false;
     ctx->adaptive_rejected_attempts = 0;
     ctx->adaptive_attempt_trace_count = 0;
@@ -1644,6 +1655,26 @@ extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
         return FULLMAG_FDM_ERR_INVALID;
     ctx->gpu_transport_test_force_adaptive_retry = true;
     return FULLMAG_FDM_OK;
+}
+
+extern "C" int fullmag_fdm_test_inject_step_transaction_failure_once(
+    fullmag_fdm_backend *handle,
+    uint32_t phase)
+{
+#if FULLMAG_HAS_CUDA
+    if (handle == nullptr ||
+        phase < static_cast<uint32_t>(StepTransactionPhase::Integrator) ||
+        phase > static_cast<uint32_t>(StepTransactionPhase::TransportCommit)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    ctx->step_transaction_test_failure_phase = phase;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)phase;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
 }
 
 int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {

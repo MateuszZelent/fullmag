@@ -408,6 +408,9 @@ struct Context {
     // Zero is the production path.
     uint32_t gpu_transport_test_completion_fault = 0;
     bool gpu_transport_test_force_adaptive_retry = false;
+    // Test-only one-shot StepTransactionPhase value. Zero disables injection;
+    // production code never sets this field.
+    uint32_t step_transaction_test_failure_phase = 0;
 
     // Device state (SoA layout)
     DeviceVectorField m;      // magnetization

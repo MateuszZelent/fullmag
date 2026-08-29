@@ -653,7 +653,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     const double A32 = 3.0 / 4.0;
     const double B1  = 2.0 / 9.0, B2 = 1.0 / 3.0, B3 = 4.0 / 9.0;
 
-    if (ctx.adaptive_enabled) {
+    if (context_should_use_adaptive_device_graph(ctx)) {
         launch_rk23_adaptive_graph_step_fp64(
             ctx,
             dt,

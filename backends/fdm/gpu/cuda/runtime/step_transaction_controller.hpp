@@ -23,8 +23,11 @@ public:
 
     explicit StepTransactionController(
         StepTransactionPhase injected_failure = StepTransactionPhase::Publish,
-        bool inject_failure = false)
-        : injected_failure_(injected_failure), inject_failure_(inject_failure) {}
+        bool inject_failure = false,
+        int injected_error = -1)
+        : injected_failure_(injected_failure),
+          inject_failure_(inject_failure),
+          injected_error_(injected_error) {}
 
     template <typename Begin, typename Capture, typename Integrator, typename FinalStats,
               typename Receipt, typename TransportCommit,
@@ -42,7 +45,8 @@ public:
     {
         const auto attempt = [&](StepTransactionPhase phase, auto &&operation) {
             note(phase);
-            if (inject_failure_ && phase == injected_failure_) return -1;
+            if (inject_failure_ && phase == injected_failure_)
+                return injected_error_;
             return operation();
         };
         int rc = attempt(StepTransactionPhase::Begin, begin);
@@ -78,6 +82,7 @@ private:
     std::size_t phase_count_ = 0;
     StepTransactionPhase injected_failure_;
     bool inject_failure_;
+    int injected_error_;
 };
 
 } // namespace fullmag::fdm
