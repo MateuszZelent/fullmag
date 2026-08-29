@@ -77,16 +77,6 @@
         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
       },
       {
-        "python": "FDM.projection_policy",
-        "type": "str | None",
-        "default": "None",
-        "si_unit": "1",
-        "validation": "None or the supported value `unit_sphere`.",
-        "meaning": "Projected-RK state constraint policy; None selects the qualified default.",
-        "backend_support": "FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy.discretization_hints.fdm.projection_policy"
-      },
-      {
         "python": "FDM.boundary_correction",
         "type": "str | None",
         "default": "None",

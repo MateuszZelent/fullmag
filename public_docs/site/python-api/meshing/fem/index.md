@@ -139,15 +139,15 @@ scenario-dependent.
 
 ## Control Room crosswalk
 
-Status: Frontend support is TODO unless a named source-backed panel is added.
+Status: Frontend support is not implemented unless a named source-backed panel is added.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `See the capability register; no page-specific route is established` | `TODO` | No supported frontend transaction |
-| Parameters without a named UI field | `See the capability register; no page-specific route is established` | `TODO` | Python-only until implemented |
+| Parameters documented on this page | `See the capability register; no page-specific route is established` | `not implemented` | No supported frontend transaction |
+| Parameters without a named UI field | `See the capability register; no page-specific route is established` | `not implemented` | Python-only until implemented |
 
 frontend support is not implemented for this API surface and its parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
 
 ## Source-code index

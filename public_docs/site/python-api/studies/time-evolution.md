@@ -192,10 +192,10 @@ Status: Stage authoring and inspection are partial; the stage editor exposes onl
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
 
 frontend support is not implemented for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index

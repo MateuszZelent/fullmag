@@ -367,15 +367,15 @@ requires interaction-specific observables, convergence, and device evidence.
 
 ## Control Room crosswalk
 
-Status: Scalar magnetic fields are partial; spatial fields and material-law-specific parameters remain TODO.
+Status: Scalar magnetic fields are partial; spatial fields and material-law-specific parameters remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` | `partial` | Apply material draft; dependent physics and mesh resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `not implemented` | Python-only until implemented |
 
 frontend support is not implemented for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx (ObjectMaterialPanel)`.
 
 ## Source-code index
