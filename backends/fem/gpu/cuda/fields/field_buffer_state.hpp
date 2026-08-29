@@ -16,6 +16,11 @@ namespace fullmag::fem {
 struct RegionalFieldDriveDeviceDesc;
 
 struct FemGpuFieldBufferDeviceState {
+    // Published interaction fields are derived from the accepted magnetic
+    // state. A failed RK attempt invalidates them instead of copying eleven
+    // full vector fields through the per-step transaction journal.
+    bool accepted_observables_valid = false;
+    uint64_t accepted_observables_step = 0;
     FemGpuComponentField h_ex;
     FemGpuComponentField h_demag;
     FemGpuComponentField h_ext;

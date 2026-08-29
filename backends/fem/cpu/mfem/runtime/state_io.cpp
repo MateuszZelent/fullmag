@@ -77,6 +77,10 @@ int copy_torque_observable_f64(
     std::vector<double> gpu_h_eff;
     const std::vector<double> *h_source = nullptr;
     if (ctx.gpu_state.device.lifecycle.allocated) {
+        if (!ctx.gpu_state.device.fields.accepted_observables_valid) {
+            error = "GPU accepted-endpoint observable cache is invalid; refresh a snapshot before reading torque";
+            return FULLMAG_FEM_ERR_INVALID;
+        }
         if (!gpu_state_download_component_aos(
                 const_cast<FemGpuState &>(ctx.gpu_state.device),
                 ctx.gpu_state.device.fields.h_eff,
@@ -286,6 +290,10 @@ int context_copy_field_f64(
         }
 
         if (gpu_field != nullptr) {
+            if (!ctx.gpu_state.device.fields.accepted_observables_valid) {
+                error = "GPU accepted-endpoint observable cache is invalid; refresh a snapshot before reading fields";
+                return FULLMAG_FEM_ERR_INVALID;
+            }
             std::vector<double> tmp;
             if (!gpu_state_download_component_aos(
                     const_cast<FemGpuState &>(ctx.gpu_state.device),

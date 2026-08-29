@@ -106,6 +106,8 @@ bool gpu_rk_snapshot_current_state(
     if (!gpu_rk_finalize_step_stats(ctx, stats, reason)) {
         return false;
     }
+    gpu.fields.accepted_observables_valid = true;
+    gpu.fields.accepted_observables_step = ctx.state.step_count;
     reason.clear();
     return true;
 }

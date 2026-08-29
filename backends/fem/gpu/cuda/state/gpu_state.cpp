@@ -135,6 +135,7 @@ bool gpu_state_upload_magnetization_aos(
     state.residency.host_state = FemGpuSyncState::HostClean;
     state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     state.rk.fsal_valid = false;
+    state.fields.accepted_observables_valid = false;
     state.relaxation.nonlinear_cg_direction_valid = false;
     gpu_relax_note_external_state_change(state.relaxation);
     return true;

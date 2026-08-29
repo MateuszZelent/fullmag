@@ -548,6 +548,17 @@ bool RkStepTransaction::rollback(std::string &error)
 #endif
     const auto host_restore_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->restore_host();
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx_->gpu_state.device.lifecycle.allocated) {
+        // The minimal device journal restores only authoritative state. Trial
+        // fields must not be published, and the next Poisson application must
+        // cold-start instead of reusing a failed candidate's guess.
+        ctx_->gpu_state.device.fields.accepted_observables_valid = false;
+        ctx_->gpu_state.device.fields.accepted_observables_step =
+            ctx_->state.step_count;
+        ctx_->poisson_demag.fresh_initial_guess_required = true;
+    }
+#endif
     const auto host_restore_done = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->finished = true;
     if (active_step_transaction_context == &impl_->ctx) {
@@ -574,6 +585,13 @@ void RkStepTransaction::commit()
     }
     const bool profile_enabled = impl_->profile_enabled;
     const auto commit_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx_->gpu_state.device.lifecycle.allocated) {
+        ctx_->gpu_state.device.fields.accepted_observables_valid = true;
+        ctx_->gpu_state.device.fields.accepted_observables_step =
+            ctx_->state.step_count;
+    }
+#endif
     impl_->finished = true;
     if (active_step_transaction_context == &impl_->ctx) {
         active_step_transaction_context = nullptr;

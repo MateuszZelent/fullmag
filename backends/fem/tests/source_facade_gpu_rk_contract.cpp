@@ -190,9 +190,14 @@ void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
             transaction_source.find("cudaDeviceSynchronize") == std::string::npos &&
             transaction_source.find("kMaxTransactionTimingEventPairs") !=
                 std::string::npos &&
-            transaction_source.find("13u * 3u") != std::string::npos &&
-            transaction_source.find("poisson_solution_full") != std::string::npos,
-        "GPU RK transaction telemetry must time exact D2D payloads without a new synchronization");
+            transaction_source.find("TransactionPayload::RkAuthoritative") !=
+                std::string::npos &&
+            transaction_source.find("component_field_count =") !=
+                std::string::npos &&
+            transaction_source.find("? 2u : 13u") != std::string::npos &&
+            transaction_source.find("TransactionPayload::RelaxationPublished") !=
+                std::string::npos,
+        "GPU RK transaction telemetry must time only authoritative m/k0 D2D payloads while relaxation remains separate");
     check(
         transaction_source.find(
             "reset_transaction_sample(ctx.gpu_state.rk_transaction_telemetry)") !=
