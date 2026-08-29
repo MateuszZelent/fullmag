@@ -963,6 +963,72 @@ fn accepted_relax_stage_handoff_rejects_digest_valid_but_physically_forged_stati
 }
 
 #[test]
+fn shared_domain_handoff_compares_uniform_external_field_only_on_magnetic_nodes() {
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    plan.external_field = Some([7_957.747_154_594_77, 0.0, 0.0]);
+    let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+    let node_count = topology.n_nodes;
+    let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+    let uniform_external = vec![plan.external_field.unwrap(); node_count];
+    let fields = crate::types::CertifiedFemEquilibriumFields::from_fields(
+        zeros.clone(),
+        zeros.clone(),
+        uniform_external.clone(),
+        uniform_external,
+        vec![0.0; node_count],
+    )
+    .unwrap();
+    let source_plan = relax_source_plan_from_eigen(&plan);
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+        "run-relax",
+        "stage-000",
+        "flat_relax",
+        true,
+        &source_plan,
+        &crate::types::FemMeshPayload::from(&plan),
+        &accepted_relax_completion(),
+        plan.equilibrium_magnetization.clone(),
+        fields,
+    )
+    .unwrap();
+
+    assert!(topology
+        .magnetic_node_volumes
+        .iter()
+        .any(|volume| *volume == 0.0));
+    materialize_equilibrium(&plan, &plan.equilibrium_magnetization, Some(&handoff))
+        .expect("air-only H_ext representation must not invalidate a magnetic-DOF handoff");
+
+    let magnetic_node = topology
+        .magnetic_node_volumes
+        .iter()
+        .position(|volume| *volume > 0.0)
+        .unwrap();
+    let mut forged_handoff = handoff.clone();
+    forged_handoff.certified_fields.h_ext_a_per_m[magnetic_node][0] += 1.0;
+    forged_handoff.certified_fields.h_eff_a_per_m[magnetic_node][0] += 1.0;
+    forged_handoff.certified_fields = crate::types::CertifiedFemEquilibriumFields::from_fields(
+        forged_handoff.certified_fields.h_ex_a_per_m.clone(),
+        forged_handoff.certified_fields.h_demag_a_per_m.clone(),
+        forged_handoff.certified_fields.h_ext_a_per_m.clone(),
+        forged_handoff.certified_fields.h_eff_a_per_m.clone(),
+        forged_handoff.certified_fields.phi_a.clone(),
+    )
+    .unwrap();
+    let error = materialize_equilibrium(
+        &plan,
+        &plan.equilibrium_magnetization,
+        Some(&forged_handoff),
+    )
+    .expect_err("a forged magnetic-node H_ext value must remain fail-closed");
+    assert!(error
+        .message
+        .contains("relax_stage_handoff_h_ext0_recompute_mismatch"));
+}
+
+#[test]
 fn shared_domain_linearization_does_not_compare_periodic_phi0_with_open_reference_problem() {
     let mut plan = minimal_native_modal_plan();
     add_minimal_shared_domain_periodic_airbox(&mut plan);

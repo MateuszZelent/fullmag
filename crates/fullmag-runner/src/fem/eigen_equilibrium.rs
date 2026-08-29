@@ -20,6 +20,26 @@ use fullmag_engine::LlgConfig;
 use fullmag_engine::MaterialParameters;
 use fullmag_engine::TimeIntegrator;
 use fullmag_engine::Vector3;
+
+fn max_vector_field_difference_on_magnetic_nodes(
+    left: &[Vector3],
+    right: &[Vector3],
+    magnetic_node_volumes: &[f64],
+) -> Option<f64> {
+    if left.len() != right.len() || left.len() != magnetic_node_volumes.len() {
+        return None;
+    }
+    left.iter()
+        .zip(right)
+        .zip(magnetic_node_volumes)
+        .filter(|(_, volume)| **volume > 0.0)
+        .map(|((left, right), _)| {
+            (0..3)
+                .map(|axis| (left[axis] - right[axis]).abs())
+                .fold(0.0, f64::max)
+        })
+        .reduce(f64::max)
+}
 use fullmag_ir::EquilibriumSourceIR;
 use fullmag_ir::FemEigenPlanIR;
 
@@ -240,6 +260,7 @@ pub(super) fn materialize_equilibrium(
     let topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
         message: format!("MeshTopology: {}", error),
     })?;
+    let magnetic_node_volumes = topology.magnetic_node_volumes.clone();
     validate_tangent_frame_transport_support(plan, &topology, &equilibrium_guess)?;
     let material = MaterialParameters::new(
         plan.material.saturation_magnetisation,
@@ -370,11 +391,21 @@ pub(super) fn materialize_equilibrium(
             &handoff.certified_fields.h_ex_a_per_m,
             &observables.exchange_field,
         )?;
-        require_recomputed_match(
-            "h_ext0",
+        let h_ext_difference = max_vector_field_difference_on_magnetic_nodes(
             &handoff.certified_fields.h_ext_a_per_m,
             &observables.external_field,
-        )?;
+            &magnetic_node_volumes,
+        )
+        .ok_or_else(|| RunError {
+            message: "relax_stage_handoff_h_ext0_recompute_mismatch: accepted and recomputed field shapes differ or the mesh has no magnetic nodes".to_string(),
+        })?;
+        if !h_ext_difference.is_finite() || h_ext_difference > 1.0e-8 {
+            return Err(RunError {
+                message: format!(
+                    "relax_stage_handoff_h_ext0_recompute_mismatch: accepted/recomputed maximum magnetic-node difference {h_ext_difference:.3e} exceeds 1.000e-8 A/m"
+                ),
+            });
+        }
         // FemLlgProblem is a useful independent reference for the local terms,
         // but it does not implement the production periodic-airbox k=0 Poisson
         // reduction. Comparing its open/Robin demag field with a field certified
