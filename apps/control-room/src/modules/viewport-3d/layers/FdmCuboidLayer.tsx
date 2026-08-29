@@ -1046,12 +1046,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
   const adoptionOwnerId = `fdm-cuboid-surface:${useId()}`;
   const recordSurfaceAdoption = useCallback(() => {
     if (!adoptionRegistry || !surfaceColors) return;
-    lastAdoptedSurfaceRef.current = {
-      fieldBufferId,
-      sessionIdentity,
-      scalarBuffer: surfaceColors,
-    };
-    recordFdmCuboidSurfaceAdoption({
+    const adoption = recordFdmCuboidSurfaceAdoption({
       carrierId,
       fieldBufferId,
       ownerId: adoptionOwnerId,
@@ -1059,6 +1054,20 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       sessionIdentity,
       scalarBuffer: surfaceColors,
     });
+    lastAdoptedSurfaceRef.current =
+      adoption.fieldBufferId && sessionIdentity &&
+        adoptionRegistry.hasActiveAdoption({
+          fieldBufferId: adoption.fieldBufferId,
+          resourceKey: adoption.resourceKey,
+          sessionEpoch: sessionIdentity.sessionEpoch,
+          sessionId: sessionIdentity.sessionId,
+        })
+        ? {
+            fieldBufferId,
+            sessionIdentity,
+            scalarBuffer: surfaceColors,
+          }
+        : null;
   }, [
     adoptionOwnerId,
     adoptionRegistry,
@@ -1220,6 +1229,15 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
           "fullmag.viewport3d.uploadFdmCuboidColors",
           colorStartMark,
         );
+      }
+      const previousAdoption = lastAdoptedSurfaceRef.current;
+      const adoptionIdentityChanged =
+        previousAdoption?.fieldBufferId !== fieldBufferId ||
+        previousAdoption?.scalarBuffer !== surfaceColors ||
+        previousAdoption?.sessionIdentity?.sessionEpoch !==
+          sessionIdentity?.sessionEpoch ||
+        previousAdoption?.sessionIdentity?.sessionId !== sessionIdentity?.sessionId;
+      if (colorChanged || adoptionIdentityChanged) {
         recordSurfaceAdoption();
       }
     }
@@ -1231,6 +1249,8 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     invalidate,
     preparedInstances,
     recordSurfaceAdoption,
+    fieldBufferId,
+    sessionIdentity,
     surfaceColors,
     surfaceRef,
     tracker,

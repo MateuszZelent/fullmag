@@ -95,8 +95,8 @@ struct TestResults {
     bool heun_passed = false;
     bool rk4_passed = false;
     bool checkpoint_passed = false;
-    bool fp32_rejection_passed = false;
     bool full_fp64_integrator_matrix_passed = false;
+    bool full_fp32_integrator_matrix_passed = false;
     DeviceInfo device{};
 };
 
@@ -175,31 +175,54 @@ TestResults run_qualification() {
         fullmag_fdm_backend_destroy(handle);
     };
 
-    // ── 0. Verify Fail-Closed Rejection on FP32 ──
-    {
+    auto verify_fp32_integrator_hard_restore = [&](fullmag_fdm_integrator integrator) {
         fullmag_fdm_plan_desc plan{};
         plan.grid = {2, 1, 1, 2.0e-9, 2.0e-9, 2.0e-9};
         plan.material = {8.0e5, 1.3e-11, 0.1, 2.211e5};
         plan.precision = FULLMAG_FDM_PRECISION_SINGLE;
-        plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+        plan.integrator = integrator;
         plan.enable_exchange = 1;
         plan.enable_demag = 0;
-        plan.initial_magnetization_xyz = m_init;
+        plan.has_external_field = 1;
+        plan.external_field_am[1] = 1.0e5;
+        plan.initial_magnetization_xyz = non_axis_initial;
         plan.initial_magnetization_len = cell_count * 3;
         plan.frozen_mask = frozen_mask;
         plan.frozen_mask_len = cell_count;
-        plan.frozen_reference_xyz = frozen_reference;
+        plan.frozen_reference_xyz = non_axis_reference;
         plan.frozen_reference_len = cell_count * 3;
+        plan.stats_mode = FULLMAG_FDM_STATS_NONE;
 
         auto *handle = fullmag_fdm_backend_create(&plan);
-        if (handle != nullptr) {
-            const char *err = fullmag_fdm_backend_last_error(handle);
-            check(err != nullptr && std::string(err).find("frozen_spins_cuda_fp32_unqualified") != std::string::npos,
-                  "FP32 backend create with frozen spins must set frozen_spins_cuda_fp32_unqualified error");
-            fullmag_fdm_backend_destroy(handle);
+        check(handle != nullptr, "FP32 integrator-matrix backend create returned null");
+        const char *create_error = fullmag_fdm_backend_last_error(handle);
+        check(create_error == nullptr, create_error ? create_error : "");
+        fullmag_fdm_step_stats stats{};
+        for (int step = 0; step < 20; ++step) {
+            check(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_OK,
+                  "FP32 integrator-matrix step failed");
         }
-        results.fp32_rejection_passed = true;
-    }
+        std::vector<float> output(cell_count * 3, 0.0f);
+        check(fullmag_fdm_backend_copy_field_f32(
+                  handle, FULLMAG_FDM_OBSERVABLE_M, output.data(), output.size()) ==
+                  FULLMAG_FDM_OK,
+              "FP32 integrator-matrix magnetization download failed");
+        const float quantized_reference[3] = {
+            static_cast<float>(non_axis_reference[0]),
+            static_cast<float>(non_axis_reference[1]),
+            static_cast<float>(non_axis_reference[2]),
+        };
+        check(std::memcmp(output.data(), quantized_reference, sizeof(quantized_reference)) == 0,
+              "FP32 frozen spin must be bitwise equal to its quantized non-axis reference");
+        const double free_displacement = std::sqrt(
+            (static_cast<double>(output[3]) - 1.0) *
+                (static_cast<double>(output[3]) - 1.0) +
+            static_cast<double>(output[4]) * static_cast<double>(output[4]) +
+            static_cast<double>(output[5]) * static_cast<double>(output[5]));
+        check(free_displacement > 1.0e-6,
+              "FP32 integrator-matrix free spin must evolve");
+        fullmag_fdm_backend_destroy(handle);
+    };
 
     // ── 1. Heun Integrator Qualification ──
     {
@@ -343,6 +366,15 @@ TestResults run_qualification() {
         verify_fp64_integrator_hard_restore(integrator);
     }
     results.full_fp64_integrator_matrix_passed = true;
+    for (const auto integrator : {
+             FULLMAG_FDM_INTEGRATOR_HEUN,
+             FULLMAG_FDM_INTEGRATOR_RK4,
+             FULLMAG_FDM_INTEGRATOR_RK23,
+             FULLMAG_FDM_INTEGRATOR_DP45,
+             FULLMAG_FDM_INTEGRATOR_ABM3}) {
+        verify_fp32_integrator_hard_restore(integrator);
+    }
+    results.full_fp32_integrator_matrix_passed = true;
 
     return results;
 }
@@ -355,8 +387,8 @@ void write_evidence_json(const char *path, const TestResults &results) {
     out << "  \"schema_version\": \"fullmag.frozen_spins.cuda.runtime.evidence.v1\",\n";
     out << "  \"timestamp_utc\": \"" << current_iso_timestamp() << "\",\n";
     out << "  \"backend\": \"fullmag_fdm\",\n";
-    out << "  \"precision\": \"fp64\",\n";
-    out << "  \"lane\": \"single_grid_fp64_explicit_rk\",\n";
+    out << "  \"precision\": \"fp64+fp32\",\n";
+    out << "  \"lane\": \"single_grid_cuda_explicit_rk\",\n";
     out << "  \"device\": {\n";
     out << "    \"name\": \"" << results.device.name << "\",\n";
     out << "    \"driver_version\": \"" << results.device.driver_version << "\",\n";
@@ -384,9 +416,10 @@ void write_evidence_json(const char *path, const TestResults &results) {
     out << "  \"heun_passed\": " << (results.heun_passed ? "true" : "false") << ",\n";
     out << "  \"rk4_passed\": " << (results.rk4_passed ? "true" : "false") << ",\n";
     out << "  \"checkpoint_passed\": " << (results.checkpoint_passed ? "true" : "false") << ",\n";
-    out << "  \"fp32_rejection_passed\": " << (results.fp32_rejection_passed ? "true" : "false") << ",\n";
     out << "  \"full_fp64_integrator_matrix_passed\": "
         << (results.full_fp64_integrator_matrix_passed ? "true" : "false") << ",\n";
+    out << "  \"full_fp32_integrator_matrix_passed\": "
+        << (results.full_fp32_integrator_matrix_passed ? "true" : "false") << ",\n";
     out << "  \"status\": \"PASS\"\n";
     out << "}\n";
     out.close();
@@ -403,7 +436,7 @@ int main() {
                 results.checkpoint_preservation_defect);
     std::printf("PASS: RK4 max defect < 1e-14\n");
     std::printf("PASS: FP64 Heun/RK4/RK23/DP45/ABM3 non-axis hard restore\n");
-    std::printf("PASS: FP32 rejection fail-closed\n");
+    std::printf("PASS: FP32 Heun/RK4/RK23/DP45/ABM3 quantized non-axis hard restore\n");
 
     const char *evidence_path = std::getenv("FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH");
     if (evidence_path != nullptr && *evidence_path != '\0') {

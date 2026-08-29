@@ -476,9 +476,11 @@ int run_backend_relaxation_step(
     }
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
-    if (ctx.gpu_state.device.lifecycle.allocated && ctx.frozen_spins.enabled()) {
-        error = "frozen_spins_fem_gpu_relaxation_unqualified: native FEM GPU relaxation "
-                "does not yet provide device-resident free-DOF reductions and hard restore";
+    if (ctx.gpu_state.device.lifecycle.allocated &&
+        ctx.frozen_spins.enabled() &&
+        algorithm == FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT) {
+        error = "frozen_spins_fem_gpu_tpi_unqualified: native FEM GPU tangent-plane "
+                "implicit relaxation does not yet provide device-resident constrained solves";
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (ctx.gpu_state.device.lifecycle.allocated &&

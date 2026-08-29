@@ -26,6 +26,7 @@
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "cpu/mfem/runtime/stage_completion.hpp"
+#include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
@@ -71,6 +72,33 @@ constexpr size_t kNcgCurrentGradientEnergyNormTailSlot = 1;
 constexpr size_t kNcgCurrentDirectionDotGradientTailSlot = 2;
 constexpr size_t kNcgCurrentDirectionNormTailSlot = 3;
 constexpr size_t kNcgCurrentScalarTailCount = 4;
+
+const uint8_t *gpu_relax_ncg_node_mask(const Context &ctx)
+{
+    const auto &regions = ctx.gpu_state.device.mesh_regions;
+    return ctx.frozen_spins.enabled()
+        ? regions.free_node_mask
+        : regions.magnetic_node_mask;
+}
+
+void gpu_relax_ncg_project_frozen_reference(
+    Context &ctx,
+    FemGpuComponentField &field,
+    cudaStream_t stream)
+{
+    if (!ctx.frozen_spins.enabled()) {
+        return;
+    }
+    const auto &regions = ctx.gpu_state.device.mesh_regions;
+    gpu_project_frozen_reference(
+        field,
+        regions.frozen_mask,
+        regions.frozen_reference_x,
+        regions.frozen_reference_y,
+        regions.frozen_reference_z,
+        static_cast<int>(ctx.gpu_state.device.lifecycle.node_count),
+        stream);
+}
 static_assert(
     kGpuFinalScalarSlots + kNcgScalarTailCount <= FEM_GPU_SCALAR_RESULT_SLOTS,
     "GPU nonlinear-CG scalar tail must fit in the shared scalar result buffer");
@@ -396,6 +424,17 @@ bool gpu_relax_ncg_preflight(
         reason = "GPU nonlinear-CG requires a device magnetic-node mask matching the FEM state";
         return false;
     }
+    if (ctx.frozen_spins.enabled() &&
+        (gpu.mesh_regions.free_node_mask == nullptr ||
+         gpu.mesh_regions.free_node_mask_count != gpu.lifecycle.node_count ||
+         gpu.mesh_regions.frozen_mask == nullptr ||
+         gpu.mesh_regions.frozen_node_count != gpu.lifecycle.node_count ||
+         gpu.mesh_regions.frozen_reference_x == nullptr ||
+         gpu.mesh_regions.frozen_reference_y == nullptr ||
+         gpu.mesh_regions.frozen_reference_z == nullptr)) {
+        reason = "GPU nonlinear-CG requires complete device Frozen Spins masks and reference matching the FEM state";
+        return false;
+    }
     if (gpu.reductions.scalar_workspace == nullptr ||
         gpu.reductions.scalar_result == nullptr ||
         gpu.reductions.temp_storage == nullptr ||
@@ -479,7 +518,7 @@ bool gpu_relax_compute_tangent_gradient_norm(
         gpu.fields.h_eff.y,
         gpu.fields.h_eff.z,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         gradient.x,
         gradient.y,
         gradient.z,
@@ -555,7 +594,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
         gpu.fields.h_eff.z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         gpu.relaxation.nonlinear_cg_direction_valid,
         gradient.x,
         gradient.y,
@@ -678,7 +717,7 @@ bool gpu_relax_metric_dot(
         b.y,
         b.z,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         gpu.reductions.scalar_workspace,
         n,
         stream);
@@ -730,7 +769,7 @@ bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
         gpu.rk.k[0].z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         gpu.rk.k[1].x,
         gpu.rk.k[1].y,
         gpu.rk.k[1].z,
@@ -870,7 +909,7 @@ bool gpu_relax_prepare_descent_direction(
         gpu.rk.k[0].z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         gpu.relaxation.nonlinear_cg_direction_valid,
         direction.x,
         direction.y,
@@ -924,7 +963,7 @@ bool gpu_relax_prepare_descent_direction(
             gpu.rk.k[0].y,
             gpu.rk.k[0].z,
             gpu.reductions.scalar_result,
-            gpu.mesh_regions.magnetic_node_mask,
+            gpu_relax_ncg_node_mask(ctx),
             direction.x,
             direction.y,
             direction.z,
@@ -1004,7 +1043,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                 gpu.relaxation.nonlinear_cg_direction.x,
                 gpu.relaxation.nonlinear_cg_direction.y,
                 gpu.relaxation.nonlinear_cg_direction.z,
-                gpu.mesh_regions.magnetic_node_mask,
+                gpu_relax_ncg_node_mask(ctx),
                 trial_step,
                 gpu.rk.m_stage.x,
                 gpu.rk.m_stage.y,
@@ -1020,6 +1059,8 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     n,
                     stream);
             }
+            gpu_relax_ncg_project_frozen_reference(
+                ctx, gpu.rk.m_stage, stream);
             if (!cuda_launch_ok("launch GPU nonlinear-CG recovery retraction", reason) ||
                 !gpu_direct_minimizer_precompute_representable_chord_increment(
                     ctx,
@@ -1148,7 +1189,7 @@ bool gpu_relax_update_next_direction(
         pr_plus_numerator,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         relaxation::reduction_roundoff_bound(3u * static_cast<size_t>(n)),
         previous_direction_valid,
         restart_step,
@@ -1174,7 +1215,7 @@ bool gpu_relax_update_next_direction(
         gpu.rk.k[1].y,
         gpu.rk.k[1].z,
         gpu.reductions.scalar_result,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_ncg_node_mask(ctx),
         direction.x,
         direction.y,
         direction.z,
@@ -1209,6 +1250,15 @@ int gpu_relax_nonlinear_cg_step(
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
     const GpuRelaxNcgRollbackState rollback =
         capture_gpu_relax_ncg_rollback_state(ctx);
+
+    gpu_relax_ncg_project_frozen_reference(
+        ctx, gpu.magnetization.m, stream);
+    if (!cuda_launch_ok(
+            "launch GPU nonlinear-CG entry Frozen Spins restore",
+            reason)) {
+        error = reason;
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
 
     if (!gpu_rk_copy_component_device(
             gpu.magnetization.m,
@@ -1388,7 +1438,7 @@ int gpu_relax_nonlinear_cg_step(
                 gpu.relaxation.nonlinear_cg_direction.x,
                 gpu.relaxation.nonlinear_cg_direction.y,
                 gpu.relaxation.nonlinear_cg_direction.z,
-                gpu.mesh_regions.magnetic_node_mask,
+                gpu_relax_ncg_node_mask(ctx),
                 trial_step,
                 gpu.rk.m_stage.x,
                 gpu.rk.m_stage.y,
@@ -1404,6 +1454,8 @@ int gpu_relax_nonlinear_cg_step(
                     n,
                     stream);
             }
+            gpu_relax_ncg_project_frozen_reference(
+                ctx, gpu.rk.m_stage, stream);
             if (!cuda_launch_ok("launch GPU nonlinear-CG trial retraction", reason) ||
                 !gpu_direct_minimizer_precompute_representable_chord_increment(
                     ctx,

@@ -279,47 +279,21 @@ int main() {
                   "inactive cells do not contribute to the adaptive error norm");
         }
 
-        if (precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-            const std::vector<double> parallel = {0.0, 0.0, 1.0};
-            const auto parallel_only = normalized_error_trace(
-                precision, integrator, parallel, {}, {});
-            const std::vector<double> frozen_initial = {
-                0.0, 0.0, 1.0,
-                1.0, 0.0, 0.0,
-            };
-            const auto frozen = normalized_error_trace(
-                precision, integrator, frozen_initial, {}, {0, 1});
-            check(parallel_only.size() == frozen.size(),
-                  "frozen-spin exclusion preserves adaptive attempt count");
-            for (std::size_t index = 0; index < parallel_only.size(); ++index) {
-                check(std::abs(parallel_only[index] - frozen[index]) <= 1.0e-12,
-                      "frozen spins do not contribute to the adaptive error norm");
-            }
-        } else {
-            const double frozen_initial[6] = {
-                0.0, 0.0, 1.0,
-                1.0, 0.0, 0.0,
-            };
-            const uint8_t frozen_mask[2] = {0, 1};
-            auto frozen_fp32 = invalid;
-            frozen_fp32.base.grid = {2, 1, 1, 1e-9, 1e-9, 1e-9};
-            frozen_fp32.base.precision = FULLMAG_FDM_PRECISION_SINGLE;
-            frozen_fp32.base.integrator = integrator;
-            frozen_fp32.base.initial_magnetization_xyz = frozen_initial;
-            frozen_fp32.base.initial_magnetization_len = 6;
-            frozen_fp32.base.frozen_mask = frozen_mask;
-            frozen_fp32.base.frozen_mask_len = 2;
-            frozen_fp32.base.frozen_reference_xyz = frozen_initial;
-            frozen_fp32.base.frozen_reference_len = 6;
-            auto *handle = fullmag_fdm_backend_create_time_policy_v2(&frozen_fp32);
-            check(handle != nullptr,
-                  "FP32 frozen-spin validation returns a deferred-error handle");
-            const char *message = fullmag_fdm_backend_last_error(handle);
-            check(message != nullptr &&
-                      std::string(message).find("frozen_spins_cuda_fp32_unqualified") !=
-                          std::string::npos,
-                  "FP32 frozen-spin adaptive norm remains fail-closed before execution");
-            fullmag_fdm_backend_destroy(handle);
+        const std::vector<double> parallel = {0.0, 0.0, 1.0};
+        const auto parallel_only = normalized_error_trace(
+            precision, integrator, parallel, {}, {});
+        const std::vector<double> frozen_initial = {
+            0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0,
+        };
+        const auto frozen = normalized_error_trace(
+            precision, integrator, frozen_initial, {}, {0, 1});
+        check(parallel_only.size() == frozen.size(),
+              "frozen-spin exclusion preserves adaptive attempt count");
+        const double tolerance = precision == FULLMAG_FDM_PRECISION_DOUBLE ? 1.0e-12 : 1.0e-6;
+        for (std::size_t index = 0; index < parallel_only.size(); ++index) {
+            check(std::abs(parallel_only[index] - frozen[index]) <= tolerance,
+                  "frozen spins do not contribute to the adaptive error norm");
         }
     };
     for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,

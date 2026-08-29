@@ -293,6 +293,13 @@ void test_frozen_spins_solver_step_contract(const char *device) {
 
     fullmag_fem_backend *handle = fullmag_fem_backend_create(&plan);
     check(handle != nullptr, "FEM backend create for frozen spins P1 Heun must succeed");
+    if (gpu) {
+        check(fullmag_fem_backend_set_gpu_execution_request_v1(
+                  handle,
+                  FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE) ==
+                  FULLMAG_FEM_OK,
+              "FEM GPU Frozen Spins contract must request strict device execution before stepping");
+    }
 
     fullmag_fem_representation_receipt_v1 representation{};
     check(
@@ -340,13 +347,211 @@ void test_frozen_spins_solver_step_contract(const char *device) {
 
     if (gpu) {
         fullmag_fem_step_stats relax_stats = {};
+        const std::vector<double> before_relax = m_out;
+
+        const int pgbb_rc = fullmag_fem_backend_relax_step(
+            handle, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, &relax_stats);
+        if (pgbb_rc != FULLMAG_FEM_OK) {
+            std::fprintf(stderr, "GPU PG-BB Frozen Spins error: %s\n",
+                         fullmag_fem_backend_last_error(handle));
+        }
+        check(pgbb_rc == FULLMAG_FEM_OK,
+              "FEM GPU PG-BB Frozen Spins relaxation must execute device-resident");
+        check(fullmag_fem_backend_copy_field_f64(
+                  handle, FULLMAG_FEM_OBSERVABLE_M, m_out.data(), m_out.size()) ==
+                  FULLMAG_FEM_OK,
+              "copy GPU PG-BB magnetization must succeed");
+        check(std::memcmp(m_out.data(), frozen_reference, 3 * sizeof(double)) == 0,
+              "GPU PG-BB must bitwise restore the non-axis frozen reference");
+
+        const int ncg_rc = fullmag_fem_backend_relax_step(
+            handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &relax_stats);
+        if (ncg_rc != FULLMAG_FEM_OK) {
+            std::fprintf(stderr, "GPU NCG Frozen Spins error: %s\n",
+                         fullmag_fem_backend_last_error(handle));
+        }
+        check(ncg_rc == FULLMAG_FEM_OK,
+              "FEM GPU NCG Frozen Spins relaxation must execute device-resident");
+        check(fullmag_fem_backend_copy_field_f64(
+                  handle, FULLMAG_FEM_OBSERVABLE_M, m_out.data(), m_out.size()) ==
+                  FULLMAG_FEM_OK,
+              "copy GPU NCG magnetization must succeed");
+        check(std::memcmp(m_out.data(), frozen_reference, 3 * sizeof(double)) == 0,
+              "GPU NCG must bitwise restore the non-axis frozen reference");
+
+        bool free_node_moved = false;
+        for (size_t i = 3; i < m_out.size(); ++i) {
+            free_node_moved = free_node_moved || m_out[i] != before_relax[i];
+        }
+        check(free_node_moved,
+              "FEM GPU direct minimizers must preserve mobility of free nodes");
+
+        fullmag_fem_transfer_audit transfer_audit = {};
+        check(fullmag_fem_backend_get_transfer_audit(handle, &transfer_audit) ==
+                  FULLMAG_FEM_OK,
+              "FEM GPU Frozen Spins transfer audit must be queryable");
+        check(transfer_audit.hot_loop_h2d_bytes == 0u &&
+                  transfer_audit.hot_loop_compute_h2d_bytes == 0u &&
+                  transfer_audit.hot_loop_exchange_h2d_bytes == 0u,
+              "FEM GPU Frozen Spins mask/reference must not be uploaded in a minimizer hot loop");
+        check(transfer_audit.hot_loop_compute_d2h_bytes == 0u &&
+                  transfer_audit.hot_loop_exchange_d2h_bytes == 0u,
+              "FEM GPU Frozen Spins minimizers must not copy full compute or exchange payloads to host");
+
+        fullmag_fem_device_info device_info = {};
+        fullmag_fem_gpu_state_info gpu_state = {};
+        fullmag_fem_runtime_build_info_v2 runtime_build_info = {};
+        runtime_build_info.abi_version =
+            FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION;
+        runtime_build_info.struct_size = sizeof(runtime_build_info);
+        fullmag_fem_gpu_execution_receipt_v1 execution_receipt = {};
+        execution_receipt.abi_version =
+            FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+        execution_receipt.struct_size = sizeof(execution_receipt);
+        check(fullmag_fem_backend_get_device_info(handle, &device_info) ==
+                  FULLMAG_FEM_OK &&
+                  device_info.is_gpu_enabled != 0,
+              "FEM GPU Frozen Spins device identity must be queryable");
+        check(fullmag_fem_get_runtime_build_info_v2(&runtime_build_info) ==
+                  FULLMAG_FEM_OK,
+              "FEM GPU Frozen Spins runtime build identity must be queryable");
+        check(fullmag_fem_backend_get_gpu_state_info(handle, &gpu_state) ==
+                  FULLMAG_FEM_OK &&
+                  gpu_state.allocated != 0 &&
+                  gpu_state.node_count == 4u &&
+                  gpu_state.source_of_truth ==
+                      FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
+              "FEM GPU Frozen Spins state must remain device-resident");
+        const int receipt_rc = fullmag_fem_backend_gpu_execution_receipt_v1(
+            handle, &execution_receipt);
+        if (receipt_rc != FULLMAG_FEM_OK ||
+            execution_receipt.fallback_count != 0u ||
+            execution_receipt.executed_host_operator_mask != 0u ||
+            execution_receipt.executed_unknown_operator_mask != 0u) {
+            std::fprintf(
+                stderr,
+                "GPU execution receipt: rc=%d class=%u fallback=%llu "
+                "device=0x%llx host=0x%llx unknown=0x%llx\n",
+                receipt_rc,
+                execution_receipt.execution_class,
+                static_cast<unsigned long long>(execution_receipt.fallback_count),
+                static_cast<unsigned long long>(execution_receipt.executed_device_operator_mask),
+                static_cast<unsigned long long>(execution_receipt.executed_host_operator_mask),
+                static_cast<unsigned long long>(execution_receipt.executed_unknown_operator_mask));
+        }
+        check(receipt_rc == FULLMAG_FEM_OK &&
+                  execution_receipt.fallback_count == 0u &&
+                  execution_receipt.executed_host_operator_mask == 0u &&
+                  execution_receipt.executed_unknown_operator_mask == 0u,
+              "FEM GPU Frozen Spins execution receipt must prove zero fallback");
+        std::printf(
+            "FROZEN_SPINS_FEM_GPU_DEVICE driver_version=%d runtime_version=%d "
+            "compute_capability=%d.%d node_count=%llu device_bytes=%llu\n",
+            device_info.driver_version,
+            device_info.runtime_version,
+            device_info.compute_capability_major,
+            device_info.compute_capability_minor,
+            static_cast<unsigned long long>(gpu_state.node_count),
+            static_cast<unsigned long long>(gpu_state.device_bytes));
+        std::printf(
+            "FROZEN_SPINS_FEM_GPU_TRANSFER hot_loop_h2d_bytes=%llu "
+            "hot_loop_compute_h2d_bytes=%llu hot_loop_compute_d2h_bytes=%llu "
+            "hot_loop_exchange_h2d_bytes=%llu hot_loop_exchange_d2h_bytes=%llu\n",
+            static_cast<unsigned long long>(transfer_audit.hot_loop_h2d_bytes),
+            static_cast<unsigned long long>(transfer_audit.hot_loop_compute_h2d_bytes),
+            static_cast<unsigned long long>(transfer_audit.hot_loop_compute_d2h_bytes),
+            static_cast<unsigned long long>(transfer_audit.hot_loop_exchange_h2d_bytes),
+            static_cast<unsigned long long>(transfer_audit.hot_loop_exchange_d2h_bytes));
+        std::printf(
+            "FROZEN_SPINS_FEM_GPU_BUILD mfem_version=%s hypre_version=%s\n",
+            runtime_build_info.mfem_version,
+            runtime_build_info.hypre_version);
+
         check(fullmag_fem_backend_relax_step(
-                  handle, FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB, &relax_stats) ==
-                  FULLMAG_FEM_ERR_UNAVAILABLE,
-              "FEM GPU Frozen Spins relaxation must fail closed until free-DOF reductions and restore are device-resident");
+                  handle,
+                  FULLMAG_FEM_RELAX_TANGENT_PLANE_IMPLICIT,
+                  &relax_stats) == FULLMAG_FEM_ERR_UNAVAILABLE,
+              "FEM GPU TPI Frozen Spins must remain fail-closed until constrained device solves exist");
+        const char *tpi_error = fullmag_fem_backend_last_error(handle);
+        check(tpi_error != nullptr &&
+                  std::strstr(tpi_error, "frozen_spins_fem_gpu_tpi_unqualified") != nullptr,
+              "FEM GPU TPI Frozen Spins rejection must expose its stable reason code");
     }
 
     fullmag_fem_backend_destroy(handle);
+
+    if (gpu) {
+        const uint8_t all_frozen_mask[] = {1, 1, 1, 1};
+        plan.frozen_mask = all_frozen_mask;
+        plan.frozen_mask_len = 4;
+        plan.frozen_reference_xyz = m_init;
+        plan.frozen_reference_len = 12;
+
+        fullmag_fem_backend *all_frozen = fullmag_fem_backend_create(&plan);
+        check(all_frozen != nullptr,
+              "FEM GPU all-frozen backend creation must succeed");
+        for (const auto algorithm : {
+                 FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB,
+                 FULLMAG_FEM_RELAX_NONLINEAR_CG}) {
+            fullmag_fem_step_stats all_frozen_stats = {};
+            const int rc = fullmag_fem_backend_relax_step(
+                all_frozen, algorithm, &all_frozen_stats);
+            if (rc != FULLMAG_FEM_OK) {
+                std::fprintf(stderr, "GPU all-frozen minimizer error: %s\n",
+                             fullmag_fem_backend_last_error(all_frozen));
+            }
+            check(rc == FULLMAG_FEM_OK,
+                  "FEM GPU all-frozen direct minimizer must terminate cleanly");
+            check(fullmag_fem_backend_copy_field_f64(
+                      all_frozen,
+                      FULLMAG_FEM_OBSERVABLE_M,
+                      m_out.data(),
+                      m_out.size()) == FULLMAG_FEM_OK,
+                  "copy FEM GPU all-frozen magnetization must succeed");
+            check(std::memcmp(m_out.data(), m_init, sizeof(m_init)) == 0,
+                  "FEM GPU all-frozen direct minimizer must preserve the complete reference bitwise");
+        }
+        fullmag_fem_backend_destroy(all_frozen);
+
+        auto run_gpu_pgbb = [&](const uint8_t *mask,
+                                uint64_t mask_len,
+                                const double *reference,
+                                uint64_t reference_len) {
+            plan.frozen_mask = mask;
+            plan.frozen_mask_len = mask_len;
+            plan.frozen_reference_xyz = reference;
+            plan.frozen_reference_len = reference_len;
+            fullmag_fem_backend *candidate = fullmag_fem_backend_create(&plan);
+            check(candidate != nullptr,
+                  "FEM GPU no-mask parity backend creation must succeed");
+            fullmag_fem_step_stats candidate_stats = {};
+            check(fullmag_fem_backend_relax_step(
+                      candidate,
+                      FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB,
+                      &candidate_stats) == FULLMAG_FEM_OK,
+                  "FEM GPU no-mask parity PG-BB step must succeed");
+            std::vector<double> candidate_m(12, 0.0);
+            check(fullmag_fem_backend_copy_field_f64(
+                      candidate,
+                      FULLMAG_FEM_OBSERVABLE_M,
+                      candidate_m.data(),
+                      candidate_m.size()) == FULLMAG_FEM_OK,
+                  "copy FEM GPU no-mask parity magnetization must succeed");
+            fullmag_fem_backend_destroy(candidate);
+            return candidate_m;
+        };
+
+        const std::vector<double> no_constraint =
+            run_gpu_pgbb(nullptr, 0u, nullptr, 0u);
+        const uint8_t zero_frozen_mask[] = {0, 0, 0, 0};
+        const std::vector<double> zero_mask =
+            run_gpu_pgbb(zero_frozen_mask, 4u, m_init, 12u);
+        check(std::memcmp(
+                  no_constraint.data(),
+                  zero_mask.data(),
+                  no_constraint.size() * sizeof(double)) == 0,
+              "FEM GPU disabled and all-zero Frozen Spins masks must have bitwise PG-BB parity");
+    }
 }
 
 void test_frozen_spins_direct_minimizer_contract() {

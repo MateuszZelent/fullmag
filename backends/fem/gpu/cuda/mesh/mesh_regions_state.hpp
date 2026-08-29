@@ -25,6 +25,11 @@ struct FemGpuMeshRegionDeviceState {
     uint64_t stt_active_element_count = 0;
     // Optional canonical Frozen Spins constraint mask and reference.
     uint8_t *frozen_mask = nullptr;
+    // Magnetic nodes eligible for minimizer updates: magnetic && !frozen.
+    // This is uploaded once during bootstrap so relaxation reductions remain
+    // device-resident and never mistake constrained nodes for free DOFs.
+    uint8_t *free_node_mask = nullptr;
+    uint64_t free_node_mask_count = 0;
     double *frozen_reference_x = nullptr;
     double *frozen_reference_y = nullptr;
     double *frozen_reference_z = nullptr;

@@ -6258,6 +6258,13 @@ export function useViewport3DSceneModel({
       status: "ready",
     },
   ]);
+  const adoptedFdmFieldBuffer =
+    fdmTargetViews.find(
+      (view) =>
+        view.settings.visible &&
+        view.fieldBuffer !== null &&
+        (view.surfaceColors !== null || view.vectorSegments !== null),
+    )?.fieldBuffer ?? fdmAirboxFieldBuffer;
   const visualizationDebugSource = {
     airboxFieldVectorPartStates: airboxFieldVectors.partStates,
     carrierRoles: new Map(
@@ -6266,13 +6273,13 @@ export function useViewport3DSceneModel({
     fieldModel: fieldRenderModel,
     // Debug/adoption evidence must use the same session-scoped target buffer as
     // the FDM renderer.  A decoded payload fingerprint is not a session identity.
-    fullFieldBufferIdentity: fdmAirboxFieldBuffer
+    fullFieldBufferIdentity: adoptedFdmFieldBuffer
       ? {
-          bufferId: fdmAirboxFieldBuffer.bufferId,
+          bufferId: adoptedFdmFieldBuffer.bufferId,
           currentDomainGenerationId:
-            fdmAirboxFieldBuffer.currentDomainGenerationId ?? null,
-          fieldRevision: fdmAirboxFieldBuffer.fieldRevision,
-          resourceKey: fdmAirboxFieldBuffer.resourceKey,
+            adoptedFdmFieldBuffer.currentDomainGenerationId ?? null,
+          fieldRevision: adoptedFdmFieldBuffer.fieldRevision,
+          resourceKey: adoptedFdmFieldBuffer.resourceKey,
           sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
           sessionId: sessionIdentity?.sessionId ?? null,
         }

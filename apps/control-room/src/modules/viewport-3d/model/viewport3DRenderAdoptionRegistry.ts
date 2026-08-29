@@ -91,6 +91,10 @@ export interface Viewport3DRenderAdoptionRegistry {
   ): void;
   clearTarget(targetId: string): void;
   getLifecycleStats(): Viewport3DRenderAdoptionRegistryLifecycleStats;
+  latestActiveAdoption(input: {
+    sessionEpoch: string;
+    sessionId: string;
+  }): Viewport3DRenderAdoptionReceipt | null;
   hasActiveAdoption(input: {
     fieldBufferId: string;
     resourceKey: string | null;
@@ -363,6 +367,25 @@ export function createViewport3DRenderAdoptionRegistry({
         rejectedTargetPassCount: rejectedTargetPasses.size,
         targetReceiptCount,
       };
+    },
+    latestActiveAdoption({ sessionEpoch, sessionId }) {
+      let latest: Viewport3DRenderAdoptionReceipt | null = null;
+      for (const targetReceipts of receipts.values()) {
+        for (const receipt of targetReceipts) {
+          if (
+            receipt.sessionEpoch !== sessionEpoch ||
+            receipt.sessionId !== sessionId ||
+            !receipt.fieldBufferId ||
+            !receipt.resourceKey
+          ) {
+            continue;
+          }
+          if (!latest || receipt.adoptionSequence > latest.adoptionSequence) {
+            latest = receipt;
+          }
+        }
+      }
+      return latest;
     },
     hasActiveAdoption({ fieldBufferId, resourceKey, sessionEpoch, sessionId }) {
       for (const owners of activePasses.values()) {

@@ -42,6 +42,36 @@ function createViewport3DRenderAdoptionRegistry(
 }
 
 describe("viewport3DRenderAdoptionRegistry", () => {
+  it("returns the newest demanded render receipt for a FEM visualization ACK", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.retainDemand("object:a");
+    registry.recordSurfaceAdoption({
+      byteLength: 12,
+      carrierId: "part:a",
+      fieldBufferId: "field-old",
+      resourceKey: "field:frozen_spins:old",
+      scalarBufferKey: "scalar-old",
+      targetId: "object:a",
+    });
+    registry.recordSurfaceAdoption({
+      byteLength: 12,
+      carrierId: "part:a",
+      fieldBufferId: "field-current",
+      resourceKey: "field:frozen_spins:current",
+      scalarBufferKey: "scalar-current",
+      targetId: "object:a",
+    });
+
+    expect(registry.latestActiveAdoption({
+      sessionEpoch: "test-session@1000",
+      sessionId: "test-session",
+    })).toMatchObject({
+      fieldBufferId: "field-current",
+      resourceKey: "field:frozen_spins:current",
+      targetId: "object:a",
+    });
+  });
+
   it("fails closed with a typed unavailable result when session identity is missing", () => {
     const registry = createUnscopedViewport3DRenderAdoptionRegistry();
     registry.retainDemand("airbox");

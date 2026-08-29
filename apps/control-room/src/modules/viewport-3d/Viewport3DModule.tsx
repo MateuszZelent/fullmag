@@ -98,7 +98,10 @@ import {
   type Viewport3DVisualizationDebugFrameCommit,
   type Viewport3DVisualizationDebugSource,
 } from "./hooks/useViewport3DVisualizationDebugPublisher";
-import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
+import {
+  createViewport3DRenderAdoptionRegistry,
+  type Viewport3DRenderAdoptionRegistry,
+} from "./model/viewport3DRenderAdoptionRegistry";
 import {
   resolveViewport3DCameraFit,
   normalizeViewport3DOrbitDebugAngles,
@@ -151,6 +154,7 @@ import {
   type Viewport3DColorbarPlan,
 } from "./model/viewport3DColorbarPlan";
 export { resolveViewport3DColorbarRangeStates } from "./model/viewport3DColorbarPlan";
+
 import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
@@ -204,6 +208,53 @@ import {
 } from "./viewport3dFieldUpdateHold";
 import type { ScalarColorBuffer } from "./viewport3dFieldMapping";
 import { installViewport3DThreeConsolePolicy } from "./viewport3dThreeConsolePolicy";
+
+export function resolveViewport3DVisualizationAckDataIdentity({
+  adoptionRegistry,
+  sessionIdentity,
+  source,
+  visualizationRevision,
+}: {
+  adoptionRegistry: Viewport3DRenderAdoptionRegistry;
+  sessionIdentity: SessionResourceIdentity | null;
+  source: Viewport3DVisualizationDebugSource;
+  visualizationRevision: number;
+}): VisualizationDataAdoptionIdentity | null {
+  const fallback = source.fullFieldBufferIdentity;
+  if (
+    fallback?.bufferId &&
+    fallback.resourceKey &&
+    fallback.sessionEpoch &&
+    fallback.sessionId
+  ) {
+    return {
+      fieldBufferId: fallback.bufferId,
+      fieldRevision: fallback.fieldRevision ?? null,
+      resourceKey: fallback.resourceKey,
+      sessionEpoch: fallback.sessionEpoch,
+      sessionId: fallback.sessionId,
+      visualizationRevision,
+    };
+  }
+  if (!sessionIdentity?.sessionEpoch || !sessionIdentity.sessionId) return null;
+  const receipt = adoptionRegistry.latestActiveAdoption({
+    sessionEpoch: sessionIdentity.sessionEpoch,
+    sessionId: sessionIdentity.sessionId,
+  });
+  if (!receipt?.fieldBufferId || !receipt.resourceKey) return null;
+  const fieldRevision = [...(source.fieldModel?.targetPasses.values() ?? [])]
+    .map((renderPass) => renderPass.fieldBuffer)
+    .find((fieldBuffer) => fieldBuffer?.bufferId === receipt.fieldBufferId)
+    ?.fieldRevision ?? null;
+  return {
+    fieldBufferId: receipt.fieldBufferId,
+    fieldRevision,
+    resourceKey: receipt.resourceKey,
+    sessionEpoch: receipt.sessionEpoch,
+    sessionId: receipt.sessionId,
+    visualizationRevision,
+  };
+}
 
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type Viewport3DCanvasCreatedState = Parameters<
@@ -1341,14 +1392,36 @@ export default function Viewport3DModule({
     frozenSpinsMaskId ?? "",
     { enabled: frozenSpinsMaskId !== null },
   );
+  const femFrozenSpinsCarrier = useMemo(() => {
+    const topology = sceneModel.topologyModel;
+    if (
+      !topology ||
+      !topology.meshTopologyHash ||
+      topology.nodeCount <= 0 ||
+      topology.positions.length !== topology.nodeCount * 3
+    ) {
+      return null;
+    }
+    return {
+      schemaVersion: "fullmag.fem-local-node-render.v1" as const,
+      carrierFingerprint: topology.meshTopologyHash,
+      meshFingerprint: topology.meshTopologyHash,
+      feSpaceOrder: 1,
+      vectorOrdering: "by_nodes" as const,
+      localNodeCount: topology.nodeCount,
+      renderVertexPositions: topology.positions,
+    };
+  }, [sceneModel.topologyModel]);
   const frozenSpinsOverlayModel = useMemo(
     () =>
       buildFrozenSpinsOverlayModel({
         current: frozenSpinsPreview.data?.current ?? false,
+        expectedTopologyFingerprint:
+          frozenSpinsPreview.data?.resolved.topology_fingerprint ?? null,
         fdmDomain: sceneModel.fdmDomain,
-        // No OpenAPI resource currently publishes exact FEM true-DOF coordinates.
-        // Never substitute topology vertices: higher-order true DOFs are not nodes.
-        femTrueDofPositions: null,
+        // FEM frozen masks use the backend's local-node AoS state space. The
+        // published FMMT topology uses the same local-node ordering for P1.
+        femCarrier: femFrozenSpinsCarrier,
         mask: frozenSpinsMask.data,
         previewId: frozenSpinsPreviewId ?? "",
       }),
@@ -1356,6 +1429,7 @@ export default function Viewport3DModule({
       frozenSpinsMask.data,
       frozenSpinsPreview.data,
       frozenSpinsPreviewId,
+      femFrozenSpinsCarrier,
       sceneModel.fdmDomain,
     ],
   );
@@ -1859,7 +1933,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     if (visualizationDebugSource.fullFieldVector) {
       for (const { carrierIds, target } of visualizationDebugSource.targets) {
         if (carrierIds.length === 0 && target.kind !== "airbox") {
-          appendTarget("fdm-domain", target.id);
+          appendTarget(target.id, target.id);
         }
       }
     }
@@ -2114,22 +2188,31 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       }),
     );
     const ackKind = visualizationAckKindsRef.current.get(revision);
-    const resourceKey = ackKind?.resourceKey ?? sceneProps.resourceFrameKey;
+    const committedDataIdentity = ackKind?.changeKind === "data"
+      ? ackKind.dataIdentity ?? resolveViewport3DVisualizationAckDataIdentity({
+          adoptionRegistry: visualizationDebugAdoptionRegistry,
+          sessionIdentity,
+          source: visualizationDebugSource,
+          visualizationRevision: revision,
+        })
+      : null;
+    const resourceKey = committedDataIdentity?.resourceKey ??
+      ackKind?.resourceKey ?? sceneProps.resourceFrameKey;
     const hasMatchingAdoption = !ackKind ||
       ackKind.changeKind === "style" ||
-      (ackKind.dataIdentity !== null &&
+      (committedDataIdentity !== null &&
         visualizationDebugAdoptionRegistry.hasActiveAdoption({
-          fieldBufferId: ackKind.dataIdentity.fieldBufferId,
+          fieldBufferId: committedDataIdentity.fieldBufferId,
           resourceKey,
-          sessionEpoch: ackKind.dataIdentity.sessionEpoch,
-          sessionId: ackKind.dataIdentity.sessionId,
+          sessionEpoch: committedDataIdentity.sessionEpoch,
+          sessionId: committedDataIdentity.sessionId,
         }));
     if (hasMatchingAdoption) sendVisualizationAck({
       changeKind: ackKind?.changeKind ?? "style",
       effectiveRenderMode: visualizationEffectiveRenderMode,
       enabled: clientReady && !visualizationError,
-      dataIdentity: ackKind?.dataIdentity ?? null,
-      renderCommit: ackKind?.dataIdentity ?? null,
+      dataIdentity: committedDataIdentity,
+      renderCommit: committedDataIdentity,
       revision,
       resourceKey,
       sessionEpoch: sessionIdentity?.sessionEpoch ?? null,
@@ -2154,19 +2237,14 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     sceneProps.renderedMeshRevision,
     sceneProps.resourceFrameKey,
     sendVisualizationAck,
-    sessionIdentity?.sessionEpoch,
+    sessionIdentity,
     slotId,
     visualizationDebugPublisher,
     visualizationDebugAdoptionRegistry,
+    visualizationDebugSource,
     visualizationEffectiveRenderMode,
     visualizationError,
   ]);
-  const fullFieldBufferIdentity = visualizationDebugSource.fullFieldBufferIdentity;
-  const fullFieldBufferId = fullFieldBufferIdentity?.bufferId;
-  const fullFieldRevision = fullFieldBufferIdentity?.fieldRevision;
-  const fullFieldResourceKey = fullFieldBufferIdentity?.resourceKey;
-  const fullFieldSessionEpoch = fullFieldBufferIdentity?.sessionEpoch;
-  const fullFieldSessionId = fullFieldBufferIdentity?.sessionId;
   useEffect(() => {
     const revision = sceneProps.visualizationRevision;
     if (revision == null) return;
@@ -2174,21 +2252,13 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     const changeKind = previous?.resourceFrameKey === sceneProps.resourceFrameKey
       ? "style"
       : "data";
-    const resourceKey = fullFieldResourceKey ?? sceneProps.resourceFrameKey;
-    const dataIdentity =
-      fullFieldBufferId &&
-      fullFieldResourceKey &&
-      fullFieldSessionEpoch &&
-      fullFieldSessionId
-        ? {
-            fieldBufferId: fullFieldBufferId,
-            fieldRevision: fullFieldRevision ?? null,
-            resourceKey: fullFieldResourceKey,
-            sessionEpoch: fullFieldSessionEpoch,
-            sessionId: fullFieldSessionId,
-            visualizationRevision: revision,
-          }
-        : null;
+    const dataIdentity = resolveViewport3DVisualizationAckDataIdentity({
+      adoptionRegistry: visualizationDebugAdoptionRegistry,
+      sessionIdentity,
+      source: visualizationDebugSource,
+      visualizationRevision: revision,
+    });
+    const resourceKey = dataIdentity?.resourceKey ?? sceneProps.resourceFrameKey;
     visualizationAckRevisionRef.current = {
       resourceFrameKey: sceneProps.resourceFrameKey,
       revision,
@@ -2213,18 +2283,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     });
   }, [
     clientReady,
-    fullFieldBufferId,
-    fullFieldResourceKey,
-    fullFieldRevision,
-    fullFieldSessionEpoch,
-    fullFieldSessionId,
     sceneProps.resourceFrameKey,
     sceneProps.visualizationRevision,
     sendVisualizationAck,
+    sessionIdentity,
     sessionIdentity?.sessionEpoch,
     slotId,
     visualizationEffectiveRenderMode,
     visualizationError,
+    visualizationDebugAdoptionRegistry,
+    visualizationDebugSource,
   ]);
   const resourceIssueOpen = Boolean(
     fieldDataIssue && dismissedResourceIssueKey !== fieldDataIssue.key,
@@ -2567,6 +2635,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             {...sceneProps}
             adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
+            sessionIdentity={sessionIdentity}
             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
             orbitDebugAngles={orbitDebugAngles}
             orbitDebugCommitRevision={orbitDebugCommitRevision}

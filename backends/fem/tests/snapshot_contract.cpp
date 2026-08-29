@@ -198,7 +198,9 @@ void gpu_snapshot_submission_uses_preallocated_bounded_pool() {
         read_text_file(root / "gpu" / "cuda" / "transfer" / "snapshot_pool.cpp");
 
     const std::size_t schedule_begin = api.find("bool schedule_gpu_snapshot_payload(");
-    const std::size_t schedule_end = api.find("\n}\n#endif", schedule_begin);
+    // Delimit by the owning preprocessor branch rather than by an LF-only
+    // brace sequence so the source contract is stable on CRLF checkouts.
+    const std::size_t schedule_end = api.find("#endif", schedule_begin);
     check(
         schedule_begin != std::string::npos && schedule_end != std::string::npos,
         "GPU snapshot scheduler must be present and bounded");

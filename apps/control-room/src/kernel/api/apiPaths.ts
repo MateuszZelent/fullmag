@@ -593,6 +593,10 @@ export const MODEL_FROZEN_SPINS_PREVIEW_PATH = openApiV2Path(
   "/v2/sessions/current/model/frozen-spins/previews/{preview_id}",
 );
 
+export const MODEL_FROZEN_SPINS_PREVIEW_ACTIVATE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate",
+);
+
 export const MODEL_PHYSICS_GRAPH_PATH = openApiV2Path(
   "/v2/sessions/current/model/physics-graph",
 );

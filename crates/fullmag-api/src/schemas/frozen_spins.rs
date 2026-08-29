@@ -342,6 +342,7 @@ pub struct FrozenSpinsResolvedPlanSummary {
 pub struct FrozenSpinsPreviewResponse {
     pub schema_version: String,
     pub preview_id: String,
+    pub activation_candidate_token: String,
     pub revision: u64,
     pub current: bool,
     pub frozen_dof_count: u64,
@@ -353,4 +354,26 @@ pub struct FrozenSpinsPreviewResponse {
     pub mask_resource: String,
     pub requested: FrozenSpinsRequestedIntent,
     pub resolved: FrozenSpinsResolvedPlanSummary,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct FrozenSpinsPreviewActivationRequest {
+    pub expected_revision: u64,
+    pub activation_candidate_token: String,
+    #[schema(value_type = FrozenSpinsSchema)]
+    pub definition: FrozenSpinsIR,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FrozenSpinsPreviewActivationResponse {
+    pub schema_version: String,
+    pub preview_id: String,
+    pub activation_candidate_token_consumed: bool,
+    pub source_state_revision: u64,
+    pub topology_fingerprint: String,
+    pub mask_sha256: String,
+    pub mask_resource: String,
+    pub revision: u64,
+    #[schema(value_type = FrozenSpinsSchema)]
+    pub definition: FrozenSpinsIR,
 }

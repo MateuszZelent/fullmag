@@ -45493,13 +45493,15 @@ fn frozen_spins_openapi_declares_control_and_data_plane_resources() {
 }
 
 #[tokio::test]
-async fn frozen_spins_preview_reports_unsupported_fem_carrier_before_fdm_fingerprint() {
+async fn frozen_spins_preview_supports_authoritative_fem_p1_carrier() {
     let state = frozen_spins_test_state().await;
+    let mesh = sample_fem_mesh_payload();
+    let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {"backend": "fem"}
         }));
-        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.fem_mesh = Some(mesh);
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
@@ -45523,7 +45525,7 @@ async fn frozen_spins_preview_reports_unsupported_fem_carrier_before_fdm_fingerp
                     serde_json::json!({
                         "expected_revision": 12,
                         "expected_source_state_revision": 7,
-                        "expected_topology_fingerprint": "mesh-candidate",
+                        "expected_topology_fingerprint": topology_fingerprint,
                         "target_object_id": "body",
                         "selector": {"kind": "all_magnetic"}
                     })
@@ -45534,11 +45536,149 @@ async fn frozen_spins_preview_reports_unsupported_fem_carrier_before_fdm_fingerp
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = body_json(response).await;
+    assert_eq!(preview["frozen_dof_count"], 4);
+    assert_eq!(preview["free_dof_count"], 0);
+    assert_eq!(preview["fraction"], 1.0);
     assert_eq!(
-        body_json(response).await["code"],
-        "selection_variant_unsupported"
+        preview["resolved"]["topology_fingerprint"],
+        topology_fingerprint
     );
+}
+
+#[tokio::test]
+async fn frozen_spins_fem_preview_uses_compact_local_to_global_mapping_with_airbox() {
+    let state = frozen_spins_test_state().await;
+    let mut mesh = sample_fem_mesh_payload();
+    mesh.nodes.push([1.0, 1.0, 1.0]);
+    mesh.cells = fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]);
+    mesh.element_markers = vec![7, 0];
+    mesh.object_segments[0].element_count = 1;
+    mesh.object_segments.push(FemMeshObjectSegment {
+        object_id: "__air__".to_string(),
+        geometry_id: None,
+        node_start: 1,
+        node_count: 4,
+        element_start: 1,
+        element_count: 1,
+        boundary_face_start: 0,
+        boundary_face_count: 0,
+    });
+    let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {"backend": "fem"}
+        }));
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0]
+                ]
+            }
+        }))
+        .expect("compact FEM magnetic-node fixture");
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": topology_fingerprint,
+                        "target_object_id": "body",
+                        "selector": {"kind": "all_magnetic"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = body_json(response).await;
+    assert_eq!(preview["frozen_dof_count"], 4);
+    assert_eq!(preview["free_dof_count"], 0);
+    assert_eq!(preview["fraction"], 1.0);
+
+    let mask = app
+        .oneshot(
+            Request::builder()
+                .uri(preview["mask_resource"].as_str().unwrap())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mask.status(), StatusCode::OK);
+    let bytes = body_bytes(mask).await;
+    assert_eq!(u64::from_le_bytes(bytes[8..16].try_into().unwrap()), 4);
+    assert_eq!(bytes[64] & 0b0000_1111, 0b0000_1111);
+}
+
+#[tokio::test]
+async fn frozen_spins_fem_preview_rejects_ambiguous_element_ownership() {
+    let state = frozen_spins_test_state().await;
+    let mut mesh = sample_fem_mesh_payload();
+    mesh.object_segments.push(mesh.object_segments[0].clone());
+    let topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(&mesh);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {"backend": "fem"}
+        }));
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0]
+                ]
+            }
+        }))
+        .expect("ambiguous FEM segment fixture");
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins/previews")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "expected_source_state_revision": 7,
+                        "expected_topology_fingerprint": topology_fingerprint,
+                        "target_object_id": "body",
+                        "selector": {"kind": "all_magnetic"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error = body_json(response).await;
+    assert_eq!(error["code"], "selection_topology_mismatch");
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("2 object segments"));
 }
 
 #[tokio::test]
@@ -45941,6 +46081,150 @@ async fn frozen_spins_preview_identity_includes_selector_not_only_resolved_mask(
     assert_eq!(first["mask_sha256"], second["mask_sha256"]);
     assert_ne!(first["preview_id"], second["preview_id"]);
     assert_eq!(state.frozen_spins_previews.read().await.len(), 2);
+}
+
+#[tokio::test]
+async fn frozen_spins_activation_candidate_is_consumed_once_and_commits_definition() {
+    let state = frozen_spins_test_state().await;
+    let definition = frozen_spins_definition("pin-body", "Pinned body");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .scene_document
+            .as_mut()
+            .expect("scene")
+            .magnetization_constraints = serde_json::from_value(serde_json::json!([{
+            "kind": "frozen_spins",
+            "schema_version": "frozen_spins.v1",
+            "id": "pin-body",
+            "name": "Pinned body",
+            "enabled": true,
+            "selector": {"kind": "all_magnetic"},
+            "reference": {"kind": "capture_current_at_activation"},
+            "membership": {"kind": "static"},
+            "activation": {"kind": "all_stages"},
+            "empty_selection": "error",
+            "inactive_selection": "warn_and_intersect"
+        }]))
+        .expect("authored Frozen Spins fixture");
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let preview_id = preview["preview_id"].as_str().unwrap();
+    let token = preview["activation_candidate_token"].as_str().unwrap();
+    assert!(token.starts_with("fsact-"));
+    let mut activated_definition = definition;
+    activated_definition["name"] = serde_json::json!("Pinned body activated");
+    let request_body = serde_json::json!({
+        "expected_revision": 12,
+        "activation_candidate_token": token,
+        "definition": activated_definition
+    });
+
+    let activated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(request_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let activated_status = activated.status();
+    let activated = body_json(activated).await;
+    assert_eq!(activated_status, StatusCode::OK, "{activated}");
+    assert_eq!(activated["schema_version"], "frozen_spins_activation.v1");
+    assert_eq!(activated["activation_candidate_token_consumed"], true);
+    assert_eq!(activated["revision"], 13);
+    assert_eq!(activated["definition"]["name"], "Pinned body activated");
+    assert_eq!(activated["mask_sha256"], preview["mask_sha256"]);
+
+    let replay = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(request_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(replay).await["code"],
+        "stale_activation_candidate"
+    );
+    assert_eq!(state.frozen_spins_previews.read().await.len(), 0);
+}
+
+#[tokio::test]
+async fn frozen_spins_activation_candidate_rejects_selector_mismatch_without_consuming() {
+    let state = frozen_spins_test_state().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .scene_document
+            .as_mut()
+            .expect("scene")
+            .magnetization_constraints = serde_json::from_value(serde_json::json!([{
+            "kind": "frozen_spins",
+            "schema_version": "frozen_spins.v1",
+            "id": "pin-body",
+            "name": "Pinned body",
+            "enabled": true,
+            "selector": {"kind": "all_magnetic"}
+        }]))
+        .expect("authored Frozen Spins fixture");
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let (status, preview) =
+        create_frozen_spins_preview_for_test(&app, serde_json::json!({"kind": "all_magnetic"}))
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let preview_id = preview["preview_id"].as_str().unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "activation_candidate_token": preview["activation_candidate_token"],
+                        "definition": {
+                            "schema_version": "frozen_spins.v1",
+                            "id": "pin-body",
+                            "name": "Mismatched",
+                            "enabled": true,
+                            "selector": {
+                                "kind": "not",
+                                "expression": {"kind": "all_magnetic"}
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let response_status = response.status();
+    let response = body_json(response).await;
+    assert_eq!(response_status, StatusCode::CONFLICT, "{response}");
+    assert_eq!(response["code"], "activation_candidate_mismatch");
+    assert_eq!(state.frozen_spins_previews.read().await.len(), 1);
 }
 
 #[tokio::test]
