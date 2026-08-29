@@ -19,6 +19,15 @@ export function resolvePnpmInvocation({
   realPath = realpathSync,
 } = {}) {
   if (platform === "win32") {
+    const pinnedPnpmCli = env.FULLMAG_PNPM_CLI?.trim();
+    if (pinnedPnpmCli && pathExists(pinnedPnpmCli)) {
+      return {
+        command: execPath,
+        argsPrefix: [canonicalPath(pinnedPnpmCli, realPath)],
+        shell: false,
+        source: "fullmag-pinned-pnpm",
+      };
+    }
     return {
       command: "pnpm.cmd",
       argsPrefix: [],

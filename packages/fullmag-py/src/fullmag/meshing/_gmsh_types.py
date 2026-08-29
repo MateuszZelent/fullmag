@@ -1143,7 +1143,12 @@ class MeshData:
             interface_marker=certificate.interface_marker,
             _bound_context=carrier.context,
         )
-        actual_fingerprint = mesh_without_certificate.topology_fingerprint_v3()
+        # The prevalidated carrier is minted only after the native (or
+        # reference) topology fingerprint has been bound to this exact mesh.
+        # Re-running the Python byte-by-byte hash here duplicates a linear
+        # pass over the large SP4 CSR arrays and provides no additional
+        # protection over that identity-bound carrier.
+        actual_fingerprint = validation.topology_fingerprint_v3
         if (
             context.actual_topology_fingerprint_v3 != actual_fingerprint
             or context.workspace.topology_fingerprint_v3 != actual_fingerprint
@@ -1264,8 +1269,7 @@ class MeshData:
             require_native=False,
         )
         if native is not None and native.validated_claimed_certificate:
-            expected_fingerprint = self.topology_fingerprint_v3()
-            if native.topology_fingerprint_v3 != expected_fingerprint:
+            if native.topology_fingerprint_v3 != certificate.topology_fingerprint:
                 raise ValueError(
                     "native mixed layer topology certificate fingerprint is stale"
                 )
@@ -1897,7 +1901,7 @@ class MeshData:
         if native is None or not native.validated_claimed_certificate:
             return False
         return (
-            native.topology_fingerprint_v3 == self.topology_fingerprint_v3()
+            native.topology_fingerprint_v3 == certificate.topology_fingerprint
             and native.certificate_payload_sha256
             == _certificate_payload_sha256(certificate)
         )

@@ -3447,6 +3447,13 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
                 "engine_id": "fdm_cpu_reference",
                 "capability_profile_version": "test-profile",
                 "supported_terms": ["exchange", "demag_tensor_fft_newell", "thermal", "stt"],
+                "feature_capabilities": {
+                    "constraint.frozen_spins": {
+                        "status": "development_executable",
+                        "reason": "Frozen Spins test lane is executable but not qualified.",
+                        "scope": "single_grid; precision=double"
+                    }
+                },
                 "supported_demag_realizations": ["tensor_fft_newell"],
                 "preview_quantities": ["m", "H_eff"],
                 "snapshot_quantities": ["m", "H_eff"],
@@ -3530,6 +3537,15 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
         "capability_supported"
     );
     assert_eq!(
+        active_lane["operations"]["constraint.frozen_spins"]["state"],
+        "supported"
+    );
+    assert_eq!(
+        active_lane["operations"]["constraint.frozen_spins"]["requires"][0],
+        "planner_feature:constraint.frozen_spins"
+    );
+    assert_eq!(active_lane["qualification"]["status"], "not_asserted");
+    assert_eq!(
         active_lane["operations"]["initial_magnetization.uniform"]["state"],
         "supported"
     );
@@ -3562,6 +3578,33 @@ async fn status_exposes_planner_owned_active_lane_capability_snapshot() {
     );
     assert!(active_lane["operations"]["study.frequency_response"]["reason"].is_string());
     assert!(active_lane["operations"]["study.frequency_response"]["requires"].is_array());
+
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .expect("live session")
+        .capabilities
+        .as_mut()
+        .expect("planner capabilities")
+        .feature_capabilities
+        .remove("constraint.frozen_spins");
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json = body_json(response).await;
+    assert_eq!(
+        json["capabilities"]["active_lane"]["operations"]["constraint.frozen_spins"]["state"],
+        "unsupported"
+    );
 }
 
 #[tokio::test]

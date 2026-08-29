@@ -970,12 +970,26 @@ verify-frozen-spins-fdm-cuda:
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -c 'set -euo pipefail; cd /workspace; build_dir="/tmp/fullmag-fdm-frozen-spins-contract"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; evidence="$build_dir/fdm-frozen-spins-cuda-runtime-evidence-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm frozen_spins_abi_contract fdm_frozen_spins_cuda_runtime_contract; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^(fdm_frozen_spins_abi_contract|fdm_frozen_spins_cuda_runtime_contract)$"; FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_frozen_spins_cuda_runtime_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"; cargo test -p fullmag-fdm-sys frozen_spins_v1_is_an_append_only_nullable_plan_extension -- --nocapture; cargo test -p fullmag-runner --features cuda native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane -- --nocapture; cargo test -p fullmag-runner constraints::checkpoint -- --nocapture; cargo test -p fullmag-runner fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture -- --nocapture'
 
+verify-frozen-spins-v1-scope:
+    python3 scripts/validate_frozen_spins_v1_scope.py
+    python3 -m unittest scripts.test_validate_frozen_spins_v1_scope -v
+
+capture-frozen-spins-source-identity output="artifacts/qualification/frozen-spins/source-baseline.json":
+    python3 scripts/capture_frozen_spins_source_identity.py --repo-root . --output "{{output}}"
+
+verify-frozen-spins-clean-source:
+    python3 scripts/capture_frozen_spins_source_identity.py --repo-root . --output artifacts/qualification/frozen-spins/source-baseline.json --require-clean
+    python3 -m unittest scripts.test_capture_frozen_spins_source_identity -v
+
+verify-frozen-spins-authoring:
+    python3 scripts/verify_frozen_spins_authoring.py
+
 verify-frozen-spins-qualification:
-    just verify-frozen-spins-fdm-cuda
-    python3 scripts/verify_frozen_spins_ir.py
-    python3 scripts/verify_frozen_spins_python.py
+    just verify-frozen-spins-v1-scope
+    just verify-frozen-spins-clean-source
+    just verify-frozen-spins-authoring
+    python3 -m unittest scripts.test_verify_frozen_spins_qualification -v
     python3 scripts/verify_frozen_spins_qualification.py
-    cargo test -p fullmag-runner constraints:: -- --nocapture
 
 verify-fdm-gpu-m1-charge-native-contract:
     docker compose --profile fem-gpu run --rm --no-deps \

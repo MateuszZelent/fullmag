@@ -361,6 +361,22 @@ __global__ void project_frozen_fp32_kernel(
     }
 }
 
+void launch_project_frozen_fp32(Context &ctx, cudaStream_t stream)
+{
+    if (!ctx.has_frozen_mask) return;
+    const int n = static_cast<int>(ctx.cell_count);
+    const int grid = (n + 255) / 256;
+    project_frozen_fp32_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<float *>(ctx.m.x),
+        static_cast<float *>(ctx.m.y),
+        static_cast<float *>(ctx.m.z),
+        ctx.frozen_mask,
+        static_cast<const float *>(ctx.frozen_reference.x),
+        static_cast<const float *>(ctx.frozen_reference.y),
+        static_cast<const float *>(ctx.frozen_reference.z),
+        n);
+}
+
 /* ── Full Heun step (fp32) ── */
 
 static const int BLOCK_SIZE = 256;

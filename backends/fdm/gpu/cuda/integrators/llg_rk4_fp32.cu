@@ -28,6 +28,7 @@ extern double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy,
 extern double reduce_max_cross_norm_fp32(Context &ctx,
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz, uint64_t n);
+extern void launch_project_frozen_fp32(Context &ctx, cudaStream_t stream);
 
 // Reuse the LLG RHS kernel declared in llg_fp32.cu
 extern __global__ void llg_rhs_fp32_kernel(
@@ -97,6 +98,7 @@ static void copy_field_d2d_fp32(DeviceVectorField &dst, const DeviceVectorField 
 static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
     int n, int grid, float gamma_bar, float alpha, double evaluation_time)
 {
+    launch_project_frozen_fp32(ctx, nullptr);
     if (ctx.enable_exchange) {
         launch_exchange_field_fp32(ctx);
         if (poll_interrupt(ctx)) {
@@ -195,6 +197,7 @@ void launch_rk4_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<const float*>(ctx.k4.x), static_cast<const float*>(ctx.k4.y), static_cast<const float*>(ctx.k4.z),
         static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
         n, dt_f / 6.0f);
+    launch_project_frozen_fp32(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
     context_stage_accepted_step(ctx, dt);

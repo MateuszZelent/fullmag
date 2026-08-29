@@ -5021,12 +5021,17 @@ class StudyMeshHandle:
         mesh_ir = domain["mesh"]
         mesh = mesh_data_from_ir(mesh_ir)
         boundary_map = _boundary_semantic_map(mesh)
-        return MeshArtifact(
+        certificate = mesh.mixed_layer_topology_certificate
+        artifact = MeshArtifact(
             mesh=mesh,
             mesh_name=str(mesh_ir.get("mesh_name", "study_domain")),
             authoring_document=current_authoring,
-            authoring_fingerprint="",
-            topology_fingerprint=mesh.topology_fingerprint_v3(),
+            authoring_fingerprint=mesh_authoring_fingerprint(current_authoring),
+            topology_fingerprint=(
+                certificate.topology_fingerprint
+                if certificate is not None
+                else mesh.topology_fingerprint_v3()
+            ),
             region_markers=[dict(entry) for entry in domain.get("region_markers", [])],
             object_region_markers=[
                 dict(entry) for entry in domain.get("object_region_markers", [])
@@ -5039,6 +5044,14 @@ class StudyMeshHandle:
             ),
             provenance={"origin": "generated"},
         )
+        # Keep the realized typed artifact bound to the current study.  The
+        # asset cache stores a large JSON CSR payload; without this binding the
+        # next ``study.mesh.save()`` call converts that payload back into NumPy
+        # arrays, only to serialize it again immediately.  The authoring
+        # fingerprint is part of the reuse guard above, so changing any mesh
+        # input invalidates this in-memory artifact before it can be reused.
+        _state._active_mesh_artifact = artifact
+        return artifact
 
     def save(self, path: str | Path) -> Path:
         from fullmag.meshing.persistence import save_mesh_artifact

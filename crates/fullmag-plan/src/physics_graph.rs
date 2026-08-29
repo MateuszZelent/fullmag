@@ -1634,6 +1634,7 @@ mod tests {
             requested_common_cell_size: None,
             grid_certificate: Some(certificate),
             layers,
+            frozen_spins: None,
             enable_exchange: false,
             enable_demag: false,
             fft: None,

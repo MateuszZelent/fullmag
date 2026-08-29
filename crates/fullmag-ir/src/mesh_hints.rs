@@ -243,6 +243,9 @@ pub struct FdmMultilayerPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
     pub layers: Vec<FdmLayerPlanIR>,
+    /// Resolved dense mask in canonical native-layer order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_spins: Option<crate::plan::ResolvedFrozenSpinsPlanIR>,
     pub enable_exchange: bool,
     pub enable_demag: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +564,8 @@ struct FdmMultilayerPlanWireIR {
     #[serde(default)]
     grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
     layers: Vec<FdmLayerPlanIR>,
+    #[serde(default)]
+    frozen_spins: Option<crate::plan::ResolvedFrozenSpinsPlanIR>,
     enable_exchange: bool,
     enable_demag: bool,
     #[serde(default)]
@@ -780,6 +785,7 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
             requested_common_cell_size: wire.requested_common_cell_size,
             grid_certificate: wire.grid_certificate,
             layers: wire.layers,
+            frozen_spins: wire.frozen_spins,
             enable_exchange: wire.enable_exchange,
             enable_demag: wire.enable_demag,
             fft: wire.fft,
@@ -823,6 +829,28 @@ impl FdmMultilayerPlanIR {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         self.validate_requested_common_cell_size(&mut errors);
+        if let Some(frozen) = self.frozen_spins.as_ref() {
+            if let Err(error) = frozen.validate_intrinsic() {
+                errors.push(error);
+            }
+            let native_cell_count = self
+                .layers
+                .iter()
+                .map(|layer| {
+                    layer
+                        .native_grid
+                        .iter()
+                        .map(|value| *value as usize)
+                        .product::<usize>()
+                })
+                .sum::<usize>();
+            if frozen.frozen_mask.len() != native_cell_count {
+                errors.push(format!(
+                    "fdm multilayer Frozen Spins mask has {} entries, expected {native_cell_count} in native-layer order",
+                    frozen.frozen_mask.len()
+                ));
+            }
+        }
         if !matches!(self.mode.as_str(), "two_d_stack" | "three_d") {
             errors.push(format!(
                 "fdm multilayer resolved mode '{}' is unsupported",
@@ -1106,6 +1134,7 @@ mod multilayer_contract_tests {
             requested_common_cell_size: None,
             grid_certificate: Some(grid_certificate),
             layers,
+            frozen_spins: None,
             enable_exchange: false,
             enable_demag: true,
             fft: None,

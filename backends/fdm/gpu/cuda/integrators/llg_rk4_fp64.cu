@@ -36,6 +36,7 @@ extern double reduce_max_norm_fp64(Context &ctx, const void *vx, const void *vy,
 extern double reduce_max_cross_norm_fp64(Context &ctx,
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz, uint64_t n);
+extern void launch_project_frozen_fp64(Context &ctx, cudaStream_t stream);
 
 // Reuse the LLG RHS kernel declared in llg_fp64.cu
 extern __global__ void llg_rhs_fp64_kernel(
@@ -106,6 +107,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
     int n, int grid, double gamma_bar, double alpha, double evaluation_time,
     uint64_t stage_id)
 {
+    launch_project_frozen_fp64(ctx, nullptr);
     if (ctx.enable_exchange) {
         launch_exchange_field_fp64(ctx);
         if (poll_interrupt(ctx)) {
@@ -207,6 +209,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<const double*>(ctx.k4.x), static_cast<const double*>(ctx.k4.y), static_cast<const double*>(ctx.k4.z),
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, dt / 6.0);
+    launch_project_frozen_fp64(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Close the transport transaction on the final accepted magnetization for
