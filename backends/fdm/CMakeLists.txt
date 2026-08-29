@@ -333,6 +333,14 @@ add_test(NAME fdm_fsal_retry_transaction_contract
     COMMAND fdm_fsal_retry_transaction_contract)
 
 if(FULLMAG_ENABLE_CUDA)
+    add_executable(fdm_dmi_boundary_cuda_runtime
+        tests/dmi_boundary_cuda_runtime.cpp)
+    target_include_directories(fdm_dmi_boundary_cuda_runtime PRIVATE
+        ${CMAKE_SOURCE_DIR}/include)
+    target_link_libraries(fdm_dmi_boundary_cuda_runtime PRIVATE fullmag_fdm)
+    add_test(NAME fdm_dmi_boundary_cuda_runtime
+        COMMAND fdm_dmi_boundary_cuda_runtime)
+
     add_executable(fdm_fsal_thermal_cuda_runtime_contract
         tests/fsal_thermal_cuda_runtime.cpp)
     target_include_directories(fdm_fsal_thermal_cuda_runtime_contract PRIVATE
