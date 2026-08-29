@@ -1,6 +1,7 @@
 *.sh text eol=lf
 *.bash text eol=lf
 *.diff text eol=lf
+*.mphtxt -text
 justfile text eol=lf
 agent/skills/**/scripts/* text eol=lf
 .agents/skills/**/scripts/* text eol=lf

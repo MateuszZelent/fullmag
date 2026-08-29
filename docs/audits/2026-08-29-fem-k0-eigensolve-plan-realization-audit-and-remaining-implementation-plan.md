@@ -837,3 +837,93 @@ kontynuować wyłącznie w
 `C:\git\fullmag\worktrees\eigensolve-k0-finalization`, zaczynając od R3 i R4.
 Najbliższym celem nie jest merge do `master`, lecz wiarygodny CPU example warstwy
 z dziurą zamykający R7/Q1.
+
+## 16. Aktualizacja po synchronizacji z `origin/master`
+
+### 16.1. Tożsamość i zakres synchronizacji
+
+Na żądanie użytkownika prace pozostały w dedykowanym worktree
+`C:\git\fullmag\worktrees\eigensolve-k0-finalization`, ale gałąź została
+zsynchronizowana z aktualnym `origin/master`:
+
+- pobrany `origin/master`: `c0aa1ff9f` (`Harden production and development build paths`),
+- merge do gałęzi K0: `ddabf6a5e`,
+- checkout `master` nie został zmieniony,
+- nic nie zostało wypchnięte do zdalnego repozytorium.
+
+Merge wniósł 12 commitów i zmiany w 165 plikach. Cztery konflikty zostały
+rozwiązane merytorycznie:
+
+1. `dispatch.rs` zachowuje nowy modułowy orchestrator K0 z
+   `fem/eigen_path.rs` oraz równocześnie refaktor mastera przenoszący CUDA FDM
+   do `solvers/fdm/...`; żadna ze starych zduplikowanych implementacji nie została
+   przywrócona.
+2. `backends/fem/CMakeLists.txt` zachowuje źródła i kontrakty K0
+   (shared-domain, rotated pencil i GPU PETSc/SLEPc), a z mastera przyjmuje
+   wymagane linkowanie `fem_aos_field_contract` z MFEM.
+3. `types.rs` zachowuje `FemEigenExecutionResolutionIR` i przyjmuje nowe typy
+   receiptów reprezentacji FEM.
+4. Ten audyt zachowuje rozszerzoną wersję worktree; pierwotna wersja dodana
+   niezależnie na masterze nie zastąpiła aktualizacji R13–R16.
+
+### 16.2. Wpływ zmian meshu na plan K0
+
+Synchronizacja jest istotna dla przykładu warstwy z dziurą. Master zmienił
+jednocześnie:
+
+- generowanie mixed prism/pyramid w `_gmsh_swept.py` i typy Gmsh,
+- persistence oraz trust policy artefaktów meshu,
+- `Problem`/`World` i przekazywanie mixed certificate do natywnego backendu,
+- `mixed_certificate.rs` i testy natywnego certyfikatu,
+- adaptery AoS oraz rozróżnienie local/true state w runtime MFEM.
+
+W konsekwencji wcześniejsze wyniki managed runtime i przyszły receipt antydotu
+nie mogą być przeniesione na nowy HEAD. R3 zostaje ponownie otwarte dla
+`ddabf6a5e`: trzeba zbudować nowy bundle, sprawdzić jego manifest i wykonać
+kontrakty K0. W R4/R7 należy dodatkowo dowieść, że masa FE, markery magnetic/
+airbox, topology SHA i DOF ordering pochodzą z tej samej, aktualnej reprezentacji
+true-DOF. Sama zgodność liczby węzłów nie jest wystarczająca.
+
+### 16.3. Dowód po rozwiązaniu konfliktów
+
+Na scalonym drzewie wykonano:
+
+- `cargo +nightly check -p fullmag-runner --no-default-features` — **PASS**,
+- `cargo +nightly test -p fullmag-runner --no-default-features --lib dispatch::tests`
+  — pierwszy przebieg ujawnił wyłącznie osiem starych testów po przeniesieniu
+  CUDA/FEM helpers; po aktualizacji 89 testów przeszło, a jedyny pozostały test
+  przeszedł w osobnym powtórzeniu,
+- test wykonujący rzeczywistą ścieżkę CUDA jest teraz jawnie ograniczony przez
+  `cfg(feature = "cuda")`, zamiast fałszywie oczekiwać CUDA w buildzie
+  `--no-default-features`.
+
+Targetowany zestaw Python mixed mesh/persistence/native certificate uruchomiony
+w efemerycznym kontenerze dał początkowo **275 passed, 15 skipped, 2 failed**.
+Obie porażki zostały rozdzielone od K0 i naprawione przyczynowo:
+
+- kandydat kwalifikacyjny `Relocate3D` otrzymuje własne deterministyczne
+  `qualification.v2` algorithm ID nawet wtedy, gdy parametry są równe polityce
+  produkcyjnej; nie podszywa się już pod `fullmag.mixed-tet-repair.v1`,
+- `.mphtxt` ma regułę `-text`, dlatego Windows `core.autocrlf` nie zmienia
+  kanonicznych bajtów fixture COMSOL; working-tree SHA ponownie wynosi
+  `1bb2bfac...a36730f8d`.
+
+Oba wcześniej nieudane testy przeszły następnie w osobnym przebiegu (**2 passed**).
+Pełny zestaw należy jeszcze powtórzyć na zamrożonym commicie, aby zamknąć ten
+source gate jednym terminalnym receipt.
+
+Pełna receptura `verify-fem-frequency-domain-native-contract` rozpoczęta przed
+synchronizacją została świadomie przerwana, ponieważ jej wynik dotyczyłby
+nieaktualnego źródła `c61c3f56a`. Musi zostać powtórzona po tej aktualizacji
+dokumentu na nowym, nieruchomym HEAD.
+
+### 16.4. Zmieniona kolejność najbliższych prac
+
+1. Zamrozić commit zawierający merge, korekty mixed-mesh i ten dokument.
+2. Powtórzyć pełny targetowany zestaw Python na dokładnym SHA.
+3. Wykonać pełne R3 na tym samym, nieruchomym SHA.
+4. Sprawdzić R4 względem nowych adapterów local/true i mixed certificate.
+5. Dopiero na tej bazie kontynuować R5–R7 i policzyć antydot CPU.
+
+Synchronizacja nie zmienia końcowego werdyktu: **NO-GO dla claimu produkcyjnego
+K0**, dopóki nowy HEAD nie uzyska managed CPU Q1, a później niezależnego GPU Q2.

@@ -1371,30 +1371,17 @@ def _repair_mixed_tetrahedra_for_qualification(
 ) -> None:
     """Run one private qualification candidate through the canonical repair."""
     selected_method = "" if method == "default" else method
-    if (
-        selected_method == _STRICT_MIXED_TET_REPAIR_POLICY.method
-        and iterations == _STRICT_MIXED_TET_REPAIR_POLICY.iterations
-    ):
-        policy = _MixedTetRepairPolicy(
-            algorithm_id=_STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id,
-            method=selected_method,
-            iterations=iterations,
-            optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
-            force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
-            local_first=False,
-        )
-    else:
-        policy = _MixedTetRepairPolicy(
-            algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
-                selected_method,
-                iterations,
-            ),
-            method=selected_method,
-            iterations=iterations,
-            optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
-            force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
-            local_first=False,
-        )
+    policy = _MixedTetRepairPolicy(
+        algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
+            selected_method,
+            iterations,
+        ),
+        method=selected_method,
+        iterations=iterations,
+        optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
+        force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
+        local_first=False,
+    )
     _execute_mixed_tet_repair_policy(gmsh, policy)
 
 
