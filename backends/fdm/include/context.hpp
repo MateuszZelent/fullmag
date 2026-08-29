@@ -1693,8 +1693,10 @@ inline TransportReceiptCategory fullmag_fdm_classify_transport_telemetry(
 }
 
 inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
-    uint64_t required_operator_mask =
-        FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR | FULLMAG_FDM_OPERATOR_REDUCTION;
+    uint64_t required_operator_mask = FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR;
+    if (ctx.adaptive_enabled || ctx.stats_mode == FULLMAG_FDM_STATS_FULL) {
+        required_operator_mask |= FULLMAG_FDM_OPERATOR_REDUCTION;
+    }
     if (ctx.enable_exchange) required_operator_mask |= FULLMAG_FDM_OPERATOR_EXCHANGE;
     if (ctx.enable_demag) required_operator_mask |= FULLMAG_FDM_OPERATOR_DEMAG;
     if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {

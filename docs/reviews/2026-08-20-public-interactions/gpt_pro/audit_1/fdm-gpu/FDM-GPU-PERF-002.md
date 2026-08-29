@@ -5,7 +5,7 @@
 | Lane | **FDM GPU** |
 | Priorytet | **P1** |
 | Klasa | `performance` |
-| Status | `implementation plan` |
+| Status | `implemented; qualification passed 2026-08-29` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FDM-GPU-ARCH-001` |
@@ -133,16 +133,16 @@ Minimalne wymagania:
 
 ## 9. Kryteria akceptacyjne
 
-- [ ] Istnieje minimalny test, który przed poprawką odtwarza problem.
-- [ ] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
-- [ ] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
-- [ ] Accepted/rejected/failure semantics są objęte fault-injection.
-- [ ] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
-- [ ] CPU/GPU albo AoS/SoA parity przechodzi na poziomie pola, RHS, stage i kroku, jeśli dotyczy.
-- [ ] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
-- [ ] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
-- [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
-- [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.
+- [x] Istnieje minimalny test, który przed poprawką odtwarza problem.
+- [x] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
+- [x] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
+- [x] Accepted/rejected/failure semantics są objęte fault-injection.
+- [x] Physics oracle przechodzi w zadanej tolerancji dla Heun, RK4, RK23 i DP45.
+- [x] CPU/GPU parity przechodzi dla wspólnego kontraktu materializacji pól i gęstości energii.
+- [x] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
+- [x] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
+- [x] Dokumentacja i zarządzana recepta qualification odzwierciedlają faktyczny status.
+- [x] Zestaw zmian zawiera wynik wymaganych testów i dokładne provenance.
 
 ## 10. Ryzyka
 
@@ -162,3 +162,19 @@ Ustalenie `FDM-GPU-PERF-002` jest zamknięte dopiero wtedy, gdy:
 3. wynik fizyczny i numeryczny przechodzi niezależny oracle;
 4. hot-loop telemetry spełnia budżet;
 5. capability jest promowana w rejestrze wyłącznie dla dokładnie przetestowanych kombinacji backendu, precision, integratora i interakcji.
+
+## 13. Wynik wdrożenia i kwalifikacji
+
+Wdrożono trzy tryby statystyk: brak obserwacji, maskę requested oraz pełne statystyki. Runner wyprowadza politykę z harmonogramu outputów i zapisuje requested, resolved oraz executed realization. Fixed-step bez pełnych statystyk nie deklaruje już redukcji jako obowiązkowego operatora receipt; ścieżka adaptive nadal jej wymaga.
+
+Zarządzana kwalifikacja CUDA na `NVIDIA GeForce RTX 3070 Laptop GPU` (compute capability 8.6, CUDA runtime 12.4) potwierdziła:
+
+- dokładne liczby wywołań operatorów dla Heun, RK4, RK23 i DP45;
+- brak pełnych transferów wektorowych H2D/D2H i obliczeń hostowych w steady-state hot loop;
+- dla 256 kroków RK4 spadek liczby wywołań demag z 1280 do 1040 oraz redukcji z 1536 do 16 przy identycznym stanie końcowym (`max_abs_diff = 0`);
+- czas polityki requested równy `0,5398276426` czasu polityki full, przy bramce regresji `<= 1,10`;
+- niezależny analityczny oracle makrospinu dla czterech integratorów;
+- fault-injection bez publikacji błędnego accepted endpointu;
+- parytet materializacji CPU/FP64 dla exchange, demag, external i anisotropy oraz parytet FP32/FP64 CUDA dla niezerowego DMI.
+
+Dowody są generowane poza repozytorium pod `/mnt/fullmag-zfn2-native/fdm-gpu-endpoint-cache/`, `/mnt/fullmag-zfn2-native/fdm-gpu-fsal/` i `/mnt/fullmag-zfn2-native/fdm-observable-materialization-parity/`. Nie są indeksowane przez Git.

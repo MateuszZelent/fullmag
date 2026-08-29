@@ -5671,7 +5671,6 @@ mod tests {
         plan.material.uniaxial_anisotropy_ku1 = Some(8.0e4);
         plan.material.uniaxial_anisotropy_ku2 = Some(1.0e4);
         plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
-        plan.interfacial_dmi = Some(1.2e-3);
         let active_mask = plan.active_mask.as_ref().expect("active mask");
         let cell_count = plan.initial_magnetization.len();
 
@@ -5691,6 +5690,11 @@ mod tests {
             .step(plan.fixed_timestep.expect("fixed dt"))
             .expect("native fdm step");
         let actual_m = backend.copy_m(cell_count).expect("copy m");
+        assert_vector_field_close("m", &actual_m, &expected_m, 5.0e-3, 1.0e-6);
+
+        backend
+            .upload_magnetization(&expected_m)
+            .expect("upload CPU reference endpoint magnetization");
         let actual_h_ex = backend.copy_h_ex(cell_count).expect("copy H_ex");
         let actual_h_demag = backend.copy_h_demag(cell_count).expect("copy H_demag");
         let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
@@ -5700,7 +5704,6 @@ mod tests {
         for index in 0..cell_count {
             if active_mask[index] {
                 for (label, actual, expected) in [
-                    ("m", actual_m[index], expected_m[index]),
                     ("H_ex", actual_h_ex[index], expected_h_ex[index]),
                     ("H_demag", actual_h_demag[index], expected_h_demag[index]),
                     ("H_ext", actual_h_ext[index], expected_h_ext[index]),

@@ -114,6 +114,26 @@ inline void fullmag_fdm_resolve_operator_device(
     state.host_operator_mask &= ~operator_mask;
 }
 
+inline void fullmag_fdm_set_operator_device_requirement(
+    ExecutionReceiptState &state,
+    uint64_t operator_mask,
+    bool required)
+{
+    std::lock_guard<std::mutex> lock(state.accounting_mutex);
+    if (required) {
+        state.required_operator_mask |= operator_mask;
+        state.device_operator_mask |= operator_mask;
+        state.host_operator_mask &= ~operator_mask;
+        return;
+    }
+    state.required_operator_mask &= ~operator_mask;
+    state.device_operator_mask &= ~operator_mask;
+    state.host_operator_mask &= ~operator_mask;
+    state.executed_device_operator_mask &= ~operator_mask;
+    state.executed_host_operator_mask &= ~operator_mask;
+    state.pending_device_operator_mask &= ~operator_mask;
+}
+
 inline void fullmag_fdm_commit_operator_device_execution(
     ExecutionReceiptState &state,
     uint64_t operator_mask)
