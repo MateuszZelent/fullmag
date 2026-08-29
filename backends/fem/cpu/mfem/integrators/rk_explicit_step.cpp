@@ -208,24 +208,13 @@ bool context_step_explicit_rk_mfem(
     const bool fsal_reuse_allowed = rk_rhs_allows_fsal_reuse(ctx);
     double exchange_energy_final = 0.0;
     double demag_energy_final = 0.0;
-    std::unique_ptr<RkAttemptCacheSnapshot> fallback_attempt_cache;
     RkAttemptCacheSnapshot *attempt_cache = nullptr;
     if (adaptive) {
-        if (ws.attempt_checkpoint != nullptr) {
-            attempt_cache = ws.attempt_checkpoint.get();
-        } else {
-            try {
-                fallback_attempt_cache =
-                    std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
-            } catch (const std::bad_alloc &) {
-                error = "RK attempt cache snapshot allocation failed";
-                return false;
-            }
-            if (!fallback_attempt_cache->prepare(error)) {
-                return false;
-            }
-            attempt_cache = fallback_attempt_cache.get();
+        if (ws.attempt_checkpoint == nullptr) {
+            error = "adaptive RK attempt checkpoint was not prepared during Context setup";
+            return false;
         }
+        attempt_cache = ws.attempt_checkpoint.get();
     }
 
     for (;;) {

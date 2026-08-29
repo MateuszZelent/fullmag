@@ -214,6 +214,7 @@ int run_backend_step_attempt(
             0.0);
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
+    gpu_attempt_hot_loop.reset();
     if (!gpu_rk_finalize_step_stats(ctx, out_stats, error)) {
         rollback();
         set_stage_completion(

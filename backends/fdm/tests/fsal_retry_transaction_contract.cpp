@@ -662,10 +662,16 @@ int main() {
     const auto single_grid_step_api_begin = api.find(
         "int execute_single_grid_step_transaction(");
     const auto single_grid_step_api_end = api.find(
-        "#endif", single_grid_step_api_begin);
+        "int execute_multilayer_step_transaction(", single_grid_step_api_begin);
     const auto single_grid_step_api = api.substr(
         single_grid_step_api_begin,
         single_grid_step_api_end - single_grid_step_api_begin);
+    const auto multilayer_step_api_begin = single_grid_step_api_end;
+    const auto multilayer_step_api_end = api.find(
+        "#endif", multilayer_step_api_begin);
+    const auto multilayer_step_api = api.substr(
+        multilayer_step_api_begin,
+        multilayer_step_api_end - multilayer_step_api_begin);
     const auto transaction_attempt_begin = single_grid_step_api.find(
         "context_begin_step_transaction_attempt(ctx)");
     const auto pre_step_capture_begin = single_grid_step_api.find(
@@ -849,12 +855,14 @@ int main() {
     report(
         rejected_output_is_byte_identical &&
             contains(step_api, "fullmag_fdm_step_stats trial_stats{}") &&
-            contains(step_api, "&trial_stats") &&
-            contains(step_api, "context_publish_accepted_step_stats") &&
-            contains(api, "context_capture_pre_step_state(ctx)") &&
-            contains(api, "ctx.trial_dt = dt_seconds") &&
-            api.find("context_capture_pre_step_state(ctx)") <
-                api.find("ctx.trial_dt = dt_seconds") &&
+            contains(single_grid_step_api, "&trial_stats") &&
+            contains(multilayer_step_api, "&trial_stats") &&
+            contains(single_grid_step_api, "context_publish_accepted_step_stats") &&
+            contains(multilayer_step_api, "context_publish_accepted_step_stats") &&
+            single_grid_step_api.find("context_capture_pre_step_state(ctx)") <
+                single_grid_step_api.find("ctx.trial_dt = dt_seconds") &&
+            multilayer_step_api.find("context_capture_pre_step_state(ctx)") <
+                multilayer_step_api.find("ctx.trial_dt = dt_seconds") &&
             !contains(active_step_api, "ctx->current_dt = dt_seconds") &&
             contains(runtime, "gpu_transport_pre_step_abm_f_n") &&
             contains(runtime, "context_invalidate_observables") &&
@@ -1028,9 +1036,11 @@ int main() {
             contains(context, "step_transaction_rollback_latency_total_ns") &&
             contains(context, "step_transaction_rollback_latency_max_ns") &&
             count_occurrences(capture_runtime, "cudaStreamSynchronize(") == 3 &&
-            count_occurrences(rollback_runtime, "cudaStreamSynchronize(") == 3,
+            count_occurrences(rollback_runtime, "cudaStreamSynchronize(") == 4 &&
+            contains(capture_runtime, "ctx.has_multilayer_plan_v2") &&
+            contains(rollback_runtime, "ctx.has_multilayer_plan_v2"),
         "FDM-GPU-TRX-001-B3-RED",
-        "capture and rollback account real D2D bytes and rollback latency without new synchronization",
+        "capture and rollback account real D2D bytes and explicit rollback completion latency",
         failures);
     const auto rollback_state_restore = rollback_transaction_api.find(
         "context_rollback_pre_step_state(ctx)");

@@ -103,6 +103,8 @@ void rk_workspace_is_owned_by_integrator_module() {
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stepper_workspace.hpp");
     const std::string rk_explicit_step =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
+    const std::string context_builder =
+        read_text_file(root / "core" / "fem_context_builder.cpp");
     const std::string rk_stage_rhs =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
 
@@ -170,10 +172,19 @@ void rk_workspace_is_owned_by_integrator_module() {
         rk_explicit_step.find("bool context_step_explicit_rk_mfem(") != std::string::npos,
         "explicit RK stepper must be defined in rk_explicit_step.cpp");
     check(
-        rk_explicit_step.find("std::make_unique<RkAttemptCacheSnapshot>(ctx, false)") !=
-            std::string::npos &&
-            rk_explicit_step.find("fallback_attempt_cache") != std::string::npos,
-        "adaptive RK stepper must allocate its compatibility checkpoint outside the attempt loop");
+        context_builder.find(
+            "std::make_unique<RkAttemptCacheSnapshot>(ctx, false)") !=
+                std::string::npos &&
+            context_builder.find("attempt_cache_allocation_count += 1") !=
+                std::string::npos &&
+            rk_workspace.find("uint64_t attempt_cache_allocation_count = 0") !=
+                std::string::npos,
+        "adaptive RK attempt checkpoint must be allocated during Context setup");
+    check(
+        rk_explicit_step.find("std::make_unique<RkAttemptCacheSnapshot>") ==
+                std::string::npos &&
+            rk_explicit_step.find("fallback_attempt_cache") == std::string::npos,
+        "adaptive RK step execution must not allocate a compatibility checkpoint");
     check(
         rk_explicit_step.find("compute_adaptive_error_norm_mass_weighted(") !=
             std::string::npos &&
@@ -586,6 +597,17 @@ void configure_oersted_only_rk_context(
     ctx.anisotropy.h_uniaxial_xyz.assign(3u, 0.0);
     ctx.anisotropy.h_cubic_xyz.assign(3u, 0.0);
     ctx.dmi.h_interfacial_xyz.assign(3u, 0.0);
+
+    if (integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ||
+        integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54) {
+        ctx.stepper.workspace.attempt_checkpoint =
+            std::make_unique<fullmag::fem::RkAttemptCacheSnapshot>(ctx, false);
+        ctx.stepper.transaction_telemetry.attempt_cache_allocation_count += 1;
+        std::string error;
+        check(
+            ctx.stepper.workspace.attempt_checkpoint->prepare(error),
+            error.c_str());
+    }
 }
 
 struct StageOerstedCallbackProbe {
@@ -1509,6 +1531,33 @@ void gpu_requested_oersted_only_step_rejects_host_rk_fallback() {
         "GPU-requested Oersted-only step must report the disabled GPU plan prerequisite");
 }
 
+void adaptive_cpu_rk_requires_preallocated_attempt_checkpoint() {
+    fullmag::fem::Context ctx;
+    configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    ctx.adaptive_dt.enabled = true;
+    ctx.adaptive_dt.atol = 1e-8;
+    ctx.adaptive_dt.rtol = 1e-8;
+    ctx.adaptive_dt.dt_min = 1e-9;
+    ctx.adaptive_dt.dt_max = 1.0;
+    ctx.stepper.workspace.attempt_checkpoint.reset();
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag_fem_step_stats stats{};
+    std::string error;
+
+    const bool step_ok = fullmag::fem::context_step_explicit_rk_mfem(
+        ctx, tableau, 0.05, stats, error);
+
+    check(!step_ok, "adaptive CPU RK must fail without its setup-owned attempt checkpoint");
+    check(
+        error.find("attempt checkpoint was not prepared during Context setup") !=
+            std::string::npos,
+        "missing adaptive RK checkpoint must report a setup-contract error");
+    check(
+        ctx.stepper.workspace.attempt_checkpoint == nullptr,
+        "adaptive RK hot path must not allocate a missing attempt checkpoint");
+}
+
 void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     fullmag::fem::Context ctx;
     configure_oersted_only_rk_context(ctx, FULLMAG_FEM_INTEGRATOR_RK23_BS);
@@ -1544,6 +1593,8 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     const std::vector<double> m_before = ctx.state.m_xyz;
     const double time_before = ctx.state.current_time;
     const uint64_t step_before = ctx.state.step_count;
+    auto *const attempt_checkpoint_before =
+        ctx.stepper.workspace.attempt_checkpoint.get();
     ctx.stepper.transaction_telemetry = {};
     check(
         fullmag::fem::context_step_explicit_rk_mfem(
@@ -1568,6 +1619,12 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     check(
         ctx.stepper.transaction_telemetry.attempt_cache_restore_payload_bytes == 0u,
         "adaptive CPU RK cache restore must copy zero payload bytes");
+    check(
+        ctx.stepper.workspace.attempt_checkpoint.get() == attempt_checkpoint_before,
+        "adaptive CPU RK retries must reuse the setup-owned checkpoint instance");
+    check(
+        ctx.stepper.transaction_telemetry.attempt_cache_allocation_count == 0u,
+        "adaptive CPU RK retries must allocate zero attempt checkpoints");
     for (size_t attempt = 0; attempt < ctx.stepper.attempt_trace.records.size(); ++attempt) {
         const auto &record = ctx.stepper.attempt_trace.records[attempt];
         check(record.attempt == attempt, "adaptive CPU RK trace attempt indices must be contiguous");
@@ -2225,6 +2282,7 @@ int main() {
     cpu_stage_transport_callback_rolls_back_native_failure();
     gpu_requested_stage_transport_callback_fails_closed();
     gpu_requested_oersted_only_step_rejects_host_rk_fallback();
+    adaptive_cpu_rk_requires_preallocated_attempt_checkpoint();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
     cpu_rk_guard_failures_preserve_committed_state();
     cpu_rk_failure_injection_rolls_back_complete_published_state();

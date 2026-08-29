@@ -184,6 +184,7 @@ struct RkTransactionTelemetryState {
     uint64_t step_transaction_device_restore_payload_bytes = 0;
     uint64_t attempt_cache_snapshot_payload_bytes = 0;
     uint64_t attempt_cache_restore_payload_bytes = 0;
+    uint64_t attempt_cache_allocation_count = 0;
     uint64_t step_transaction_cpu_snapshot_allocation_count = 0;
     uint64_t step_transaction_peak_rss_bytes = 0;
 };

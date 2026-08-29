@@ -928,9 +928,8 @@ bool rk_restore_active_step_device_checkpoint(Context &ctx, std::string &error)
 }
 
 struct RkAttemptCacheSnapshot::Impl {
-    explicit Impl(Context &context, bool profile_enabled)
-        : ctx(context),
-          profile_enabled(profile_enabled)
+    explicit Impl(Context &context)
+        : ctx(context)
     {
     }
 
@@ -958,7 +957,6 @@ struct RkAttemptCacheSnapshot::Impl {
     }
 
     Context &ctx;
-    bool profile_enabled = false;
 };
 
 RkAttemptCacheSnapshot::RkAttemptCacheSnapshot(Context &ctx)
@@ -972,7 +970,7 @@ RkAttemptCacheSnapshot::RkAttemptCacheSnapshot(Context &ctx, bool capture_now)
     const bool profile_enabled = step_profile_enabled(ctx);
     const auto capture_start =
         capture_now && profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
-    impl_ = std::make_unique<Impl>(ctx, profile_enabled);
+    impl_ = std::make_unique<Impl>(ctx);
     if (capture_now) {
         impl_->capture();
         if (profile_enabled) {
@@ -1007,7 +1005,7 @@ bool RkAttemptCacheSnapshot::capture(std::string &error)
         error = "RK attempt cache snapshot is not initialized";
         return false;
     }
-    const bool profile_enabled = impl_->profile_enabled;
+    const bool profile_enabled = step_profile_enabled(impl_->ctx);
     const auto capture_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     try {
         impl_->capture();
@@ -1030,7 +1028,7 @@ RkAttemptCacheSnapshot::~RkAttemptCacheSnapshot() = default;
 
 void RkAttemptCacheSnapshot::restore_preserving_attempt_counters()
 {
-    const bool profile_enabled = impl_->profile_enabled;
+    const bool profile_enabled = step_profile_enabled(impl_->ctx);
     const auto restore_start = profile_enabled ? SteadyClock::now() : SteadyClock::time_point{};
     impl_->restore();
     if (profile_enabled) {

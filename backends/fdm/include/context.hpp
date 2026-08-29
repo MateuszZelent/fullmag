@@ -139,6 +139,7 @@ struct DeviceMultilayerLayer {
     uint64_t cell_count = 0;
     uint64_t convolution_cell_count = 0;
     DeviceVectorField m;
+    DeviceVectorField pre_step_m;
     DeviceVectorField h_ex;
     DeviceVectorField h_demag;
     DeviceVectorField h_dmi;
@@ -503,6 +504,7 @@ struct Context {
     DeviceVectorField gpu_transport_pre_step_abm_f_n2;
     bool gpu_transport_pre_step_m_valid = false;
     bool gpu_transport_pre_step_abm_valid = false;
+    bool multilayer_pre_step_m_valid = false;
     uint64_t gpu_transport_pre_step_step_count = 0;
     uint64_t gpu_transport_pre_step_accepted_step_index = 0;
     uint64_t gpu_transport_pre_step_accepted_state_revision = 1;
@@ -1692,6 +1694,13 @@ inline TransportReceiptCategory fullmag_fdm_classify_transport_telemetry(
     }
 }
 
+inline bool fullmag_fdm_multilayer_has_active_mask(const Context &ctx) {
+    for (const auto &layer : ctx.multilayer_layers) {
+        if (layer.has_active_mask) return true;
+    }
+    return false;
+}
+
 inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
     uint64_t required_operator_mask = FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR;
     if (ctx.adaptive_enabled || ctx.stats_mode == FULLMAG_FDM_STATS_FULL) {
@@ -1709,6 +1718,7 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD;
     }
     if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask ||
+        fullmag_fdm_multilayer_has_active_mask(ctx) ||
         ctx.has_slonczewski_active_mask || ctx.has_sot_active_mask) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_MASKS;
     }
@@ -1755,6 +1765,25 @@ inline void fullmag_fdm_note_operator_device_execution(
 {
     fullmag_fdm_note_operator_device_launch(
         *ctx.execution_receipt, operator_mask);
+}
+
+inline void fullmag_fdm_note_multilayer_rhs_device_execution(Context &ctx) {
+    fullmag_fdm_note_operator_device_execution(
+        ctx, FULLMAG_FDM_OPERATOR_MULTILAYER_INTERACTIONS);
+    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
+    }
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_ANISOTROPY);
+    }
+    if (ctx.has_external_field) {
+        fullmag_fdm_note_operator_device_execution(
+            ctx, FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD);
+    }
+    if (fullmag_fdm_multilayer_has_active_mask(ctx)) {
+        fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_MASKS);
+    }
 }
 
 inline bool fullmag_fdm_note_llg_rhs_torque_device_launch(

@@ -1168,6 +1168,7 @@ static void free_multilayer_plan_v2(Context &ctx) {
     free_multilayer_fft_workspaces(ctx);
     for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
         free_vector_field(layer.m);
+        free_vector_field(layer.pre_step_m);
         free_vector_field(layer.h_ex);
         free_vector_field(layer.h_demag);
         free_vector_field(layer.h_dmi);
@@ -2155,7 +2156,71 @@ static bool copy_field_d2d_async(
                             cudaMemcpyDeviceToDevice, stream) == cudaSuccess;
 }
 
+static void capture_pre_step_metadata(Context &ctx) {
+    ctx.gpu_transport_pre_step_step_count = ctx.step_count;
+    ctx.gpu_transport_pre_step_accepted_step_index = ctx.accepted_step_index;
+    ctx.gpu_transport_pre_step_accepted_state_revision = ctx.accepted_state_revision;
+    ctx.gpu_transport_pre_step_current_time = ctx.current_time;
+    ctx.gpu_transport_pre_step_current_dt = ctx.current_dt;
+    ctx.gpu_transport_pre_step_adaptive_has_previous_error =
+        ctx.adaptive_has_previous_error;
+    ctx.gpu_transport_pre_step_adaptive_previous_error = ctx.adaptive_previous_error;
+    ctx.gpu_transport_pre_step_abm_startup = ctx.abm_startup;
+    ctx.gpu_transport_pre_step_abm_last_dt = ctx.abm_last_dt;
+}
+
+static void restore_pre_step_metadata(Context &ctx) {
+    ctx.step_count = ctx.gpu_transport_pre_step_step_count;
+    ctx.accepted_step_index = ctx.gpu_transport_pre_step_accepted_step_index;
+    ctx.accepted_state_revision = ctx.gpu_transport_pre_step_accepted_state_revision;
+    ctx.current_time = ctx.gpu_transport_pre_step_current_time;
+    ctx.current_dt = ctx.gpu_transport_pre_step_current_dt;
+    ctx.trial_dt = 0.0;
+    ctx.fsal_valid = false;
+    ctx.fsal_pending = false;
+    ctx.accepted_step_pending = false;
+    ctx.adaptive_has_previous_error =
+        ctx.gpu_transport_pre_step_adaptive_has_previous_error;
+    ctx.adaptive_previous_error = ctx.gpu_transport_pre_step_adaptive_previous_error;
+    ctx.abm_startup = ctx.gpu_transport_pre_step_abm_startup;
+    ctx.abm_last_dt = ctx.gpu_transport_pre_step_abm_last_dt;
+}
+
 bool context_capture_pre_step_state(Context &ctx) {
+    if (ctx.has_multilayer_plan_v2) {
+        const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? sizeof(double) : sizeof(float);
+        const cudaStream_t stream = context_compute_stream(ctx);
+        uint64_t total_cells = 0;
+        for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+            if (layer.cell_count > std::numeric_limits<uint64_t>::max() - total_cells) {
+                ctx.step_transaction_accounting_valid = false;
+                ctx.last_error = "multilayer transaction cell count overflow";
+                return false;
+            }
+            total_cells += layer.cell_count;
+            const size_t bytes = static_cast<size_t>(layer.cell_count) * scalar_bytes;
+            if (!copy_field_d2d_async(
+                    layer.pre_step_m, layer.m, bytes, stream)) {
+                ctx.step_transaction_accounting_valid = false;
+                ctx.last_error = "failed to capture multilayer pre-step magnetization";
+                return false;
+            }
+        }
+        // Multilayer integrators use the same compute stream.  Keeping the
+        // snapshot asynchronous preserves ordering without adding a hot-loop
+        // synchronization; the receipt or rollback boundary observes errors.
+        ctx.multilayer_pre_step_m_valid = true;
+        capture_pre_step_metadata(ctx);
+        uint64_t payload_bytes = 0;
+        if (!context_step_transaction_payload_bytes(
+                total_cells, scalar_bytes, false, payload_bytes)) {
+            ctx.step_transaction_accounting_valid = false;
+        } else {
+            (void)context_commit_step_transaction_capture_sample(ctx, payload_bytes);
+        }
+        return true;
+    }
     if (ctx.cell_count == 0) return true;
     if (ctx.gpu_transport_pre_step_m.x == nullptr &&
         !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) {
@@ -2206,16 +2271,7 @@ bool context_capture_pre_step_state(Context &ctx) {
         }
         ctx.gpu_transport_pre_step_abm_valid = true;
     }
-    ctx.gpu_transport_pre_step_step_count = ctx.step_count;
-    ctx.gpu_transport_pre_step_accepted_step_index = ctx.accepted_step_index;
-    ctx.gpu_transport_pre_step_accepted_state_revision = ctx.accepted_state_revision;
-    ctx.gpu_transport_pre_step_current_time = ctx.current_time;
-    ctx.gpu_transport_pre_step_current_dt = ctx.current_dt;
-    ctx.gpu_transport_pre_step_adaptive_has_previous_error =
-        ctx.adaptive_has_previous_error;
-    ctx.gpu_transport_pre_step_adaptive_previous_error = ctx.adaptive_previous_error;
-    ctx.gpu_transport_pre_step_abm_startup = ctx.abm_startup;
-    ctx.gpu_transport_pre_step_abm_last_dt = ctx.abm_last_dt;
+    capture_pre_step_metadata(ctx);
     uint64_t step_transaction_capture_d2d_bytes = 0;
     if (!context_step_transaction_payload_bytes(
             ctx.cell_count, scalar_bytes,
@@ -2232,6 +2288,52 @@ bool context_capture_pre_step_state(Context &ctx) {
 bool context_rollback_pre_step_state(Context &ctx) {
     if (ctx.step_transaction_rollback_sample_pending) {
         context_discard_step_transaction_rollback_sample(ctx);
+    }
+    if (ctx.has_multilayer_plan_v2) {
+        if (!ctx.multilayer_pre_step_m_valid) {
+            context_discard_step_transaction_rollback_sample(ctx);
+            ctx.last_error = "multilayer pre-step magnetization snapshot is unavailable";
+            return false;
+        }
+        const size_t scalar_bytes = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? sizeof(double) : sizeof(float);
+        const cudaStream_t stream = context_compute_stream(ctx);
+        const auto rollback_started_at = std::chrono::steady_clock::now();
+        uint64_t total_cells = 0;
+        for (DeviceMultilayerLayer &layer : ctx.multilayer_layers) {
+            if (layer.cell_count > std::numeric_limits<uint64_t>::max() - total_cells) {
+                context_discard_step_transaction_rollback_sample(ctx);
+                ctx.last_error = "multilayer rollback cell count overflow";
+                return false;
+            }
+            total_cells += layer.cell_count;
+            const size_t bytes = static_cast<size_t>(layer.cell_count) * scalar_bytes;
+            if (!copy_field_d2d_async(layer.m, layer.pre_step_m, bytes, stream)) {
+                context_discard_step_transaction_rollback_sample(ctx);
+                ctx.last_error = "failed to restore multilayer pre-step magnetization";
+                return false;
+            }
+        }
+        if (cudaStreamSynchronize(stream) != cudaSuccess) {
+            context_discard_step_transaction_rollback_sample(ctx);
+            ctx.last_error = "failed to complete multilayer magnetization rollback";
+            return false;
+        }
+        const auto rollback_finished_at = std::chrono::steady_clock::now();
+        const uint64_t rollback_latency_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                rollback_finished_at - rollback_started_at).count());
+        uint64_t rollback_bytes = 0;
+        if (!context_step_transaction_payload_bytes(
+                total_cells, scalar_bytes, false, rollback_bytes)) {
+            context_discard_step_transaction_rollback_sample(ctx);
+        } else {
+            (void)context_stage_step_transaction_rollback_sample(
+                ctx, rollback_bytes, rollback_latency_ns);
+        }
+        ctx.multilayer_pre_step_m_valid = false;
+        restore_pre_step_metadata(ctx);
+        return true;
     }
     if (!ctx.gpu_transport_pre_step_m_valid) {
         context_discard_step_transaction_rollback_sample(ctx);
@@ -2294,26 +2396,14 @@ bool context_rollback_pre_step_state(Context &ctx) {
     }
     ctx.gpu_transport_pre_step_m_valid = false;
     ctx.gpu_transport_pre_step_abm_valid = false;
-    ctx.step_count = ctx.gpu_transport_pre_step_step_count;
-    ctx.accepted_step_index = ctx.gpu_transport_pre_step_accepted_step_index;
-    ctx.accepted_state_revision = ctx.gpu_transport_pre_step_accepted_state_revision;
-    ctx.current_time = ctx.gpu_transport_pre_step_current_time;
-    ctx.current_dt = ctx.gpu_transport_pre_step_current_dt;
-    ctx.trial_dt = 0.0;
-    ctx.fsal_valid = false;
-    ctx.fsal_pending = false;
-    ctx.accepted_step_pending = false;
-    ctx.adaptive_has_previous_error =
-        ctx.gpu_transport_pre_step_adaptive_has_previous_error;
-    ctx.adaptive_previous_error = ctx.gpu_transport_pre_step_adaptive_previous_error;
-    ctx.abm_startup = ctx.gpu_transport_pre_step_abm_startup;
-    ctx.abm_last_dt = ctx.gpu_transport_pre_step_abm_last_dt;
+    restore_pre_step_metadata(ctx);
     return true;
 }
 
 void context_discard_pre_step_state(Context &ctx) {
     ctx.gpu_transport_pre_step_m_valid = false;
     ctx.gpu_transport_pre_step_abm_valid = false;
+    ctx.multilayer_pre_step_m_valid = false;
 }
 
 bool context_prepare_checkpoint_import_staging(
@@ -2672,6 +2762,10 @@ bool context_upload_multilayer_plan_v2(
         dst.has_active_mask = src.active_mask != nullptr;
 
         if (!alloc_vector_field_cells(ctx, dst.m, dst.cell_count, "multilayer_m")) {
+            return fail();
+        }
+        if (!alloc_vector_field_cells(
+                ctx, dst.pre_step_m, dst.cell_count, "multilayer_pre_step_m")) {
             return fail();
         }
         if (!alloc_vector_field_cells(ctx, dst.h_ex, dst.cell_count, "multilayer_h_ex")) {

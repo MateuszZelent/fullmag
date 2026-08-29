@@ -5,7 +5,7 @@
 | Lane | **FDM GPU** |
 | Priorytet | **P1** |
 | Klasa | `transactionality` |
-| Status | `implementation plan` |
+| Status | `source/test remediated; global qualification pending` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FDM-GPU-PERF-004`, `FDM-GPU-NUM-001` |
@@ -133,13 +133,46 @@ Minimalne wymagania:
 
 ## 9. Kryteria akceptacyjne
 
-- [ ] Istnieje minimalny test, który przed poprawką odtwarza problem.
+### Stan wykonania — 2026-08-29
+
+Publiczna ścieżka multilayer omijała `StepTransactionController`: po wstrzyknięciu
+awarii final-stats krok nie kończył się błędem i nie uruchamiał rollbacku. RED
+reproducer zakończył się komunikatem `multilayer final-stats fault did not fail
+the transaction`. Naprawa objęła jeden wspólny przebieg begin/capture/integrate/
+final-stats/receipt/transport/commit/publish/rollback, setup-owned snapshot
+magnetyzacji każdej warstwy oraz staged commit czasu, `dt`, licznika kroku i
+`accepted_step_index`.
+
+Fault-injection obejmuje Heun/RK4/RK23 × FP32/FP64 oraz fazy integratora,
+final-stats, receipt i transport-commit. Każda awaria pozostawia statystyki
+wywołującego bez zmian, przywraca magnetyzację bitowo, publikuje dokładną liczbę
+bajtów D2D i pozwala na retry bitowo zgodny z czystym krokiem kontrolnym.
+Istniejący kontrakt single-grid dodatkowo pokrywa RK23/DP45, stabilny termiczny
+RNG key, FSAL i dynamiczny Oersted. Checkpoint/restart jest teraz wykonywany
+zarówno dla przypadku deterministycznego, jak i Brown thermal.
+
+Dowody wykonane na `NVIDIA GeForce RTX 3070 Laptop GPU`:
+
+- `just verify-fdm-gpu-transaction-contract` — CTest **3/3**, dwa dokładne testy
+  runnera **2/2**, termiczny oracle/retry **PASS**, requested `fdm`, resolved
+  `fdm_cuda`, executed `cuda_fdm`, fallback `0`;
+- `just verify-fdm-gpu-abi-contract` — Rust layout **2/2**, C sentinel **1/1** i
+  `cargo check -p fullmag-runner --features cuda` — **PASS**;
+- `just verify-fdm-gpu-transaction-compute-sanitizer` — **NIEZALICZONE**:
+  testy poprzedzające sanitizer przechodzą, ale WDDM odrzuca inicjalizację,
+  ponieważ systemowe klucze interfejsu debugowania NVIDIA są wyłączone. Nie jest
+  to dowód braku błędów pamięci; gate pozostaje otwarty.
+
+Drzewa CMake, targety Cargo i JSON evidence znajdują się na zewnętrznym
+loop-backed ext4 i nie są częścią checkoutu ani indeksu Git.
+
+- [x] Istnieje minimalny test, który przed poprawką odtwarza problem.
 - [ ] Authoring, IR, planner, runner i backend transportują pełny kontrakt.
-- [ ] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
-- [ ] Accepted/rejected/failure semantics są objęte fault-injection.
-- [ ] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
+- [x] Niewspierane konfiguracje kończą się fail-closed przed rozpoczęciem kroku.
+- [x] Accepted/rejected/failure semantics są objęte fault-injection.
+- [x] Physics oracle i/lub directional derivative przechodzą w zadanej tolerancji.
 - [ ] CPU/GPU albo AoS/SoA parity przechodzi na poziomie pola, RHS, stage i kroku, jeśli dotyczy.
-- [ ] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
+- [x] Telemetryka dowodzi liczby operatorów, transferów, synchronizacji i rebuildów.
 - [ ] Steady-state performance gate nie wykazuje regresji ponad ustalony próg.
 - [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
 - [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.

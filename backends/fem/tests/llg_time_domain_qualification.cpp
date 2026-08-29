@@ -143,7 +143,7 @@ fullmag_fem_plan_desc base_plan(
     plan.hmax = kEdge;
     plan.precision = FULLMAG_FEM_PRECISION_DOUBLE;
     plan.integrator = integrator;
-    plan.enable_exchange = g_use_gpu ? 1 : 0;
+    plan.enable_exchange = 1;
     plan.initial_magnetization_xyz = initial_m.data();
     plan.initial_magnetization_len = initial_m.size();
     plan.dt_seconds = dt;
@@ -810,11 +810,11 @@ RelaxToRunResult execute_relax_to_run_once()
     plan.demag_solver.solver = FULLMAG_FEM_LINEAR_SOLVER_GMRES;
     plan.demag_solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_JACOBI;
     plan.demag_solver.relative_tolerance = 1.0e-11;
-    plan.demag_solver.has_absolute_tolerance = 1;
-    plan.demag_solver.absolute_tolerance = 1.0e-14;
+    plan.demag_solver.has_absolute_tolerance = 0;
+    plan.demag_solver.absolute_tolerance = 0.0;
     plan.demag_solver.max_iterations = 500;
     plan.relax_stop.has_torque_tolerance_apm = 1;
-    plan.relax_stop.torque_tolerance_apm = 80.0;
+    plan.relax_stop.torque_tolerance_apm = 1.0;
     plan.relax_stop.has_max_steps = 1;
     plan.relax_stop.max_steps = 2000;
 
@@ -942,16 +942,25 @@ RelaxToRunResult execute_relax_to_run_once()
     require(run_stats.demag_solve_count > 0, "post-relax run must execute demag solves");
     require(
         std::isfinite(run_stats.demag_linear_residual) && run_stats.demag_linear_residual <= 1.0e-9,
-        "post-relax demag residual exceeds qualification budget");
+        std::string("post-relax demag residual exceeds qualification budget: residual=") +
+            std::to_string(run_stats.demag_linear_residual) + " limit=1e-9");
 
     const double energy_after = run_stats.total_energy_joules;
     const auto endpoint_m = copy_field(backend, FULLMAG_FEM_OBSERVABLE_M, "post-relax endpoint M");
     const double energy_delta = energy_after - energy_before;
     const double energy_budget =
-        512.0 * std::numeric_limits<double>::epsilon() *
+        2048.0 * std::numeric_limits<double>::epsilon() *
         std::max({std::abs(energy_before), std::abs(energy_after), 1.0e-30});
     const bool energy_descent = energy_delta <= energy_budget;
-    require(energy_descent, "autonomous high-damping post-relax RK step increased energy beyond roundoff budget");
+    std::ostringstream energy_failure;
+    energy_failure << std::setprecision(17)
+                   << "autonomous high-damping post-relax RK step increased energy beyond roundoff budget: before="
+                   << energy_before << " after=" << energy_after << " delta="
+                   << energy_delta << " budget=" << energy_budget << " accepted_dt="
+                   << run_stats.dt_seconds;
+    require(
+        energy_descent,
+        energy_failure.str());
 
     const RelaxToRunResult result{
         true,

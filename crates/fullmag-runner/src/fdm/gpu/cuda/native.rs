@@ -3868,9 +3868,21 @@ mod tests {
 
     #[test]
     fn llg_checkpoint_wrapper_restores_bitwise_and_rejects_corruption() {
+        assert_llg_checkpoint_round_trip(false);
+        assert_llg_checkpoint_round_trip(true);
+    }
+
+    fn assert_llg_checkpoint_round_trip(thermal: bool) {
         let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
         plan.enable_exchange = false;
         plan.fixed_timestep = Some(1.0e-15);
+        if thermal {
+            plan.temperature = Some(300.0);
+            plan.thermal_seed_config = Some(fullmag_ir::ThermalSeedConfig {
+                policy: fullmag_ir::SeedPolicy::Fixed,
+                seed: Some(0x5a17),
+            });
+        }
         let dt = plan.fixed_timestep.expect("fixed timestep");
         let configure_identity = |backend: &mut NativeFdmBackend| {
             backend
