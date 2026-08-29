@@ -33,6 +33,12 @@ struct FemGpuAcceptedEvaluationToken {
     uint64_t invalidations = 0;
 };
 
+enum class GpuRelaxNcgFailurePoint : uint32_t {
+    None = 0,
+    AfterTrialMagnetization = 1,
+    DuringAcceptedStatistics = 2,
+};
+
 struct FemGpuRelaxationDeviceState {
     FemGpuComponentField projected_gradient_accepted_h_eff;
     FemGpuComponentField nonlinear_cg_direction;
@@ -44,6 +50,9 @@ struct FemGpuRelaxationDeviceState {
     uint32_t accepted_evaluation_cache_hits_current_step = 0;
     uint32_t accepted_evaluation_cache_misses_current_step = 0;
     uint32_t accepted_evaluation_invalidations_current_step = 0;
+    GpuRelaxNcgFailurePoint next_nonlinear_cg_failure =
+        GpuRelaxNcgFailurePoint::None;
+    uint64_t nonlinear_cg_failures_injected = 0;
     uint32_t direct_energy_refinements_current_step = 0;
     uint64_t direct_energy_refinements = 0;
 };

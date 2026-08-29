@@ -17,11 +17,6 @@ namespace {
 using TransactionTelemetry = GpuRkTransactionTelemetryRuntimeState;
 constexpr size_t kMaxTransactionTimingEventPairs = 128u;
 
-enum class TransactionPayload {
-    RkAuthoritative,
-    RelaxationPublished,
-};
-
 bool transaction_profile_enabled(const Context &ctx)
 {
     const auto &timings = ctx.gpu_state.rk_phase_timings;
@@ -146,30 +141,12 @@ bool record_event(void *event, cudaStream_t stream, const char *label, std::stri
     return true;
 }
 
-uint64_t transaction_payload_bytes(
-    const Context &ctx,
-    TransactionPayload payload)
+uint64_t transaction_payload_bytes(const Context &ctx)
 {
-    const auto &gpu = ctx.gpu_state.device;
-    const uint64_t node_count = gpu.lifecycle.node_count;
-    // RK owns only accepted m and the FSAL endpoint. Published H fields are
-    // derived and invalidated on rollback. The direct minimizer retains the
-    // legacy complete snapshot until its separate transaction is migrated.
-    const uint64_t component_field_count =
-        payload == TransactionPayload::RkAuthoritative ? 2u : 13u;
-    uint64_t bytes = saturating_mul(
-        saturating_mul(node_count, component_field_count * 3u), sizeof(double));
-    if (payload == TransactionPayload::RelaxationPublished &&
-        gpu.demag_poisson.poisson_solution != nullptr) {
-        bytes = saturating_add(bytes, saturating_mul(
-            gpu.demag_poisson.scalar_dof_count, sizeof(double)));
-    }
-    if (payload == TransactionPayload::RelaxationPublished &&
-        gpu.demag_poisson.poisson_solution_full != nullptr) {
-        bytes = saturating_add(bytes, saturating_mul(
-            gpu.demag_poisson.full_scalar_dof_count, sizeof(double)));
-    }
-    return bytes;
+    // Authoritative m plus the FSAL endpoint k0: two three-component fields.
+    return saturating_mul(
+        saturating_mul(ctx.gpu_state.device.lifecycle.node_count, 2u * 3u),
+        sizeof(double));
 }
 
 bool collect_event_pairs(
@@ -198,39 +175,10 @@ bool collect_event_pairs(
     return true;
 }
 
-bool copy_scalar(
-    const double *source,
-    double *destination,
-    uint64_t count,
-    cudaStream_t stream,
-    const char *label,
-    std::string &error)
-{
-    if (source == nullptr) {
-        return true;
-    }
-    if (destination == nullptr) {
-        error = std::string(label) + " backup storage is unavailable";
-        return false;
-    }
-    const auto rc = cudaMemcpyAsync(
-        destination,
-        source,
-        static_cast<size_t>(count) * sizeof(double),
-        cudaMemcpyDeviceToDevice,
-        stream);
-    if (rc != cudaSuccess) {
-        error = std::string(label) + " failed: " + cudaGetErrorString(rc);
-        return false;
-    }
-    return true;
-}
-
-bool copy_published_device_state(
+bool copy_authoritative_device_state(
     Context &ctx,
     bool restore,
     bool record_telemetry,
-    TransactionPayload payload,
     std::string &error)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -281,53 +229,6 @@ bool copy_published_device_state(
         return false;
     }
 
-    auto &fields = gpu.fields;
-    if (payload == TransactionPayload::RelaxationPublished &&
-        (!copy_component(fields.h_ex, rk.transaction_h_ex, "GPU relaxation transaction H_ex copy") ||
-        !copy_component(fields.h_demag, rk.transaction_h_demag, "GPU relaxation transaction H_demag copy") ||
-        !copy_component(fields.h_drive, rk.transaction_h_drive, "GPU relaxation transaction H_drive copy") ||
-        !copy_component(fields.h_ani, rk.transaction_h_ani, "GPU relaxation transaction H_ani copy") ||
-        !copy_component(fields.h_cubic_ani, rk.transaction_h_cubic_ani, "GPU relaxation transaction H_cubic copy") ||
-        !copy_component(fields.h_dmi, rk.transaction_h_dmi, "GPU relaxation transaction H_dmi copy") ||
-        !copy_component(fields.h_bulk_dmi, rk.transaction_h_bulk_dmi, "GPU relaxation transaction H_bulk_dmi copy") ||
-        !copy_component(fields.h_oe, rk.transaction_h_oe, "GPU relaxation transaction H_oe copy") ||
-        !copy_component(fields.h_therm, rk.transaction_h_therm, "GPU relaxation transaction H_therm copy") ||
-        !copy_component(fields.h_mel, rk.transaction_h_mel, "GPU relaxation transaction H_mel copy") ||
-        !copy_component(fields.h_eff, rk.transaction_h_eff, "GPU relaxation transaction H_eff copy"))) {
-        return false;
-    }
-
-    auto copy_optional_scalar = [&] (
-        double *live,
-        double *backup,
-        uint64_t scalar_count,
-        const char *label) {
-        if (live == nullptr) {
-            return true;
-        }
-        return restore
-            ? copy_scalar(backup, live, scalar_count, stream, label, error)
-            : copy_scalar(live, backup, scalar_count, stream, label, error);
-    };
-    if (payload == TransactionPayload::RelaxationPublished &&
-        gpu.demag_poisson.poisson_solution != nullptr &&
-        !copy_optional_scalar(
-            gpu.demag_poisson.poisson_solution,
-            rk.transaction_poisson_solution,
-            gpu.demag_poisson.scalar_dof_count,
-            "GPU RK transaction Poisson solution copy")) {
-        return false;
-    }
-    if (payload == TransactionPayload::RelaxationPublished &&
-        gpu.demag_poisson.poisson_solution_full != nullptr &&
-        !copy_optional_scalar(
-            gpu.demag_poisson.poisson_solution_full,
-            rk.transaction_poisson_solution_full,
-            gpu.demag_poisson.full_scalar_dof_count,
-            "GPU RK transaction full Poisson solution copy")) {
-        return false;
-    }
-
     if (record_telemetry) {
         if (!record_event(
                 events[used].stop_event,
@@ -340,7 +241,7 @@ bool copy_published_device_state(
         }
         used += 1u;
         auto &bytes = restore ? telemetry.restore_bytes : telemetry.capture_bytes;
-        bytes = saturating_add(bytes, transaction_payload_bytes(ctx, payload));
+        bytes = saturating_add(bytes, transaction_payload_bytes(ctx));
     }
 
     if (restore) {
@@ -377,39 +278,21 @@ bool gpu_rk_capture_step_transaction_device(Context &ctx, std::string &error)
          !ctx.gpu_state.rk_transaction_telemetry.restore_events.empty())) {
         gpu_rk_destroy_step_transaction_timing(ctx);
     }
-    return copy_published_device_state(
+    return copy_authoritative_device_state(
         ctx,
         false,
         profile_enabled,
-        TransactionPayload::RkAuthoritative,
         error);
 }
 
 bool gpu_rk_restore_step_transaction_device(Context &ctx, std::string &error)
 {
     const bool profile_enabled = transaction_profile_enabled(ctx);
-    return copy_published_device_state(
+    return copy_authoritative_device_state(
         ctx,
         true,
         profile_enabled,
-        TransactionPayload::RkAuthoritative,
         error);
-}
-
-bool gpu_relax_capture_step_transaction_device_unprofiled(
-    Context &ctx,
-    std::string &error)
-{
-    return copy_published_device_state(
-        ctx, false, false, TransactionPayload::RelaxationPublished, error);
-}
-
-bool gpu_relax_restore_step_transaction_device_unprofiled(
-    Context &ctx,
-    std::string &error)
-{
-    return copy_published_device_state(
-        ctx, true, false, TransactionPayload::RelaxationPublished, error);
 }
 
 bool gpu_rk_collect_step_transaction_timing(Context &ctx, std::string &error)

@@ -117,12 +117,6 @@ bool all_gpu_state_owned_pointers_are_null(const fullmag::fem::FemGpuState &gpu)
              &gpu.fields.h_eff, &gpu.fields.regional_drive_basis,
              &gpu.rk.m_backup, &gpu.rk.m_stage, &gpu.rk.error,
              &gpu.rk.transaction_m, &gpu.rk.transaction_k0,
-             &gpu.rk.transaction_h_ex, &gpu.rk.transaction_h_demag,
-             &gpu.rk.transaction_h_drive, &gpu.rk.transaction_h_ani,
-             &gpu.rk.transaction_h_cubic_ani, &gpu.rk.transaction_h_dmi,
-             &gpu.rk.transaction_h_bulk_dmi, &gpu.rk.transaction_h_oe,
-             &gpu.rk.transaction_h_therm, &gpu.rk.transaction_h_mel,
-             &gpu.rk.transaction_h_eff,
          }) {
         if (!component_pointers_are_null(*field)) {
             return false;
@@ -142,8 +136,6 @@ bool all_gpu_state_owned_pointers_are_null(const fullmag::fem::FemGpuState &gpu)
         gpu.fields.regional_drive_descs == nullptr &&
         gpu.fields.regional_drive_point_times == nullptr &&
         gpu.fields.regional_drive_point_values == nullptr &&
-        gpu.rk.transaction_poisson_solution == nullptr &&
-        gpu.rk.transaction_poisson_solution_full == nullptr &&
         gpu.local_interactions.node_weight == nullptr &&
         gpu.magnetoelastic.strain_voigt == nullptr &&
         gpu.materials.ms == nullptr && gpu.materials.a == nullptr &&
@@ -1715,6 +1707,38 @@ void check_device_magnetization_is_finite_unit_and_changed(
     }
 }
 
+std::vector<double> download_device_magnetization(
+    fullmag::fem::Context &context)
+{
+    std::vector<double> values;
+    std::string error;
+    check(fullmag::fem::gpu_state_download_magnetization_aos(
+              context.gpu_state.device,
+              values,
+              context.transfer_audit.audit,
+              error),
+          error.c_str());
+    return values;
+}
+
+std::vector<double> download_device_component(
+    fullmag::fem::Context &context,
+    const fullmag::fem::FemGpuComponentField &field,
+    const char *label)
+{
+    std::vector<double> values;
+    std::string error;
+    check(fullmag::fem::gpu_state_download_component_aos(
+              context.gpu_state.device,
+              field,
+              values,
+              context.transfer_audit.audit,
+              label,
+              error),
+          error.c_str());
+    return values;
+}
+
 void check_device_hypre_demag_operator_is_reused(
     const fullmag::fem::Context &context,
     const char *algorithm)
@@ -1828,6 +1852,126 @@ void mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry()
 #endif
 }
 
+void mixed_p1_gpu_ncg_fault_injection_rolls_back_and_retries_bitwise()
+{
+    const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
+    if (requested_device == nullptr || std::string(requested_device) != "cuda") {
+        return;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    for (const auto failure_point : {
+             fullmag::fem::GpuRelaxNcgFailurePoint::AfterTrialMagnetization,
+             fullmag::fem::GpuRelaxNcgFailurePoint::DuringAcceptedStatistics,
+         }) {
+        auto fault_fixture = initialize_mixed_gpu_runtime(
+            FULLMAG_FEM_INTEGRATOR_HEUN, false, true);
+        auto control_fixture = initialize_mixed_gpu_runtime(
+            FULLMAG_FEM_INTEGRATOR_HEUN, false, true);
+        auto &fault = fault_fixture->context;
+        auto &control = control_fixture->context;
+
+        fullmag_fem_step_stats first_fault_stats{};
+        fullmag_fem_step_stats first_control_stats{};
+        std::string error;
+        check(fullmag::fem::run_backend_relaxation_step(
+                  fault,
+                  FULLMAG_FEM_RELAX_NONLINEAR_CG,
+                  first_fault_stats,
+                  error) == FULLMAG_FEM_OK,
+              error.c_str());
+        error.clear();
+        check(fullmag::fem::run_backend_relaxation_step(
+                  control,
+                  FULLMAG_FEM_RELAX_NONLINEAR_CG,
+                  first_control_stats,
+                  error) == FULLMAG_FEM_OK,
+              error.c_str());
+
+        const auto accepted_m = download_device_magnetization(fault);
+        const auto control_accepted_m = download_device_magnetization(control);
+        check(accepted_m == control_accepted_m,
+              "GPU nonlinear-CG fixtures must match before fault injection");
+        const auto accepted_direction = download_device_component(
+            fault,
+            fault.gpu_state.device.relaxation.nonlinear_cg_direction,
+            "GPU nonlinear-CG accepted direction before fault injection");
+        const uint64_t accepted_steps = fault.relaxation.accepted_steps;
+        const uint64_t step_count = fault.state.step_count;
+        const auto accepted_token =
+            fault.gpu_state.device.relaxation.accepted_evaluation;
+
+        fault.gpu_state.device.relaxation.next_nonlinear_cg_failure =
+            failure_point;
+        fullmag_fem_step_stats rejected_stats{};
+        error.clear();
+        check(fullmag::fem::run_backend_relaxation_step(
+                  fault,
+                  FULLMAG_FEM_RELAX_NONLINEAR_CG,
+                  rejected_stats,
+                  error) == FULLMAG_FEM_ERR_INTERNAL,
+              "injected GPU nonlinear-CG failure must fail the step");
+        check(error.find("previous device state restored") != std::string::npos,
+              error.c_str());
+        check(fault.gpu_state.device.relaxation.nonlinear_cg_failures_injected == 1u &&
+                  fault.gpu_state.device.relaxation.next_nonlinear_cg_failure ==
+                      fullmag::fem::GpuRelaxNcgFailurePoint::None,
+              "GPU nonlinear-CG failpoint must be one-shot and observable");
+        check(fault.relaxation.accepted_steps == accepted_steps &&
+                  fault.state.step_count == step_count,
+              "failed GPU nonlinear-CG attempt must not publish accepted counters");
+        check(download_device_magnetization(fault) == accepted_m,
+              "failed GPU nonlinear-CG attempt must restore magnetization bitwise");
+        check(download_device_component(
+                  fault,
+                  fault.gpu_state.device.relaxation.nonlinear_cg_direction,
+                  "GPU nonlinear-CG direction after rollback") ==
+                  accepted_direction,
+              "failed GPU nonlinear-CG attempt must restore direction bitwise");
+        const auto &restored_token =
+            fault.gpu_state.device.relaxation.accepted_evaluation;
+        check(!restored_token.valid &&
+                  restored_token.accepted_step == accepted_token.accepted_step &&
+                  restored_token.state_generation == accepted_token.state_generation &&
+                  restored_token.total_energy_j == accepted_token.total_energy_j &&
+                  restored_token.energy_terms_j == accepted_token.energy_terms_j &&
+                  restored_token.invalidations ==
+                      accepted_token.invalidations + 1u,
+              "failed GPU nonlinear-CG attempt must preserve but invalidate the accepted evaluation token");
+        check(!fault.gpu_state.device.fields.accepted_observables_valid &&
+                  fault.poisson_demag.fresh_initial_guess_required &&
+                  !fault.gpu_state.device.rk.fsal_valid,
+              "GPU nonlinear-CG rollback must invalidate derived fields, Poisson guess, and FSAL");
+
+        fullmag_fem_step_stats retried_stats{};
+        fullmag_fem_step_stats control_stats{};
+        error.clear();
+        check(fullmag::fem::run_backend_relaxation_step(
+                  fault,
+                  FULLMAG_FEM_RELAX_NONLINEAR_CG,
+                  retried_stats,
+                  error) == FULLMAG_FEM_OK,
+              error.c_str());
+        error.clear();
+        check(fullmag::fem::run_backend_relaxation_step(
+                  control,
+                  FULLMAG_FEM_RELAX_NONLINEAR_CG,
+                  control_stats,
+                  error) == FULLMAG_FEM_OK,
+              error.c_str());
+        check(download_device_magnetization(fault) ==
+                  download_device_magnetization(control),
+              "GPU nonlinear-CG retry must match a clean control bitwise");
+        check(retried_stats.total_energy_joules == control_stats.total_energy_joules &&
+                  retried_stats.max_torque_Apm == control_stats.max_torque_Apm,
+              "GPU nonlinear-CG retry observables must match a clean control bitwise");
+        check(fault.gpu_state.device.fields.accepted_observables_valid &&
+                  fault.gpu_state.device.fields.accepted_observables_step ==
+                      fault.state.step_count,
+              "successful GPU nonlinear-CG retry must publish current observables");
+    }
+#endif
+}
+
 void mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry()
 {
     const char *requested_device = std::getenv("FULLMAG_MIXED_P1_ROLLBACK_DEVICE");
@@ -1894,6 +2038,14 @@ void mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry()
 
 int main()
 {
+    const char *ncg_transaction_only =
+        std::getenv("FULLMAG_MIXED_P1_NCG_TRANSACTION_ONLY");
+    if (ncg_transaction_only != nullptr &&
+        std::string(ncg_transaction_only) == "1") {
+        mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry();
+        mixed_p1_gpu_ncg_fault_injection_rolls_back_and_retries_bitwise();
+        return 0;
+    }
     const char *local_interactions_only =
         std::getenv("FULLMAG_MIXED_P1_LOCAL_INTERACTIONS_ONLY");
     if (local_interactions_only != nullptr &&
@@ -1925,6 +2077,7 @@ int main()
     repeated_post_device_fes_failure_rolls_back_runtime_state();
     post_allocation_gpu_bootstrap_failure_rolls_back_every_owner();
     mixed_p1_gpu_direct_minimizers_use_device_armijo_without_tet_geometry();
+    mixed_p1_gpu_ncg_fault_injection_rolls_back_and_retries_bitwise();
     mixed_p1_gpu_llg_overdamped_runs_every_explicit_rk_without_tet_geometry();
     mfem_mass_weights_cover_tet_prism_and_mixed_magnetic_domains();
     mixed_p1_uniform_uniaxial_field_and_energy_use_mfem_mass_weights();

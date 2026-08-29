@@ -32,7 +32,6 @@
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
-#include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
@@ -204,7 +203,6 @@ void publish_ncg_accepted_evaluation(
 struct GpuRelaxNcgRollbackState {
     double step_size = kDefaultStepSize;
     bool direction_valid = false;
-    bool fsal_valid = false;
     uint64_t accepted_steps = 0;
     uint64_t step_count = 0;
     double current_time = 0.0;
@@ -233,7 +231,6 @@ GpuRelaxNcgRollbackState capture_gpu_relax_ncg_rollback_state(
     return {
         ctx.relaxation.step_size,
         ctx.gpu_state.device.relaxation.nonlinear_cg_direction_valid,
-        ctx.gpu_state.device.rk.fsal_valid,
         ctx.relaxation.accepted_steps,
         ctx.state.step_count,
         ctx.state.current_time,
@@ -278,7 +275,6 @@ void restore_gpu_relax_ncg_metadata(
     ctx.relaxation.step_size = rollback.step_size;
     ctx.gpu_state.device.relaxation.nonlinear_cg_direction_valid =
         rollback.direction_valid;
-    ctx.gpu_state.device.rk.fsal_valid = rollback.fsal_valid;
     ctx.relaxation.accepted_steps = rollback.accepted_steps;
     ctx.state.step_count = rollback.step_count;
     ctx.state.current_time = rollback.current_time;
@@ -335,6 +331,30 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
 bool cuda_launch_ok(const char *operation, std::string &reason)
 {
     return cuda_ok(cudaPeekAtLastError(), operation, reason);
+}
+
+bool inject_nonlinear_cg_failure(
+    Context &ctx,
+    GpuRelaxNcgFailurePoint point,
+    std::string &reason)
+{
+    auto &relaxation = ctx.gpu_state.device.relaxation;
+    if (relaxation.next_nonlinear_cg_failure != point) {
+        return false;
+    }
+    relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
+    relaxation.nonlinear_cg_failures_injected += 1u;
+    switch (point) {
+        case GpuRelaxNcgFailurePoint::AfterTrialMagnetization:
+            reason = "injected GPU nonlinear-CG failure after trial magnetization";
+            break;
+        case GpuRelaxNcgFailurePoint::DuringAcceptedStatistics:
+            reason = "injected GPU nonlinear-CG failure during accepted statistics";
+            break;
+        case GpuRelaxNcgFailurePoint::None:
+            return false;
+    }
+    return true;
 }
 
 bool gpu_relax_ncg_preflight(
@@ -770,6 +790,41 @@ bool gpu_relax_restore_previous_direction(
     return true;
 }
 
+bool gpu_relax_restore_previous_state(
+    Context &ctx,
+    cudaStream_t stream,
+    const GpuRelaxNcgRollbackState &rollback,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    if (!gpu_rk_copy_component_device(
+            gpu.rk.m_backup,
+            gpu.magnetization.m,
+            gpu.lifecycle.node_count,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG restore previous m",
+            reason) ||
+        !gpu_relax_restore_previous_direction(ctx, stream, rollback, reason)) {
+        return false;
+    }
+    if (!cuda_ok(
+            cudaStreamSynchronize(stream),
+            "GPU nonlinear-CG rollback synchronization",
+            reason)) {
+        return false;
+    }
+    restore_gpu_relax_ncg_metadata(ctx, rollback);
+    gpu_relax_invalidate_accepted_evaluation(gpu.relaxation);
+    // Nonlinear-CG uses k0 as gradient scratch, so a failed minimizer step
+    // invalidates FSAL instead of retaining another full vector backup.
+    gpu.rk.fsal_valid = false;
+    gpu.fields.accepted_observables_valid = false;
+    gpu.fields.accepted_observables_step = ctx.state.step_count;
+    ctx.poisson_demag.fresh_initial_guess_required = true;
+    mark_gpu_relax_ncg_device_source_of_truth(ctx);
+    return true;
+}
+
 int gpu_relax_restore_previous_state_after_failure(
     Context &ctx,
     cudaStream_t stream,
@@ -779,16 +834,14 @@ int gpu_relax_restore_previous_state_after_failure(
     std::string &error)
 {
     std::string restore_reason;
-    if (!gpu_relax_restore_step_transaction_device_unprofiled(ctx, restore_reason) ||
-        !gpu_relax_restore_previous_direction(ctx, stream, rollback, restore_reason)) {
+    if (!gpu_relax_restore_previous_state(
+            ctx, stream, rollback, restore_reason)) {
         error =
             "GPU nonlinear-CG failed to restore previous device state after " +
             std::string(failure_context) + ": " + restore_reason +
             "; original error: " + original_reason;
         return FULLMAG_FEM_ERR_INTERNAL;
     }
-    mark_gpu_relax_ncg_device_source_of_truth(ctx);
-    restore_gpu_relax_ncg_metadata(ctx, rollback);
     error = original_reason + "; previous device state restored";
     return FULLMAG_FEM_ERR_INTERNAL;
 }
@@ -1157,21 +1210,21 @@ int gpu_relax_nonlinear_cg_step(
     const GpuRelaxNcgRollbackState rollback =
         capture_gpu_relax_ncg_rollback_state(ctx);
 
-    if (!gpu_relax_capture_step_transaction_device_unprofiled(ctx, reason) ||
-        !gpu_rk_copy_component_device(
+    if (!gpu_rk_copy_component_device(
             gpu.magnetization.m,
             gpu.rk.m_backup,
             gpu.lifecycle.node_count,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG backup current m",
             reason) ||
-        !gpu_rk_copy_component_device(
-            gpu.relaxation.nonlinear_cg_direction,
-            gpu.relaxation.nonlinear_cg_direction_backup,
-            gpu.lifecycle.node_count,
-            stream,
-            "cudaMemcpyAsync GPU nonlinear-CG backup current direction",
-            reason)) {
+        (rollback.direction_valid &&
+         !gpu_rk_copy_component_device(
+             gpu.relaxation.nonlinear_cg_direction,
+             gpu.relaxation.nonlinear_cg_direction_backup,
+             gpu.lifecycle.node_count,
+             stream,
+             "cudaMemcpyAsync GPU nonlinear-CG backup current direction",
+             reason))) {
         error = reason;
         return FULLMAG_FEM_ERR_INTERNAL;
     }
@@ -1210,6 +1263,8 @@ int gpu_relax_nonlinear_cg_step(
             reason,
             error);
     }
+    gpu.fields.accepted_observables_valid = true;
+    gpu.fields.accepted_observables_step = ctx.state.step_count;
     const double current_torque_apm = current_snapshot.terms_j[
         static_cast<size_t>(GpuFinalScalarSlot::MaxTorque)];
     if (relaxation_torque_confirmation_pending(ctx, current_torque_apm)) {
@@ -1366,6 +1421,10 @@ int gpu_relax_nonlinear_cg_step(
                     stream,
                     "cudaMemcpyAsync GPU nonlinear-CG trial m",
                     reason) ||
+                inject_nonlinear_cg_failure(
+                    ctx,
+                    GpuRelaxNcgFailurePoint::AfterTrialMagnetization,
+                    reason) ||
                 !gpu_relax_compute_effective_field_and_energy_terms(
                     ctx,
                     stream,
@@ -1516,16 +1575,13 @@ int gpu_relax_nonlinear_cg_step(
     if (!line_search_accepted) {
         if (every_permitted_trial_unchanged) {
             std::string restore_reason;
-            if (!gpu_relax_restore_step_transaction_device_unprofiled(ctx, restore_reason) ||
-                !gpu_relax_restore_previous_direction(
+            if (!gpu_relax_restore_previous_state(
                     ctx, stream, rollback, restore_reason)) {
                 error =
                     "GPU nonlinear-CG failed to restore the representability-stationary state: " +
                     restore_reason;
                 return FULLMAG_FEM_ERR_INTERNAL;
             }
-            restore_gpu_relax_ncg_metadata(ctx, rollback);
-            mark_gpu_relax_ncg_device_source_of_truth(ctx);
             if (!gpu_relax_compute_effective_field_and_energy_terms(
                     ctx, stream, n, blocks, reason)) {
                 error =
@@ -1533,6 +1589,8 @@ int gpu_relax_nonlinear_cg_step(
                     reason;
                 return FULLMAG_FEM_ERR_INTERNAL;
             }
+            gpu.fields.accepted_observables_valid = true;
+            gpu.fields.accepted_observables_step = ctx.state.step_count;
             logical_rhs_evaluations += 1u;
             out_stats.step = ctx.state.step_count;
             out_stats.time_seconds = 0.0;
@@ -1666,6 +1724,18 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.rhs_evaluations =
         logical_rhs_evaluations + refinement_rhs_evaluations;
     double ncg_tail_scalars[kNcgScalarTailCount] = {0.0, 0.0, 0.0};
+    if (inject_nonlinear_cg_failure(
+            ctx,
+            GpuRelaxNcgFailurePoint::DuringAcceptedStatistics,
+            reason)) {
+        return gpu_relax_restore_previous_state_after_failure(
+            ctx,
+            stream,
+            rollback,
+            "accepted-step stats finalization failure",
+            reason,
+            error);
+    }
     if (!gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
             ctx,
             out_stats,
@@ -1735,6 +1805,8 @@ int gpu_relax_nonlinear_cg_step(
         armijo_increment_rhs_j;
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
+    gpu.fields.accepted_observables_valid = true;
+    gpu.fields.accepted_observables_step = ctx.state.step_count;
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

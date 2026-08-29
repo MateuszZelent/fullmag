@@ -714,8 +714,6 @@ bool gpu_state_initialize(
         !gpu_rk_workspace_allocate(
             state.rk,
             node_count,
-            state.demag_poisson.scalar_dof_count,
-            state.demag_poisson.full_scalar_dof_count,
             state.lifecycle.stage_count,
             device_bytes,
             error) ||
@@ -806,38 +804,28 @@ bool gpu_state_resize_demag_poisson_scalars(
     double *rhs = nullptr;
     double *solution = nullptr;
     double *solution_full = nullptr;
-    double *transaction_solution = nullptr;
-    double *transaction_solution_full = nullptr;
     uint64_t replacement_bytes = 0;
     if (!gpu_device_allocate_double(rhs, scalar_dof_count, replacement_bytes, error) ||
         !gpu_device_allocate_double(solution, scalar_dof_count, replacement_bytes, error) ||
-        !gpu_device_allocate_double(solution_full, full_scalar_dof_count, replacement_bytes, error) ||
-        !gpu_device_allocate_double(transaction_solution, scalar_dof_count, replacement_bytes, error) ||
         !gpu_device_allocate_double(
-            transaction_solution_full,
+            solution_full,
             full_scalar_dof_count,
             replacement_bytes,
             error)) {
         gpu_device_free_double(rhs);
         gpu_device_free_double(solution);
         gpu_device_free_double(solution_full);
-        gpu_device_free_double(transaction_solution);
-        gpu_device_free_double(transaction_solution_full);
         return false;
     }
 
     const uint64_t previous_bytes = sizeof(double) *
-        (3u * demag.scalar_dof_count + 2u * demag.full_scalar_dof_count);
+        (2u * demag.scalar_dof_count + demag.full_scalar_dof_count);
     gpu_device_free_double(demag.poisson_rhs);
     gpu_device_free_double(demag.poisson_solution);
     gpu_device_free_double(demag.poisson_solution_full);
-    gpu_device_free_double(state.rk.transaction_poisson_solution);
-    gpu_device_free_double(state.rk.transaction_poisson_solution_full);
     demag.poisson_rhs = rhs;
     demag.poisson_solution = solution;
     demag.poisson_solution_full = solution_full;
-    state.rk.transaction_poisson_solution = transaction_solution;
-    state.rk.transaction_poisson_solution_full = transaction_solution_full;
     demag.scalar_dof_count = scalar_dof_count;
     demag.full_scalar_dof_count = full_scalar_dof_count;
     state.lifecycle.device_bytes =

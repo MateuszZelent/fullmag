@@ -6,6 +6,7 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_transaction_device.hpp"
+#include "gpu/cuda/integrators/rk/rk_workspace_memory.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
@@ -272,53 +273,31 @@ void minimal_rk_transaction_restores_only_authoritative_gpu_state()
     fullmag::fem::gpu_state_destroy(gpu);
 }
 
-void relaxation_transaction_retains_complete_legacy_rollback()
+void rk_workspace_allocates_only_minimal_transaction_journal()
 {
-    fullmag::fem::Context ctx;
-    const double initial_m[3] = {1.0, 0.0, 0.0};
+    fullmag::fem::FemGpuRkWorkspaceDeviceState rk;
+    constexpr uint64_t node_count = 5u;
+    constexpr uint32_t stage_count = 7u;
+    uint64_t device_bytes = 0;
     std::string error;
     check(
-        fullmag::fem::gpu_state_initialize(
-            ctx.gpu_state.device,
-            1,
-            FULLMAG_FEM_INTEGRATOR_RK45_DP54,
-            true,
-            true,
-            initial_m,
-            3,
-            ctx.transfer_audit.audit,
+        fullmag::fem::gpu_rk_workspace_allocate(
+            rk,
+            node_count,
+            stage_count,
+            device_bytes,
             error),
         error.c_str());
-    auto &gpu = ctx.gpu_state.device;
-    set_component(gpu.magnetization.m, 1.0);
-    set_component(gpu.rk.k[0], 4.0);
-    set_component(gpu.fields.h_ex, 10.0);
-    set_component(gpu.fields.h_eff, 110.0);
-    set_value(gpu.demag_poisson.poisson_solution, 120.0);
-    set_value(gpu.demag_poisson.poisson_solution_full, 121.0);
-
-    check(
-        fullmag::fem::gpu_relax_capture_step_transaction_device_unprofiled(ctx, error),
-        error.c_str());
-    set_component(gpu.magnetization.m, -1.0);
-    set_component(gpu.rk.k[0], -4.0);
-    set_component(gpu.fields.h_ex, -10.0);
-    set_component(gpu.fields.h_eff, -110.0);
-    set_value(gpu.demag_poisson.poisson_solution, -120.0);
-    set_value(gpu.demag_poisson.poisson_solution_full, -121.0);
-    check(
-        fullmag::fem::gpu_relax_restore_step_transaction_device_unprofiled(ctx, error),
-        error.c_str());
-
-    check_component(gpu.magnetization.m, 1.0, "GPU relaxation magnetization rollback");
-    check_component(gpu.rk.k[0], 4.0, "GPU relaxation FSAL rollback");
-    check_component(gpu.fields.h_ex, 10.0, "GPU relaxation H_ex rollback");
-    check_component(gpu.fields.h_eff, 110.0, "GPU relaxation H_eff rollback");
-    check(host_value(gpu.demag_poisson.poisson_solution) == 120.0,
-          "GPU relaxation Poisson solution rollback");
-    check(host_value(gpu.demag_poisson.poisson_solution_full) == 121.0,
-          "GPU relaxation full Poisson solution rollback");
-    fullmag::fem::gpu_state_destroy(gpu);
+    constexpr uint64_t component_field_count = stage_count + 5u;
+    constexpr uint64_t expected_bytes =
+        component_field_count * 3u * node_count * sizeof(double);
+    check(device_bytes == expected_bytes,
+          "GPU RK workspace VRAM must include only scratch, stages, m, and k0 journal fields");
+    check(rk.transaction_m.x != nullptr && rk.transaction_k0.x != nullptr,
+          "minimal GPU RK transaction journal must allocate m and k0 storage");
+    fullmag::fem::gpu_rk_workspace_free(rk);
+    check(rk.transaction_m.x == nullptr && rk.transaction_k0.x == nullptr,
+          "minimal GPU RK transaction journal must release its storage");
 }
 
 void committed_transaction_and_external_upload_update_observable_validity()
@@ -492,7 +471,7 @@ int main()
     inactive_airbox_vector_is_ignored();
     valid_active_vector_is_normalized();
     minimal_rk_transaction_restores_only_authoritative_gpu_state();
-    relaxation_transaction_retains_complete_legacy_rollback();
+    rk_workspace_allocates_only_minimal_transaction_journal();
     committed_transaction_and_external_upload_update_observable_validity();
     profiled_device_transaction_reports_exact_payload_and_events();
     profiler_off_does_not_allocate_transaction_events();

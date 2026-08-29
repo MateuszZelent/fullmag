@@ -21,6 +21,8 @@ bool gpu_relaxation_state_allocate(
     relaxation.node_count = node_count;
     relaxation.state_generation = 0;
     relaxation.nonlinear_cg_direction_valid = false;
+    relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
+    relaxation.nonlinear_cg_failures_injected = 0;
     relaxation.accepted_evaluation = {};
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;
@@ -53,6 +55,8 @@ void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
     relaxation.node_count = 0;
     relaxation.state_generation = 0;
     relaxation.nonlinear_cg_direction_valid = false;
+    relaxation.next_nonlinear_cg_failure = GpuRelaxNcgFailurePoint::None;
+    relaxation.nonlinear_cg_failures_injected = 0;
     relaxation.accepted_evaluation = {};
     gpu_relax_reset_step_diagnostics(relaxation);
     relaxation.direct_energy_refinements = 0;

@@ -176,13 +176,8 @@ void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
     check(
         transaction_header.find("gpu_rk_collect_step_transaction_timing(") !=
                 std::string::npos &&
-            transaction_header.find(
-                "gpu_relax_capture_step_transaction_device_unprofiled(") !=
-                std::string::npos &&
-            transaction_header.find(
-                "gpu_relax_restore_step_transaction_device_unprofiled(") !=
-                std::string::npos,
-        "GPU transaction header must separate RK telemetry from direct-minimizer rollback");
+            transaction_header.find("gpu_relax_") == std::string::npos,
+        "GPU transaction header must expose only the minimal RK journal");
     check(
         transaction_source.find("cudaEventRecord") != std::string::npos &&
             transaction_source.find("cudaEventElapsedTime") != std::string::npos &&
@@ -190,14 +185,11 @@ void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
             transaction_source.find("cudaDeviceSynchronize") == std::string::npos &&
             transaction_source.find("kMaxTransactionTimingEventPairs") !=
                 std::string::npos &&
-            transaction_source.find("TransactionPayload::RkAuthoritative") !=
-                std::string::npos &&
-            transaction_source.find("component_field_count =") !=
-                std::string::npos &&
-            transaction_source.find("? 2u : 13u") != std::string::npos &&
-            transaction_source.find("TransactionPayload::RelaxationPublished") !=
-                std::string::npos,
-        "GPU RK transaction telemetry must time only authoritative m/k0 D2D payloads while relaxation remains separate");
+            transaction_source.find("2u * 3u") != std::string::npos &&
+            transaction_source.find("transaction_h_") == std::string::npos &&
+            transaction_source.find("transaction_poisson_") == std::string::npos &&
+            transaction_source.find("gpu_relax_") == std::string::npos,
+        "GPU RK transaction telemetry and storage must contain only authoritative m/k0 D2D payloads");
     check(
         transaction_source.find(
             "reset_transaction_sample(ctx.gpu_state.rk_transaction_telemetry)") !=
@@ -217,18 +209,17 @@ void gpu_rk_transaction_telemetry_is_profiled_without_new_sync() {
         "GPU rollback timing must be collected after the existing restore fence");
     check(
         nonlinear_cg_source.find(
-                "gpu_relax_capture_step_transaction_device_unprofiled(") !=
+                "gpu_relax_restore_previous_state(") != std::string::npos &&
+            nonlinear_cg_source.find("accepted_observables_valid = false") !=
                 std::string::npos &&
-            nonlinear_cg_source.find(
-                "gpu_relax_restore_step_transaction_device_unprofiled(") !=
+            nonlinear_cg_source.find("fresh_initial_guess_required = true") !=
                 std::string::npos &&
-            nonlinear_cg_source.find(
-                "gpu_rk_capture_step_transaction_device(") ==
+            nonlinear_cg_source.find("gpu_relax_capture_step_transaction") ==
                 std::string::npos &&
             nonlinear_cg_source.find(
                 "gpu_rk_restore_step_transaction_device(") ==
                 std::string::npos,
-        "nonlinear-CG rollback must not be counted as RK transaction telemetry");
+        "nonlinear-CG rollback must restore authoritative state and invalidate derived caches without an RK/full-field transaction");
     check(
         stats_source.find("gpu_rk_collect_step_transaction_timing(ctx, reason)") <
                 stats_source.find("collect_gpu_rk_phase_timing_events(ctx, stats, reason)") &&
