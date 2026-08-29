@@ -164,6 +164,8 @@ bool initialize_demag_poisson_hypre_device_solver(
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
     if (!configure_hypre_device_vendor_kernels(error)) {
+        return false;
+    }
     const HypreDevicePolicySnapshot hypre_policy =
         configure_hypre_cuda_device_policy();
     if (!hypre_cuda_device_policy_is_available(hypre_policy)) {
