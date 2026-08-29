@@ -428,7 +428,10 @@ pub use capabilities::{
     ResolvedQuantityProviderRegistry, RuntimeEngineId, MIXED_P1_FEATURE_CAPABILITY_IDS,
     MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
 };
-pub use fem_eigen::AcceptedFemRelaxStageHandoff;
+pub use fem_eigen::{
+    fem_relax_equilibrium_identity_signatures, validate_recomputed_fem_linearization_certificate,
+    AcceptedFemRelaxStageHandoff,
+};
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
 pub use interactive::commands::{
@@ -467,15 +470,17 @@ pub use timestep_qualification::{
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
+    recomputed_fem_equilibrium_content_sha256, recomputed_fem_linearization_certificate_sha256,
     AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutionProvenance, FdmGpuExecutionReceipt,
     FdmGpuOperatorResidency, FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult,
     FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, InitialTimestepReason,
     LegacyDtPolicy, LiveFieldMaterializationState, LiveFieldMaterializationStatus,
     LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
-    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
-    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
-    StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
-    TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
+    LlgTimestepQualificationId, RecomputedFemLinearizationCertificateV1, RequestedTimestepPolicy,
+    ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo,
+    SolverAttemptRecord, StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats,
+    StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
+    TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{

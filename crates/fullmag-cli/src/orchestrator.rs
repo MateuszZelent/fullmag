@@ -2366,6 +2366,7 @@ fn accepted_relax_handoff_from_completed_stage(
     completion: &fullmag_ir::StageCompletionIR,
     equilibrium_magnetization: &[[f64; 3]],
     certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+    recomputed_certificate: &fullmag_runner::RecomputedFemLinearizationCertificateV1,
 ) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
     let BackendPlanIR::Fem(source_plan) = backend_plan else {
         return Ok(None);
@@ -2373,6 +2374,14 @@ fn accepted_relax_handoff_from_completed_stage(
     if !source_stage.is_relaxation {
         return Ok(None);
     }
+    fullmag_runner::validate_recomputed_fem_linearization_certificate(
+        source_plan,
+        source_mesh,
+        equilibrium_magnetization,
+        certified_fields,
+        recomputed_certificate,
+    )
+    .map_err(|error| anyhow!(error.to_string()))?;
     fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax(
         &source_stage.run_id,
         &source_stage.stage_id,
@@ -9419,6 +9428,27 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             } else {
                 None
             };
+        let next_continuation_recomputed_certificate =
+            if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
+                && stage_result.completion.as_ref().is_some_and(|completion| {
+                    completion.status == "completed" && completion.converged
+                })
+            {
+                let path = current_stage_artifact_dir
+                    .join("equilibrium/recomputed_fem_linearization_certificate.v1.json");
+                let bytes = fs::read(&path).with_context(|| {
+                    format!(
+                        "accepted native FEM relaxation did not publish {}",
+                        path.display()
+                    )
+                })?;
+                Some(
+                    serde_json::from_slice(&bytes)
+                        .with_context(|| format!("failed to decode {}", path.display()))?,
+                )
+            } else {
+                None
+            };
         let next_continuation_stage_source = ContinuationStageSource {
             run_id: run_id.clone(),
             stage_id: current_stage_id.clone(),
@@ -9431,17 +9461,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             next_continuation_completion.as_ref(),
             next_continuation_fem_mesh_payload.as_ref(),
             next_continuation_certified_fields.as_ref(),
+            next_continuation_recomputed_certificate.as_ref(),
         ) {
-            (Some(completion), Some(source_mesh), Some(certified_fields)) => {
-                accepted_relax_handoff_from_completed_stage(
-                    &execution_plan.backend_plan,
-                    &next_continuation_stage_source,
-                    source_mesh,
-                    completion,
-                    &next_continuation_magnetization,
-                    certified_fields,
-                )?
-            }
+            (
+                Some(completion),
+                Some(source_mesh),
+                Some(certified_fields),
+                Some(recomputed_certificate),
+            ) => accepted_relax_handoff_from_completed_stage(
+                &execution_plan.backend_plan,
+                &next_continuation_stage_source,
+                source_mesh,
+                completion,
+                &next_continuation_magnetization,
+                certified_fields,
+                recomputed_certificate,
+            )?,
             _ => None,
         };
         continuation_magnetization = Some(next_continuation_magnetization);
@@ -14880,6 +14915,45 @@ mod tests {
         .expect("certified field fixture")
     }
 
+    fn recomputed_certificate(
+        plan: &fullmag_ir::FemPlanIR,
+        mesh: &fullmag_runner::FemMeshPayload,
+        m0: &[[f64; 3]],
+        fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+    ) -> fullmag_runner::RecomputedFemLinearizationCertificateV1 {
+        let [material, physics, boundary] =
+            fullmag_runner::fem_relax_equilibrium_identity_signatures(plan)
+                .expect("equilibrium identity fixture");
+        let mut certificate = fullmag_runner::RecomputedFemLinearizationCertificateV1 {
+            schema_version: "RecomputedFemLinearizationCertificate.v1".to_string(),
+            status: "matched".to_string(),
+            recompute_provider: "native_fem_final_state_refresh.v1".to_string(),
+            node_count: m0.len(),
+            equilibrium_content_sha256: fullmag_runner::recomputed_fem_equilibrium_content_sha256(
+                m0,
+            ),
+            mesh_topology_sha256: fullmag_runner::fem_mesh_topology_fingerprint(mesh),
+            equilibrium_material_signature: material,
+            equilibrium_static_physics_signature: physics,
+            equilibrium_boundary_signature: boundary,
+            accepted_fields_content_sha256: fields.content_sha256.clone(),
+            recomputed_fields_content_sha256: fields.content_sha256.clone(),
+            max_h_ex_difference_a_per_m: 0.0,
+            max_h_demag_difference_a_per_m: 0.0,
+            max_h_ext_difference_a_per_m: 0.0,
+            max_h_eff_difference_a_per_m: 0.0,
+            max_phi_difference_a: 0.0,
+            field_absolute_tolerance_a_per_m: 1.0e-6,
+            field_relative_tolerance: 1.0e-8,
+            phi_absolute_tolerance_a: 1.0e-12,
+            content_sha256: String::new(),
+        };
+        certificate.content_sha256 =
+            fullmag_runner::recomputed_fem_linearization_certificate_sha256(&certificate)
+                .expect("certificate digest fixture");
+        certificate
+    }
+
     #[test]
     fn frequency_response_rejects_max_steps_relaxation_continuation() {
         let stage = frequency_response_relaxed_stage();
@@ -15346,6 +15420,8 @@ mod tests {
         let source_backend = BackendPlanIR::Fem(source.clone());
         let source_mesh = fullmag_runner::FemMeshPayload::from(&source);
         let m0 = source.initial_magnetization.clone();
+        let fields = certified_fields(source_mesh.nodes.len());
+        let recomputed = recomputed_certificate(&source, &source_mesh, &m0, &fields);
         let target = fullmag_ir::FemEigenPlanIR {
             mesh_name: source.mesh_name,
             mesh_source: source.mesh_source,
@@ -15396,8 +15472,6 @@ mod tests {
             stage_kind: "flat_relax".to_string(),
             is_relaxation: true,
         };
-        let fields = certified_fields(source_mesh.nodes.len());
-
         let handoff = accepted_relax_handoff_from_completed_stage(
             &source_backend,
             &source_stage,
@@ -15405,6 +15479,7 @@ mod tests {
             &completion,
             &m0,
             &fields,
+            &recomputed,
         )
         .expect("accepted relax output should create a typed handoff");
         assert!(handoff.is_some());
@@ -15414,6 +15489,75 @@ mod tests {
                 .expect("Eigen should consume the prepared handoff")
                 .is_some()
         );
+
+        let mut tampered_recompute = recomputed.clone();
+        tampered_recompute.max_h_demag_difference_a_per_m = 1.0;
+        let error = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &completion,
+            &m0,
+            &fields,
+            &tampered_recompute,
+        )
+        .expect_err("a digest-stale recompute certificate must fail closed");
+        assert!(error.to_string().contains("content digest mismatch"));
+
+        let mut mismatched_equilibrium = recomputed.clone();
+        mismatched_equilibrium.equilibrium_content_sha256 = format!("sha256:{}", "a".repeat(64));
+        mismatched_equilibrium.content_sha256 =
+            fullmag_runner::recomputed_fem_linearization_certificate_sha256(
+                &mismatched_equilibrium,
+            )
+            .expect("equilibrium-mismatch certificate digest");
+        let error = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &completion,
+            &m0,
+            &fields,
+            &mismatched_equilibrium,
+        )
+        .expect_err("a certificate for a different equilibrium must fail closed");
+        assert!(error.to_string().contains("equilibrium digest mismatch"));
+
+        let mut mismatched_mesh = recomputed.clone();
+        mismatched_mesh.mesh_topology_sha256 = format!("sha256:{}", "b".repeat(64));
+        mismatched_mesh.content_sha256 =
+            fullmag_runner::recomputed_fem_linearization_certificate_sha256(&mismatched_mesh)
+                .expect("mesh-mismatch certificate digest");
+        let error = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &completion,
+            &m0,
+            &fields,
+            &mismatched_mesh,
+        )
+        .expect_err("a certificate for a different mesh must fail closed");
+        assert!(error.to_string().contains("mesh topology digest mismatch"));
+
+        let mut mismatched_fields = recomputed.clone();
+        mismatched_fields.recomputed_fields_content_sha256 = format!("sha256:{}", "c".repeat(64));
+        mismatched_fields.content_sha256 =
+            fullmag_runner::recomputed_fem_linearization_certificate_sha256(&mismatched_fields)
+                .expect("field-mismatch certificate digest");
+        let error = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &completion,
+            &m0,
+            &fields,
+            &mismatched_fields,
+        )
+        .expect_err("a certificate for different recomputed fields must fail closed");
+        assert!(error
+            .to_string()
+            .contains("recomputed field digest mismatch"));
 
         let artifact_dir = temp_test_dir("relax-save-eigen-handoff");
         let save_action = ResolvedScriptStageAction::SaveState {
@@ -15506,6 +15650,7 @@ mod tests {
             &rejected,
             &m0,
             &fields,
+            &recomputed,
         )
         .expect_err("unaccepted relax output must fail closed before the runner");
         assert!(error.to_string().contains("completion_not_accepted"));
@@ -15522,6 +15667,7 @@ mod tests {
             &stage_completion(fullmag_ir::StageStopReason::Torque),
             &m0,
             &fields,
+            &recomputed,
         )
         .expect("a non-relaxation stage should invalidate rather than create a handoff")
         .is_none());

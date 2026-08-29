@@ -13,13 +13,24 @@ use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
+    recomputed_fem_equilibrium_content_sha256, recomputed_fem_linearization_certificate_sha256,
     AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutedRun, FieldSnapshot, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StepStats, StepUpdate,
+    RecomputedFemLinearizationCertificateV1, RunError, RunResult, RunStatus, StepStats, StepUpdate,
 };
 
 use super::preview::FemPreviewHandoff;
 use super::scalars::ensure_fem_object_scalars;
 use super::snapshots::copy_native_fem_field_snapshot;
+
+const LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M: f64 = 1.0e-6;
+const LINEARIZATION_FIELD_RELATIVE_TOLERANCE: f64 = 1.0e-8;
+const LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A: f64 = 1.0e-12;
+
+#[derive(Debug, Clone)]
+struct NativeEquilibriumEvaluation {
+    magnetization: Vec<[f64; 3]>,
+    fields: CertifiedFemEquilibriumFields,
+}
 
 #[cfg(test)]
 mod tests {
@@ -129,6 +140,183 @@ fn terminal_scheduled_field_actions(
     (!payload_already_sampled, diagnostic_copy)
 }
 
+fn copy_native_equilibrium_evaluation(
+    backend: &NativeFemBackend,
+    node_count: usize,
+) -> Result<NativeEquilibriumEvaluation, RunError> {
+    Ok(NativeEquilibriumEvaluation {
+        magnetization: copy_native_fem_field_snapshot(backend, "m", node_count)?,
+        fields: CertifiedFemEquilibriumFields::from_fields(
+            backend.copy_linearization_field(
+                fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
+                node_count,
+            )?,
+            backend.copy_linearization_field(
+                fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
+                node_count,
+            )?,
+            backend.copy_linearization_field(
+                fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
+                node_count,
+            )?,
+            backend.copy_linearization_field(
+                fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
+                node_count,
+            )?,
+            backend.copy_demag_phi(node_count)?,
+        )?,
+    })
+}
+
+fn max_vector_difference(left: &[[f64; 3]], right: &[[f64; 3]]) -> Option<f64> {
+    (left.len() == right.len()).then(|| {
+        left.iter()
+            .zip(right)
+            .flat_map(|(left, right)| left.iter().zip(right))
+            .map(|(left, right)| (left - right).abs())
+            .fold(0.0_f64, f64::max)
+    })
+}
+
+fn max_scalar_difference(left: &[f64], right: &[f64]) -> Option<f64> {
+    (left.len() == right.len()).then(|| {
+        left.iter()
+            .zip(right)
+            .map(|(left, right)| (left - right).abs())
+            .fold(0.0_f64, f64::max)
+    })
+}
+
+fn max_vector_amplitude(values: &[[f64; 3]]) -> f64 {
+    values
+        .iter()
+        .flatten()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max)
+}
+
+fn max_scalar_amplitude(values: &[f64]) -> f64 {
+    values
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max)
+}
+
+fn certify_native_linearization_recompute(
+    plan: &FemPlanIR,
+    accepted: &NativeEquilibriumEvaluation,
+    recomputed: &NativeEquilibriumEvaluation,
+) -> Result<RecomputedFemLinearizationCertificateV1, RunError> {
+    let equilibrium_content_sha256 =
+        recomputed_fem_equilibrium_content_sha256(&accepted.magnetization);
+    let recomputed_equilibrium_content_sha256 =
+        recomputed_fem_equilibrium_content_sha256(&recomputed.magnetization);
+    if equilibrium_content_sha256 != recomputed_equilibrium_content_sha256 {
+        return Err(RunError {
+            message: "native_linearization_recompute_m0_changed_during_refresh".to_string(),
+        });
+    }
+
+    let compared = [
+        (
+            "h_ex0",
+            max_vector_difference(
+                &accepted.fields.h_ex_a_per_m,
+                &recomputed.fields.h_ex_a_per_m,
+            ),
+            max_vector_amplitude(&accepted.fields.h_ex_a_per_m)
+                .max(max_vector_amplitude(&recomputed.fields.h_ex_a_per_m)),
+        ),
+        (
+            "h_demag0",
+            max_vector_difference(
+                &accepted.fields.h_demag_a_per_m,
+                &recomputed.fields.h_demag_a_per_m,
+            ),
+            max_vector_amplitude(&accepted.fields.h_demag_a_per_m)
+                .max(max_vector_amplitude(&recomputed.fields.h_demag_a_per_m)),
+        ),
+        (
+            "h_ext0",
+            max_vector_difference(
+                &accepted.fields.h_ext_a_per_m,
+                &recomputed.fields.h_ext_a_per_m,
+            ),
+            max_vector_amplitude(&accepted.fields.h_ext_a_per_m)
+                .max(max_vector_amplitude(&recomputed.fields.h_ext_a_per_m)),
+        ),
+        (
+            "h_eff0",
+            max_vector_difference(
+                &accepted.fields.h_eff_a_per_m,
+                &recomputed.fields.h_eff_a_per_m,
+            ),
+            max_vector_amplitude(&accepted.fields.h_eff_a_per_m)
+                .max(max_vector_amplitude(&recomputed.fields.h_eff_a_per_m)),
+        ),
+    ];
+    for (label, difference, scale) in compared.iter().copied() {
+        let difference = difference.ok_or_else(|| RunError {
+            message: format!("native_linearization_recompute_{label}_shape_mismatch"),
+        })?;
+        let tolerance = LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M
+            + LINEARIZATION_FIELD_RELATIVE_TOLERANCE * scale.max(1.0);
+        if !difference.is_finite() || difference > tolerance {
+            return Err(RunError {
+                message: format!(
+                    "native_linearization_recompute_{label}_mismatch: maximum difference {difference:.3e} exceeds {tolerance:.3e} A/m"
+                ),
+            });
+        }
+    }
+    let max_phi_difference_a =
+        max_scalar_difference(&accepted.fields.phi_a, &recomputed.fields.phi_a).ok_or_else(
+            || RunError {
+                message: "native_linearization_recompute_phi0_shape_mismatch".to_string(),
+            },
+        )?;
+    let phi_tolerance = LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A
+        + LINEARIZATION_FIELD_RELATIVE_TOLERANCE
+            * max_scalar_amplitude(&accepted.fields.phi_a)
+                .max(max_scalar_amplitude(&recomputed.fields.phi_a))
+                .max(1.0);
+    if !max_phi_difference_a.is_finite() || max_phi_difference_a > phi_tolerance {
+        return Err(RunError {
+            message: format!(
+                "native_linearization_recompute_phi0_mismatch: maximum difference {max_phi_difference_a:.3e} exceeds {phi_tolerance:.3e} A"
+            ),
+        });
+    }
+
+    let identity =
+        crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(plan)?;
+    let mesh = crate::types::FemMeshPayload::from(plan);
+    let mut certificate = RecomputedFemLinearizationCertificateV1 {
+        schema_version: "RecomputedFemLinearizationCertificate.v1".to_string(),
+        status: "matched".to_string(),
+        recompute_provider: "native_fem_final_state_refresh.v1".to_string(),
+        node_count: accepted.magnetization.len(),
+        equilibrium_content_sha256,
+        mesh_topology_sha256: crate::types::fem_mesh_topology_fingerprint(&mesh),
+        equilibrium_material_signature: identity.equilibrium_material_signature,
+        equilibrium_static_physics_signature: identity.equilibrium_static_physics_signature,
+        equilibrium_boundary_signature: identity.equilibrium_boundary_signature,
+        accepted_fields_content_sha256: accepted.fields.content_sha256.clone(),
+        recomputed_fields_content_sha256: recomputed.fields.content_sha256.clone(),
+        max_h_ex_difference_a_per_m: compared[0].1.unwrap_or(f64::INFINITY),
+        max_h_demag_difference_a_per_m: compared[1].1.unwrap_or(f64::INFINITY),
+        max_h_ext_difference_a_per_m: compared[2].1.unwrap_or(f64::INFINITY),
+        max_h_eff_difference_a_per_m: compared[3].1.unwrap_or(f64::INFINITY),
+        max_phi_difference_a,
+        field_absolute_tolerance_a_per_m: LINEARIZATION_FIELD_ABSOLUTE_TOLERANCE_A_PER_M,
+        field_relative_tolerance: LINEARIZATION_FIELD_RELATIVE_TOLERANCE,
+        phi_absolute_tolerance_a: LINEARIZATION_PHI_ABSOLUTE_TOLERANCE_A,
+        content_sha256: String::new(),
+    };
+    certificate.content_sha256 = recomputed_fem_linearization_certificate_sha256(&certificate)?;
+    Ok(certificate)
+}
+
 pub(crate) fn finalize_native_fem_relaxation(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
@@ -209,6 +397,11 @@ pub(crate) fn finalize_native_fem_relaxation(
             .saturating_duration_since(std::time::Instant::now())
             .as_millis(),
     );
+
+    // Preserve the accepted endpoint evaluation before the mandatory fresh
+    // snapshot. The post-refresh evaluation below is compared against this
+    // value and bound into a linearization certificate.
+    let accepted_native_equilibrium = copy_native_equilibrium_evaluation(backend, node_count)?;
 
     // Refresh device-resident component fields at the accepted final state
     // before any synchronous or asynchronous field snapshot selects H_eff.
@@ -389,31 +582,14 @@ pub(crate) fn finalize_native_fem_relaxation(
     }
 
     let copy_start = std::time::Instant::now();
-    let final_magnetization = copy_native_fem_field_snapshot(backend, "m", node_count)?;
-    let h_ex_a_per_m = backend.copy_linearization_field(
-        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
-        node_count,
+    let recomputed_native_equilibrium = copy_native_equilibrium_evaluation(backend, node_count)?;
+    let recomputed_linearization_certificate = certify_native_linearization_recompute(
+        plan,
+        &accepted_native_equilibrium,
+        &recomputed_native_equilibrium,
     )?;
-    let h_demag_a_per_m = backend.copy_linearization_field(
-        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
-        node_count,
-    )?;
-    let h_ext_a_per_m = backend.copy_linearization_field(
-        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
-        node_count,
-    )?;
-    let h_eff_a_per_m = backend.copy_linearization_field(
-        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
-        node_count,
-    )?;
-    let phi_a = backend.copy_demag_phi(node_count)?;
-    let certified_fem_equilibrium_fields = CertifiedFemEquilibriumFields::from_fields(
-        h_ex_a_per_m,
-        h_demag_a_per_m,
-        h_ext_a_per_m,
-        h_eff_a_per_m,
-        phi_a,
-    )?;
+    let final_magnetization = recomputed_native_equilibrium.magnetization;
+    let certified_fem_equilibrium_fields = recomputed_native_equilibrium.fields;
     finalization_field_copy_wall_time_ns =
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
@@ -427,6 +603,16 @@ pub(crate) fn finalize_native_fem_relaxation(
                 message: format!("failed to encode certified FEM equilibrium fields: {error}"),
             }
         })?,
+    });
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "equilibrium/recomputed_fem_linearization_certificate.v1.json".into(),
+        bytes: serde_json::to_vec_pretty(&recomputed_linearization_certificate).map_err(
+            |error| RunError {
+                message: format!(
+                    "failed to encode recomputed FEM linearization certificate: {error}"
+                ),
+            },
+        )?,
     });
     if let Some(telemetry) = backend.stage_oersted_telemetry() {
         auxiliary_artifacts.push(AuxiliaryArtifact {

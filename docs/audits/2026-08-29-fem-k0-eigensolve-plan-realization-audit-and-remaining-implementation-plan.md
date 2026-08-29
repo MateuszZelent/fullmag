@@ -49,13 +49,37 @@ check nieokresowych problemów. Dla meshu z parami okresowymi nie używa solvera
 otwartego jako rzekomego oracle dla okresowego `H_demag/H_eff/phi`; pola nadal
 są kompletne, digest-bound i sprawdzane pod kątem dekompozycji. Testy źródłowe
 `fem::eigen_tests`: **132/132 PASS**. Ponowny managed solve po tej korekcie jest
-**NOT VERIFIED** z powodu bieżącego `WSL/Service/E_ACCESSDENIED` przy tworzeniu
-nowych sesji WSL.
+**NOT VERIFIED**. WSL nie jest środowiskiem wykonawczym tego worktree ani
+warunkiem dalszych prac: aktywnym środowiskiem jest Windows, a linuxowy runtime
+ma być uruchamiany bezpośrednio przez Docker Desktop. Windowsowy klient i daemon
+Docker Desktop zostały potwierdzone (`29.6.1`, daemon `linux`); pozostało
+zmaterializować świeży bundle runtime z bieżącego Windowsowego worktree i
+uruchomić recepturę bez zależności od starego WSL-owego aliasu runtime.
 
 Konsekwencja dla planu: R4 pozostaje **PARTIAL**, dopóki recompute okresowego
 `H_demag0/phi0` nie zostanie wykonany przez niezależne wywołanie tego samego
 natywnego operatora `periodic_airbox_k0` i związany osobnym certyfikatem. Nie
 wolno uznać samego usunięcia fałszywego porównania za realizację bramki R4.
+
+### Aktualizacja wykonawcza: natywny certyfikat recompute R4
+
+Finalizacja relaksacji zachowuje teraz pola zaakceptowanego endpointu, wykonuje
+obowiązkowy świeży snapshot tym samym natywnym backendem (w tym tym samym
+operatorem `periodic_airbox_k0`) i porównuje `m0`, `H_ex0`, `H_demag0`, `H_ext0`,
+`H_eff0` oraz `phi0`. Rozjazd kształtu, wartości niefinitywne, zmiana `m0` lub
+przekroczenie tolerancji zatrzymują handoff fail-closed.
+
+Po zgodnym recompute publikowany jest
+`equilibrium/recomputed_fem_linearization_certificate.v1.json`. Certyfikat wiąże
+digest `m0`, topologię meshu, sygnatury materiału/statycznej fizyki/BC, digesty
+pól przed i po recompute oraz metryki różnic. Orchestrator wymaga i waliduje ten
+certyfikat przed utworzeniem typowanego handoffu relaksacja -> eigensolve.
+Negatywne testy odrzucają certyfikat z niezgodnym własnym SHA, `m0`, meshem lub
+polem recomputed; targetowany test CLI przechodzi na Windowsie.
+
+Ten slice nadal oznacza R4 **PARTIAL**, nie `DONE`: trzeba rozszerzyć związanie o
+operator/pencil, acceptance i source SHA, domknąć wymagania masy FE/energii oraz
+uzyskać rzeczywisty Windows Docker Desktop runtime proof na okresowym antydocie.
 
 ## 1. Wynik pierwotnego audytu w skrócie (stan przed konsolidacją)
 

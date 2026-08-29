@@ -180,6 +180,58 @@ pub(crate) fn certified_equilibrium_fields_sha256(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecomputedFemLinearizationCertificateV1 {
+    pub schema_version: String,
+    pub status: String,
+    pub recompute_provider: String,
+    pub node_count: usize,
+    pub equilibrium_content_sha256: String,
+    pub mesh_topology_sha256: String,
+    pub equilibrium_material_signature: String,
+    pub equilibrium_static_physics_signature: String,
+    pub equilibrium_boundary_signature: String,
+    pub accepted_fields_content_sha256: String,
+    pub recomputed_fields_content_sha256: String,
+    pub max_h_ex_difference_a_per_m: f64,
+    pub max_h_demag_difference_a_per_m: f64,
+    pub max_h_ext_difference_a_per_m: f64,
+    pub max_h_eff_difference_a_per_m: f64,
+    pub max_phi_difference_a: f64,
+    pub field_absolute_tolerance_a_per_m: f64,
+    pub field_relative_tolerance: f64,
+    pub phi_absolute_tolerance_a: f64,
+    pub content_sha256: String,
+}
+
+pub fn recomputed_fem_linearization_certificate_sha256(
+    certificate: &RecomputedFemLinearizationCertificateV1,
+) -> Result<String, RunError> {
+    let mut preimage = certificate.clone();
+    preimage.content_sha256.clear();
+    let encoded = serde_json::to_vec(&preimage).map_err(|error| RunError {
+        message: format!("failed to encode recomputed FEM linearization certificate: {error}"),
+    })?;
+    let mut hash = Sha256::new();
+    hash.update(b"RecomputedFemLinearizationCertificate.v1\0");
+    hash.update((encoded.len() as u64).to_le_bytes());
+    hash.update(encoded);
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+pub fn recomputed_fem_equilibrium_content_sha256(values: &[[f64; 3]]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"RecomputedFemLinearizationCertificate.m0.v1\0");
+    hash.update((values.len() as u64).to_le_bytes());
+    for vector in values {
+        for value in vector {
+            hash.update(value.to_bits().to_le_bytes());
+        }
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemCpuRelaxationQualificationMetadata {
     pub schema_version: String,
     pub benchmark_gate_version: String,
