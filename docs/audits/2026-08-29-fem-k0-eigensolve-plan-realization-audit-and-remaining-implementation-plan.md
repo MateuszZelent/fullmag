@@ -1,12 +1,22 @@
 # Audyt realizacji planu FEM eigensolve K0 CPU/GPU i plan domknięcia
 
 **Data audytu:** 2026-08-29
+**Aktualizacja po konsolidacji i re-audycie GPT Pro:** 2026-08-29
 **Audytowany task Codex:** `codex://threads/019ff50c-f17c-79f2-9473-edac793b79c4`
 **Tytuł tasku:** `Dokończ eigensolve k0 demag (2)`
-**Tryb audytu:** read-only dla kodu, historii tasku, referencji Git i worktree; jedyną zmianą jest ten dokument
-**Werdykt:** **NO-GO dla merge do `master` i NO-GO dla claimu produkcyjnego CPU/GPU**
+**Bieżący worktree:** `C:\git\fullmag\worktrees\eigensolve-k0-finalization`
+**Bieżący branch:** `codex/eigensolve-k0-finalization-20260829`
+**Bieżący commit:** `5e5849c8acf8ec0f80c0f463fc5d9109ea9a4e14`
+**Tryb audytu:** analiza źródeł i dokumentów; bez nowego managed solve, GPU profile i browser proof
+**Werdykt:** **GO dla dalszej implementacji w dedykowanym worktree; NO-GO dla claimu produkcyjnego CPU/GPU i bezpośredniej promocji do `master`**
 
-## 1. Wynik w skrócie
+> **Uwaga o aktualności:** sekcje 1–12 zachowują stan i rozumowanie audytu
+> sprzed lokalnej konsolidacji. R0–R2 zostały następnie wykonane przez utworzenie
+> windowsowego worktree i merge aktualnego `master` z rescue. Sekcje 13–15 są
+> aktualizacją po konsolidacji i zastępują wcześniejszy plan tam, gdzie występuje
+> różnica.
+
+## 1. Wynik pierwotnego audytu w skrócie (stan przed konsolidacją)
 
 Oryginalny plan nie został porzucony: większość jego architektury została rzeczywiście
 zaimplementowana na poziomie źródeł. Powstały realne ścieżki FEM K0 z dynamicznym
@@ -315,7 +325,7 @@ Werdykt: **duży zakres D1/D2, brak D5**.
 | UI-Q3 | P1 | brak końcowego live browser proof | 60 s WebGL smoke na tym samym immutable candidate |
 | REL-G2 | P0 | brak finalnej integracji | verified candidate, manifest, promotion attestation, clean merge |
 
-## 9. Nowy plan wdrożenia pozostałych prac
+## 9. Pierwotny plan wdrożenia pozostałych prac (R0–R2 wykonane później)
 
 Nowy plan zachowuje logikę oryginalnego DAG, ale dodaje obowiązkową fazę odzysku.
 Nie wolno rozpoczynać R3–R9 przed zamknięciem R0–R2.
@@ -555,7 +565,7 @@ candidate. GPU device i native build są serializowane.
 - `.fms` działa po restarcie i usunięciu źródłowej historii;
 - live WebGL proof jest obowiązkowy.
 
-## 12. Decyzja końcowa
+## 12. Pierwotna decyzja końcowa (przed konsolidacją)
 
 Nie należy obecnie:
 
@@ -580,3 +590,250 @@ R3 kontrakty P0
 
 Obecna implementacja jest wartościowa i nie wymaga przepisania od zera. Wymaga
 jednak odzyskania, ujednolicenia i ponownej kwalifikacji na jednym źródle.
+
+## 13. Aktualizacja po konsolidacji i ocena wniosków GPT Pro
+
+### 13.1. Co zmieniło się od pierwotnego audytu
+
+Stan operacyjny opisany w sekcjach 3, 8 i R0–R2 nie jest już stanem bieżącym:
+
+- istnieje dedykowany windowsowy worktree
+  `C:\git\fullmag\worktrees\eigensolve-k0-finalization`;
+- branch `codex/eigensolve-k0-finalization-20260829` jest czysty przed zmianą tego
+  dokumentu;
+- commit `5e5849c8acf8ec0f80c0f463fc5d9109ea9a4e14` jest merge'em aktualnej w chwili
+  konsolidacji bazy `master` (`9d7bd3191959513ad31879a9c5ccecaa48e28558`) i rescue
+  (`bc5ca20f67645145fa0a9c3250fd9d905ed4e135`);
+- dirty checkout `C:\git\fullmag\fullmag` nie został użyty do integracji ani
+  zmodyfikowany;
+- historyczne worktree WSL pozostają kopią bezpieczeństwa.
+
+Oznacza to, że problemy `REC-01`, `REC-02` i `SCM-02` są lokalnie zamknięte na
+poziomie konsolidacji źródeł. Nie oznacza to jeszcze przejścia Q1–Q3 ani gotowości
+do promocji.
+
+### 13.2. Metoda oceny dokumentów GPT Pro
+
+Dwa dokumenty GPT Pro potraktowano wyłącznie jako źródło hipotez. Każda teza została
+porównana z bieżącym scalonym drzewem, a nie z historycznym `master` ani rescue.
+Klasy werdyktu:
+
+| Werdykt | Znaczenie |
+|---|---|
+| `CONFIRMED` | problem jest bezpośrednio widoczny w bieżącym źródle |
+| `PARTIAL` | sedno ryzyka jest trafne, ale opis jest zbyt szeroki lub część ochron już istnieje |
+| `STALE/RESOLVED` | teza była prawdziwa dla wcześniejszego drzewa albo nie uwzględnia kodu po konsolidacji |
+| `NOT VERIFIED` | nie da się rozstrzygnąć bez managed runtime, GPU profilera albo browsera |
+
+### 13.3. Tezy GPT Pro, które realnie poprawiają audyt
+
+| ID GPT Pro | Werdykt | Dowód w scalonym źródle | Konsekwencja |
+|---|---|---|---|
+| SCM-01 | `CONFIRMED P0` | materializacja managed source zatrzymała się na pustych celach symlinków `.claude/skills/*` | naprawić checkout/source identity przed jakimkolwiek Q1 |
+| PHY-01 | `CONFIRMED P0` | `linearization_state.cpp:323–369` normalizuje `m0`, ale kopiuje stare `H_eff0` i `H_demag0` bez recompute | domyślnie fail-closed; renormalizacja tylko z ponownym obliczeniem zależnych pól i certyfikatu |
+| PHY-02 | `CONFIRMED P0` | `require_symmetric_periodic_mesh` i `recompute_h_eff0_and_compare` występują tylko w deklaracji `linearization_state.hpp:64–65` | zaimplementować opcje albo usunąć je z publicznego kontraktu; nie mogą być martwymi przełącznikami |
+| PHY-03 | `PARTIAL P0` | builder wymaga v7, SHA-256 i spójnego acceptance certificate, ale nie przelicza niezależnie `H_eff0`/residualu | zachować istniejące walidacje i dodać recomputed linearization certificate |
+| PHY-04 | `CONFIRMED P1` | `linearization_state.cpp:305–346` liczy maksimum nodalnego względnego torque bez wag FE | dodać ważoną normę FE i zachować max-nodal jako diagnostykę pomocniczą |
+| PHY-05 | `CONFIRMED P0` | `linearization_state.cpp:303` ustawia `tangent_lumped_mass` na same jedynki | wyprowadzić rzeczywisty lumped mass z assembly i związać go z mesh/operator digest |
+| NUM-01 | `CONFIRMED P0 dla wspólnego helpera CPU` | `slepc_modal_eigen.cpp:225–250` ustawia rzeczywisty target `+omega`, a `:316–320` interpretuje częstotliwość z części urojonej eigenvalue | naprawić pencil/target i dodać test, który odróżnia target realny od `+i omega` |
+| NUM-02 | `CONFIRMED P0 dla tego helpera` | `slepc_modal_eigen.cpp:235–239` pobiera tylko `2 * requested`, po czym filtruje znak, okno i residual | adaptacyjnie zwiększać `nev/ncv` albo zwracać jawne incomplete; bez milczącego niedoboru |
+| NUM-11 | `CONFIRMED P1` | `slepc_modal_eigen.cpp:294–299` odczytuje licznik KSP po `EPSSolve`, co nie dowodzi sumy wszystkich solve'ów | zliczać iteracje monitorem/callbackiem i nazwać pola zgodnie z semantyką |
+| ID-01 | `CONFIRMED P1` | `linearization_state.cpp:62–68,408–431` buduje tekst `key=value;`, choć pole nazywa się `*_hash` | użyć kanonicznego SHA-256 albo zmienić nazwę na `signature_preimage` |
+| TEST-02 | `CONFIRMED P0` | brak świeżego pełnego CPU window związanego z obecnym commit/runtime | pozostaje główną bramką Q1 |
+| TEST-03 | `CONFIRMED P0` | brak profiler-backed GPU qualification dla obecnego candidate | pozostaje główną bramką Q2 |
+| UI-02 | `CONFIRMED P0` | brak live WebGL proof na tych samych natywnych artefaktach | pozostaje główną bramką Q3 |
+
+Największą wartością dokumentów GPT Pro jest więc nie ogólne stwierdzenie „brak
+kwalifikacji”, które audyt już zawierał, lecz wskazanie trzech konkretnych defektów
+przed Q1: niespójnej renormalizacji stanu, fikcyjnej masy lumped i błędnej geometrii
+targetu SLEPc.
+
+### 13.4. Tezy wymagające zawężenia albo odrzucenia
+
+| ID GPT Pro | Werdykt | Korekta po sprawdzeniu scalonego drzewa |
+|---|---|---|
+| SCM-02 | `STALE/RESOLVED` | kod rescue i bieżąca baza są już połączone w jednym dedykowanym branchu |
+| ABI-01 | `STALE/RESOLVED` | publiczne modalne deskryptory, request i result mają `struct_size` w `native/include/fullmag_fem.h` |
+| ABI-03 | `STALE/RESOLVED` | request ma jawny `execution_target`, result publikuje `resolved_execution_target` i `resolved_engine_id` |
+| ABI-04 | `STALE/RESOLVED` | modalne rozmiary i offsety są objęte layout/fingerprint v2–v4 w nagłówku ABI |
+| PHY-07 | `PARTIAL` | backendowy operator i mode kinematics walidują enum fail-closed, ale opcjonalność/fallback w projekcji UI nadal wymaga testu end-to-end |
+| POI-01 | `STALE na poziomie D1/D2` | scalone drzewo ma realny shared-domain MFEM/Poisson-airbox assembly i testy; nadal brak aktualnego D3/D4 |
+| POI-02 | `STALE na poziomie D1/D2` | `periodic_mesh_certificate.v6` waliduje relacje seam/corner, role regionów, klasy i kanoniczne digests; nadal trzeba sprawdzić receipt runtime |
+| GPU-01 | `STALE jako opis całego GPU` | limit 64 DOF dotyczy bounded dense validation lane; `kMaxGpuModalDofs` i produkcyjny adapter są osobne |
+| GPU-02 | `STALE na poziomie źródeł` | istnieje osobny `gpu/frequency_domain/modal_petsc_slepc.cpp` z PETSc/SLEPc CUDA; jego produkcyjność pozostaje `NOT VERIFIED` |
+| GPU-03 | `PARTIAL/NOT VERIFIED` | kod deklaruje persistent setup i brak transferów w iteracji, lecz prawdziwość musi potwierdzić profiler, nie self-report |
+| GPU-04 | `STALE/RESOLVED` | modalny CUDA kod jest wydzielony do `modal_krylov.cu` i `modal_petsc_slepc.cpp` |
+| UI-01 | `STALE/RESOLVED na D1/D2` | scalony Control Room zawiera resources, selection/composition, Inspectory i viewport mode overlay; nie ma jednak D5 |
+
+Pozostałych tez GPT Pro, zwłaszcza `NUM-03..10`, `PERF-01..06`, `ART-01..03`,
+`TEL-01` i `GPU-05`, nie należy automatycznie uznawać za potwierdzone dla całej
+architektury. Część dotyczy oracle/validation lane, część route produkcyjnego, a
+część wymaga pomiaru. Trafiają do ukierunkowanego audytu R3/R4, nie do listy
+zamkniętych faktów.
+
+### 13.5. Zaktualizowany rejestr P0
+
+| ID | Problem bieżący | Bramka zamknięcia |
+|---|---|---|
+| WIN-SRC-01 | puste symlinki blokują czystą materializację managed source | clean source export i identity manifest z dokładnego commit SHA |
+| LIN-PHY-01 | `m0` może zostać zmienione bez recompute pól zależnych | fail-closed lub atomowy recompute `m0/H_eff0/H_demag0/phi0/energy` |
+| LIN-FE-01 | tangent mass jest wektorem jedynek | rzeczywista FE lumped mass + unit/invariance tests |
+| LIN-CERT-01 | acceptance artifact nie jest niezależnym linearization certificate | recomputed, digest-bound certificate i weighted residual |
+| CPU-SPEC-01 | helper SLEPc targetuje oś rzeczywistą mimo spektrum `+-i omega` | poprawny pencil/target + analityczny test regresyjny |
+| CPU-COMP-01 | stałe oversampling `2*requested` nie gwarantuje coverage | adaptacyjne żądanie albo jawne incomplete |
+| CPU-Q1 | brak świeżego certified window na realnym antydocie | Q1 receipt z residualami, completeness i convergence |
+| GPU-Q2 | źródła GPU istnieją, lecz nie są profiler-qualified | Q2 z device trace, parity i scaling |
+| UI-Q3 | UI istnieje, lecz nie ma live proof | Q3 na artefaktach tego samego immutable candidate |
+
+## 14. Skorygowany plan wdrożenia v2
+
+Plan poniżej zastępuje R0–R9 jako plan wykonawczy. Nie powtarza wykonanej
+konsolidacji i rozdziela naprawy fizyki od kwalifikacji produktu.
+
+### R0–R2 — wykonane lokalnie
+
+**Stan:** `DONE-D1`.
+
+- odzyskano rescue i zachowano historyczne worktree;
+- utworzono dedykowany worktree Windows;
+- scalono aktualną bazę z rescue bez dotykania dirty `master`;
+- focused baseline przed ostatnim, skryptowym amendem obejmował 193/193 testów
+  runnera eigensolve, 49/49 testów API i Control Room typecheck;
+- targetowane UI Vitest nie wystartowały z powodu istniejącego
+  `ERR_REQUIRE_ESM`; nie był to wynik assertion testów;
+- managed CPU gate został zablokowany przez source materialization na pustych
+  symlinkach, więc D3/D4 nadal nie istnieje.
+
+Ponieważ ostatni amend dotyczył skryptów runtime, dla ścisłej tożsamości candidate
+focused baseline należy powtórzyć na finalnym SHA po naprawach R3–R6.
+
+### R3 — odtwarzalny Windows/managed source
+
+1. Naprawić puste cele `.claude/skills/*` w sposób zgodny z polityką repozytorium.
+2. Udowodnić clean checkout/export na Windows i w managed builderze.
+3. Zapisać commit SHA, tree SHA, source manifest i runtime manifest jako różne pola.
+4. Uruchomić source-identity gate przed buildem.
+
+**Bramka:** managed runtime widzi dokładnie to samo drzewo co worktree; brak pustych
+symlinków i brak ręcznie skopiowanych źródeł.
+
+### R4 — korekta stanu liniaryzacji i certyfikatu fizycznego
+
+1. Ustawić `allow_m0_renormalization=false` jako produkcyjny default.
+2. Jeżeli renormalizacja pozostaje wspierana, przeliczać atomowo wszystkie zależne
+   pola i energię; w przeciwnym razie odrzucać wejście.
+3. Zaimplementować `recompute_h_eff0_and_compare` i
+   `require_symmetric_periodic_mesh` albo usunąć martwe opcje z kontraktu.
+4. Zastąpić `tangent_lumped_mass=1` rzeczywistą masą FE z tego samego assembly.
+5. Dodać ważone normy torque, tangent leakage i full descriptor residual.
+6. Związać certificate z mesh, magnetic/airbox topology, material, BC, `phi0`,
+   operator/pencil, acceptance i source SHA przez kanoniczny SHA-256.
+7. Dodać negatywne testy: zmienione `m0`, `H_eff0`, masa, `phi0`, mesh i certificate.
+
+**Bramka:** nie da się zbudować stanu liniaryzacji z niespójną parą `m0/H_eff0`;
+test stałego pola i test skalowania FE przechodzą.
+
+### R5 — audyt lane'ów i semantyki statusów
+
+1. Sporządzić call graph każdej publicznej ścieżki: oracle, bounded validation,
+   CPU production i GPU production.
+2. Przypisać stabilne engine ID i jawny status `validation_only`/`production`.
+3. Dla każdej tezy `NUM-03..10`, `PERF-01..06`, `ART-01..03`, `TEL-01` wskazać
+   dokładny lane; nie naprawiać oracle tak, jakby był production hot path.
+4. Rozdzielić `solve_succeeded`, `fields_available`, `selected_only`,
+   `window_complete`, `scientifically_qualified` i `release_qualified`.
+5. Unknown phase convention odrzucać na backendzie, API i w viewport bez fallbacku.
+
+**Bramka:** każdy publiczny wynik ujawnia lane/engine i nie może promować
+availability do completeness/qualification.
+
+### R6 — poprawny CPU nearest-frequency
+
+1. Naprawić reprezentację problemu własnego tak, aby shift-and-invert targetował
+   fizyczne `+i omega` albo równoważny, jawnie obrócony realny pencil.
+2. Dodać analityczny makrospin test, w którym target realny i urojony wybierają
+   różne wyniki; test ma wykrywać regresję NUM-01.
+3. Zastąpić stałe `2*requested` adaptacyjnym `nev/ncv` i retry po filtracji.
+4. Liczyć residual pełnego oryginalnego descriptor pencil dla każdego moda.
+5. Poprawić telemetrykę iteracji KSP i jawnie raportować ostatni/łączny licznik.
+6. Zachować nearest jako `selected_only`, nigdy `complete`.
+
+**Bramka:** nearest na małym oracle i realnym shared-domain case zwraca właściwy
+mod, pełny residual i jawny status incomplete/selected-only.
+
+### R7 — certyfikowane CPU complete window
+
+1. Zaimplementować adaptacyjne pokrycie okna i niezależny warunek kompletności.
+2. Wymagać zgodności base/refinement, stabilności klastrów i braku truncation.
+3. `window_complete=true` ustawiać wyłącznie po przejściu pełnego certificate.
+4. Uruchomić Kittel jako niezależny oracle oraz realny okresowy antidot z dziurą.
+5. Wykonać uzgodniony zestaw mesh/airbox convergence i zapisać receipt.
+
+**Bramka R7/Q1:** pełne okno, wszystkie residuale, brak fallbacku, convergence i
+immutable source/runtime/input identity są zielone.
+
+### R8 — artefakty, API, FMS i Control Room
+
+1. Propagować rozdzielone statusy i pełny identity tuple do artifact/API/UI.
+2. Regenerować OpenAPI kanonicznym generatorem.
+3. Wykonać FMS export -> restart -> import bez pierwotnej historii.
+4. Naprawić środowisko Vitest `ERR_REQUIRE_ESM` i uruchomić targetowane testy UI.
+5. Wykonać live browser/WebGL proof na natywnych artefaktach CPU Q1.
+
+**Bramka R8/Q3-CPU:** spectrum, mode field i viewport wskazują ten sam candidate;
+60 s bez utraty WebGL context, stale cache i konfliktu shaderów.
+
+### R9 — GPU production i Q2
+
+1. Kwalifikować `modal_petsc_slepc.cpp`, nie bounded dense CUDA oracle.
+2. Potwierdzić przez profiler `VECCUDA`, `MATAIJCUSPARSE`, HYPRE device path,
+   persistent setup i brak transferów/synchronizacji w hot loop.
+3. Wykonać bounded, pośredni i `>1024 DOF`, następnie ten sam antydot co CPU.
+4. Porównać częstotliwości, pełne residuale i podprzestrzenie klastrów.
+5. Wykonać repeatability, cancellation, teardown, peak-memory i sanitizer gates.
+
+**Bramka R9/Q2:** profiler i parity potwierdzają production path bez fallbacku;
+self-report bez trace nie wystarcza.
+
+### R10 — immutable candidate i promocja
+
+1. Po R3–R9 zamrozić jeden candidate.
+2. Powtórzyć focused source tests na dokładnym finalnym SHA.
+3. Powtórzyć wymagane D3–D5 po każdej zmianie wpływającej na source identity.
+4. Zbudować DoD manifest z osobnym statusem CPU, GPU i browser.
+5. Dopiero wtedy pobrać najnowszy `master`, rozwiązać konflikt i przygotować merge.
+
+**Bramka R10/G2:** commit, runtime, receipts, profiler i browser proof mają wspólną
+tożsamość; brak `pending`, historycznych substytutów i ręcznych wyjątków.
+
+### 14.1. Zależności i najkrótsza ścieżka do przykładu warstwy z dziurą
+
+```text
+R3 clean source
+ -> R4 physical linearization
+ -> R5 lane/status audit
+ -> R6 correct CPU nearest
+ -> R7 real periodic antidot CPU Q1
+ -> R8 artifact/API/UI Q3-CPU
+
+R7 CPU oracle -> R9 GPU Q2
+R8 + R9 -> R10/G2
+```
+
+Pierwszy wiarygodny przykład „warstwa z dziurą” nie musi czekać na GPU ani pełny
+release. Minimalny naukowo uczciwy milestone to R3–R7: poprawny stan
+liniaryzacji, rzeczywista masa FE, poprawny target SLEPc, realny periodic
+Poisson-airbox assembly, pełny residual i jawny status selected-only lub certified
+window. UI może zostać dołączone w R8.
+
+## 15. Zaktualizowana decyzja
+
+Wnioski GPT Pro są użyteczne, ale nie jako gotowy werdykt o całym repozytorium.
+Do planu należy przyjąć przede wszystkim `PHY-01`, `PHY-02`, `PHY-05`, `NUM-01`,
+`NUM-02`, `ID-01` oraz nacisk na niezależną kompletność i profiler-backed Q2.
+
+Nie należy ponownie wykonywać recovery ani przepisywać solvera od zera. Należy
+kontynuować wyłącznie w
+`C:\git\fullmag\worktrees\eigensolve-k0-finalization`, zaczynając od R3 i R4.
+Najbliższym celem nie jest merge do `master`, lecz wiarygodny CPU example warstwy
+z dziurą zamykający R7/Q1.
