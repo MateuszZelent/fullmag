@@ -469,8 +469,10 @@ int context_upload_magnetization_f64(
         } else {
             fill_zero_vector_field(ctx.effective_field.h_xyz, ctx.mesh.n_nodes);
         }
-        if (!ctx.mesh.periodic_reduced_node.empty()) {
-            project_static_periodic_aos(ctx, ctx.effective_field.h_xyz);
+        if (!project_static_periodic_aos_checked(
+                ctx, ctx.effective_field.h_xyz, error)) {
+            error = "upload_magnetization: effective-field periodic projection failed: " + error;
+            return FULLMAG_FEM_ERR_INVALID;
         }
     } else {
         std::string heff_error;

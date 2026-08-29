@@ -114,7 +114,10 @@ bool prepare_dmi_periodic_input(
         }
     }
     projected_m_xyz = m_xyz;
-    project_static_periodic_aos(ctx, projected_m_xyz);
+    if (!project_static_periodic_aos_checked(ctx, projected_m_xyz, error)) {
+        error = "DMI periodic input projection failed: " + error;
+        return false;
+    }
     return true;
 }
 

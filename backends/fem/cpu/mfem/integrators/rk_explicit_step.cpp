@@ -290,7 +290,11 @@ bool context_step_explicit_rk_mfem(
                 error = "explicit RK stage candidate normalization failed: " + error;
                 return false;
             }
-            project_static_periodic_aos(ctx, ws.m_stage);
+            if (!project_static_periodic_aos_checked(ctx, ws.m_stage, error)) {
+                ws.fsal_valid = false;
+                error = "explicit RK stage periodic projection failed: " + error;
+                return false;
+            }
             if (ctx.frozen_spins.enabled()) {
                 ctx.frozen_spins.project_onto_reference(ws.m_stage);
             }
@@ -336,7 +340,11 @@ bool context_step_explicit_rk_mfem(
             }
             ws.m_candidate[i] = ctx.state.m_xyz[i] + dt * accum;
         }
-        project_static_periodic_aos(ctx, ws.m_candidate);
+        if (!project_static_periodic_aos_checked(ctx, ws.m_candidate, error)) {
+            ws.fsal_valid = false;
+            error = "explicit RK embedded candidate periodic projection failed: " + error;
+            return false;
+        }
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }
@@ -489,7 +497,11 @@ bool context_step_explicit_rk_mfem(
             error = "explicit RK high-order candidate normalization failed: " + error;
             return false;
         }
-        project_static_periodic_aos(ctx, ws.m_candidate);
+        if (!project_static_periodic_aos_checked(ctx, ws.m_candidate, error)) {
+            ws.fsal_valid = false;
+            error = "explicit RK high-order candidate periodic projection failed: " + error;
+            return false;
+        }
         if (ctx.frozen_spins.enabled()) {
             ctx.frozen_spins.project_onto_reference(ws.m_candidate);
         }

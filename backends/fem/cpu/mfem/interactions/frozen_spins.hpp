@@ -1,5 +1,7 @@
 #pragma once
 
+#include "fullmag_fem.h"
+
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -9,11 +11,21 @@ namespace fullmag::fem {
 struct Context;
 
 /*
+ * Import the public node-selection descriptor into the local AoS state space.
+ * Periodic classes must have identical membership and frozen references, and
+ * inactive Airbox nodes cannot be frozen.
+ */
+bool initialize_frozen_spins_plan_fields(
+    Context &ctx,
+    const fullmag_fem_plan_desc &plan,
+    std::string &error);
+
+/*
  * Native FEM Frozen Spins runtime owner.
  *
  * This module owns the frozen reference descriptor for the native FEM runtime.
- * The mask is indexed by FEM grid node id (the reduced-magnetization true DOF),
- * so the mask has exactly one u8 per node and the reference holds exactly
+ * The mask is indexed by FEM local grid node id, matching dense
+ * `ctx.state.m_xyz`, so it has exactly one u8 per node and the reference holds
  * three f64 per node — mirroring dense ctx.state.m_xyz.
  *
  * Responsibilities:
@@ -44,8 +56,8 @@ public:
      *
      * The descriptor is accepted when:
      *   - both pointers are null (no constraint requested), OR
-     *   - both pointers are set, the mask length equals the true DOF count, and
-     *     the reference length equals three times the true DOF count.
+     *   - both pointers are set, the mask length equals the local state-node
+     *     count, and the reference length equals three times that count.
      *
      * Any other combination fails closed with a
      * frozen_spins_fem_unqualified error. The active candidate DOF count is
@@ -59,8 +71,8 @@ public:
         std::size_t frozen_mask_len,
         const double* frozen_reference_xyz,
         std::size_t frozen_reference_len,
-        std::size_t true_dof_count,
-        std::size_t active_candidate_dof_count,
+        std::size_t local_node_count,
+        std::size_t active_candidate_node_count,
         const char* fingerprint,
         std::string& error,
         uint64_t activation_epoch = 1);
@@ -90,12 +102,12 @@ public:
     void zero_frozen_rhs(std::vector<double>& rhs_xyz) const;
 
     /*
-     * Number of frozen true DOF.
+     * Number of frozen local state nodes.
      */
     std::size_t frozen_count() const;
 
     /*
-     * The mask (u8) as a vector indexed by true DOF.
+     * The mask (u8) as a vector indexed by local state node.
      */
     const std::vector<uint8_t>& mask() const { return frozen_mask_; }
 
