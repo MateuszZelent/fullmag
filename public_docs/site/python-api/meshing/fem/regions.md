@@ -50,7 +50,15 @@ region.mesh(maximum_element_size=3 * nm, minimum_element_size=1.5 * nm,
 body.Ms = 800.0e3
 body.Aex = 13.0e-12
 body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.exchange()
+study.demag(realization="poisson_robin")
 study.build_domain_mesh()
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="llg_overdamped",
+    tolA=1.0e-4,
+    max_steps=1_000,
+)
 ```
 
 ## 4. Exact API
