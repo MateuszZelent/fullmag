@@ -182,6 +182,11 @@ Tolerances are dimensionless state tolerances, not SI field tolerances.
 - J. R. Dormand, P. J. Prince, “A family of embedded Runge-Kutta formulae,” *Journal of Computational and Applied Mathematics* 6 (1980), DOI: [10.1016/0771-050X(80)90013-3](https://doi.org/10.1016/0771-050X(80)90013-3).
 
 (time-integration-adaptive-stepping-source-code-index)=
+
+## Control Room crosswalk
+
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. TODO: frontend support applies to numerical parameters without a matching control. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |

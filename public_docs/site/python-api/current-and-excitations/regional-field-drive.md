@@ -118,6 +118,20 @@ Field-drive physics belongs to the Zeeman/antenna pages.
 
 (python-api-current-and-excitations-regional-field-drive-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Field-drive and transport panels cover a partial subset of the excitation API.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Stages -> Add field drive / Transport` | `partial` | Submit drive/transport draft; affected stage and field resources are invalidated |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add field drive / Transport` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for excitation parameters without a named drive/transport field.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx (TransportAuthoringInspector)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|

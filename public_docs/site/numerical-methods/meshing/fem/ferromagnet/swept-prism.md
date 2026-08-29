@@ -87,6 +87,86 @@ under a scale-aware tolerance and should count cells by family and region.
 | Resolve additional thickness structure | 3 prism layers | Current reviewed authoring maximum; four node planes |
 | More than 3 layers | not enabled by current Control Room gate | Requires expanded capability evidence before authoring |
 
+## Standard entry: strict swept-prism (source-first implementation)
+
+### Wprowadzenie
+
+Strict swept-prism in FullMag is implemented as a constrained path through `GeometryMeshHandle` and
+`PerObjectMeshRecipe` objects. The user-facing API call is interpreted into a strict recipe, then
+validated against route preconditions (`topology`, `order`, `transition`, layer count exactness).
+
+### Dowód bezpośredni z kodu
+
+- `GeometryMeshHandle.thin_film(...)` (in `packages/fullmag-py/src/fullmag/world.py`) waliduje:
+  `topology in {"tetrahedral","prismatic",None}`, strict prismatic constraints (`order in {None,1}`,
+  `exact_layers=True` poza trybem extended), i `transition='pyramid_to_tetrahedra'`.
+- Dla ścieżki prismatic `thin_film(...)` modyfikuje `mesh_spec` na `swept_prism` + `through_thickness_distribution="fixed"` + `sweep_face_meshing="triangular"` + `sweep_direction="auto"` + `element_family="prism"` + `exact_layer_count=True`.
+- Dla ścieżki prismatic `thin_film(...)` także wywołuje `configure(...)` z przeliczeniem `maximum/minimum_element_size`, a także parametrów
+  interfejs/granic/rogu.
+- `GeometryMeshHandle.configure(...)` (ten sam plik) jest pełnym kontraktem ustawień meshu:
+  `cell_size`, aliasy `hmax/hmin`, `growth_rate`/`maximum_element_growth_rate`,
+  `interface_maximum_element_size` / `surface_maximum_element_size`, `edge_*`, `corner_*`,
+  `mesh_strategy`, `topology`, `through_thickness_*`, `sweep_*`, `transition_policy`.
+- `PerObjectMeshRecipe` walidacje (`packages/fullmag-py/src/fullmag/model/discretization.py`) wymuszają:
+  `topology="prismatic" -> order in {None,1}`, `mesh_strategy='swept_prism'`, `exact_layer_count=True`,
+  `transition_policy='pyramid_to_tetrahedra'`.
+
+### Jak to zrobić w Pythonie
+
+```python
+import fullmag as fm
+
+study = fm.study("strict_swept_prism")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+film = study.geometry(fm.Box(600e-9, 200e-9, 6e-9), name="film")
+film.mesh(
+    minimum_element_size=4e-9,
+    maximum_element_size=8e-9,
+    mesh_strategy="swept_prism",
+    topology="prismatic",
+    through_thickness_elements=2,
+    through_thickness_distribution="fixed",
+    through_thickness_symmetric=False,
+    sweep_face_meshing="triangular",
+    sweep_direction="auto",
+    element_family="prism",
+    transition_policy="pyramid_to_tetrahedra",
+    exact_layer_count=True,
+    order=1,
+)
+```
+
+### Funkcje i argumenty (źródłowo)
+
+| Funkcja | Argumenty |
+|---|---|
+| `GeometryMeshHandle.thin_film(*, hmax=None, hmin=None, maximum_element_size=None, minimum_element_size=None, order=None, curvature_factor=None, narrow_region_resolution=None, layers=1, topology=None, exact_layers=None, transition=None, interface_maximum_element_size=None, surface_maximum_element_size=None, interface_thickness=None, surface_thickness=None, transition_distance=None, surface_transition_distance=None, edge_maximum_element_size=None, edge_thickness=None, edge_transition_distance=None, corner_maximum_element_size=None, corner_extent=None, corner_transition_distance=None)` | Wariant ukierunkowany na thin-film; przy `topology="prismatic"` uruchamia ścieżkę strict with `pyramid_to_tetrahedra`. |
+| `GeometryMeshHandle.configure(..., cell_size=None, hmax=None, hmin=None, maximum_element_size=None, minimum_element_size=None, order=None, growth_rate=None, maximum_element_growth_rate=None, narrow_region_resolution=None, interface_maximum_element_size=None, interface_hmax=None, interface_thickness=None, transition_distance=None, transition_growth=None, edge_maximum_element_size=None, edge_hmax=None, edge_thickness=None, edge_transition_distance=None, corner_maximum_element_size=None, corner_hmax=None, corner_extent=None, corner_transition_distance=None, mesh_strategy=None, topology=None, through_thickness_elements=None, through_thickness_distribution=None, through_thickness_element_ratio=None, through_thickness_symmetric=None, sweep_face_meshing=None, sweep_direction=None, element_family=None, transition_policy=None, exact_layer_count=None)` | Pełny kontrakt ustawień (m.in. aliases jakości/warstw/siatek); `thin_film()` mapuje część z nich do tej metody. |
+| `PerObjectMeshRecipe` / `_SWEEP_TRANSITION_POLICIES` checks | `topology`, `mesh_strategy`, `order`, `element_family`, `exact_layer_count`, `transition_policy` | Wymusza spójność strict mixed-P1. |
+
+### Referencje do kodu
+
+- `packages/fullmag-py/src/fullmag/world.py` (`GeometryMeshHandle.thin_film`, `GeometryMeshHandle.configure`)
+- `packages/fullmag-py/src/fullmag/model/discretization.py` (walidacje `PerObjectMeshRecipe`, `_SWEEP_TRANSITION_POLICIES`)
+- `packages/fullmag-py/tests/test_mixed_element_meshing.py` (testy prism/pyramid/tet i mixed-element)
+- `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` (kontrola capability)
+- `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py` (`generate_swept_mesh`)
+- `tests/standard_problems/mumag/sp4/fem/scenarios/mesh_single_prism_layer.py` (referencyjny skrypt SP4)
+
+### Bibliografia
+
+- FullMag SP4 FEM strict mixed-meshing path and managed qualification scripts are the implementation references for this contract.
+- Abert, C. “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+
+## SP4 and similar workflow references
+
+The production SP4 FEM relaxation setup uses the mixed-prism strict route with exact layer-count control and
+prism-tetrahedral transition, matching this page’s `prismatic`, `exact_layer_count=true`, and
+`transition="pyramid_to_tetrahedra"` contract.
+
 ## Parameters
 
 | Python / IR key | Unit | Default | Validation | Numerical effect |
@@ -303,3 +383,7 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 - C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
+

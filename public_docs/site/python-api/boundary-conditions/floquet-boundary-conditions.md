@@ -108,6 +108,20 @@ Phase-convention references belong to the Floquet response page.
 
 (python-api-boundary-conditions-floquet-boundary-conditions-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: No complete authoring route is established for this API surface.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Boundary` | `TODO` | No supported frontend transaction |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Boundary` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for this boundary-condition API and its parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|

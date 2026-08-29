@@ -120,6 +120,20 @@ user API. Use typed constraint helpers and stage/problem authoring rather than m
 No new physical model is introduced; references belong to the interactions consuming the magnet.
 
 (python-api-magnets-and-textures-ferromagnet-source-code-index)=
+
+## Control Room crosswalk
+
+Status: The exposed texture families are partial; unlisted presets remain Python-only.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

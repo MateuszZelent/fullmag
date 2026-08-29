@@ -451,6 +451,10 @@ contract and exposes object/region mesh membership read-only in the Control Room
 | SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | Boolean. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | none |
 | SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | Finite and positive. | Preserved compatibility value; not consumed by the current builder. | Inert compatibility data | none |
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## Source-code index
 
 | Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
@@ -460,3 +464,4 @@ contract and exposes object/region mesh membership read-only in the Control Room
 | UI airbox lifecycle | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx` | `submitAirboxPolicyDraft`, `build` | panel/model tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/airbox/AirboxMeshParametersPanel.tsx) |
 | UI region controls | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx` | `ObjectRegionMeshPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/apps/control-room/src/modules/inspector/panels/region/ObjectRegionMeshPanel.tsx) |
 | final provenance | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | fallback/report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/043201a94f769307c6b6e0db971da9a8a5eec57c/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |
+

@@ -280,6 +280,24 @@ intentionally not presented as an analytic texture preset because its value depe
 specific resolved mesh and simulation state.
 
 (mumax3-source-code-index)=
+
+## Control Room crosswalk
+
+Status: The exposed texture families are partial; unlisted presets remain Python-only.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
+
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## Source-code index
 
 | Source ID | Repository path | Stable symbol | Evidence |
@@ -292,3 +310,4 @@ specific resolved mesh and simulation state.
 | python-compact-hopfion-factory | packages/fullmag-py/src/fullmag/init/textures.py | hopfion_compact_support | test_mumax_compact_hopfion_factory_and_support_boundary |
 | mumax3-vortex-wall | external_solvers/3/engine/config.go | func VortexWall | pinned submodule f656494b29516bead825b444b1f0b38c6e6c7dbf + independent parity fixtures |
 | mumax3-compact-hopfion | external_solvers/3/engine/config.go | func HopfionCompactSupport | pinned submodule f656494b29516bead825b444b1f0b38c6e6c7dbf + independent parity fixtures |
+

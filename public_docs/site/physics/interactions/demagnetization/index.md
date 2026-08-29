@@ -184,21 +184,20 @@ ProblemIR documents across all children.
 4. NIST μMAG Standard Problems, current benchmark definitions.
 
 (physics-demagnetization-source-code-index)=
-## Source-code index
 
-| Repository path | Stable symbol / area | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `Demag` | public realization vocabulary and IR |
-| `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM, FDMDemag, FEM` | numerical policies |
-| `packages/fullmag-py/src/fullmag/model/problem.py` | `FdmPbc` | periodic request semantics |
-| `crates/fullmag-plan/src/fdm.rs` | `demag planning` | FDM topology and capability resolution |
-| `crates/fullmag-plan/src/fem.rs` | `demag planning` | FEM realization and solver resolution |
-| `backends/fdm/cpu` | `demag convolution` | FDM CPU reference |
-| `backends/fdm/gpu/cuda/interactions` | `demag kernels/FFT` | FDM GPU realization |
-| `backends/fem/cpu/mfem` | `Poisson/BEM demag` | FEM CPU realization |
-| `backends/fem/gpu/cuda` | `FEM demag support` | FEM GPU realization |
+## Control Room crosswalk
 
-(physics-demagnetization-round-trip-and-failure-semantics)=
+This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. TODO: frontend support applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -217,3 +216,19 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 ## Limitations
 
 Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
+
+## Source-code index
+
+| Repository path | Stable symbol / area | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `Demag` | public realization vocabulary and IR |
+| `packages/fullmag-py/src/fullmag/model/discretization.py` | `FDM, FDMDemag, FEM` | numerical policies |
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `FdmPbc` | periodic request semantics |
+| `crates/fullmag-plan/src/fdm.rs` | `demag planning` | FDM topology and capability resolution |
+| `crates/fullmag-plan/src/fem.rs` | `demag planning` | FEM realization and solver resolution |
+| `backends/fdm/cpu` | `demag convolution` | FDM CPU reference |
+| `backends/fdm/gpu/cuda/interactions` | `demag kernels/FFT` | FDM GPU realization |
+| `backends/fem/cpu/mfem` | `Poisson/BEM demag` | FEM CPU realization |
+| `backends/fem/gpu/cuda` | `FEM demag support` | FEM GPU realization |
+
+(physics-demagnetization-round-trip-and-failure-semantics)=

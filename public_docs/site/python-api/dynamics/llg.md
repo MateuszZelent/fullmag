@@ -112,6 +112,20 @@ No physical model is introduced. Primary references belong to consuming interact
 
 (python-api-dynamics-llg-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Common solver/stage fields are partial; backend-specific options without editor fields remain TODO.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Solver` | `partial` | Apply stage draft; solver request and result resources become stale |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for dynamics parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|

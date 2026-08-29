@@ -256,3 +256,7 @@ Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b
 - Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
 
 - H. Si, “TetGen, a Delaunay-based quality tetrahedral mesh generator,” *ACM Transactions on Mathematical Software* **41** (2015), [doi:10.1145/2629697](https://doi.org/10.1145/2629697).
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
+

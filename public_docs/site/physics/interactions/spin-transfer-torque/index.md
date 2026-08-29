@@ -226,19 +226,20 @@ coefficients.
 3. NIST μMAG Standard Problem 5.
 
 (physics-spin-transfer-torque-source-code-index)=
-## Source-code index
 
-| Repository path | Stable symbol / area | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `SlonczewskiSTT, ZhangLiSTT` | public constructors and formula versions |
-| `packages/fullmag-py/src/fullmag/world.py` | `spin_torque facade` | stage registration boundary |
-| `crates/fullmag-plan/src/spin_torque.rs` | `STT planning` | variant/source/target capability |
-| `crates/fullmag-plan/src/fdm.rs` | `FDM torque planning` | FDM materialization |
-| `crates/fullmag-plan/src/fem.rs` | `FEM torque planning` | FEM materialization |
-| `backends/fdm/gpu/cuda/interactions` | `STT kernels` | FDM GPU realization |
-| `backends/fem/cpu/mfem/interactions` | `STT operators` | FEM CPU realization |
+## Control Room crosswalk
 
-(physics-spin-transfer-torque-round-trip-and-failure-semantics)=
+This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. TODO: frontend support applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -252,3 +253,17 @@ The authored model is valid only within the continuum, discretization, boundary,
 ## Implementation mapping
 
 Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+
+## Source-code index
+
+| Repository path | Stable symbol / area | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `SlonczewskiSTT, ZhangLiSTT` | public constructors and formula versions |
+| `packages/fullmag-py/src/fullmag/world.py` | `spin_torque facade` | stage registration boundary |
+| `crates/fullmag-plan/src/spin_torque.rs` | `STT planning` | variant/source/target capability |
+| `crates/fullmag-plan/src/fdm.rs` | `FDM torque planning` | FDM materialization |
+| `crates/fullmag-plan/src/fem.rs` | `FEM torque planning` | FEM materialization |
+| `backends/fdm/gpu/cuda/interactions` | `STT kernels` | FDM GPU realization |
+| `backends/fem/cpu/mfem/interactions` | `STT operators` | FEM CPU realization |
+
+(physics-spin-transfer-torque-round-trip-and-failure-semantics)=

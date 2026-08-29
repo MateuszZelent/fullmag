@@ -254,3 +254,7 @@ grading
 boundary-closure
 periodic-airbox
 ```
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

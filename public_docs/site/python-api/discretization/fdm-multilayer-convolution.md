@@ -520,6 +520,7 @@ runtime-resource, and UI behavior.
 
 (python-api-fdm-multilayer-convolution-source-code-index)=
 <!-- (source-code-index)= -->
+
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Lane and evidence |

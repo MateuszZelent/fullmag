@@ -115,3 +115,18 @@ This is an onboarding run, not an MD/qualification benchmark. It uses a small ce
 practical to run; exchange and demagnetization validation regimes are documented on the canonical
 {ref}`interaction pages <public-docs-physics-interactions-root>`. The FDM CPU lane shown here has
 scoped published evidence; do not infer executed CUDA parity from this snippet.
+## Control Room crosswalk
+
+Use the authoring path stated in this guide, normally `Model Explorer -> Objects` followed by the relevant Geometry, Material, Physics, Mesh, or Stage panel. Any parameter shown in Python but not shown in that path is `TODO: frontend support`; do not describe it as configurable in the UI. See {doc}`/frontend/capability-register`.
+
+## Python/API crosswalk
+
+The runnable Python example and exact argument contract are authoritative. If this guide is conceptual or does not contain a runnable example, it explicitly defers to the linked `{doc}``/python-api/index` page rather than duplicating an unverified signature.
+
+## Physics, limitations, and bibliography
+
+Use the linked physics or numerical-methods page for governing equations and assumptions. This onboarding page does not add a new physical model. Bibliography: see the linked terminal API or physics page; no additional source is claimed here.
+## Source-code index
+
+- No new implementation symbol is introduced by this guide. The exact Python source symbol is owned by the linked terminal API page and the runnable example.
+

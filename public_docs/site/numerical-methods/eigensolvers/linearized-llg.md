@@ -186,6 +186,11 @@ runtime qualification condition, not a mathematical assumption.
 - Canonical LLG owner: {doc}`../../physics/foundations/llg-equation`.
 
 (numerical-methods-eigensolver-linearized-llg-source-code-index)=
+
+## Control Room crosswalk
+
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. TODO: frontend support applies to numerical parameters without a matching control. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |

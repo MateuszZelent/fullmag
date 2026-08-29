@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-grading)=
 # Airbox Grading API
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## 1. What it is and when to use it
 
 `study.universe.mesh(...)` controls air sizing: element size bounds and how the
@@ -135,3 +139,7 @@ Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 |---|---|---|---|
 | air sizing and grading | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | validation and `_configure_study_universe` |
 | FDM/FEM mutual exclusion | `packages/fullmag-py/src/fullmag/world.py` | `StudyUniverseMeshHandle.mesh` | `cell_size` vs FEM controls branch |
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
+
