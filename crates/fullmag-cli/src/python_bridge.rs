@@ -983,6 +983,7 @@ pub(crate) fn run_python_helper_with_progress(
     }
 
     let pythonpath = repo_root().join("packages").join("fullmag-py").join("src");
+    let python_extension_root = repo_root().join(".fullmag").join("local");
     let fem_mesh_cache_dir = repo_root()
         .join(".fullmag")
         .join("local")
@@ -1005,9 +1006,13 @@ pub(crate) fn run_python_helper_with_progress(
             let mut merged = pythonpath.display().to_string();
             if let Some(existing) = &inherited_pythonpath {
                 if !existing.is_empty() {
-                    merged.push(':');
+                    merged.push(if cfg!(windows) { ';' } else { ':' });
                     merged.push_str(existing);
                 }
+            }
+            if python_extension_root.is_dir() {
+                merged.push(if cfg!(windows) { ';' } else { ':' });
+                merged.push_str(&python_extension_root.display().to_string());
             }
             command.env("PYTHONPATH", merged);
         }

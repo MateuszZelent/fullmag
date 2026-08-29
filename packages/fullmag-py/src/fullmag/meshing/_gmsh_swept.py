@@ -212,16 +212,29 @@ def _apply_mixed_air_interface_mesh_options(
 
 
 def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
+    """Compute all-family p05 quality without a Python loop per element.
+
+    The apex line-search calls this once after every mixed-domain mesh.  The
+    old implementation performed a dictionary lookup, array allocation, and
+    several NumPy calls for each of hundreds of thousands of cells.  Resolve
+    Gmsh tags to a dense coordinate array once and evaluate each family in
+    bounded vectorized batches instead.
+    """
     node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
-    coordinate_by_tag = {
-        int(tag): point
-        for tag, point in zip(
-            node_tags,
-            np.asarray(coordinates, dtype=np.float64).reshape((-1, 3)),
-            strict=True,
-        )
+    node_tags_array = np.asarray(node_tags, dtype=np.int64)
+    node_coordinates = np.asarray(coordinates, dtype=np.float64).reshape((-1, 3))
+    if node_tags_array.shape != (len(node_coordinates),):
+        raise RuntimeError("mixed Gmsh node tags and coordinates have inconsistent lengths")
+    order = np.argsort(node_tags_array)
+    sorted_tags = node_tags_array[order]
+    sorted_coordinates = node_coordinates[order]
+    decompositions = {
+        "tet4": ((0, 1, 2, 3),),
+        "prism6": ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)),
+        "pyramid5": ((0, 1, 2, 4), (0, 2, 3, 4)),
     }
-    values: dict[str, list[float]] = {}
+    values: dict[str, list[np.ndarray]] = {}
+    batch_size = 65_536
     for element_type, family, arity in (
         (4, "tet4", 4),
         (6, "prism6", 6),
@@ -231,15 +244,40 @@ def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
         if len(element_tags) == 0:
             continue
         connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, arity))
-        for cell in connectivity:
-            cell_coordinates = np.asarray(
-                [coordinate_by_tag[int(tag)] for tag in cell], dtype=np.float64
-            )
-            values.setdefault(family, []).extend(
-                _mixed_cell_scaled_jacobians(family, cell_coordinates).tolist()
-            )
+        family_values: list[np.ndarray] = []
+        for start in range(0, len(connectivity), batch_size):
+            batch = connectivity[start : start + batch_size]
+            positions = np.searchsorted(sorted_tags, batch)
+            if np.any(positions >= len(sorted_tags)) or not np.array_equal(
+                sorted_tags[positions], batch
+            ):
+                raise RuntimeError("mixed Gmsh connectivity references an unknown node")
+            points = sorted_coordinates[positions]
+            for indices in decompositions[family]:
+                tetra = points[:, np.asarray(indices, dtype=np.intp), :]
+                matrix = np.stack(
+                    (
+                        tetra[:, 1] - tetra[:, 0],
+                        tetra[:, 2] - tetra[:, 0],
+                        tetra[:, 3] - tetra[:, 0],
+                    ),
+                    axis=2,
+                )
+                # ``matrix`` stores edge vectors as columns (N, row, column),
+                # matching the scalar helper's ``norm(..., axis=0)``.
+                denominator = np.prod(np.linalg.norm(matrix, axis=1), axis=1)
+                determinants = np.abs(np.linalg.det(matrix))
+                family_values.append(
+                    np.divide(
+                        determinants,
+                        denominator,
+                        out=np.zeros_like(determinants),
+                        where=denominator > 0.0,
+                    )
+                )
+        values[family] = family_values
     return {
-        family: float(np.percentile(family_values, 5.0))
+        family: float(np.percentile(np.concatenate(family_values), 5.0))
         for family, family_values in sorted(values.items())
     }
 
@@ -400,7 +438,7 @@ def _mixed_apex_candidate_preserves_face_sides(
 
 
 def _mixed_shared_faces_by_apex(
-    cells_by_family: dict[str, list[NDArray[np.int64]]],
+    cells_by_family: dict[str, NDArray[np.int64] | list[NDArray[np.int64]]],
     *,
     apex_tags: list[int],
 ) -> dict[
@@ -413,12 +451,65 @@ def _mixed_shared_faces_by_apex(
     ],
 ]:
     """Index every shared face whose plane or owner interior an apex can move."""
+    apex_array = np.asarray(apex_tags, dtype=np.int64)
+    cell_arities = {"tet4": 4, "prism6": 6, "pyramid5": 5}
     face_owners: dict[tuple[int, ...], list[NDArray[np.int64]]] = {}
+    cell_rows_by_family: dict[str, list[NDArray[np.int64]]] = {}
+
+    # Only cells containing a movable apex can originate a relevant face.  The
+    # candidate keys are small; all-cell membership checks below stay in
+    # NumPy, so the far-air volume never creates millions of Python tuples.
+    candidate_faces_by_arity: dict[int, set[tuple[int, ...]]] = {}
     for family, cells in cells_by_family.items():
-        for cell in cells:
-            for local_face in _MIXED_CELL_LOCAL_FACETS[family]:
-                face = tuple(sorted(int(cell[index]) for index in local_face))
-                face_owners.setdefault(face, []).append(cell)
+        cell_array = np.asarray(cells, dtype=np.int64).reshape(
+            (-1, cell_arities[family])
+        )
+        if isinstance(cells, np.ndarray):
+            cell_rows = list(cell_array)
+        else:
+            # Preserve row identity for the small unit-test/development API;
+            # the production path supplies a 2-D ndarray and takes the fast
+            # vectorized mask below.
+            cell_rows = [
+                np.asarray(cell, dtype=np.int64) for cell in cells
+            ]
+        cell_rows_by_family[family] = cell_rows
+        mask = np.isin(cell_array, apex_array).any(axis=1)
+        for cell, is_incident in zip(cell_rows, mask, strict=True):
+            if is_incident:
+                for local_face in _MIXED_CELL_LOCAL_FACETS[family]:
+                    face = tuple(sorted(int(cell[index]) for index in local_face))
+                    candidate_faces_by_arity.setdefault(len(face), set()).add(face)
+
+    def packed_face_keys(rows: NDArray[np.int64]) -> NDArray[np.void]:
+        contiguous = np.ascontiguousarray(rows, dtype=np.int64)
+        return contiguous.view(
+            np.dtype((np.void, contiguous.dtype.itemsize * contiguous.shape[1]))
+        ).reshape(-1)
+
+    packed_candidates = {
+        arity: packed_face_keys(
+            np.asarray(sorted(faces), dtype=np.int64).reshape((-1, arity))
+        )
+        for arity, faces in candidate_faces_by_arity.items()
+    }
+    for family, cells in cells_by_family.items():
+        cell_array = np.asarray(cells, dtype=np.int64).reshape(
+            (-1, cell_arities[family])
+        )
+        cell_rows = cell_rows_by_family[family]
+        for local_face in _MIXED_CELL_LOCAL_FACETS[family]:
+            face_arity = len(local_face)
+            candidates = packed_candidates.get(face_arity)
+            if candidates is None or not len(cell_array):
+                continue
+            face_rows = np.sort(cell_array[:, local_face], axis=1)
+            selected = np.flatnonzero(
+                np.isin(packed_face_keys(face_rows), candidates)
+            )
+            for index in selected:
+                face = tuple(int(value) for value in face_rows[index])
+                face_owners.setdefault(face, []).append(cell_rows[int(index)])
 
     apex_set = set(apex_tags)
     shared_faces_by_apex: dict[
@@ -625,9 +716,9 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
     incident_by_apex: dict[int, list[tuple[str, np.ndarray]]] = {
         apex: [] for apex in apex_tags
     }
-    apex_set = set(apex_tags)
-    cells_by_family: dict[str, list[NDArray[np.int64]]] = {
-        "pyramid5": [pyramid for pyramid in pyramids]
+    apex_array = np.asarray(apex_tags, dtype=np.int64)
+    cells_by_family: dict[str, NDArray[np.int64]] = {
+        "pyramid5": pyramids
     }
     for element_type, family, arity in (
         (4, "tet4", 4),
@@ -637,9 +728,12 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         if len(element_tags) == 0:
             continue
         connectivity = np.asarray(element_nodes, dtype=np.int64).reshape((-1, arity))
-        cells_by_family[family] = [cell for cell in connectivity]
-        for cell in connectivity:
-            cell_apices = sorted(apex_set.intersection(int(tag) for tag in cell))
+        cells_by_family[family] = connectivity
+        incident = connectivity[np.isin(connectivity, apex_array).any(axis=1)]
+        for cell in incident:
+            cell_apices = sorted(
+                set(int(tag) for tag in cell).intersection(apex_tags)
+            )
             for apex in cell_apices:
                 incident_by_apex[apex].append((family, cell))
 
@@ -795,13 +889,17 @@ class _MixedTetRepairPolicy:
     algorithm_id: str
     method: str
     iterations: int
+    optimize_threshold: float = 1.0e-6
+    force: bool = True
 
 
 _MIXED_TET_REPAIR_METHODS = frozenset({"", "Relocate3D", "Netgen"})
 _STRICT_MIXED_TET_REPAIR_POLICY = _MixedTetRepairPolicy(
-    algorithm_id="fullmag.mixed-tet-repair.v1",
-    method="Relocate3D",
+    algorithm_id="fullmag.mixed-tet-repair.v2",
+    method="",
     iterations=1,
+    optimize_threshold=1.0e-6,
+    force=True,
 )
 
 
@@ -818,6 +916,17 @@ def _validate_mixed_tet_repair_policy(policy: _MixedTetRepairPolicy) -> None:
         or policy.iterations < 1
     ):
         raise ValueError("mixed tetrahedral repair iterations must be at least one")
+    if (
+        isinstance(policy.optimize_threshold, bool)
+        or not isinstance(policy.optimize_threshold, numbers.Real)
+        or not math.isfinite(float(policy.optimize_threshold))
+        or policy.optimize_threshold <= 0.0
+    ):
+        raise ValueError(
+            "mixed tetrahedral repair optimize threshold must be a positive finite number"
+        )
+    if not isinstance(policy.force, bool):
+        raise ValueError("mixed tetrahedral repair force flag must be boolean")
 
 
 def _qualification_mixed_tet_repair_algorithm_id(
@@ -833,7 +942,7 @@ def _qualification_mixed_tet_repair_algorithm_id(
     _validate_mixed_tet_repair_policy(candidate)
     method_id = method if method else "default"
     return (
-        "fullmag.mixed-tet-repair.qualification.v1"
+        "fullmag.mixed-tet-repair.qualification.v2"
         f".method-{method_id}.niter-{iterations}"
     )
 
@@ -846,28 +955,39 @@ def _execute_mixed_tet_repair_policy(
     if not isinstance(policy, _MixedTetRepairPolicy):
         raise TypeError("mixed tetrahedral repair policy has an invalid type")
     _validate_mixed_tet_repair_policy(policy)
-    before = _mixed_tet_degeneracy_report(gmsh)
-    emit_progress("Gmsh: repairing mixed-domain tetrahedra")
-    gmsh.model.mesh.optimize(policy.method, niter=policy.iterations)
-    after = _mixed_tet_degeneracy_report(gmsh)
-    if after.element_tags:
-        created = after.element_tags - before.element_tags
-        left = after.element_tags & before.element_tags
-        reports = []
-        for label, subset in (("created", created), ("left", left)):
-            if not subset:
-                continue
-            report = _mixed_tet_degeneracy_report(gmsh, element_tags=subset)
-            reports.append(
-                f"{label}: count={len(report.element_tags)}, "
-                f"worst_element_tag={report.worst_element_tag}, "
-                f"determinant={report.worst_determinant:.6e}, "
-                f"threshold={report.worst_threshold:.6e}"
-            )
-        raise RuntimeError(
-            "mixed tetrahedral repair left or created degenerate tet4; "
-            + "; ".join(reports)
+    previous_threshold = gmsh.option.getNumber("Mesh.OptimizeThreshold")
+    try:
+        gmsh.option.setNumber(
+            "Mesh.OptimizeThreshold", policy.optimize_threshold
         )
+        before = _mixed_tet_degeneracy_report(gmsh)
+        emit_progress("Gmsh: repairing mixed-domain tetrahedra")
+        gmsh.model.mesh.optimize(
+            policy.method,
+            force=policy.force,
+            niter=policy.iterations,
+        )
+        after = _mixed_tet_degeneracy_report(gmsh)
+        if after.element_tags:
+            created = after.element_tags - before.element_tags
+            left = after.element_tags & before.element_tags
+            reports = []
+            for label, subset in (("created", created), ("left", left)):
+                if not subset:
+                    continue
+                report = _mixed_tet_degeneracy_report(gmsh, element_tags=subset)
+                reports.append(
+                    f"{label}: count={len(report.element_tags)}, "
+                    f"worst_element_tag={report.worst_element_tag}, "
+                    f"determinant={report.worst_determinant:.6e}, "
+                    f"threshold={report.worst_threshold:.6e}"
+                )
+            raise RuntimeError(
+                "mixed tetrahedral repair left or created degenerate tet4; "
+                + "; ".join(reports)
+            )
+    finally:
+        gmsh.option.setNumber("Mesh.OptimizeThreshold", previous_threshold)
 
 
 def _repair_mixed_tetrahedra(
@@ -886,19 +1006,22 @@ def _repair_mixed_tetrahedra_for_qualification(
     iterations: int = 1,
 ) -> None:
     """Run one private qualification candidate through the canonical repair."""
+    selected_method = "" if method == "default" else method
     policy = (
         _STRICT_MIXED_TET_REPAIR_POLICY
         if (
-            method == _STRICT_MIXED_TET_REPAIR_POLICY.method
+            selected_method == _STRICT_MIXED_TET_REPAIR_POLICY.method
             and iterations == _STRICT_MIXED_TET_REPAIR_POLICY.iterations
         )
         else _MixedTetRepairPolicy(
             algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
-                method,
+                selected_method,
                 iterations,
             ),
-            method=method,
+            method=selected_method,
             iterations=iterations,
+            optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
+            force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
         )
     )
     _execute_mixed_tet_repair_policy(gmsh, policy)

@@ -7468,6 +7468,12 @@ def _build_explicit_mesh_assets() -> dict[str, Any] | None:
             for region in handle._object_regions
         ],
         asset_cache=_state._geometry_asset_cache,
+        # This is an internal state-owned cache.  The realized asset is
+        # immutable from the world's perspective and is immediately consumed
+        # by ``study.mesh``/runtime serialization; copying the full JSON CSR
+        # payload on every cache hit makes large mixed meshes spend minutes in
+        # ``copy.deepcopy`` before persistence even starts.
+        _copy_cached_assets=False,
     )
     _cache_mesh_quality_reports(assets)
     return assets

@@ -4,7 +4,8 @@ use crate::{
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use smallvec::SmallVec;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub type MeshValidationError = Vec<String>;
 
@@ -38,11 +39,8 @@ pub struct MixedCertificateEvidenceV1 {
 
 #[derive(Debug)]
 struct FaceRecord {
-    sorted_global_node_ids: Vec<u32>,
-    cell_global_ordinal: u64,
+    sorted_global_node_ids: SmallVec<[u32; 4]>,
     cell_storage_ordinal: usize,
-    local_face_ordinal: usize,
-    topology_code: u8,
     marker: u32,
 }
 
@@ -55,11 +53,13 @@ struct CellEvidenceRecord {
     marker: u32,
     signed_volume_m3: f64,
     absolute_volume_m3: f64,
-    jacobian_samples_m3: Vec<f64>,
-    scaled_jacobian_samples: Vec<f64>,
-    faces: Vec<FaceRecord>,
+    jacobian_samples_m3: SmallVec<[f64; 8]>,
+    scaled_jacobian_samples: SmallVec<[f64; 3]>,
+    faces: SmallVec<[FaceRecord; 6]>,
     semantic_error: Option<String>,
 }
+
+type FaceKey = SmallVec<[u32; 4]>;
 
 #[derive(Debug, Clone, Copy)]
 struct EvidenceContext {
@@ -84,15 +84,6 @@ fn mesh_part_name(mesh_part: FemCellMeshPartIR) -> &'static str {
         FemCellMeshPartIR::Magnetic => "magnetic",
         FemCellMeshPartIR::TransitionAir => "transition_air",
         FemCellMeshPartIR::FarAir => "far_air",
-    }
-}
-
-fn topology_code(cell_type: FemCellTypeIR) -> u8 {
-    match cell_type {
-        FemCellTypeIR::Tet4 => 1,
-        FemCellTypeIR::Prism6 => 2,
-        FemCellTypeIR::Pyramid5 => 3,
-        FemCellTypeIR::Hex8 => 4,
     }
 }
 
@@ -179,7 +170,7 @@ fn mixed_cell_volumes(cell_type: FemCellTypeIR, points: &[[f64; 3]]) -> Result<(
 fn mixed_scaled_jacobians(
     cell_type: FemCellTypeIR,
     points: &[[f64; 3]],
-) -> Result<Vec<f64>, String> {
+) -> Result<SmallVec<[f64; 3]>, String> {
     Ok(mixed_tets(cell_type)?
         .iter()
         .map(|indices| {
@@ -235,7 +226,7 @@ fn build_cell_record(mesh: &MeshIR, ordinal: usize) -> Result<CellEvidenceRecord
             mixed_scaled_jacobians(cell_type, &points)?,
         )
     } else {
-        (0.0, 0.0, Vec::new())
+        (0.0, 0.0, SmallVec::new())
     };
     let global_ordinal =
         *mesh.cells.global_ordinals.get(ordinal).ok_or_else(|| {
@@ -244,18 +235,15 @@ fn build_cell_record(mesh: &MeshIR, ordinal: usize) -> Result<CellEvidenceRecord
     let faces = mixed_local_facets(cell_type)
         .iter()
         .enumerate()
-        .map(|(local_face_ordinal, local_face)| {
+        .map(|(_, local_face)| {
             let mut sorted_global_node_ids = local_face
                 .iter()
                 .map(|index| node_ids[*index])
-                .collect::<Vec<_>>();
+                .collect::<SmallVec<[u32; 4]>>();
             sorted_global_node_ids.sort_unstable();
             FaceRecord {
                 sorted_global_node_ids,
-                cell_global_ordinal: global_ordinal,
                 cell_storage_ordinal: ordinal,
-                local_face_ordinal,
-                topology_code: topology_code(cell_type),
                 marker,
             }
         })
@@ -268,7 +256,9 @@ fn build_cell_record(mesh: &MeshIR, ordinal: usize) -> Result<CellEvidenceRecord
         marker,
         signed_volume_m3,
         absolute_volume_m3,
-        jacobian_samples_m3: crate::mesh_hints::cell_jacobian_determinants(cell_type, &points),
+        jacobian_samples_m3: crate::mesh_hints::cell_jacobian_determinants(cell_type, &points)
+            .into_iter()
+            .collect(),
         scaled_jacobian_samples,
         faces,
         semantic_error: (!legal).then(|| {
@@ -292,30 +282,23 @@ fn parallel_cell_records(mesh: &MeshIR) -> Result<Vec<CellEvidenceRecord>, Strin
     Ok(records)
 }
 
-fn sorted_face_records(records: &mut [CellEvidenceRecord]) -> Vec<FaceRecord> {
-    let mut faces = records
-        .iter_mut()
-        .flat_map(|record| std::mem::take(&mut record.faces))
-        .collect::<Vec<_>>();
-    faces.sort_by(|left, right| {
-        left.sorted_global_node_ids
-            .cmp(&right.sorted_global_node_ids)
-            .then(left.cell_global_ordinal.cmp(&right.cell_global_ordinal))
-            .then(left.local_face_ordinal.cmp(&right.local_face_ordinal))
-            .then(left.topology_code.cmp(&right.topology_code))
-    });
-    faces
-}
-
 fn adjacency_from_records(
     records: &mut [CellEvidenceRecord],
-) -> BTreeMap<Vec<u32>, Vec<(usize, u32)>> {
-    let mut adjacency = BTreeMap::<Vec<u32>, Vec<(usize, u32)>>::new();
-    for face in sorted_face_records(records) {
-        adjacency
-            .entry(face.sorted_global_node_ids)
-            .or_default()
-            .push((face.cell_storage_ordinal, face.marker));
+) -> HashMap<FaceKey, Vec<(usize, u32)>> {
+    // Face keys are topology identities, not user-facing ordered evidence.
+    // Hashing avoids both the O(F log F) tree insertion cost and the global
+    // O(F log F) face sort for the millions of faces in the SP4 airbox.  Cell
+    // records are collected in storage/global-ordinal order, so owner order
+    // remains deterministic for the small compatibility API and all numeric
+    // reductions continue to consume cells in global-ordinal order.
+    let mut adjacency = HashMap::<FaceKey, Vec<(usize, u32)>>::new();
+    for record in records.iter_mut() {
+        for face in std::mem::take(&mut record.faces) {
+            adjacency
+                .entry(face.sorted_global_node_ids)
+                .or_default()
+                .push((face.cell_storage_ordinal, face.marker));
+        }
     }
     adjacency
 }
@@ -324,7 +307,12 @@ fn adjacency_from_records(
 pub(crate) fn mixed_face_adjacency(
     mesh: &MeshIR,
 ) -> Result<BTreeMap<Vec<u32>, Vec<(usize, u32)>>, String> {
-    parallel_cell_records(mesh).map(|mut records| adjacency_from_records(&mut records))
+    parallel_cell_records(mesh).map(|mut records| {
+        adjacency_from_records(&mut records)
+            .into_iter()
+            .map(|(key, owners)| (key.into_vec(), owners))
+            .collect()
+    })
 }
 
 fn fixed_order_compensated_sum(values: impl Iterator<Item = f64>) -> f64 {
@@ -514,82 +502,84 @@ fn certificate_context(
 
 fn same_side_face_count(
     mesh: &MeshIR,
-    adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
+    adjacency: &HashMap<FaceKey, Vec<(usize, u32)>>,
     tolerance: f64,
 ) -> Result<u64, String> {
-    let mut count = 0;
-    for (face, owners) in adjacency.iter().filter(|(_, owners)| owners.len() == 2) {
-        let coordinates =
-            face.iter()
+    adjacency
+        .par_iter()
+        .filter(|(_, owners)| owners.len() == 2)
+        .map(|(face, owners)| -> Result<u64, String> {
+            let coordinates = face
+                .iter()
                 .map(|node| {
                     mesh.nodes.get(*node as usize).copied().ok_or_else(|| {
                         format!("mixed certificate face references missing node {node}")
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-        let mut normal = None;
-        'normal: for first in 1..coordinates.len() {
-            for second in first + 1..coordinates.len() {
-                let candidate = cross3(
-                    sub3(coordinates[first], coordinates[0]),
-                    sub3(coordinates[second], coordinates[0]),
-                );
-                let length = norm3(candidate);
-                if length > 0.0 {
-                    normal = Some([
-                        candidate[0] / length,
-                        candidate[1] / length,
-                        candidate[2] / length,
-                    ]);
-                    break 'normal;
+            let mut normal = None;
+            'normal: for first in 1..coordinates.len() {
+                for second in first + 1..coordinates.len() {
+                    let candidate = cross3(
+                        sub3(coordinates[first], coordinates[0]),
+                        sub3(coordinates[second], coordinates[0]),
+                    );
+                    let length = norm3(candidate);
+                    if length > 0.0 {
+                        normal = Some([
+                            candidate[0] / length,
+                            candidate[1] / length,
+                            candidate[2] / length,
+                        ]);
+                        break 'normal;
+                    }
                 }
             }
-        }
-        let Some(normal) = normal else {
-            count += 1;
-            continue;
-        };
-        let mut face_scale: f64 = 0.0;
-        for left in 0..coordinates.len() {
-            for right in left + 1..coordinates.len() {
-                face_scale = face_scale.max(norm3(sub3(coordinates[right], coordinates[left])));
-            }
-        }
-        let side_tolerance = tolerance.max(f64::EPSILON * face_scale.max(1.0e-30) * 64.0);
-        let mut distances = Vec::with_capacity(2);
-        for (owner, _) in owners {
-            let owner_nodes = mesh
-                .cells
-                .item_nodes(*owner)
-                .ok_or_else(|| format!("mixed certificate cell {owner} has invalid CSR"))?;
-            let opposite = owner_nodes
-                .iter()
-                .filter(|node| !face.contains(node))
-                .filter_map(|node| mesh.nodes.get(*node as usize))
-                .collect::<Vec<_>>();
-            if opposite.is_empty() {
-                distances.push(0.0);
-                continue;
-            }
-            let mut interior = [0.0; 3];
-            for point in &opposite {
-                for axis in 0..3 {
-                    interior[axis] += point[axis];
+            let Some(normal) = normal else {
+                return Ok(1);
+            };
+            let mut face_scale: f64 = 0.0;
+            for left in 0..coordinates.len() {
+                for right in left + 1..coordinates.len() {
+                    face_scale = face_scale.max(norm3(sub3(
+                        coordinates[right],
+                        coordinates[left],
+                    )));
                 }
             }
-            for value in &mut interior {
-                *value /= opposite.len() as f64;
+            let side_tolerance = tolerance.max(f64::EPSILON * face_scale.max(1.0e-30) * 64.0);
+            let mut distances = [0.0_f64; 2];
+            for (distance, (owner, _)) in distances.iter_mut().zip(owners) {
+                let owner_nodes = mesh
+                    .cells
+                    .item_nodes(*owner)
+                    .ok_or_else(|| format!("mixed certificate cell {owner} has invalid CSR"))?;
+                let mut interior = [0.0; 3];
+                let mut opposite_count = 0usize;
+                for node in owner_nodes.iter().filter(|node| !face.contains(node)) {
+                    let point = mesh
+                        .nodes
+                        .get(*node as usize)
+                        .ok_or_else(|| format!("mixed certificate cell {owner} references missing node {node}"))?;
+                    for axis in 0..3 {
+                        interior[axis] += point[axis];
+                    }
+                    opposite_count += 1;
+                }
+                if opposite_count != 0 {
+                    for value in &mut interior {
+                        *value /= opposite_count as f64;
+                    }
+                    *distance = dot3(sub3(interior, coordinates[0]), normal);
+                }
             }
-            distances.push(dot3(sub3(interior, coordinates[0]), normal));
-        }
-        if distances[0].abs() > side_tolerance
-            && distances[1].abs() > side_tolerance
-            && distances[0] * distances[1] > 0.0
-        {
-            count += 1;
-        }
-    }
-    Ok(count)
+            Ok(u64::from(
+                distances[0].abs() > side_tolerance
+                    && distances[1].abs() > side_tolerance
+                    && distances[0] * distances[1] > 0.0,
+            ))
+        })
+        .try_reduce(|| 0_u64, |left, right| Ok(left + right))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -615,9 +605,25 @@ pub(crate) fn mixed_explicit_role_counts(
     counts
 }
 
-pub(crate) fn mixed_conformity_counts(
+fn compact_explicit_role_counts(
+    faces: &[(FaceKey, FemFacetRoleIR)],
+) -> BTreeMap<FaceKey, MixedExplicitRoleCounts> {
+    let mut counts = BTreeMap::<FaceKey, MixedExplicitRoleCounts>::new();
+    for (key, role) in faces {
+        let entry = counts.entry(key.clone()).or_default();
+        entry.explicit += 1;
+        match role {
+            FemFacetRoleIR::Exterior => entry.exterior += 1,
+            FemFacetRoleIR::MaterialInterface => entry.interface += 1,
+            FemFacetRoleIR::PeriodicSeam => {}
+        }
+    }
+    counts
+}
+
+fn mixed_conformity_counts_fast(
     mesh: &MeshIR,
-    adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
+    adjacency: &HashMap<FaceKey, Vec<(usize, u32)>>,
     tolerance: f64,
     interface_marker: u32,
     outer_marker: u32,
@@ -628,12 +634,14 @@ pub(crate) fn mixed_conformity_counts(
                 .facets
                 .item_nodes(ordinal)
                 .ok_or_else(|| format!("mixed certificate facet {ordinal} has invalid CSR"))?
-                .to_vec();
+                .iter()
+                .copied()
+                .collect::<FaceKey>();
             key.sort_unstable();
             Ok((key, mesh.facets.roles[ordinal]))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let explicit = mixed_explicit_role_counts(&explicit_faces);
+    let explicit = compact_explicit_role_counts(&explicit_faces);
     let mut orphan = 0u64;
     let mut nonconforming = 0u64;
     for (ordinal, (key, role)) in explicit_faces.iter().enumerate() {
@@ -706,6 +714,37 @@ pub(crate) fn mixed_conformity_counts(
         nonmanifold,
         duplicate_faces + duplicate_nodes,
     ))
+}
+
+/// Compatibility wrapper for existing crate-internal diagnostics/tests.
+///
+/// The production certificate path uses the hash-based adjacency above.  The
+/// historical helper exposed an ordered `BTreeMap<Vec<u32>, ...>` to tests and
+/// mesh-asset validation, so keep that narrow API while converting once at the
+/// boundary instead of paying the tree cost in the hot path.
+pub(crate) fn mixed_conformity_counts(
+    mesh: &MeshIR,
+    adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
+    tolerance: f64,
+    interface_marker: u32,
+    outer_marker: u32,
+) -> Result<(u64, u64, u64, u64), String> {
+    let compact = adjacency
+        .iter()
+        .map(|(key, owners)| {
+            (
+                key.iter().copied().collect::<FaceKey>(),
+                owners.clone(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    mixed_conformity_counts_fast(
+        mesh,
+        &compact,
+        tolerance,
+        interface_marker,
+        outer_marker,
+    )
 }
 
 pub(crate) fn mixed_coordinate_key(point: [f64; 3], scale: f64) -> Result<[u64; 3], String> {
@@ -976,7 +1015,7 @@ fn compute_evidence_from_records(
         orphan_face_count,
         nonmanifold_face_count,
         coincident_interface_face_count,
-    ) = mixed_conformity_counts(
+    ) = mixed_conformity_counts_fast(
         mesh,
         &adjacency,
         plane_tolerance_m,

@@ -200,7 +200,14 @@ install-cli install-cli-dev install-cli-static:
 			build_mode="managed-fem-gpu-host"; \
 		fi; \
 	fi; \
+	echo "Building native Python core for mesh certification..."; \
+	CARGO_TARGET_DIR="$$cargo_target_dir" CARGO_INCREMENTAL=0 cargo +nightly build -p fullmag-py-core --release; \
 	mkdir -p .fullmag/local/lib; \
+	if [ ! -f "$$cargo_target_dir/release/lib_fullmag_core.so" ]; then \
+		echo "Native Python core build did not produce lib_fullmag_core.so" >&2; exit 2; \
+	fi; \
+	cp "$$cargo_target_dir/release/lib_fullmag_core.so" .fullmag/local/_fullmag_core.so.new; \
+	mv -f .fullmag/local/_fullmag_core.so.new .fullmag/local/_fullmag_core.so; \
 	rm -f .fullmag/local/lib/libfullmag_fdm.so* .fullmag/local/lib/libfullmag_fem.so*; \
 	fdm_dir=$$(find "$$cargo_target_dir/release/build" -path '*fullmag-fdm-sys*/out/native-build/backends/fdm/libfullmag_fdm.so.*' -type f -printf '%T@ %h\n' 2>/dev/null | sort -nr | awk 'NR==1 { print $$2 }'); \
 	if [ -z "$$fdm_dir" ]; then \
@@ -229,7 +236,8 @@ install-cli install-cli-dev install-cli-static:
 			'REPO_ROOT="$$(cd "$$SELF_DIR/../../.." && pwd)"' \
 			'export FULLMAG_REPO_ROOT="$$REPO_ROOT"' \
 			'export FULLMAG_API_PORT="$${FULLMAG_API_PORT:-8081}"' \
-			'export PYTHONPATH="$$REPO_ROOT/packages/fullmag-py/src$${PYTHONPATH:+:$$PYTHONPATH}"' \
+			'LOCAL_PYTHON_EXTENSION_ROOT="$$SELF_DIR/.."' \
+			'export PYTHONPATH="$$REPO_ROOT/packages/fullmag-py/src$${PYTHONPATH:+:$$PYTHONPATH}:$$LOCAL_PYTHON_EXTENSION_ROOT"' \
 			'export FULLMAG_FEM_MESH_CACHE_DIR="$$REPO_ROOT/.fullmag/local/cache/fem_mesh_assets"' \
 			'LOCAL_LD_LIBRARY_PATH="$$SELF_DIR/../lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"' \
 			'MANAGED_RUNTIME_ROOT="$${SELF_DIR}/../../runtimes/fem-gpu-host"' \

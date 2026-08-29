@@ -112,14 +112,21 @@ def _candidate_document(
         "gate": {"status": "release_pass", "failures": []},
     }
     if algorithm_id is None:
-        algorithm_id = (
-            swept._STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id
-            if method == "Relocate3D"
-            else swept._qualification_mixed_tet_repair_algorithm_id(
-                "" if method == "default" else method,
+        if method == "default" and iterations == 1:
+            algorithm_id = swept._STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id
+        elif isinstance(iterations, int) and not isinstance(iterations, bool) and iterations == 1:
+            algorithm_id = swept._qualification_mixed_tet_repair_algorithm_id(
+                method,
                 iterations,
             )
-        )
+        else:
+            # Keep deliberately malformed overrides representable so that
+            # evaluate_candidate can reject them as policy mismatches.
+            selected_method = "default" if method == "default" else method
+            algorithm_id = (
+                "fullmag.mixed-tet-repair.qualification.v2."
+                f"method-{selected_method}.niter-{iterations}"
+            )
     if policy_method is None:
         policy_method = "" if method == "default" else method
     return {
@@ -209,7 +216,7 @@ class RepairPolicyQualificationTests(unittest.TestCase):
             {"nodes": 4, "cells": 1, "facets": 0},
         )
 
-    def test_hard_failing_relocate_payload_reaches_blocked_decision(self) -> None:
+    def test_hard_failing_default_payload_reaches_blocked_decision(self) -> None:
         fingerprint = _partial_failing_mesh().topology_fingerprint_v3()
         with tempfile.TemporaryDirectory() as root_name:
             evidence_path = Path(root_name) / "relocate.failure.json"
@@ -224,7 +231,7 @@ class RepairPolicyQualificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             row = qualification._worker_failure_row(
-                "Relocate3D",
+                "default",
                 evidence_path=evidence_path,
                 returncode=1,
                 stdout="",
@@ -249,7 +256,9 @@ class RepairPolicyQualificationTests(unittest.TestCase):
                 with qualification._qualification_probe_installed(candidate):
                     with benchmark._mesh_phase_probe({}, None):
                         swept._repair_mixed_tetrahedra(gmsh)
-                gmsh.model.mesh.optimize.assert_called_once_with(executed, niter=1)
+                gmsh.model.mesh.optimize.assert_called_once_with(
+                    executed, force=True, niter=1
+                )
 
     def test_worker_selector_executes_policy_while_probe_wraps_public_repair(
         self,
@@ -283,7 +292,9 @@ class RepairPolicyQualificationTests(unittest.TestCase):
                     artifact_dir=root / "artifacts",
                 )
 
-        gmsh.model.mesh.optimize.assert_called_once_with("Netgen", niter=1)
+        gmsh.model.mesh.optimize.assert_called_once_with(
+            "Netgen", force=True, niter=1
+        )
 
     def test_cli_requires_the_exact_canonical_candidate_matrix(self) -> None:
         invalid = (
@@ -520,7 +531,7 @@ class RepairPolicyQualificationTests(unittest.TestCase):
             any("topology fingerprint" in failure for failure in decision["ranking_failures"])
         )
 
-    def test_relocate_candidate_evidence_uses_immutable_production_id(
+    def test_relocate_candidate_evidence_uses_qualification_id(
         self,
     ) -> None:
         row = qualification.evaluate_candidate(
@@ -531,12 +542,12 @@ class RepairPolicyQualificationTests(unittest.TestCase):
 
         self.assertEqual(
             row["algorithm_id"],
-            swept._STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id,
+            swept._qualification_mixed_tet_repair_algorithm_id("Relocate3D", 1),
         )
         self.assertEqual(row["method"], "Relocate3D")
         self.assertEqual(row["iterations"], 1)
 
-    def test_default_and_netgen_use_deterministic_qualification_ids(self) -> None:
+    def test_default_uses_production_and_netgen_uses_qualification_id(self) -> None:
         for method in ("default", "Netgen"):
             with self.subTest(method=method):
                 row = qualification.evaluate_candidate(
@@ -544,13 +555,12 @@ class RepairPolicyQualificationTests(unittest.TestCase):
                     _candidate_document(method),
                     expected_runs=10,
                 )
-                self.assertEqual(
-                    row["algorithm_id"],
-                    swept._qualification_mixed_tet_repair_algorithm_id(
-                        "" if method == "default" else method,
-                        1,
-                    ),
+                expected_id = (
+                    swept._STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id
+                    if method == "default"
+                    else swept._qualification_mixed_tet_repair_algorithm_id(method, 1)
                 )
+                self.assertEqual(row["algorithm_id"], expected_id)
                 self.assertEqual(row["iterations"], 1)
 
     def test_candidate_rejects_mismatched_policy_identity_before_legal(self) -> None:
@@ -584,16 +594,16 @@ class RepairPolicyQualificationTests(unittest.TestCase):
             any("repair method" in failure for failure in row["failures"])
         )
 
-    def test_relocate3d_failure_blocks_mesher_quality_without_default_fallback(
+    def test_default_failure_blocks_mesher_quality_without_fallback(
         self,
     ) -> None:
         rows = [
             qualification.evaluate_candidate(
-                "default", _candidate_document("default"), expected_runs=10
+                "default", _candidate_document("default", non_manifold_faces=1), expected_runs=10
             ),
             qualification.evaluate_candidate(
                 "Relocate3D",
-                _candidate_document("Relocate3D", non_manifold_faces=1),
+                _candidate_document("Relocate3D"),
                 expected_runs=10,
             ),
         ]

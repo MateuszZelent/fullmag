@@ -117,7 +117,7 @@ def _document() -> dict[str, object]:
         "scenario": {
             "id": "sp4_mixed",
             "requested_layers": 1,
-            "repair_method": "Relocate3D",
+            "repair_method": "default",
             "gmsh_threads": 1,
             "rayon_threads": 1,
             "python_audit_runs": 0,
@@ -479,7 +479,7 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                         with self.assertRaises(SystemExit):
                             benchmark._parse_args([*common, *thread_args])
 
-    def test_parser_preserves_literal_relocate3d_baseline_provenance(self) -> None:
+    def test_parser_preserves_literal_default_baseline_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             common = [*_cli_args(root), "--rayon-threads", "1", "--gmsh-threads", "1"]
@@ -495,17 +495,17 @@ class BenchmarkEvidenceTests(unittest.TestCase):
             self.assertEqual(mode, "qualification")
             self.assertEqual(config.repair_method_override, "Relocate3D")
 
-            mode, config = benchmark._config_from_argv(
-                [*common, "--mode", "baseline", "--repair-method", "Relocate3D"]
-            )
-            self.assertEqual(mode, "baseline")
-            self.assertIsNone(config.repair_method_override)
-
             with contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     benchmark._config_from_argv(
-                        [*common, "--mode", "baseline", "--repair-method", "default"]
+                        [*common, "--mode", "baseline", "--repair-method", "Relocate3D"]
                     )
+
+            mode, config = benchmark._config_from_argv(
+                [*common, "--mode", "baseline", "--repair-method", "default"]
+            )
+            self.assertEqual(mode, "baseline")
+            self.assertIsNone(config.repair_method_override)
 
     def test_canonical_repair_is_measured_without_reimplementing_policy(self) -> None:
         calls: list[str] = []
@@ -534,7 +534,7 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                 qualification_selector=None,
             )
 
-    def test_baseline_evidence_records_literal_relocate3d(self) -> None:
+    def test_baseline_evidence_records_literal_default(self) -> None:
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             dependencies = benchmark._BenchmarkDependencies(
@@ -556,7 +556,7 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                 dependencies=dependencies,
             )
 
-            self.assertEqual(document["scenario"]["repair_method"], "Relocate3D")
+            self.assertEqual(document["scenario"]["repair_method"], "default")
 
     def test_qualification_executes_and_records_each_selected_repair_method(
         self,
@@ -624,13 +624,13 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                     )
 
     def test_baseline_validator_rejects_noncanonical_repair_provenance(self) -> None:
-        for method in ("default", "Netgen"):
+        for method in ("Relocate3D", "Netgen"):
             with self.subTest(method=method):
                 document = _document()
                 document["scenario"]["repair_method"] = method  # type: ignore[index]
                 with self.assertRaisesRegex(
                     ValueError,
-                    "baseline_recorded.*Relocate3D",
+                    "baseline_recorded.*default",
                 ):
                     validate_evidence_document(document)
 

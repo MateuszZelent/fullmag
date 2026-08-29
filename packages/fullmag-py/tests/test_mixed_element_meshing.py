@@ -8,7 +8,7 @@ import ast
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import numpy as np
 import pytest
@@ -87,6 +87,50 @@ def test_mixed_face_frequency_counting_is_linear_in_face_count() -> None:
     assert CountingFace.comparisons <= len(faces)
 
 
+def test_mixed_gmsh_quality_vectorization_matches_scalar_reference() -> None:
+    rng = np.random.default_rng(42)
+    tags = np.asarray([50, 10, 80, 20, 70, 30, 90, 40, 60], dtype=np.int64)
+    coordinates = rng.normal(size=(len(tags), 3))
+    elements = {
+        4: (np.asarray([101], dtype=np.int64), np.asarray([10, 20, 30, 40], dtype=np.int64)),
+        6: (np.asarray([201], dtype=np.int64), np.asarray([10, 20, 30, 50, 60, 70], dtype=np.int64)),
+        7: (np.asarray([301], dtype=np.int64), np.asarray([20, 30, 40, 80, 90], dtype=np.int64)),
+    }
+    gmsh = Mock()
+    gmsh.model.mesh.getNodes.return_value = (
+        tags,
+        coordinates.reshape(-1),
+        np.asarray([], dtype=np.float64),
+    )
+    gmsh.model.mesh.getElementsByType.side_effect = lambda element_type: elements.get(
+        int(element_type),
+        (np.asarray([], dtype=np.int64), np.asarray([], dtype=np.int64)),
+    )
+
+    actual = gmsh_swept._mixed_gmsh_scaled_jacobian_p05(gmsh)
+    coordinate_by_tag = {
+        int(tag): point for tag, point in zip(tags, coordinates, strict=True)
+    }
+    expected: dict[str, float] = {}
+    for element_type, family, arity in (
+        (4, "tet4", 4),
+        (6, "prism6", 6),
+        (7, "pyramid5", 5),
+    ):
+        _, element_nodes = elements[element_type]
+        cell_coordinates = np.asarray(
+            [coordinate_by_tag[int(tag)] for tag in element_nodes],
+            dtype=np.float64,
+        )
+        assert cell_coordinates.shape == (arity, 3)
+        values = gmsh_swept._mixed_cell_scaled_jacobians(family, cell_coordinates)
+        expected[family] = float(np.percentile(values, 5.0))
+
+    assert actual.keys() == expected.keys()
+    for family in expected:
+        assert actual[family] == pytest.approx(expected[family], rel=1.0e-12)
+
+
 def _empty_tet_gmsh_mock() -> Mock:
     gmsh = Mock()
     gmsh.model.mesh.getElementsByType.return_value = (
@@ -96,15 +140,17 @@ def _empty_tet_gmsh_mock() -> Mock:
     return gmsh
 
 
-def test_mixed_tetrahedra_repair_uses_versioned_relocate3d_policy() -> None:
+def test_mixed_tetrahedra_repair_uses_versioned_default_policy() -> None:
     gmsh = _empty_tet_gmsh_mock()
 
     gmsh_swept._repair_mixed_tetrahedra(gmsh)
 
-    gmsh.model.mesh.optimize.assert_called_once_with("Relocate3D", niter=1)
+    gmsh.model.mesh.optimize.assert_called_once_with("", force=True, niter=1)
     policy = gmsh_swept._STRICT_MIXED_TET_REPAIR_POLICY
-    assert policy.algorithm_id == "fullmag.mixed-tet-repair.v1"
-    assert policy.method == "Relocate3D"
+    assert policy.algorithm_id == "fullmag.mixed-tet-repair.v2"
+    assert policy.method == ""
+    assert policy.optimize_threshold == 1.0e-6
+    assert policy.force is True
 
 
 def test_mixed_tetrahedra_repair_uses_one_iteration() -> None:
@@ -112,7 +158,22 @@ def test_mixed_tetrahedra_repair_uses_one_iteration() -> None:
 
     gmsh_swept._repair_mixed_tetrahedra(gmsh)
 
-    assert gmsh.model.mesh.optimize.call_args.kwargs == {"niter": 1}
+    assert gmsh.model.mesh.optimize.call_args.kwargs == {"force": True, "niter": 1}
+    gmsh.option.setNumber.assert_any_call("Mesh.OptimizeThreshold", 1.0e-6)
+
+
+def test_mixed_tetrahedra_repair_restores_gmsh_threshold_after_optimizer_failure() -> None:
+    gmsh = _empty_tet_gmsh_mock()
+    gmsh.option.getNumber.return_value = 0.42
+    gmsh.model.mesh.optimize.side_effect = RuntimeError("optimizer failed")
+
+    with pytest.raises(RuntimeError, match="optimizer failed"):
+        gmsh_swept._repair_mixed_tetrahedra(gmsh)
+
+    assert gmsh.option.setNumber.call_args_list == [
+        call("Mesh.OptimizeThreshold", 1.0e-6),
+        call("Mesh.OptimizeThreshold", 0.42),
+    ]
 
 
 def test_mixed_tetrahedra_repair_rejects_created_degenerate_tet4() -> None:
@@ -134,14 +195,18 @@ def test_mixed_tetrahedra_repair_rejects_created_degenerate_tet4() -> None:
             assert element_type == 4
             return np.asarray([101], dtype=np.int64), np.asarray([1, 2, 3, 4])
 
-        def optimize(self, method: str, *, niter: int) -> None:
-            assert (method, niter) == ("Relocate3D", 1)
+        def optimize(self, method: str, *, force: bool, niter: int) -> None:
+            assert (method, force, niter) == ("", True, 1)
             self.coordinates[4] = np.asarray(
                 [0.0, 0.0, np.finfo(np.float64).eps]
             )
 
     mesh = MutableTetMesh()
-    gmsh = type("Gmsh", (), {"model": type("Model", (), {"mesh": mesh})()})()
+    gmsh = type(
+        "Gmsh",
+        (),
+        {"model": type("Model", (), {"mesh": mesh})(), "option": Mock()},
+    )()
 
     with pytest.raises(RuntimeError, match="repair.*created: count=1"):
         gmsh_swept._repair_mixed_tetrahedra(gmsh)
@@ -166,11 +231,15 @@ def test_mixed_tetrahedra_repair_rejects_generated_sliver_left_by_policy() -> No
             assert element_type == 4
             return np.asarray([101], dtype=np.int64), np.asarray([1, 2, 3, 4])
 
-        def optimize(self, method: str, *, niter: int) -> None:
-            assert (method, niter) == ("Relocate3D", 1)
+        def optimize(self, method: str, *, force: bool, niter: int) -> None:
+            assert (method, force, niter) == ("", True, 1)
 
     mesh = GeneratedSliverMesh()
-    gmsh = type("Gmsh", (), {"model": type("Model", (), {"mesh": mesh})()})()
+    gmsh = type(
+        "Gmsh",
+        (),
+        {"model": type("Model", (), {"mesh": mesh})(), "option": Mock()},
+    )()
 
     with pytest.raises(RuntimeError, match="left: count=1.*worst_element_tag=101"):
         gmsh_swept._repair_mixed_tetrahedra(gmsh)
@@ -204,12 +273,16 @@ def test_mixed_tetrahedra_repair_reports_created_and_left_worst_separately() -> 
                 np.asarray([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.int64),
             )
 
-        def optimize(self, method: str, *, niter: int) -> None:
-            assert (method, niter) == ("Relocate3D", 1)
+        def optimize(self, method: str, *, force: bool, niter: int) -> None:
+            assert (method, force, niter) == ("", True, 1)
             self.coordinates[8] = np.asarray([2.0, 0.0, 0.0])
 
     mesh = MixedFailureMesh()
-    gmsh = type("Gmsh", (), {"model": type("Model", (), {"mesh": mesh})()})()
+    gmsh = type(
+        "Gmsh",
+        (),
+        {"model": type("Model", (), {"mesh": mesh})(), "option": Mock()},
+    )()
 
     with pytest.raises(RuntimeError) as caught:
         gmsh_swept._repair_mixed_tetrahedra(gmsh)
@@ -263,7 +336,7 @@ def test_qualification_repair_selector_delegates_through_validated_policy(
     )
 
 
-def test_qualification_relocate_selector_uses_immutable_production_policy(
+def test_qualification_relocate_selector_uses_its_own_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gmsh = Mock()
@@ -276,6 +349,29 @@ def test_qualification_relocate_selector_uses_immutable_production_policy(
     monkeypatch.setattr(gmsh_swept, "_execute_mixed_tet_repair_policy", capture)
 
     gmsh_swept._repair_mixed_tetrahedra_for_qualification("Relocate3D", gmsh)
+
+    assert len(delegated) == 1
+    policy = delegated[0]
+    assert policy.method == "Relocate3D"
+    assert policy.iterations == 1
+    assert policy.algorithm_id == (
+        gmsh_swept._qualification_mixed_tet_repair_algorithm_id("Relocate3D", 1)
+    )
+
+
+def test_qualification_default_selector_uses_immutable_production_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gmsh = Mock()
+    delegated: list[object] = []
+
+    def capture(_gmsh: object, policy: object) -> None:
+        assert _gmsh is gmsh
+        delegated.append(policy)
+
+    monkeypatch.setattr(gmsh_swept, "_execute_mixed_tet_repair_policy", capture)
+
+    gmsh_swept._repair_mixed_tetrahedra_for_qualification("", gmsh)
 
     assert delegated == [gmsh_swept._STRICT_MIXED_TET_REPAIR_POLICY]
 
