@@ -15,13 +15,13 @@ export type MoveAxis = "x" | "y" | "z";
 export type Translation3 = [number, number, number];
 
 const FALLBACK_MOVE_GIZMO_COLORS: Viewport3DColors = {
-  accent: "#89b4fa",
-  background: "#11111b",
-  danger: "#f38ba8",
-  field: "#a6e3a1",
-  mesh: "#313244",
-  success: "#a6e3a1",
-  wire: "#6c7086",
+  accent: 0x89b4fa,
+  background: 0x11111b,
+  danger: 0xf38ba8,
+  field: 0xa6e3a1,
+  mesh: 0x313244,
+  success: 0xa6e3a1,
+  wire: 0x6c7086,
 };
 
 export interface MoveDraft {
