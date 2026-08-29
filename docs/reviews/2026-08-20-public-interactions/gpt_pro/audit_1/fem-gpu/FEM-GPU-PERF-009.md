@@ -5,10 +5,22 @@
 | Lane | **FEM GPU** |
 | Priorytet | **P0** |
 | Klasa | `performance` |
-| Status | `implementation plan` |
+| Status | `częściowa remediacja — device Hypre FP64 tuple zakwalifikowany` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FEM-GPU-ARCH-001`, `FEM-GPU-PERF-005` |
+
+## Stan wykonania — 2026-08-29
+
+Pełna kwalifikacja strict FEM GPU wykonała demag RHS, solve i recovery przez
+device Hypre Poisson bez hybrid CPU Poisson. Receipt ma
+`executed_device_operator_mask=991`, `executed_host_operator_mask=0`,
+`fallback_count=0` oraz zerowe bajty H2D/D2H compute w hot-loopie. Artefakty CPU
+i GPU przeszły własne walidatory, a końcowy comparator FP64 zgłosił `pass`.
+
+Pozostają pozostałe wspierane warunki brzegowe/PBC, reprezentatywne skale siatki
+i osobny benchmark wydajności. Hybrid pozostaje jawnym trybem compatibility/debug,
+nie dowodem produkcyjnego GPU.
 
 ## 1. Cel dokumentu
 

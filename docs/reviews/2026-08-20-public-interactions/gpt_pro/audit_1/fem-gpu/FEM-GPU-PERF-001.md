@@ -5,10 +5,25 @@
 | Lane | **FEM GPU** |
 | Priorytet | **P0** |
 | Klasa | `performance` |
-| Status | `implementation plan` |
+| Status | `częściowa remediacja — strict FP64 hot-loop zakwalifikowany` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FEM-GPU-ARCH-001` |
+
+## Stan wykonania — 2026-08-29
+
+Granica `TransferAuditScope::HotLoop` kończy się teraz bezpośrednio po właściwym
+obliczeniu RK, przed materializacją końcowych statystyk kroku. Dzięki temu
+zatwierdzony odczyt obserwacyjny nie jest błędnie klasyfikowany jako ruch danych
+compute, a właściwy hot-loop nadal fail-closed odrzuca transfery i synchronizacje.
+Hardware receipt z pełnej kwalifikacji raportuje
+`hot_loop_compute_h2d_bytes=0`, `hot_loop_compute_d2h_bytes=0` oraz
+`hot_loop_compute_host_sync_count=0`; wszystkie wymagane operatory wykonano na
+urządzeniu.
+
+Pozostają benchmarki steady-state i time-to-accuracy na reprezentatywnych
+rozmiarach oraz szersza macierz interakcji/integratorów. Finding nie jest jeszcze
+globalnie zamknięty.
 
 ## 1. Cel dokumentu
 

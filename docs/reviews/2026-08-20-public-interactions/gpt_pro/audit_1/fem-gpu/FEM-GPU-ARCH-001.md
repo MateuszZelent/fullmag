@@ -5,10 +5,24 @@
 | Lane | **FEM GPU** |
 | Priorytet | **P0** |
 | Klasa | `architecture` |
-| Status | `implementation plan` |
+| Status | `częściowa remediacja — strict FP64 hardware tuple zakwalifikowany` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | brak twardych zależności |
+
+## Stan wykonania — 2026-08-29
+
+Zarządzana recepta `just verify-fem-llg-time-domain-qualification-production`
+przeszła na rzeczywistym GPU dla strict FEM CUDA FP64 z device Hypre Poisson.
+Receipt potwierdza `requested=strict_device`, `resolved=device_resident`,
+`executed=cuda_fem`, komplet maski operatorów `991`, zero fallbacków oraz brak
+operatorów host/unknown. CPU/GPU parity dla identycznej fizyki exchange + demag
+przeszło z maksymalną różnicą endpointu `2.9504581591051765e-16`.
+
+Nie zamyka to jeszcze całego findingu: pozostają publiczny Python→IR→planner→runner
+E2E dla tego exact tuple, szersza macierz interakcji/BC/integratorów oraz pomiar
+time-to-accuracy. Capability nie jest promowana globalnie poza zakwalifikowanym
+tuple.
 
 ## 1. Cel dokumentu
 

@@ -771,6 +771,7 @@ verify-fem-llg-time-domain-qualification:
     source_snapshot_sha256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      -e FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY=raw_tangent_gradient \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json'
     python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/source-snapshot.v1.json --output .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/source-snapshot-post.v1.json
     python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json
@@ -782,6 +783,7 @@ verify-fem-llg-time-domain-qualification-gpu:
     source_snapshot_sha256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_snapshot_sha256"])' .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/source-snapshot.v1.json)"; docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       -e FULLMAG_FEM_QUALIFICATION_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" \
+      -e FULLMAG_FEM_DIRECT_MINIMIZER_DIRECTION_POLICY=raw_tangent_gradient \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json gpu'
     python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/source-snapshot.v1.json --output .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/source-snapshot-post.v1.json
     python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json --device gpu
