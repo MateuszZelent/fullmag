@@ -476,16 +476,23 @@ void production_exchange_energy_difference_uses_assembled_mfem_form()
         "production exchange difference must ignore magnetization changes confined to the nonmagnetic domain");
 
     ctx.mesh.periodic_reduced_node.resize(ctx.mesh.n_nodes);
-    ctx.mesh.periodic_representative_nodes.resize(ctx.mesh.n_nodes);
-    for (uint32_t node = 0; node < ctx.mesh.n_nodes; ++node) {
-        ctx.mesh.periodic_reduced_node[node] = node;
-        ctx.mesh.periodic_representative_nodes[node] = node;
-    }
+    ctx.mesh.periodic_representative_nodes = {0u};
+    ctx.mesh.periodic_reduced_node[0] = 0u;
     ctx.mesh.periodic_reduced_node[1] = 0u;
+    for (uint32_t node = 2; node < ctx.mesh.n_nodes; ++node) {
+        ctx.mesh.periodic_reduced_node[node] = node - 1u;
+        ctx.mesh.periodic_representative_nodes.push_back(node);
+    }
+    ctx.mesh.periodic_reduced_node_count = ctx.mesh.n_nodes - 1u;
+    ctx.mesh.periodic_map_revision = 1u;
     auto periodic_base = base;
     auto periodic_trial = trial;
-    fullmag::fem::project_static_periodic_aos(ctx, periodic_base);
-    fullmag::fem::project_static_periodic_aos(ctx, periodic_trial);
+    check(
+        fullmag::fem::project_static_periodic_aos_checked(ctx, periodic_base, error),
+        error.c_str());
+    check(
+        fullmag::fem::project_static_periodic_aos_checked(ctx, periodic_trial, error),
+        error.c_str());
     const auto periodic_actual = fullmag::fem::exchange_energy_difference(
         ctx, periodic_base, periodic_trial, false, error);
     const long double periodic_endpoint = exchange_endpoint_difference(

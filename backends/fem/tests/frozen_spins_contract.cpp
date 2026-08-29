@@ -109,6 +109,62 @@ void test_frozen_spins_unit_contract() {
     check(std::abs(rhs[5] - 60.0) < 1e-15, "node 1 rhs_z must remain 60.0");
 }
 
+void test_periodic_frozen_spins_descriptor_uses_local_state_space() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 4;
+    ctx.mesh.magnetic_node_mask = {1u, 0u, 1u, 0u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 0u, 1u};
+    ctx.mesh.periodic_representative_nodes = {2u, 3u};
+    ctx.mesh.periodic_reduced_node_count = 2u;
+    ctx.mesh.periodic_map_revision = 9u;
+    ctx.state.m_xyz = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    const uint8_t mask[] = {1u, 0u, 1u, 0u};
+    const double reference[] = {
+        0.0, 0.0, 1.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        0.0, 1.0, 0.0,
+    };
+    fullmag_fem_plan_desc plan{};
+    plan.frozen_mask = mask;
+    plan.frozen_mask_len = 4u;
+    plan.frozen_reference_xyz = reference;
+    plan.frozen_reference_len = 12u;
+    std::string error;
+
+    check(
+        fullmag::fem::initialize_frozen_spins_plan_fields(ctx, plan, error),
+        error.c_str());
+    check(ctx.frozen_spins.mask().size() == 4u,
+          "periodic frozen descriptor is stored in local state-node space");
+    check(ctx.frozen_spins.frozen_count() == 2u,
+          "periodic frozen descriptor retains both local members of one true class");
+    ctx.frozen_spins.project_onto_reference(ctx.state.m_xyz);
+    check(ctx.state.m_xyz[2] == 1.0 && ctx.state.m_xyz[8] == 1.0,
+          "periodic frozen class projects every local member to one reference");
+
+    const uint8_t inconsistent_mask[] = {1u, 0u, 0u, 0u};
+    plan.frozen_mask = inconsistent_mask;
+    check(
+        !fullmag::fem::initialize_frozen_spins_plan_fields(ctx, plan, error),
+        "periodic frozen descriptor must reject inconsistent class membership");
+    check(error.find("periodic_class_membership_mismatch") != std::string::npos,
+          "periodic frozen membership mismatch has a typed reason");
+
+    const uint8_t airbox_mask[] = {0u, 1u, 0u, 1u};
+    plan.frozen_mask = airbox_mask;
+    check(
+        !fullmag::fem::initialize_frozen_spins_plan_fields(ctx, plan, error),
+        "frozen descriptor must reject an inactive Airbox class");
+    check(error.find("inactive_node") != std::string::npos,
+          "Airbox frozen selection has a typed inactive-node reason");
+}
+
 void test_frozen_spins_architecture_contract() {
     const std::filesystem::path root = fem_source_root();
     const std::string context_h = read_text_file(root / "include" / "context.hpp");
@@ -120,8 +176,9 @@ void test_frozen_spins_architecture_contract() {
 
     check(context_h.find("FrozenSpins frozen_spins") != std::string::npos,
           "Context must declare frozen_spins module");
-    check(builder_cpp.find("ctx.frozen_spins.import_descriptor") != std::string::npos,
-          "fem_context_builder must import frozen_spins descriptor");
+    check(builder_cpp.find("initialize_frozen_spins_plan_fields(ctx, plan, error)") !=
+              std::string::npos,
+          "fem_context_builder must delegate frozen_spins representation import");
     check(builder_cpp.find("ctx.frozen_spins.project_onto_reference") != std::string::npos,
           "fem_context_builder must project initial state onto reference");
     check(api_cpp.find("frozen_spins_fem_unqualified") == std::string::npos,
@@ -395,6 +452,8 @@ int main() {
     std::printf("Running native FEM Frozen Spins contract tests...\n");
     test_frozen_spins_unit_contract();
     std::printf("PASS: FrozenSpins unit contract\n");
+    test_periodic_frozen_spins_descriptor_uses_local_state_space();
+    std::printf("PASS: FrozenSpins periodic representation contract\n");
     test_frozen_spins_architecture_contract();
     std::printf("PASS: FrozenSpins architecture contract\n");
     test_frozen_spins_solver_step_contract();

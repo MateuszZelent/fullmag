@@ -235,9 +235,9 @@ void dmi_periodic_projection_has_one_owner() {
         workspace_impl.find(periodic_helper) != std::string::npos,
         "DMI workspace implementation must own the shared periodic-input helper");
     check(
-        workspace_impl.find("project_static_periodic_aos(ctx, projected_m_xyz)") !=
+        workspace_impl.find("project_static_periodic_aos_checked(ctx, projected_m_xyz, error)") !=
             std::string::npos,
-        "DMI workspace must apply the canonical periodic projection");
+        "DMI workspace must apply the checked canonical periodic projection");
     for (const std::string *source : {&interfacial, &bulk}) {
         check(
             source->find(periodic_helper) != std::string::npos,
