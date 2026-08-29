@@ -28,7 +28,7 @@ docs/physics/0000-physics-documentation-standard.md. Public pages may summarize 
 introduce a second sign or unit convention.
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Geometry` or `Material` as named by the linked API page. Status: `partial`. TODO: frontend support applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+Use `Model Explorer -> Objects -> <object> -> Geometry` or `Material` as named by the linked API page. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
 
 ## Python/API crosswalk
 

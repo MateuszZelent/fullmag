@@ -64,7 +64,7 @@ periodic boundary combination or every mixed FEM topology. Those topics remain d
 their public API, certificates and validation artifacts are linked.
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Geometry` or `Material` as named by the linked API page. Status: `partial`. TODO: frontend support applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+Use `Model Explorer -> Objects -> <object> -> Geometry` or `Material` as named by the linked API page. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
 
 ## Python/API crosswalk
 

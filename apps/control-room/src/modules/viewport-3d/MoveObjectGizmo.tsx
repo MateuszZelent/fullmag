@@ -7,6 +7,7 @@ import type {
   Viewport3DPrimitiveRenderModel,
   Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
+import { useViewport3DColors } from "./hooks/useViewport3DColors";
 export { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 export type MoveAxis = "x" | "y" | "z";
@@ -119,6 +120,9 @@ export function MoveObjectGizmo({
   onDraftChange?: (draft: MoveDraft | null) => void;
   onGestureActiveChange?: (active: boolean) => void;
 }) {
+  const { colors } = useViewport3DColors();
+  if (!colors) return null;
+
   const origin = object.translation ?? object.bounds.center;
   const [originX, originY, originZ] = origin;
   const [draft, setDraft] = useState<MoveDraft | null>(null);
@@ -168,7 +172,7 @@ export function MoveObjectGizmo({
     >
       <mesh userData={{ draftPreview: true }}>
         <boxGeometry args={object.bounds.size} />
-        <meshBasicMaterial color="#89b4fa" opacity={0.22} transparent wireframe />
+        <meshBasicMaterial color={colors.accent} opacity={0.22} transparent wireframe />
       </mesh>
       {(["x", "y", "z"] as const).map((axis, index) => (
         <mesh
@@ -180,7 +184,7 @@ export function MoveObjectGizmo({
           userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
         >
           <cylinderGeometry args={[length * 0.035, length * 0.035, length, 10]} />
-          <meshBasicMaterial color={["#f38ba8", "#a6e3a1", "#89b4fa"][index]} depthTest={false} />
+          <meshBasicMaterial color={[colors.danger, colors.success, colors.accent][index]} depthTest={false} />
         </mesh>
       ))}
     </group>
