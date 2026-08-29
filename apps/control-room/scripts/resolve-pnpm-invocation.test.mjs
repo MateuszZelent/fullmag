@@ -132,6 +132,25 @@ describe("resolvePnpmInvocation", () => {
     });
   });
 
+  it("uses the launcher-validated pinned pnpm CLI on native Windows", () => {
+    const pnpmCli = "C:\\fullmag-cache\\corepack\\v1\\pnpm\\10.8.1\\bin\\pnpm.cjs";
+
+    expect(
+      resolvePnpmInvocation({
+        platform: "win32",
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        env: { FULLMAG_PNPM_CLI: pnpmCli },
+        pathExists: (candidate) => candidate === pnpmCli,
+        realPath: (candidate) => candidate,
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      argsPrefix: [pnpmCli],
+      shell: false,
+      source: "fullmag-pinned-pnpm",
+    });
+  });
+
   it("fails clearly instead of falling back to a PATH-resolved Windows shim", () => {
     expect(() =>
       resolvePnpmInvocation({
@@ -159,7 +178,10 @@ describe("control-room dependency readiness", () => {
         source: "pnpm-home",
       },
       pathExists: (candidate) =>
-        nextAvailable && candidate.endsWith("/node_modules/.bin/next"),
+        nextAvailable &&
+        candidate
+          .replaceAll("\\", "/")
+          .endsWith("/node_modules/.bin/next"),
       execFile: (command, args, options) => {
         installCalls.push({ command, args, options });
         nextAvailable = true;

@@ -1,6 +1,8 @@
 //! Native CUDA FDM execution loop.
 
 use fullmag_ir::{FdmPlanIR, OutputIR};
+#[cfg(feature = "cuda")]
+use sha2::{Digest, Sha256};
 
 use crate::artifact_pipeline::ArtifactPipelineSender;
 #[cfg(feature = "cuda")]
@@ -72,6 +74,11 @@ fn frozen_spins_checkpoint_value(
     .map_err(|error| RunError {
         message: format!("serializing CUDA Frozen Spins checkpoint: {error}"),
     })?;
+    let plan_bytes = serde_json::to_vec(plan).map_err(|error| RunError {
+        message: format!("serializing CUDA FDM plan identity: {error}"),
+    })?;
+    let checkpoint =
+        checkpoint.with_problem_sha256(format!("sha256:{:x}", Sha256::digest(plan_bytes)));
     serde_json::to_value(checkpoint)
         .map(Some)
         .map_err(|error| RunError {

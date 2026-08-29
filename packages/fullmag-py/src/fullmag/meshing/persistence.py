@@ -616,7 +616,10 @@ def save_mesh_artifact(
             require_native=certification_bindings is not None,
         )
         if native_certificate is not None:
-            expected_fingerprint = mesh.topology_fingerprint_v3()
+            # The native certifier computes and validates the v3 fingerprint
+            # over the exact CSR arrays.  Recomputing that byte stream in
+            # Python here duplicates a large linear pass for SP4 meshes.
+            expected_fingerprint = native_certificate.topology_fingerprint_v3
             expected_payload = _certificate_payload_sha256(certificate)
             if (
                 not native_certificate.validated_claimed_certificate
@@ -628,11 +631,21 @@ def save_mesh_artifact(
                         "native mixed certificate result does not match mesh certificate"
                     )
                 native_certificate = None
+    native_mixed_certificate_validated = bool(
+        native_certificate is not None
+        and native_certificate.validated_claimed_certificate
+    )
     if native_certificate is None:
         mesh.validate_strict(require_positive_orientation=True)
-    mesh_ir = mesh.to_ir(mesh_name)
-    if validate_mesh_ir(mesh_ir) is False:
-        raise ValueError("mesh failed Rust MeshIR validation")
+    topology_fingerprint = (
+        native_certificate.topology_fingerprint_v3
+        if native_certificate is not None
+        else mesh.topology_fingerprint_v3()
+    )
+    if not native_mixed_certificate_validated:
+        mesh_ir = mesh.to_ir(mesh_name)
+        if validate_mesh_ir(mesh_ir) is False:
+            raise ValueError("mesh failed Rust MeshIR validation")
     regions = _normalize_markers(region_markers)
     object_regions = _normalize_markers(object_region_markers)
     boundaries = {str(name): int(marker) for name, marker in (boundary_map or {}).items()}
@@ -681,7 +694,7 @@ def save_mesh_artifact(
         expected_payload = _certificate_payload_sha256(certificate)
         if (
             not native.validated_claimed_certificate
-            or native.topology_fingerprint_v3 != mesh.topology_fingerprint_v3()
+            or native.topology_fingerprint_v3 != topology_fingerprint
             or native.certificate_payload_sha256 != expected_payload
             or native.algorithm_id != certification_bindings.certifier_algorithm_id
             or native.rayon_threads != certification_bindings.certifier_threads
@@ -720,7 +733,7 @@ def save_mesh_artifact(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "mesh_name": mesh_name,
         "topology_fingerprint_version": "v3",
-        "topology_fingerprint": mesh.topology_fingerprint_v3(),
+        "topology_fingerprint": topology_fingerprint,
         "authoring_schema": AUTHORING_SCHEMA,
         "authoring_document": authoring,
         "authoring_fingerprint": mesh_authoring_fingerprint(authoring),
@@ -779,19 +792,23 @@ def _load_mesh_artifact_full_audit(
         )
         if certificate is None:
             raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
-        topology_fingerprint = unsigned.topology_fingerprint_v3()
+        native = certify_mixed_mesh_arrays(
+            mesh=unsigned,
+            metadata={"mesh_name": str(manifest.get("mesh_name", ""))},
+            certificate=certificate.to_dict(),
+            require_native=require_native,
+        )
+        topology_fingerprint = (
+            native.topology_fingerprint_v3
+            if native is not None
+            else unsigned.topology_fingerprint_v3()
+        )
         receipt, _ = _validate_v2_receipt(
             manifest=manifest,
             members=members,
             mesh=unsigned,
             certificate=certificate,
             topology_fingerprint_v3=topology_fingerprint,
-        )
-        native = certify_mixed_mesh_arrays(
-            mesh=unsigned,
-            metadata={"mesh_name": str(manifest.get("mesh_name", ""))},
-            certificate=certificate.to_dict(),
-            require_native=require_native,
         )
         if native is not None:
             if (
@@ -828,7 +845,7 @@ def _load_mesh_artifact_full_audit(
                 if (
                     not native.validated_claimed_certificate
                     or native.topology_fingerprint_v3
-                    != unsigned.topology_fingerprint_v3()
+                    != certificate.topology_fingerprint
                     or native.certificate_payload_sha256
                     != _certificate_payload_sha256(certificate)
                     or native.algorithm_id != MIXED_CERTIFIER_ALGORITHM
@@ -837,12 +854,24 @@ def _load_mesh_artifact_full_audit(
                         "native certificate audit does not match legacy mixed artifact"
                     )
                 native_backend = "rust_rayon"
-        topology_fingerprint = mesh.topology_fingerprint_v3()
+                topology_fingerprint = native.topology_fingerprint_v3
+            else:
+                topology_fingerprint = mesh.topology_fingerprint_v3()
+        else:
+            topology_fingerprint = mesh.topology_fingerprint_v3()
     manifest_fingerprint = manifest.get("topology_fingerprint")
     if topology_fingerprint != manifest_fingerprint:
         raise MeshArtifactCorruptionError("topology fingerprint does not match manifest")
     mesh_name = str(manifest.get("mesh_name", ""))
-    if not mesh_name or validate_mesh_ir(mesh.to_ir(mesh_name)) is False:
+    if not mesh_name:
+        raise MeshArtifactCorruptionError("mesh failed Rust MeshIR validation")
+    # The native mixed certificate path has already parsed the complete typed
+    # mesh and validated its structural, orientation, degeneracy, conformity,
+    # and executable mixed-topology evidence.  Rebuilding a JSON MeshIR here
+    # only to run the same broad preflight repeats a large Python allocation and
+    # serialization pass for every certified SP4 artifact.  Keep the generic
+    # MeshIR validator for legacy or source-only artifacts.
+    if native_backend != "rust_rayon" and validate_mesh_ir(mesh.to_ir(mesh_name)) is False:
         raise MeshArtifactCorruptionError("mesh failed Rust MeshIR validation")
     authoring = manifest.get("authoring_document")
     if not isinstance(authoring, dict):

@@ -1,6 +1,7 @@
 //! Activation metadata for durable hard constraints.
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub const FROZEN_SPINS_ACTIVATION_SCHEMA: &str = "fullmag.frozen_spins.activation.v1";
@@ -14,6 +15,79 @@ pub struct FrozenSpinsActivation {
     pub membership_policy: String,
     pub source_state_revision: Option<u64>,
     pub topology_fingerprint: String,
+}
+
+/// Runtime owner of per-constraint activation epochs and the revision of the
+/// complete resolved active set. Epochs survive temporary stage deactivation;
+/// re-entry therefore receives a new epoch instead of recapturing as epoch 1.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenSpinsActivationSet {
+    pub resolved_constraint_set_revision: u64,
+    pub constraint_activation_epochs: BTreeMap<String, u64>,
+    pub active_constraint_ids: BTreeSet<String>,
+}
+
+impl Default for FrozenSpinsActivationSet {
+    fn default() -> Self {
+        Self {
+            resolved_constraint_set_revision: 0,
+            constraint_activation_epochs: BTreeMap::new(),
+            active_constraint_ids: BTreeSet::new(),
+        }
+    }
+}
+
+impl FrozenSpinsActivationSet {
+    /// Prepare a new resolved set without mutating the currently published
+    /// state. Continuing constraints keep their epoch; newly active and
+    /// re-entering constraints advance their own epoch exactly once.
+    pub fn prepare_transition(
+        &self,
+        active_constraint_ids: impl IntoIterator<Item = String>,
+    ) -> Result<Self, FrozenSpinsActivationError> {
+        let active_constraint_ids = active_constraint_ids.into_iter().collect::<BTreeSet<_>>();
+        if active_constraint_ids.iter().any(|id| id.trim().is_empty()) {
+            return Err(FrozenSpinsActivationError::Invalid(
+                "frozen_spins_activation_constraint_id_invalid".to_string(),
+            ));
+        }
+        let mut constraint_activation_epochs = self.constraint_activation_epochs.clone();
+        for id in &active_constraint_ids {
+            if !self.active_constraint_ids.contains(id) {
+                let next = constraint_activation_epochs
+                    .get(id)
+                    .copied()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        FrozenSpinsActivationError::Invalid(
+                            "frozen_spins_activation_epoch_overflow".to_string(),
+                        )
+                    })?;
+                constraint_activation_epochs.insert(id.clone(), next);
+            }
+        }
+        let resolved_constraint_set_revision = self
+            .resolved_constraint_set_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                FrozenSpinsActivationError::Invalid(
+                    "frozen_spins_resolved_constraint_set_revision_overflow".to_string(),
+                )
+            })?;
+        Ok(Self {
+            resolved_constraint_set_revision,
+            constraint_activation_epochs,
+            active_constraint_ids,
+        })
+    }
+
+    pub fn epoch(&self, constraint_id: &str) -> Option<u64> {
+        self.constraint_activation_epochs
+            .get(constraint_id)
+            .copied()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +176,6 @@ impl FrozenSpinsActivation {
 }
 
 /// Snapshot of the runtime state read during the first phase of activation.
-#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrozenSpinsActivationSnapshot {
     pub model_revision: u64,
@@ -112,7 +185,6 @@ pub struct FrozenSpinsActivationSnapshot {
     pub total_dofs: usize,
 }
 
-#[cfg(test)]
 impl FrozenSpinsActivationSnapshot {
     pub fn validate_preconditions(
         &self,
@@ -218,5 +290,31 @@ mod tests {
             snapshot.commit_check(&stale_current),
             Err(FrozenSpinsActivationError::StaleState)
         );
+    }
+
+    #[test]
+    fn activation_set_tracks_per_constraint_epochs_and_resolved_set_revision() {
+        let initial = FrozenSpinsActivationSet::default()
+            .prepare_transition(["always".to_string(), "stage-a".to_string()])
+            .unwrap();
+        assert_eq!(initial.resolved_constraint_set_revision, 1);
+        assert_eq!(initial.epoch("always"), Some(1));
+        assert_eq!(initial.epoch("stage-a"), Some(1));
+
+        let stage_b = initial
+            .prepare_transition(["always".to_string(), "stage-b".to_string()])
+            .unwrap();
+        assert_eq!(stage_b.resolved_constraint_set_revision, 2);
+        assert_eq!(stage_b.epoch("always"), Some(1));
+        assert_eq!(stage_b.epoch("stage-a"), Some(1));
+        assert_eq!(stage_b.epoch("stage-b"), Some(1));
+
+        let reentered = stage_b
+            .prepare_transition(["always".to_string(), "stage-a".to_string()])
+            .unwrap();
+        assert_eq!(reentered.resolved_constraint_set_revision, 3);
+        assert_eq!(reentered.epoch("always"), Some(1));
+        assert_eq!(reentered.epoch("stage-a"), Some(2));
+        assert_eq!(reentered.epoch("stage-b"), Some(1));
     }
 }

@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 JUSTFILE = ROOT / "justfile"
 LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag.ps1"
+CONTROL_ROOM = ROOT / "crates" / "fullmag-cli" / "src" / "control_room.rs"
 WSL_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
 WINDOWS_COMPOSE = ROOT / "compose.windows.yaml"
 FEM_GPU_DOCKERFILE = ROOT / "docker" / "fem-gpu" / "Dockerfile"
@@ -96,6 +97,26 @@ def test_windows_launcher_supports_build_false_without_rebuilding() -> None:
     assert "release\\fullmag.exe" in launcher
 
 
+def test_windows_launcher_builds_cli_and_api_as_sibling_release_binaries() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert '"-p", "fullmag-cli", "-p", "fullmag-api"' in launcher
+    assert '$FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\\release\\fullmag-api.exe"' in launcher
+    assert "Native Fullmag API binary was not produced" in launcher
+    assert "Native Windows Fullmag API binary is missing" in launcher
+
+
+def test_native_windows_control_room_uses_windows_command_lookup_and_opener() -> None:
+    control_room = CONTROL_ROOM.read_text(encoding="utf-8")
+
+    assert '#[cfg(windows)]\npub(crate) fn command_exists' in control_room
+    assert 'ProcessCommand::new("where.exe")' in control_room
+    assert 'if cfg!(windows) {\n        &["cmd.exe"]' in control_room
+    assert "let frontend_ready = loop" in control_room
+    assert "if !frontend_ready" in control_room
+    assert "if !frontend_is_ready_for_bootstrap(web_port)" not in control_room
+
+
 def test_windows_launcher_reuses_existing_msvc_rust_toolchain() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
 
@@ -110,6 +131,8 @@ def test_windows_launcher_recognizes_pnpm_windows_swc_store_entry() -> None:
 
     assert "node_modules\\.pnpm" in launcher
     assert "@next+swc-win32-x64-msvc@*" in launcher
+    assert '$PinnedPnpmVersion = "10.8.1"' in launcher
+    assert "$env:FULLMAG_PNPM_CLI = $PinnedPnpmCli" in launcher
 
 
 def test_windows_fem_gpu_routes_to_wsl_before_posix_host_setup() -> None:

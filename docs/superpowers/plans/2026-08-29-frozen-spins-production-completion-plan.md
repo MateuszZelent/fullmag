@@ -132,7 +132,7 @@ Poniższe wpisy są historycznymi obserwacjami audytowymi, nie trwałymi receipt
 - Runner FDM CPU: 10/10 `PASS` dla single-grid, w tym exchange/demag, STT/SOT/thermal, publiczne integratory, telemetria free/all, all-frozen, minimizery bezpośrednie i zgodność bez maski.
 - API: 26/26 `PASS`.
 - UI: 13/13 testów skupionych oraz 181/181 testów Ribbon/Explorer, razem 194/194.
-- Zarządzany test FDM CUDA zakończył się kodem 0: ABI + CUDA runtime 2/2, RK4 z defektem `<1e-14`, Heun z zerowym defektem frozen, checkpoint i CPU-reference resume `PASS`.
+- Zarządzany test FDM CUDA zakończył się kodem 0: ABI + CUDA runtime 2/2, RK4 z historycznie raportowanym defektem `<1e-14`, Heun z zerowym defektem frozen, checkpoint i CPU-reference import. Wynik nie zamyka FS-005 ani ExactResume, dopóki nie wykaże zero ULP i nie rozdzieli PortableStateImport.
 - Diagnostyczne uruchomienie `fem_frozen_spins_contract` w kontenerze przeszło 4/4: unit, architecture, solver step, direct minimizer.
 - `git diff --check` przechodził dla audytowanego stanu.
 
@@ -152,9 +152,9 @@ Poniższe wpisy są historycznymi obserwacjami audytowymi, nie trwałymi receipt
 - FEM GPU ma skompilowane źródła, lecz brak wykonanego dowodu urządzeniowego Frozen Spins.
 - Zarządzany FEM CPU build przeszedł, ale kanoniczna recepta zakończyła się przed Frozen Spins przez niezależny błąd `fem_interaction_docs_contract` dotyczący ownership boundaries.
 - CUDA receipt był efemeryczny w `/tmp`, nie miał rzeczywistej identyfikacji urządzenia/drivera/runtime i zniknął wraz z kontenerem.
-- Control Room przekazuje `femTrueDofPositions: null`, więc overlay dla FEM nie ma autorytatywnych pozycji true DOF.
+- Control Room przekazuje `femTrueDofPositions: null`; nawet zastąpienie go samą tablicą pozycji nie zamknie FS-010 bez pełnego true-DOF-to-render CSR carrier.
 - Browser smoke sprawdza jedynie Ribbon, canvas i WebGL; nie tworzy constraintu, nie potwierdza Explorer/Inspector, maski, preview ani overlay.
-- Typecheck pozostaje `NOT VERIFIED`: wrapper Windows kończy się `spawnSync next.cmd EINVAL`, a bezpośredni `tsc` zgłasza brak typów `esrecurse` i `json-schema`. Nie jest to dowód defektu Frozen Spins, ale blokuje release gate UI.
+- Typecheck ma `qualification_status=UNQUALIFIED, gate_result=NOT_RUN/BLOCKED`: wrapper Windows kończy się `spawnSync next.cmd EINVAL`, a bezpośredni `tsc` zgłasza brak typów `esrecurse` i `json-schema`. Nie jest to dowód defektu Frozen Spins, ale blokuje release gate UI.
 
 ### 4.3. Aktualizacja wykonawcza po rozpoczęciu realizacji planu
 
@@ -190,7 +190,7 @@ Dowody wykonane dla tego wycinka:
 - FDM CUDA host-backed sync/async scalar preview: `PASS` na poziomie testów źródłowych;
 - FEM Rust `cargo check --tests --features fem-gpu`: `PASS` z podstawionym katalogiem biblioteki, wyłącznie dowód kompilacji;
 - API catalog/schema oraz test end-to-end resource/data-plane: `PASS`;
-- testy Control Room quantity ID i planu danych 3D: 33/33 `PASS`;
+- testy Control Room quantity ID, Ribbon i topology-aware scalar carrier FDM/FEM: 88/88 `PASS`;
 - ukierunkowany ESLint: `PASS`;
 - `git diff --check` dla zmienianych plików: `PASS`.
 
@@ -198,10 +198,20 @@ Pozostałe bramki tego wycinka:
 
 - pełny typecheck Control Room: `BLOCKED` przez niezależne błędy `react-resizable-panels` w `Resizable.tsx`;
 - managed FEM runtime: `BLOCKED` przez istniejące błędy kompilacji natywnego C++/MSVC (`std::snprintf`, GNU `__atomic_*`, `M_PI` i pola Poisson);
-- rzeczywista kwalifikacja CUDA/GPU: `NOT VERIFIED`;
-- live browser/WebGL z wyborem `frozen_spins` jako aktywnego quantity: `NOT VERIFIED`;
+- rzeczywista kwalifikacja CUDA/GPU: `qualification_status=UNQUALIFIED, gate_result=NOT_RUN`;
+- live browser/WebGL z wyborem `frozen_spins` jako aktywnego quantity: `qualification_status=UNQUALIFIED, gate_result=NOT_RUN`;
 - P13 jako całość: `SOURCE CONFIRMED / INCOMPLETE`, ponieważ nadal wymagane są lifecycle revision/ETag/invalidation, pełny carrier FEM true-DOF i roundtrip constraintu;
 - P14 jako całość: `SOURCE CONFIRMED / INCOMPLETE`, ponieważ nadal wymagane są live FDM/FEM, stany błędów, typecheck oraz browser proof.
+
+Po korekcie audytu rozpoczęto również P0–P2:
+
+- P0: dodano maszynowo walidowany `frozen-spins-v1-scope.yaml`; 27 funkcji ma status `REQUIRED`, a jedynie live/callable selector jest `OUT_OF_SCOPE` ze stabilnym reason code; walidator i 4 testy przechodzą;
+- P1: dodano Frozen-Spins-specific source identity opartą o istniejący kanoniczny snapshot V2, rozszerzoną o osobne hashe tracked/staged/untracked, Git tree oraz rekurencyjne identity i dirty content submodułów; 2 testy przechodzą, a bieżący dirty checkout jest prawidłowo odrzucany przez `--require-clean`;
+- P2: rozdzielono authoring od qualification. Skrypt authoringu przechodzi na Windows bez ręcznego `PYTHONUTF8`, natomiast agregator kwalifikacji wymaga clean source identity, trwałych artefaktów i pełnego pokrycia 47 test case IDs;
+- agregator ma 6 testów fail-closed obejmujących brak receiptów, `SKIP`, dirty source, fallback, unknown driver, błędny hash artefaktu, mixed tree, duplicate evidence ID, niezgodność z przechwyconym source identity oraz append-only/idempotent evidence ledger;
+- przy braku katalogu trwałych receiptów agregator prawidłowo kończy się niezerowym kodem i raportuje `0/47`, zamiast drukować fałszywe `PASS`.
+
+P0 ma `gate_result=PASS` na poziomie zamrożenia zakresu. P1 i P2 pozostają `INCOMPLETE`: P1 wymaga jeszcze klasyfikacji zmian oraz czystego qualification tree, a P2 osobnych recept lane i realnych receiptów generowanych przez runtime. Append-only evidence ledger jest zaimplementowany, lecz pozostaje pusty do pierwszego kompletnego zestawu ważnych receiptów.
 
 ### 4.4. Findings register
 
@@ -761,7 +771,7 @@ Zrealizować decyzję P0 dla FP32: implementować i zakwalifikować, jeśli `REQ
 Jeżeli P0 oznaczy FP32 poza V1, należy jednocześnie:
 
 - zmienić zaakceptowaną specyfikację V1;
-- oznaczyć FP32 jako `OUT OF V1 SCOPE`, nie `QUALIFIED`;
+- oznaczyć FP32 jako `scope_status=OUT_OF_SCOPE`, nie `QUALIFIED`;
 - utrzymać fail-closed w plannerze i API;
 - dodać test stabilnego kodu błędu;
 - uzyskać osobną akceptację właściciela produktu. Bez tej decyzji P10 pozostaje otwarte.
@@ -1012,16 +1022,19 @@ Zamknąć wszystkie dowody w jednej odtwarzalnej ścieżce i uniemożliwić regr
 ### Implementacja
 
 1. `just verify-frozen-spins-qualification` ma uruchomić lub zweryfikować wszystkie obowiązkowe recepty P2, w kontrolowanej kolejności i na tym samym source identity.
-2. Dla ciężkich GPU/FEM jobs dopuszczalne jest zebranie osobnych receiptów CI, ale agregator musi walidować wspólne SHA, runtime manifest, ważność schematu i kompletność macierzy.
-3. Dodać CI matrix generowaną z capability registry. Nowy publiczny integrator/backend/precision ma domyślnie status niezakwalifikowany i blokuje rozszerzenie capability bez dedykowanego testu.
+2. Dla ciężkich GPU/FEM jobs dopuszczalne jest zebranie osobnych receiptów CI, ale agregator waliduje wspólny clean tree identity, runtime manifest, schema, P0 scope ledger i kompletność covering-array.
+3. Dodać CI matrix generowaną z capability predicates oraz P0 scope ledger. Nowy publiczny integrator/backend/precision może mieć `execution_supported=true`, lecz domyślnie ma `qualification_status=UNQUALIFIED` i nie przechodzi strict-production/release gate.
 4. Dodać gate wykrywający:
    - macierz dokumentacyjna mówi `QUALIFIED`, lecz brak receiptu;
-   - receipt dotyczy innego SHA;
+   - receipt dotyczy innego tree/source snapshot;
    - `fallback_used=true`;
    - brak identyfikacji urządzenia/runtime;
    - brak testu dla publicznego algorytmu;
    - browser smoke bez artefaktów;
-   - wygenerowane API niezgodne ze źródłem.
+   - wygenerowane API niezgodne ze źródłem;
+   - brak zero-ULP hard restore;
+   - brak performance/transfer metrics;
+   - otwarty critical finding FS-001–FS-014.
 5. Zaktualizować:
    - design/spec Frozen Spins;
    - macierz kwalifikacji;
@@ -1038,46 +1051,47 @@ Macierz release musi mieć jednoznaczny wynik dla co najmniej:
 
 - IR/Python/API authoring i roundtrip;
 - FDM CPU single-grid FP64;
-- FDM CPU multilayer;
-- ABM3;
+- FDM CPU multilayer zgodnie z P0;
+- ABM3 zgodnie z P0;
 - FDM CUDA FP64;
-- FDM CUDA FP32 albo formalne `OUT OF V1 SCOPE`;
+- FDM CUDA FP32 albo formalne `scope_status=OUT_OF_SCOPE`;
 - FEM CPU explicit/direct minimizer;
-- FEM TPI albo formalne `OUT OF V1 SCOPE`;
-- FEM GPU;
+- FEM TPI albo formalne `scope_status=OUT_OF_SCOPE`;
+- FEM GPU zgodnie z P0;
 - checkpoint/exact resume;
 - Control Room component/typecheck;
 - browser/WebGL FDM i FEM;
-- scientific invariant/influence/no-mask/CPU-GPU parity.
+- scientific invariant/influence/no-mask/CPU-GPU parity, independent oracle i refinement convergence;
+- performance/no-transfer receipts.
 
 ### Bramka P16 — Definition of Done
 
 Frozen Spins V1 można uznać za zakończone wyłącznie, gdy wszystkie poniższe zdania są prawdziwe:
 
 1. `region.freeze_spins()` i jawny constraint API roundtripują do identycznego kanonicznego IR.
-2. Preview, solver i overlay używają tej samej mask revision/fingerprint.
-3. Każdy deklarowany backend/precision/mesh/algorithm zachowuje frozen reference i liczy dynamikę/redukcje po free DOF.
+2. Typed state snapshot selectors są oceniane raz, a preview/launch używają activation token albo jawnej stale invalidation; overlay adoptuje maskę solvera.
+3. Każdy required backend/precision/mesh/algorithm zachowuje frozen reference bitwise i liczy dynamikę/redukcje po free sites.
 4. Zamrożone spiny nadal wpływają na free DOF przez energię i oddziaływania.
 5. Każda nieobsługiwana krotka fail-closed przed uruchomieniem, ze stabilnym kodem.
-6. Checkpoint zachowuje maskę, referencję, epoch, polityki, historię i hashes; `ExactResume` sprawdza `problem_hash`.
-7. Capabilities API są wyprowadzone z dokładnej krotki lane i ważnego dowodu kwalifikacji.
-8. Control Room tworzy zasób, pokazuje prawidłowy child/Inspector i renderuje rzeczywisty overlay FDM/FEM.
+6. Checkpoint zachowuje maskę, reference, per-constraint epochs, resolved-set revision, pełną historię, RNG, partition i hashes; ExactResume jest odrębny od PortableStateImport.
+7. Capabilities API oddzielają authoring/preview/execution od qualification i są zgodne z plannerem.
+8. Control Room tworzy zasób, pokazuje child/Inspector, oferuje `frozen_spins` jako standardowe quantity i renderuje FDM/FEM przez topology-aware carrier, w FEM przez CSR mapping.
 9. Realny browser/WebGL smoke oraz typecheck przechodzą w kanonicznym środowisku.
-10. Każdy status `QUALIFIED` ma trwały receipt z czystym SHA, manifestem runtime, realnym urządzeniem i `fallback_used=false`.
+10. Każdy status `QUALIFIED` ma trwały receipt z clean tree identity, runtime manifestem, realnym urządzeniem, `fallback_used=false`, zero-ULP restore oraz metrykami performance/transfer.
 11. Zbiorcza recepta kończy się kodem 0 bez `SKIP` w obowiązkowej macierzy.
 12. Dokumentacja i generowane API odpowiadają dokładnie wykonanym dowodom.
 
-Jeżeli choć jeden punkt jest niespełniony, końcowy status pozostaje `PARTIAL` albo `BLOCKED`; nie wolno zastępować brakującego dowodu procentowym oszacowaniem gotowości.
+Jeżeli choć jeden punkt jest niespełniony, agregat ma `gate_result=FAIL/NOT_RUN` i odpowiednią oś qualification; nie wolno zastępować brakującego dowodu procentem ani nieformalnym `PARTIAL` dla lane.
 
 ## 6. Zalecana kolejność realizacyjna i punkty kontrolne
 
 Praktyczna kolejność bezpiecznych batchy:
 
-1. **Batch A — prawda i proweniencja:** P1–P3.
+1. **Batch A — zakres i proweniencja:** P0–P2.
 2. **Batch B — kontrakt stanu:** P4–P6.
-3. **Batch C — FDM:** P7–P10.
-4. **Batch D — FEM:** P11–P12.
-5. **Batch E — API/UI:** P13–P15.
+3. **Batch C — final capability registry:** P3.
+4. **Batch D — równoległe lane:** FDM P7–P10, FEM P11–P12 i niezależne carriers P13.
+5. **Batch E — API/UI/E2E:** pozostałe P13–P15.
 6. **Batch F — zamknięcie:** P16.
 
 Po każdym batchu należy przygotować krótki raport zawierający: SHA, diff scope, testy source, testy managed runtime, receipt IDs, status każdej lane, znane blokery i decyzję `GO/NO-GO` dla kolejnego batchu.
@@ -1086,16 +1100,19 @@ Po każdym batchu należy przygotować krótki raport zawierający: SHA, diff sc
 
 - Nie nazywać kompilacji testem runtime.
 - Nie nazywać bezpośrednio uruchomionego binarium dowodem pełnej recepty, jeżeli kanoniczna recepta kończy się wcześniej błędem.
-- Nie publikować `supported=true` na podstawie samej obecności kodu.
+- Nie mieszać `execution_supported` z `qualification_status`; brak receiptu nie zmienia deterministycznej możliwości wykonania, ale blokuje release.
 - Nie akceptować receiptów z `unknown` device/driver/runtime w release gate.
 - Nie przechowywać jedynego receiptu w `/tmp` kontenera.
 - Nie omijać multilayer, ABM3, FP32, TPI lub FEM GPU bez formalnej decyzji zakresowej.
 - Nie zastępować browser E2E testem komponentowym ani sprawdzeniem, że canvas istnieje.
-- Nie wyliczać maski drugi raz w UI niezależnie od planera.
+- Nie wyliczać maski drugi raz w UI niezależnie od activation transaction.
+- Nie porównywać resolved mask SHA FDM i FEM.
+- Nie nazywać cross-lane state import `ExactResume`.
+- Nie używać tolerancji zamiast bitwise hard restore invariant.
 - Nie usuwać udziału frozen spins z energii/interakcji.
 - Nie resetować, stashować ani nadpisywać niepowiązanych zmian użytkownika.
 - Nie wykonywać commit/push/merge/release bez osobnej autoryzacji.
 
 ## 8. Pierwszy konkretny krok wykonawczy
 
-Przed zmianą semantyki backendów należy zrealizować P1 i P2: zamrozić source identity, naprawić fałszywy agregator kwalifikacyjny, ustalić trwały katalog receiptów i wygenerować uczciwą macierz `NOT VERIFIED / SOURCE CONFIRMED / RUNTIME CONFIRMED / QUALIFIED`. Dopiero na tej podstawie należy usuwać kolejne fail-closed w plannerze. Dzięki temu każda nowa implementacja będzie natychmiast miała mierzalną bramkę i nie rozszerzy przypadkowo publicznego capability bez dowodu.
+Najpierw zatwierdzić P0 scope ledger, następnie wygenerować P1 source snapshot identity i P2 evidence ledger. Potem wdrożyć P4 typed snapshot selector `m_z > 0.5`, P5 atomową activation transaction i P6 pełne resume semantics. Dopiero z zamkniętych semantyk P4–P6 należy wygenerować dodatnie wpisy P3 capability. Istniejący pion quantity/API/Viewport 3D pozostaje poprawnym, niezależnym wycinkiem, lecz jego pełny status P13/P14 wymaga activation transaction i FEM CSR carrier.

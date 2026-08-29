@@ -206,8 +206,8 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
         // The multilayer IR does not yet retain drive, antenna, thermal,
         // magnetoelastic, transport, or electric-field terms.  They must stay
         // unavailable rather than being inferred from another plan family.
-        QuantityId::FrozenSpins
-        | QuantityId::HDrive
+        QuantityId::FrozenSpins => plan.frozen_spins.is_some(),
+        QuantityId::HDrive
         | QuantityId::HOe
         | QuantityId::HAnt
         | QuantityId::HMel

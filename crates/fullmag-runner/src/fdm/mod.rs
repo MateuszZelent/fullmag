@@ -641,6 +641,7 @@ mod tests {
                 layer("free", 0.0, [1.0, 0.0, 0.0]),
                 layer("ref", 2.0, [0.0, 1.0, 0.0]),
             ],
+            frozen_spins: None,
             enable_exchange: true,
             enable_demag: true,
             fft: None,

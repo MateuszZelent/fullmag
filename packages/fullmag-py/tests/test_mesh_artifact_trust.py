@@ -633,6 +633,60 @@ class MeshArtifactTrustTests(unittest.TestCase):
         self.assertTrue(artifact.provenance["production_qualified"])
         self.assertEqual(artifact.provenance["artifact_trust"], "portable_full_audit")
 
+    def test_native_certified_save_skips_duplicate_mesh_ir_preflight(self) -> None:
+        mesh = _certified_mesh()
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.fullmag-mesh"
+            with (
+                mock.patch(
+                    "fullmag.meshing.persistence.certify_mixed_mesh_arrays",
+                    return_value=_native_certificate_result(mesh),
+                ),
+                mock.patch.object(
+                    MeshData,
+                    "to_ir",
+                    side_effect=AssertionError("native save rebuilt MeshIR"),
+                ),
+                mock.patch(
+                    "fullmag.meshing.persistence.validate_mesh_ir",
+                    side_effect=AssertionError("native save repeated MeshIR validation"),
+                ),
+            ):
+                save_mesh_artifact(
+                    path,
+                    mesh=mesh,
+                    mesh_name="mixed-domain",
+                    authoring_document={"mesh": {"topology": "prismatic"}},
+                    region_markers=[{"geometry_name": "magnet", "marker": 1}],
+                    boundary_map={"outer": 3, "material_interface": 2},
+                    build_report={"build_mode": "mixed", "fallbacks_triggered": []},
+                    provenance={"origin": "generated"},
+                    certification_bindings=_bindings(),
+                )
+
+    def test_native_certified_load_skips_duplicate_mesh_ir_preflight(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.fullmag-mesh"
+            mesh = self._save_v2(path)
+            with (
+                mock.patch(
+                    "fullmag.meshing.persistence.certify_mixed_mesh_arrays",
+                    return_value=_native_certificate_result(mesh),
+                ),
+                mock.patch.object(
+                    MeshData,
+                    "to_ir",
+                    side_effect=AssertionError("native load rebuilt MeshIR"),
+                ),
+                mock.patch(
+                    "fullmag.meshing.persistence.validate_mesh_ir",
+                    side_effect=AssertionError("native load repeated MeshIR validation"),
+                ),
+            ):
+                artifact = load_mesh_artifact(path)
+
+        self.assertEqual(artifact.provenance["certifier_backend"], "rust_rayon")
+
     def test_public_full_audit_python_fallback_is_explicitly_not_production(
         self,
     ) -> None:

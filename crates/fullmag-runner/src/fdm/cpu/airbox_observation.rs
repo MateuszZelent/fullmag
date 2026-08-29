@@ -645,6 +645,7 @@ mod tests {
             requested_common_cell_size: None,
             grid_certificate: None,
             layers: vec![layer],
+            frozen_spins: None,
             enable_exchange: true,
             enable_demag: true,
             fft: None,

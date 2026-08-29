@@ -277,6 +277,8 @@ $RustupHome = if ($env:FULLMAG_WINDOWS_RUSTUP_HOME) {
 }
 $PnpmHome = Join-Path $CacheRoot "pnpm-home"
 $PnpmStore = Join-Path $CacheRoot "pnpm-store"
+$PinnedPnpmVersion = "10.8.1"
+$PinnedPnpmCli = Join-Path $CacheRoot "corepack\v1\pnpm\$PinnedPnpmVersion\bin\pnpm.cjs"
 $NpmCache = Join-Path $CacheRoot "npm-cache"
 $PipCache = Join-Path $CacheRoot "pip-cache"
 $UvCache = Join-Path $CacheRoot "uv"
@@ -288,6 +290,7 @@ $PythonVenv = Join-Path $PythonRoot "fullmag"
 $PythonExe = Join-Path $PythonVenv "Scripts\python.exe"
 $ManifestPath = Join-Path $BuildRoot "windows-runtime\build-manifest.json"
 $FullmagExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag.exe"
+$FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-api.exe"
 $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
 
 foreach ($item in @(
@@ -364,7 +367,8 @@ if ($BuildMode -eq "true") {
   Invoke-External "cargo" @("--version")
 
   $cargoArguments = @(
-    "build", "--release", "--target", $TargetTriple, "-p", "fullmag-cli"
+    "build", "--release", "--target", $TargetTriple,
+    "-p", "fullmag-cli", "-p", "fullmag-api"
   )
   if ($useCuda) {
     $cargoArguments += @("--features", "cuda")
@@ -380,6 +384,9 @@ if ($BuildMode -eq "true") {
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
     throw "Native Fullmag binary was not produced at $FullmagExe"
   }
+  if (-not (Test-Path -LiteralPath $FullmagApiExe -PathType Leaf)) {
+    throw "Native Fullmag API binary was not produced at $FullmagApiExe"
+  }
   $nativeFdmDll = $null
   if ($useCuda) {
     $nativeFdmDll = Stage-NativeFdmDll
@@ -388,6 +395,7 @@ if ($BuildMode -eq "true") {
     schema_version = 1
     target_triple = $TargetTriple
     binary = $FullmagExe
+    api_binary = $FullmagApiExe
     backend = if ($Backend -eq "auto") { "auto" } else { $Backend }
     cuda = $useCuda
     features = if ($useCuda) { @("cuda") } else { @() }
@@ -403,6 +411,9 @@ if ($BuildMode -eq "true") {
 else {
   if (-not (Test-Path -LiteralPath $FullmagExe -PathType Leaf)) {
     throw "Native Windows Fullmag binary is missing at $FullmagExe; rerun with build=True"
+  }
+  if (-not (Test-Path -LiteralPath $FullmagApiExe -PathType Leaf)) {
+    throw "Native Windows Fullmag API binary is missing at $FullmagApiExe; rerun with build=True"
   }
   if (-not (Test-Path -LiteralPath $PythonExe -PathType Leaf)) {
     throw "Fullmag Python environment is missing at $PythonExe; rerun with build=True"
@@ -427,6 +438,15 @@ else {
     }
   }
 }
+
+if (-not (Test-Path -LiteralPath $PinnedPnpmCli -PathType Leaf)) {
+  throw "Pinned pnpm $PinnedPnpmVersion is missing at $PinnedPnpmCli; rerun with build=True"
+}
+$resolvedPnpmVersion = (& node $PinnedPnpmCli --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $resolvedPnpmVersion -ne $PinnedPnpmVersion) {
+  throw "Pinned pnpm validation failed at $PinnedPnpmCli; expected $PinnedPnpmVersion, got $resolvedPnpmVersion"
+}
+$env:FULLMAG_PNPM_CLI = $PinnedPnpmCli
 
 if ($useCuda) {
   Test-NvidiaRuntime

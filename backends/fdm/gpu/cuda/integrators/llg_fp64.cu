@@ -375,6 +375,22 @@ __global__ void project_frozen_fp64_kernel(
     }
 }
 
+void launch_project_frozen_fp64(Context &ctx, cudaStream_t stream)
+{
+    if (!ctx.has_frozen_mask) return;
+    const int n = static_cast<int>(ctx.cell_count);
+    const int grid = (n + 255) / 256;
+    project_frozen_fp64_kernel<<<grid, 256, 0, stream>>>(
+        static_cast<double *>(ctx.m.x),
+        static_cast<double *>(ctx.m.y),
+        static_cast<double *>(ctx.m.z),
+        ctx.frozen_mask,
+        static_cast<const double *>(ctx.frozen_reference.x),
+        static_cast<const double *>(ctx.frozen_reference.y),
+        static_cast<const double *>(ctx.frozen_reference.z),
+        n);
+}
+
 __global__ void zero_frozen_rhs_fp64_kernel(
     double * __restrict__ rx,
     double * __restrict__ ry,

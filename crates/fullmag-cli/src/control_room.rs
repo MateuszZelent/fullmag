@@ -360,6 +360,8 @@ mod control_room_guard_tests {
     use std::thread;
     use std::time::Duration;
 
+    #[cfg(windows)]
+    use super::command_exists;
     use super::{
         api_openapi_response_is_compatible, browser_control_room_assets, browser_open_args,
         control_room_launch_signature, packaged_install_root, wait_for_api_ready,
@@ -411,6 +413,12 @@ mod control_room_guard_tests {
                 "http://172.17.101.240:3100/".to_string(),
             ]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_windows_command_lookup_finds_cmd() {
+        assert!(command_exists("cmd.exe"));
     }
 
     #[test]
@@ -868,13 +876,16 @@ pub(crate) fn bootstrap_control_plane(
             let _ = fs::write(&mode_file, &desired_signature);
 
             let bootstrap_deadline = Instant::now() + Duration::from_secs(90);
-            while Instant::now() < bootstrap_deadline {
+            let frontend_ready = loop {
+                if Instant::now() >= bootstrap_deadline {
+                    break false;
+                }
                 if frontend_is_ready_for_bootstrap(web_port) {
-                    break;
+                    break true;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            if !frontend_is_ready_for_bootstrap(web_port) {
+            };
+            if !frontend_ready {
                 bail!("control room did not become ready on :{}", web_port);
             }
         } else {
@@ -2060,7 +2071,9 @@ fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Durat
 }
 
 pub(crate) fn which_opener() -> Result<String> {
-    let candidates: &[&str] = if is_wsl_environment() {
+    let candidates: &[&str] = if cfg!(windows) {
+        &["cmd.exe"]
+    } else if is_wsl_environment() {
         &[
             "wslview",
             "cmd.exe",
@@ -2106,6 +2119,18 @@ fn browser_open_args(opener: &str, url: &str) -> Vec<String> {
     vec![url.to_string()]
 }
 
+#[cfg(windows)]
+pub(crate) fn command_exists(cmd: &str) -> bool {
+    ProcessCommand::new("where.exe")
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
 pub(crate) fn command_exists(cmd: &str) -> bool {
     ProcessCommand::new("which")
         .arg(cmd)

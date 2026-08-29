@@ -5,6 +5,7 @@ use fullmag_engine::{FrozenSpinsState, Vector3};
 use fullmag_ir::{ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub const FROZEN_SPINS_CHECKPOINT_SCHEMA: &str = "fullmag.frozen_spins.checkpoint.v1";
@@ -13,9 +14,17 @@ pub const FROZEN_SPINS_CHECKPOINT_SCHEMA: &str = "fullmag.frozen_spins.checkpoin
 #[serde(deny_unknown_fields)]
 pub struct FrozenSpinsCheckpointV1 {
     pub schema: String,
+    #[serde(default)]
+    pub problem_sha256: String,
     pub constraint_ids: Vec<String>,
     pub authored_fingerprints: Vec<SelectionAuthoredFingerprintIR>,
     pub activation: FrozenSpinsActivation,
+    #[serde(default)]
+    pub constraint_activation_epochs: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub active_constraint_ids: BTreeSet<String>,
+    #[serde(default)]
+    pub resolved_constraint_set_revision: u64,
     pub mask_len: usize,
     /// Dense mask packed least-significant-bit first, eight cells per byte.
     pub mask_bits: Vec<u8>,
@@ -117,6 +126,10 @@ impl FrozenSpinsCheckpointV1 {
             || self.activation.schema != super::activation::FROZEN_SPINS_ACTIVATION_SCHEMA
             || self.activation.epoch == 0
             || self.activation.topology_fingerprint.is_empty()
+            || self
+                .constraint_activation_epochs
+                .values()
+                .any(|epoch| *epoch == 0)
         {
             return Err(FrozenSpinsCheckpointError::Invalid(
                 "frozen_spins_checkpoint_payload_integrity_mismatch".to_string(),
@@ -157,9 +170,13 @@ impl FrozenSpinsCheckpointV1 {
         let reference = frozen.reference().to_vec();
         let checkpoint = Self {
             schema: FROZEN_SPINS_CHECKPOINT_SCHEMA.to_string(),
+            problem_sha256: String::new(),
             constraint_ids: plan.constraint_ids.clone(),
             authored_fingerprints: plan.certificate.authored_fingerprints.clone(),
             activation,
+            constraint_activation_epochs: frozen.constraint_activation_epochs().clone(),
+            active_constraint_ids: frozen.active_constraint_ids().clone(),
+            resolved_constraint_set_revision: frozen.resolved_constraint_set_revision(),
             mask_len: frozen.len(),
             mask_bits,
             mask_sha256: plan.mask_sha256.clone(),
@@ -180,6 +197,26 @@ impl FrozenSpinsCheckpointV1 {
         Ok(checkpoint)
     }
 
+    /// Bind this constraint checkpoint to the complete execution problem.
+    /// ExactResume callers must validate this hash before restoring any state;
+    /// PortableStateImport deliberately uses a separate workflow.
+    pub fn with_problem_sha256(mut self, problem_sha256: impl Into<String>) -> Self {
+        self.problem_sha256 = problem_sha256.into();
+        self
+    }
+
+    pub fn validate_problem_sha256(
+        &self,
+        expected: &str,
+    ) -> Result<(), FrozenSpinsCheckpointError> {
+        if self.problem_sha256.is_empty() || self.problem_sha256 != expected {
+            return Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_problem_hash_mismatch".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn validate_for_plan(
         &self,
         plan: &ResolvedFrozenSpinsPlanIR,
@@ -193,6 +230,19 @@ impl FrozenSpinsCheckpointV1 {
             || self.authored_fingerprints != plan.certificate.authored_fingerprints
         {
             return Err(FrozenSpinsCheckpointError::ConstraintIdentityMismatch);
+        }
+        let effective_epochs = self.effective_constraint_activation_epochs(plan);
+        let effective_active_ids = self.effective_active_constraint_ids(plan);
+        if effective_active_ids != plan.constraint_ids.iter().cloned().collect()
+            || effective_active_ids
+                .iter()
+                .any(|id| !effective_epochs.contains_key(id))
+            || effective_epochs.values().any(|epoch| *epoch == 0)
+            || self.effective_resolved_constraint_set_revision() == 0
+        {
+            return Err(FrozenSpinsCheckpointError::Invalid(
+                "frozen_spins_checkpoint_activation_set_mismatch".to_string(),
+            ));
         }
         if self.activation.topology_fingerprint != plan.grid_or_mesh_fingerprint {
             return Err(FrozenSpinsCheckpointError::TopologyMismatch {
@@ -249,14 +299,50 @@ impl FrozenSpinsCheckpointV1 {
         plan: &ResolvedFrozenSpinsPlanIR,
     ) -> Result<FrozenSpinsState, FrozenSpinsCheckpointError> {
         self.validate_for_plan(plan)?;
-        FrozenSpinsState::from_checkpoint(
+        FrozenSpinsState::from_checkpoint_with_activation_set(
             unpack_mask(&self.mask_bits, self.mask_len)?,
             self.reference.clone(),
             self.frozen_dof_count as usize,
             self.free_dof_count as usize,
-            self.activation.epoch,
+            self.effective_constraint_activation_epochs(plan),
+            self.effective_active_constraint_ids(plan),
+            self.effective_resolved_constraint_set_revision(),
         )
         .map_err(|error| FrozenSpinsCheckpointError::Invalid(error.to_string()))
+    }
+
+    fn effective_constraint_activation_epochs(
+        &self,
+        plan: &ResolvedFrozenSpinsPlanIR,
+    ) -> BTreeMap<String, u64> {
+        if self.constraint_activation_epochs.is_empty() {
+            plan.constraint_ids
+                .iter()
+                .cloned()
+                .map(|id| (id, self.activation.epoch))
+                .collect()
+        } else {
+            self.constraint_activation_epochs.clone()
+        }
+    }
+
+    fn effective_active_constraint_ids(
+        &self,
+        plan: &ResolvedFrozenSpinsPlanIR,
+    ) -> BTreeSet<String> {
+        if self.active_constraint_ids.is_empty() {
+            plan.constraint_ids.iter().cloned().collect()
+        } else {
+            self.active_constraint_ids.clone()
+        }
+    }
+
+    fn effective_resolved_constraint_set_revision(&self) -> u64 {
+        if self.resolved_constraint_set_revision == 0 {
+            self.activation.epoch
+        } else {
+            self.resolved_constraint_set_revision
+        }
     }
 }
 
@@ -377,12 +463,31 @@ mod tests {
             "cpu",
             "double",
         )
-        .unwrap();
+        .unwrap()
+        .with_problem_sha256("sha256:problem-a");
         let encoded = serde_json::to_vec(&checkpoint).unwrap();
         let decoded: FrozenSpinsCheckpointV1 = serde_json::from_slice(&encoded).unwrap();
+        assert!(decoded.validate_problem_sha256("sha256:problem-a").is_ok());
+        assert_eq!(
+            decoded
+                .validate_problem_sha256("sha256:problem-b")
+                .unwrap_err()
+                .to_string(),
+            "frozen_spins_checkpoint_problem_hash_mismatch"
+        );
         let restored = decoded.restore_engine_state(&plan).unwrap();
         assert_eq!(restored.mask(), state.mask());
         assert_eq!(restored.reference(), state.reference());
+        assert_eq!(decoded.constraint_activation_epochs["frozen"], 1);
+        assert_eq!(decoded.resolved_constraint_set_revision, 1);
+        assert_eq!(
+            restored.constraint_activation_epochs(),
+            state.constraint_activation_epochs()
+        );
+        assert_eq!(
+            restored.resolved_constraint_set_revision(),
+            state.resolved_constraint_set_revision()
+        );
         assert_eq!(decoded.step, 11);
         assert!(decoded.mask_bits.len() < decoded.mask_len);
     }

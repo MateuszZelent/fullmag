@@ -5765,6 +5765,7 @@ mod tests {
                         transfer_kind: "identity".to_string(),
                     },
                 ],
+                frozen_spins: None,
                 enable_exchange: true,
                 enable_demag: true,
                 fft: None,

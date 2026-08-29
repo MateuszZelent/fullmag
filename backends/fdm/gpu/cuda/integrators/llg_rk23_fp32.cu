@@ -35,6 +35,7 @@ extern double reduce_max_norm_fp32(Context &ctx, const void *vx, const void *vy,
 extern double reduce_max_cross_norm_fp32(Context &ctx,
     const void *ax, const void *ay, const void *az,
     const void *bx, const void *by, const void *bz, uint64_t n);
+extern void launch_project_frozen_fp32(Context &ctx, cudaStream_t stream);
 extern AdaptiveErrorPolicy reduce_adaptive_error_policy(
     Context &ctx,
     double *device_values,
@@ -161,6 +162,7 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
     bool allow_host_boundaries = true,
     cudaStream_t stream = nullptr)
 {
+    launch_project_frozen_fp32(ctx, stream);
     if (ctx.enable_exchange) {
         launch_exchange_field_fp32(ctx, stream);
         if (allow_host_boundaries && poll_interrupt(ctx)) {
@@ -206,6 +208,7 @@ static void finish_rk23_accepted_step_fp32(
     double dt_next,
     fullmag_fdm_step_stats *stats)
 {
+    launch_project_frozen_fp32(ctx, nullptr);
     context_stage_fsal_accepted_step(ctx, dt);
     context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
@@ -570,6 +573,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f,
                                        step_start_time + dt)) return;
             if (abort_step_from_tmp(ctx)) return;
+            launch_project_frozen_fp32(ctx, nullptr);
             context_stage_fsal_accepted_step(ctx, dt);
             context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
@@ -619,6 +623,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         }
 
         if (policy.accepted) {
+            launch_project_frozen_fp32(ctx, nullptr);
             context_stage_fsal_accepted_step(ctx, dt);
             context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
 

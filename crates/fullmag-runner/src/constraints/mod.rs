@@ -8,7 +8,10 @@
 mod activation;
 mod checkpoint;
 
-pub use activation::{FrozenSpinsActivation, FROZEN_SPINS_ACTIVATION_SCHEMA};
+pub use activation::{
+    FrozenSpinsActivation, FrozenSpinsActivationSet, FrozenSpinsActivationSnapshot,
+    FROZEN_SPINS_ACTIVATION_SCHEMA,
+};
 pub use checkpoint::{
     FrozenSpinsCheckpointError, FrozenSpinsCheckpointV1, FROZEN_SPINS_CHECKPOINT_SCHEMA,
 };
