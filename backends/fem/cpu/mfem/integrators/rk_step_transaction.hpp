@@ -19,12 +19,11 @@ using RkStepTransactionJournalPtr =
 /*
  * One native FEM explicit-RK call transaction.
  *
- * Host and device state are captured by begin(), with device copies ordered on
- * the solver compute stream. Unless commit() is called, rollback restores
+ * CPU state uses preallocated accepted/trial buffer generations and fixed-size
+ * metadata so begin(), commit(), and rollback do not copy O(N) host payloads.
+ * An allocated CUDA lane retains its device checkpoint plus the host mirror
+ * required by the GPU contract. Unless commit() is called, rollback restores
  * every published field/cache/controller/residency/counter owned by the step.
- * The host snapshot storage is owned by StepperWorkspace and recaptured in
- * place across public steps; the remaining deep-copy payload is intentionally
- * retained until the minimal-journal migration is independently qualified.
  */
 class RkStepTransaction {
 public:
@@ -40,6 +39,7 @@ public:
 
 private:
     friend struct RkStepTransactionJournal;
+    friend void rk_step_transaction_prepare_workspace(Context &ctx);
     struct Impl;
     Context *ctx_ = nullptr;
     RkStepTransactionJournal *journal_ = nullptr;
@@ -47,16 +47,17 @@ private:
 };
 
 /* Prepare or reset the reusable host journal during Context setup. */
-void rk_step_transaction_prepare_workspace(StepperWorkspace &workspace);
+void rk_step_transaction_prepare_workspace(Context &ctx);
 void rk_step_transaction_reset_workspace(StepperWorkspace &workspace) noexcept;
 
 /* Restore the device checkpoint owned by the active outer step transaction. */
 bool rk_restore_active_step_device_checkpoint(Context &ctx, std::string &error);
 
 /*
- * Per-adaptive-attempt snapshot for published host fields and physical caches.
- * Solver-work counters and the Brown raw draw deliberately remain cumulative
- * across retries; candidate fields and demag warm-start values do not.
+ * Per-adaptive-attempt cache invalidation journal. Published accepted state is
+ * owned by the outer transaction; rejected attempts invalidate reusable field
+ * caches and warm starts without copying their O(N) payloads. Solver-work
+ * counters and the Brown raw draw deliberately remain cumulative across retries.
  */
 class RkAttemptCacheSnapshot {
 public:

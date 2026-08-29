@@ -49,6 +49,7 @@ struct DemagFemBemWorkspace {
     int last_u2_iterations = 0;
     double last_u1_residual = 0.0;
     double last_u2_residual = 0.0;
+    bool fresh_initial_guess_required = false;
     FemBemHypreCache *u1_hypre_cache = nullptr;
     FemBemHypreCache *u2_hypre_cache = nullptr;
 };

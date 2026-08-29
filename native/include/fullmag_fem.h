@@ -1142,6 +1142,9 @@ typedef struct {
     uint64_t demag_potential_true_dof_count;
     double demag_variational_energy_joules;
     double demag_recovered_field_energy_joules;
+    /* Append-only CPU RK minimal-journal performance telemetry. */
+    uint64_t rk_transaction_cpu_snapshot_allocation_count;
+    uint64_t rk_transaction_peak_rss_bytes;
 } fullmag_fem_step_stats;
 
 /*

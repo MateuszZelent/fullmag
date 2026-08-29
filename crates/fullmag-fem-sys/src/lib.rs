@@ -1210,6 +1210,8 @@ pub struct fullmag_fem_step_stats {
     pub demag_potential_true_dof_count: u64,
     pub demag_variational_energy_joules: f64,
     pub demag_recovered_field_energy_joules: f64,
+    pub rk_transaction_cpu_snapshot_allocation_count: u64,
+    pub rk_transaction_peak_rss_bytes: u64,
 }
 
 pub const FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION: u32 = 1;

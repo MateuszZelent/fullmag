@@ -22,7 +22,6 @@ StepperWorkspace::StepperWorkspace(const StepperWorkspace &other)
     : allocated(other.allocated),
       dof_len(other.dof_len),
       stages(other.stages),
-      m_backup(other.m_backup),
       m_stage(other.m_stage),
       m_candidate(other.m_candidate),
       h_ex_tmp(other.h_ex_tmp),
@@ -47,7 +46,6 @@ StepperWorkspace &StepperWorkspace::operator=(const StepperWorkspace &other)
     allocated = other.allocated;
     dof_len = other.dof_len;
     stages = other.stages;
-    m_backup = other.m_backup;
     for (int i = 0; i < MAX_RK_STAGES; ++i) {
         k[i] = other.k[i];
     }
@@ -69,7 +67,6 @@ StepperWorkspace::StepperWorkspace(StepperWorkspace &&other) noexcept
     : allocated(other.allocated),
       dof_len(other.dof_len),
       stages(other.stages),
-      m_backup(std::move(other.m_backup)),
       m_stage(std::move(other.m_stage)),
       m_candidate(std::move(other.m_candidate)),
       h_ex_tmp(std::move(other.h_ex_tmp)),
@@ -94,7 +91,6 @@ StepperWorkspace &StepperWorkspace::operator=(StepperWorkspace &&other) noexcept
     allocated = other.allocated;
     dof_len = other.dof_len;
     stages = other.stages;
-    m_backup = std::move(other.m_backup);
     for (int i = 0; i < MAX_RK_STAGES; ++i) {
         k[i] = std::move(other.k[i]);
     }
@@ -175,7 +171,6 @@ void stepper_workspace_allocate(StepperWorkspace &ws, std::size_t dof_len, int s
     }
     ws.dof_len = dof_len;
     ws.stages = stages;
-    ws.m_backup.resize(dof_len, 0.0);
     for (int i = 0; i < stages; ++i) {
         ws.k[i].resize(dof_len, 0.0);
     }

@@ -204,7 +204,7 @@ bool build_context_from_plan(
         }
     }
     try {
-        rk_step_transaction_prepare_workspace(ctx.stepper.workspace);
+        rk_step_transaction_prepare_workspace(ctx);
     } catch (const std::bad_alloc &) {
         error = "RK step transaction journal allocation failed during setup";
         return false;

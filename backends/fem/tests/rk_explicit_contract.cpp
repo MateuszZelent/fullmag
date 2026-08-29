@@ -361,7 +361,7 @@ void workspace_allocates_common_buffers() {
     fullmag::fem::StepperWorkspace ws;
     fullmag::fem::stepper_workspace_allocate(ws, 9u, 3);
 
-    check(ws.m_backup.size() == 9u, "m backup allocated");
+    check(ws.m_candidate.size() == 9u, "private candidate allocated");
     check(ws.m_stage.size() == 9u, "stage magnetization allocated");
     check(ws.h_ex_tmp.size() == 9u, "exchange temp field allocated");
     check(ws.h_demag_tmp.size() == 9u, "demag temp field allocated");
@@ -449,37 +449,25 @@ void endpoint_cache_telemetry_has_public_versioned_abi() {
     }
 }
 
-void rk_transaction_payload_inventory_covers_owned_vectors() {
+void rk_transaction_uses_cpu_buffer_generations_without_payload_copies() {
     const std::string transaction = read_text_file(
         fem_source_root() / "cpu" / "mfem" / "integrators" / "rk_step_transaction.cpp");
     for (const char *field : {
-             "state.m_xyz",
-             "anisotropy.uniaxial_axis_x_field",
-             "anisotropy.h_uniaxial_xyz",
-             "magnetoelastic.strain_voigt",
-             "exchange.h_xyz",
-             "exchange.mfem.h_x",
-             "demag.h_xyz",
-             "demag.cached_xyz",
-             "zeeman.h_ext_xyz",
-             "zeeman.regional_drives",
-             "attempt_trace.records",
-             "hot_loop_violation_message",
-             "dmi.h_interfacial_xyz",
-             "effective_field.h_xyz",
-             "oersted.h_basis_per_ampere_xyz",
-             "stage_transport.torque_xyz_per_s",
-             "thermal_brown.xi_xyz",
-             "gpu_hybrid_stage_m",
-             "cpu_k0",
-             "poisson_solution",
-             "fem_bem_boundary",
-             "fem_bem_rhs",
+             "CpuPublishedFieldBuffers",
+             "cpu_buffers.swap_with(ctx)",
+             "ctx.state.m_xyz.swap(ctx.stepper.workspace.m_candidate)",
+             "ctx.stepper.workspace.fsal_valid = false",
+             "ctx.poisson_demag.fresh_initial_guess_required = true",
+             "workspace->fresh_initial_guess_required = true",
          }) {
         check(
             transaction.find(field) != std::string::npos,
-            "RK transaction payload inventory must name every owned dynamic vector");
+            "CPU RK transaction must use generation swaps and cache invalidation");
     }
+    check(
+        transaction.find("if (minimal_cpu_journal) {\n            return 0;") !=
+            std::string::npos,
+        "CPU RK transaction payload accounting must report zero copied bytes");
 }
 
 void fsal_reuse_requires_matching_source_state() {
@@ -1575,11 +1563,11 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
             stats.rejected_attempts,
         "adaptive CPU RK must restore one cache snapshot per rejected attempt");
     check(
-        ctx.stepper.transaction_telemetry.attempt_cache_snapshot_payload_bytes > 0u,
-        "adaptive CPU RK must report cache snapshot payload bytes");
+        ctx.stepper.transaction_telemetry.attempt_cache_snapshot_payload_bytes == 0u,
+        "adaptive CPU RK cache capture must copy zero payload bytes");
     check(
-        ctx.stepper.transaction_telemetry.attempt_cache_restore_payload_bytes > 0u,
-        "adaptive CPU RK retries must report restored cache payload bytes");
+        ctx.stepper.transaction_telemetry.attempt_cache_restore_payload_bytes == 0u,
+        "adaptive CPU RK cache restore must copy zero payload bytes");
     for (size_t attempt = 0; attempt < ctx.stepper.attempt_trace.records.size(); ++attempt) {
         const auto &record = ctx.stepper.attempt_trace.records[attempt];
         check(record.attempt == attempt, "adaptive CPU RK trace attempt indices must be contiguous");
@@ -1802,9 +1790,7 @@ void assert_published_rk_state_equal(
             before.stage_transport.stage_attempt_active,
         label);
     check_vector_near(ctx.thermal_brown.h_xyz, before.thermal.h_xyz, 0.0, label);
-    check(ctx.stepper.workspace.fsal_valid == before.fsal_valid, label);
-    check_vector_near(ctx.stepper.workspace.k[0], before.fsal_k0, 0.0, label);
-    check(ctx.poisson_demag.solves_current_step == before.demag_solves_current_step, label);
+    check(!ctx.stepper.workspace.fsal_valid, label);
     check(
         ctx.transfer_audit.audit.counters.h2d_bytes ==
             before.transfer_host_to_device,
@@ -1839,6 +1825,7 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
         ctx.poisson_demag.solves_current_step = 13;
         ctx.transfer_audit.audit.counters.h2d_bytes = 17;
         ctx.transfer_audit.audit.counters.d2h_bytes = 19;
+        fullmag::fem::rk_step_transaction_prepare_workspace(ctx);
         const auto before = capture_published_rk_state(ctx);
         ctx.stepper.failure_injection.next = failpoint;
 
@@ -1859,12 +1846,16 @@ void cpu_rk_failure_injection_rolls_back_complete_published_state() {
               "failed RK step must report one transaction rollback");
         check(stats.rk_transaction_rollback_count == 1u,
               "public failed RK stats must include the transaction rollback");
-        check(telemetry.step_transaction_host_snapshot_payload_bytes > 0u,
-              "failed RK step must report host snapshot payload bytes");
+        check(stats.rk_transaction_cpu_snapshot_allocation_count == 0u,
+              "public failed RK stats must report zero CPU snapshot allocations");
+        check(stats.rk_transaction_peak_rss_bytes > 0u,
+              "public failed RK stats must include peak RSS");
+        check(telemetry.step_transaction_host_snapshot_payload_bytes == 0u,
+              "failed CPU RK step must copy zero host snapshot payload bytes");
         check(
             telemetry.step_transaction_host_restore_payload_bytes ==
                 telemetry.step_transaction_host_snapshot_payload_bytes,
-            "outer RK rollback must report the restored host snapshot payload");
+            "CPU RK rollback must restore through swaps without copied payload");
         check(telemetry.step_transaction_device_snapshot_payload_bytes == 0u,
               "CPU RK transaction must not report a device snapshot payload");
         check(telemetry.step_transaction_device_restore_payload_bytes == 0u,
@@ -2018,6 +2009,7 @@ void cpu_rk_success_commits_state_and_completion_once() {
     set_step_profile(ctx, true);
     ctx.stage_completion.relax_stop.has_max_steps = 1;
     ctx.stage_completion.relax_stop.max_steps = 100;
+    fullmag::fem::rk_step_transaction_prepare_workspace(ctx);
     const uint64_t step_before = ctx.state.step_count;
     const double time_before = ctx.state.current_time;
     const uint32_t completion_samples_before = ctx.stage_completion.relax_energy_window_count;
@@ -2043,10 +2035,18 @@ void cpu_rk_success_commits_state_and_completion_once() {
           "public successful RK stats must include the committed transaction");
     check(stats.rk_transaction_rollback_count == 0u,
           "public successful RK stats must include zero transaction rollbacks");
-    check(telemetry.step_transaction_host_snapshot_payload_bytes > 0u,
-          "successful RK step must report host snapshot payload bytes");
+    check(stats.rk_transaction_cpu_snapshot_allocation_count == 0u,
+          "public successful RK stats must report zero CPU snapshot allocations");
+    check(stats.rk_transaction_peak_rss_bytes > 0u,
+          "public successful RK stats must include peak RSS");
+    check(telemetry.step_transaction_host_snapshot_payload_bytes == 0u,
+          "successful CPU RK step must copy zero host snapshot payload bytes");
     check(telemetry.step_transaction_host_restore_payload_bytes == 0u,
           "successful RK step must not report restored host payload bytes");
+    check(telemetry.step_transaction_cpu_snapshot_allocation_count == 0u,
+          "prepared successful CPU RK step must allocate zero snapshot buffers");
+    check(telemetry.step_transaction_peak_rss_bytes > 0u,
+          "profiled successful CPU RK step must publish peak RSS");
     check(
         telemetry.step_transaction_host_capture_wall_time_ns <=
             telemetry.step_transaction_begin_wall_time_ns,
@@ -2206,7 +2206,7 @@ int main() {
     workspace_allocates_common_buffers();
     endpoint_cache_telemetry_has_explicit_validity_dimensions();
     endpoint_cache_telemetry_has_public_versioned_abi();
-    rk_transaction_payload_inventory_covers_owned_vectors();
+    rk_transaction_uses_cpu_buffer_generations_without_payload_copies();
     fsal_reuse_requires_matching_source_state();
     rk_rhs_passes_explicit_stage_and_endpoint_times();
     gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal();

@@ -54,6 +54,11 @@ bool context_compute_demag_fem_bem(
         error = "FEM/BEM demag RHS assembly returned a null vector";
         return false;
     }
+    if (workspace->fresh_initial_guess_required) {
+        *workspace->u1 = 0.0;
+        *workspace->u2 = 0.0;
+        workspace->fresh_initial_guess_required = false;
+    }
     mfem::Vector rhs_neumann(rhs->Size());
     if (!prepare_demag_fem_bem_neumann_rhs(*rhs, rhs_neumann, error)) {
         return false;

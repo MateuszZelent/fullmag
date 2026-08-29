@@ -485,6 +485,10 @@ pub struct StepStats {
     pub rk_transaction_rollback_count: u64,
     #[serde(default)]
     pub rk_transaction_commit_count: u64,
+    #[serde(default)]
+    pub rk_transaction_cpu_snapshot_allocation_count: u64,
+    #[serde(default)]
+    pub rk_transaction_peak_rss_bytes: u64,
     /// Host time to enqueue the Fullmag→HYPRE dependency event.
     #[serde(default)]
     pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
@@ -836,6 +840,8 @@ impl Default for StepStats {
             rk_transaction_restore_bytes: 0,
             rk_transaction_rollback_count: 0,
             rk_transaction_commit_count: 0,
+            rk_transaction_cpu_snapshot_allocation_count: 0,
+            rk_transaction_peak_rss_bytes: 0,
             demag_hypre_wait_in_enqueue_wall_time_ns: 0,
             demag_hypre_host_api_wall_time_ns: 0,
             demag_hypre_device_elapsed_time_ns: 0,

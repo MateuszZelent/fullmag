@@ -131,6 +131,10 @@ void gpu_rk_publish_final_step_stats(
     stats.rk_transaction_restore_bytes = saturating_add(
         host_transaction.step_transaction_host_restore_payload_bytes,
         device_transaction.restore_bytes);
+    stats.rk_transaction_cpu_snapshot_allocation_count =
+        host_transaction.step_transaction_cpu_snapshot_allocation_count;
+    stats.rk_transaction_peak_rss_bytes =
+        host_transaction.step_transaction_peak_rss_bytes;
     stats.requested_omp_threads = ctx.cpu_threads.requested_omp_threads;
     stats.effective_omp_threads = ctx.cpu_threads.effective_omp_threads;
     stats.cpu_thread_cap_reason = ctx.cpu_threads.cap_reason;

@@ -15,7 +15,7 @@ namespace fullmag::fem {
  * Reusable explicit Runge-Kutta stepper workspace.
  *
  * The native FEM explicit RK path reuses these AOS buffers across accepted and
- * rejected steps: magnetization backup, stage RHS vectors, temporary effective
+ * rejected steps: private candidate magnetization, stage RHS vectors, temporary effective
  * fields, adaptive error estimates, the host transaction journal, and the FSAL
  * cache validity flag. The structure contains storage only; physical RHS
  * assembly and time integration live in the RK modules.
@@ -84,7 +84,6 @@ struct StepperWorkspace {
     bool allocated = false;
     std::size_t dof_len = 0;                       // n_nodes * 3
     int stages = 0;                                // currently allocated RK stages
-    std::vector<double> m_backup;                  // backup of m before stage loop
     std::vector<double> k[MAX_RK_STAGES];          // stage derivatives k_i
     std::vector<double> m_stage;                   // temp: m at stage evaluation point
     std::vector<double> m_candidate;               // private high-order candidate
@@ -154,7 +153,8 @@ struct RkAttemptTraceState {
  * checkpoint separately because the CUDA capture is asynchronous. Device
  * restore time includes the existing rollback stream synchronization. Payload
  * byte counters describe dynamic host buffers and device buffers actually
- * copied; they intentionally exclude fixed-size object metadata. Adaptive
+ * copied; CPU generation swaps therefore report zero host payload bytes and
+ * expose capacity-growing snapshot allocations separately. Adaptive
  * attempt-cache counters remain separate from the outer accepted-step
  * transaction so retry overhead is not mistaken for a committed step.
  *
@@ -184,6 +184,8 @@ struct RkTransactionTelemetryState {
     uint64_t step_transaction_device_restore_payload_bytes = 0;
     uint64_t attempt_cache_snapshot_payload_bytes = 0;
     uint64_t attempt_cache_restore_payload_bytes = 0;
+    uint64_t step_transaction_cpu_snapshot_allocation_count = 0;
+    uint64_t step_transaction_peak_rss_bytes = 0;
 };
 
 /*

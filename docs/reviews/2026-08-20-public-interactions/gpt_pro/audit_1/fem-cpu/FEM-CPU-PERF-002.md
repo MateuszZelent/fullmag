@@ -5,7 +5,7 @@
 | Lane | **FEM CPU** |
 | Priorytet | **P1** |
 | Klasa | `performance` |
-| Status | `implementation plan` |
+| Status | `implemented / qualification pending` |
 | Pewność ustalenia | `high` |
 | Audytowany snapshot | `04e362df5dd51b1e6acca3aab9033c8124d3d6d0` |
 | Zależności | `FEM-CPU-PERF-001` |
@@ -143,16 +143,45 @@ Minimalne wymagania:
 - [ ] Dokumentacja publiczna i qualification registry odzwierciedlają faktyczny status.
 - [ ] PR zawiera wynik wszystkich wymaganych testów i dokładne provenance.
 
-## 10. Ryzyka
+## 10. Stan implementacji — 2026-08-29
+
+Produkcyjna ścieżka FEM CPU używa dwóch prealokowanych generacji buforów pól.
+Accepted magnetization pozostaje w `Context`, candidate jest składany w
+`StepperWorkspace::m_candidate`, a commit publikuje go przez `swap`. Rollback
+odwraca swap magnetyzacji i generacji pól, przywraca stałorozmiarowy journal
+metadanych oraz unieważnia FSAL i warm-starty Poissona/FEM-BEM. Adaptive retry
+unieważnia cache bez kopiowania jego O(N) payloadu.
+
+Publiczna telemetryka `StepStats` i solver profile publikuje teraz osobno:
+
+- bajty host/device snapshot i restore;
+- liczbę alokacji buforów snapshotu CPU;
+- czas begin/capture/commit/rollback;
+- peak RSS procesu.
+
+Managed `just verify-fem-gpu-rk-transaction-contract` na CUDA 12.4 oraz
+loop-backed ext4 przeszedł 5/5 CTest, w tym pełny `fem_rk_explicit_contract`
+i fault-injection. `fullmag-fem-sys` przeszedł 41/41 testów ABI,
+`cargo check -p fullmag-runner` zakończył się powodzeniem, a wykonywane mixed-P1
+PGBB/NCG dla `exchange_only` i `device_hypre` zachowały istniejące budżety
+transferów. Test 32 kolejnych rollbacków dowodzi ponownego użycia tego samego
+journala, zera alokacji snapshotu CPU i zera kopiowanych bajtów hosta.
+
+Ustalenie pozostaje niekwalifikowane. Brakuje hash-bound publicznego E2E dla
+promowanego tuple capability, sprzętowego progu time-to-accuracy oraz szerokiej
+macierzy interakcji/integratorów. Z tego powodu nie zwiększono globalnego
+licznika zamkniętych findingów.
+
+## 11. Ryzyka
 
 - Niektóre solver caches mają skutki uboczne wymagające jawnej invalidacji.
 - Dwubuforowy Poisson zwiększy pamięć.
 
-## 11. Poza zakresem
+## 12. Poza zakresem
 
 - Crash-consistent persistence bez zewnętrznego checkpointu.
 
-## 12. Definition of Done
+## 13. Definition of Done
 
 Ustalenie `FEM-CPU-PERF-002` jest zamknięte dopiero wtedy, gdy:
 

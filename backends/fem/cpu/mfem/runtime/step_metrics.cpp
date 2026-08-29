@@ -206,6 +206,10 @@ void fill_step_profiler_timing_stats(
         transaction.step_transaction_rollback_count;
     stats.rk_transaction_commit_count =
         transaction.step_transaction_commit_count;
+    stats.rk_transaction_cpu_snapshot_allocation_count =
+        transaction.step_transaction_cpu_snapshot_allocation_count;
+    stats.rk_transaction_peak_rss_bytes =
+        transaction.step_transaction_peak_rss_bytes;
 
 #if FULLMAG_HAS_MFEM_STACK
     const auto &poisson = ctx.poisson_demag;

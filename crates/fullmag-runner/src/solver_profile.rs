@@ -256,6 +256,10 @@ pub struct SolverProfileStepSample {
     #[serde(default)]
     pub rk_transaction_commit_count: u64,
     #[serde(default)]
+    pub rk_transaction_cpu_snapshot_allocation_count: u64,
+    #[serde(default)]
+    pub rk_transaction_peak_rss_bytes: u64,
+    #[serde(default)]
     pub demag_hypre_wait_in_enqueue_wall_time_ns: u64,
     #[serde(default)]
     pub demag_hypre_host_api_wall_time_ns: u64,
@@ -624,6 +628,9 @@ impl SolverProfileStepSample {
             rk_transaction_restore_bytes: stats.rk_transaction_restore_bytes,
             rk_transaction_rollback_count: stats.rk_transaction_rollback_count,
             rk_transaction_commit_count: stats.rk_transaction_commit_count,
+            rk_transaction_cpu_snapshot_allocation_count: stats
+                .rk_transaction_cpu_snapshot_allocation_count,
+            rk_transaction_peak_rss_bytes: stats.rk_transaction_peak_rss_bytes,
             demag_hypre_wait_in_enqueue_wall_time_ns: stats
                 .demag_hypre_wait_in_enqueue_wall_time_ns,
             demag_hypre_host_api_wall_time_ns: stats.demag_hypre_host_api_wall_time_ns,
