@@ -600,7 +600,36 @@ def save_mesh_artifact(
     if target.suffix != ".fullmag-mesh":
         raise ValueError("native mesh artifacts must use .fullmag-mesh; use study.mesh.export() for .msh")
     target.parent.mkdir(parents=True, exist_ok=True)
-    mesh.validate_strict(require_positive_orientation=True)
+    # A mixed certificate already contains the complete per-cell geometry
+    # evidence (including orientation and degeneracy checks).  Re-running the
+    # Python ``validate_strict`` loop here makes persistence scale linearly in
+    # Python over every cell and turns a large SP4 save into a multi-minute
+    # operation.  Reuse the native certificate result when available; retain
+    # the Python validator for source-only runtimes and un-certified meshes.
+    native_certificate = None
+    certificate = mesh.mixed_layer_topology_certificate
+    if certificate is not None:
+        native_certificate = certify_mixed_mesh_arrays(
+            mesh=mesh,
+            metadata={"mesh_name": mesh_name},
+            certificate=certificate.to_dict(),
+            require_native=certification_bindings is not None,
+        )
+        if native_certificate is not None:
+            expected_fingerprint = mesh.topology_fingerprint_v3()
+            expected_payload = _certificate_payload_sha256(certificate)
+            if (
+                not native_certificate.validated_claimed_certificate
+                or native_certificate.topology_fingerprint_v3 != expected_fingerprint
+                or native_certificate.certificate_payload_sha256 != expected_payload
+            ):
+                if certification_bindings is not None:
+                    raise ValueError(
+                        "native mixed certificate result does not match mesh certificate"
+                    )
+                native_certificate = None
+    if native_certificate is None:
+        mesh.validate_strict(require_positive_orientation=True)
     mesh_ir = mesh.to_ir(mesh_name)
     if validate_mesh_ir(mesh_ir) is False:
         raise ValueError("mesh failed Rust MeshIR validation")
@@ -639,12 +668,14 @@ def save_mesh_artifact(
             raise ValueError(
                 "mixed certificate Gmsh provenance does not match v2 bindings"
             )
-        native = certify_mixed_mesh_arrays(
-            mesh=mesh,
-            metadata={"mesh_name": mesh_name},
-            certificate=certificate.to_dict(),
-            require_native=True,
-        )
+        native = native_certificate
+        if native is None:  # pragma: no cover - require_native contract
+            native = certify_mixed_mesh_arrays(
+                mesh=mesh,
+                metadata={"mesh_name": mesh_name},
+                certificate=certificate.to_dict(),
+                require_native=True,
+            )
         if native is None:  # pragma: no cover - require_native contract
             raise RuntimeError("native mixed mesh certifier is required")
         expected_payload = _certificate_payload_sha256(certificate)

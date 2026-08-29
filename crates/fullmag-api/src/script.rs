@@ -320,6 +320,7 @@ pub(crate) fn run_python_helper(
     }
 
     let pythonpath = real_root.join("packages").join("fullmag-py").join("src");
+    let python_extension_root = real_root.join(".fullmag").join("local");
     let fem_mesh_cache_dir = real_root
         .join(".fullmag")
         .join("local")
@@ -340,6 +341,10 @@ pub(crate) fn run_python_helper(
                     merged.push(if cfg!(windows) { ';' } else { ':' });
                     merged.push_str(existing);
                 }
+            }
+            if python_extension_root.is_dir() {
+                merged.push(if cfg!(windows) { ';' } else { ':' });
+                merged.push_str(&python_extension_root.display().to_string());
             }
             command.env("PYTHONPATH", merged);
         }

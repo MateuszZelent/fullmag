@@ -508,15 +508,24 @@ def _quality_document(mesh: object) -> dict[str, object]:
     certificate = mesh.mixed_layer_topology_certificate  # type: ignore[attr-defined]
     if certificate is None:
         raise ValueError("SP4 mixed mesh is missing its topology certificate")
-    from fullmag.meshing._gmsh_types import _mixed_same_side_two_owner_face_count
+
+    # An accepted certificate has zero total nonconforming faces, therefore
+    # the same-side component is necessarily zero as well.  Avoid rebuilding
+    # the Python face-adjacency dictionary for every large benchmark run; the
+    # native certifier already checked this component during certification.
+    same_side_two_owner_faces = 0
+    if not hasattr(certificate, "nonconforming_face_count") or certificate.nonconforming_face_count:
+        from fullmag.meshing._gmsh_types import _mixed_same_side_two_owner_face_count
+
+        same_side_two_owner_faces = _mixed_same_side_two_owner_face_count(
+            mesh, tolerance=certificate.plane_tolerance_m
+        )
 
     return {
         "requested_layers": certificate.requested_layer_count,
         "realized_layers": certificate.realized_layer_count,
         "non_manifold_faces": certificate.nonmanifold_face_count,
-        "same_side_two_owner_faces": _mixed_same_side_two_owner_face_count(
-            mesh, tolerance=certificate.plane_tolerance_m
-        ),
+        "same_side_two_owner_faces": same_side_two_owner_faces,
         "relative_volume_error": certificate.shared_domain_relative_volume_error,
         "scaled_jacobian_p05_by_family": dict(
             certificate.scaled_jacobian_p05_by_family
@@ -698,7 +707,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         arguments.mode == "baseline"
         and arguments.repair_method != PRODUCTION_REPAIR_METHOD
     ):
-        parser.error("baseline requires --repair-method Relocate3D")
+        parser.error("baseline requires --repair-method default")
     return arguments
 
 

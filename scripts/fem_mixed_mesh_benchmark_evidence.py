@@ -12,9 +12,9 @@ from typing import Mapping, Sequence
 SCHEMA = "fullmag.fem-mixed-mesh-performance.v2"
 SOURCE_IDENTITY_SCHEMA = "fullmag.source-snapshot.v2"
 GMSH_VERSION = "4.15.2"
-PRODUCTION_REPAIR_METHOD = "Relocate3D"
+PRODUCTION_REPAIR_METHOD = "default"
 REPAIR_METHODS = ("default", "Relocate3D", "Netgen")
-REPAIR_METHOD_OVERRIDES = (PRODUCTION_REPAIR_METHOD, "Netgen")
+REPAIR_METHOD_OVERRIDES = ("Relocate3D", "Netgen")
 CELL_FAMILIES = ("prism6", "pyramid5", "tet4")
 PHASE_TIMING_FIELDS = (
     "authoring_resolve_s",
@@ -567,7 +567,7 @@ def validate_evidence_document(document: Mapping[str, object]) -> None:
     if status not in {"baseline_recorded", "release_pass", "release_fail"}:
         raise ValueError("gate.status is unsupported")
     if status == "baseline_recorded" and scenario["repair_method"] != PRODUCTION_REPAIR_METHOD:
-        raise ValueError("baseline_recorded requires canonical repair method Relocate3D")
+        raise ValueError("baseline_recorded requires canonical repair method default")
     failures = gate["failures"]
     if not isinstance(failures, list) or any(
         not isinstance(failure, str) for failure in failures

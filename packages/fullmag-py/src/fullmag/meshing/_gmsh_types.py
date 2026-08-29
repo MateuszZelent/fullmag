@@ -1247,6 +1247,41 @@ class MeshData:
         certificate = self.mixed_layer_topology_certificate
         if certificate is None:
             return
+
+        # The production certificate is minted by the native mixed-mesh
+        # certifier when the managed runtime ships the optional extension.  A
+        # Python re-computation of every cell Jacobian is both redundant and
+        # prohibitively expensive for the large SP4 mesh (hundreds of
+        # thousands of cells).  Let the same native engine validate the
+        # complete certificate before falling back to the legacy Python audit
+        # used by source-only/development runtimes.
+        from fullmag import _core
+
+        native = _core.certify_mixed_mesh_arrays(
+            mesh=self,
+            metadata={},
+            certificate=certificate.to_dict(),
+            require_native=False,
+        )
+        if native is not None and native.validated_claimed_certificate:
+            expected_fingerprint = self.topology_fingerprint_v3()
+            if native.topology_fingerprint_v3 != expected_fingerprint:
+                raise ValueError(
+                    "native mixed layer topology certificate fingerprint is stale"
+                )
+            expected_payload = _certificate_payload_sha256(certificate)
+            if native.certificate_payload_sha256 != expected_payload:
+                raise ValueError(
+                    "native mixed layer topology certificate payload is stale"
+                )
+            return
+
+        # Keep the legacy Python audit as the diagnostic fallback for a
+        # rejected certificate.  Besides supporting source-only runtimes,
+        # this preserves the field-specific validation errors used by callers
+        # and tests.  The slow path is only entered for invalid/tampered
+        # certificates; valid production meshes return above.
+
         axis = {"x": 0, "y": 1, "z": 2}[certificate.resolved_sweep_direction]
         actual_topology_fingerprint_v3 = (
             self._validate_mixed_layer_topology_certificate_topology(certificate)
@@ -1403,7 +1438,16 @@ class MeshData:
             atol=max(tolerance, certificate.plane_tolerance_m),
         ):
             raise ValueError("mixed layer topology certificate magnetic planes are stale")
-        if _cell_counts_by_marker(self) != certificate.cell_family_counts_by_marker:
+        native_compact_workspace = (
+            workspace is not None
+            and not workspace.cell_nodes_per_ordinal
+            and not workspace.canonical_faces_per_cell
+        )
+        if (
+            not native_compact_workspace
+            and _cell_counts_by_marker(self)
+            != certificate.cell_family_counts_by_marker
+        ):
             raise ValueError("mixed layer topology certificate cell marker counts are stale")
         parts = certificate.cell_family_counts_by_part
         if set(parts) != {"magnetic", "transition_air", "far_air"}:
@@ -1421,7 +1465,11 @@ class MeshData:
             family != "tet4" for family in parts["far_air"]
         ):
             raise ValueError("mixed layer topology certificate transition partition is stale")
-        if _facet_counts_by_role_marker(self) != certificate.facet_family_counts_by_role_marker:
+        if (
+            not native_compact_workspace
+            and _facet_counts_by_role_marker(self)
+            != certificate.facet_family_counts_by_role_marker
+        ):
             raise ValueError("mixed layer topology certificate facet counts are stale")
 
     def topology_fingerprint_v2(self) -> str:
@@ -1770,6 +1818,18 @@ class MeshData:
         require_positive_orientation: bool = True,
         eps_volume: float | None = None,
     ) -> None:
+        # Certified mixed meshes already carry native per-cell Jacobian
+        # evidence.  Re-running this check in a Python loop is prohibitively
+        # expensive for the production SP4 mesh, while the native certifier
+        # performs the same geometry/degeneracy/orientation checks in Rayon.
+        # Keep the historical loop as a strict fallback for source-only
+        # runtimes, custom epsilon policies, and uncertified meshes.
+        if (
+            require_positive_orientation
+            and eps_volume is None
+            and self._native_mixed_certificate_valid()
+        ):
+            return
         self.validate()
         if not np.all(np.isfinite(self.nodes)):
             raise ValueError("mesh nodes must be finite")
@@ -1810,6 +1870,37 @@ class MeshData:
                     f"has negative {cell_type} Jacobian "
                     f"{float(np.min(determinants)):.6e}"
                 )
+
+    def _native_mixed_certificate_valid(self) -> bool:
+        """Return whether the native certifier accepted this exact mesh.
+
+        ``False`` deliberately means "use the reference Python path" rather
+        than treating an unavailable extension as an error.  Certificate
+        construction and ``MeshData`` initialization retain their existing
+        fail-closed behavior; this helper only avoids duplicating an already
+        accepted geometry pass in performance-sensitive serialization paths.
+        """
+        certificate = self.mixed_layer_topology_certificate
+        if certificate is None:
+            return False
+        try:
+            from fullmag import _core
+
+            native = _core.certify_mixed_mesh_arrays(
+                mesh=self,
+                metadata={},
+                certificate=certificate.to_dict(),
+                require_native=False,
+            )
+        except (ImportError, RuntimeError, TypeError, ValueError):
+            return False
+        if native is None or not native.validated_claimed_certificate:
+            return False
+        return (
+            native.topology_fingerprint_v3 == self.topology_fingerprint_v3()
+            and native.certificate_payload_sha256
+            == _certificate_payload_sha256(certificate)
+        )
 
     def oriented_copy(self) -> "MeshData":
         if self.n_elements == 0:
@@ -2216,8 +2307,14 @@ class MeshData:
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
-        mesh = self.oriented_copy()
-        mesh.validate_strict(require_positive_orientation=True)
+        # Native mixed certification proves positive orientation, so avoid a
+        # second Python pass over every cell merely to discover that no
+        # reorientation is needed.  Uncertified/source-only meshes retain the
+        # legacy orientation and strict-validation behavior.
+        native_mixed_valid = self._native_mixed_certificate_valid()
+        mesh = self if native_mixed_valid else self.oriented_copy()
+        if not native_mixed_valid:
+            mesh.validate_strict(require_positive_orientation=True)
         ir: dict[str, object] = {
             "mesh_name": mesh_name,
             "nodes": mesh.nodes.tolist(),
@@ -2574,6 +2671,70 @@ def _build_mixed_topology_workspace(
         }),
         magnetic_layer_coordinates=magnetic_planes,
         magnetic_layer_tolerance=magnetic_tolerance,
+    )
+
+
+def _build_mixed_topology_workspace_from_native(
+    mesh: MeshData,
+    *,
+    sweep_axis: int,
+    interface_marker: int,
+    topology_fingerprint_v3: str,
+    magnetic_layer_coordinates: tuple[float, ...],
+    magnetic_layer_tolerance: float,
+) -> _MixedTopologyWorkspace:
+    """Create the small binding workspace after native certification.
+
+    The native certifier already owns the expensive per-cell geometry and face
+    audit.  Python only needs an identity-bound carrier for certificate
+    construction; retaining millions of Python face/volume objects here would
+    turn a linear Rust pass back into the historical multi-minute bottleneck.
+    The full workspace builder remains the fail-closed fallback when the
+    optional extension is unavailable.
+    """
+    if not isinstance(topology_fingerprint_v3, str) or not topology_fingerprint_v3:
+        raise ValueError("native mixed topology fingerprint must be non-empty")
+    if sweep_axis not in (0, 1, 2):
+        raise ValueError("mixed topology workspace sweep axis must be 0, 1, or 2")
+    if not math.isfinite(float(magnetic_layer_tolerance)) or magnetic_layer_tolerance <= 0.0:
+        raise ValueError("native mixed topology plane tolerance must be positive")
+
+    # Pyramid base classification is the only topology detail consumed by the
+    # binding checks.  It is bounded by the transition shell, unlike the full
+    # cell/face adjacency workspace.
+    interface_quads = {
+        tuple(sorted(int(node) for node in mesh.facet_node_ids(ordinal)))
+        for ordinal, (family, role, marker) in enumerate(zip(
+            mesh.facet_types.tolist(),
+            mesh.facet_roles.tolist(),
+            mesh.boundary_markers.tolist(),
+            strict=True,
+        ))
+        if family == "quad4"
+        and role == "material_interface"
+        and int(marker) == interface_marker
+    }
+    pyramid_bases: dict[tuple[int, ...], bool] = {}
+    for ordinal in np.flatnonzero(mesh.cell_types == "pyramid5"):
+        cell = mesh.cell_node_ids(int(ordinal))
+        base = tuple(sorted(int(cell[index]) for index in (0, 1, 2, 3)))
+        pyramid_bases[base] = base in interface_quads
+
+    empty_f64 = np.zeros(0, dtype=np.float64)
+    empty_f64.setflags(write=False)
+    return _MixedTopologyWorkspace(
+        topology_fingerprint_v3=topology_fingerprint_v3,
+        sweep_axis=sweep_axis,
+        interface_marker=interface_marker,
+        cell_nodes_per_ordinal=(),
+        canonical_faces_per_cell=(),
+        face_owners=MappingProxyType({}),
+        cell_family_ordinals=MappingProxyType({}),
+        cell_signed_volumes=empty_f64,
+        cell_absolute_volumes=empty_f64,
+        pyramid_base_classification=MappingProxyType(pyramid_bases),
+        magnetic_layer_coordinates=tuple(float(value) for value in magnetic_layer_coordinates),
+        magnetic_layer_tolerance=float(magnetic_layer_tolerance),
     )
 
 
@@ -3492,6 +3653,33 @@ def _recompute_and_bind_mixed_certificate_evidence(
         airbox_bounds_max_m=airbox_bounds_max_m,
         workspace=workspace,
         _bound_context=context,
+    )
+    immutable_evidence = _immutable_mixed_certificate_evidence(evidence)
+    if not isinstance(immutable_evidence, Mapping):
+        raise TypeError("mixed certificate evidence must be a mapping")
+    carrier = _CanonicalMixedCertificateEvidence(
+        evidence=immutable_evidence,
+        context=context,
+        _capability=_CANONICAL_MIXED_EVIDENCE_CAPABILITY,
+    )
+    _MINTED_CANONICAL_MIXED_EVIDENCE.add(carrier)
+    return carrier
+
+
+def _bind_mixed_certificate_evidence(
+    mesh: MeshData,
+    evidence: Mapping[str, object],
+    *,
+    workspace: _MixedTopologyWorkspace,
+    _bound_context: _BoundMixedTopologyContext,
+) -> _CanonicalMixedCertificateEvidence:
+    """Bind evidence produced by an independently validated native engine."""
+    context = _require_mixed_topology_workspace(
+        mesh,
+        workspace,
+        sweep_axis=workspace.sweep_axis,
+        interface_marker=workspace.interface_marker,
+        _bound_context=_bound_context,
     )
     immutable_evidence = _immutable_mixed_certificate_evidence(evidence)
     if not isinstance(immutable_evidence, Mapping):

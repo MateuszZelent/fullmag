@@ -370,7 +370,8 @@ def _production_policy_identity() -> dict[str, object]:
 
 def _candidate_policy_identity(method: str) -> dict[str, object]:
     production_policy = _production_policy_identity()
-    if method == production_policy["method"]:
+    selected_method = "" if method == "default" else method
+    if selected_method == production_policy["method"]:
         return production_policy
     package_source = (
         Path(__file__).resolve().parents[1] / "packages" / "fullmag-py" / "src"
@@ -381,7 +382,6 @@ def _candidate_policy_identity(method: str) -> dict[str, object]:
         _qualification_mixed_tet_repair_algorithm_id,
     )
 
-    selected_method = "" if method == "default" else method
     return {
         "algorithm_id": _qualification_mixed_tet_repair_algorithm_id(
             selected_method,
@@ -455,8 +455,13 @@ def fastest_legal_method(candidates: Sequence[Mapping[str, object]]) -> str | No
     return str(min(legal, key=lambda row: float(row["p95_total_s"]))["method"])
 
 
+def _production_candidate_method() -> str:
+    policy_method = _production_policy_identity()["method"]
+    return "default" if policy_method == "" else str(policy_method)
+
+
 def decide_matrix_status(candidates: Sequence[Mapping[str, object]]) -> dict[str, object]:
-    production_method = str(_production_policy_identity()["method"])
+    production_method = _production_candidate_method()
     relocate = next(
         (candidate for candidate in candidates if candidate.get("method") == production_method),
         None,

@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openmpi-bin \
     pkg-config \
     python3 \
+    python3-dev \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
@@ -89,10 +90,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gfortran \
     libboost-dev \
+    libgl1 \
+    libglu1-mesa \
     libopenmpi-dev \
+    libsm6 \
+    libx11-6 \
+    libxcursor1 \
+    libxext6 \
+    libxft2 \
+    libxi6 \
+    libxinerama1 \
+    libxrender1 \
     openmpi-bin \
     pkg-config \
     python3 \
+    python3-dev \
     python3-pip \
     xz-utils \
     && architecture="$(dpkg --print-architecture)" \
@@ -109,6 +121,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir cmake==3.30.5
+RUN pip3 install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain stable
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
