@@ -5974,6 +5974,8 @@ mod tests {
             beta: 0.05,
             lande_g: Some(2.0),
         }];
+        let torque_payload = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize canonical torque payload");
         problem.physics_graph = Some(serde_json::json!({
             "schema_version": "physics_graph.v1",
             "scene_revision": 49,
@@ -5987,7 +5989,7 @@ mod tests {
                 "authored_state": "authored",
                 "capability": "reference_executable",
                 "source_path": "/spin_torque_modules/0",
-                "family_payload": {"kind": "zhang_li"}
+                "family_payload": torque_payload
             }],
             "edges": []
         }));
@@ -6035,6 +6037,8 @@ mod tests {
         } else {
             panic!("exact hysteresis fixture must have a settle sequence")
         }
+        let torque_payload = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize canonical torque payload");
         problem.physics_graph = Some(serde_json::json!({
             "schema_version": "physics_graph.v1",
             "scene_revision": 51,
@@ -6049,7 +6053,7 @@ mod tests {
                     "authored_state": "authored",
                     "capability": "reference_executable",
                     "source_path": "/spin_torque_modules/0",
-                    "family_payload": {"kind": "zhang_li"}
+                    "family_payload": torque_payload
                 },
                 {
                     "id": "drive:global",

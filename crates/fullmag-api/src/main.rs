@@ -2403,8 +2403,7 @@ async fn main() {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     let repo_root = repo_root();
-    let current_workspace_root = repo_root
-        .join(".fullmag")
+    let current_workspace_root = crate::script::state_root(&repo_root)
         .join("local-live")
         .join("current");
     let static_web_root = resolve_static_web_root(&repo_root);

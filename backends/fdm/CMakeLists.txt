@@ -233,7 +233,13 @@ if(FULLMAG_ENABLE_CUDA)
     target_include_directories(fdm_frozen_spins_cuda_runtime_contract PRIVATE
         ${CMAKE_SOURCE_DIR}/include
     )
-    target_link_libraries(fdm_frozen_spins_cuda_runtime_contract PRIVATE fullmag_fdm)
+    target_compile_definitions(fdm_frozen_spins_cuda_runtime_contract PRIVATE
+        FULLMAG_HAS_CUDA=1
+    )
+    target_link_libraries(fdm_frozen_spins_cuda_runtime_contract PRIVATE
+        fullmag_fdm
+        CUDA::cudart
+    )
     add_test(NAME fdm_frozen_spins_cuda_runtime_contract COMMAND fdm_frozen_spins_cuda_runtime_contract)
 endif()
 

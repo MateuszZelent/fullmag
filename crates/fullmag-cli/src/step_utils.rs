@@ -5185,6 +5185,7 @@ mod tests {
                 demag: Some(fullmag_ir::FdmDemagHintsIR {
                     strategy: "multilayer_convolution".to_string(),
                     mode: "two_d_stack".to_string(),
+                    fft_backend: "auto".to_string(),
                     common_cells: None,
                     common_cells_xy: None,
                     common_cell_size: None,

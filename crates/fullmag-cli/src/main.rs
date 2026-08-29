@@ -353,7 +353,10 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
     };
     use std::collections::HashMap;
 
-    let default_store_root = std::path::PathBuf::from(".fullmag/local-live/session-store");
+    let default_store_root =
+        crate::control_room::runtime_state_root(&crate::control_room::repo_root())
+            .join("local-live")
+            .join("session-store");
 
     match cmd {
         SessionSubcommand::Save {

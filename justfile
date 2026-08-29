@@ -31,11 +31,29 @@ windows-build backend="fdm" device="cpu" frontend="dev":
     fi
 
 ensure-python:
-    mkdir -p "{{repo_root}}/.fullmag/local"
-    if [ ! -x "{{repo_python}}" ]; then if ! python3 -m venv "{{repo_root}}/.fullmag/local/python"; then echo "cannot create the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; fi; fi
-    if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then if ! "{{repo_python}}" -m ensurepip --upgrade; then python3 scripts/bootstrap_fullmag_python_pip.py "{{repo_python}}" --wheel-dir /usr/share/python-wheels || { echo "cannot bootstrap pip in the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; }; fi; fi
-    if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then echo "cannot bootstrap pip in the Fullmag Python environment; ensurepip completed without a usable pip module" >&2; exit 1; fi
-    "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'pytest>=9,<10'
+    @set -euo pipefail; \
+      mkdir -p "{{repo_root}}/.fullmag/local"; \
+      if [ ! -x "{{repo_python}}" ]; then \
+        if ! python3 -m venv "{{repo_root}}/.fullmag/local/python"; then \
+          echo "cannot create the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; \
+        fi; \
+      fi; \
+      if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then \
+        if ! "{{repo_python}}" -m ensurepip --upgrade; then \
+          python3 scripts/bootstrap_fullmag_python_pip.py "{{repo_python}}" --wheel-dir /usr/share/python-wheels || { echo "cannot bootstrap pip in the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; }; \
+        fi; \
+      fi; \
+      if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then \
+        echo "cannot bootstrap pip in the Fullmag Python environment; ensurepip completed without a usable pip module" >&2; exit 1; \
+      fi; \
+      stamp="{{repo_root}}/.fullmag/local/python/.dependencies-stamp"; \
+      fingerprint="$( { sha256sum "{{repo_root}}/packages/fullmag-py/pyproject.toml" "{{repo_root}}/packages/fullmag-py/uv.lock" 2>/dev/null || true; "{{repo_python}}" --version; } )"; \
+      if [ -f "$stamp" ] && cmp -s <(printf '%s\n' "$fingerprint") "$stamp"; then \
+        echo "Reusing Fullmag Python dependencies (stamp unchanged)."; \
+      else \
+        "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7' 'pytest>=9,<10'; \
+        printf '%s\n' "$fingerprint" > "$stamp"; \
+      fi
 
 verify-relaxation-capability-evidence:
     just ensure-python
@@ -49,7 +67,7 @@ build-static-control-room:
     make web-build-static-if-needed
 
 build-desktop:
-    cargo build --release -p fullmag-desktop
+    cargo build --locked --release -p fullmag-desktop
     mkdir -p "{{local_bin}}"
     cp target/release/fullmag-ui "{{local_bin}}/"
 
@@ -88,15 +106,15 @@ package target="fullmag":
     else echo "unknown package target: {{target}}" >&2; echo "supported targets: fullmag, fullmag-host, fullmag-portable" >&2; exit 1; fi
 
 check:
-    cargo +nightly check --workspace --exclude fullmag-desktop
+    cargo +nightly check --locked --workspace --exclude fullmag-desktop
 
 test:
-    cargo +nightly test --workspace --exclude fullmag-desktop
+    cargo +nightly test --locked --workspace --exclude fullmag-desktop
 
 run-topological-charge-skyrmion-smoke device="cpu":
     mode="{{device}}"; \
     case "$mode" in cpu|CPU|0) ;; *) echo "unsupported topological-charge smoke device: $mode (expected cpu)" >&2; exit 2 ;; esac; \
-    cargo test -p fullmag-api analysis::topological_charge::tests::analytic_neel_skyrmion_integrates_to_unit_charge_with_known_orientation -- --exact
+    cargo test --locked -p fullmag-api analysis::topological_charge::tests::analytic_neel_skyrmion_integrates_to_unit_charge_with_known_orientation -- --exact
 
 verify-topological-charge-fdm-runtime api_port="18187":
     just ensure-python
@@ -171,7 +189,7 @@ verify-fem-meshing-production:
 verify-fem-mixed-p1-capability-contract:
     python3 scripts/validate_mixed_p1_capability_contract.py
     python3 -m unittest scripts.test_validate_mixed_p1_capability_contract
-    cargo test -p fullmag-runner --no-default-features capabilities::tests::
+    cargo test --locked -p fullmag-runner --no-default-features capabilities::tests::
 
 verify-fem-mixed-prism-airbox-runtime:
     just ensure-managed-fem-runtime
@@ -256,34 +274,34 @@ verify-fem-mixed-p1-uniaxial-native-contract:
 # MESH-GATE-002: cross-backend PBC matrix contract. Managed runtime evidence
 # is deliberately supplied by the case artifacts, not inferred by this recipe.
 verify-fdm-pbc-production:
-    cargo test -p fullmag-engine --lib periodic --no-fail-fast
-    cargo test -p fullmag-plan --lib fdm_pbc --no-fail-fast
-    cargo test -p fullmag-runner --lib stale_resolved_periodic_workspace --no-fail-fast
+    cargo test --locked -p fullmag-engine --lib periodic --no-fail-fast
+    cargo test --locked -p fullmag-plan --lib fdm_pbc --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib stale_resolved_periodic_workspace --no-fail-fast
     python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
 
 # M3 CPU reference gate. The public Python -> ProblemIR -> planner -> runner
 # workload proves exact 300 K continuation through the built resume-json process.
 verify-fdm-transient-spin-m3-reference:
-    cargo build -p fullmag-cli --bin fullmag
+    cargo build --locked -p fullmag-cli --bin fullmag
     mkdir -p /tmp/fullmag-zfn2-build/m3-pytest; \
     fullmag_bin="${CARGO_TARGET_DIR:-target}/debug/fullmag"; \
     TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
       python3 scripts/verify_fdm_transient_spin_m3_public_e2e.py --fullmag "$fullmag_bin"
-    cargo test -p fullmag-engine --lib transient_spin --no-fail-fast
-    cargo test -p fullmag-runner --lib coupled_ars232 --no-fail-fast
-    cargo test -p fullmag-runner --lib adaptive_norm_detects_each_dimensional_observable_family --no-fail-fast
-    cargo test -p fullmag-runner --lib coupled_trial_failures_rollback_llg_transport_and_thermal_state --no-fail-fast
-    cargo test -p fullmag-runner --lib public_reference_resume_matches_uninterrupted_runner_artifact --no-fail-fast
-    cargo test -p fullmag-runner --lib coupled_checkpoint_restore_rejects_incomplete_state_without_mutating_workflow --no-fail-fast
-    cargo test -p fullmag-api session_checkpoint_create_captures_live_magnetization --no-fail-fast
-    cargo test -p fullmag-api legacy_checkpoint_fails_closed_for_active_coupled_m3_session --no-fail-fast
-    cargo test -p fullmag-api coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation --no-fail-fast
-    cargo test -p fullmag-plan --lib resolves_transient_fdm_cpu_double_with_physical_capacitance_and_versions --no-fail-fast
-    cargo test -p fullmag-plan --lib transient_reference_execution_rejects_non_strict_mode --no-fail-fast
-    cargo test -p fullmag-runner --lib coupled_checkpoint_rejects_each_public_identity_mismatch --no-fail-fast
-    cargo test -p fullmag-api api_rejects_missing_or_malformed_coupled_identity_classes --no-fail-fast
-    cargo test -p fullmag-cli cli_parses_exact_coupled_checkpoint_resume_entrypoint --no-fail-fast
-    cargo test -p fullmag-cli cli_resume_unwraps_only_the_exact_backend_state_envelope --no-fail-fast
+    cargo test --locked -p fullmag-engine --lib transient_spin --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib coupled_ars232 --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib adaptive_norm_detects_each_dimensional_observable_family --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib coupled_trial_failures_rollback_llg_transport_and_thermal_state --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib public_reference_resume_matches_uninterrupted_runner_artifact --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib coupled_checkpoint_restore_rejects_incomplete_state_without_mutating_workflow --no-fail-fast
+    cargo test --locked -p fullmag-api session_checkpoint_create_captures_live_magnetization --no-fail-fast
+    cargo test --locked -p fullmag-api legacy_checkpoint_fails_closed_for_active_coupled_m3_session --no-fail-fast
+    cargo test --locked -p fullmag-api coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation --no-fail-fast
+    cargo test --locked -p fullmag-plan --lib resolves_transient_fdm_cpu_double_with_physical_capacitance_and_versions --no-fail-fast
+    cargo test --locked -p fullmag-plan --lib transient_reference_execution_rejects_non_strict_mode --no-fail-fast
+    cargo test --locked -p fullmag-runner --lib coupled_checkpoint_rejects_each_public_identity_mismatch --no-fail-fast
+    cargo test --locked -p fullmag-api api_rejects_missing_or_malformed_coupled_identity_classes --no-fail-fast
+    cargo test --locked -p fullmag-cli cli_parses_exact_coupled_checkpoint_resume_entrypoint --no-fail-fast
+    cargo test --locked -p fullmag-cli cli_resume_unwraps_only_the_exact_backend_state_envelope --no-fail-fast
     TMPDIR=/tmp/fullmag-zfn2-build/m3-pytest PYTHONPATH=packages/fullmag-py/src \
       python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
 
@@ -974,9 +992,11 @@ verify-fdm-gpu-m1-layout-abi-contract:
 
 verify-frozen-spins-fdm-cuda:
     docker compose --profile fem-gpu run --rm --no-deps -T \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -c 'set -euo pipefail; cd /workspace; build_dir="/tmp/fullmag-fdm-frozen-spins-contract"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; evidence="$build_dir/fdm-frozen-spins-cuda-runtime-evidence-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm frozen_spins_abi_contract fdm_frozen_spins_cuda_runtime_contract; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^(fdm_frozen_spins_abi_contract|fdm_frozen_spins_cuda_runtime_contract)$"; FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_frozen_spins_cuda_runtime_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"; cargo test -p fullmag-fdm-sys frozen_spins_v1_is_an_append_only_nullable_plan_extension -- --nocapture; cargo test -p fullmag-runner --features cuda native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane -- --nocapture; cargo test -p fullmag-runner constraints::checkpoint -- --nocapture; cargo test -p fullmag-runner fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture -- --nocapture'
+      fem-gpu bash -c 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-frozen-spins-contract"; evidence_dir="/workspace/artifacts/qualification/frozen-spins/fdm-cuda"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target" "$evidence_dir"; evidence="$evidence_dir/fdm-frozen-spins-cuda-runtime-evidence-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm frozen_spins_abi_contract fdm_frozen_spins_cuda_runtime_contract; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^(fdm_frozen_spins_abi_contract|fdm_frozen_spins_cuda_runtime_contract)$"; FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_frozen_spins_cuda_runtime_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"; cargo test -p fullmag-fdm-sys frozen_spins_v1_is_an_append_only_nullable_plan_extension -- --nocapture; cargo test -p fullmag-runner --features cuda native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane -- --nocapture; cargo test -p fullmag-runner constraints::checkpoint -- --nocapture; cargo test -p fullmag-runner fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture -- --nocapture'
 
 verify-frozen-spins-v1-scope:
     python3 scripts/validate_frozen_spins_v1_scope.py
@@ -4739,11 +4759,27 @@ run-headless-bench script:
 
 fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
-      build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; \
+      build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
         [ -n "$raw" ] || continue; \
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
         key_lc="$(printf "%s" "$key" | tr "[:upper:]" "[:lower:]")"; value_lc="$(printf "%s" "$value" | tr "[:upper:]" "[:lower:]")"; \
+        option_id=""; \
+        case "$key_lc" in \
+          --build|build|true|false) option_id="build" ;; \
+          --windows|windows) option_id="windows" ;; \
+          --force|force) option_id="force" ;; \
+          --frontend|frontend|ui|--static|static|--dev|dev) option_id="frontend" ;; \
+          --backend|--discretization|--engine|backend|discretization|engine|--fem|fem|--fdm|fdm|--auto|auto) option_id="backend" ;; \
+          --device|--execution|device|execution|--gpu|gpu|--cpu|cpu) option_id="device" ;; \
+          --mode|--run_mode|mode|run_mode|--interactive|-i|interactive|--headless|headless) option_id="run_mode" ;; \
+          --script|script) option_id="script" ;; \
+          --web_port|--web-port|--port|web_port|web-port|port) option_id="web_port" ;; \
+        esac; \
+        if [ -n "$option_id" ]; then \
+          case ",$seen_options," in *",$option_id,"*) echo "duplicate fullmag option: $raw" >&2; exit 2 ;; esac; \
+          seen_options="${seen_options},${option_id}"; \
+        fi; \
         case "$key_lc" in \
           --build|build) build="$value_lc" ;; \
           --windows|windows) windows="$value_lc" ;; \
@@ -4764,7 +4800,11 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
           --interactive|-i|interactive) run_mode="interactive" ;; \
           --headless|headless) run_mode="headless" ;; \
           true|false) build="$key_lc" ;; \
-          *) script="$raw" ;; \
+          *) \
+            case "$raw" in -*|*=*) echo "unknown fullmag option: $raw" >&2; exit 2 ;; esac; \
+            if [ -n "$script" ]; then echo "multiple script paths supplied: $script and $raw" >&2; exit 2; fi; \
+            case "$raw" in *.py|*/*|*\\*) script="$raw" ;; *) echo "unknown fullmag argument: $raw (expected a .py script path or a named option)" >&2; exit 2 ;; esac; \
+            ;; \
         esac; \
       done; \
       case "$build" in 1|true|yes|on) build="true" ;; 0|false|no|off) build="false" ;; *) echo "unsupported build value: $build (expected true or false)" >&2; exit 2 ;; esac; \

@@ -351,6 +351,60 @@ fn packaged_install_root(self_exe: &Path) -> Option<PathBuf> {
         .then_some(install_root)
 }
 
+/// Return the writable per-user state directory used by the launcher.
+///
+/// Source checkouts keep the historical `.fullmag` directory in the checkout,
+/// while installed bundles must never try to write beside binaries under
+/// `Program Files` (or another read-only prefix).  `FULLMAG_STATE_ROOT` is an
+/// explicit escape hatch for managed deployments and tests.
+pub(crate) fn runtime_state_root(root: &Path) -> PathBuf {
+    if let Some(configured) = std::env::var_os("FULLMAG_STATE_ROOT") {
+        let configured = PathBuf::from(configured);
+        if !configured.as_os_str().is_empty() {
+            return configured;
+        }
+    }
+
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|path| packaged_install_root(&path))
+        .is_some_and(|install_root| install_root == root);
+    if !packaged {
+        return root.join(".fullmag");
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(local_app_data).join("Fullmag");
+        }
+        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+            return PathBuf::from(user_profile)
+                .join("AppData")
+                .join("Local")
+                .join("Fullmag");
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Some(state_home) = std::env::var_os("XDG_STATE_HOME") {
+            return PathBuf::from(state_home).join("fullmag");
+        }
+        if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+            return PathBuf::from(data_home).join("fullmag");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("state")
+                .join("fullmag");
+        }
+    }
+
+    std::env::temp_dir().join("fullmag")
+}
+
 #[cfg(test)]
 mod control_room_guard_tests {
     use std::io::{Read, Write};
@@ -360,7 +414,6 @@ mod control_room_guard_tests {
     use std::thread;
     use std::time::Duration;
 
-    #[cfg(windows)]
     use super::command_exists;
     use super::{
         api_openapi_response_is_compatible, browser_control_room_assets, browser_open_args,
@@ -523,7 +576,11 @@ mod control_room_guard_tests {
             identity.worktree_state,
             identity.source_snapshot_sha256,
         );
-        assert!(api_openapi_response_is_compatible(&current));
+        if identity.source_snapshot_sha256 == "unknown" {
+            assert!(!api_openapi_response_is_compatible(&current));
+        } else {
+            assert!(api_openapi_response_is_compatible(&current));
+        }
 
         let foreign = current.replacen(identity.git_commit, &"0".repeat(40), 1);
         assert!(!api_openapi_response_is_compatible(&foreign));
@@ -545,7 +602,7 @@ mod control_room_guard_tests {
     }
 
     #[test]
-    fn startup_wait_accepts_health_ready_api_before_contract_probe_finishes() {
+    fn startup_wait_rejects_health_only_api_without_contract() {
         let listener = TcpListener::bind((std::net::Ipv4Addr::from(super::LOOPBACK_V4_OCTETS), 0))
             .expect("readiness fixture should bind");
         listener
@@ -571,10 +628,14 @@ mod control_room_guard_tests {
                 }
             }
         });
-        let mut child = TestCommand::new("sh")
-            .args(["-c", "sleep 2"])
-            .spawn()
-            .expect("readiness fixture child should start");
+        let mut child = if cfg!(windows) {
+            TestCommand::new("cmd.exe")
+                .args(["/C", "ping -n 3 127.0.0.1 > NUL"])
+                .spawn()
+        } else {
+            TestCommand::new("sh").args(["-c", "sleep 2"]).spawn()
+        }
+        .expect("readiness fixture child should start");
 
         let result = wait_for_api_ready(port, &mut child, Duration::from_millis(500));
 
@@ -584,18 +645,15 @@ mod control_room_guard_tests {
         let _ = server.join();
 
         assert!(
-            result.is_ok(),
-            "health-ready API must not be blocked by the optional contract probe: {result:?}"
+            result.is_err(),
+            "health-only API must not be accepted as a compatible runtime: {result:?}"
         );
     }
 
     #[test]
     fn packaged_install_root_is_derived_from_bin_executable() {
-        let root = std::env::temp_dir().join(format!(
-            "fullmag-packaged-root-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
+        let root =
+            std::env::temp_dir().join(format!("fullmag-packaged-root-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("bin")).unwrap();
         std::fs::create_dir_all(root.join(".fullmag")).unwrap();
@@ -625,9 +683,8 @@ mod control_room_guard_tests {
 
         let error = browser_control_room_assets(&root, true).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("apps/control-room/dev-server.mjs"));
+        let error_text = error.to_string().replace('\\', "/");
+        assert!(error_text.contains("apps/control-room/dev-server.mjs"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -649,6 +706,27 @@ mod control_room_guard_tests {
         assert_eq!(web_dir, root.join("apps/control-room"));
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn packaged_static_control_room_uses_bundled_web_tree() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-control-room-packaged-v2-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let web = root.join(".fullmag").join("local").join("web");
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::write(web.join("index.html"), "static").unwrap();
+        std::fs::write(web.join("dev-server.mjs"), "server").unwrap();
+
+        let (web_dir, static_root, _, available) =
+            browser_control_room_assets(&root, false).unwrap();
+
+        assert_eq!(web_dir, web);
+        assert_eq!(static_root, web);
+        assert_eq!(available, command_exists("node"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 pub(crate) struct ControlPlaneReady {
@@ -665,8 +743,29 @@ fn browser_control_room_assets(
 ) -> Result<(PathBuf, PathBuf, PathBuf, bool)> {
     // The v2 Control Room is the only supported runtime frontend. Legacy paths
     // remain reference material and must never be selected by the launcher.
-    let v2_dir = root.join("apps").join("control-room");
-    let dev_server = v2_dir.join("dev-server.mjs");
+    let mut v2_dir = root.join("apps").join("control-room");
+    let mut dev_server = v2_dir.join("dev-server.mjs");
+    // Installed bundles keep only the exported web tree.  The small Node
+    // wrapper is staged beside it so static Control Room startup does not
+    // depend on the build checkout being present on the target machine.
+    if !dev_mode && !dev_server.is_file() {
+        for candidate in [
+            root.join("web").join("dev-server.mjs"),
+            root.join(".fullmag")
+                .join("local")
+                .join("web")
+                .join("dev-server.mjs"),
+        ] {
+            if candidate.is_file() {
+                v2_dir = candidate
+                    .parent()
+                    .expect("dev-server candidate should have a parent")
+                    .to_path_buf();
+                dev_server = candidate;
+                break;
+            }
+        }
+    }
     if dev_mode && !dev_server.is_file() {
         bail!(
             "canonical Control Room frontend is unavailable: expected {}",
@@ -674,7 +773,11 @@ fn browser_control_room_assets(
         );
     }
     let repo_local_static_web_root = root.join(".fullmag").join("local").join("web");
-    let repo_built_static_web_root = v2_dir.join("out");
+    let repo_built_static_web_root = if v2_dir.ends_with("web") {
+        v2_dir.clone()
+    } else {
+        v2_dir.join("out")
+    };
     let static_web_root = if repo_local_static_web_root.join("index.html").is_file() {
         repo_local_static_web_root
     } else {
@@ -696,17 +799,31 @@ fn browser_control_room_assets(
 }
 
 pub(crate) fn bootstrap_control_plane(
-    _session_id: &str,
+    session_id: &str,
     dev_mode: bool,
     requested_port: Option<u16>,
     live_workspace: Option<&LocalLiveWorkspace>,
 ) -> Result<ControlPlaneReady> {
     let root = repo_root();
-    let log_dir = root.join(".fullmag").join("logs");
-    let url_file = root.join(".fullmag").join("control-room-url.txt");
-    let (web_dir, static_web_root, mode_file, external_control_room_available) =
+    let state_root = runtime_state_root(&root);
+    let log_dir = state_root.join("logs");
+    let url_file = state_root.join("control-room-url.txt");
+    let log_suffix = session_id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        .collect::<String>();
+    let log_suffix = if log_suffix.is_empty() {
+        "session".to_string()
+    } else {
+        log_suffix
+    };
+    let api_log_path = log_dir.join(format!("fullmag-api-{log_suffix}.log"));
+    let web_log_path = log_dir.join(format!("control-room-{log_suffix}.log"));
+    let (web_dir, static_web_root, _mode_file, external_control_room_available) =
         browser_control_room_assets(&root, dev_mode)?;
+    let mode_file = state_root.join("control-room-mode.txt");
     fs::create_dir_all(&log_dir)?;
+    prune_control_room_logs(&log_dir);
 
     let stream_api_logs_to_terminal = dev_mode
         || std::env::var("FULLMAG_API_LOG_TO_TERMINAL")
@@ -736,21 +853,20 @@ pub(crate) fn bootstrap_control_plane(
             TerminalLogSource::Api,
             format!("starting fullmag-api on :{} ...", api_port()),
         );
-        let api_log = fs::File::create(log_dir.join("fullmag-api.log"))
-            .context("failed to create api log")?;
+        let api_log = fs::File::create(&api_log_path).context("failed to create api log")?;
         let api_err = api_log.try_clone()?;
         if stream_api_logs_to_terminal {
             terminal_logger().emit(
                 TerminalLogSource::Api,
-                "streaming fullmag-api logs to terminal in compact labeled mode (full log still saved to .fullmag/logs/fullmag-api.log)",
+                format!(
+                    "streaming fullmag-api logs to terminal in compact labeled mode (full log still saved to {})",
+                    api_log_path.display()
+                ),
             );
         } else {
             terminal_logger().emit(
                 TerminalLogSource::Api,
-                format!(
-                    "fullmag-api logs: {}",
-                    log_dir.join("fullmag-api.log").display()
-                ),
+                format!("fullmag-api logs: {}", api_log_path.display()),
             );
         }
 
@@ -805,8 +921,8 @@ pub(crate) fn bootstrap_control_plane(
                 TerminalLogSource::Web,
                 format!("starting control room on :{} ...", web_port),
             );
-            let web_log = fs::File::create(log_dir.join("control-room.log"))
-                .context("failed to create frontend log")?;
+            let web_log =
+                fs::File::create(&web_log_path).context("failed to create frontend log")?;
             let web_err = web_log.try_clone()?;
             let terminal_log_file = if stream_web_logs_to_terminal {
                 Some(
@@ -836,16 +952,16 @@ pub(crate) fn bootstrap_control_plane(
             if stream_web_logs_to_terminal {
                 terminal_logger().emit(
                     TerminalLogSource::Web,
-                    "streaming control room logs to terminal in compact labeled mode (full log still saved to .fullmag/logs/control-room.log)",
+                    format!(
+                        "streaming control room logs to terminal in compact labeled mode (full log still saved to {})",
+                        web_log_path.display()
+                    ),
                 );
                 command.stdout(Stdio::piped()).stderr(Stdio::piped());
             } else {
                 terminal_logger().emit(
                     TerminalLogSource::Web,
-                    format!(
-                        "control room logs: {}",
-                        log_dir.join("control-room.log").display()
-                    ),
+                    format!("control room logs: {}", web_log_path.display()),
                 );
                 command.stdout(web_log).stderr(web_err);
             }
@@ -924,6 +1040,42 @@ pub(crate) fn bootstrap_control_plane(
     bail!(
         "control room dev mode requires the canonical Control Room frontend at apps/control-room/dev-server.mjs; run `just build-static-control-room` and omit `--dev`, or install the Control Room dependencies"
     )
+}
+
+fn prune_control_room_logs(log_dir: &Path) {
+    let retention_days = std::env::var("FULLMAG_LOG_RETENTION_DAYS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(14)
+        .clamp(1, 3650);
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(Duration::from_secs(retention_days.saturating_mul(86_400)));
+    let Ok(entries) = fs::read_dir(log_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_session_log = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                (name.starts_with("fullmag-api-") || name.starts_with("control-room-"))
+                    && name.ends_with(".log")
+            });
+        if !is_session_log {
+            continue;
+        }
+        let should_remove = cutoff
+            .zip(
+                fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok(),
+            )
+            .is_some_and(|(cutoff, modified)| modified < cutoff);
+        if should_remove {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 pub(crate) fn open_in_browser(ready: &ControlPlaneReady) {
@@ -1188,27 +1340,63 @@ fn frontend_is_ready_with_timeout(port: u16, timeout: Duration) -> bool {
 }
 
 fn stop_control_room_frontend_processes(port: u16) {
-    let hosts = [
-        "0.0.0.0".to_string(),
-        std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS).to_string(),
-        LOCALHOST_HTTP_HOST.to_string(),
-    ];
-    for host in hosts {
-        for pattern in [
-            format!("next dev --hostname {host} --port {port}"),
-            format!("next dev .*--hostname {host}.*--port {port}"),
-            format!("next dev .*--hostname {host}.*-p {port}"),
-            format!("next dev .*--port {port}"),
-            format!("next dev .*-p {port}"),
-            format!("node dev-server.mjs --hostname {host} --port {port}"),
-            format!("node dev-server.mjs .*--hostname {host}.*--port {port}"),
-        ] {
-            let _ = ProcessCommand::new("pkill")
-                .args(["-f", &pattern])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+    #[cfg(windows)]
+    {
+        let needle = format!(":{port}");
+        if let Ok(output) = ProcessCommand::new("netstat")
+            .args(["-ano", "-p", "tcp"])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let mut pids = std::collections::BTreeSet::new();
+            for line in text.lines() {
+                let fields = line.split_whitespace().collect::<Vec<_>>();
+                if fields.len() >= 5
+                    && fields[0].eq_ignore_ascii_case("TCP")
+                    && fields[1].contains(&needle)
+                    && fields[3].eq_ignore_ascii_case("LISTENING")
+                {
+                    if let Ok(pid) = fields[4].parse::<u32>() {
+                        pids.insert(pid);
+                    }
+                }
+            }
+            for pid in pids {
+                let _ = ProcessCommand::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let hosts = [
+            "0.0.0.0".to_string(),
+            std::net::Ipv4Addr::from(LOOPBACK_V4_OCTETS).to_string(),
+            LOCALHOST_HTTP_HOST.to_string(),
+        ];
+        for host in hosts {
+            for pattern in [
+                format!("next dev --hostname {host} --port {port}"),
+                format!("next dev .*--hostname {host}.*--port {port}"),
+                format!("next dev .*--hostname {host}.*-p {port}"),
+                format!("next dev .*--port {port}"),
+                format!("next dev .*-p {port}"),
+                format!("node dev-server.mjs --hostname {host} --port {port}"),
+                format!("node dev-server.mjs .*--hostname {host}.*--port {port}"),
+            ] {
+                let _ = ProcessCommand::new("pkill")
+                    .args(["-f", &pattern])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
         }
     }
 
@@ -1240,10 +1428,27 @@ pub(crate) fn api_is_ready(port: u16) -> bool {
 }
 
 fn api_bridge_is_ready(port: u16) -> bool {
+    api_bridge_is_ready_with_identity(port, false)
+}
+
+// A freshly spawned API may be compiled directly with `cargo run` and thus
+// have an unknown source snapshot.  It is still safe to accept that child
+// when its commit matches the launcher and the complete API contract matches;
+// reuse of an already listening process remains strict and fail-closed.
+fn api_bridge_is_ready_for_startup(port: u16) -> bool {
+    api_bridge_is_ready_with_identity(port, true)
+}
+
+fn api_bridge_is_ready_with_identity(port: u16, allow_unknown_snapshot: bool) -> bool {
     if !api_is_ready(port) {
         return false;
     }
-    if !api_openapi_is_compatible(port) {
+    let openapi_ready = if allow_unknown_snapshot {
+        api_openapi_is_compatible_with_identity(port, true)
+    } else {
+        api_openapi_is_compatible(port)
+    };
+    if !openapi_ready {
         return false;
     }
 
@@ -1279,6 +1484,10 @@ fn api_bridge_is_ready(port: u16) -> bool {
 }
 
 fn api_openapi_is_compatible(port: u16) -> bool {
+    api_openapi_is_compatible_with_identity(port, false)
+}
+
+fn api_openapi_is_compatible_with_identity(port: u16, allow_unknown_snapshot: bool) -> bool {
     let addr = std::net::SocketAddr::from((LOOPBACK_V4_OCTETS, port));
     let mut stream = match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
         Ok(stream) => stream,
@@ -1297,10 +1506,19 @@ fn api_openapi_is_compatible(port: u16) -> bool {
         return false;
     }
     let mut response = String::new();
-    stream.read_to_string(&mut response).is_ok() && api_openapi_response_is_compatible(&response)
+    stream.read_to_string(&mut response).is_ok()
+        && api_openapi_response_is_compatible_with_identity(&response, allow_unknown_snapshot)
 }
 
+#[cfg(test)]
 fn api_openapi_response_is_compatible(response: &str) -> bool {
+    api_openapi_response_is_compatible_with_identity(response, false)
+}
+
+fn api_openapi_response_is_compatible_with_identity(
+    response: &str,
+    allow_unknown_snapshot: bool,
+) -> bool {
     const REQUIRED_STAGE_KINDS: [&str; 5] = [
         "add_field_drive",
         "remove_field_drive",
@@ -1330,7 +1548,7 @@ fn api_openapi_response_is_compatible(response: &str) -> bool {
     else {
         return false;
     };
-    if !api_build_identity_is_compatible(&document) {
+    if !api_build_identity_is_compatible_with_unknown(&document, allow_unknown_snapshot) {
         return false;
     }
 
@@ -1344,7 +1562,10 @@ fn api_openapi_response_is_compatible(response: &str) -> bool {
         })
 }
 
-fn api_build_identity_is_compatible(document: &serde_json::Value) -> bool {
+fn api_build_identity_is_compatible_with_unknown(
+    document: &serde_json::Value,
+    allow_unknown_snapshot: bool,
+) -> bool {
     let Some(remote) = document
         .get("x-fullmag-build-identity")
         .and_then(serde_json::Value::as_object)
@@ -1365,13 +1586,15 @@ fn api_build_identity_is_compatible(document: &serde_json::Value) -> bool {
         return false;
     }
 
-    let local_snapshot_is_known = local.source_snapshot_sha256 != "unknown";
-    let remote_snapshot_is_known = remote_snapshot != "unknown";
-    if local_snapshot_is_known || remote_snapshot_is_known {
-        return remote_snapshot == local.source_snapshot_sha256;
+    // A health check plus the commit is not enough for reuse: two dirty
+    // worktrees can share the same HEAD while compiling different API code.
+    // Unknown snapshots therefore fail closed and force a fresh API process.
+    if local.source_snapshot_sha256 == "unknown" || remote_snapshot == "unknown" {
+        return allow_unknown_snapshot
+            && local.source_snapshot_sha256 == "unknown"
+            && remote_snapshot == "unknown";
     }
-
-    true
+    remote_snapshot == local.source_snapshot_sha256
 }
 
 pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {
@@ -1794,6 +2017,7 @@ pub(crate) fn spawn_fullmag_api(
 ) -> Result<std::process::Child> {
     let packaged_root = packaged_install_root(self_exe);
     let runtime_root = packaged_root.clone().unwrap_or_else(|| root.to_path_buf());
+    let state_root = runtime_state_root(&runtime_root);
     let sibling_api = self_exe.with_file_name(format!("fullmag-api{EXE_SUFFIX}"));
     let web_static_dir = {
         let candidates = [
@@ -1822,31 +2046,9 @@ pub(crate) fn spawn_fullmag_api(
             .join("local")
             .join("bin")
             .join(format!("fullmag-api{EXE_SUFFIX}")),
-        root.join(".fullmag")
-            .join("target")
-            .join("release")
-            .join(format!("fullmag-api{EXE_SUFFIX}")),
-        root.join(".fullmag")
-            .join("target")
-            .join("debug")
-            .join(format!("fullmag-api{EXE_SUFFIX}")),
-        root.join("target")
-            .join("release")
-            .join(format!("fullmag-api{EXE_SUFFIX}")),
-        root.join("target")
-            .join("debug")
-            .join(format!("fullmag-api{EXE_SUFFIX}")),
-        root.join("target")
-            .join("x86_64-pc-windows-msvc")
-            .join("release")
-            .join(format!("fullmag-api{EXE_SUFFIX}")),
-        root.join("target")
-            .join("x86_64-pc-windows-msvc")
-            .join("debug")
-            .join(format!("fullmag-api{EXE_SUFFIX}")),
     ];
 
-    if let Some(path) = candidates.iter().find(|candidate| candidate.exists()) {
+    if let Some(path) = candidates.iter().find(|candidate| candidate.is_file()) {
         let mut command = ProcessCommand::new(path);
         let terminal_log_file = if stream_logs_to_terminal {
             Some(
@@ -1861,6 +2063,7 @@ pub(crate) fn spawn_fullmag_api(
             .current_dir(&runtime_root)
             .env("FULLMAG_API_PORT", api_port().to_string())
             .env("FULLMAG_REPO_ROOT", &runtime_root)
+            .env("FULLMAG_STATE_ROOT", &state_root)
             .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
             .stdin(Stdio::null());
         if stream_logs_to_terminal {
@@ -1882,47 +2085,14 @@ pub(crate) fn spawn_fullmag_api(
         return Ok(child);
     }
 
-    if packaged_root.is_some() {
-        bail!(
-            "fullmag-api binary missing from packaged install rooted at {}",
-            runtime_root.display()
-        );
-    }
-
-    let mut command = ProcessCommand::new("cargo");
-    let terminal_log_file = if stream_logs_to_terminal {
-        Some(
-            stdout
-                .try_clone()
-                .context("failed to clone api log file for terminal streaming")?,
-        )
+    let install_hint = if packaged_root.is_some() {
+        format!("packaged install rooted at {}", runtime_root.display())
     } else {
-        None
+        "the configured Fullmag build output".to_string()
     };
-    command
-        .args(["run", "-p", "fullmag-api"])
-        .current_dir(root)
-        .env("FULLMAG_API_PORT", api_port().to_string())
-        .env("FULLMAG_REPO_ROOT", root)
-        .env("FULLMAG_WEB_STATIC_DIR", &web_static_dir)
-        .stdin(Stdio::null());
-    if stream_logs_to_terminal {
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    } else {
-        command.stdout(stdout).stderr(stderr);
-    }
-    configure_child_process(&mut command);
-    configure_repo_local_library_env(&mut command, root, None);
-    if disable_static_control_room {
-        command.env("FULLMAG_DISABLE_STATIC_CONTROL_ROOM", "1");
-    }
-    let mut child = command
-        .spawn()
-        .context("failed to spawn fullmag-api via cargo")?;
-    if let Some(log_file) = terminal_log_file {
-        terminal_logger().attach_child(&mut child, TerminalLogSource::Api, log_file)?;
-    }
-    Ok(child)
+    bail!(
+        "fullmag-api binary is missing from {install_hint}; build fullmag-api beside the CLI before starting the runtime"
+    )
 }
 
 #[cfg(unix)]
@@ -2001,6 +2171,15 @@ fn terminate_child_process(child: &mut std::process::Child) {
             let _ = libc::kill(-pgid, libc::SIGKILL);
         }
     }
+    #[cfg(windows)]
+    {
+        let _ = ProcessCommand::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -2046,13 +2225,21 @@ fn configure_repo_local_library_env(
 
 fn wait_for_api_ready(port: u16, child: &mut std::process::Child, timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
+    let mut health_seen = false;
+    let mut next_contract_probe = Instant::now();
     loop {
-        // A newly spawned API is considered live once its health endpoint
-        // responds.  Contract validation remains mandatory for reusing an
-        // existing process, but OpenAPI generation and the internal snapshot
-        // probe can legitimately lag while the runtime is under startup load.
-        if api_is_ready(port) {
-            return Ok(());
+        // A newly spawned API must pass both liveness and the complete API
+        // contract.  Health alone can be served by an unrelated stale process
+        // on the requested port.  Source snapshots are strict when present;
+        // direct ad-hoc `cargo run` builds may legitimately report `unknown`.
+        if !health_seen {
+            health_seen = api_is_ready(port);
+        }
+        if health_seen && Instant::now() >= next_contract_probe {
+            if api_bridge_is_ready_for_startup(port) {
+                return Ok(());
+            }
+            next_contract_probe = Instant::now() + Duration::from_millis(500);
         }
         if let Some(status) = child
             .try_wait()
@@ -2144,6 +2331,11 @@ pub(crate) fn command_exists(cmd: &str) -> bool {
 pub(crate) fn repo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("FULLMAG_REPO_ROOT") {
         return PathBuf::from(root);
+    }
+    if let Ok(self_exe) = std::env::current_exe() {
+        if let Some(install_root) = packaged_install_root(&self_exe) {
+            return install_root;
+        }
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

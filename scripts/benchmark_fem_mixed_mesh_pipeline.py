@@ -332,6 +332,9 @@ def _persistence_phase_probe(
 
     original_sha256 = persistence.sha256  # type: ignore[attr-defined]
     original_deserialize = persistence._deserialize_mesh  # type: ignore[attr-defined]
+    original_deserialize_detached = getattr(
+        persistence, "_deserialize_mesh_with_detached_certificate", None
+    )
     original_topology_fingerprint = MeshData.topology_fingerprint_v3
 
     def timed_sha256(*args: object, **kwargs: object) -> object:
@@ -348,6 +351,13 @@ def _persistence_phase_probe(
             lambda: original_deserialize(payload),
         )
 
+    def timed_deserialize_detached(payload: bytes) -> object:
+        return _measure(
+            timings_ns,
+            "artifact_deserialize_s",
+            lambda: original_deserialize_detached(payload),
+        )
+
     def timed_topology_fingerprint(
         instance: object, *args: object, **kwargs: object
     ) -> object:
@@ -359,12 +369,16 @@ def _persistence_phase_probe(
 
     persistence.sha256 = timed_sha256  # type: ignore[attr-defined]
     persistence._deserialize_mesh = timed_deserialize  # type: ignore[attr-defined]
+    if original_deserialize_detached is not None:
+        persistence._deserialize_mesh_with_detached_certificate = timed_deserialize_detached  # type: ignore[attr-defined]
     MeshData.topology_fingerprint_v3 = timed_topology_fingerprint  # type: ignore[method-assign]
     try:
         yield
     finally:
         persistence.sha256 = original_sha256  # type: ignore[attr-defined]
         persistence._deserialize_mesh = original_deserialize  # type: ignore[attr-defined]
+        if original_deserialize_detached is not None:
+            persistence._deserialize_mesh_with_detached_certificate = original_deserialize_detached  # type: ignore[attr-defined]
         MeshData.topology_fingerprint_v3 = original_topology_fingerprint  # type: ignore[method-assign]
 
 
@@ -509,7 +523,13 @@ def _single_run(
 def _capture_source_identity(repo_root: Path) -> dict[str, object]:
     from capture_source_snapshot_identity import capture
 
-    identity = capture(repo_root)
+    # The managed FEM runtime deliberately excludes documentation, UI and
+    # other non-runtime trees from its source snapshot.  Reuse that exact
+    # policy here: a full ``git status --untracked-files=all`` scan is
+    # pathological on a Windows checkout exposed through Docker's 9P bind
+    # mount, and can take longer than the mesh itself.  Runtime tracked and
+    # untracked paths are still hashed and the capture remains race-checked.
+    identity = capture(repo_root, ignore_non_runtime_dirty=True)
     return {field: identity[field] for field in _SOURCE_IDENTITY_FIELDS}
 
 

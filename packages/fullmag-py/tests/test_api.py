@@ -87,6 +87,112 @@ class ProblemApiTests(unittest.TestCase):
         copied["fem_domain_mesh_asset"]["mesh"]["nodes"].append([1.0, 0.0, 0.0])
         self.assertEqual(len(cached_assets["fem_domain_mesh_asset"]["mesh"]["nodes"]), 1)
 
+    def test_shared_domain_mesh_persistent_cache_reuses_a_certified_artifact(self) -> None:
+        geometry = fm.Box(size=(10e-9, 10e-9, 10e-9), name="box")
+        discretization = fm.DiscretizationHints(
+            fem=fm.FEM(order=1, maximum_element_size=2e-9),
+        )
+        universe = {
+            "mode": "manual",
+            "size": [20e-9, 20e-9, 20e-9],
+            "center": [0.0, 0.0, 0.0],
+        }
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0e-9, 0.0, 0.0],
+                    [0.0, 1.0e-9, 0.0],
+                    [0.0, 0.0, 1.0e-9],
+                ]
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
+            boundary_markers=np.asarray([10], dtype=np.int32),
+        )
+
+        with TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": tmp}
+        ), patch(
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(
+                mesh,
+                [{"geometry_name": "box", "marker": 1}],
+                None,
+            ),
+        ) as realize, patch("fullmag._core.validate_mesh_ir", return_value=True):
+            first = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[geometry],
+                discretization=discretization,
+                study_universe=universe,
+            )
+            second = build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[geometry],
+                discretization=discretization,
+                study_universe=universe,
+            )
+            cache_files = list(Path(tmp).glob("shared_domains/*.fullmag-mesh"))
+
+        self.assertEqual(realize.call_count, 1)
+        self.assertEqual(
+            first["fem_domain_mesh_asset"]["mesh"]["cells"],
+            second["fem_domain_mesh_asset"]["mesh"]["cells"],
+        )
+        self.assertEqual(len(cache_files), 1)
+
+    def test_shared_domain_mesh_cache_key_rebuilds_when_mesh_inputs_change(self) -> None:
+        geometry = fm.Box(size=(10e-9, 10e-9, 10e-9), name="box")
+        universe = {
+            "mode": "manual",
+            "size": [20e-9, 20e-9, 20e-9],
+            "center": [0.0, 0.0, 0.0],
+        }
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0e-9, 0.0, 0.0],
+                    [0.0, 1.0e-9, 0.0],
+                    [0.0, 0.0, 1.0e-9],
+                ]
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
+            boundary_markers=np.asarray([10], dtype=np.int32),
+        )
+        with TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": tmp}
+        ), patch(
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(
+                mesh,
+                [{"geometry_name": "box", "marker": 1}],
+                None,
+            ),
+        ) as realize, patch("fullmag._core.validate_mesh_ir", return_value=True):
+            build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[geometry],
+                discretization=fm.DiscretizationHints(
+                    fem=fm.FEM(order=1, maximum_element_size=2e-9)
+                ),
+                study_universe=universe,
+            )
+            build_geometry_assets_for_request(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[geometry],
+                discretization=fm.DiscretizationHints(
+                    fem=fm.FEM(order=1, maximum_element_size=3e-9)
+                ),
+                study_universe=universe,
+            )
+
+        self.assertEqual(realize.call_count, 2)
+
     def test_fdm_grid_cache_ignores_region_only_changes(self) -> None:
         geometry = fm.Cylinder(radius=10e-9, height=4e-9, name="film")
         discretization = fm.DiscretizationHints(

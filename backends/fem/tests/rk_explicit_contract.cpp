@@ -475,9 +475,17 @@ void rk_transaction_uses_cpu_buffer_generations_without_payload_copies() {
             transaction.find(field) != std::string::npos,
             "CPU RK transaction must use generation swaps and cache invalidation");
     }
+    const auto payload_accounting_function =
+        transaction.find("uint64_t host_snapshot_payload_bytes() const");
+    const auto minimal_journal_branch = transaction.find(
+        "if (minimal_cpu_journal)", payload_accounting_function);
+    const auto zero_payload_return = transaction.find(
+        "return 0;", minimal_journal_branch);
     check(
-        transaction.find("if (minimal_cpu_journal) {\n            return 0;") !=
-            std::string::npos,
+        payload_accounting_function != std::string::npos &&
+            minimal_journal_branch != std::string::npos &&
+            zero_payload_return != std::string::npos &&
+            zero_payload_return - minimal_journal_branch < 128,
         "CPU RK transaction payload accounting must report zero copied bytes");
 }
 

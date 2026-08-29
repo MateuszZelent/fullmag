@@ -5755,8 +5755,7 @@ fn capture_pause_checkpoint(
     backend_plan: &BackendPlanIR,
     stage_artifact_dir: &Path,
 ) -> Result<fullmag_session::CaptureResult> {
-    let store_root = repo_root()
-        .join(".fullmag")
+    let store_root = runtime_state_root(&repo_root())
         .join("local-live")
         .join("session-store");
     let store = fullmag_session::SessionStore::open(store_root)?;
@@ -6728,10 +6727,18 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         std::process::id()
     ));
     let run_id = format!("run-{}", session_id);
+    let default_session_root = runtime_state_root(&repo_root())
+        .join("local-live")
+        .join("history");
+    let session_root = if args.session_root == Path::new(".fullmag/local-live/history") {
+        default_session_root.as_path()
+    } else {
+        args.session_root.as_path()
+    };
     let output_paths = resolve_script_output_paths(
         &script_path,
         args.output_dir.as_deref(),
-        &args.session_root,
+        session_root,
         &session_id,
     );
     let workspace_dir = output_paths.workspace_dir.clone();
@@ -11155,7 +11162,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
 
     let session_id = format!("session-{}-{}", started_at_unix_ms, std::process::id());
     let run_id = format!("run-{}", session_id);
-    let workspace_dir = PathBuf::from(".fullmag")
+    let workspace_dir = runtime_state_root(&repo_root())
         .join("local-live")
         .join("history")
         .join(&session_id);

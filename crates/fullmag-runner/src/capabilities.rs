@@ -961,13 +961,13 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
     let (status, reason, scope) = match engine {
         FemEngine::CpuNative => (
             FeatureCapabilityStatus::DevelopmentExecutable,
-            "Frozen Spins source execution is available for the resolved FEM CPU double-precision explicit/direct-minimizer scope; TPI and production qualification remain gated.",
-            "true_dof; precision=double; explicit_rk|projected_gradient_bb|nonlinear_cg; tangent_plane_implicit=unsupported",
+            "Frozen Spins source execution is available for the resolved FEM CPU double-precision explicit and relaxation scope; production qualification remains gated.",
+            "true_dof; precision=double; explicit_rk|projected_gradient_bb|nonlinear_cg|tangent_plane_implicit",
         ),
         FemEngine::NativeGpu => (
-            FeatureCapabilityStatus::SourceVisible,
-            "Frozen Spins FEM GPU sources are visible, but device-resident execution is not yet capability-enabled.",
-            "true_dof; precision=double; reason_code=frozen_spins_fem_gpu_unqualified",
+            FeatureCapabilityStatus::DevelopmentExecutable,
+            "Frozen Spins device-resident FEM GPU explicit RK execution is available in double precision; GPU relaxation and production qualification remain gated.",
+            "true_dof; precision=double; explicit_rk; gpu_relaxation=unsupported; reason_code=frozen_spins_fem_gpu_relaxation_unqualified",
         ),
     };
     capabilities.feature_capabilities.insert(
@@ -1282,8 +1282,11 @@ mod tests {
         );
         assert_eq!(
             fem_gpu.feature_capabilities["constraint.frozen_spins"].status,
-            FeatureCapabilityStatus::SourceVisible
+            FeatureCapabilityStatus::DevelopmentExecutable
         );
+        let fem_gpu_scope = &fem_gpu.feature_capabilities["constraint.frozen_spins"].scope;
+        assert!(fem_gpu_scope.contains("explicit_rk"));
+        assert!(fem_gpu_scope.contains("gpu_relaxation=unsupported"));
     }
 
     #[test]

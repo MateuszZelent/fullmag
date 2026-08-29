@@ -831,12 +831,19 @@ def _load_mesh_artifact_full_audit(
                 f"full mixed certificate audit failed: {exc}"
             ) from exc
     else:
-        mesh = _deserialize_mesh(members["topology.npz"])
-        certificate = mesh.mixed_layer_topology_certificate
+        # Keep the certificate detached while reading legacy v1 topology.  A
+        # v1 payload used to be constructed as signed MeshData, stripped back
+        # to unsigned MeshData for the native audit, and then validated a third
+        # time.  The detached form lets the native result validate the exact
+        # arrays once, after which the signed constructor can take its
+        # certificate fast path.
+        unsigned, certificate = _deserialize_mesh_with_detached_certificate(
+            members["topology.npz"]
+        )
+        mesh = unsigned
         if certificate is not None:
-            unsigned = replace(mesh, mixed_layer_topology_certificate=None)
             native = certify_mixed_mesh_arrays(
-                mesh=unsigned,
+                mesh=mesh,
                 metadata={"mesh_name": str(manifest.get("mesh_name", ""))},
                 certificate=certificate.to_dict(),
                 require_native=require_native,
@@ -855,7 +862,19 @@ def _load_mesh_artifact_full_audit(
                     )
                 native_backend = "rust_rayon"
                 topology_fingerprint = native.topology_fingerprint_v3
+                try:
+                    mesh = replace(mesh, mixed_layer_topology_certificate=certificate)
+                except Exception as exc:
+                    raise MeshArtifactCorruptionError(
+                        f"full mixed certificate audit failed: {exc}"
+                    ) from exc
             else:
+                try:
+                    mesh = replace(mesh, mixed_layer_topology_certificate=certificate)
+                except Exception as exc:
+                    raise MeshArtifactCorruptionError(
+                        f"full mixed certificate audit failed: {exc}"
+                    ) from exc
                 topology_fingerprint = mesh.topology_fingerprint_v3()
         else:
             topology_fingerprint = mesh.topology_fingerprint_v3()

@@ -957,19 +957,56 @@ pub(crate) fn run_python_helper_with_progress(
     args: &[String],
     progress_callback: Option<PythonProgressCallback>,
 ) -> Result<std::process::Output> {
-    let local_python = repo_root()
-        .join(".fullmag")
-        .join("local")
-        .join("python")
-        .join("bin")
-        .join("python");
-    let repo_python = repo_root().join(".venv").join("bin").join("python");
+    let root = repo_root();
+    let local_python = if cfg!(windows) {
+        root.join(".fullmag")
+            .join("local")
+            .join("python")
+            .join("Scripts")
+            .join("python.exe")
+    } else {
+        root.join(".fullmag")
+            .join("local")
+            .join("python")
+            .join("bin")
+            .join("python")
+    };
+    let repo_python = if cfg!(windows) {
+        root.join(".venv").join("Scripts").join("python.exe")
+    } else {
+        root.join(".venv").join("bin").join("python")
+    };
+    let packaged_python_candidates = if cfg!(windows) {
+        vec![
+            root.join("python").join("python.exe"),
+            root.join("python").join("Scripts").join("python.exe"),
+            root.join(".fullmag")
+                .join("local")
+                .join("python")
+                .join("python.exe"),
+            root.join(".fullmag")
+                .join("local")
+                .join("python")
+                .join("Scripts")
+                .join("python.exe"),
+            root.join(".fullmag")
+                .join("local")
+                .join("python")
+                .join("bin")
+                .join("python.exe"),
+        ]
+    } else {
+        Vec::new()
+    };
     let mut candidates = Vec::new();
 
     if let Ok(preferred) = std::env::var("FULLMAG_PYTHON") {
         candidates.push(preferred);
     } else {
-        for candidate in [local_python, repo_python] {
+        for candidate in std::iter::once(local_python)
+            .chain(std::iter::once(repo_python))
+            .chain(packaged_python_candidates)
+        {
             if candidate.is_file() {
                 candidates.push(candidate.display().to_string());
             }
@@ -982,10 +1019,10 @@ pub(crate) fn run_python_helper_with_progress(
         }
     }
 
-    let pythonpath = repo_root().join("packages").join("fullmag-py").join("src");
-    let python_extension_root = repo_root().join(".fullmag").join("local");
-    let fem_mesh_cache_dir = repo_root()
-        .join(".fullmag")
+    let pythonpath = root.join("packages").join("fullmag-py").join("src");
+    let packaged_site_packages = root.join("python").join("site-packages");
+    let python_extension_root = root.join(".fullmag").join("local");
+    let fem_mesh_cache_dir = crate::control_room::runtime_state_root(&root)
         .join("local")
         .join("cache")
         .join("fem_mesh_assets");
@@ -1002,19 +1039,26 @@ pub(crate) fn run_python_helper_with_progress(
             command.env("FULLMAG_PROGRESS", "1");
         }
         command.env("FULLMAG_FEM_MESH_CACHE_DIR", &fem_mesh_cache_dir);
-        if pythonpath.exists() {
-            let mut merged = pythonpath.display().to_string();
-            if let Some(existing) = &inherited_pythonpath {
-                if !existing.is_empty() {
-                    merged.push(if cfg!(windows) { ';' } else { ':' });
-                    merged.push_str(existing);
-                }
+        let mut python_paths = Vec::new();
+        if pythonpath.is_dir() {
+            python_paths.push(pythonpath.display().to_string());
+        }
+        if packaged_site_packages.is_dir() {
+            python_paths.push(packaged_site_packages.display().to_string());
+        }
+        if python_extension_root.is_dir() {
+            python_paths.push(python_extension_root.display().to_string());
+        }
+        if let Some(existing) = &inherited_pythonpath {
+            if !existing.is_empty() {
+                python_paths.push(existing.clone());
             }
-            if python_extension_root.is_dir() {
-                merged.push(if cfg!(windows) { ';' } else { ':' });
-                merged.push_str(&python_extension_root.display().to_string());
-            }
-            command.env("PYTHONPATH", merged);
+        }
+        if !python_paths.is_empty() {
+            command.env(
+                "PYTHONPATH",
+                python_paths.join(if cfg!(windows) { ";" } else { ":" }),
+            );
         }
 
         match command.spawn() {

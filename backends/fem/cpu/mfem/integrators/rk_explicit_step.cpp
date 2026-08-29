@@ -157,10 +157,6 @@ bool context_step_explicit_rk_mfem(
     }
 
     if (mfem_device_requests_gpu(ctx)) {
-        if (ctx.frozen_spins.enabled()) {
-            error = "GPU RK cannot execute frozen spins constraints before a device-resident lane is qualified (frozen_spins_fem_gpu_unqualified)";
-            return false;
-        }
         if (ctx.oersted.has_stage_callback) {
             error = "GPU RK cannot use the CPU-only stage Oersted callback before a device-resident lane is qualified";
             return false;

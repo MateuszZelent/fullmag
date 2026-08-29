@@ -228,6 +228,23 @@ function Invoke-DockerImageBuild {
   Invoke-External "docker" $arguments
 }
 
+function Get-DockerImageId {
+  param([Parameter(Mandatory = $true)][string]$Image)
+  $savedErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $imageId = (& docker image inspect $Image --format '{{.Id}}' 2>$null | Select-Object -First 1).Trim()
+    $imageExitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $savedErrorActionPreference
+  }
+  if ($imageExitCode -ne 0 -or -not $imageId) {
+    throw "Docker image is unavailable: $Image; build it with BuildMode=true"
+  }
+  return $imageId
+}
+
 if ($Backend -ne "fem") {
   throw "Windows FEM container launcher requires backend=fem"
 }
@@ -307,7 +324,7 @@ $identityPython = Get-Command "python" -ErrorAction SilentlyContinue
 if (-not $identityPython) {
   throw "Python is required to capture the exact Fullmag source identity"
 }
-$identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot | Out-String)
+$identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty | Out-String)
 if ($LASTEXITCODE -ne 0) {
   throw "Fullmag source identity capture failed with exit code $LASTEXITCODE"
 }
@@ -315,6 +332,9 @@ $sourceIdentity = $identityOutput | ConvertFrom-Json
 $env:FULLMAG_SOURCE_GIT_COMMIT = [string]$sourceIdentity.head_commit_full
 $env:FULLMAG_SOURCE_WORKTREE_STATE = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
 $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = [string]$sourceIdentity.source_snapshot_sha256
+$ManifestPath = Join-Path $StateRoot "windows-fem-$Device-manifest.json"
+$RuntimeBinaryPath = Join-Path $StateRoot "local\bin\fullmag"
+$RuntimeApiPath = Join-Path $StateRoot "local\bin\fullmag-api"
 
 $resolvedScript = $null
 $containerScript = $null
@@ -375,27 +395,55 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     $buildCommandBase64 = [Convert]::ToBase64String($buildCommandBytes)
     $buildCommandPayload = "printf '%s' '$buildCommandBase64' | base64 --decode | bash"
     Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $buildCommandPayload)
-  } elseif (-not (Test-Path -LiteralPath (Join-Path $StateRoot "local\bin\fullmag") -PathType Leaf)) {
+  } elseif (-not (Test-Path -LiteralPath $RuntimeBinaryPath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $RuntimeApiPath -PathType Leaf)) {
     throw "Container-local FEM $Device launcher is missing at $StateRoot\local\bin\fullmag; rerun with build=True"
   }
 
-  $manifest = [ordered]@{
-    schema_version = 1
-    backend = "fem"
-    requested_device = $RequestedDevice
-    device = $Device
-    runtime = "docker-desktop-linux-container-local"
-    compose_file = $ComposeFile
-    image = $RuntimeImage
-    repository = $RepoRoot
-    state_root = $StateRoot
-    build_root = $BuildRoot
-    cache_root = $CacheRoot
-    cargo_target_root = $TargetRoot
-    script = $resolvedScript
-    built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+  $imageId = Get-DockerImageId $RuntimeImage
+
+  if ($BuildMode -eq "true") {
+    $manifest = [ordered]@{
+      schema_version = 2
+      backend = "fem"
+      requested_device = $RequestedDevice
+      device = $Device
+      runtime = "docker-desktop-linux-container-local"
+      compose_file = $ComposeFile
+      image = $RuntimeImage
+      image_id = $imageId
+      repository = $RepoRoot
+      state_root = $StateRoot
+      build_root = $BuildRoot
+      cache_root = $CacheRoot
+      cargo_target_root = $TargetRoot
+      script = $resolvedScript
+      git_commit = [string]$sourceIdentity.head_commit_full
+      worktree_state = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+      source_snapshot_sha256 = [string]$sourceIdentity.source_snapshot_sha256
+      binary_sha256 = (Get-FileHash -LiteralPath $RuntimeBinaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+      api_binary_sha256 = (Get-FileHash -LiteralPath $RuntimeApiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+      built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    }
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+  } else {
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+      throw "Windows FEM $Device build manifest is missing at $ManifestPath; rerun with build=True"
+    }
+    $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    $binaryHash = (Get-FileHash -LiteralPath $RuntimeBinaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $apiBinaryHash = (Get-FileHash -LiteralPath $RuntimeApiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expectedWorktreeState = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+    if ([int]$manifest.schema_version -ne 2 -or
+        [string]$manifest.git_commit -ne [string]$sourceIdentity.head_commit_full -or
+        [string]$manifest.worktree_state -ne $expectedWorktreeState -or
+        [string]$manifest.source_snapshot_sha256 -ne [string]$sourceIdentity.source_snapshot_sha256 -or
+        [string]$manifest.binary_sha256 -ne $binaryHash -or
+        [string]$manifest.api_binary_sha256 -ne $apiBinaryHash -or
+        [string]$manifest.image_id -ne $imageId) {
+      throw "Existing Windows FEM $Device runtime does not match the current source identity or binary hashes; rerun with build=True"
+    }
   }
-  $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $StateRoot "windows-fem-$Device-manifest.json") -Encoding UTF8
 
   if ($BuildOnly) {
     Write-Host "Windows FEM $Device container build is ready"

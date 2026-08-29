@@ -162,6 +162,7 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "FULLMAG_WINDOWS_REBUILD_FEM_IMAGE",
         "docker image inspect",
         "capture_source_snapshot_identity.py",
+        "--ignore-non-runtime-dirty",
         "FULLMAG_SOURCE_SNAPSHOT_SHA256",
         "--load",
         "docker info",
