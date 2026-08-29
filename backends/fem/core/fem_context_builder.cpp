@@ -195,6 +195,7 @@ bool build_context_from_plan(
         try {
             ctx.stepper.workspace.attempt_checkpoint =
                 std::make_unique<RkAttemptCacheSnapshot>(ctx, false);
+            ctx.stepper.transaction_telemetry.attempt_cache_allocation_count += 1;
         } catch (const std::bad_alloc &) {
             error = "RK attempt cache checkpoint allocation failed during setup";
             return false;
