@@ -33,6 +33,7 @@
 #include "cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.hpp"
 #include "cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -75,6 +76,15 @@ std::string read_text_file(const char *path)
     return std::string(
         std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>());
+}
+
+std::string read_source_text_file(const char *path)
+{
+    std::string source = read_text_file(path);
+    source.erase(
+        std::remove(source.begin(), source.end(), '\r'),
+        source.end());
+    return source;
 }
 
 bool file_exists(const char *path)
@@ -1058,7 +1068,7 @@ void static_periodic_driven_response_is_explicitly_available()
 void driven_response_solver_accepts_fmr_env_aliases_source_contract()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         contains(source.c_str(), "env_positive_double_alias"),
@@ -1086,7 +1096,7 @@ void driven_response_solver_accepts_fmr_env_aliases_source_contract()
 void periodic_airbox_reduced_response_keeps_block_jacobi_fallback_source_contract()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         !contains(source.c_str(), "!static_periodic_reduced_magnetic_solve &&\n"
@@ -1100,7 +1110,7 @@ void periodic_airbox_reduced_response_keeps_block_jacobi_fallback_source_contrac
 void periodic_airbox_reduced_response_uses_schur_residual_preconditioner_source_contract()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         contains(source.c_str(), "apply_static_periodic_reduced_mfem_schur_residual_right_preconditioner"),
@@ -1580,7 +1590,7 @@ void frequency_solve_planner_selects_first_real_backend_without_runtime_side_eff
 void driven_response_diagnostics_publish_honest_krylov_residency()
 {
     const std::string source =
-        read_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
+        read_source_text_file("backends/fem/src/frequency_domain/driven_response_solver.cpp");
 
     check(
         contains(source.c_str(), "\"krylov_vector_location\":\"host\""),
