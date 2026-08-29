@@ -1379,6 +1379,7 @@ def test_modal_cpu_compose_service_is_gpu_request_free() -> None:
     assert "image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}" in service
     assert "FULLMAG_FEM_WITH_SLEPC: \"ON\"" in service
     assert "FULLMAG_FEM_MFEM_DEVICE: cpu" in service
+    assert "LD_LIBRARY_PATH: /usr/local/cuda/compat:/opt/fullmag-deps/lib" in service
     assert "gpus:" not in service
 
 
