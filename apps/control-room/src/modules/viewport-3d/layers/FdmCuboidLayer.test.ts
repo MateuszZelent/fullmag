@@ -531,6 +531,9 @@ describe("FdmCuboidLayer model", () => {
 
     expect(source).toContain("adoptionRegistry.clearAdoption(");
     expect(source).toContain("if (usesInstanceColors || !adoptionRegistry) return;");
+    expect(source).toContain("const adoptionIdentityChanged =");
+    expect(source).toContain("colorChanged || adoptionIdentityChanged");
+    expect(source).toContain("sessionIdentity?.sessionEpoch");
     expect(source).toContain("unregister();");
   });
   it("records FDM surface colors as an adopted derived-global carrier", () => {

@@ -965,6 +965,58 @@ describe("ControlRoomApi", () => {
     });
   });
 
+  it("activates a one-time Frozen Spins preview candidate through the typed model facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const definition = {
+      enabled: true,
+      id: "pin-edge",
+      name: "Pinned edge",
+      reference: { kind: "capture_current_at_activation" as const },
+      schema_version: "fullmag.frozen-spins.v1",
+      selector: { kind: "in_object" as const, object_id: "film" },
+    };
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        observedUrl = String(url);
+        observedInit = init;
+        return jsonResponse({
+          activation_candidate_token_consumed: true,
+          definition,
+          mask_resource: "/v2/sessions/current/data/frozen-spins/resolved-masks/mask-1",
+          mask_sha256: "sha256:mask",
+          preview_id: "preview-1",
+          revision: 8,
+          schema_version: "frozen_spins_activation.v1",
+          source_state_revision: 41,
+          topology_fingerprint: "sha256:topology",
+        });
+      },
+      requestIdFactory: () => "req-frozen-spins-activate",
+    });
+
+    await expect(api.model.frozenSpins.activatePreview("preview-1", {
+      activation_candidate_token: "fsact-candidate-1",
+      definition,
+      expected_revision: 7,
+    })).resolves.toMatchObject({
+      activation_candidate_token_consumed: true,
+      preview_id: "preview-1",
+      revision: 8,
+    });
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/model/frozen-spins/previews/preview-1/activate",
+    );
+    expect(observedInit?.method).toBe("POST");
+    expect(parseRequestJsonBody(observedInit?.body)).toEqual({
+      activation_candidate_token: "fsact-candidate-1",
+      definition,
+      expected_revision: 7,
+    });
+  });
+
   it("loads magnetic response sweep artifacts through the analysis facade", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";

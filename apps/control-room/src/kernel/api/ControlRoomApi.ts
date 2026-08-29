@@ -113,6 +113,7 @@ import {
   MODEL_READINESS_PATH,
   MODEL_FROZEN_SPIN_PATH,
   MODEL_FROZEN_SPINS_PATH,
+  MODEL_FROZEN_SPINS_PREVIEW_ACTIVATE_PATH,
   MODEL_FROZEN_SPINS_PREVIEW_PATH,
   MODEL_FROZEN_SPINS_PREVIEWS_PATH,
   MODEL_COUPLINGS_PATH,
@@ -361,6 +362,8 @@ import type {
   FrozenSpinsDefinitionResource,
   FrozenSpinsMutationRequest,
   FrozenSpinsDeleteRequest,
+  FrozenSpinsPreviewActivationRequest,
+  FrozenSpinsPreviewActivationResponse,
   FrozenSpinsPreviewRequest,
   FrozenSpinsPreviewResponse,
   SceneCurrentTransport,
@@ -1673,6 +1676,20 @@ export class ControlRoomApi {
       getPreview: (previewId: string, options?: RequestOptions) =>
         this.requestJson<FrozenSpinsPreviewResponse>(
           MODEL_FROZEN_SPINS_PREVIEW_PATH,
+          options,
+          { path: { preview_id: previewId } },
+        ),
+      activatePreview: (
+        previewId: string,
+        request: FrozenSpinsPreviewActivationRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<
+          FrozenSpinsPreviewActivationResponse,
+          FrozenSpinsPreviewActivationRequest
+        >(
+          MODEL_FROZEN_SPINS_PREVIEW_ACTIVATE_PATH,
+          request,
           options,
           { path: { preview_id: previewId } },
         ),

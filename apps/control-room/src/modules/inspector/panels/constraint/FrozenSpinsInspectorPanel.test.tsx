@@ -19,6 +19,7 @@ import {
 } from "./FrozenSpinsInspectorPanel";
 
 const preview = {
+  activation_candidate_token: "fsact-candidate-1",
   bounds_m: [[0, 1e-9], [0, 2e-9], [0, 3e-9]],
   current: true,
   fraction: 0.25,
@@ -50,6 +51,7 @@ const preview = {
 };
 
 const mocks = vi.hoisted(() => ({
+  activatePreview: vi.fn(),
   clear: vi.fn(),
   createPreview: vi.fn(),
   delete: vi.fn(),
@@ -66,6 +68,7 @@ vi.mock("@/kernel/KernelContext", () => ({
     api: {
       model: {
         frozenSpins: {
+          activatePreview: mocks.activatePreview,
           createPreview: mocks.createPreview,
           delete: mocks.delete,
           patch: mocks.patch,
@@ -96,6 +99,17 @@ vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
 describe("FrozenSpinsInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.activatePreview.mockResolvedValue({
+      activation_candidate_token_consumed: true,
+      definition: definitionFixture(),
+      mask_resource: preview.mask_resource,
+      mask_sha256: preview.mask_sha256,
+      preview_id: preview.preview_id,
+      revision: 8,
+      schema_version: "frozen_spins_activation.v1",
+      source_state_revision: 41,
+      topology_fingerprint: "sha256:topology",
+    });
     mocks.createPreview.mockResolvedValue(preview);
     mocks.definitionResource = {
       data: {
@@ -167,6 +181,195 @@ describe("FrozenSpinsInspectorPanel", () => {
         "preview-1",
       );
       expect(container.textContent).toContain("25.00%");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("atomically activates the exact preview candidate and prevents UI replay", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+      await act(async () => findButton(container, "Activate preview").click());
+
+      expect(mocks.activatePreview).toHaveBeenCalledWith("preview-1", {
+        activation_candidate_token: "fsact-candidate-1",
+        definition: expect.objectContaining({
+          id: "pin-edge",
+          reference: { kind: "capture_current_at_activation" },
+          selector: { kind: "in_object", object_id: "film" },
+        }),
+        expected_revision: 7,
+      });
+      expect(mocks.invalidate).toHaveBeenCalledWith(
+        "model:frozen-spins:active-preview",
+        "",
+      );
+      expect(container.textContent).toContain("one-time candidate consumed");
+      expect(findOptionalButton(container, "Activate preview")).toBeNull();
+      expect(mocks.activatePreview).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a server-rejected activation candidate available for correction and retry", async () => {
+    mocks.activatePreview.mockRejectedValueOnce(
+      new Error("activation_definition_mismatch"),
+    );
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+      await act(async () => findButton(container, "Activate preview").click());
+
+      expect(container.textContent).toContain("activation_definition_mismatch");
+      expect(findButton(container, "Activate preview").disabled).toBe(false);
+      expect(container.textContent).toContain("ready (one-time)");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("disables activation after the selector diverges from the previewed selector", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+      const selectorKind = findElements(
+        container,
+        (element) => element.tagName === "SELECT",
+      )[0]!;
+      await act(async () => {
+        selectorKind.value = "all_magnetic";
+        selectorKind.dispatchEvent(new TestEvent("change", { bubbles: true }));
+      });
+
+      expect(findButton(container, "Activate preview").disabled).toBe(true);
+      expect(container.textContent).toContain("requires new preview");
+      expect(mocks.activatePreview).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps the inspector root and unrelated draft fields stable while activation awaits ACK", async () => {
+    let resolveActivation!: (value: unknown) => void;
+    mocks.activatePreview.mockReturnValueOnce(
+      new Promise((resolve) => { resolveActivation = resolve; }),
+    );
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+      const inspectorRoot = findByAttribute(
+        container,
+        "data-frozen-spins-inspector-id",
+      );
+      await act(async () => { findButton(container, "Activate preview").click(); });
+
+      const nameInput = findByAttribute(container, "aria-label", "Name");
+      expect(nameInput.disabled).toBe(false);
+      expect(findButton(container, "Apply").disabled).toBe(true);
+      expect(findButton(container, "Delete").disabled).toBe(true);
+      expect(findByAttribute(container, "data-frozen-spins-inspector-id")).toBe(
+        inspectorRoot,
+      );
+      const selectorKind = findElements(
+        container,
+        (element) => element.tagName === "SELECT",
+      )[0]!;
+      await act(async () => {
+        selectorKind.value = "all_magnetic";
+        selectorKind.dispatchEvent(new TestEvent("change", { bubbles: true }));
+      });
+      await act(async () => resolveActivation({
+        activation_candidate_token_consumed: true,
+        definition: definitionFixture(),
+        mask_resource: preview.mask_resource,
+        mask_sha256: preview.mask_sha256,
+        preview_id: preview.preview_id,
+        revision: 8,
+        schema_version: "frozen_spins_activation.v1",
+        source_state_revision: 41,
+        topology_fingerprint: "sha256:topology",
+      }));
+
+      expect(
+        findByAttribute(container, "data-selection-expression-kind").getAttribute(
+          "data-selection-expression-kind",
+        ),
+      ).toBe("all_magnetic");
+      expect(findByAttribute(container, "data-frozen-spins-inspector-id")).toBe(
+        inspectorRoot,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("exposes but disables activation for a stale preview", async () => {
+    mocks.createPreview.mockResolvedValueOnce({ ...preview, current: false });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+
+      expect(findButton(container, "Activate preview").disabled).toBe(true);
+      expect(container.textContent).toContain("Activation candidate");
+      expect(container.textContent).toContain("stale");
+      expect(mocks.activatePreview).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -298,6 +501,11 @@ function findButton(root: TestNode, text: string): TestElement {
     element.tagName === "BUTTON" && element.textContent.includes(text))[0];
   if (!button) throw new Error(`Missing button ${text}`);
   return button;
+}
+
+function findOptionalButton(root: TestNode, text: string): TestElement | null {
+  return findElements(root, (element) =>
+    element.tagName === "BUTTON" && element.textContent.includes(text))[0] ?? null;
 }
 
 function findElements(

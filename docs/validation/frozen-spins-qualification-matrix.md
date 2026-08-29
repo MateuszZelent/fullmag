@@ -27,13 +27,14 @@ runtime nie są immutable receiptami i dlatego nie podnoszą żadnego lane do
 | Lane | `scope_status` | `implementation_status` | `qualification_status` | `gate_result` | Stan dowodu |
 |---|---|---|---|---|---|
 | FDM CPU/reference FP64 single-grid | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Testy źródłowe/runtime istnieją; brak czystego source identity i receiptu P7 |
-| FDM CPU/reference FP64 multilayer + ABM3 | `REQUIRED` | `NOT_IMPLEMENTED` | `UNQUALIFIED` | `NOT_RUN` | Planner nadal fail-closed; wymagane P8 |
-| FDM CUDA FP64 single-grid | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Historyczny runtime CUDA nie ma trwałego receiptu, pełnej identity ani zero-ULP P9 |
-| FDM CUDA FP32 | `REQUIRED` | `NOT_IMPLEMENTED` | `UNQUALIFIED` | `NOT_RUN` | Obecnie fail-closed; wymagane P10 |
-| FEM CPU/MFEM FP64 explicit/minimizer/TPI | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Źródła explicit/minimizer istnieją, TPI i managed receipt wymagają P11 |
-| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Kompilowalne fragmenty nie są device-resident dowodem P12 |
-| API v2 + standard quantity FDM/FEM | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Testy kontraktowe payloadu przechodzą; brak aktywacyjnej transakcji i CSR P13 |
-| Control Room + browser/WebGL | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Testy jednostkowe quantity przechodzą; brak pełnego workflow i live smoke P14/P15 |
+| FDM CPU/reference FP64 multilayer + ABM3 | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Multilayer i historia ABM3 mają runtime tests; brak clean-tree receiptu P16 |
+| FDM CUDA FP64 single-grid | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Trwały dirty-tree receipt potwierdza Heun/RK4/RK23/DP45/ABM3, exact restore i checkpoint na RTX 4080 SUPER |
+| FDM CUDA FP32 | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Ten sam managed run potwierdza pełną macierz FP32 i zero-ULP restore; finalna kwalifikacja wymaga clean tree |
+| FEM CPU/MFEM FP64 explicit/minimizer/TPI | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Explicit, PG-BB, NCG i TPI przechodzą wraz z bitwise restore i free-node mobility; brak clean-tree receiptu P16 |
+| FEM GPU MFEM/hypre/libCEED/CUDA FP64 | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Managed receipt potwierdza device-resident Heun/PG-BB/NCG, no fallback i zero hot-loop transfers; GPU TPI jawnie unsupported |
+| API v2 + standard quantity FDM/FEM | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | Katalog/metadata/payload i FEM serial-P1 authored preview respektują `ExplicitLocalToGlobal`, airbox, incydencję i fail-closed ownership. Jednorazowy token `Preview → Activate` jest atomowo konsumowany dopiero po commitcie; replay/stale/mismatch są fail-closed. Filtr API `frozen_spins` 32/32 `PASS`; nadal brak solver-launch epoch/certificate P5/P13 |
+| Control Room + browser/WebGL FDM CPU | `REQUIRED` | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Realny static build: HTTP v2 `frozen_spins`, WebGL 703×478, render ACK `rendered`, screenshot i receipt `frozen-spins-browser-5061bc04-6edd-442d-bdef-09ad3d3e634a.json`; Inspector `Preview → Activate` 10/10 i transport 1/1 `PASS`; browserowy workflow aktywacji nadal nieuruchomiony; dirty source |
+| Control Room + browser/WebGL FEM serial P1 | `REQUIRED` | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | `fullmag.fem-local-node-render.v1` consumer 5/5 i authored-preview payload mają testy źródłowe; fail-closed poza P1; brak live FEM smoke |
 
 Żadna komórka nie może zostać podniesiona przez samą zmianę tego dokumentu.
 Awans wymaga wpisu: pełny commit SHA, dokładna komenda, wynik, urządzenie/runtime
@@ -108,7 +109,7 @@ identity, artefakt, workload i reviewer.
 - typed HTTP v2 resources, generowane typy/transport i revision-safe preview;
 - authoritative preview fingerprint zgodny z solver planem;
 - dedykowany Explorer node i Inspector bez remount/focus/scroll regression;
-- widoczny overlay maski dla FDM i FEM bez obniżania jakości innych warstw;
+- widoczny overlay/standard quantity dla FDM i FEM bez obniżania jakości innych warstw; FEM serial P1 używa zweryfikowanego local-node → published vertex carrier, a inne przestrzenie FE kończą się fail-closed;
 - browser smoke: aktualny resource, canvas visible, WebGL context healthy,
   drawing buffer niezerowy.
 
@@ -120,10 +121,10 @@ agregator nie znajdzie receiptu dla jej pełnej krotki.
 
 | Algorytm / efekt | FDM CPU | FDM CUDA | FEM CPU | FEM GPU |
 |---|---|---|---|---|
-| explicit LLG fixed/adaptive RK | źródło/runtime częściowo potwierdzone | FP64 runtime historyczny, FP32 brak | źródło potwierdzone | źródło częściowo potwierdzone |
-| `projected_gradient_bb` / `nonlinear_cg` | źródło/runtime częściowo potwierdzone | wymaga macierzy P9/P10 | źródło potwierdzone | wymaga P12 |
-| ABM3/history | brak implementacji P8 | brak implementacji P8/P9 | nie dotyczy | nie dotyczy |
-| `tangent_plane_implicit` | nie dotyczy | nie dotyczy | brak implementacji P11 | brak implementacji P12 |
+| explicit LLG fixed/adaptive RK | runtime potwierdzony | FP64 i FP32 pełna macierz runtime | runtime potwierdzony | Heun runtime potwierdzony na GPU |
+| `projected_gradient_bb` / `nonlinear_cg` | runtime potwierdzony | runtime potwierdzony | runtime potwierdzony | runtime potwierdzony device-resident |
+| ABM3/history | runtime potwierdzony | FP64 i FP32 runtime potwierdzony | nie dotyczy | nie dotyczy |
+| `tangent_plane_implicit` | nie dotyczy | nie dotyczy | runtime potwierdzony | fail-closed: `frozen_spins_fem_gpu_tpi_unqualified` |
 | STT / SOT / termika | wymagane testy pairwise P7 | wymagane testy pairwise P9/P10 | wymagane testy pairwise P11 | wymagane testy pairwise P12 |
 | all-frozen relaxation | wymagane zero-ULP P7 | wymagane zero-ULP P9/P10 | wymagane zero-ULP P11 | wymagane zero-ULP P12 |
 | all-frozen time evolution | wymagany analityczny advance P7 | wymagany analityczny advance P9/P10 | wymagany analityczny advance P11 | wymagany analityczny advance P12 |
@@ -163,9 +164,10 @@ który nie obsługuje constraintu, ani pominąć constraintu.
 | Authoring IR/Python | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | `verify_frozen_spins_authoring.py` przechodzi i jawnie nie deklaruje runtime qualification |
 | Agregator receiptów | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | 6 testów: kompletne pokrycie, brak receiptów, dirty/fallback/SKIP/unknown driver/bad hash, mixed tree/duplicate evidence ID, source binding i append-only ledger |
 | Finalny zestaw receiptów | `NOT_IMPLEMENTED` | `UNQUALIFIED` | `NOT_RUN` | 0/47 obowiązkowych test case IDs ma obecnie ważny trwały receipt bieżącego clean tree |
-| FDM CUDA obserwacja historyczna | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Efemeryczny artefakt nie spełnia nowego schematu i nie dowodzi zero ULP |
-| FEM CPU obserwacja historyczna | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `NOT_RUN` | Brak ukończonego managed receiptu przypisanego do clean tree |
-| API/Control Room quantity | `SOURCE_CONFIRMED` | `UNQUALIFIED` | `PASS` | Ukierunkowane testy źródłowe przechodzą; live browser/WebGL pozostaje `NOT_RUN` |
+| FDM CUDA runtime | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | `fdm-frozen-spins-cuda-runtime-evidence-v1.json`: FP64+FP32, pięć integratorów, max defect 0, checkpoint PASS, realne GPU |
+| FEM GPU runtime | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | `fem-frozen-spins-gpu-runtime-evidence-v1.json`: MFEM 4.9/Hypre 3.1.0, Heun/PG-BB/NCG, no fallback, transfer audit 0; dirty source |
+| FEM CPU runtime | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Explicit, PG-BB, NCG i TPI wykonane; brak finalnego receiptu przypisanego do clean tree |
+| API/Control Room quantity i authoring activation | `RUNTIME_CONFIRMED` | `UNQUALIFIED` | `PASS` | Quantity/render-adoption 290/290, API Frozen Spins 32/32, Inspector 10/10, typed transport 1/1, typecheck i ukierunkowany ESLint przechodzą. FDM live browser/WebGL ma trwały receipt i PNG; pełna suite UI ma niezależne błędy dirty-tree, FEM live pozostaje `NOT_RUN` |
 
 `just verify-frozen-spins-qualification` jest bramką fail-closed. Najpierw
 waliduje P0 i authoring oraz własne testy agregatora, a następnie kończy się

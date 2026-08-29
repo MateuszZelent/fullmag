@@ -19,7 +19,7 @@ import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 const MAX_FROZEN_SPINS_OVERLAY_POINTS = 50_000;
 
 export interface FrozenSpinsOverlayModel {
-  carrierKind: "fdm-cells" | "fem-true-dofs";
+  carrierKind: "fdm-cells" | "fem-local-nodes";
   current: boolean;
   frozenCount: number;
   maskSha256: string;
@@ -29,15 +29,27 @@ export interface FrozenSpinsOverlayModel {
   totalCount: number;
 }
 
+export interface FemLocalNodeRenderCarrier {
+  schemaVersion: "fullmag.fem-local-node-render.v1";
+  carrierFingerprint: string;
+  meshFingerprint: string;
+  feSpaceOrder: number;
+  vectorOrdering: "by_nodes" | "by_vdim";
+  localNodeCount: number;
+  renderVertexPositions: Float32Array | Float64Array;
+}
+
 export function buildFrozenSpinsOverlayModel({
   fdmDomain,
-  femTrueDofPositions,
+  femCarrier,
+  expectedTopologyFingerprint,
   current,
   mask,
   previewId,
 }: {
   fdmDomain: FdmGridRenderDomain | null | undefined;
-  femTrueDofPositions: Float32Array | Float64Array | null | undefined;
+  femCarrier: FemLocalNodeRenderCarrier | null | undefined;
+  expectedTopologyFingerprint: string | null | undefined;
   current: boolean;
   mask: DecodedFrozenSpinsMask | null | undefined;
   previewId: string;
@@ -61,18 +73,23 @@ export function buildFrozenSpinsOverlayModel({
     };
   }
 
-  if (
-    femTrueDofPositions &&
-    mask.bitCount * 3 === femTrueDofPositions.length
-  ) {
+  const femPositions = femCarrier
+    ? frozenFemRenderPositions(
+        femCarrier,
+        frozenIndices,
+        mask.bitCount,
+        expectedTopologyFingerprint,
+      )
+    : null;
+  if (femPositions) {
     return {
-      carrierKind: "fem-true-dofs",
+      carrierKind: "fem-local-nodes",
       current,
       frozenCount: mask.frozenIndices.length,
       maskSha256: mask.maskSha256,
-      positions: indexedPositions(femTrueDofPositions, frozenIndices),
+      positions: femPositions,
       previewId,
-      renderedCount: frozenIndices.length,
+      renderedCount: femPositions.length / 3,
       totalCount: mask.bitCount,
     };
   }
@@ -180,16 +197,37 @@ function fdmCellCenters(
   return positions;
 }
 
-function indexedPositions(
-  positions: Float32Array | Float64Array,
-  indices: Uint32Array,
-): Float32Array {
-  const selected = new Float32Array(indices.length * 3);
-  for (let output = 0; output < indices.length; output += 1) {
-    const source = indices[output]! * 3;
-    selected[output * 3] = positions[source]!;
-    selected[output * 3 + 1] = positions[source + 1]!;
-    selected[output * 3 + 2] = positions[source + 2]!;
+function frozenFemRenderPositions(
+  carrier: FemLocalNodeRenderCarrier,
+  frozenLocalNodes: Uint32Array,
+  maskLocalNodeCount: number,
+  expectedTopologyFingerprint: string | null | undefined,
+): Float32Array | null {
+  if (
+    carrier.schemaVersion !== "fullmag.fem-local-node-render.v1" ||
+    !isCanonicalFingerprint(carrier.carrierFingerprint) ||
+    !isCanonicalFingerprint(carrier.meshFingerprint) ||
+    !isCanonicalFingerprint(expectedTopologyFingerprint ?? "") ||
+    carrier.meshFingerprint !== expectedTopologyFingerprint ||
+    !Number.isInteger(carrier.feSpaceOrder) ||
+    carrier.feSpaceOrder < 1 ||
+    carrier.localNodeCount !== maskLocalNodeCount ||
+    carrier.renderVertexPositions.length !== carrier.localNodeCount * 3
+  ) {
+    return null;
+  }
+  if (frozenLocalNodes.some((node) => node >= carrier.localNodeCount)) return null;
+  const sampled = sampleFrozenIndices(frozenLocalNodes, MAX_FROZEN_SPINS_OVERLAY_POINTS);
+  const selected = new Float32Array(sampled.length * 3);
+  for (let output = 0; output < sampled.length; output += 1) {
+    const source = sampled[output]! * 3;
+    selected[output * 3] = carrier.renderVertexPositions[source]!;
+    selected[output * 3 + 1] = carrier.renderVertexPositions[source + 1]!;
+    selected[output * 3 + 2] = carrier.renderVertexPositions[source + 2]!;
   }
   return selected;
+}
+
+function isCanonicalFingerprint(value: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/.test(value);
 }

@@ -70,6 +70,8 @@ void gpu_runtime_coefficients_free(
     gpu_device_free_u8(mesh_regions.stt_active_element_mask);
     mesh_regions.stt_active_element_count = 0;
     gpu_device_free_u8(mesh_regions.frozen_mask);
+    gpu_device_free_u8(mesh_regions.free_node_mask);
+    mesh_regions.free_node_mask_count = 0;
     mesh_regions.frozen_node_count = 0;
     gpu_device_free_double(mesh_regions.frozen_reference_x);
     gpu_device_free_double(mesh_regions.frozen_reference_y);

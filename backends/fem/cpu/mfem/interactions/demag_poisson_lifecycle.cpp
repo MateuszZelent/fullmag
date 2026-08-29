@@ -109,13 +109,26 @@ bool context_initialize_poisson(Context &ctx, std::string &error)
             return false;
         }
 
-        // The micromagnetic state remains nodal P1.  Open-boundary Poisson
-        // demag uses an independent quadratic scalar-potential space so edge
-        // DOFs can resolve the thin-film surface charge.  The legacy static
-        // periodic reduction is node-class based and therefore remains P1
-        // until periodic P2 equivalence classes are implemented explicitly.
+        // The micromagnetic state remains nodal P1.  On meshes made only from
+        // MFEM elements with quadratic H1 support, open-boundary Poisson demag
+        // uses an independent quadratic scalar-potential space so edge DOFs
+        // can resolve the thin-film surface charge.  MFEM's H1 pyramid basis
+        // currently aborts for order > 1, however.  Mixed prism/pyramid/tet
+        // meshes therefore resolve to the compatible P1 potential space; this
+        // is an explicit topology policy, not a silent downgrade.  The legacy
+        // static periodic reduction is node-class based and remains P1 until
+        // periodic P2 equivalence classes are implemented explicitly.
+        bool has_pyramid = false;
+        for (int element = 0; element < mesh->GetNE(); ++element) {
+            if (mesh->GetElementBaseGeometry(element) == mfem::Geometry::PYRAMID) {
+                has_pyramid = true;
+                break;
+            }
+        }
+        const bool periodic_reduction =
+            demag_periodic_poisson_reduction_requested(ctx);
         const int potential_order =
-            demag_periodic_poisson_reduction_requested(ctx) ? 1 : 2;
+            periodic_reduction || has_pyramid ? 1 : 2;
         auto *potential_fec = new mfem::H1_FECollection(
             potential_order,
             mesh->Dimension());

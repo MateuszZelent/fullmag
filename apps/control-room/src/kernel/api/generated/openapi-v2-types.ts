@@ -2340,6 +2340,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_frozen_spins_previews_preview_id_activate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/frozen-spins/{constraint_id}": {
         parameters: {
             query?: never;
@@ -3227,6 +3243,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/simulation/commands/{command_id}/failure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["simulation_post_sessions_current_simulation_commands_command_id_failure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/simulation/objects/{object_id}/metrics": {
         parameters: {
             query?: never;
@@ -3732,7 +3764,7 @@ export interface components {
             base_revision?: number | null;
             /** @enum {string} */
             kind: "patch_magnetization";
-            magnetization_ref?: string | null;
+            magnetization_ref?: null | components["schemas"]["NullableStringPatchValue"];
             object_id: string;
             region_id?: string | null;
         } | {
@@ -4093,6 +4125,9 @@ export interface components {
             precision?: string | null;
             runtime_family?: string | null;
             worker?: string | null;
+        };
+        CommandFailureRequest: {
+            error: string;
         };
         CommandQueueStatusResource: {
             /** Format: int64 */
@@ -5626,6 +5661,25 @@ export interface components {
             /** Format: int64 */
             expected_revision: number;
         };
+        FrozenSpinsPreviewActivationRequest: {
+            activation_candidate_token: string;
+            definition: components["schemas"]["FrozenSpinsSchema"];
+            /** Format: int64 */
+            expected_revision: number;
+        };
+        FrozenSpinsPreviewActivationResponse: {
+            activation_candidate_token_consumed: boolean;
+            definition: components["schemas"]["FrozenSpinsSchema"];
+            mask_resource: string;
+            mask_sha256: string;
+            preview_id: string;
+            /** Format: int64 */
+            revision: number;
+            schema_version: string;
+            /** Format: int64 */
+            source_state_revision: number;
+            topology_fingerprint: string;
+        };
         FrozenSpinsPreviewRequest: {
             /** Format: int64 */
             expected_revision: number;
@@ -5637,6 +5691,7 @@ export interface components {
             target_object_id: string;
         };
         FrozenSpinsPreviewResponse: {
+            activation_candidate_token: string;
             bounds_m?: number[][] | null;
             current: boolean;
             /** Format: double */
@@ -18073,6 +18128,58 @@ export interface operations {
             };
         };
     };
+    model_post_sessions_current_model_frozen_spins_previews_preview_id_activate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FrozenSpinsPreviewActivationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrozenSpinsPreviewActivationResponse"];
+                };
+            };
+            /** @description Preview or definition missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale, consumed, or mismatched activation candidate */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Definition is incompatible with the preview */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     model_get_sessions_current_model_frozen_spins_constraint_id: {
         parameters: {
             query?: never;
@@ -20702,6 +20809,40 @@ export interface operations {
                 };
             };
             /** @description Command not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    simulation_post_sessions_current_simulation_commands_command_id_failure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Command identifier */
+                command_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommandFailureRequest"];
+            };
+        };
+        responses: {
+            /** @description Command marked as failed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommandDetailResource"];
+                };
+            };
+            /** @description Command or workspace not found */
             404: {
                 headers: {
                     [name: string]: unknown;

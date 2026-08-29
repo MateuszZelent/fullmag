@@ -311,13 +311,24 @@ fn attach_compatibility_registry(
     precision: fullmag_ir::ExecutionPrecision,
 ) -> BackendCapabilities {
     if precision == fullmag_ir::ExecutionPrecision::Single {
+        let frozen_fp32_executable = capabilities.engine_id == RuntimeEngineId::FdmCuda
+            && capabilities
+                .feature_capabilities
+                .get("constraint.frozen_spins")
+                .is_some_and(|feature| feature.scope.contains("single_grid"));
         if let Some(feature) = capabilities
             .feature_capabilities
             .get_mut("constraint.frozen_spins")
         {
-            feature.status = FeatureCapabilityStatus::Unsupported;
-            feature.reason = "Frozen Spins execution is not implemented for this lane in single precision; authoring remains available but execution must fail closed.".to_string();
-            feature.scope = format!("{}; precision=double", feature.scope);
+            if frozen_fp32_executable {
+                feature.status = FeatureCapabilityStatus::DevelopmentExecutable;
+                feature.reason = "Frozen Spins execution is available for the resolved FDM CUDA single-grid FP32 lane; production qualification remains receipt-scoped.".to_string();
+                feature.scope = "single_grid; device=cuda; precision=single; integrators=heun|rk4|rk23|dp45|abm3; hard_restore=quantized_bitwise".to_string();
+            } else {
+                feature.status = FeatureCapabilityStatus::Unsupported;
+                feature.reason = "Frozen Spins execution is not implemented for this lane in single precision; authoring remains available but execution must fail closed.".to_string();
+                feature.scope = format!("{}; precision=double", feature.scope);
+            }
         }
     }
     let mut field_quantities = capabilities
@@ -966,8 +977,8 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
         ),
         FemEngine::NativeGpu => (
             FeatureCapabilityStatus::DevelopmentExecutable,
-            "Frozen Spins device-resident FEM GPU explicit RK execution is available in double precision; GPU relaxation and production qualification remain gated.",
-            "true_dof; precision=double; explicit_rk; gpu_relaxation=unsupported; reason_code=frozen_spins_fem_gpu_relaxation_unqualified",
+            "Frozen Spins device-resident FEM GPU explicit RK, projected-gradient BB, and nonlinear-CG execution is available in double precision; tangent-plane implicit relaxation and production qualification remain gated.",
+            "true_dof; precision=double; explicit_rk|projected_gradient_bb|nonlinear_cg; tangent_plane_implicit=unsupported; reason_code=frozen_spins_fem_gpu_tpi_unqualified",
         ),
     };
     capabilities.feature_capabilities.insert(
@@ -1270,8 +1281,11 @@ mod tests {
         );
         assert_eq!(
             fdm_fp32.feature_capabilities["constraint.frozen_spins"].status,
-            FeatureCapabilityStatus::Unsupported
+            FeatureCapabilityStatus::DevelopmentExecutable
         );
+        assert!(fdm_fp32.feature_capabilities["constraint.frozen_spins"]
+            .scope
+            .contains("hard_restore=quantized_bitwise"));
         assert_eq!(
             fdm_multilayer.feature_capabilities["constraint.frozen_spins"].status,
             FeatureCapabilityStatus::DevelopmentExecutable
@@ -1286,7 +1300,9 @@ mod tests {
         );
         let fem_gpu_scope = &fem_gpu.feature_capabilities["constraint.frozen_spins"].scope;
         assert!(fem_gpu_scope.contains("explicit_rk"));
-        assert!(fem_gpu_scope.contains("gpu_relaxation=unsupported"));
+        assert!(fem_gpu_scope.contains("projected_gradient_bb"));
+        assert!(fem_gpu_scope.contains("nonlinear_cg"));
+        assert!(fem_gpu_scope.contains("tangent_plane_implicit=unsupported"));
     }
 
     #[test]

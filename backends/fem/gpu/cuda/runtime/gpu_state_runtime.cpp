@@ -147,6 +147,8 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     if (ctx.frozen_spins.enabled()) {
         if (!gpu_state_upload_frozen_spins(
                 ctx.gpu_state.device,
+                ctx.mesh.magnetic_node_mask.data(),
+                static_cast<uint64_t>(ctx.mesh.magnetic_node_mask.size()),
                 ctx.frozen_spins.mask().data(),
                 static_cast<uint64_t>(ctx.frozen_spins.mask().size()),
                 ctx.frozen_spins.reference().data(),
@@ -158,6 +160,8 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     } else {
         if (!gpu_state_upload_frozen_spins(
                 ctx.gpu_state.device,
+                nullptr,
+                0,
                 nullptr,
                 0,
                 nullptr,

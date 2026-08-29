@@ -14,6 +14,7 @@
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_energy_reductions.hpp"
 #include "gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp"
@@ -49,6 +50,33 @@ constexpr double kMinStepSize = 1.0e-15;
 constexpr double kMaxStepSize = 1.0e-3;
 constexpr double kArmijoCoefficient = 1.0e-4;
 constexpr uint32_t kMaxBacktracks = 20;
+
+const uint8_t *gpu_relax_pgbb_node_mask(const Context &ctx)
+{
+    const auto &regions = ctx.gpu_state.device.mesh_regions;
+    return ctx.frozen_spins.enabled()
+        ? regions.free_node_mask
+        : regions.magnetic_node_mask;
+}
+
+void gpu_relax_pgbb_project_frozen_reference(
+    Context &ctx,
+    FemGpuComponentField &field,
+    cudaStream_t stream)
+{
+    if (!ctx.frozen_spins.enabled()) {
+        return;
+    }
+    const auto &regions = ctx.gpu_state.device.mesh_regions;
+    gpu_project_frozen_reference(
+        field,
+        regions.frozen_mask,
+        regions.frozen_reference_x,
+        regions.frozen_reference_y,
+        regions.frozen_reference_z,
+        static_cast<int>(ctx.gpu_state.device.lifecycle.node_count),
+        stream);
+}
 
 struct GpuRelaxPgbbRollbackState {
     double step_size = kDefaultStepSize;
@@ -152,6 +180,17 @@ bool gpu_relax_pgbb_preflight(
         reason = "GPU projected-gradient BB requires a device magnetic-node mask matching the FEM state";
         return false;
     }
+    if (ctx.frozen_spins.enabled() &&
+        (gpu.mesh_regions.free_node_mask == nullptr ||
+         gpu.mesh_regions.free_node_mask_count != gpu.lifecycle.node_count ||
+         gpu.mesh_regions.frozen_mask == nullptr ||
+         gpu.mesh_regions.frozen_node_count != gpu.lifecycle.node_count ||
+         gpu.mesh_regions.frozen_reference_x == nullptr ||
+         gpu.mesh_regions.frozen_reference_y == nullptr ||
+         gpu.mesh_regions.frozen_reference_z == nullptr)) {
+        reason = "GPU projected-gradient BB requires complete device Frozen Spins masks and reference matching the FEM state";
+        return false;
+    }
     if (gpu.reductions.scalar_workspace == nullptr ||
         gpu.reductions.scalar_result == nullptr ||
         gpu.reductions.temp_storage == nullptr ||
@@ -240,7 +279,7 @@ bool gpu_relax_compute_current_metrics(
         gpu.fields.h_eff.y,
         gpu.fields.h_eff.z,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_pgbb_node_mask(ctx),
         gradient.x,
         gradient.y,
         gradient.z,
@@ -256,7 +295,7 @@ bool gpu_relax_compute_current_metrics(
         gradient.z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_pgbb_node_mask(ctx),
         gpu.rk.error.x,
         n,
         stream);
@@ -420,7 +459,7 @@ bool gpu_relax_compute_accepted_bb_curvature(
         gpu.fields.h_eff.y,
         gpu.fields.h_eff.z,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_pgbb_node_mask(ctx),
         gpu.rk.k[1].x,
         gpu.rk.k[1].y,
         gpu.rk.k[1].z,
@@ -446,7 +485,7 @@ bool gpu_relax_compute_accepted_bb_curvature(
         gpu.rk.k[1].z,
         gpu.materials.ms,
         gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
+        gpu_relax_pgbb_node_mask(ctx),
         gpu.reductions.scalar_workspace,
         gpu.rk.error.x,
         gpu.rk.error.y,
@@ -513,6 +552,15 @@ int gpu_relax_projected_gradient_bb_step(
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream);
     const int n = static_cast<int>(gpu.lifecycle.node_count);
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
+
+    gpu_relax_pgbb_project_frozen_reference(
+        ctx, gpu.magnetization.m, stream);
+    if (!cuda_launch_ok(
+            "launch GPU projected-gradient BB entry Frozen Spins restore",
+            reason)) {
+        error = reason;
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
 
     if (!gpu_rk_copy_component_device(
             gpu.magnetization.m,
@@ -640,7 +688,7 @@ int gpu_relax_projected_gradient_bb_step(
                 gpu.rk.k[0].x,
                 gpu.rk.k[0].y,
                 gpu.rk.k[0].z,
-                gpu.mesh_regions.magnetic_node_mask,
+                gpu_relax_pgbb_node_mask(ctx),
                 -trial_step,
                 gpu.rk.m_stage.x,
                 gpu.rk.m_stage.y,
@@ -656,6 +704,8 @@ int gpu_relax_projected_gradient_bb_step(
                     n,
                     stream);
             }
+            gpu_relax_pgbb_project_frozen_reference(
+                ctx, gpu.rk.m_stage, stream);
             if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason)) {
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,

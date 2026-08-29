@@ -26,7 +26,9 @@ pub(crate) struct FrozenSpinsPreviewRecord {
     pub session_id: String,
     pub scene_revision: u64,
     pub source_state_revision: u64,
+    pub fem_topology: bool,
     pub topology_fingerprint: String,
+    pub requested_selector: fullmag_ir::SelectionExprIR,
     pub response: crate::schemas::FrozenSpinsPreviewResponse,
     pub frozen_mask: Vec<bool>,
 }
@@ -37,6 +39,8 @@ const MAX_FROZEN_SPINS_PREVIEWS: usize = 32;
 pub(crate) struct FrozenSpinsPreviewStore {
     records: BTreeMap<String, FrozenSpinsPreviewRecord>,
     insertion_order: VecDeque<String>,
+    consumed_activation_tokens: BTreeMap<String, String>,
+    consumed_activation_order: VecDeque<String>,
     session_id: Option<String>,
 }
 
@@ -45,6 +49,8 @@ impl FrozenSpinsPreviewStore {
         if self.session_id.as_deref() != Some(session_id) {
             self.records.clear();
             self.insertion_order.clear();
+            self.consumed_activation_tokens.clear();
+            self.consumed_activation_order.clear();
             self.session_id = Some(session_id.to_string());
         }
     }
@@ -76,6 +82,49 @@ impl FrozenSpinsPreviewStore {
             }
         }
         replaced
+    }
+
+    pub(crate) fn consume(
+        &mut self,
+        preview_id: &str,
+        activation_candidate_token: &str,
+    ) -> Option<FrozenSpinsPreviewRecord> {
+        let matches = self
+            .records
+            .get(preview_id)
+            .map(|record| record.response.activation_candidate_token == activation_candidate_token)
+            .unwrap_or(false);
+        if !matches {
+            return None;
+        }
+        self.insertion_order
+            .retain(|existing| existing != preview_id);
+        let consumed = self.records.remove(preview_id)?;
+        self.consumed_activation_order
+            .retain(|existing| existing != preview_id);
+        self.consumed_activation_order
+            .push_back(preview_id.to_string());
+        self.consumed_activation_tokens.insert(
+            preview_id.to_string(),
+            activation_candidate_token.to_string(),
+        );
+        while self.consumed_activation_tokens.len() > MAX_FROZEN_SPINS_PREVIEWS {
+            if let Some(oldest) = self.consumed_activation_order.pop_front() {
+                self.consumed_activation_tokens.remove(&oldest);
+            }
+        }
+        Some(consumed)
+    }
+
+    pub(crate) fn activation_token_was_consumed(
+        &self,
+        preview_id: &str,
+        activation_candidate_token: &str,
+    ) -> bool {
+        self.consumed_activation_tokens
+            .get(preview_id)
+            .map(String::as_str)
+            == Some(activation_candidate_token)
     }
 
     #[cfg(test)]

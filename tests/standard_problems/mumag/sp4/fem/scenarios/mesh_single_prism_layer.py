@@ -12,12 +12,16 @@ The matching managed mesh command is:
 It is a topology/artifact contract only; it does not qualify a solver run.
 """
 
+import os
+
 import fullmag as fm
 
 
 study = fm.study("mumag_sp4_fem_mesh_single_prism_layer")
 study.engine("fem")
-study.device("auto", precision="double")
+# Mixed-P1 authoring requires an explicit execution device.  The managed CPU
+# recipe is the default; GPU callers can opt in without changing the fixture.
+study.device(os.environ.get("FULLMAG_SP4_DEVICE", "cpu"), precision="double")
 study.mode("strict")
 
 study.universe(

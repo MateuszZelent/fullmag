@@ -18,11 +18,13 @@ import {
   resolveViewport3DMeshQualityLegend,
   resolveViewport3DVectorSegmentLengthRange,
   createViewport3DPointerHoldLifecycle,
+  resolveViewport3DVisualizationAckDataIdentity,
   resolveViewport3DScalarColorbarLegend,
   resolveViewport3DScalarColorbarLegends,
   shouldClearRetainedViewport3DScalarColorbarLegends,
   shouldRetainViewport3DScalarColorbarLegends,
 } from "./Viewport3DModule";
+import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
 import { planViewport3DColorbars } from "./model/viewport3DColorbarPlan";
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
@@ -54,6 +56,55 @@ describe("viewport vector segment diagnostics", () => {
         new Float32Array([0, 0, 0, 3, 4, 0, 1, 1, 1, 1, 1, 1, 3, 0.5]),
       ),
     ).toEqual({ max: 5, min: 2 });
+  });
+});
+
+describe("FEM visualization ACK data identity", () => {
+  it("uses the scalar buffer actually adopted by the FEM surface renderer", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const sessionIdentity = {
+      sessionEpoch: "session-fem@1000",
+      sessionId: "session-fem",
+    };
+    registry.setSessionIdentity(sessionIdentity);
+    registry.retainDemand("object:frozen");
+    registry.recordSurfaceAdoption({
+      byteLength: 496,
+      carrierId: "part:frozen",
+      fieldBufferId: "fem:frozen_spins:63",
+      resourceKey: "field:frozen_spins:63",
+      scalarBufferKey: "scalar:frozen_spins:63",
+      sessionIdentity,
+      targetId: "object:frozen",
+    });
+
+    const identity = resolveViewport3DVisualizationAckDataIdentity({
+      adoptionRegistry: registry,
+      sessionIdentity: sessionIdentity as never,
+      source: {
+        fieldModel: {
+          targetPasses: new Map([
+            ["part:frozen", {
+              fieldBuffer: {
+                bufferId: "fem:frozen_spins:63",
+                fieldRevision: "63",
+              },
+            }],
+          ]),
+        },
+        fullFieldBufferIdentity: null,
+      } as never,
+      visualizationRevision: 12,
+    });
+
+    expect(identity).toEqual({
+      fieldBufferId: "fem:frozen_spins:63",
+      fieldRevision: "63",
+      resourceKey: "field:frozen_spins:63",
+      sessionEpoch: "session-fem@1000",
+      sessionId: "session-fem",
+      visualizationRevision: 12,
+    });
   });
 });
 
@@ -211,6 +262,34 @@ describe("resolveViewport3DMeshQualityLegend", () => {
     expect(callback).toContain("...airboxFrameState");
     expect(callback).not.toContain("dataset");
     expect(callback).not.toContain("closest<HTMLElement>");
+  });
+
+  it("replays FDM render adoption through the carrier id used by each target layer", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+    const mappingStart = source.indexOf(
+      "const visualizationDebugCarrierTargets = useMemo",
+    );
+    const mappingSource = source.slice(
+      mappingStart,
+      source.indexOf("useViewport3DVisualizationDebugPublisher", mappingStart),
+    );
+
+    expect(mappingSource).toContain("appendTarget(target.id, target.id)");
+    expect(mappingSource).not.toContain('appendTarget("fdm-domain", target.id)');
+  });
+
+  it("passes session provenance explicitly to the WebGL scene after frame prop destructuring", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+    const sceneStart = source.indexOf("<Viewport3DScene", source.indexOf("const Viewport3DFrame"));
+    const sceneSource = source.slice(sceneStart, source.indexOf("/>", sceneStart));
+
+    expect(sceneSource).toContain("sessionIdentity={sessionIdentity}");
   });
 
   it("preserves mesh-part boundary face identity in viewport selection refs", () => {

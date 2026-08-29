@@ -4870,4 +4870,31 @@ describe("useViewport3DSceneModel", () => {
     );
     expect(source).toContain("responseDomainGenerationId:");
   });
+
+  it("uses the field buffer adopted by a visible FDM render pass for frame ACK identity", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const adoptionStart = source.indexOf("const adoptedFdmFieldBuffer =");
+    const debugSourceStart = source.indexOf(
+      "const visualizationDebugSource =",
+      adoptionStart,
+    );
+    const adoptionSource = source.slice(adoptionStart, debugSourceStart);
+    const identitySource = source.slice(
+      debugSourceStart,
+      source.indexOf("fullFieldVector:", debugSourceStart),
+    );
+
+    expect(adoptionSource).toContain("view.settings.visible");
+    expect(adoptionSource).toContain("view.fieldBuffer !== null");
+    expect(adoptionSource).toContain(
+      "view.surfaceColors !== null || view.vectorSegments !== null",
+    );
+    expect(adoptionSource).toContain("?.fieldBuffer ?? fdmAirboxFieldBuffer");
+    expect(identitySource).toContain(
+      "fullFieldBufferIdentity: adoptedFdmFieldBuffer",
+    );
+    expect(identitySource).not.toContain(
+      "fullFieldBufferIdentity: fdmAirboxFieldBuffer",
+    );
+  });
 });

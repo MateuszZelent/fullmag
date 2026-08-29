@@ -535,6 +535,8 @@ bool gpu_state_upload_stt_element_mask(
 
 bool gpu_state_upload_frozen_spins(
     FemGpuState &state,
+    const uint8_t *magnetic_node_mask,
+    uint64_t magnetic_node_mask_len,
     const uint8_t *frozen_mask,
     uint64_t frozen_mask_len,
     const double *frozen_reference_xyz,
@@ -542,6 +544,10 @@ bool gpu_state_upload_frozen_spins(
     TransferAudit &audit,
     std::string &error)
 {
+    if ((magnetic_node_mask == nullptr) != (magnetic_node_mask_len == 0)) {
+        error = "FEM GPU Frozen Spins free-node mask requires a magnetic mask pointer and non-zero length together";
+        return false;
+    }
     if ((frozen_mask == nullptr) != (frozen_mask_len == 0)) {
         error = "FEM GPU Frozen Spins mask requires a pointer and non-zero length together";
         return false;
@@ -554,6 +560,10 @@ bool gpu_state_upload_frozen_spins(
         error = "FEM GPU Frozen Spins reference length must be 3x the mask length";
         return false;
     }
+    if (frozen_mask != nullptr && magnetic_node_mask_len != frozen_mask_len) {
+        error = "FEM GPU Frozen Spins magnetic and frozen masks must have identical lengths";
+        return false;
+    }
     if (!state.lifecycle.allocated) {
         return true;
     }
@@ -562,10 +572,13 @@ bool gpu_state_upload_frozen_spins(
     auto &mesh_regions = state.mesh_regions;
     if (mesh_regions.frozen_mask != nullptr) {
         gpu_device_free_u8(mesh_regions.frozen_mask);
+        gpu_device_free_u8(mesh_regions.free_node_mask);
         gpu_device_free_double(mesh_regions.frozen_reference_x);
         gpu_device_free_double(mesh_regions.frozen_reference_y);
         gpu_device_free_double(mesh_regions.frozen_reference_z);
         mesh_regions.frozen_mask = nullptr;
+        mesh_regions.free_node_mask = nullptr;
+        mesh_regions.free_node_mask_count = 0;
         mesh_regions.frozen_reference_x = nullptr;
         mesh_regions.frozen_reference_y = nullptr;
         mesh_regions.frozen_reference_z = nullptr;
@@ -576,12 +589,35 @@ bool gpu_state_upload_frozen_spins(
     }
 
     uint8_t *d_mask = nullptr;
+    uint8_t *d_free_mask = nullptr;
     if (!gpu_device_allocate_u8(d_mask, frozen_mask_len, state.lifecycle.device_bytes, error)) {
+        return false;
+    }
+    if (!gpu_device_allocate_u8(d_free_mask, frozen_mask_len, state.lifecycle.device_bytes, error)) {
+        gpu_device_free_u8(d_mask);
         return false;
     }
     if (cudaMemcpy(d_mask, frozen_mask, static_cast<size_t>(frozen_mask_len), cudaMemcpyHostToDevice) != cudaSuccess) {
         gpu_device_free_u8(d_mask);
+        gpu_device_free_u8(d_free_mask);
         error = "cudaMemcpy FemGpuState frozen mask host->device failed";
+        return false;
+    }
+    record_host_to_device(audit, frozen_mask_len);
+
+    std::vector<uint8_t> free_mask(frozen_mask_len, 0u);
+    for (uint64_t i = 0; i < frozen_mask_len; ++i) {
+        free_mask[i] = static_cast<uint8_t>(
+            magnetic_node_mask[i] != 0u && frozen_mask[i] == 0u);
+    }
+    if (cudaMemcpy(
+            d_free_mask,
+            free_mask.data(),
+            static_cast<size_t>(frozen_mask_len),
+            cudaMemcpyHostToDevice) != cudaSuccess) {
+        gpu_device_free_u8(d_mask);
+        gpu_device_free_u8(d_free_mask);
+        error = "cudaMemcpy FemGpuState free-node mask host->device failed";
         return false;
     }
     record_host_to_device(audit, frozen_mask_len);
@@ -602,6 +638,7 @@ bool gpu_state_upload_frozen_spins(
         !gpu_device_allocate_double(d_ry, frozen_mask_len, state.lifecycle.device_bytes, error) ||
         !gpu_device_allocate_double(d_rz, frozen_mask_len, state.lifecycle.device_bytes, error)) {
         gpu_device_free_u8(d_mask);
+        gpu_device_free_u8(d_free_mask);
         gpu_device_free_double(d_rx);
         gpu_device_free_double(d_ry);
         gpu_device_free_double(d_rz);
@@ -613,6 +650,7 @@ bool gpu_state_upload_frozen_spins(
         cudaMemcpy(d_ry, ry.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess ||
         cudaMemcpy(d_rz, rz.data(), bytes, cudaMemcpyHostToDevice) != cudaSuccess) {
         gpu_device_free_u8(d_mask);
+        gpu_device_free_u8(d_free_mask);
         gpu_device_free_double(d_rx);
         gpu_device_free_double(d_ry);
         gpu_device_free_double(d_rz);
@@ -622,12 +660,16 @@ bool gpu_state_upload_frozen_spins(
     record_host_to_device(audit, 3u * frozen_mask_len * sizeof(double));
 
     mesh_regions.frozen_mask = d_mask;
+    mesh_regions.free_node_mask = d_free_mask;
+    mesh_regions.free_node_mask_count = frozen_mask_len;
     mesh_regions.frozen_reference_x = d_rx;
     mesh_regions.frozen_reference_y = d_ry;
     mesh_regions.frozen_reference_z = d_rz;
     mesh_regions.frozen_node_count = frozen_mask_len;
     return true;
 #else
+    (void)magnetic_node_mask;
+    (void)magnetic_node_mask_len;
     (void)audit;
     error = "FEM GPU Frozen Spins upload requires CUDA runtime support";
     return false;

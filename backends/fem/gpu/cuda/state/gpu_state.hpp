@@ -209,6 +209,8 @@ bool gpu_state_upload_mesh_geometry(
 
 bool gpu_state_upload_frozen_spins(
     FemGpuState &state,
+    const uint8_t *magnetic_node_mask,
+    uint64_t magnetic_node_mask_len,
     const uint8_t *frozen_mask,
     uint64_t frozen_mask_len,
     const double *frozen_reference_xyz,

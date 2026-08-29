@@ -25,7 +25,7 @@ import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
 
-type PendingField = "apply" | "delete" | "preview" | null;
+type PendingField = "activate" | "apply" | "delete" | "preview" | null;
 
 interface Feedback {
   kind: "error" | "success" | "warning";
@@ -103,6 +103,7 @@ export function FrozenSpinsEditor({
   const [pendingField, setPendingField] = useState<PendingField>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [preview, setPreview] = useState<FrozenSpinsPreviewResponse | null>(null);
+  const [previewSelectorJson, setPreviewSelectorJson] = useState<string | null>(null);
   const fieldMeta = useFieldMetaResource({
     enabled: objectId !== null,
     owner_object_id: objectId,
@@ -127,7 +128,9 @@ export function FrozenSpinsEditor({
         setDraft(acknowledged);
       }
       setRevision(response.revision);
+      setPreview(null);
       invalidateDefinitionResources(kernel, draft.id, response.revision);
+      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       setFeedback({ kind: "success", message: "Frozen Spins definition updated." });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -167,6 +170,7 @@ export function FrozenSpinsEditor({
             : null,
         target_object_id: objectId,
       });
+      setPreviewSelectorJson(JSON.stringify(draft.selector));
       setPreview(response);
       kernel.resources.invalidate(
         FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
@@ -177,6 +181,46 @@ export function FrozenSpinsEditor({
         message: response.current
           ? "Frozen Spins preview is current and visible in the 3D viewport."
           : "Preview was created but is stale against the current model state.",
+      });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setPendingField(null);
+    }
+  }
+
+  async function activatePreview(): Promise<void> {
+    if (!preview?.current) {
+      setFeedback({
+        kind: "warning",
+        message: "Create a current Frozen Spins preview before activation.",
+      });
+      return;
+    }
+    const submittedDraft = draft;
+    setPendingField("activate");
+    setFeedback(null);
+    try {
+      const response = await kernel.api.model.frozenSpins.activatePreview(
+        preview.preview_id,
+        {
+          activation_candidate_token: preview.activation_candidate_token,
+          definition: submittedDraft,
+          expected_revision: revision,
+        },
+      );
+      if (draftRef.current === submittedDraft) {
+        const acknowledged = normalizeDefinition(response.definition);
+        draftRef.current = acknowledged;
+        setDraft(acknowledged);
+      }
+      setRevision(response.revision);
+      setPreview(null);
+      invalidateDefinitionResources(kernel, draft.id, response.revision);
+      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
+      setFeedback({
+        kind: "success",
+        message: "Frozen Spins preview activated and its one-time candidate consumed.",
       });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -200,6 +244,7 @@ export function FrozenSpinsEditor({
         frozenSpinsDefinitionResourceKey(draft.id),
         response.revision,
       );
+      kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
       kernel.selection.clear("inspector");
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -210,6 +255,14 @@ export function FrozenSpinsEditor({
   const activation = draft.activation ?? { kind: "all_stages" };
   const reference = draft.reference ?? { kind: "capture_current_at_activation" };
   const membership = draft.membership ?? { kind: "static" };
+  const toolbarPending = pendingField !== null;
+  const activationCandidateReady = Boolean(
+    preview?.current &&
+    draft.enabled &&
+    reference.kind === "capture_current_at_activation" &&
+    previewSelectorJson === JSON.stringify(draft.selector) &&
+    activationIncludesStage(activation, preview.requested.stage_id),
+  );
 
   return (
     <div
@@ -363,7 +416,7 @@ export function FrozenSpinsEditor({
       <InspectorGroup title="Preview" collapsible defaultOpen>
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={pendingField === "preview"}
+            disabled={toolbarPending}
             size="sm"
             type="button"
             onClick={() => void createPreview()}
@@ -371,16 +424,31 @@ export function FrozenSpinsEditor({
             {pendingField === "preview" ? "Computing preview…" : "Preview mask"}
           </Button>
           <Button
-            disabled={pendingField === "apply"}
+            disabled={toolbarPending}
             size="sm"
             type="button"
-            variant="primary"
             onClick={() => void applyDraft()}
           >
             {pendingField === "apply" ? "Applying…" : "Apply"}
           </Button>
+          {preview ? (
+            <Button
+              disabled={!activationCandidateReady || toolbarPending}
+              size="sm"
+              title={
+                activationCandidateReady
+                  ? "Atomically commit this exact preview candidate"
+                  : "Create a preview that matches the current selector, reference, and stage"
+              }
+              type="button"
+              variant="primary"
+              onClick={() => void activatePreview()}
+            >
+              {pendingField === "activate" ? "Activating…" : "Activate preview"}
+            </Button>
+          ) : null}
           <Button
-            disabled={pendingField === "delete"}
+            disabled={toolbarPending}
             size="sm"
             type="button"
             variant="danger"
@@ -389,17 +457,29 @@ export function FrozenSpinsEditor({
             {pendingField === "delete" ? "Deleting…" : "Delete"}
           </Button>
         </div>
-        {preview ? <FrozenSpinsPreviewDetails preview={preview} /> : null}
+        {preview ? (
+          <FrozenSpinsPreviewDetails
+            activationCandidateReady={activationCandidateReady}
+            preview={preview}
+          />
+        ) : null}
       </InspectorGroup>
     </div>
   );
 }
 
 export function FrozenSpinsPreviewDetails({
+  activationCandidateReady,
   preview,
 }: {
+  activationCandidateReady?: boolean;
   preview: FrozenSpinsPreviewResponse;
 }) {
+  const activationCandidateState = !preview.current
+    ? "stale"
+    : activationCandidateReady === false
+      ? "requires new preview"
+      : "ready (one-time)";
   return (
     <div className="fm-inspector-panel" data-preview-current={preview.current}>
       <FieldRow label="Preview ID" value={preview.preview_id} />
@@ -409,6 +489,10 @@ export function FrozenSpinsPreviewDetails({
       <FieldRow label="Bounds (m)" value={formatBounds(preview.bounds_m)} />
       <FieldRow label="Mask hash" value={preview.mask_sha256} />
       <FieldRow label="Freshness" value={preview.current ? "current" : "stale"} />
+      <FieldRow
+        label="Activation candidate"
+        value={activationCandidateState}
+      />
       <FieldRow label="Qualification" value={preview.resolved.qualification} />
       {preview.warnings.map((warning) => (
         <FeedbackBanner
@@ -444,6 +528,14 @@ function invalidateDefinitionResources(
 
 function splitIds(value: string): string[] {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function activationIncludesStage(
+  activation: FrozenSpinsActivation,
+  stageId: string | null | undefined,
+): boolean {
+  if (!stageId || activation.kind === "all_stages") return true;
+  return activation.stage_ids.includes(stageId);
 }
 
 function formatBounds(bounds: number[][] | null | undefined): string {

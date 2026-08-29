@@ -549,9 +549,13 @@
                 "type": "string"
               },
               "magnetization_ref": {
-                "type": [
-                  "string",
-                  "null"
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NullableStringPatchValue"
+                  }
                 ]
               },
               "object_id": {
@@ -2145,6 +2149,17 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "CommandFailureRequest": {
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
         "type": "object"
       },
       "CommandQueueStatusResource": {
@@ -7927,6 +7942,74 @@
         ],
         "type": "object"
       },
+      "FrozenSpinsPreviewActivationRequest": {
+        "properties": {
+          "activation_candidate_token": {
+            "type": "string"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/FrozenSpinsSchema"
+          },
+          "expected_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "activation_candidate_token",
+          "definition"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsPreviewActivationResponse": {
+        "properties": {
+          "activation_candidate_token_consumed": {
+            "type": "boolean"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/FrozenSpinsSchema"
+          },
+          "mask_resource": {
+            "type": "string"
+          },
+          "mask_sha256": {
+            "type": "string"
+          },
+          "preview_id": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "preview_id",
+          "activation_candidate_token_consumed",
+          "source_state_revision",
+          "topology_fingerprint",
+          "mask_sha256",
+          "mask_resource",
+          "revision",
+          "definition"
+        ],
+        "type": "object"
+      },
       "FrozenSpinsPreviewRequest": {
         "properties": {
           "expected_revision": {
@@ -7966,6 +8049,9 @@
       },
       "FrozenSpinsPreviewResponse": {
         "properties": {
+          "activation_candidate_token": {
+            "type": "string"
+          },
           "bounds_m": {
             "items": {
               "items": {
@@ -8029,6 +8115,7 @@
         "required": [
           "schema_version",
           "preview_id",
+          "activation_candidate_token",
           "revision",
           "current",
           "frozen_dof_count",
@@ -41554,6 +41641,76 @@
         ]
       }
     },
+    "/v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_frozen_spins_previews_preview_id_activate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preview_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrozenSpinsPreviewActivationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FrozenSpinsPreviewActivationResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Preview or definition missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale, consumed, or mismatched activation candidate"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Definition is incompatible with the preview"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/frozen-spins/{constraint_id}": {
       "delete": {
         "operationId": "model_delete_sessions_current_model_frozen_spins_constraint_id",
@@ -44345,6 +44502,50 @@
           },
           "404": {
             "description": "Command not found"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
+    "/v2/sessions/current/simulation/commands/{command_id}/failure": {
+      "post": {
+        "operationId": "simulation_post_sessions_current_simulation_commands_command_id_failure",
+        "parameters": [
+          {
+            "description": "Command identifier",
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommandFailureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandDetailResource"
+                }
+              }
+            },
+            "description": "Command marked as failed"
+          },
+          "404": {
+            "description": "Command or workspace not found"
           }
         },
         "tags": [

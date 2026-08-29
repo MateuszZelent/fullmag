@@ -104,6 +104,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::model::get_frozen_spins_preview),
         )
         .route(
+            "/v2/sessions/current/model/frozen-spins/previews/:preview_id/activate",
+            post(handlers::model::activate_frozen_spins_preview),
+        )
+        .route(
             "/v2/sessions/current/model/frozen-spins/:constraint_id",
             get(handlers::model::get_frozen_spins)
                 .patch(handlers::model::patch_frozen_spins)

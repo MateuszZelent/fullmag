@@ -621,6 +621,10 @@ export type FrozenSpinsPreviewRequest =
   components["schemas"]["FrozenSpinsPreviewRequest"];
 export type FrozenSpinsPreviewResponse =
   components["schemas"]["FrozenSpinsPreviewResponse"];
+export type FrozenSpinsPreviewActivationRequest =
+  components["schemas"]["FrozenSpinsPreviewActivationRequest"];
+export type FrozenSpinsPreviewActivationResponse =
+  components["schemas"]["FrozenSpinsPreviewActivationResponse"];
 export type FrozenSpinsDefinition = components["schemas"]["FrozenSpinsSchema"];
 export type FrozenSpinsSelectionExpression =
   components["schemas"]["SelectionExprSchema"];

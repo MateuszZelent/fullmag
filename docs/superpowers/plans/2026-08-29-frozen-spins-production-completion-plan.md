@@ -152,8 +152,8 @@ Poniższe wpisy są historycznymi obserwacjami audytowymi, nie trwałymi receipt
 - FEM GPU ma skompilowane źródła, lecz brak wykonanego dowodu urządzeniowego Frozen Spins.
 - Zarządzany FEM CPU build przeszedł, ale kanoniczna recepta zakończyła się przed Frozen Spins przez niezależny błąd `fem_interaction_docs_contract` dotyczący ownership boundaries.
 - CUDA receipt był efemeryczny w `/tmp`, nie miał rzeczywistej identyfikacji urządzenia/drivera/runtime i zniknął wraz z kontenerem.
-- Control Room przekazuje `femTrueDofPositions: null`; nawet zastąpienie go samą tablicą pozycji nie zamknie FS-010 bez pełnego true-DOF-to-render CSR carrier.
-- Browser smoke sprawdza jedynie Ribbon, canvas i WebGL; nie tworzy constraintu, nie potwierdza Explorer/Inspector, maski, preview ani overlay.
+- Historyczna implementacja przekazywała `femTrueDofPositions: null`. Audyt dyskretyzacji wykazał następnie, że obsługiwana ścieżka FEM P1 publikuje maskę w lokalnym porządku węzłów, a nie w true-DOF; właściwym kontraktem jest więc `fullmag.fem-local-node-render.v1` związany z opublikowaną topologią FMMT. Wyższy rząd, MPI/ghost i true-DOF pozostają fail-closed do czasu osobnego, jawnego carriera.
+- Historyczny browser smoke sprawdzał jedynie Ribbon, canvas i WebGL. Został rozszerzony o realny katalog/payload quantity, HTTP v2, render ACK, network log, screenshot i receipt; pełny workflow create/activate/Explorer/Inspector oraz FEM live pozostaje oddzielną częścią P15.
 - Typecheck ma `qualification_status=UNQUALIFIED, gate_result=NOT_RUN/BLOCKED`: wrapper Windows kończy się `spawnSync next.cmd EINVAL`, a bezpośredni `tsc` zgłasza brak typów `esrecurse` i `json-schema`. Nie jest to dowód defektu Frozen Spins, ale blokuje release gate UI.
 
 ### 4.3. Aktualizacja wykonawcza po rozpoczęciu realizacji planu
@@ -196,12 +196,12 @@ Dowody wykonane dla tego wycinka:
 
 Pozostałe bramki tego wycinka:
 
-- pełny typecheck Control Room: `BLOCKED` przez niezależne błędy `react-resizable-panels` w `Resizable.tsx`;
+- pełny typecheck Control Room: `PASS`; naprawiono kontrakt `react-resizable-panels` w `Resizable.tsx` oraz Windows wrapper, który uruchamia teraz lokalne entrypointy Next.js/TypeScript przez `process.execPath` zamiast zawodnego `next.cmd`/`tsc.cmd`;
 - managed FEM runtime: `BLOCKED` przez istniejące błędy kompilacji natywnego C++/MSVC (`std::snprintf`, GNU `__atomic_*`, `M_PI` i pola Poisson);
 - rzeczywista kwalifikacja CUDA/GPU: `qualification_status=UNQUALIFIED, gate_result=NOT_RUN`;
-- live browser/WebGL z wyborem `frozen_spins` jako aktywnego quantity: `qualification_status=UNQUALIFIED, gate_result=NOT_RUN`;
-- P13 jako całość: `SOURCE CONFIRMED / INCOMPLETE`, ponieważ nadal wymagane są lifecycle revision/ETag/invalidation, pełny carrier FEM true-DOF i roundtrip constraintu;
-- P14 jako całość: `SOURCE CONFIRMED / INCOMPLETE`, ponieważ nadal wymagane są live FDM/FEM, stany błędów, typecheck oraz browser proof.
+- live browser/WebGL z wyborem `frozen_spins` jako aktywnego quantity: FDM CPU `RUNTIME_CONFIRMED_DIRTY_SOURCE/PASS`; FEM live nadal `NOT_RUN`;
+- P13 jako całość: `SOURCE CONFIRMED / INCOMPLETE`; autorytatywny FEM serial-P1 authored preview jest wdrożony z obsługą `ExplicitLocalToGlobal`, airboxu i incydencji elementów, a jednorazowa atomowa transakcja authoringowa `Preview → Activate` konsumuje token dopiero po commitcie. Nadal wymagane są pełne descriptor lifecycle revision/ETag/invalidation, activation certificate/epoch oraz powiązanie z uruchomieniem solvera;
+- P14 jako całość: `SOURCE CONFIRMED / INCOMPLETE`; quantity 3D FDM ma realny PASS, FEM local-node carrier ma testy źródłowe, a Inspector oferuje kontrolowane `Activate preview` z lokalnym stale/mismatch guardem. Nadal otwarte są live FEM, browserowy workflow create/activate oraz ekspozycja solverowych epoch/resolved-set revision.
 
 Po korekcie audytu rozpoczęto również P0–P2:
 
@@ -213,7 +213,20 @@ Po korekcie audytu rozpoczęto również P0–P2:
 
 P0 ma `gate_result=PASS` na poziomie zamrożenia zakresu. P1 i P2 pozostają `INCOMPLETE`: P1 wymaga jeszcze klasyfikacji zmian oraz czystego qualification tree, a P2 osobnych recept lane i realnych receiptów generowanych przez runtime. Append-only evidence ledger jest zaimplementowany, lecz pozostaje pusty do pierwszego kompletnego zestawu ważnych receiptów.
 
-### 4.4. Findings register
+### 4.4. Aktualizacja wykonawcza P9–P14 po wdrożeniu runtime
+
+**Stan na 2026-08-29 po wdrożeniu integratorów CUDA, FEM TPI, device-resident minimizerów FEM GPU i standardowego quantity:** nadal nie wolno użyć statusu zbiorczego `QUALIFIED`, ponieważ checkout jest brudny, a bramki P13 carrier, P15 i P16 pozostają otwarte.
+
+1. **P9 / FDM CUDA FP64 — `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** Heun, RK4, RK23, DP45 i ABM3 wykonują device-side hard restore przed pełnym RHS i po stanie kandydackim/zaakceptowanym. Zarządzany test na NVIDIA GeForce RTX 4080 SUPER (CC 8.9, UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, PCI `0000:01:00.0`) potwierdził bitową niezmienność nieosiowej referencji oraz ruch swobodnego spinu. Recepta zapisuje trwały receipt, lecz obecny dirty tree nie może dać finalnego dowodu release.
+2. **P10 / FDM CUDA FP32 — `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** publiczny C ABI dopuszcza lane po usunięciu przejściowego guardu. Kanoniczna recepta potwierdziła na RTX 4080 SUPER pełną macierz Heun/RK4/RK23/DP45/ABM3 dla FP32 i FP64, zero-ULP hard restore, ruch free spinu oraz zachowanie checkpointu. Trwały receipt znajduje się w `artifacts/qualification/frozen-spins/fdm-cuda/fdm-frozen-spins-cuda-runtime-evidence-v1.json`; nie jest receipt'em release, ponieważ nie wiąże jeszcze kompletnego clean-tree source identity P16.
+3. **P11 / FEM CPU — `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** explicit RK, PG-BB, NCG i TPI zachowują nieosiową referencję `(0.36, 0.48, 0.8)` bitowo, a swobodny węzeł pozostaje mobilny. TPI eliminuje zamrożone tangent DOF przez inactive/identity rows i korzysta ze wspólnego free-only gradient/restore. Capability CPU obejmuje `tangent_plane_implicit`; końcowy ABI `fullmag-fem-sys` przeszedł 42/42 z przypiętym `RUSTUP_TOOLCHAIN=nightly`.
+4. **P12 / FEM GPU — explicit RK, PG-BB i NCG `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** maska free-node i frozen reference są przesyłane raz podczas bootstrapu i pozostają na urządzeniu. PG-BB/NCG liczą gradienty, normy, iloczyny skalarne, krzywiznę, kierunki i retrakcję tylko po free nodes, po każdej projekcji okresowej wykonują exact restore i nie używają CPU fallbacku. Kanoniczne `just verify-frozen-spins-fem-gpu` wykonało prawdziwe binarium na RTX 4080 SUPER (MFEM 4.9, Hypre 3.1.0, CUDA CC 8.9), potwierdziło przypadki non-axis, free mobility, all-frozen, no-mask bitwise parity i `hot_loop_*_h2d/d2h_bytes=0`. Receipt: `artifacts/qualification/frozen-spins/fem-gpu/fem-frozen-spins-gpu-runtime-evidence-v1.json`, ze statusem `RUNTIME_CONFIRMED_DIRTY_SOURCE`. GPU TPI pozostaje fail-closed kodem `frozen_spins_fem_gpu_tpi_unqualified`; wymaganie `algorithm.fem_tpi` jest pokryte lane CPU P11, nie wolno reklamować TPI na GPU.
+5. **P13–P14 / quantity, Preview → Activate i Viewport 3D — FDM `RUNTIME_CONFIRMED_DIRTY_SOURCE`, FEM `SOURCE_CONFIRMED`:** `frozen_spins` jest kanonicznym `spatial_scalar`, unit `1`, location `node`, z aliasem `frozen_mask`. Jest publikowane tylko przy resolved mask i przechodzi przez ten sam HTTP v2/FMVP/colormap/topology-aware scalar pipeline co `mat_ms` i `mat_aex`. Naprawiono ogólny lifecycle render adoption: `Viewport3DFrame` przekazuje session provenance do WebGL scene, FDM rejestruje receipt ponownie po zmianie session/buffer identity, a replay używa rzeczywistego `target.id`. Ukierunkowane testy quantity po poprawce: 290/290 `PASS`; typecheck, ESLint i produkcyjny static build: `PASS`. FEM authored preview używa rzeczywistego `EntityMapping`: dla kompaktowego pola `m` mapuje local-node → global mesh node przez `ExplicitLocalToGlobal`, a incydencję magnet/air i region membership buduje z tej samej connectivity oraz `object_segments`. Brak segmentu, nakładające się segmenty, niejednoznaczny owner, błędna cardinality albo topology kończą się fail-closed. API generuje domenowo separowany jednorazowy `activation_candidate_token`; endpoint `POST /v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate` sprawdza session, source/topology/scene revision, token, selector, reference i stage, atomowo zatwierdza definicję, a token zapisuje jako skonsumowany dopiero po sukcesie. Replay i mismatch kończą się typed fail-closed, przy czym mismatch nie konsumuje kandydata. Wygenerowany OpenAPI/TypeScript i ręczna fasada są aktualne. Bieżący filtr API `frozen_spins`: 32/32 `PASS`; Inspector/Preview→Activate: 10/10 `PASS`; test transportu fasady: 1/1 `PASS`; typecheck i ukierunkowany ESLint: `PASS`. Pełna suite Control Room wykonała 5961 testów `PASS`, ale ma 8 niezależnych błędów i 3 nieładowalne suite w istniejącym dirty tree, dlatego nie jest bramką `PASS` P16. Nadal otwarte są solver-launch activation epoch/certificate oraz live FEM browser.
+6. **Managed FEM regression:** natywna sekwencja wykonała Frozen 6/6, STT, strict GPU, termikę i macierz pochodnych energii. Kruchy LF-only kontrakt snapshotu zastąpiono granicą odporną na CRLF, a Rust ABI uniezależniono od synchronizacji kanału stable. Nadal wymagany jest jeden końcowy clean-tree run tworzący trwały receipt z pojedynczym exit code 0.
+7. **P14 / bezpieczna konsumpcja FEM carrier — `SOURCE_CONFIRMED`:** po weryfikacji pamięci backendu renderer wymaga `fullmag.fem-local-node-render.v1`, bo maska obsługiwanej ścieżki serial P1 jest local-node AoS. Carrier wiąże `mesh_fingerprint`, `topology_hash`, P1 FE order, `by_nodes`, cardinality i dokładne local-node → published render vertex. Wadliwy ordering, cardinality albo fingerprint kończy się fail-closed bez overlay. Test komponentowy 5/5 i pełny typecheck przechodzą. Higher-order, MPI/ghost i true-DOF są jawnie nieobsługiwane, a nie aproksymowane.
+8. **P15 / browser quantity gate — FDM CPU `RUNTIME_CONFIRMED_DIRTY_SOURCE/PASS`:** `smoke-frozen-spins.mjs` zweryfikował realny katalog i field `frozen_spins`, metadata i payload `0/1`, HTTP v2 `/samples/vector`, render ACK `rendered`, aktywny WebGL 703×478 bez context loss oraz brak krytycznych błędów konsoli. Trwałe artefakty: `artifacts/qualification/frozen-spins/browser/frozen-spins-browser-5061bc04-6edd-442d-bdef-09ad3d3e634a.json` i odpowiadający PNG. Receipt wskazuje lane `fdm_cpu_reference`, double, min `0`, max `1`, mean `0.09375`. Authoringowe `Preview → Activate` ma testy komponentowe i API, lecz P15 jako całość pozostaje `INCOMPLETE`, bo nie wykonano live FEM ani realnego browserowego create/activate/Explorer/Inspector workflow.
+
+### 4.5. Findings register
 
 | ID | Finding | Severity | Owner stage | Closure evidence |
 |---|---|---|---|---|
@@ -226,7 +239,7 @@ P0 ma `gate_result=PASS` na poziomie zamrożenia zakresu. P1 i P2 pozostają `IN
 | FS-007 | activation epoch nie ma właściciela i stage semantics | critical | P5/P6 | per-constraint epochs + resolved-set revision tests |
 | FS-008 | ExactResume nie zachowuje pełnej historii | critical | P6/P8 | negative matrix i continuous/resumed parity |
 | FS-009 | brak all-frozen time-evolution semantics | high | P0/P7–P12 | analytical time advance receipt |
-| FS-010 | FEM overlay zakłada niewystarczające 1:1 DOF positions | critical | P13/P14 | versioned true-DOF-to-render CSR carrier |
+| FS-010 | FEM overlay nie miał nośnika zgodnego z faktycznym local-node AoS mask ordering | critical | P13/P14 | `fullmag.fem-local-node-render.v1`, exact published topology mapping; fail-closed poza serial P1 |
 | FS-011 | preview/solver snapshot race | critical | P5/P13/P14 | activation token consume albo stale invalidation test |
 | FS-012 | brak macierzy shapes/frames/CSG | high | P4/P15 | geometry test IDs i refinement convergence |
 | FS-013 | brak performance qualification | high | P7–P16 | overhead, memory i transfer metrics w receiptach |
@@ -881,7 +894,7 @@ Zapewnić pełny, wersjonowany roundtrip constraintu oraz autorytatywny nośnik 
 2. Endpoint create/update/delete constraintu musi zwracać resource id, revision, policy, selector fingerprint i stan kompilacji.
 3. Dodać lekki descriptor maski zawierający counts, mask fingerprint, carrier fingerprint, activation epoch i URL/identyfikator ciężkiego payloadu.
 4. Ciężki payload maski/overlay pobierać przez HTTP v2, wersjonować revision/ETag i walidować carrier fingerprint. WebSocket ma jedynie sygnalizować zmianę revision.
-5. Dla FDM payload jednoznacznie określa grid/layout i mapowanie sites. Dla FEM sam `femTrueDofPositions` nie wystarcza: wersjonowany carrier zawiera `mesh_fingerprint`, `fe_space_order`, `vector_ordering`, `true_dof_count`, `true_dof_to_render_vertex` CSR, ownership/ghost metadata, representative positions i component layout.
+5. Dla FDM payload jednoznacznie określa grid/layout i mapowanie sites. Dla obsługiwanej ścieżki FEM serial P1 carrier `fullmag.fem-local-node-render.v1` zawiera `mesh_fingerprint`, `topology_hash`, `fe_space_order=1`, `vector_ordering=by_nodes`, `local_node_count`, opublikowane pozycje/wierzchołki FMMT i dokładne local-node → render vertex. Nie wolno nazywać tej maski true-DOF ani tworzyć fikcyjnego CSR. Higher-order, periodic/shared/hanging oraz MPI/ghost wymagają przyszłego, osobno wersjonowanego carriera i do tego czasu kończą się fail-closed.
 6. API ma odrzucić mieszanie maski z inną geometrią/carrierem. Nie wolno renderować po samych długościach tablic.
 7. Descriptor publikuje cztery rozdzielone fingerprinty zgodnie z P4 i activation certificate zgodnie z P5.
 8. Preview state-dependent zwraca activation candidate token i source-state revision. Endpoint launch atomowo konsumuje token albo zwraca typed stale error; w trybie spekulatywnym publikuje nowe solver revision i wymusza HTTP refetch.
@@ -893,7 +906,7 @@ Zapewnić pełny, wersjonowany roundtrip constraintu oraz autorytatywny nośnik 
 - Python/API roundtrip equality;
 - create/read/update/delete i stabilne ID/revision;
 - FDM carrier match/mismatch;
-- FEM CSR true-DOF-to-render mapping dla P1 nodal, periodic/shared/hanging/higher-order i MPI/ghost fixtures;
+- FEM local-node-to-render mapping dla serial P1 oraz negatywne fixtures dla higher-order, periodic/shared/hanging i MPI/ghost;
 - ETag/conditional GET;
 - websocket invalidation prowadzi do ponownego HTTP GET;
 - stale payload i carrier mismatch — fail-closed;
@@ -902,7 +915,7 @@ Zapewnić pełny, wersjonowany roundtrip constraintu oraz autorytatywny nośnik 
 
 ### Bramka P13
 
-`PASS`, gdy API v2 zwraca autorytatywny, wersjonowany mask resource z activation transaction, a FEM overlay używa pełnego CSR carrier mappingu zamiast `null` lub założenia 1:1.
+`PASS`, gdy API v2 zwraca autorytatywny, wersjonowany mask resource z activation transaction, FEM serial P1 używa zweryfikowanego local-node carrier mappingu, a wszystkie pozostałe przestrzenie FE kończą się jawnie fail-closed.
 
 ---
 
@@ -917,7 +930,7 @@ Domknąć pełny workflow użytkownika, a nie tylko obecność przycisku i canva
 - Ribbon action tworząca Frozen Spins;
 - Explorer child node i selection model;
 - dedykowany Inspector constraintu;
-- `apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx`, szczególnie obecne `femTrueDofPositions: null`;
+- `apps/control-room/src/modules/viewport-3d/Viewport3DModule.tsx` i `layers/FrozenSpinsOverlay.tsx`, szczególnie budowa carriera z rzeczywiście opublikowanej topologii;
 - hooks/cache API v2, overlay renderer i error states;
 - testy React/Vitest oraz generowany klient.
 
@@ -927,7 +940,7 @@ Domknąć pełny workflow użytkownika, a nie tylko obecność przycisku i canva
 2. Explorer ma prezentować constraint jako poprawne dziecko właściwego zasobu. Selection identity constraintu ma działać niezależnie od opcjonalnego `objectId`; nie przywracać naprawionego błędu z ID zależnym od obiektu.
 3. Inspector ma pokazywać i edytować dozwolone pola: selector/region, membership policy, reference policy, activation state, epoch, counts, capability/status i stabilny błąd. Pola niedozwolone po aktywacji mają być read-only albo wymagać jawnej reaktywacji.
 4. Preview ma pobrać autorytatywną maskę API, sprawdzić revision i carrier fingerprint, a następnie przekazać ten sam fingerprint do statusu solvera.
-5. FDM overlay renderować według grid carrier. FEM overlay renderować przez CSR true-DOF-to-render carrier z P13; usunąć `null` i wszystkie założenia 1:1 w obsługiwanej ścieżce.
+5. FDM overlay renderować według grid carrier. FEM serial P1 renderować przez `fullmag.fem-local-node-render.v1` z P13, utworzony z `sceneModel.topologyModel`; nie wolno mieszać go z true-DOF. Dla innych przestrzeni FE zwrócić stabilny fail-closed reason.
 6. Dodać czytelne stany: loading, stale/reloading, empty mask, all frozen, unsupported lane, carrier mismatch, backend disconnected, WebGL context lost.
 7. Cache unieważniać po revision event. Nie czyścić poprawnego overlay przy niezwiązanej telemetrii.
 8. Wyświetlać active/frozen/free site counts, scalar component DOF count, vector dimension, per-constraint epochs i resolved-set revision ze statusu, nie wyliczać ich z grafiki.
@@ -981,7 +994,7 @@ Udowodnić w działającym systemie, że użytkownik może utworzyć constraint,
    - weryfikację epoch i telemetrii free/all;
    - zmianę/dezaktywację i sprawdzenie invalidation/reload;
    - kontrolowane zakończenie bez błędów konsoli/WebGL.
-3. Wykonać osobne scenariusze FDM i FEM. FEM musi faktycznie przejść przez CSR carrier i render geometry, nie tylko canvas.
+3. Wykonać osobne scenariusze FDM i FEM. FEM musi faktycznie przejść przez local-node carrier i opublikowaną geometrię P1, nie tylko canvas; przypadek nieobsługiwanej przestrzeni FE ma potwierdzić fail-closed.
 4. Zapisać screenshot overlay, trace, log konsoli, network log dla zasobu maski oraz session/solver receipt. Artefakty powiązać wspólnym run ID.
 5. Test negatywny ma potwierdzić czytelny fail-closed dla nieobsługiwanej krotki, np. przed kwalifikacją FP32/TPI.
 
@@ -1009,7 +1022,7 @@ Dla każdego required lane receipt zapisuje: no-mask overhead, partial-mask over
 
 ### Bramka P15
 
-`PASS`, gdy realny browser smoke przechodzi dla FDM i FEM, artefakty są trwałe, nie ma błędów konsoli/WebGL, a walidacja naukowa potwierdza invariant, influence, parity i resume. Obecny smoke sprawdzający tylko Ribbon/canvas/WebGL nie spełnia bramki.
+`PASS`, gdy realny browser smoke przechodzi dla FDM i FEM, artefakty są trwałe, nie ma błędów konsoli/WebGL, a walidacja naukowa potwierdza invariant, influence, parity i resume. FDM quantity/WebGL ma trwały PASS; FEM live oraz pełny workflow authoring/activation pozostają wymagane.
 
 ---
 
@@ -1075,7 +1088,7 @@ Frozen Spins V1 można uznać za zakończone wyłącznie, gdy wszystkie poniższ
 5. Każda nieobsługiwana krotka fail-closed przed uruchomieniem, ze stabilnym kodem.
 6. Checkpoint zachowuje maskę, reference, per-constraint epochs, resolved-set revision, pełną historię, RNG, partition i hashes; ExactResume jest odrębny od PortableStateImport.
 7. Capabilities API oddzielają authoring/preview/execution od qualification i są zgodne z plannerem.
-8. Control Room tworzy zasób, pokazuje child/Inspector, oferuje `frozen_spins` jako standardowe quantity i renderuje FDM/FEM przez topology-aware carrier, w FEM przez CSR mapping.
+8. Control Room tworzy zasób, pokazuje child/Inspector, oferuje `frozen_spins` jako standardowe quantity i renderuje FDM/FEM przez topology-aware carrier, w FEM serial P1 przez zweryfikowany local-node mapping.
 9. Realny browser/WebGL smoke oraz typecheck przechodzą w kanonicznym środowisku.
 10. Każdy status `QUALIFIED` ma trwały receipt z clean tree identity, runtime manifestem, realnym urządzeniem, `fallback_used=false`, zero-ULP restore oraz metrykami performance/transfer.
 11. Zbiorcza recepta kończy się kodem 0 bez `SKIP` w obowiązkowej macierzy.
@@ -1115,4 +1128,4 @@ Po każdym batchu należy przygotować krótki raport zawierający: SHA, diff sc
 
 ## 8. Pierwszy konkretny krok wykonawczy
 
-Najpierw zatwierdzić P0 scope ledger, następnie wygenerować P1 source snapshot identity i P2 evidence ledger. Potem wdrożyć P4 typed snapshot selector `m_z > 0.5`, P5 atomową activation transaction i P6 pełne resume semantics. Dopiero z zamkniętych semantyk P4–P6 należy wygenerować dodatnie wpisy P3 capability. Istniejący pion quantity/API/Viewport 3D pozostaje poprawnym, niezależnym wycinkiem, lecz jego pełny status P13/P14 wymaga activation transaction i FEM CSR carrier.
+Najpierw zatwierdzić P0 scope ledger, następnie wygenerować P1 source snapshot identity i P2 evidence ledger. Potem wdrożyć P4 typed snapshot selector `m_z > 0.5`, domknąć P5 solverowy lifecycle activation epoch/certificate i P6 pełne resume semantics. Dopiero z zamkniętych semantyk P4–P6 należy wygenerować dodatnie wpisy P3 capability. Pion quantity/API/Viewport 3D ma już FDM live, źródłowo zweryfikowany FEM authored preview/local-node carrier oraz atomowe authoringowe `Preview → Activate`; jego pełny status P13/P14 wymaga teraz powiązania kandydata z solver launch, ekspozycji epoch/statusu oraz live dowodu FEM carriera `fullmag.fem-local-node-render.v1`.
