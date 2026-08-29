@@ -4,6 +4,7 @@
 #include "frequency_domain/frequency_domain_contract.hpp"
 #include "frequency_domain/modal_eigen_request.hpp"
 
+#include <complex>
 #include <cstdint>
 #include <vector>
 
@@ -22,6 +23,10 @@ struct RealFrequencyRotatedPencil {
     RealSplitCsrMatrix lhs{};
     RealSplitCsrMatrix rhs{};
 };
+
+std::complex<double> original_descriptor_eigenvalue_from_rotated(
+    std::complex<double> rotated_eigenvalue,
+    double angular_frequency_scale) noexcept;
 
 FrequencyDomainStatus assemble_real_frequency_rotated_pencil(
     const CsrMatrixView &lhs,

@@ -1,6 +1,7 @@
 #include "cpu/frequency_domain/poisson_airbox_schur_matshell.hpp"
 #include "cpu/frequency_domain/mode_deduplication.hpp"
 #include "frequency_domain/mode_kinematics.hpp"
+#include "frequency_domain/real_frequency_rotated_pencil.hpp"
 
 #include <algorithm>
 #include <array>
@@ -4628,15 +4629,21 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         }
         ++out_result->raw_ritz_real_axis_count;
         ++out_result->finite_real_eigenpair_count;
-        // The rotated pencil eigenvalue is w = kr + i*ki while the public
-        // descriptor uses lambda = i*w.  Preserve the small computed decay
-        // component (-ki) in the original residual instead of silently
-        // projecting it away; otherwise a numerically tiny Ritz imaginary
-        // part is amplified by the SI scale and dominates certification.
-        const double lambda_real = 0.0;
-        const double lambda_imag = split_eigenvalue;
+        // The rotated pencil eigenvalue is w = kr + i*ki while the original
+        // descriptor uses lambda = i*w = -ki + i*kr.  Preserve the small
+        // computed real component while refining and certifying the original
+        // descriptor residual.  The public undamped mode remains projected
+        // onto the imaginary axis below; using that projected value for the
+        // residual makes harmless Ritz roundoff dominate certification after
+        // restoring the physical rad/s scale.
+        const Complex residual_lambda = original_descriptor_eigenvalue_from_rotated(
+            {scaled_eigenvalue, scaled_imaginary},
+            angular_frequency_scale);
+        const double residual_lambda_real = residual_lambda.real();
+        const double published_lambda_real = 0.0;
+        const double lambda_imag = residual_lambda.imag();
         const ModeKinematics kinematics = map_eigenvalue(
-            {lambda_real, lambda_imag},
+            {published_lambda_real, lambda_imag},
             FrequencyDomainPhaseConvention::exp_i_omega_t);
         if (kinematics.zero_frequency_mode) {
             ++out_result->raw_ritz_zero_count;
@@ -4703,7 +4710,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             xr,
             xi,
             scaled_eigenvalue,
-            0.0,
+            scaled_imaginary,
             static_cast<double>(eigensolver_tolerance),
             3,
             &refined_action_residual);
@@ -4825,7 +4832,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 vector_real.data(),
                 vector_imag.data(),
                 static_cast<std::uint64_t>(full_vector.size()),
-                lambda_real,
+                residual_lambda_real,
                 lambda_imag,
                 static_cast<double>(residual),
                 &metrics);
@@ -4864,7 +4871,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         candidates.push_back(Candidate{
             index,
             std::abs(kinematics.omega_rad_s - target_omega),
-            lambda_real,
+            published_lambda_real,
             lambda_imag,
             kinematics.omega_rad_s,
             kinematics.frequency_hz,

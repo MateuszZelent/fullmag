@@ -86,6 +86,15 @@ bool append_source_row(
 
 } // namespace
 
+std::complex<double> original_descriptor_eigenvalue_from_rotated(
+    std::complex<double> rotated_eigenvalue,
+    double angular_frequency_scale) noexcept
+{
+    return {
+        -rotated_eigenvalue.imag() * angular_frequency_scale,
+        rotated_eigenvalue.real() * angular_frequency_scale};
+}
+
 FrequencyDomainStatus assemble_real_frequency_rotated_pencil(
     const CsrMatrixView &lhs,
     const CsrMatrixView &mass,

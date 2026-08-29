@@ -94,10 +94,23 @@ void rejects_malformed_or_nonfinite_csr()
           "real-split pencil must explain non-finite CSR rejection");
 }
 
+void maps_complex_rotated_ritz_value_to_original_descriptor()
+{
+    const std::complex<double> lambda =
+        fd::original_descriptor_eigenvalue_from_rotated(
+            {2.0, 3.0e-6},
+            5.0);
+    check(lambda.real() == -15.0e-6,
+          "rotated Ritz imaginary part must become the descriptor real part with the i-rotation sign");
+    check(lambda.imag() == 10.0,
+          "rotated Ritz real part must become the descriptor imaginary part");
+}
+
 } // namespace
 
 int main()
 {
     assembles_real_frequency_rotated_signs_and_order();
     rejects_malformed_or_nonfinite_csr();
+    maps_complex_rotated_ritz_value_to_original_descriptor();
 }
