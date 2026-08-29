@@ -20,6 +20,11 @@
 namespace fullmag {
 namespace fdm {
 
+static uint64_t steady_clock_now_ns() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 extern void set_cufft_error(Context &ctx, const char *operation, cufftResult err);
 extern void launch_exchange_field_fp64(Context &ctx);
@@ -93,7 +98,7 @@ cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
 static void free_cubic_anisotropy_fields(Context &ctx);
-static bool context_refresh_anisotropy_observable(Context &ctx);
+static bool launch_anisotropy_observable(Context &ctx);
 static bool upload_f64_array(Context &ctx, double *&dst, const double *src,
                               uint64_t len, const char *label);
 
@@ -3510,16 +3515,21 @@ static bool context_download_field_impl(
         return false;
     }
 
-    if (observable == FULLMAG_FDM_OBSERVABLE_H_ANI
-        && !context_refresh_anisotropy_observable(ctx))
-    {
-        return false;
+    uint64_t required_mask = 0;
+    switch (observable) {
+        case FULLMAG_FDM_OBSERVABLE_H_EX:
+            required_mask = OBSERVABLE_ENDPOINT_H_EX; break;
+        case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            required_mask = OBSERVABLE_ENDPOINT_H_DEMAG; break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI:
+            required_mask = OBSERVABLE_ENDPOINT_H_ANI; break;
+        case FULLMAG_FDM_OBSERVABLE_H_EFF:
+            required_mask = OBSERVABLE_ENDPOINT_H_EFF_VISUAL; break;
+        default:
+            break;
     }
-    if (observable == FULLMAG_FDM_OBSERVABLE_H_EFF
-        && !context_refresh_observables(ctx))
-    {
-        return false;
-    }
+    if (required_mask != 0 &&
+        !context_ensure_observable_fields(ctx, required_mask)) return false;
 
     const DeviceVectorField *field;
     switch (observable) {
@@ -3973,16 +3983,21 @@ static bool context_download_field_preview_impl(
         return context_download_field_impl(ctx, observable, out_xyz, out_len);
     }
 
-    if (observable == FULLMAG_FDM_OBSERVABLE_H_ANI
-        && !context_refresh_anisotropy_observable(ctx))
-    {
-        return false;
+    uint64_t required_mask = 0;
+    switch (observable) {
+        case FULLMAG_FDM_OBSERVABLE_H_EX:
+            required_mask = OBSERVABLE_ENDPOINT_H_EX; break;
+        case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            required_mask = OBSERVABLE_ENDPOINT_H_DEMAG; break;
+        case FULLMAG_FDM_OBSERVABLE_H_ANI:
+            required_mask = OBSERVABLE_ENDPOINT_H_ANI; break;
+        case FULLMAG_FDM_OBSERVABLE_H_EFF:
+            required_mask = OBSERVABLE_ENDPOINT_H_EFF_VISUAL; break;
+        default:
+            break;
     }
-    if (observable == FULLMAG_FDM_OBSERVABLE_H_EFF
-        && !context_refresh_observables(ctx))
-    {
-        return false;
-    }
+    if (required_mask != 0 &&
+        !context_ensure_observable_fields(ctx, required_mask)) return false;
 
     const DeviceVectorField *field = nullptr;
     switch (observable) {
@@ -4267,6 +4282,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     Context &ctx,
     fullmag_fdm_observable observable)
 {
+    ++ctx.endpoint_field_cache.field_snapshot_request_count;
     auto *snapshot = new (std::nothrow) AsyncFieldSnapshot();
     if (snapshot == nullptr) {
         ctx.last_error = "failed to allocate async field snapshot";
@@ -4274,6 +4290,8 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     }
     snapshot->precision = ctx.precision;
     snapshot->cell_count = ctx.cell_count;
+    snapshot->telemetry_cache = &ctx.endpoint_field_cache;
+    snapshot->telemetry_started_ns = steady_clock_now_ns();
     const bool scalar_observable = is_energy_density_observable(observable);
     snapshot->component_count = scalar_observable ? 1u : 3u;
     snapshot->host_soa_len_bytes =
@@ -4328,9 +4346,21 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             field = &ctx.m;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EX:
+            if (!context_ensure_observable_fields(
+                    ctx, OBSERVABLE_ENDPOINT_H_EX)) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_ex snapshot"
+                                           : ctx.last_error);
+            }
             field = &ctx.h_ex;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            if (!context_ensure_observable_fields(
+                    ctx, OBSERVABLE_ENDPOINT_H_DEMAG)) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_demag snapshot"
+                                           : ctx.last_error);
+            }
             if (ctx.h_demag_visual.x == nullptr || ctx.h_demag_visual.y == nullptr ||
                 ctx.h_demag_visual.z == nullptr) {
                 return fail_message("demag_visual_buffer_unavailable");
@@ -4338,7 +4368,8 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
-            if (!context_refresh_anisotropy_observable(ctx)) {
+            if (!context_ensure_observable_fields(
+                    ctx, OBSERVABLE_ENDPOINT_H_ANI)) {
                 return fail_message(
                     ctx.last_error.empty() ? "failed to refresh H_ani snapshot"
                                            : ctx.last_error);
@@ -4346,7 +4377,8 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
-            if (!context_refresh_observables(ctx)) {
+            if (!context_ensure_observable_fields(
+                    ctx, OBSERVABLE_ENDPOINT_H_EFF_VISUAL)) {
                 return fail_message(
                     ctx.last_error.empty() ? "failed to refresh H_eff snapshot" : ctx.last_error);
             }
@@ -4572,6 +4604,14 @@ bool context_wait_async_field_snapshot(
 
     *out_data = snapshot.host_soa;
     out_len_bytes = static_cast<uint64_t>(snapshot.host_soa_len_bytes);
+    if (snapshot.telemetry_cache != nullptr && snapshot.telemetry_started_ns != 0) {
+        const uint64_t elapsed_ns = steady_clock_now_ns() - snapshot.telemetry_started_ns;
+        auto &cache = *snapshot.telemetry_cache;
+        cache.field_snapshot_latency_total_ns += elapsed_ns;
+        cache.field_snapshot_latency_max_ns =
+            std::max(cache.field_snapshot_latency_max_ns, elapsed_ns);
+        snapshot.telemetry_started_ns = 0;
+    }
     out_desc.cell_count = snapshot.cell_count;
     out_desc.component_count = snapshot.component_count;
     out_desc.scalar_bytes =
@@ -4674,7 +4714,8 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
             field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
-            if (!context_refresh_anisotropy_observable(ctx)) {
+            if (!context_ensure_observable_fields(
+                    ctx, OBSERVABLE_ENDPOINT_H_ANI)) {
                 return fail_message(
                     ctx.last_error.empty() ? "failed to refresh H_ani preview snapshot"
                                            : ctx.last_error);
@@ -4682,7 +4723,8 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
             field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
-            if (!context_refresh_observables(ctx)) {
+            if (!context_ensure_observable_fields(
+                    ctx, OBSERVABLE_ENDPOINT_H_EFF_VISUAL)) {
                 return fail_message(
                     ctx.last_error.empty() ? "failed to refresh H_eff preview snapshot" : ctx.last_error);
             }
@@ -5000,27 +5042,60 @@ bool context_query_device_info(Context &ctx) {
 }
 
 bool context_refresh_observables(Context &ctx) {
-    ctx.observables_valid = false;
+    return context_ensure_observable_fields(ctx, OBSERVABLE_ENDPOINT_ALL_FIELDS);
+}
+
+bool context_ensure_observable_fields(Context &ctx, uint64_t required_mask) {
+    auto &cache = ctx.endpoint_field_cache;
+    ++cache.refresh_request_count;
+    context_prepare_endpoint_cache_identity(ctx);
+    const uint64_t supported_mask = OBSERVABLE_ENDPOINT_ALL_FIELDS;
+    if ((required_mask & ~supported_mask) != 0) {
+        ctx.last_error = "unsupported endpoint observable field mask";
+        return false;
+    }
+    if (context_endpoint_fields_are_fresh(ctx, required_mask)) {
+        ++cache.refresh_cache_hit_count;
+        return true;
+    }
+
+    ++cache.refresh_execution_count;
+    uint64_t expanded_mask = required_mask;
+    if ((expanded_mask & (OBSERVABLE_ENDPOINT_H_EFF |
+                          OBSERVABLE_ENDPOINT_H_EFF_VISUAL)) != 0) {
+        expanded_mask |= OBSERVABLE_ENDPOINT_CORE_FIELDS;
+    }
+    const uint64_t needed = expanded_mask & ~cache.valid_field_mask;
     const double evaluation_time =
         ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        if (ctx.enable_exchange) {
+        if ((needed & OBSERVABLE_ENDPOINT_H_EX) != 0 && ctx.enable_exchange) {
             launch_exchange_field_fp64(ctx);
         }
-        if (ctx.enable_demag) {
+        if ((needed & OBSERVABLE_ENDPOINT_H_DEMAG) != 0 && ctx.enable_demag) {
             launch_demag_field_fp64(ctx);
         }
-        launch_effective_field_fp64(ctx, evaluation_time);
-        if (!context_refresh_effective_field_visual(ctx)) return false;
+        if ((needed & OBSERVABLE_ENDPOINT_H_ANI) != 0 &&
+            !launch_anisotropy_observable(ctx)) return false;
+        if ((needed & OBSERVABLE_ENDPOINT_H_EFF) != 0) {
+            launch_effective_field_fp64(ctx, evaluation_time);
+        }
     } else {
-        if (ctx.enable_exchange) {
+        if ((needed & OBSERVABLE_ENDPOINT_H_EX) != 0 && ctx.enable_exchange) {
             launch_exchange_field_fp32(ctx);
         }
-        if (ctx.enable_demag) {
+        if ((needed & OBSERVABLE_ENDPOINT_H_DEMAG) != 0 && ctx.enable_demag) {
             launch_demag_field_fp32(ctx);
         }
-        launch_effective_field_fp32(ctx, evaluation_time);
-        if (!context_refresh_effective_field_visual(ctx)) return false;
+        if ((needed & OBSERVABLE_ENDPOINT_H_ANI) != 0 &&
+            !launch_anisotropy_observable(ctx)) return false;
+        if ((needed & OBSERVABLE_ENDPOINT_H_EFF) != 0) {
+            launch_effective_field_fp32(ctx, evaluation_time);
+        }
+    }
+    if ((needed & OBSERVABLE_ENDPOINT_H_EFF_VISUAL) != 0 &&
+        !context_refresh_effective_field_visual(ctx)) {
+        return false;
     }
 
     cudaError_t err = cudaGetLastError();
@@ -5028,34 +5103,19 @@ bool context_refresh_observables(Context &ctx) {
         set_cuda_error(ctx, "context_refresh_observables", err);
         return false;
     }
-    ctx.observables_valid = true;
+    context_publish_endpoint_fields(ctx, needed);
     return true;
 }
 
 void context_invalidate_observables(Context &ctx) {
-    ctx.observables_valid = false;
+    context_clear_endpoint_cache(ctx);
 }
 
 bool context_refresh_demag_observable(Context &ctx) {
-    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        if (ctx.enable_demag) {
-            launch_demag_field_fp64(ctx);
-        }
-    } else {
-        if (ctx.enable_demag) {
-            launch_demag_field_fp32(ctx);
-        }
-    }
-
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        set_cuda_error(ctx, "context_refresh_demag_observable", err);
-        return false;
-    }
-    return true;
+    return context_ensure_observable_fields(ctx, OBSERVABLE_ENDPOINT_H_DEMAG);
 }
 
-static bool context_refresh_anisotropy_observable(Context &ctx) {
+static bool launch_anisotropy_observable(Context &ctx) {
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         launch_anisotropy_field_fp64(ctx);
     } else {
@@ -5064,7 +5124,7 @@ static bool context_refresh_anisotropy_observable(Context &ctx) {
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        set_cuda_error(ctx, "context_refresh_anisotropy_observable", err);
+        set_cuda_error(ctx, "launch_anisotropy_observable", err);
         return false;
     }
     return true;
@@ -5106,7 +5166,8 @@ bool context_refresh_energy_density_observable(
     }
     if (wants_anisotropy &&
         (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy)) {
-        if (!context_refresh_anisotropy_observable(ctx)) return false;
+        if (!context_ensure_observable_fields(
+                ctx, OBSERVABLE_ENDPOINT_H_ANI)) return false;
         // The anisotropy kernels currently use the legacy default stream.
         // Synchronize it before the scalar kernel is queued on the compute
         // stream so the materialized value cannot observe stale H_ani data.

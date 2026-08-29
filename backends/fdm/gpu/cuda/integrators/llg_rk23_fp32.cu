@@ -207,6 +207,7 @@ static void finish_rk23_accepted_step_fp32(
     fullmag_fdm_step_stats *stats)
 {
     context_stage_fsal_accepted_step(ctx, dt);
+    context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt, dt_next);
         return;
@@ -570,7 +571,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
                                        step_start_time + dt)) return;
             if (abort_step_from_tmp(ctx)) return;
             context_stage_fsal_accepted_step(ctx, dt);
-            context_refresh_observables(ctx);
+            context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
             } else if (context_fill_current_stats(ctx, stats)) {
@@ -619,6 +620,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         if (policy.accepted) {
             context_stage_fsal_accepted_step(ctx, dt);
+            context_publish_endpoint_fields(ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
 
             double dt_next = policy.dt_candidate;
 

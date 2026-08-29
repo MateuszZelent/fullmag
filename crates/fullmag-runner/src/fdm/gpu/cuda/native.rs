@@ -593,6 +593,36 @@ pub(crate) struct AdaptiveBatchStep {
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EndpointCacheTelemetry {
+    pub cache_identity_valid: bool,
+    pub stats_valid: bool,
+    pub accepted_state_revision: u64,
+    pub valid_field_mask: u64,
+    pub refresh_request_count: u64,
+    pub refresh_execution_count: u64,
+    pub refresh_cache_hit_count: u64,
+    pub invalidation_count: u64,
+    pub stats_snapshot_request_count: u64,
+    pub stats_snapshot_cache_hit_count: u64,
+    pub field_snapshot_request_count: u64,
+    pub field_snapshot_latency_total_ns: u64,
+    pub field_snapshot_latency_max_ns: u64,
+    pub exchange_evaluation_count: u64,
+    pub demag_evaluation_count: u64,
+    pub demag_forward_fft_count: u64,
+    pub demag_inverse_fft_count: u64,
+    pub effective_field_evaluation_count: u64,
+    pub energy_reduction_count: u64,
+    pub last_step_exchange_evaluation_count: u64,
+    pub last_step_demag_evaluation_count: u64,
+    pub last_step_demag_forward_fft_count: u64,
+    pub last_step_demag_inverse_fft_count: u64,
+    pub last_step_effective_field_evaluation_count: u64,
+    pub last_step_energy_reduction_count: u64,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeStatsMode {
     Full,
     None,
@@ -2828,6 +2858,77 @@ impl NativeFdmBackend {
             return Err(self.last_error_or("refresh_observables failed"));
         }
         Ok(())
+    }
+
+    pub(crate) fn endpoint_cache_telemetry(&self) -> Result<EndpointCacheTelemetry, RunError> {
+        let mut telemetry = ffi::fullmag_fdm_endpoint_cache_telemetry_v1 {
+            abi_version: ffi::FULLMAG_FDM_ENDPOINT_CACHE_TELEMETRY_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_endpoint_cache_telemetry_v1>() as u32,
+            cache_identity_valid: 0,
+            stats_valid: 0,
+            accepted_state_revision: 0,
+            accepted_time_bits: 0,
+            source_revision: 0,
+            field_revision: 0,
+            transport_revision: 0,
+            projection_policy_identity: 0,
+            valid_field_mask: 0,
+            refresh_request_count: 0,
+            refresh_execution_count: 0,
+            refresh_cache_hit_count: 0,
+            invalidation_count: 0,
+            stats_snapshot_request_count: 0,
+            stats_snapshot_cache_hit_count: 0,
+            field_snapshot_request_count: 0,
+            field_snapshot_latency_total_ns: 0,
+            field_snapshot_latency_max_ns: 0,
+            exchange_evaluation_count: 0,
+            demag_evaluation_count: 0,
+            demag_forward_fft_count: 0,
+            demag_inverse_fft_count: 0,
+            effective_field_evaluation_count: 0,
+            energy_reduction_count: 0,
+            last_step_exchange_evaluation_count: 0,
+            last_step_demag_evaluation_count: 0,
+            last_step_demag_forward_fft_count: 0,
+            last_step_demag_inverse_fft_count: 0,
+            last_step_effective_field_evaluation_count: 0,
+            last_step_energy_reduction_count: 0,
+        };
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_get_endpoint_cache_telemetry_v1(self.handle, &mut telemetry)
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("endpoint cache telemetry query failed"));
+        }
+        Ok(EndpointCacheTelemetry {
+            cache_identity_valid: telemetry.cache_identity_valid != 0,
+            stats_valid: telemetry.stats_valid != 0,
+            accepted_state_revision: telemetry.accepted_state_revision,
+            valid_field_mask: telemetry.valid_field_mask,
+            refresh_request_count: telemetry.refresh_request_count,
+            refresh_execution_count: telemetry.refresh_execution_count,
+            refresh_cache_hit_count: telemetry.refresh_cache_hit_count,
+            invalidation_count: telemetry.invalidation_count,
+            stats_snapshot_request_count: telemetry.stats_snapshot_request_count,
+            stats_snapshot_cache_hit_count: telemetry.stats_snapshot_cache_hit_count,
+            field_snapshot_request_count: telemetry.field_snapshot_request_count,
+            field_snapshot_latency_total_ns: telemetry.field_snapshot_latency_total_ns,
+            field_snapshot_latency_max_ns: telemetry.field_snapshot_latency_max_ns,
+            exchange_evaluation_count: telemetry.exchange_evaluation_count,
+            demag_evaluation_count: telemetry.demag_evaluation_count,
+            demag_forward_fft_count: telemetry.demag_forward_fft_count,
+            demag_inverse_fft_count: telemetry.demag_inverse_fft_count,
+            effective_field_evaluation_count: telemetry.effective_field_evaluation_count,
+            energy_reduction_count: telemetry.energy_reduction_count,
+            last_step_exchange_evaluation_count: telemetry.last_step_exchange_evaluation_count,
+            last_step_demag_evaluation_count: telemetry.last_step_demag_evaluation_count,
+            last_step_demag_forward_fft_count: telemetry.last_step_demag_forward_fft_count,
+            last_step_demag_inverse_fft_count: telemetry.last_step_demag_inverse_fft_count,
+            last_step_effective_field_evaluation_count: telemetry
+                .last_step_effective_field_evaluation_count,
+            last_step_energy_reduction_count: telemetry.last_step_energy_reduction_count,
+        })
     }
 
     pub fn snapshot_step_stats(&mut self, grid: [u32; 3]) -> Result<StepStats, RunError> {

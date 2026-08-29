@@ -172,6 +172,7 @@ void launch_exchange_field_fp32(Context &ctx, cudaStream_t stream) {
         set_cuda_error(ctx, "launch_exchange_field_fp32", launch_error);
         return;
     }
+    ++ctx.endpoint_field_cache.exchange_evaluation_count;
     fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_EXCHANGE);
 }
 
@@ -180,6 +181,7 @@ void launch_exchange_field_fp32(Context &ctx) {
 }
 
 double launch_exchange_energy_fp32(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     return reduce_exchange_energy_fp32(ctx);
 }
 

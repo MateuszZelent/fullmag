@@ -1415,6 +1415,7 @@ double reduce_external_energy_fp32(Context &ctx) {
 }
 
 double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     if (!ctx.has_uniaxial_anisotropy) {
         return 0.0;
     }
@@ -1441,6 +1442,7 @@ double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx) {
 }
 
 double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     if (!ctx.has_uniaxial_anisotropy) {
         return 0.0;
     }
@@ -1619,6 +1621,7 @@ __global__ void dmi_energy_blocks_kernel(
 }
 
 double reduce_cubic_anisotropy_energy_fp64(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     if (!ctx.has_cubic_anisotropy) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
@@ -1636,6 +1639,7 @@ double reduce_cubic_anisotropy_energy_fp64(Context &ctx) {
 }
 
 double reduce_cubic_anisotropy_energy_fp32(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     if (!ctx.has_cubic_anisotropy) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
@@ -1653,6 +1657,7 @@ double reduce_cubic_anisotropy_energy_fp32(Context &ctx) {
 }
 
 double reduce_dmi_energy_fp64(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     if (!ctx.has_interfacial_dmi && !ctx.has_bulk_dmi) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     double coeff = ctx.dx * ctx.dy * ctx.dz;
@@ -1672,6 +1677,7 @@ double reduce_dmi_energy_fp64(Context &ctx) {
 }
 
 double reduce_dmi_energy_fp32(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     if (!ctx.has_interfacial_dmi && !ctx.has_bulk_dmi) return 0.0;
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     double coeff = ctx.dx * ctx.dy * ctx.dz;

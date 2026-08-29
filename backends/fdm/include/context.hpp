@@ -249,6 +249,66 @@ struct DeviceMultilayerFftWorkspace {
     bool components_share_allocation = false;
 };
 
+enum ObservableEndpointFieldMask : uint64_t {
+    OBSERVABLE_ENDPOINT_H_EX = UINT64_C(1) << 0,
+    OBSERVABLE_ENDPOINT_H_DEMAG = UINT64_C(1) << 1,
+    OBSERVABLE_ENDPOINT_H_ANI = UINT64_C(1) << 2,
+    OBSERVABLE_ENDPOINT_H_EFF = UINT64_C(1) << 3,
+    OBSERVABLE_ENDPOINT_H_EFF_VISUAL = UINT64_C(1) << 4,
+};
+
+constexpr uint64_t OBSERVABLE_ENDPOINT_CORE_FIELDS =
+    OBSERVABLE_ENDPOINT_H_EX |
+    OBSERVABLE_ENDPOINT_H_DEMAG |
+    OBSERVABLE_ENDPOINT_H_EFF;
+constexpr uint64_t OBSERVABLE_ENDPOINT_ALL_FIELDS =
+    OBSERVABLE_ENDPOINT_CORE_FIELDS |
+    OBSERVABLE_ENDPOINT_H_ANI |
+    OBSERVABLE_ENDPOINT_H_EFF_VISUAL;
+
+struct EndpointFieldCache {
+    uint64_t accepted_state_revision = 0;
+    uint64_t time_bits = 0;
+    uint64_t source_revision = 0;
+    uint64_t field_revision = 0;
+    uint64_t transport_revision = 0;
+    uint64_t projection_policy_identity = 0;
+    uint64_t valid_field_mask = 0;
+    bool stats_valid = false;
+    uint64_t stats_quantity_mask = 0;
+    fullmag_fdm_step_stats stats{};
+
+    uint64_t refresh_request_count = 0;
+    uint64_t refresh_execution_count = 0;
+    uint64_t refresh_cache_hit_count = 0;
+    uint64_t invalidation_count = 0;
+    uint64_t stats_snapshot_request_count = 0;
+    uint64_t stats_snapshot_cache_hit_count = 0;
+    uint64_t field_snapshot_request_count = 0;
+    uint64_t field_snapshot_latency_total_ns = 0;
+    uint64_t field_snapshot_latency_max_ns = 0;
+
+    uint64_t exchange_evaluation_count = 0;
+    uint64_t demag_evaluation_count = 0;
+    uint64_t demag_forward_fft_count = 0;
+    uint64_t demag_inverse_fft_count = 0;
+    uint64_t effective_field_evaluation_count = 0;
+    uint64_t energy_reduction_count = 0;
+
+    uint64_t step_exchange_evaluation_baseline = 0;
+    uint64_t step_demag_evaluation_baseline = 0;
+    uint64_t step_demag_forward_fft_baseline = 0;
+    uint64_t step_demag_inverse_fft_baseline = 0;
+    uint64_t step_effective_field_evaluation_baseline = 0;
+    uint64_t step_energy_reduction_baseline = 0;
+    uint64_t last_step_exchange_evaluation_count = 0;
+    uint64_t last_step_demag_evaluation_count = 0;
+    uint64_t last_step_demag_forward_fft_count = 0;
+    uint64_t last_step_demag_inverse_fft_count = 0;
+    uint64_t last_step_effective_field_evaluation_count = 0;
+    uint64_t last_step_energy_reduction_count = 0;
+};
+
 struct Context {
     // Grid
     uint32_t nx, ny, nz;
@@ -370,6 +430,7 @@ struct Context {
     fullmag_fdm_integrator integrator;
     fullmag_fdm_stats_mode stats_mode = FULLMAG_FDM_STATS_FULL;
     uint32_t stats_stride = 1;
+    uint64_t stats_quantity_mask = FULLMAG_FDM_STATS_QUANTITY_ALL;
     bool disable_precession = false;
 
     // Hot-loop host-boundary audit for scalar control/readback decisions.
@@ -506,6 +567,7 @@ struct Context {
     uint64_t step_transaction_pending_rollback_d2d_bytes = 0;
     uint64_t step_transaction_pending_rollback_latency_ns = 0;
     bool observables_valid = false;
+    EndpointFieldCache endpoint_field_cache{};
 
     // Complete v2 timestep policy (fixed unless explicitly enabled).
     bool adaptive_enabled = false;
@@ -676,6 +738,130 @@ struct Context {
     void *interrupt_poll_user_data = nullptr;
     bool step_interrupted = false;
 };
+
+inline uint64_t endpoint_cache_double_bits(double value) {
+    uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value), "double bit width changed");
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+inline uint64_t endpoint_cache_target_state_revision(const Context &ctx) {
+    return ctx.accepted_step_pending
+        ? ctx.accepted_state_revision + 1
+        : ctx.accepted_state_revision;
+}
+
+inline double endpoint_cache_target_time(const Context &ctx) {
+    return ctx.accepted_step_pending ? ctx.pending_time : ctx.current_time;
+}
+
+inline bool context_endpoint_cache_identity_matches(const Context &ctx) {
+    const auto &cache = ctx.endpoint_field_cache;
+    return cache.accepted_state_revision == endpoint_cache_target_state_revision(ctx) &&
+        cache.time_bits == endpoint_cache_double_bits(endpoint_cache_target_time(ctx)) &&
+        cache.source_revision == ctx.rhs_source_revision &&
+        cache.field_revision == ctx.rhs_field_revision &&
+        cache.transport_revision == ctx.rhs_transport_revision &&
+        cache.projection_policy_identity == ctx.projection_policy_identity;
+}
+
+inline void context_prepare_endpoint_cache_identity(Context &ctx) {
+    if (context_endpoint_cache_identity_matches(ctx)) return;
+    auto &cache = ctx.endpoint_field_cache;
+    if (cache.valid_field_mask != 0 || cache.stats_valid) {
+        ++cache.invalidation_count;
+    }
+    cache.accepted_state_revision = endpoint_cache_target_state_revision(ctx);
+    cache.time_bits = endpoint_cache_double_bits(endpoint_cache_target_time(ctx));
+    cache.source_revision = ctx.rhs_source_revision;
+    cache.field_revision = ctx.rhs_field_revision;
+    cache.transport_revision = ctx.rhs_transport_revision;
+    cache.projection_policy_identity = ctx.projection_policy_identity;
+    cache.valid_field_mask = 0;
+    cache.stats_valid = false;
+    cache.stats_quantity_mask = 0;
+    ctx.observables_valid = false;
+}
+
+inline bool context_endpoint_fields_are_fresh(
+    const Context &ctx,
+    uint64_t required_mask)
+{
+    return context_endpoint_cache_identity_matches(ctx) &&
+        (ctx.endpoint_field_cache.valid_field_mask & required_mask) == required_mask;
+}
+
+inline void context_publish_endpoint_fields(Context &ctx, uint64_t field_mask) {
+    context_prepare_endpoint_cache_identity(ctx);
+    ctx.endpoint_field_cache.valid_field_mask |= field_mask;
+    ctx.observables_valid = context_endpoint_fields_are_fresh(
+        ctx, OBSERVABLE_ENDPOINT_ALL_FIELDS);
+}
+
+inline void context_publish_endpoint_stats(
+    Context &ctx,
+    const fullmag_fdm_step_stats &stats,
+    uint64_t quantity_mask = FULLMAG_FDM_STATS_QUANTITY_ALL)
+{
+    context_prepare_endpoint_cache_identity(ctx);
+    ctx.endpoint_field_cache.stats = stats;
+    ctx.endpoint_field_cache.stats_quantity_mask = quantity_mask;
+    ctx.endpoint_field_cache.stats_valid = true;
+}
+
+inline bool context_copy_endpoint_stats(
+    const Context &ctx,
+    fullmag_fdm_step_stats *out_stats,
+    uint64_t quantity_mask = FULLMAG_FDM_STATS_QUANTITY_ALL)
+{
+    if (out_stats == nullptr || !context_endpoint_cache_identity_matches(ctx) ||
+        !ctx.endpoint_field_cache.stats_valid ||
+        (ctx.endpoint_field_cache.stats_quantity_mask & quantity_mask) != quantity_mask) {
+        return false;
+    }
+    *out_stats = ctx.endpoint_field_cache.stats;
+    return true;
+}
+
+inline void context_clear_endpoint_cache(Context &ctx) {
+    auto &cache = ctx.endpoint_field_cache;
+    if (cache.valid_field_mask != 0 || cache.stats_valid) {
+        ++cache.invalidation_count;
+    }
+    cache.valid_field_mask = 0;
+    cache.stats_valid = false;
+    cache.stats_quantity_mask = 0;
+    ctx.observables_valid = false;
+}
+
+inline void context_begin_endpoint_step_accounting(Context &ctx) {
+    auto &cache = ctx.endpoint_field_cache;
+    cache.step_exchange_evaluation_baseline = cache.exchange_evaluation_count;
+    cache.step_demag_evaluation_baseline = cache.demag_evaluation_count;
+    cache.step_demag_forward_fft_baseline = cache.demag_forward_fft_count;
+    cache.step_demag_inverse_fft_baseline = cache.demag_inverse_fft_count;
+    cache.step_effective_field_evaluation_baseline =
+        cache.effective_field_evaluation_count;
+    cache.step_energy_reduction_baseline = cache.energy_reduction_count;
+}
+
+inline void context_finish_endpoint_step_accounting(Context &ctx) {
+    auto &cache = ctx.endpoint_field_cache;
+    cache.last_step_exchange_evaluation_count =
+        cache.exchange_evaluation_count - cache.step_exchange_evaluation_baseline;
+    cache.last_step_demag_evaluation_count =
+        cache.demag_evaluation_count - cache.step_demag_evaluation_baseline;
+    cache.last_step_demag_forward_fft_count =
+        cache.demag_forward_fft_count - cache.step_demag_forward_fft_baseline;
+    cache.last_step_demag_inverse_fft_count =
+        cache.demag_inverse_fft_count - cache.step_demag_inverse_fft_baseline;
+    cache.last_step_effective_field_evaluation_count =
+        cache.effective_field_evaluation_count -
+        cache.step_effective_field_evaluation_baseline;
+    cache.last_step_energy_reduction_count =
+        cache.energy_reduction_count - cache.step_energy_reduction_baseline;
+}
 
 #if FULLMAG_HAS_CUDA
 bool context_create_compute_stream(Context &ctx);
@@ -887,6 +1073,63 @@ inline bool context_get_step_transaction_telemetry_v1(
     return true;
 }
 
+inline bool context_get_endpoint_cache_telemetry_v1(
+    const Context &ctx,
+    fullmag_fdm_endpoint_cache_telemetry_v1 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version !=
+            FULLMAG_FDM_ENDPOINT_CACHE_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size !=
+            sizeof(fullmag_fdm_endpoint_cache_telemetry_v1)) {
+        return false;
+    }
+    const auto &cache = ctx.endpoint_field_cache;
+    fullmag_fdm_endpoint_cache_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_ENDPOINT_CACHE_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    result.cache_identity_valid =
+        context_endpoint_cache_identity_matches(ctx) ? 1U : 0U;
+    result.stats_valid = cache.stats_valid ? 1U : 0U;
+    result.accepted_state_revision = cache.accepted_state_revision;
+    result.accepted_time_bits = cache.time_bits;
+    result.source_revision = cache.source_revision;
+    result.field_revision = cache.field_revision;
+    result.transport_revision = cache.transport_revision;
+    result.projection_policy_identity = cache.projection_policy_identity;
+    result.valid_field_mask = cache.valid_field_mask;
+    result.refresh_request_count = cache.refresh_request_count;
+    result.refresh_execution_count = cache.refresh_execution_count;
+    result.refresh_cache_hit_count = cache.refresh_cache_hit_count;
+    result.invalidation_count = cache.invalidation_count;
+    result.stats_snapshot_request_count = cache.stats_snapshot_request_count;
+    result.stats_snapshot_cache_hit_count = cache.stats_snapshot_cache_hit_count;
+    result.field_snapshot_request_count = cache.field_snapshot_request_count;
+    result.field_snapshot_latency_total_ns = cache.field_snapshot_latency_total_ns;
+    result.field_snapshot_latency_max_ns = cache.field_snapshot_latency_max_ns;
+    result.exchange_evaluation_count = cache.exchange_evaluation_count;
+    result.demag_evaluation_count = cache.demag_evaluation_count;
+    result.demag_forward_fft_count = cache.demag_forward_fft_count;
+    result.demag_inverse_fft_count = cache.demag_inverse_fft_count;
+    result.effective_field_evaluation_count =
+        cache.effective_field_evaluation_count;
+    result.energy_reduction_count = cache.energy_reduction_count;
+    result.last_step_exchange_evaluation_count =
+        cache.last_step_exchange_evaluation_count;
+    result.last_step_demag_evaluation_count =
+        cache.last_step_demag_evaluation_count;
+    result.last_step_demag_forward_fft_count =
+        cache.last_step_demag_forward_fft_count;
+    result.last_step_demag_inverse_fft_count =
+        cache.last_step_demag_inverse_fft_count;
+    result.last_step_effective_field_evaluation_count =
+        cache.last_step_effective_field_evaluation_count;
+    result.last_step_energy_reduction_count =
+        cache.last_step_energy_reduction_count;
+    *out_telemetry = result;
+    return true;
+}
+
 inline bool context_get_adaptive_execution_telemetry_v1(
     const Context &ctx,
     fullmag_fdm_adaptive_execution_telemetry_v1 *out_telemetry)
@@ -1029,6 +1272,8 @@ struct AsyncFieldSnapshot {
     std::shared_ptr<AsyncFieldSnapshotPool> pool;
     std::size_t pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
     std::shared_ptr<AsyncTransferReceiptToken> receipt_token;
+    EndpointFieldCache *telemetry_cache = nullptr;
+    uint64_t telemetry_started_ns = 0;
 };
 
 struct AsyncPreviewSnapshot {
@@ -1182,7 +1427,7 @@ inline void context_reset_integrator_history(Context &ctx) {
 }
 
 inline bool fullmag_fdm_should_fill_step_stats_for_step(const Context &ctx, uint64_t step) {
-    if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
+    if (ctx.stats_mode != FULLMAG_FDM_STATS_FULL) {
         return false;
     }
     const uint32_t stride = ctx.stats_stride == 0 ? 1 : ctx.stats_stride;
@@ -1975,6 +2220,7 @@ bool context_query_device_info(Context &ctx);
 
 /// Populate H_ex / H_demag / H_eff for the current state without advancing time.
 bool context_refresh_observables(Context &ctx);
+bool context_ensure_observable_fields(Context &ctx, uint64_t required_mask);
 void context_invalidate_observables(Context &ctx);
 
 /// Populate only H_demag for the current state without advancing time.

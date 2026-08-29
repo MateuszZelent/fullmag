@@ -763,6 +763,12 @@ if(FULLMAG_ENABLE_CUDA)
     target_link_libraries(smoke_context PRIVATE fullmag_fdm)
     add_test(NAME fdm_smoke_context COMMAND smoke_context)
 
+    add_executable(endpoint_cache_cuda_runtime
+        tests/endpoint_cache_cuda_runtime.cpp)
+    target_link_libraries(endpoint_cache_cuda_runtime PRIVATE fullmag_fdm)
+    add_test(NAME fdm_endpoint_cache_cuda_runtime
+        COMMAND endpoint_cache_cuda_runtime)
+
     add_executable(exchange_fp64_parity tests/exchange_fp64_parity.cu)
     target_link_libraries(exchange_fp64_parity PRIVATE fullmag_fdm)
     add_test(NAME fdm_exchange_fp64_parity COMMAND exchange_fp64_parity)

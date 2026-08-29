@@ -657,6 +657,7 @@ void launch_demag_field_fp64(Context &ctx) {
         context_end_compute_stream_work(ctx, "launch_demag_field_fp64");
         return;
     }
+    ++ctx.endpoint_field_cache.demag_forward_fft_count;
 
     if (ctx.has_demag_tensor_kernel) {
         tensor_convolution_fp64_kernel<<<grid_padded, BLOCK_SIZE, 0, stream>>>(
@@ -693,6 +694,7 @@ void launch_demag_field_fp64(Context &ctx) {
         context_end_compute_stream_work(ctx, "launch_demag_field_fp64");
         return;
     }
+    ++ctx.endpoint_field_cache.demag_inverse_fft_count;
 
     unpack_demag_fft_fp64_kernel<<<grid_physical, BLOCK_SIZE, 0, stream>>>(
         static_cast<const cufftDoubleComplex*>(ctx.fft_x),
@@ -753,6 +755,7 @@ void launch_demag_field_fp64(Context &ctx) {
         return;
     }
     if (context_end_compute_stream_work(ctx, "launch_demag_field_fp64")) {
+        ++ctx.endpoint_field_cache.demag_evaluation_count;
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_DEMAG);
         if (ctx.has_demag_boundary_corr) {
@@ -888,6 +891,7 @@ void launch_effective_field_fp64(
         set_cuda_error(ctx, "launch_effective_field_fp64", launch_error);
         return;
     }
+    ++ctx.endpoint_field_cache.effective_field_evaluation_count;
     if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
     }
@@ -953,10 +957,12 @@ void launch_anisotropy_field_fp64(Context &ctx) {
 }
 
 double launch_demag_energy_fp64(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     return reduce_demag_energy_fp64(ctx);
 }
 
 double launch_external_energy_fp64(Context &ctx) {
+    ++ctx.endpoint_field_cache.energy_reduction_count;
     return reduce_external_energy_fp64(ctx);
 }
 

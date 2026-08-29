@@ -340,7 +340,6 @@ pub(crate) fn execute_cuda_fdm(
                 if !observation_due {
                     continue;
                 }
-                backend.refresh_observables()?;
                 let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
                 stats.error_estimate = Some(terminal.normalized_error);
                 stats.rejected_attempts = terminal.rejected_attempts;

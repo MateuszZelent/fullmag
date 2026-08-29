@@ -151,7 +151,38 @@ typedef struct {
 typedef enum {
     FULLMAG_FDM_STATS_FULL = 0,  /* default: preserve existing per-step diagnostics */
     FULLMAG_FDM_STATS_NONE = 1,  /* step returns only step/time/dt metadata */
+    FULLMAG_FDM_STATS_CONTROL = 2, /* step-control metadata; no full observation */
+    FULLMAG_FDM_STATS_REQUESTED = 3, /* on-demand masked scalar observation */
 } fullmag_fdm_stats_mode;
+
+#define FULLMAG_FDM_STATS_QUANTITY_E_EX          (UINT64_C(1) << 0)
+#define FULLMAG_FDM_STATS_QUANTITY_E_DEMAG       (UINT64_C(1) << 1)
+#define FULLMAG_FDM_STATS_QUANTITY_E_EXT         (UINT64_C(1) << 2)
+#define FULLMAG_FDM_STATS_QUANTITY_E_ANI         (UINT64_C(1) << 3)
+#define FULLMAG_FDM_STATS_QUANTITY_E_DMI         (UINT64_C(1) << 4)
+#define FULLMAG_FDM_STATS_QUANTITY_E_TOTAL       (UINT64_C(1) << 5)
+#define FULLMAG_FDM_STATS_QUANTITY_MAX_H_EFF     (UINT64_C(1) << 6)
+#define FULLMAG_FDM_STATS_QUANTITY_MAX_H_DEMAG   (UINT64_C(1) << 7)
+#define FULLMAG_FDM_STATS_QUANTITY_MAX_TORQUE    (UINT64_C(1) << 8)
+#define FULLMAG_FDM_STATS_QUANTITY_MAX_RHS       (UINT64_C(1) << 9)
+#define FULLMAG_FDM_STATS_QUANTITY_ALL           ((UINT64_C(1) << 10) - 1)
+#define FULLMAG_FDM_STATS_QUANTITY_CONTROL       \
+    (FULLMAG_FDM_STATS_QUANTITY_MAX_TORQUE | \
+     FULLMAG_FDM_STATS_QUANTITY_MAX_RHS)
+
+#define FULLMAG_FDM_STATS_POLICY_ABI_V1 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fdm_stats_mode mode;
+    uint32_t stride;
+    uint64_t quantity_mask;
+} fullmag_fdm_stats_policy_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_stats_policy_v1) == 24,
+              "stats policy v1 ABI size changed");
+#endif
 
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1 UINT32_C(1)
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2 UINT32_C(2)
@@ -798,6 +829,47 @@ typedef struct {
     uint64_t stale_publication_count;
 } fullmag_fdm_step_transaction_telemetry_v1;
 
+#define FULLMAG_FDM_ENDPOINT_CACHE_TELEMETRY_ABI_V1 1u
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t cache_identity_valid;
+    uint32_t stats_valid;
+    uint64_t accepted_state_revision;
+    uint64_t accepted_time_bits;
+    uint64_t source_revision;
+    uint64_t field_revision;
+    uint64_t transport_revision;
+    uint64_t projection_policy_identity;
+    uint64_t valid_field_mask;
+    uint64_t refresh_request_count;
+    uint64_t refresh_execution_count;
+    uint64_t refresh_cache_hit_count;
+    uint64_t invalidation_count;
+    uint64_t stats_snapshot_request_count;
+    uint64_t stats_snapshot_cache_hit_count;
+    uint64_t field_snapshot_request_count;
+    uint64_t field_snapshot_latency_total_ns;
+    uint64_t field_snapshot_latency_max_ns;
+    uint64_t exchange_evaluation_count;
+    uint64_t demag_evaluation_count;
+    uint64_t demag_forward_fft_count;
+    uint64_t demag_inverse_fft_count;
+    uint64_t effective_field_evaluation_count;
+    uint64_t energy_reduction_count;
+    uint64_t last_step_exchange_evaluation_count;
+    uint64_t last_step_demag_evaluation_count;
+    uint64_t last_step_demag_forward_fft_count;
+    uint64_t last_step_demag_inverse_fft_count;
+    uint64_t last_step_effective_field_evaluation_count;
+    uint64_t last_step_energy_reduction_count;
+} fullmag_fdm_endpoint_cache_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_endpoint_cache_telemetry_v1) == 240,
+              "endpoint cache telemetry v1 ABI size changed");
+#endif
+
 #define FULLMAG_FDM_ADAPTIVE_EXECUTION_TELEMETRY_ABI_V1 1u
 
 typedef enum {
@@ -1044,6 +1116,10 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
+int fullmag_fdm_backend_set_stats_policy_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_stats_policy_v1 *policy);
+
 /** Upload a cell-wise profile as static external H_ext [A/m].
  * The legacy descriptor keeps the wire layout stable; this role setter is
  * intentionally a separate versioned operation and is valid only for a
@@ -1102,6 +1178,10 @@ int fullmag_fdm_backend_get_fsal_telemetry_v2(
 int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_step_transaction_telemetry_v1 *out_telemetry);
+
+int fullmag_fdm_backend_get_endpoint_cache_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_endpoint_cache_telemetry_v1 *out_telemetry);
 
 /* Caller initializes abi_version and struct_size. */
 int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(

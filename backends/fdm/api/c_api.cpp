@@ -338,6 +338,12 @@ int execute_single_grid_step_transaction(
             fullmag_fdm_note_operator_device_execution(
                 ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
             receipt_solver_phase.commit();
+            if (fullmag_fdm_should_fill_step_stats(ctx)) {
+                context_publish_endpoint_fields(
+                    ctx, OBSERVABLE_ENDPOINT_CORE_FIELDS);
+                context_publish_endpoint_stats(ctx, trial_stats);
+            }
+            context_finish_endpoint_step_accounting(ctx);
             (void)context_publish_accepted_step_stats(
                 true, trial_stats, &out_stats);
         },
@@ -623,9 +629,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // Execution config
     ctx->precision  = plan->precision;
     ctx->integrator = plan->integrator;
+    if (plan->stats_mode == FULLMAG_FDM_STATS_REQUESTED) {
+        ctx->last_error =
+            "requested stats mode requires fullmag_fdm_backend_set_stats_policy_v1";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     ctx->stats_mode = plan->stats_mode == FULLMAG_FDM_STATS_NONE
         ? FULLMAG_FDM_STATS_NONE
-        : FULLMAG_FDM_STATS_FULL;
+        : plan->stats_mode == FULLMAG_FDM_STATS_CONTROL
+            ? FULLMAG_FDM_STATS_CONTROL
+            : FULLMAG_FDM_STATS_FULL;
     ctx->stats_stride = plan->stats_stride == 0 ? 1 : plan->stats_stride;
     ctx->disable_precession = plan->disable_precession != 0;
     ctx->enable_exchange = plan->enable_exchange != 0;
@@ -1363,9 +1376,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 
     ctx->precision = plan->precision;
     ctx->integrator = plan->integrator;
+    if (plan->stats_mode == FULLMAG_FDM_STATS_REQUESTED) {
+        ctx->last_error =
+            "requested stats mode is unsupported for v2 multilayer handles";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     ctx->stats_mode = plan->stats_mode == FULLMAG_FDM_STATS_NONE
         ? FULLMAG_FDM_STATS_NONE
-        : FULLMAG_FDM_STATS_FULL;
+        : plan->stats_mode == FULLMAG_FDM_STATS_CONTROL
+            ? FULLMAG_FDM_STATS_CONTROL
+            : FULLMAG_FDM_STATS_FULL;
     ctx->stats_stride = plan->stats_stride == 0 ? 1 : plan->stats_stride;
     ctx->disable_precession = plan->disable_precession != 0;
     ctx->enable_exchange = plan->enable_exchange != 0;
@@ -1402,6 +1422,84 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
 
 /* ── Step ── */
 
+int fullmag_fdm_backend_set_stats_policy_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_stats_policy_v1 *policy)
+{
+#if FULLMAG_HAS_CUDA
+    if (handle == nullptr || policy == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (policy->abi_version != FULLMAG_FDM_STATS_POLICY_ABI_V1 ||
+        policy->struct_size != sizeof(fullmag_fdm_stats_policy_v1))
+    {
+        ctx->last_error = "stats_policy_v1_abi_mismatch";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (ctx->accepted_step_pending) {
+        ctx->last_error = "stats_policy_change_during_step_transaction";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if ((policy->quantity_mask & ~FULLMAG_FDM_STATS_QUANTITY_ALL) != 0) {
+        ctx->last_error = "stats_policy_v1_unknown_quantity_mask";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    uint64_t resolved_mask = 0;
+    switch (policy->mode) {
+    case FULLMAG_FDM_STATS_FULL:
+        if (policy->quantity_mask != 0 &&
+            policy->quantity_mask != FULLMAG_FDM_STATS_QUANTITY_ALL)
+        {
+            ctx->last_error = "stats_policy_v1_full_requires_all_quantities";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        resolved_mask = FULLMAG_FDM_STATS_QUANTITY_ALL;
+        break;
+    case FULLMAG_FDM_STATS_NONE:
+        if (policy->quantity_mask != 0) {
+            ctx->last_error = "stats_policy_v1_none_requires_empty_mask";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        break;
+    case FULLMAG_FDM_STATS_CONTROL:
+        if (policy->quantity_mask != 0 &&
+            policy->quantity_mask != FULLMAG_FDM_STATS_QUANTITY_CONTROL)
+        {
+            ctx->last_error = "stats_policy_v1_control_requires_control_mask";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        resolved_mask = FULLMAG_FDM_STATS_QUANTITY_CONTROL;
+        break;
+    case FULLMAG_FDM_STATS_REQUESTED:
+        if (ctx->has_multilayer_plan_v2) {
+            ctx->last_error = "stats_policy_v1_requested_multilayer_unsupported";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        if (policy->quantity_mask == 0) {
+            ctx->last_error = "stats_policy_v1_requested_requires_nonempty_mask";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        resolved_mask = policy->quantity_mask;
+        break;
+    default:
+        ctx->last_error = "stats_policy_v1_unknown_mode";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+
+    ctx->stats_mode = policy->mode;
+    ctx->stats_stride = policy->stride == 0 ? 1 : policy->stride;
+    ctx->stats_quantity_mask = resolved_mask;
+    ctx->endpoint_field_cache.stats_valid = false;
+    ctx->endpoint_field_cache.stats_quantity_mask = 0;
+    ctx->last_error.clear();
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)policy;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
@@ -1423,6 +1521,7 @@ int fullmag_fdm_backend_step(
     ctx->adaptive_rejected_attempts = 0;
     ctx->adaptive_attempt_trace_count = 0;
     fullmag_fdm_reset_hot_loop_audit(*ctx);
+    context_begin_endpoint_step_accounting(*ctx);
     ReceiptSolverPhaseGuard receipt_solver_phase(*ctx);
     if (ctx->has_multilayer_plan_v2) {
         if (ctx->gpu_transport_rhs.active) {
@@ -1468,6 +1567,7 @@ int fullmag_fdm_backend_step(
             *ctx, FULLMAG_FDM_OPERATOR_LLG_INTEGRATOR);
         receipt_solver_phase.commit();
         fullmag_fdm_publish_multilayer_demag_stage_counters(*ctx, &trial_stats);
+        context_finish_endpoint_step_accounting(*ctx);
         (void)context_publish_accepted_step_stats(true, trial_stats, out_stats);
         return FULLMAG_FDM_OK;
     }
@@ -2311,6 +2411,7 @@ int fullmag_fdm_backend_snapshot_stats(
 #if FULLMAG_HAS_CUDA
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    ++ctx->endpoint_field_cache.stats_snapshot_request_count;
 
     if (ctx->has_multilayer_plan_v2) {
         std::memset(out_stats, 0, sizeof(*out_stats));
@@ -2535,6 +2636,20 @@ int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
 #if FULLMAG_HAS_CUDA
     auto *ctx = reinterpret_cast<Context *>(handle);
     return context_get_step_transaction_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_endpoint_cache_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_endpoint_cache_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_get_endpoint_cache_telemetry_v1(*ctx, out_telemetry)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 #else
     return FULLMAG_FDM_ERR_CUDA;
