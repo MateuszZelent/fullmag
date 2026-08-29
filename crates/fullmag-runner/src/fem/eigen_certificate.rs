@@ -319,6 +319,10 @@ impl OwnedModalCertificateV6Binding {
         }
     }
 
+    pub(crate) fn cell_markers(&self) -> &[u32] {
+        &self.cell_markers
+    }
+
     pub(super) fn validate(&self) -> Result<(), RunError> {
         self.mesh_magnetic
             .validate(MODAL_CERTIFICATE_VIEW_AUTHORITATIVE_MESH)?;

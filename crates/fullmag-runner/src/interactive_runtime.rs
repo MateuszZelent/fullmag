@@ -5648,6 +5648,8 @@ fn cuda_execution_provenance(
         fdm_gpu_step_transaction_telemetry: None,
         fdm_gpu_observation_policy: None,
         fdm_gpu_endpoint_cache_telemetry: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution,
@@ -5780,10 +5782,14 @@ fn fem_gpu_execution_provenance(
         fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
+        fdm_gpu_observation_policy: None,
+        fdm_gpu_endpoint_cache_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution: None,
         fem_gpu_execution_receipt: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {
             vec!["spin_torque".to_string()]

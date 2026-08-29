@@ -1760,7 +1760,7 @@ fn solve_native_modal_eigen_impl(
         .transpose()?;
     let shared_packed_mesh = shared_domain.map(|problem| {
         let mut packed = super::PackedNativeMesh::new(problem.mesh);
-        packed.replace_cell_markers(&problem.certificate_binding_v6.cell_markers);
+        packed.replace_cell_markers(problem.certificate_binding_v6.cell_markers());
         packed
     });
     let shared_mesh_descriptor = shared_domain
