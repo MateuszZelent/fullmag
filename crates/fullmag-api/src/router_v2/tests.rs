@@ -39334,7 +39334,7 @@ fn openapi_contains_planar_default_field_data_paths() {
 }
 
 async fn default_planar_fdm_test_state() -> Arc<AppState> {
-    let state = test_app_state_with_live_session().await;
+    let state = planar_fdm_test_state([2, 2, 1]).await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {
@@ -39362,9 +39362,18 @@ async fn default_planar_fdm_test_state() -> Arc<AppState> {
     state
 }
 
+async fn planar_fdm_test_state(counts: [u32; 3]) -> Arc<AppState> {
+    let (_, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, counts);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    state
+}
+
 #[tokio::test]
 async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
-    let state = test_app_state_with_live_session().await;
+    let state = planar_fdm_test_state([2, 2, 2]).await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {
@@ -39452,7 +39461,7 @@ async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
 
 #[tokio::test]
 async fn source_parity_across_meta_vector_and_planar() {
-    let state = test_app_state_with_live_session().await;
+    let state = planar_fdm_test_state([2, 2, 2]).await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata = Some(serde_json::json!({
             "artifact_layout": {
@@ -39566,7 +39575,7 @@ async fn source_parity_across_meta_vector_and_planar() {
 
 #[tokio::test]
 async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
-    let state = test_app_state_with_live_session().await;
+    let state = planar_fdm_test_state([2, 2, 1]).await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.session.resolved_backend = Some("fdm".to_string());
         snapshot.session.resolved_device = Some("cpu".to_string());

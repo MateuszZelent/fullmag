@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_READINESS_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
@@ -220,6 +221,12 @@ describe("flattenVisibleExplorerRows", () => {
       node,
       resourceData: {
         [MODEL_GEOMETRY_VALIDATION_PATH]: { diagnostics: [] },
+        [MODEL_READINESS_PATH]: {
+          blockers: [],
+          ready_to_export: true,
+          ready_to_run: true,
+          scene_revision: 1,
+        },
         [SESSION_STATUS_RESOURCE_KEY]: {
           capabilities: {
             binary_fields: true,

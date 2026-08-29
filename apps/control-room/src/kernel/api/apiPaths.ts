@@ -809,6 +809,10 @@ export const SIMULATION_COMMAND_DETAIL_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/commands/{command_id}",
 );
 
+export const SIMULATION_COMMAND_FAILURE_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/commands/{command_id}/failure",
+);
+
 export const SIMULATION_OBJECT_METRICS_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/objects/{object_id}/metrics",
 );

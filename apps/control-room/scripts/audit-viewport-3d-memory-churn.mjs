@@ -894,7 +894,7 @@ async function installBrowserAuditInstrumentation(page) {
 }
 
 async function installFdmFixtureApi(page, fixture, requests) {
-  await page.route("**/v2/sessions/current/**", async (route) => {
+  await page.route("**/v2/**", async (route) => {
     const request = route.request();
     const requestUrl = new URL(request.url());
     requests.push(`${request.method()} ${requestUrl.pathname}`);
@@ -904,6 +904,31 @@ async function installFdmFixtureApi(page, fixture, requests) {
     }
 
     const path = requestUrl.pathname;
+    if (path === "/v2/sessions") {
+      await fulfillJson(route, {
+        schema_version: "session-list.v1",
+        sessions: [{
+          current: true,
+          name: "FDM memory churn fixture",
+          session_id: "fdm-memory-churn-fixture",
+          status: "running",
+        }],
+      });
+      return;
+    }
+    if (path === "/v2/platform/health") {
+      await fulfillJson(route, {
+        active_session: true,
+        api_contract_version: "v2",
+        status: "ok",
+        uptime_seconds: 1,
+      });
+      return;
+    }
+    if (path === "/v2/platform/capabilities") {
+      await fulfillJson(route, { engines: [], profile_version: "fixture.v1" });
+      return;
+    }
     if (path === "/v2/sessions/current/status") {
       await fulfillJson(route, fdmStatusFixture(fixture));
       return;
