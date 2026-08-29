@@ -222,7 +222,7 @@ Status: The Control Room authors a study and lowers it to ProblemIR; direct Prob
 | Parameters documented on this page | `No standalone Control Room route` | `TODO` | No supported frontend transaction |
 | Parameters without a named UI field | `No standalone Control Room route` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for standalone Problem/ProblemIR authoring.
+frontend support is not implemented for standalone Problem/ProblemIR authoring.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`.
 

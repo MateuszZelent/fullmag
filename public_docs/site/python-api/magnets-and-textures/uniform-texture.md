@@ -111,7 +111,7 @@ Status: The exposed texture families are partial; unlisted presets remain Python
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Magnetization` | `partial` | Apply magnetization draft; authored object state is revised |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Magnetization` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
+frontend support is not implemented for texture presets and arguments not exposed by ObjectMagneticTexturePanel.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx (ObjectMagneticTexturePanel)`.
 

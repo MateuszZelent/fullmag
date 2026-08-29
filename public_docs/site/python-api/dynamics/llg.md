@@ -122,7 +122,7 @@ Status: Common solver/stage fields are partial; backend-specific options without
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Solver` | `partial` | Apply stage draft; solver request and result resources become stale |
 | Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for dynamics parameters not rendered by the stage editor.
+frontend support is not implemented for dynamics parameters not rendered by the stage editor.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 

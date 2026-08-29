@@ -111,7 +111,7 @@ Status: Advertised global/object mesh controls are partial; compatibility-only f
 | Parameters documented on this page | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `partial` | Apply mesh policy or Build Mesh; mesh resources become stale |
 | Parameters without a named UI field | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for discretization parameters not represented by the mesh panels.
+frontend support is not implemented for discretization parameters not represented by the mesh panels.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx (ObjectMeshPolicyPanel)`.
 

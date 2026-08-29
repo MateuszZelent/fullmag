@@ -44,6 +44,7 @@ Boundary-correction support remains interaction/device capability-gated.
 | `FDM.default_cell` | `Sequence[float] \| None` | `None` | m | Three finite positive values. | Default native cell size inherited by magnets without an override. | FDM CPU/GPU | `backend_policy.discretization_hints.fdm.default_cell` |
 | `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | 1 | Nonempty names and FDMGrid values. | Object-owned native grid overrides. | FDM CPU/GPU; multilayer capability-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
 | `FDM.demag` | `FDMDemag \| None` | `None` | 1 | Typed, internally consistent demag policy. | Single-grid or multilayer common-grid request. | FDM demagnetization lanes | `backend_policy.discretization_hints.fdm.demag` |
+| `FDM.projection_policy` | `str \| None` | `None` | 1 | `None` or the supported `unit_sphere` policy. | Projected-RK state constraint policy; `None` selects the qualified default. | FDM CPU/GPU; planner checks combinations | `backend_policy.discretization_hints.fdm.projection_policy` |
 | `FDM.boundary_correction` | `str \| None` | `None` | 1 | `none`, `volume`, or `full`. | Requested embedded-boundary correction. | Interaction/device capability-gated | `backend_policy.discretization_hints.fdm.boundary_correction` |
 | `FDM.boundary_phi_floor` | `float \| None` | `None` | 1 | Strictly between zero and one. | Minimum stable partial-cell volume fraction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_phi_floor` |
 | `FDM.boundary_delta_min` | `float \| None` | `None` | m | Finite and nonnegative. | Minimum geometric distance used by full correction. | Boundary-correction lanes | `backend_policy.discretization_hints.fdm.boundary_delta_min` |
@@ -129,7 +130,7 @@ Status: Frontend support is TODO unless a named source-backed panel is added.
 | Parameters documented on this page | `See the capability register; no page-specific route is established` | `TODO` | No supported frontend transaction |
 | Parameters without a named UI field | `See the capability register; no page-specific route is established` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for this API surface and its parameters.
+frontend support is not implemented for this API surface and its parameters.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
 

@@ -374,7 +374,7 @@ Status: Scalar magnetic fields are partial; spatial fields and material-law-spec
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` | `partial` | Apply material draft; dependent physics and mesh resources become stale |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
+frontend support is not implemented for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx (ObjectMaterialPanel)`.
 

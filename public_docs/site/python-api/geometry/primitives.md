@@ -251,7 +251,7 @@ Status: Basic object/shape fields are partial; advanced boolean, imported, auxil
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Geometry` | `partial` | Apply geometry draft; object resources become stale |
 | Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Geometry` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for every geometry parameter not rendered by GeometryObjectPanel.
+frontend support is not implemented for every geometry parameter not rendered by GeometryObjectPanel.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx (GeometryObjectPanel)`.
 

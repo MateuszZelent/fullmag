@@ -146,7 +146,7 @@ Status: Frontend support is TODO unless a named source-backed panel is added.
 | Parameters documented on this page | `See the capability register; no page-specific route is established` | `TODO` | No supported frontend transaction |
 | Parameters without a named UI field | `See the capability register; no page-specific route is established` | `TODO` | Python-only until implemented |
 
-TODO: frontend support for this API surface and its parameters.
+frontend support is not implemented for this API surface and its parameters.
 See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
 
