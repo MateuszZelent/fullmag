@@ -204,6 +204,7 @@ fn max_scalar_amplitude(values: &[f64]) -> f64 {
 
 fn certify_native_linearization_recompute(
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     accepted: &NativeEquilibriumEvaluation,
     recomputed: &NativeEquilibriumEvaluation,
 ) -> Result<RecomputedFemLinearizationCertificateV1, RunError> {
@@ -288,16 +289,31 @@ fn certify_native_linearization_recompute(
         });
     }
 
+    let mesh_topology_sha256 = fem_mesh_generation_id
+        .as_deref()
+        .filter(|digest| {
+            digest.strip_prefix("sha256:").is_some_and(|hex| {
+                hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        })
+        .ok_or_else(|| RunError {
+            message: "native_linearization_recompute_missing_stage_mesh_topology_sha256"
+                .to_string(),
+        })?
+        .to_string();
     let identity =
         crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(plan)?;
-    let mesh = crate::types::FemMeshPayload::from(plan);
     let mut certificate = RecomputedFemLinearizationCertificateV1 {
         schema_version: "RecomputedFemLinearizationCertificate.v1".to_string(),
         status: "matched".to_string(),
         recompute_provider: "native_fem_final_state_refresh.v1".to_string(),
         node_count: accepted.magnetization.len(),
         equilibrium_content_sha256,
-        mesh_topology_sha256: crate::types::fem_mesh_topology_fingerprint(&mesh),
+        // The runtime plan may normalize element markers before native
+        // allocation. The stage mesh identity is computed from the immutable
+        // authoring payload before that normalization and is also what the
+        // orchestrator persists and hands to the following eigen stage.
+        mesh_topology_sha256,
         equilibrium_material_signature: identity.equilibrium_material_signature,
         equilibrium_static_physics_signature: identity.equilibrium_static_physics_signature,
         equilibrium_boundary_signature: identity.equilibrium_boundary_signature,
@@ -585,6 +601,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     let recomputed_native_equilibrium = copy_native_equilibrium_evaluation(backend, node_count)?;
     let recomputed_linearization_certificate = certify_native_linearization_recompute(
         plan,
+        fem_mesh_generation_id,
         &accepted_native_equilibrium,
         &recomputed_native_equilibrium,
     )?;
