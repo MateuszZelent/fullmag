@@ -2525,6 +2525,29 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             static_cast<std::size_t>(magnetic_node_count));
         std::vector<double> linearization_h_demag0_z(
             static_cast<std::size_t>(magnetic_node_count));
+        mfem::Array<int> magnetic_attribute_marker(mesh->attributes.Max());
+        if (magnetic_attribute_marker.Size() < 1) {
+            copy_error(out_result->error_message,
+                       "shared-domain magnetic FE attribute is missing");
+            return out_result->status;
+        }
+        magnetic_attribute_marker = 0;
+        // The imported shared-domain contract maps the magnetic cell marker 1
+        // to MFEM volume attribute 1; air cells receive a distinct attribute.
+        magnetic_attribute_marker[0] = 1;
+        mfem::ConstantCoefficient unit_density(1.0);
+        mfem::LinearForm magnetic_lumped_mass_form(&scalar_space);
+        magnetic_lumped_mass_form.AddDomainIntegrator(
+            new mfem::DomainLFIntegrator(unit_density),
+            magnetic_attribute_marker);
+        magnetic_lumped_mass_form.Assemble();
+        if (magnetic_lumped_mass_form.Size() != static_cast<int>(node_count)) {
+            copy_error(out_result->error_message,
+                       "shared-domain FE lumped-mass dimensions do not match the mesh");
+            return out_result->status;
+        }
+        std::vector<double> linearization_tangent_lumped_mass(
+            static_cast<std::size_t>(magnetic_node_count));
         std::uint64_t linearization_node = 0u;
         for (std::uint64_t node = 0u; node < node_count; ++node) {
             if (magnetic_node_mask[static_cast<std::size_t>(node)] == 0u) {
@@ -2541,6 +2564,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             linearization_h_demag0_x[destination] = payload.linearization_h_demag0_xyz[source_offset];
             linearization_h_demag0_y[destination] = payload.linearization_h_demag0_xyz[source_offset + 1u];
             linearization_h_demag0_z[destination] = payload.linearization_h_demag0_xyz[source_offset + 2u];
+            linearization_tangent_lumped_mass[destination] =
+                magnetic_lumped_mass_form[static_cast<int>(node)];
             ++linearization_node;
         }
         EquilibriumArtifactDescriptor equilibrium_artifact{};
@@ -2567,8 +2592,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             linearization_h_demag0_z.data(),
             magnetic_node_count};
         equilibrium_artifact.phi0 = payload.linearization_phi0;
+        equilibrium_artifact.tangent_lumped_mass =
+            linearization_tangent_lumped_mass.data();
         equilibrium_artifact.magnetic_node_count = magnetic_node_count;
         equilibrium_artifact.airbox_node_count = payload.linearization_phi0_count;
+        equilibrium_artifact.tangent_lumped_mass_count =
+            linearization_tangent_lumped_mass.size();
         equilibrium_artifact.accepted_for_linearization = true;
         equilibrium_artifact.acceptance = {
             payload.acceptance_criterion,

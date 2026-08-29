@@ -43,9 +43,11 @@ struct EquilibriumArtifactDescriptor {
     CartesianVectorFieldView h_eff0_a_per_m;
     CartesianVectorFieldView h_demag0_a_per_m;
     const double *phi0 = nullptr;
+    const double *tangent_lumped_mass = nullptr;
 
     std::uint64_t magnetic_node_count = 0;
     std::uint64_t airbox_node_count = 0;
+    std::uint64_t tangent_lumped_mass_count = 0;
     bool accepted_for_linearization = false;
     EquilibriumAcceptanceCertificateDescriptor acceptance{};
     const char *demag_model = nullptr;
@@ -58,11 +60,8 @@ struct LinearizationBuildOptions {
     const char *expected_physics_snapshot_id = nullptr;
     const char *expected_boundary_snapshot_id = nullptr;
     double m0_norm_tolerance = 1.0e-10;
-    double periodic_seam_tolerance = 1.0e-8;
-    bool allow_m0_renormalization = true;
+    bool allow_m0_renormalization = false;
     bool require_static_demag_if_enabled = true;
-    bool require_symmetric_periodic_mesh = true;
-    bool recompute_h_eff0_and_compare = true;
 };
 
 struct LinearizationStateNative {
@@ -96,6 +95,7 @@ struct LinearizationDiagnostics {
     std::uint64_t node_count = 0;
     double max_m0_norm_error = 0.0;
     double max_m0_cross_heff0_relative = 0.0;
+    double weighted_m0_cross_heff0_relative_l2 = 0.0;
     double max_tangent_basis_dot_abs = 0.0;
     bool accepted_equilibrium = false;
     bool static_demag_available = false;

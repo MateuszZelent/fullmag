@@ -5967,6 +5967,7 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     const double h_demag_y[] = {0.0, 0.0};
     const double h_demag_z[] = {0.25, 0.0};
     const double phi0[] = {0.0, 0.0};
+    const double tangent_lumped_mass[] = {2.0, 3.0};
 
     fd::EquilibriumArtifactDescriptor artifact{};
     artifact.equilibrium_id = "eq:accepted";
@@ -5982,8 +5983,10 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     artifact.h_eff0_a_per_m = {h_eff_x, h_eff_y, h_eff_z, 2};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 2};
     artifact.phi0 = phi0;
+    artifact.tangent_lumped_mass = tangent_lumped_mass;
     artifact.magnetic_node_count = 2;
     artifact.airbox_node_count = 2;
+    artifact.tangent_lumped_mass_count = 2;
     artifact.accepted_for_linearization = true;
     artifact.acceptance = {
         "torque",
@@ -6013,7 +6016,11 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     check(state.schema_version == "LinearizationState.v6", "linearization state preserves v6 schema");
     check(state.producer_run_id == "run:equilibrium", "linearization state preserves producer run id");
     check(state.equilibrium_id == "eq:accepted", "linearization state preserves equilibrium id");
-    check(!state.linearization_signature_hash.empty(), "linearization state emits signature hash");
+    check(state.linearization_signature_hash.rfind("sha256:", 0) == 0 &&
+              state.linearization_signature_hash.size() == 71,
+          "linearization state emits a canonical SHA-256 identity");
+    check(state.tangent_lumped_mass == std::vector<double>({2.0, 3.0}),
+          "linearization state preserves FE lumped-mass weights");
     check(state.acceptance_criterion == "torque", "linearization state preserves acceptance criterion");
     check(state.acceptance_metric_kind == "max_torque_apm", "linearization state preserves acceptance metric");
     check(state.acceptance_unit == "A/m", "linearization state preserves acceptance unit");
@@ -6023,6 +6030,8 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
           "linearization state preserves acceptance certificate identity");
     check(diagnostics.static_demag_available, "linearization diagnostics report static demag availability");
     check(diagnostics.max_m0_norm_error <= options.m0_norm_tolerance, "linearization diagnostics bound m0 norm error");
+    check(diagnostics.weighted_m0_cross_heff0_relative_l2 <= 1.0e-12,
+          "linearization diagnostics publish the FE-weighted equilibrium torque norm");
     check(std::strlen(diagnostics.acceptance_certificate_sha256) > 0,
           "linearization diagnostics retain acceptance certificate identity");
     check(
@@ -6062,6 +6071,7 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     const double h_demag_y[] = {0.0};
     const double h_demag_z[] = {0.25};
     const double phi0[] = {0.0};
+    const double tangent_lumped_mass[] = {2.0};
 
     fd::EquilibriumArtifactDescriptor artifact{};
     artifact.equilibrium_id = "eq:accepted";
@@ -6077,8 +6087,10 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     artifact.h_eff0_a_per_m = {h_parallel_x, h_parallel_y, h_parallel_z, 1};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 1};
     artifact.phi0 = phi0;
+    artifact.tangent_lumped_mass = tangent_lumped_mass;
     artifact.magnetic_node_count = 1;
     artifact.airbox_node_count = 1;
+    artifact.tangent_lumped_mass_count = 1;
     artifact.accepted_for_linearization = true;
     artifact.acceptance = {
         "energy",
@@ -6097,6 +6109,49 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
 
     fd::LinearizationStateNative state{};
     fd::LinearizationDiagnostics diagnostics{};
+    fd::EquilibriumArtifactDescriptor missing_lumped_mass = artifact;
+    missing_lumped_mass.tangent_lumped_mass = nullptr;
+    missing_lumped_mass.tangent_lumped_mass_count = 0;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_lumped_mass,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a missing FE lumped mass");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_tangent_lumped_mass_missing") == 0,
+          "missing FE lumped mass has a stable reject reason");
+
+    const double invalid_tangent_lumped_mass[] = {0.0};
+    fd::EquilibriumArtifactDescriptor invalid_lumped_mass = artifact;
+    invalid_lumped_mass.tangent_lumped_mass = invalid_tangent_lumped_mass;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            invalid_lumped_mass,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a non-positive FE lumped mass");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_tangent_lumped_mass_invalid") == 0,
+          "invalid FE lumped mass has a stable reject reason");
+
+    const double nonunit_m0_z[] = {1.0 + 1.0e-6};
+    fd::EquilibriumArtifactDescriptor nonunit_m0 = artifact;
+    nonunit_m0.m0_unit = {m0_x, m0_y, nonunit_m0_z, 1};
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            nonunit_m0,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects non-unit m0 by default instead of silently renormalizing it");
+    check(contains(diagnostics.error_message, "m0 norm"),
+          "non-unit m0 rejection explains the representation-integrity failure");
+
     fd::EquilibriumArtifactDescriptor rejected_artifact = artifact;
     rejected_artifact.accepted_for_linearization = false;
     check(
