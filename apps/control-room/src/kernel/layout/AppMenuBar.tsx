@@ -427,9 +427,9 @@ function NoSessionAppMenuBar({
             <DropdownMenuLabel>Application</DropdownMenuLabel>
             {APP_DROPDOWN_ITEMS.map((item) => (
               <DropdownMenuItem
-                disabled={isCommandDisabled(item.commandId)}
-                key={item.commandId}
-                onSelect={() => runCommand(item.commandId)}
+                disabled={isCommandDisabled(item.id)}
+                key={item.id}
+                onSelect={() => runCommand(item.id)}
               >
                 {item.label}
               </DropdownMenuItem>
