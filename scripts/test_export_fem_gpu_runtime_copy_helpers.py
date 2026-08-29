@@ -1792,14 +1792,15 @@ def test_export_mounts_durable_staging_for_container_postprocessing() -> None:
     assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/managed-runtime-target"' not in exporter
 
 
-def test_export_keeps_container_temp_registry_and_build_log_on_durable_ext4() -> None:
+def test_export_keeps_nvcc_temp_local_but_cache_and_build_log_durable() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
-    assert '-e TMPDIR="/workspace/target/tmp"' in exporter
+    assert '-e TMPDIR="/tmp/fullmag-runtime-export"' in exporter
+    assert '-e TMPDIR="/workspace/target/tmp"' not in exporter
     assert '-e CARGO_HOME="/workspace/target/cargo-home"' in exporter
-    assert 'mkdir -p "${TMPDIR}" "${CARGO_HOME}"' in exporter
-    assert 'tee "${TMPDIR}/fullmag-build.log"' in exporter
-    assert "tee /tmp/fullmag-build.log" not in exporter
+    assert '-e FULLMAG_BUILD_LOG="/workspace/target/tmp/fullmag-build.log"' in exporter
+    assert 'mkdir -p "${TMPDIR}" "${CARGO_HOME}" "$(dirname "${build_log}")"' in exporter
+    assert 'tee "${build_log}"' in exporter
     assert '-e TMPDIR="/managed-runtime-target/tmp"' in exporter
 
 
