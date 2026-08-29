@@ -3874,9 +3874,30 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
                     .to_string(),
             );
         }
+        if let Some(fallback_reason) = override_value.get("fallback_reason") {
+            if !fallback_reason
+                .as_str()
+                .is_some_and(|reason| !reason.trim().is_empty())
+            {
+                errors.push(
+                    "runtime_metadata.runtime_device_override.fallback_reason must be a non-empty string when provided"
+                        .to_string(),
+                );
+            }
+            if override_value
+                .get("device")
+                .and_then(|value| value.as_str())
+                != Some("cpu")
+            {
+                errors.push(
+                    "runtime_metadata.runtime_device_override.fallback_reason is valid only for device='cpu'"
+                        .to_string(),
+                );
+            }
+        }
         let unexpected = override_value
             .keys()
-            .filter(|key| !matches!(key.as_str(), "device" | "source"))
+            .filter(|key| !matches!(key.as_str(), "device" | "source" | "fallback_reason"))
             .cloned()
             .collect::<Vec<_>>();
         if !unexpected.is_empty() {

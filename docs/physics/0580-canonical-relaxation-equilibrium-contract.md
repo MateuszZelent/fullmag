@@ -2,7 +2,7 @@
 
 - Status: approved contract; implementation incomplete
 - Owners: Fullmag physics, planner, backend, API, and Control Room maintainers
-- Last updated: 2026-08-02
+- Last updated: 2026-08-19
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`,
   `docs/specs/resource-first-control-room-api-v2.md`,
@@ -349,12 +349,13 @@ for a lane, that lane rejects Oersted during relaxation.
 | `mu0` | vacuum permeability | `N/A^2` |
 | `gamma` | gyromagnetic ratio used with `H` | `m/(A s)` |
 | `alpha` | Gilbert damping | `1` |
-| `E` | total conservative energy | $\mathrm{J}$ |
+| $E$ | total conservative energy | $\mathrm{J}$ |
 | `g` | tangent field gradient | `A/m` |
 | `p` | direct-minimizer search direction | `A/m` |
 | `lambda` ($\lambda$) | direct-minimizer line-search step | $\mathrm{m\,A^{-1}}$ |
 | `V_i` | nodal/cell integration weight | `m^3` |
 | `max_torque_Apm` | maximum field equilibrium residual | `A/m` |
+| $T_{\max}^{A/m}$ | maximum field equilibrium residual used by the torque stop criterion | $\mathrm{A\,m^{-1}}$ |
 | `max_torque_T` | `mu0` times field residual | `T` |
 | `max_rhs_norm_per_s` | maximum total dynamic RHS norm | `1/s` |
 | `relaxation_time_s` | LLG-relaxation stage-local clock | `s` |
@@ -366,6 +367,11 @@ for a lane, that lane rejects Oersted during relaxation.
 | `phi_prime` ($\phi'(0)$) | physical-metric directional energy derivative | $\mathrm{J\,A\,m^{-1}}$ |
 | `s_i^{\mathrm{fp}}` | representable trial chord at cell/node `i` | $1$ |
 | `Delta E_lin_chord` ($\Delta E_{\mathrm{lin,chord}}$) | first-order energy increment along the stored trial chord | $\mathrm{J}$ |
+| $\mathcal C_{\mathrm T}$ | satisfied configured torque stop criterion, including its required fresh accepted-state confirmation samples | $1$ |
+| $\mathcal C_{\mathrm E}$ | satisfied configured energy-plateau stop criterion | $1$ |
+| $\mathcal C_{\mathrm{stop}}$ | satisfied user-enabled convergence condition | $1$ |
+| $\tau_{\mathrm T}$ | user-authored torque tolerance | $\mathrm{A\,m^{-1}}$ |
+| $\varepsilon_{\mathrm E}$ | user-authored energy-plateau tolerance | $\mathrm{J}$ |
 
 (assumptions-and-validity)=
 ### 2.6 Assumptions and validity limits
@@ -492,25 +498,44 @@ No new relaxation physics belongs in a monolithic bridge or cross-cutting
 Hybrid relaxation is unsupported. `backend=hybrid` rejects rather than
 splitting one equilibrium solve across unqualified FDM/FEM or CPU/GPU methods.
 
+(relaxation-stop-semantics)=
 ### 3.4 Stop semantics
 
-Canonical convergence criteria are:
+For every fresh accepted state, the canonical stop predicate is
 
-- torque: `max_torque_Apm <= torque_tolerance_apm`;
-- energy plateau: range `max(E)-min(E)` over the last 50 accepted states is at
-  most `energy_tolerance_j`; a plateau is a controller signal and never proves
-  equilibrium by itself;
-- `converged=true` requires a configured, finite torque tolerance and at least
-  three consecutive fresh accepted-state torque samples at or below it;
-- when energy tolerance is configured, its plateau condition must also hold,
-  but it cannot replace the torque condition;
+```{math}
+:label: eq-relaxation-any-enabled-stop
+\mathcal C_{\mathrm{stop}}
+=\mathcal C_{\mathrm T}\lor\mathcal C_{\mathrm E},
+\qquad
+\mathcal C_{\mathrm T}
+=\left(T_{\max}^{A/m}\leq\tau_{\mathrm T}\right)
+\text{ for three consecutive fresh accepted-state samples},
+\qquad
+\mathcal C_{\mathrm E}
+=\left(\max(E)-\min(E)\leq\varepsilon_{\mathrm E}\right)_{50\ \mathrm{accepted\ states}}.
+```
+
+Only criteria explicitly enabled by the user participate in the disjunction. Thus an enabled finite torque criterion or an enabled energy-plateau criterion can independently emit `converged=true`; an absent criterion is not a hidden gate. The energy window must contain 50 accepted states, and a nonfinite, stale, or unavailable torque/energy input is an error rather than a satisfied criterion.
+
+| Enabled criteria and observed result | Typed stop reason | Converged |
+|---|---|---|
+| Torque only; $\mathcal C_{\mathrm T}$ | `torque` | `true` |
+| Energy only; $\mathcal C_{\mathrm E}$ | `energy` | `true` |
+| Torque and energy; both conditions hold in the same accepted sample | `torque` | `true` |
+| Torque and energy; only $\mathcal C_{\mathrm E}$ holds | `energy` | `true` |
+| No enabled physical criterion is satisfied | no convergence reason | `false` |
+| `max_steps`, timeout, cancellation, numerical stagnation, unsupported path, or backend error | corresponding non-convergence reason | `false` |
+
+`torque` has deterministic reporting priority when both criteria first hold in the same accepted sample. This priority changes only the reported reason, not the physical acceptance result.
+
 - a candidate LLG relaxation step whose fresh total energy exceeds the last
   accepted energy by more than the configured absolute-plus-relative numerical
   budget is rejected and rolled back before it can affect completion metrics;
-- an energy plateau above the torque threshold tightens adaptive error control
+- an energy plateau that does not satisfy an enabled energy criterion tightens adaptive error control
   or the fixed time step by `sqrt(2)` down to its configured floor; it does not
   terminate the stage;
-- a complete plateau window above the torque threshold after the controller has
+- a complete plateau window that satisfies no enabled physical criterion after the controller has
   reached its floor terminates as `numerical_stagnation`, with
   `converged=false`;
 - `max_steps` is a terminal budget, not proof of convergence;
@@ -522,12 +547,11 @@ Direct-minimizer line-search step sums are not time and are not exposed as
 `line_search_backtracks`, `rhs_evaluations`, and `accepted_steps` with explicit
 units.
 
-Every terminal stage has exactly one typed stop reason. `torque` is the only
-equilibrium convergence reason. `energy` is retained only as a compatibility
-decode value for historical artifacts and must not be emitted for new runs.
-`gradient` is converged only when the canonical torque criterion also passes;
-otherwise a degenerate direction is `numerical_stagnation`. Budgets,
-cancellation, unsupported paths, and backend failures never set
+Every terminal stage has exactly one typed stop reason. `energy` is a current
+convergence reason, not a compatibility-only decode value. `gradient` is never
+a convergence reason: a degenerate direction before a user-enabled torque or
+energy criterion completes is `numerical_stagnation`, with `converged=false`.
+Budgets, cancellation, unsupported paths, and backend failures never set
 `converged=true`.
 
 Completion is emitted from the state that owned the stop decision. It is not
@@ -614,6 +638,11 @@ fm.Relaxation(
 )
 ```
 
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `fm.RelaxStop.torque_tolerance_apm` | `float or None` | `0.7957747154594767` | $\mathrm{A\,m^{-1}}$ | finite and positive when provided | Optional torque equilibrium threshold; `None` disables this criterion without disabling an enabled energy criterion. | FEM/FDM CPU/GPU | `StudyIR::Relaxation.stop.torque_tolerance_apm` |
+| `fm.RelaxStop.energy_tolerance_j` | `float or None` | `None` | $\mathrm{J}$ | finite and positive when provided | Optional 50-accepted-state energy-plateau threshold; `None` disables this criterion without disabling an enabled torque criterion. | FEM/FDM CPU/GPU | `StudyIR::Relaxation.stop.energy_tolerance_j` |
+
 The parity benchmark is authored through the same stage-first public surface:
 
 ```python
@@ -642,8 +671,9 @@ energy-increase budget, tightening by `1/sqrt(2)`, and an explicit controller
 floor. Requested physical criteria and the resolved controller policy are both
 recorded in provenance. Validation rejects NaN and infinity as well as values
 outside their documented domains. An explicit `None` survives every facade and
-disables an optional diagnostic criterion; the mandatory convergence torque
-criterion cannot be disabled for a run that claims equilibrium.
+disables only its corresponding physical criterion. A run may claim equilibrium
+when its enabled torque or energy criterion completes; at least one stop
+criterion, physical or budget, remains required by `RelaxStop` validation.
 
 Adaptive timestep authoring is also part of the canonical contract. The
 `AdaptiveTimestep` constructor records whether `dt_min` was explicitly
@@ -730,6 +760,39 @@ Runtime records:
 `BackendError`, nonfinite telemetry, line-search exhaustion, and solver failure
 produce failed completion. They cannot be represented by
 `status="completed"`.
+
+For native FEM, successful finalization also freezes the accepted-state field
+snapshot as `CertifiedFemEquilibriumFields.v1`. The bundle contains nodal
+`H_ex`, `H_demag`, `H_ext`, `H_eff` in `A/m`, scalar potential `phi` in `A`,
+and an exact content SHA-256 over their canonical bit representation. It is
+created only from the final accepted state and is never a substitute for
+`StageCompletionIR`, the acceptance criterion, or the source identities.
+
+The version boundaries are fail-closed:
+
+- `AcceptedFemRelaxStageHandoff.v2` is frozen as the legacy completion and
+  equilibrium identity contract. Adding the certified-field bundle or new
+  signature fields under the v2 schema name is an incompatible mutation.
+- `AcceptedFemRelaxStageHandoff.v3` is the required production handoff. It
+  binds the v2 data, `CertifiedFemEquilibriumFields.v1`, and separate source
+  signatures for equilibrium material, static physics, and static boundary
+  conditions into one digest.
+- modal operator and dynamic modal-boundary signatures remain separate from
+  those source-equilibrium signatures. A signature that includes
+  `operator.kind` or `spin_wave_bc` cannot prove the identity of the preceding
+  relaxation stage.
+- consuming v3 requires `LinearizationState.v7`. Publishing the new source
+  field digest and split source/modal signatures in the public equilibrium
+  payload requires `equilibrium_artifact.v8`; v7 remains frozen and is not
+  rewritten in place.
+
+The current source-visible implementation produces and carries
+`CertifiedFemEquilibriumFields.v1`, but still labels the expanded handoff v2
+and computes the material/physics/boundary signatures only from the target
+eigensolve request. Therefore source-to-target material, static-physics and
+static-BC identity is not yet certified. This is an implementation gap and
+blocks production `relax -> eigenmodes` qualification; it does not invalidate
+the accepted relaxation itself.
 
 ### 4.5 OpenAPI and resources
 
@@ -854,6 +917,9 @@ run through their repository-owned commands.
 - [x] Managed runtime contract verification
 - [ ] Full source-bound managed relaxation qualification matrix
 - [x] Canonical physics contract
+- [x] Final native FEM certified-field bundle source implementation
+- [ ] Frozen-v2 to v3 handoff migration with source material/static-physics/static-BC signatures
+- [ ] `LinearizationState.v7` and `equilibrium_artifact.v8` consumers and migration tests
 
 (limitations)=
 ## 7. Known limits and deferred work
@@ -906,6 +972,13 @@ from the current runs.
 | `crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs` | `cudaDirectMinimizer` / `execute_direct_minimizer` | Executes the CUDA FDM direct-minimizer loop. |
 | `backends/fdm/gpu/cuda/runtime/telemetry.cu` | `nativeF32Energy` / `context_fill_current_stats` | Publishes FP32-state energy reductions as joules. |
 | `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `fp32ArmijoRegression` / `single_precision_armijo_uses_bounded_energy_roundoff_budget` | Guards single-vs-double acceptance semantics. |
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class RelaxStop` | Validates optional public torque and energy thresholds and lowers present values into canonical stop fields. |
+| `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_stop_criteria_satisfied` | Rust implementation owner that must be aligned with the canonical user-enabled torque-or-energy predicate. |
+| `backends/fem/cpu/mfem/runtime/stage_completion.hpp` | `update_stage_completion_from_stats` | Declares the FEM completion owner that must implement deterministic reason selection for the canonical predicate. |
+| `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `stage_completion_from_ffi` | Maps the native typed completion reason and metric into public runner completion provenance. |
+| `crates/fullmag-runner/src/types.rs` | `CertifiedFemEquilibriumFields::from_fields` | Freezes the accepted FEM field snapshot as `CertifiedFemEquilibriumFields.v1` and computes its exact content digest. |
+| `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | Writes the certified field bundle only from the final accepted native FEM state. |
+| `crates/fullmag-runner/src/fem_eigen.rs` | `AcceptedFemRelaxStageHandoff::from_completed_relax` | Current source owner of the handoff; it must migrate from the incompatible expanded v2 label to v3 and bind source-equilibrium signatures. |
 
 (scientific-bibliography)=
 ## 8. References

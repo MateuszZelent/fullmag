@@ -1572,6 +1572,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     if isinstance(stage.get("eigen_spin_wave_bc_config"), dict)
                     else None
                 ),
+                "eigen_magnetostatic_bc": stage.get("eigen_magnetostatic_bc") or None,
             }
             for stage in (builder.get("stages") or [])
         ],

@@ -168,10 +168,19 @@ frequency_hz = lambda_i/(2*pi)
 sigma = i*omega_target
 ```
 
-A real PETSc/SLEPc build must use the explicit real-split transformed pencil to
-represent `sigma`. A real `EPSSetTarget(omega_target)` on the original
-`lambda=i omega` spectrum is forbidden unless a separately named
-real-frequency pencil and its mapping are derived and documented.
+The managed runtime is `libpetsc-real-dev` plus `libslepc-real-dev`. It must
+use the explicit ADR-017 real-split `real_frequency_rotated` pencil:
+
+```text
+R(L)y = omega R(i B_alpha)y
+tau = omega_target
+```
+
+`EPSSetTarget(tau)` is legal only on `real_frequency_rotated`. A real
+`EPSSetTarget(omega_target)` on the original `lambda=i omega` spectrum is
+forbidden; it is not an approximation, fallback, or alternate production
+representation. The artifact records the complex intent
+`sigma=i*omega_target` and the real realization together.
 
 ## ADR-018 - Original-operator blockwise residual
 

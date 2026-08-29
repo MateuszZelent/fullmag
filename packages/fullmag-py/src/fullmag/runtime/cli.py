@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -105,10 +106,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                             ir,
                         )
                         if transfer_result is not None:
+                            target_grid = _require_target_grid_identity(transfer_result)
                             print(
                                 f"fullmag: FEM→FDM state transfer: "
                                 f"{transfer_result['n_located']}/{transfer_result['n_total']} cells "
-                                f"interpolated, {transfer_result['n_outside']} outside",
+                                f"interpolated, {transfer_result['n_outside']} outside "
+                                f"(grid={target_grid['grid_fingerprint']})",
                                 file=sys.stderr,
                             )
                             _apply_continuation_initial_state(ir, transfer_result["values"])
@@ -231,6 +234,44 @@ def _apply_continuation_initial_state(ir: dict[str, object], final_magnetization
         "kind": "sampled_field",
         "values": final_magnetization,
     }
+
+
+def _require_target_grid_identity(
+    transfer_result: dict[str, object],
+) -> dict[str, object]:
+    target_grid = transfer_result.get("target_grid")
+    if not isinstance(target_grid, dict):
+        raise RuntimeError(
+            "FEM→FDM state transfer requires canonical target grid identity from the native bridge"
+        )
+    origin = target_grid.get("origin_m")
+    counts = target_grid.get("counts")
+    cell = target_grid.get("cell_m")
+    fingerprint = target_grid.get("grid_fingerprint")
+    valid_origin = (
+        isinstance(origin, list)
+        and len(origin) == 3
+        and all(isinstance(value, (int, float)) and math.isfinite(value) for value in origin)
+    )
+    valid_counts = (
+        isinstance(counts, list)
+        and len(counts) == 3
+        and all(isinstance(value, int) and value > 0 for value in counts)
+    )
+    valid_cell = (
+        isinstance(cell, list)
+        and len(cell) == 3
+        and all(
+            isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+            for value in cell
+        )
+    )
+    valid_fingerprint = isinstance(fingerprint, str) and len(fingerprint) == 64
+    if not (valid_origin and valid_counts and valid_cell and valid_fingerprint):
+        raise RuntimeError(
+            "FEM→FDM state transfer received invalid canonical target grid identity"
+        )
+    return target_grid
 
 
 def _stage_output_dir(

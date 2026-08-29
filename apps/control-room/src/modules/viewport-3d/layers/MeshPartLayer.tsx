@@ -15,11 +15,14 @@ import {
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
+import type { ModeCompositionFieldLayerSnapshot } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 import {
   viewport3DFieldColorLayersEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
-import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import {
+  sameRenderableFieldQuantityId,
+} from "@/kernel/api/quantityIds";
 import type { MeshElementFamily } from "@/kernel/selection/selectionTypes";
 
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
@@ -65,6 +68,7 @@ import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
   pointColorFromSettings,
+  resolveMeshPartMagnetizationTexturePreviewColor,
   resolveMeshPartSurfaceMaterialColor,
   shaderUsesVertexColors,
   surfaceScalarColorModeFromSettings,
@@ -91,6 +95,12 @@ import {
   buildMeshPartScalarColorRetentionKey,
   resolveMeshPartCommittedScalarColorState,
 } from "./meshPartScalarTransition";
+import {
+  buildModeCompositionScalarColorBuffer,
+  buildModeCompositionVectorLayerInput,
+  modeCompositionTargetIdForMeshPart,
+  resolveModeCompositionMeshPartRenderPlan,
+} from "../model/modeCompositionViewportProjection";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 const MESH_PART_SURFACE_USER_DATA = {
@@ -404,8 +414,7 @@ function scalarColorBufferMatchesSettings(
   }
   if (
     buffer.quantityId &&
-    resolveCanonicalQuantityId(buffer.quantityId) !==
-      resolveCanonicalQuantityId(settings.activeQuantityId)
+    !sameRenderableFieldQuantityId(buffer.quantityId, settings.activeQuantityId)
   ) {
     return false;
   }
@@ -441,8 +450,7 @@ function scalarColorBufferMatchesRetainedSettings(
   }
   if (
     buffer.quantityId &&
-    resolveCanonicalQuantityId(buffer.quantityId) !==
-      resolveCanonicalQuantityId(settings.activeQuantityId)
+    !sameRenderableFieldQuantityId(buffer.quantityId, settings.activeQuantityId)
   ) {
     return false;
   }
@@ -472,12 +480,16 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   colors,
   sessionIdentity,
   vectorColorMode,
+  vectorScale,
   fieldModel,
   materialProfile,
   onSelectPart,
   partModel,
   magnetizationTexturePreview,
   meshQualityColors,
+  modeCompositionId,
+  modeCompositionPhaseRad,
+  modeCompositionSnapshot,
   settings,
   topologyModel,
   tracker,
@@ -487,12 +499,16 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   colors: Viewport3DColors;
   sessionIdentity?: SessionResourceIdentity | null;
   vectorColorMode: string;
+  vectorScale: number;
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>;
   magnetizationTexturePreview: Viewport3DMagnetizationTexturePreview | null;
   meshQualityColors: ScalarColorBuffer | null;
+  modeCompositionId: string | null;
+  modeCompositionPhaseRad?: number | null;
+  modeCompositionSnapshot: ModeCompositionFieldLayerSnapshot | null;
   settings: VisualizationTargetSettings;
   topologyModel: Viewport3DTopologyRenderModel | null;
   tracker: Viewport3DResourceTracker;
@@ -611,11 +627,79 @@ export const MeshPartLayer = memo(function MeshPartLayer({
 
   const fieldColorLayersEnabled =
     viewport3DFieldColorLayersEnabledFromBrowserConfig();
+  const baseRenderPlan = resolveViewport3DTargetRenderPlan(
+    renderSettings,
+    materialProfile,
+  );
+  const modeTargetId = modeCompositionTargetIdForMeshPart(part);
+  const modeRenderPlan = modeTargetId
+    ? resolveModeCompositionMeshPartRenderPlan({
+        baseSurface: baseRenderPlan.surface.visible
+          ? { kind: "surface", surface: baseRenderPlan.surface }
+          : { kind: "none" },
+        compositionId: modeCompositionId,
+        snapshot: modeCompositionSnapshot,
+        targetId: modeTargetId,
+      })
+    : null;
+  const modeScalarColors = useMemo(() => {
+    const modal = modeRenderPlan?.surfacePass;
+    if (modal?.owner !== "modal") return null;
+    const requiredSurfaceNodeIndices =
+      partModel.surfaceNodeIndices ?? surfaceIndices;
+    if (!requiredSurfaceNodeIndices?.length) return null;
+    return buildModeCompositionScalarColorBuffer({
+      field: modal.buffer.field,
+      geometryNodeIndices: expandSurfaceFaces ? surfaceIndices : null,
+      layer: modal.buffer.layer,
+      phaseRad: modeCompositionPhaseRad,
+      projectionKey: [
+        part.id,
+        surfaceGeometryProjection,
+        topologyRevision ?? "none",
+      ].join(":"),
+      requiredSurfaceNodeIndices,
+      topologyNodeCount,
+    });
+  }, [
+    expandSurfaceFaces,
+    modeRenderPlan,
+    modeCompositionPhaseRad,
+    part.id,
+    partModel.surfaceNodeIndices,
+    surfaceGeometryProjection,
+    surfaceIndices,
+    topologyNodeCount,
+    topologyRevision,
+  ]);
+  const modalSurfaceActive = Boolean(modeScalarColors);
+  const modalVectorLayerInput = useMemo(() => {
+    const modal = modeRenderPlan?.surfacePass;
+    if (modal?.owner !== "modal" || !topologyModel) return null;
+    return buildModeCompositionVectorLayerInput({
+      field: modal.buffer.field,
+      layer: modal.buffer.layer,
+      phaseRad: modeCompositionPhaseRad,
+      topologyNodeCount,
+      topologyPositions: topologyModel.positions,
+      vectorScale,
+    });
+  }, [
+    modeCompositionPhaseRad,
+    modeRenderPlan,
+    topologyModel,
+    topologyNodeCount,
+    vectorScale,
+  ]);
+  const modalVectorsActive = Boolean(modalVectorLayerInput?.segments);
   const scalarColorMode = fieldColorLayersEnabled
     ? surfaceScalarColorModeFromSettings(renderSettings)
     : null;
   const scalarColorRetentionKey = useMemo(() => {
     if (!renderSettings.shaderVisible) return null;
+    if (modeScalarColors) {
+      return modeScalarColors.buildKey ?? null;
+    }
     if (meshQualityColors) {
       return [
         "mesh-quality",
@@ -636,6 +720,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     });
   }, [
     fieldColorLayersEnabled,
+    modeScalarColors,
     meshQualityColors,
     part.id,
     renderSettings.activeQuantityId,
@@ -692,8 +777,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     surfaceVertexCount,
     topologyRevision,
   ]);
-  const effectiveScalarColors = meshQualityColors ?? scalarColors;
+  const effectiveScalarColors = modeScalarColors ?? meshQualityColors ?? scalarColors;
   const vertexColorsEnabled =
+    modalSurfaceActive ||
     Boolean(meshQualityColors) ||
     (fieldColorLayersEnabled && shaderUsesVertexColors(renderSettings));
   const effectiveCanUseVertexScalarColors = canApplyVertexScalarColorBuffer(
@@ -701,7 +787,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     surfaceVertexCount,
   );
   const shaderScalarColorsEnabled =
-    !meshQualityColors &&
+    (modalSurfaceActive || !meshQualityColors) &&
     vertexColorsEnabled &&
     canApplyScalarShaderColorBuffer(
       effectiveScalarColors,
@@ -714,8 +800,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     enabled: Boolean(
       geometry &&
         topologyModel &&
-        renderSettings.shaderVisible &&
-        (fieldColorLayersEnabled || meshQualityColors),
+        (modalSurfaceActive || renderSettings.shaderVisible) &&
+        (modalSurfaceActive || fieldColorLayersEnabled || meshQualityColors),
     ),
     geometry,
     invalidate,
@@ -733,8 +819,8 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     enabled: Boolean(
       geometry &&
         topologyModel &&
-        renderSettings.shaderVisible &&
-        (fieldColorLayersEnabled || meshQualityColors) &&
+        (modalSurfaceActive || renderSettings.shaderVisible) &&
+        (modalSurfaceActive || fieldColorLayersEnabled || meshQualityColors) &&
         !shaderScalarColorsEnabled,
     ),
     geometry,
@@ -806,24 +892,24 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         ? committedScalarColorState.buffer
         : null,
   });
-  const renderPlan = resolveViewport3DTargetRenderPlan(
-    renderSettings,
-    materialProfile,
-  );
-  const surfaceOpacity = renderPlan.surface.opacity;
+  const renderPlan = baseRenderPlan;
+  const surfaceOpacity = modalSurfaceActive
+    ? Math.min(1, Math.max(0, modeCompositionSnapshot?.layer?.appearance.opacity ?? 1))
+    : renderPlan.surface.opacity;
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),
     [surfaceOpacity],
   );
+  const scalarShaderBuffer = committedScalarColorState.buffer;
   const scalarShaderMaterial = useMemo(() => {
-    if (!fieldColorLayersEnabled && !meshQualityColors) return null;
+    if (!modalSurfaceActive && !fieldColorLayersEnabled && !meshQualityColors) return null;
     if (
       committedScalarColorState.pipeline !== "shader" ||
-      !committedScalarColorState.buffer
+      !scalarShaderBuffer
     ) return null;
     return tracker.track(
       "material",
-      createScalarSurfaceShaderMaterial(committedScalarColorState.buffer, {
+      createScalarSurfaceShaderMaterial(scalarShaderBuffer, {
         ...surfacePolicy,
         opacity: surfaceOpacity,
         toneMapped: materialProfile.magneticSurface.toneMapped,
@@ -833,8 +919,9 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     fieldColorLayersEnabled,
     materialProfile.magneticSurface.toneMapped,
     meshQualityColors,
-    committedScalarColorState.buffer,
+    modalSurfaceActive,
     committedScalarColorState.pipeline,
+    scalarShaderBuffer,
     surfaceOpacity,
     surfacePolicy,
     tracker,
@@ -873,19 +960,25 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     partId: part.id,
   });
   const hasAnyVisibleRenderableSubLayer =
-    (renderPlan.surface.visible && Boolean(geometry)) ||
+    ((modalSurfaceActive || renderPlan.surface.visible) && Boolean(geometry)) ||
     (renderPlan.wireframe.visible && Boolean(edgeGeometry)) ||
     (renderPlan.points.visible && Boolean(pointGeometry)) ||
     renderPlan.bounds.visible ||
-    (renderPlan.vectors.visible &&
+    ((modalVectorsActive || renderPlan.vectors.visible) &&
       viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      Boolean(vectorLayerInput.segments));
+      Boolean(modalVectorLayerInput?.segments ?? vectorLayerInput.segments));
 
-  if (!renderSettings.visible || !hasAnyVisibleRenderableSubLayer) return null;
+  if (
+    (!renderSettings.visible && !modalSurfaceActive && !modalVectorsActive) ||
+    !hasAnyVisibleRenderableSubLayer
+  ) return null;
   const meshColor = resolveMeshPartSurfaceMaterialColor(
     renderSettings,
     colors.mesh,
-    magnetizationTexturePreview?.color ?? null,
+    resolveMeshPartMagnetizationTexturePreviewColor(
+      Boolean(fieldModel?.legacyResponseOverlayActive || modalSurfaceActive),
+      magnetizationTexturePreview?.color ?? null,
+    ),
     Boolean(committedScalarColorState.buffer),
   );
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -916,7 +1009,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       onPointerDown={handlePointerDown}
       userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.meshPart }}
     >
-      {renderPlan.surface.visible && geometry ? (
+      {(modalSurfaceActive || renderPlan.surface.visible) && geometry ? (
         <mesh
           geometry={geometry}
           renderOrder={surfacePolicy.transparent
@@ -972,18 +1065,32 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      renderPlan.vectors.visible ? (
+      (modalVectorsActive || renderPlan.vectors.visible) ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
-          buildReference={vectorLayerInput.buildReference}
+          buildReference={
+            modalVectorLayerInput?.buildReference ?? vectorLayerInput.buildReference
+          }
           carrierId={part.id}
           colors={colors}
-          colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
+          colorMode={
+            modalVectorsActive
+              ? "orientation"
+              : vectorColorModeFromSettings(renderSettings, vectorColorMode)
+          }
           materialProfile={materialProfile.glyphs}
-          opacity={renderPlan.vectors.opacity}
-          segments={vectorLayerInput.segments}
-          fieldBufferId={requestedFieldBufferId}
           sessionIdentity={sessionIdentity}
+          opacity={
+            modalVectorsActive
+              ? modeRenderPlan?.surfacePass.owner === "modal"
+                ? modeRenderPlan.surfacePass.buffer.layer.appearance.opacity
+                : 1
+              : renderPlan.vectors.opacity
+          }
+          segments={modalVectorLayerInput?.segments ?? vectorLayerInput.segments}
+          fieldBufferId={
+            modalVectorLayerInput?.buildReference.fieldBufferId ?? requestedFieldBufferId
+          }
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />

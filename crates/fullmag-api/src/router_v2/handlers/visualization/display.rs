@@ -2259,11 +2259,7 @@ fn build_visualization_target_registry(
             "airbox",
             "Airbox",
             VisualizationTargetSource::Airbox,
-            airbox_target_settings(
-                scalar_color_palette,
-                layers,
-                vector_style,
-            ),
+            airbox_target_settings(scalar_color_palette, layers, vector_style),
             overrides,
         ),
         objects: if scene_objects.is_empty() {

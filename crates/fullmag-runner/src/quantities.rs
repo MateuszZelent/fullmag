@@ -189,9 +189,7 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
         | QuantityId::MatAlpha => true,
         QuantityId::HEx | QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::HDemag | QuantityId::EdenDemag => plan.enable_demag,
-        QuantityId::HExt | QuantityId::EdenExt => {
-            has_nonzero_external_field(plan.external_field)
-        }
+        QuantityId::HExt | QuantityId::EdenExt => has_nonzero_external_field(plan.external_field),
         QuantityId::HAni | QuantityId::EdenAni => plan.layers.iter().any(|layer| {
             layer.material.uniaxial_anisotropy_ku1.is_some()
                 || layer.material.uniaxial_anisotropy_ku2.is_some()
@@ -511,12 +509,8 @@ mod tests {
         let mut fem = fem_plan();
         fem.external_field = Some([0.0, -0.0, 0.0]);
 
-        assert!(
-            active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities).is_empty()
-        );
-        assert!(
-            active_fem_preview_quantities(FemEngine::CpuNative, &fem, &quantities).is_empty()
-        );
+        assert!(active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities).is_empty());
+        assert!(active_fem_preview_quantities(FemEngine::CpuNative, &fem, &quantities).is_empty());
     }
 
     #[test]

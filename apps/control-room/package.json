@@ -99,6 +99,7 @@
     "three": "^0.183.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.51.1",
     "@storybook/addon-a11y": "^10.5.0",
     "@storybook/nextjs-vite": "^10.5.0",
     "@tailwindcss/postcss": "^4.2.2",

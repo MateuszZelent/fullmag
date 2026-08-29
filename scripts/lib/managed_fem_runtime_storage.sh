@@ -1,5 +1,34 @@
 #!/usr/bin/env bash
 
+resolve_managed_fem_native_storage_profile() {
+  FULLMAG_NATIVE_STORAGE_PROFILE="${FULLMAG_NATIVE_STORAGE_PROFILE-canonical}"
+  FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"
+  case "${FULLMAG_NATIVE_STORAGE_PROFILE}" in
+    canonical)
+      FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
+      FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
+      ;;
+    native-2)
+      FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native-2.ext4"
+      FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native-2"
+      ;;
+    *)
+      echo "[managed_fem_runtime_storage] unknown managed FEM native storage profile: ${FULLMAG_NATIVE_STORAGE_PROFILE:-<empty>} (expected canonical or native-2)" >&2
+      return 2
+      ;;
+  esac
+}
+
+managed_fem_runtime_lock_path() {
+  local repo_root="$1"
+  local lock_root="${FULLMAG_RUNTIME_LOCK_ROOT:-${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime-locks}"
+  local lock_key
+
+  lock_key="$(printf '%s' "${repo_root}" | sha256sum | cut -c1-64)"
+  mkdir -p "${lock_root}"
+  printf '%s/fullmag-fem-%s.lock\n' "${lock_root}" "${lock_key}"
+}
+
 validate_managed_fem_runtime_storage_target() {
   local target_dir="$1"
   local expected_backing_image="$2"
@@ -98,6 +127,73 @@ require_regular_contained_durable_variant() {
   esac
 }
 
+managed_fem_runtime_symlink_supported() {
+  local parent="$1"
+  local token="${parent}/.fullmag-symlink-target.$$"
+  local link="${parent}/.fullmag-symlink-probe.$$"
+
+  mkdir -p "${parent}" || return 1
+  rm -f -- "${token}" "${link}" 2>/dev/null || true
+  if ! : > "${token}" 2>/dev/null; then
+    return 1
+  fi
+  if ln -s "$(basename "${token}")" "${link}" 2>/dev/null; then
+    rm -f -- "${token}" "${link}"
+    return 0
+  fi
+  rm -f -- "${token}" "${link}"
+  return 1
+}
+
+materialize_managed_fem_runtime_tree() {
+  local source_root="$1"
+  local destination="$2"
+  local validator="$3"
+  local allow_unaddressed_staging="${4:-0}"
+  local staging="${destination}.materialized-next.$$"
+  local backup="${destination}.directory-backup.$(date -u +%Y%m%dT%H%M%SZ).$$"
+
+  rm -rf -- "${staging}"
+  mkdir -p "${staging}"
+  # Publication may live on CIFS, where symlink creation is unsupported.
+  # Dereference every bundle link so ldd can still resolve the SONAME-named
+  # regular file; tar handles nested links more reliably than cp on CIFS.
+  tar -C "${source_root}" -ch --hard-dereference -f - . | \
+    tar -C "${staging}" -xf -
+  # The temporary directory is intentionally not hash-addressed yet.  Validate
+  # its contents before publication, then validate the final destination again
+  # after the hash-addressed directory/active runtime name is in place.
+  python3 "${validator}" --runtime-root "${staging}" \
+    --allow-unaddressed-staging >/dev/null
+  if [ -e "${destination}" ] || [ -L "${destination}" ]; then
+    mv "${destination}" "${backup}"
+  fi
+  if ! mv "${staging}" "${destination}"; then
+    if [ -e "${backup}" ] || [ -L "${backup}" ]; then
+      mv "${backup}" "${destination}"
+    fi
+    rm -rf -- "${staging}"
+    return 2
+  fi
+  if [ "${allow_unaddressed_staging}" = "1" ]; then
+    if ! python3 "${validator}" --runtime-root "${destination}" \
+        --allow-unaddressed-staging >/dev/null; then
+      rm -rf -- "${destination}"
+      if [ -e "${backup}" ] || [ -L "${backup}" ]; then
+        mv "${backup}" "${destination}"
+      fi
+      return 2
+    fi
+  elif ! python3 "${validator}" --runtime-root "${destination}" >/dev/null; then
+    rm -rf -- "${destination}"
+    if [ -e "${backup}" ] || [ -L "${backup}" ]; then
+      mv "${backup}" "${destination}"
+    fi
+    return 2
+  fi
+  rm -rf -- "${backup}"
+}
+
 migrate_managed_fem_runtime_variants() {
   local variants_alias="$1"
   local durable_variants_root="$2"
@@ -177,4 +273,79 @@ migrate_managed_fem_runtime_variants() {
   rmdir -- "${variants_alias}"
   ln -sfn "${durable_variants_root}" "${next_alias}"
   mv -Tf "${next_alias}" "${variants_alias}"
+}
+
+prepare_managed_fem_runtime_variants_for_rebind() {
+  local variants_alias="$1"
+  local durable_variants_root="$2"
+  local validator="$3"
+
+  if [ -L "${variants_alias}" ] && \
+     [ "$(readlink -f "${variants_alias}" 2>/dev/null || true)" != \
+       "$(readlink -f "${durable_variants_root}")" ]; then
+    return 0
+  fi
+  if ! managed_fem_runtime_symlink_supported "$(dirname "${variants_alias}")"; then
+    mkdir -p "${variants_alias}"
+    return 0
+  fi
+  migrate_managed_fem_runtime_variants \
+    "${variants_alias}" "${durable_variants_root}" "${validator}"
+}
+
+rebind_managed_fem_runtime_aliases() {
+  local active_alias="$1"
+  local variants_alias="$2"
+  local durable_variants_root="$3"
+  local durable_variant="$4"
+  local validator="$5"
+  local variant_name direct_next variants_next relative_next direct_target
+
+  require_regular_contained_durable_variant \
+    "${durable_variants_root}" "${durable_variant}"
+  python3 "${validator}" --runtime-root "${durable_variant}" >/dev/null
+
+  if ! managed_fem_runtime_symlink_supported "$(dirname "${active_alias}")"; then
+    if [ -L "${variants_alias}" ]; then
+      echo "managed FEM variants alias is a symlink on a no-symlink publication filesystem: ${variants_alias}" >&2
+      return 2
+    fi
+    mkdir -p "${variants_alias}"
+    variant_name="$(basename "${durable_variant}")"
+    materialize_managed_fem_runtime_tree \
+      "${durable_variant}" "${variants_alias}/${variant_name}" "${validator}"
+    materialize_managed_fem_runtime_tree \
+      "${durable_variant}" "${active_alias}" "${validator}" 1
+    return 0
+  fi
+
+  if { [ -e "${active_alias}" ] || [ -L "${active_alias}" ]; } && \
+     [ ! -L "${active_alias}" ]; then
+    echo "managed FEM active runtime is not a symlink: ${active_alias}" >&2
+    return 2
+  fi
+
+  variant_name="$(basename "${durable_variant}")"
+  direct_target="$(readlink -f "${durable_variant}")"
+  direct_next="${active_alias}.direct-next.$$"
+  variants_next="${variants_alias}.next.$$"
+  relative_next="${active_alias}.relative-next.$$"
+
+  ln -sfn "${direct_target}" "${direct_next}"
+  if ! mv -Tf "${direct_next}" "${active_alias}"; then
+    rm -f -- "${direct_next}"
+    return 2
+  fi
+
+  ln -sfn "${durable_variants_root}" "${variants_next}"
+  if ! mv -Tf "${variants_next}" "${variants_alias}"; then
+    rm -f -- "${variants_next}"
+    return 2
+  fi
+
+  ln -sfn "fem-gpu-variants/${variant_name}" "${relative_next}"
+  if ! mv -Tf "${relative_next}" "${active_alias}"; then
+    rm -f -- "${relative_next}"
+    return 2
+  fi
 }

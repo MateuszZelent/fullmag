@@ -7,7 +7,7 @@ from typing import Mapping, Sequence
 
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.dynamics import LLG
-from fullmag.model.eigen import ModeTracking, coerce_k_sampling
+from fullmag.model.eigen import BiasFieldSweep, ModeTracking, coerce_k_sampling
 from fullmag.model.outputs import (
     SaveDispersion,
     SaveEigenDiagnostics,
@@ -590,6 +590,11 @@ class FloquetBC:
 SpinWaveBoundarySpec = str | dict[str, object] | PeriodicBC | FloquetBC
 
 
+def _spin_wave_bc_kind(value: SpinWaveBoundarySpec) -> str:
+    serialized = _serialize_spin_wave_bc(value)
+    return serialized if isinstance(serialized, str) else str(serialized["kind"])
+
+
 def _serialize_spin_wave_bc(value: SpinWaveBoundarySpec) -> str | dict[str, object]:
     if hasattr(value, "to_ir"):
         serialized = value.to_ir()
@@ -1021,10 +1026,12 @@ class Eigenmodes:
     include_demag: bool = True
     k_sampling: object | None = None
     k_vector: tuple[float, float, float] | None = None
+    bias_field_sweep: BiasFieldSweep | None = None
     mode_tracking: ModeTracking | None = None
     normalization: str = "unit_l2"
     damping_policy: str = "ignore"
     spin_wave_bc: SpinWaveBoundarySpec = "free"
+    magnetostatic_bc: str = "open"
     dynamics: LLG = field(default_factory=LLG)
 
     def __post_init__(self) -> None:
@@ -1072,8 +1079,36 @@ class Eigenmodes:
             ),
         )
         _serialize_spin_wave_bc(self.spin_wave_bc)
+        magnetostatic_bc = require_non_empty(self.magnetostatic_bc, "magnetostatic_bc")
+        if magnetostatic_bc not in SUPPORTED_MAGNETOSTATIC_BCS:
+            supported = ", ".join(sorted(SUPPORTED_MAGNETOSTATIC_BCS))
+            raise ValueError(f"magnetostatic_bc must be one of: {supported}")
+        object.__setattr__(self, "magnetostatic_bc", magnetostatic_bc)
+        if magnetostatic_bc == "periodic_airbox_k0":
+            if not self.include_demag:
+                raise ValueError("periodic_airbox_k0 requires include_demag=True")
+            if _spin_wave_bc_kind(self.spin_wave_bc) != "periodic":
+                raise ValueError("periodic_airbox_k0 requires spin_wave_bc='periodic'")
+            sampling = coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+            if sampling != {"kind": "single", "k_vector": [0.0, 0.0, 0.0]}:
+                raise ValueError("periodic_airbox_k0 requires k_vector=(0.0, 0.0, 0.0)")
+            if self.damping_policy != "ignore":
+                raise ValueError("periodic_airbox_k0 requires damping_policy='ignore'")
         # Validate alias / primary representation early to fail loudly.
-        coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+        sampling = coerce_k_sampling(k_sampling=self.k_sampling, legacy_k_vector=self.k_vector)
+        if self.bias_field_sweep is not None:
+            if not isinstance(self.bias_field_sweep, BiasFieldSweep):
+                raise TypeError("bias_field_sweep must be a BiasFieldSweep")
+            if sampling != {"kind": "single", "k_vector": [0.0, 0.0, 0.0]}:
+                raise ValueError("bias_field_sweep requires k_sampling at single Gamma")
+            if not self.include_demag:
+                raise ValueError("bias_field_sweep requires include_demag=True")
+            if magnetostatic_bc != "periodic_airbox_k0":
+                raise ValueError("bias_field_sweep requires magnetostatic_bc='periodic_airbox_k0'")
+            if _spin_wave_bc_kind(self.spin_wave_bc) != "periodic":
+                raise ValueError("bias_field_sweep requires spin_wave_bc='periodic'")
+            if self.damping_policy != "ignore":
+                raise ValueError("bias_field_sweep requires damping_policy='ignore'")
 
     def to_ir(self) -> dict[str, object]:
         target: dict[str, object]
@@ -1116,10 +1151,13 @@ class Eigenmodes:
             "normalization": self.normalization,
             "damping_policy": self.damping_policy,
             "spin_wave_bc": _serialize_spin_wave_bc(self.spin_wave_bc),
+            "magnetostatic_bc": self.magnetostatic_bc,
             "sampling": {"outputs": [output.to_ir() for output in self.outputs]},
         }
         if self.mode_tracking is not None:
             payload["mode_tracking"] = self.mode_tracking.to_ir()
+        if self.bias_field_sweep is not None:
+            payload["bias_field_sweep"] = self.bias_field_sweep.to_ir()
         return payload
 
 

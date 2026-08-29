@@ -100,6 +100,122 @@
         ".superpowers/sdd/fd-masterplan-task-6-report.md"
       ]
     },
+    "modal_cpu_k0_periodic_airbox_real_shared_domain.production": {
+      "scope_id": "modal_cpu_k0_periodic_airbox_real_shared_domain.production",
+      "claim_kind": "validated_scope",
+      "study_product": "modal_eigen",
+      "device": "cpu",
+      "precision": "double",
+      "wavevector_scope": "k0",
+      "demag_scope": "periodic_airbox_k0",
+      "scope_variant": "mfem_weak_form_shared_domain",
+      "solver_lane": "cpu_slepc_schur_matrix_free",
+      "implementation_state": "source_visible",
+      "validation_state": "unvalidated",
+      "production_operator_kind": "matrix_free_schur_selected_spectrum",
+      "materialized_validation_limit_dimension": 1024,
+      "production_scalability_gate": "requires_measured_operator_dimension_gt_1024",
+      "exact_scope": {
+        "backend": "fem",
+        "device": "cpu",
+        "precision": "double",
+        "wavevector": "exact_k0",
+        "periodic_axes": ["x", "y"],
+        "open_axes": ["z"],
+        "domain_mesh": {
+          "kind": "shared_magnetic_airbox",
+          "fe_order": 1,
+          "element_types": ["tet4", "prism6"]
+        },
+        "demag_model": "periodic_airbox_k0",
+        "operator_form": "full_2x2",
+        "operator_terms": ["exchange", "zeeman", "dynamic_demag"],
+        "exchange_model": "native_mfem_weak_form_homogeneous_scalar_a_ex",
+        "damping_alpha": 0.0,
+        "target": "real_frequency_rotated",
+        "spectrum": "finite_positive_physical_modes_in_requested_window",
+        "required_artifacts": ["spectrum.v2", "solver_diagnostics_with_eps_phi", "complex_delta_m"],
+        "excluded_interactions": ["anisotropy", "dmi"],
+        "fallback_policy": "strict_no_fallback"
+      },
+      "scope_label": "Future FEM CPU K0 periodic-airbox production scope on real shared-domain MFEM assembly and scalable selected-spectrum Schur execution.",
+      "includes": [
+        "P1 tet4|prism6 shared magnetic-plus-airbox domain",
+        "x/y periodic and open-z boundary contract with explicit Robin, Dirichlet or pure-Neumann gauge tuple",
+        "exchange, parallel static restoring field and dynamic Poisson-airbox demag",
+        "alpha=0, double precision, full_2x2 and real-frequency rotated target",
+        "physical BiasFieldSweep with accepted equilibrium provenance per sample",
+        "matrix-free Schur selected-spectrum execution with a measured operator_dimension greater than 1024"
+      ],
+      "excludes": [
+        "materialized descriptor dimensions at or below 1024 as production evidence",
+        "synthetic algebraic oracles",
+        "nonzero-k Floquet dynamic demag",
+        "any promotion without fresh managed convergence, parity, DOD and browser evidence"
+      ],
+      "evidence": [
+        "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
+        "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+        "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp"
+      ]
+    },
+    "modal_gpu_k0_periodic_airbox_scalable.production": {
+      "scope_id": "modal_gpu_k0_periodic_airbox_scalable.production",
+      "claim_kind": "validated_scope",
+      "study_product": "modal_eigen",
+      "device": "gpu",
+      "precision": "double",
+      "wavevector_scope": "k0",
+      "demag_scope": "periodic_airbox_k0",
+      "scope_variant": "mfem_weak_form_shared_domain",
+      "solver_lane": "gpu_petsc_slepc_schur_matrix_free",
+      "implementation_state": "source_visible",
+      "validation_state": "unvalidated",
+      "production_operator_kind": "matrix_free_schur_selected_spectrum",
+      "materialized_validation_limit_dimension": 1024,
+      "production_scalability_gate": "requires_measured_operator_dimension_gt_1024",
+      "exact_scope": {
+        "backend": "fem",
+        "device": "gpu",
+        "precision": "double",
+        "wavevector": "exact_k0",
+        "periodic_axes": ["x", "y"],
+        "open_axes": ["z"],
+        "domain_mesh": {
+          "kind": "shared_magnetic_airbox",
+          "fe_order": 1,
+          "element_types": ["tet4", "prism6"]
+        },
+        "demag_model": "periodic_airbox_k0",
+        "operator_form": "full_2x2",
+        "operator_terms": ["exchange", "zeeman", "dynamic_demag"],
+        "exchange_model": "native_mfem_weak_form_homogeneous_scalar_a_ex",
+        "damping_alpha": 0.0,
+        "target": "real_frequency_rotated",
+        "spectrum": "finite_positive_physical_modes_in_requested_window",
+        "required_artifacts": ["spectrum.v2", "solver_diagnostics_with_eps_phi", "complex_delta_m"],
+        "excluded_interactions": ["anisotropy", "dmi"],
+        "fallback_policy": "strict_no_fallback"
+      },
+      "scope_label": "Future FEM GPU K0 periodic-airbox production scope on persistent PETSc/SLEPc CUDA matrix-free selected-spectrum execution.",
+      "includes": [
+        "the same real shared-domain P1 physics, BC, gauge, sweep and precision envelope as the CPU production scope",
+        "persistent GPU EPS, ST, KSP, BV, matrix and vector ownership",
+        "strict no-CPU-fallback execution",
+        "matrix-free Schur selected-spectrum execution with a measured operator_dimension greater than 1024"
+      ],
+      "excludes": [
+        "materialized descriptor dimensions at or below 1024 as production evidence",
+        "dense and one-shot GPU validation oracles",
+        "unmeasured residency, transfer or allocation claims",
+        "any promotion without fresh managed convergence, CPU parity, sanitizer, scaling, DOD and browser evidence"
+      ],
+      "evidence": [
+        "docs/physics/0830-fem-poisson-airbox-modal-eigen.md",
+        "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+        "crates/fullmag-runner/src/fem_eigen.rs"
+      ]
+    },
     "modal_cpu_nonzero_k_none_selected_spectrum.executable": {
       "scope_id": "modal_cpu_nonzero_k_none_selected_spectrum.executable",
       "claim_kind": "executable_scope",

@@ -70,6 +70,7 @@ import {
   parseCanonicalFieldVectorResourceKey,
 } from "../api/fieldQueryIdentity";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
+import { canonicalFrequencyDomainResourceKey } from "../resources/frequencyDomainResourceKeys";
 import { PHYSICS_GRAPH_RESOURCE_KEY } from "../resources/physicsGraphResources";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
@@ -85,6 +86,8 @@ const FDM_REGION_MEMBERSHIP_SCOPED_PREFIX =
   );
 
 interface RealtimeResourceEvent {
+  artifact_path?: string;
+  content_digest?: ResourceRevision;
   resource_key?: string;
   revision?: ResourceRevision;
   seq?: ResourceRevision;
@@ -93,11 +96,14 @@ interface RealtimeResourceEvent {
 }
 
 interface RealtimeBatchChange {
+  artifact_path?: string;
   broad?: boolean;
+  content_digest?: ResourceRevision;
   domain_generation_id?: string | null;
   quantity_ids?: string[];
   resource?: string;
   resource_id?: string;
+  resource_key?: string;
   recommended_fetch?: string;
   revision: ResourceRevision;
 }
@@ -223,13 +229,32 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
   }
 
   const record = change as Record<string, unknown>;
-  const revision = record.revision;
+  const contentDigest = realtimeRevision(record.content_digest);
+  const revision = contentDigest ?? record.revision;
   if (typeof revision !== "number" && typeof revision !== "string") {
     return null;
   }
 
+  const resourceKey = canonicalFrequencyDomainResourceKey(
+    typeof record.resource_key === "string"
+      ? record.resource_key
+      : typeof record.artifact_path === "string"
+        ? record.artifact_path
+        : undefined,
+  );
+  const recommendedFetch = canonicalFrequencyDomainResourceKey(
+    typeof record.recommended_fetch === "string"
+      ? record.recommended_fetch
+      : undefined,
+  );
+
   return {
+    artifact_path:
+      typeof record.artifact_path === "string"
+        ? record.artifact_path
+        : undefined,
     broad: record.broad === true,
+    content_digest: contentDigest ?? undefined,
     domain_generation_id: realtimeDomainGenerationId(record.domain_generation_id),
     quantity_ids: Array.isArray(record.quantity_ids)
       ? record.quantity_ids.filter((value): value is string => typeof value === "string")
@@ -237,12 +262,22 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
     resource: typeof record.resource === "string" ? record.resource : undefined,
     resource_id:
       typeof record.resource_id === "string" ? record.resource_id : undefined,
+    resource_key:
+      resourceKey ??
+      (typeof record.resource_key === "string"
+        ? record.resource_key
+        : undefined),
     recommended_fetch:
-      typeof record.recommended_fetch === "string"
+      recommendedFetch ??
+      (typeof record.recommended_fetch === "string"
         ? record.recommended_fetch
-        : undefined,
+        : undefined),
     revision,
   };
+}
+
+function realtimeRevision(value: unknown): ResourceRevision | null {
+  return typeof value === "number" || typeof value === "string" ? value : null;
 }
 
 function realtimeDomainGenerationId(value: unknown): string | null {
@@ -461,7 +496,7 @@ export class RealtimeInvalidationBridge {
         if (!change) {
           continue;
         }
-        const recommendedFetch = change.recommended_fetch;
+        const recommendedFetch = change.recommended_fetch ?? change.resource_key;
         const fieldSampleChange =
           change.resource === "fields" && change.resource_id === "samples";
         const planarFieldChange = change.resource === "planar_fields";
@@ -587,11 +622,17 @@ export class RealtimeInvalidationBridge {
       return sessionHandled;
     }
 
-    if (!event.resource_key || event.revision === undefined) {
+    const resourceKey =
+      canonicalFrequencyDomainResourceKey(
+        event.resource_key ?? event.artifact_path,
+      ) ??
+      event.resource_key;
+    const revision = event.content_digest ?? event.revision;
+    if (!resourceKey || revision === undefined) {
       return sessionHandled;
     }
 
-    this.invalidateResource(event.resource_key, event.revision);
+    this.invalidateResource(resourceKey, revision);
     return true;
   }
 

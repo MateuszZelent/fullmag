@@ -1311,6 +1311,10 @@ describe("viewport3dRenderModel", () => {
           values: new Float64Array(24),
         },
         scalarColorModes: new Set(["magnitude"]),
+        modeOverlay: {
+          phasorAmplitudeMax: 2.5,
+          representation: "phase_rotated_real",
+        },
         visualizationPhaseRad: 1.25,
       },
     );
@@ -1321,6 +1325,29 @@ describe("viewport3dRenderModel", () => {
       quantityId: "analysis:eigen:sample-0000:mode-0002",
     });
     expect(model?.visualizationPhaseRad).toBe(1.25);
+    expect(model?.modeOverlay).toEqual({
+      phasorAmplitudeMax: 2.5,
+      phasorPhaseRad: 1.25,
+      representation: "phase_rotated_real",
+    });
+  });
+
+  it("keeps the analysis handoff active while the binary mode payload is loading", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      { analysisOverlayActive: true },
+    );
+
+    expect(model?.analysisOverlayActive).toBe(true);
+    expect(model?.modeOverlay).toBeNull();
   });
 
   it("projects complex analysis fields locally using visualization phase", () => {

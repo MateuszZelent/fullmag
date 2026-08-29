@@ -37,9 +37,9 @@ describe("Inspector design-system reference contract", () => {
   it("stacks the Inspector action bar into two columns in narrow containers", () => {
     const inspector = read("src/design/styles/inspector.css");
 
-    expect(inspector).toContain("@container (max-width: 390px)");
+    expect(inspector).toContain("@container (max-width: 560px)");
     expect(inspector).toMatch(
-      /@container \(max-width: 390px\)[\s\S]*?\.fm-inspector__action-bar\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+      /@container \(max-width: 560px\)[\s\S]*?\.fm-inspector__action-bar\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
     );
   });
 

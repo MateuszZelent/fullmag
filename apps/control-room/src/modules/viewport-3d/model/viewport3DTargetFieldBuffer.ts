@@ -4,7 +4,10 @@ import type {
 } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { fieldVectorComponentsSemanticallyEqual } from "@/kernel/api/fieldQueryIdentity";
-import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import {
+  resolveCanonicalQuantityId,
+  sameRenderableFieldQuantityId,
+} from "@/kernel/api/quantityIds";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 import type { SessionResourceIdentity } from "@/kernel/resources/sessionResourceIdentity";
 
@@ -527,8 +530,7 @@ export function viewport3DTargetFieldBufferMatchesQuantity(
   return (
     !buffer ||
     quantityId == null ||
-    resolveCanonicalQuantityId(buffer.quantityId) ===
-      resolveCanonicalQuantityId(quantityId)
+    sameRenderableFieldQuantityId(buffer.quantityId, quantityId)
   );
 }
 

@@ -1,6 +1,7 @@
 #include "frequency_domain/linearization_state.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -78,7 +79,58 @@ bool expected_signature_matches(const char *expected, const char *actual) noexce
     return !present(expected) || (present(actual) && std::strcmp(expected, actual) == 0);
 }
 
+bool valid_sha256_digest(const char *value) noexcept
+{
+    if (value == nullptr || std::strlen(value) != 71u ||
+        std::strncmp(value, "sha256:", 7u) != 0) {
+        return false;
+    }
+    for (std::size_t index = 7u; index < 71u; ++index) {
+        if (!std::isxdigit(static_cast<unsigned char>(value[index]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
+
+FrequencyDomainStatus validate_equilibrium_acceptance_certificate(
+    const EquilibriumAcceptanceCertificateDescriptor &certificate,
+    char error_message[128]) noexcept
+{
+    copy_error(error_message, "");
+    if (!present(certificate.certificate_sha256)) {
+        copy_error(error_message, "equilibrium_acceptance_certificate_missing");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!valid_sha256_digest(certificate.certificate_sha256)) {
+        copy_error(error_message, "equilibrium_acceptance_certificate_digest_invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!std::isfinite(certificate.metric_value) ||
+        certificate.metric_value < 0.0 || !std::isfinite(certificate.threshold) ||
+        certificate.threshold < 0.0 ||
+        certificate.metric_value > certificate.threshold) {
+        copy_error(error_message, "equilibrium_acceptance_certificate_metric_invalid");
+        return FrequencyDomainStatus::validation_error;
+    }
+    const bool torque = present(certificate.criterion) &&
+        std::strcmp(certificate.criterion, "torque") == 0 &&
+        present(certificate.metric_kind) &&
+        std::strcmp(certificate.metric_kind, "max_torque_apm") == 0 &&
+        present(certificate.unit) && std::strcmp(certificate.unit, "A/m") == 0;
+    const bool energy = present(certificate.criterion) &&
+        std::strcmp(certificate.criterion, "energy") == 0 &&
+        present(certificate.metric_kind) &&
+        std::strcmp(certificate.metric_kind, "total_energy_plateau_range_j") == 0 &&
+        present(certificate.unit) && std::strcmp(certificate.unit, "J") == 0;
+    if (!torque && !energy) {
+        copy_error(error_message, "equilibrium_acceptance_certificate_incoherent");
+        return FrequencyDomainStatus::validation_error;
+    }
+    return FrequencyDomainStatus::ok;
+}
 
 FrequencyDomainStatus build_linearization_state_from_equilibrium(
     const EquilibriumArtifactDescriptor &artifact,
@@ -100,14 +152,40 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
             "frequency linearization requires an accepted equilibrium artifact");
         return FrequencyDomainStatus::validation_error;
     }
+    if (!present(artifact.schema_version) ||
+        std::strcmp(artifact.schema_version, "equilibrium_artifact.v7") != 0) {
+        copy_reject(
+            out_diagnostics,
+            "equilibrium_artifact_schema_not_v7",
+            "frequency linearization requires equilibrium_artifact.v7");
+        return FrequencyDomainStatus::validation_error;
+    }
+    char acceptance_error[128]{};
+    if (validate_equilibrium_acceptance_certificate(
+            artifact.acceptance, acceptance_error) != FrequencyDomainStatus::ok) {
+        copy_reject(
+            out_diagnostics,
+            acceptance_error,
+            "frequency linearization requires a coherent accepted relaxation certificate");
+        return FrequencyDomainStatus::validation_error;
+    }
+    std::strncpy(
+        out_diagnostics.acceptance_certificate_sha256,
+        artifact.acceptance.certificate_sha256,
+        sizeof(out_diagnostics.acceptance_certificate_sha256) - 1u);
+    if (!present(artifact.producer_run_id) || !present(artifact.content_sha256)) {
+        copy_reject(
+            out_diagnostics,
+            "equilibrium_artifact_provenance_missing",
+            "frequency linearization requires equilibrium producer and content hash");
+        return FrequencyDomainStatus::validation_error;
+    }
     if (artifact.magnetic_node_count == 0) {
         copy_error(out_diagnostics.error_message, "linearization requires magnetic nodes");
         return FrequencyDomainStatus::validation_error;
     }
     if (options.m0_norm_tolerance < 0.0 ||
-        !std::isfinite(options.m0_norm_tolerance) ||
-        options.equilibrium_torque_relative_tolerance < 0.0 ||
-        !std::isfinite(options.equilibrium_torque_relative_tolerance)) {
+        !std::isfinite(options.m0_norm_tolerance)) {
         copy_error(out_diagnostics.error_message, "linearization tolerances must be finite and non-negative");
         return FrequencyDomainStatus::validation_error;
     }
@@ -134,6 +212,15 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
         return FrequencyDomainStatus::validation_error;
     }
     if (!expected_signature_matches(
+            options.expected_equilibrium_id,
+            artifact.equilibrium_id)) {
+        copy_reject(
+            out_diagnostics,
+            "equilibrium_id_mismatch",
+            "linearization equilibrium id does not match requested frequency problem");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!expected_signature_matches(
             options.expected_mesh_snapshot_id,
             artifact.mesh_snapshot_id)) {
         copy_reject(
@@ -149,6 +236,15 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
             out_diagnostics,
             "equilibrium_material_hash_mismatch",
             "linearization material snapshot does not match requested frequency problem");
+        return FrequencyDomainStatus::validation_error;
+    }
+    if (!expected_signature_matches(
+            options.expected_boundary_snapshot_id,
+            artifact.boundary_snapshot_id)) {
+        copy_reject(
+            out_diagnostics,
+            "equilibrium_boundary_hash_mismatch",
+            "linearization boundary snapshot does not match requested frequency problem");
         return FrequencyDomainStatus::validation_error;
     }
     if (!expected_signature_matches(
@@ -180,6 +276,13 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
             "linearization requires static demag for enabled demag model");
         return FrequencyDomainStatus::validation_error;
     }
+    if (is_demag_enabled(artifact) && artifact.airbox_node_count > 0 && artifact.phi0 == nullptr) {
+        copy_reject(
+            out_diagnostics,
+            "equilibrium_phi0_required_but_missing",
+            "linearization requires phi0 for an airbox demag equilibrium");
+        return FrequencyDomainStatus::validation_error;
+    }
 
     const std::uint64_t node_count = artifact.magnetic_node_count;
     out_state.node_count = node_count;
@@ -187,6 +290,15 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
     out_state.h_eff0_xyz.resize(node_count * 3);
     if (field_view_has_components(artifact.h_demag0_a_per_m)) {
         out_state.h_demag0_xyz.resize(node_count * 3);
+    }
+    if (artifact.phi0 != nullptr) {
+        out_state.phi0.assign(artifact.phi0, artifact.phi0 + artifact.airbox_node_count);
+        for (double value : out_state.phi0) {
+            if (!std::isfinite(value)) {
+                copy_error(out_diagnostics.error_message, "phi0 must contain finite values");
+                return FrequencyDomainStatus::validation_error;
+            }
+        }
     }
     out_state.tangent_lumped_mass.assign(node_count, 1.0);
 
@@ -264,14 +376,6 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
         copy_error(out_diagnostics.error_message, "m0 norm exceeds linearization tolerance");
         return FrequencyDomainStatus::validation_error;
     }
-    if (max_relative_torque > options.equilibrium_torque_relative_tolerance) {
-        copy_reject(
-            out_diagnostics,
-            "equilibrium_torque_residual_too_large",
-            "equilibrium torque exceeds linearization tolerance");
-        return FrequencyDomainStatus::validation_error;
-    }
-
     out_state.tangent_frames.resize(node_count);
     TangentFrameDiagnostics frame_diagnostics{};
     const FrequencyDomainStatus frame_status = build_tangent_frame(
@@ -290,14 +394,41 @@ FrequencyDomainStatus build_linearization_state_from_equilibrium(
     out_state.material_snapshot_id = artifact.material_snapshot_id;
     out_state.physics_snapshot_id = artifact.physics_snapshot_id;
     out_state.boundary_snapshot_id = artifact.boundary_snapshot_id;
+    out_state.producer_run_id = artifact.producer_run_id;
+    out_state.equilibrium_content_sha256 = artifact.content_sha256;
     out_state.demag_model = artifact.demag_model != nullptr ? artifact.demag_model : "";
+    out_state.acceptance_criterion = artifact.acceptance.criterion;
+    out_state.acceptance_metric_kind = artifact.acceptance.metric_kind;
+    out_state.acceptance_unit = artifact.acceptance.unit;
+    out_state.acceptance_metric_value = artifact.acceptance.metric_value;
+    out_state.acceptance_threshold = artifact.acceptance.threshold;
+    out_state.acceptance_certificate_sha256 = artifact.acceptance.certificate_sha256;
+    out_state.accepted_m0_norm_tolerance = options.m0_norm_tolerance;
 
     append_signature_part(out_state.linearization_signature_hash, "eq", artifact.equilibrium_id);
     append_signature_part(out_state.linearization_signature_hash, "mesh", artifact.mesh_snapshot_id);
     append_signature_part(out_state.linearization_signature_hash, "material", artifact.material_snapshot_id);
     append_signature_part(out_state.linearization_signature_hash, "physics", artifact.physics_snapshot_id);
     append_signature_part(out_state.linearization_signature_hash, "boundary", artifact.boundary_snapshot_id);
+    append_signature_part(out_state.linearization_signature_hash, "producer", artifact.producer_run_id);
+    append_signature_part(out_state.linearization_signature_hash, "content", artifact.content_sha256);
     append_signature_part(out_state.linearization_signature_hash, "demag", artifact.demag_model);
+    append_signature_part(
+        out_state.linearization_signature_hash,
+        "acceptance_criterion",
+        artifact.acceptance.criterion);
+    append_signature_part(
+        out_state.linearization_signature_hash,
+        "acceptance_metric_kind",
+        artifact.acceptance.metric_kind);
+    append_signature_part(
+        out_state.linearization_signature_hash,
+        "acceptance_unit",
+        artifact.acceptance.unit);
+    append_signature_part(
+        out_state.linearization_signature_hash,
+        "acceptance_certificate",
+        artifact.acceptance.certificate_sha256);
 
     return FrequencyDomainStatus::ok;
 }

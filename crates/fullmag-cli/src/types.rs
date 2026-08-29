@@ -830,6 +830,12 @@ pub(crate) struct CurrentLiveStageExecutionRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_topology_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_unix_ms: Option<u64>,

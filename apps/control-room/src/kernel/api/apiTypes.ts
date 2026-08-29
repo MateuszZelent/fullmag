@@ -238,6 +238,16 @@ export type FrequencyDomainManifestResource =
   components["schemas"]["FrequencyDomainManifestResource"];
 export type FrequencyDomainJsonArtifactResource =
   components["schemas"]["FrequencyDomainJsonArtifactResource"];
+export type FrequencyDomainJsonArtifactPayload =
+  components["schemas"]["FrequencyDomainJsonArtifactPayload"];
+export type FrequencyDomainSpectrumArtifactPayload =
+  components["schemas"]["FrequencyDomainSpectrumArtifactPayload"];
+export type FrequencyDomainBranchesArtifactPayload =
+  components["schemas"]["FrequencyDomainBranchesArtifactPayload"];
+export type FrequencyDomainResponseSweepArtifactPayload =
+  components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"];
+export type FrequencyDomainFmrPeaksArtifactPayload =
+  components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"];
 export type FrequencyDomainTextArtifactResource =
   components["schemas"]["FrequencyDomainTextArtifactResource"];
 export type ArtifactResource = components["schemas"]["ArtifactResource"];
@@ -722,6 +732,29 @@ export type VisualizationStatePatch =
   components["schemas"]["VisualizationStatePatch"];
 export type VisualizationStateResource =
   components["schemas"]["VisualizationStateResource"];
+export type ModeCompositionDatasetPatch =
+  components["schemas"]["ModeCompositionDatasetPatch"];
+export type EigenModeResourceRef =
+  components["schemas"]["EigenModeResourceRef"];
+export type ModeCompositionLayer =
+  components["schemas"]["ModeCompositionLayer"];
+export type ModeCompositionLifecycle =
+  components["schemas"]["ModeCompositionLifecycle"];
+export type ModeCompositionOperation =
+  components["schemas"]["ModeCompositionOperation"];
+export type ModeCompositionPatch =
+  components["schemas"]["ModeCompositionPatch"];
+export type ModeCompositionPhaseClock =
+  components["schemas"]["ModeCompositionPhaseClock"];
+export type ModeCompositionResource =
+  components["schemas"]["ModeCompositionResource"];
+export type ModeFieldComponent = components["schemas"]["ModeFieldComponent"];
+export type ModeFieldNormalization =
+  components["schemas"]["ModeFieldNormalization"];
+export type ModeFieldRepresentation =
+  components["schemas"]["ModeFieldRepresentation"];
+export type ModeLayerAnimation = components["schemas"]["ModeLayerAnimation"];
+export type ModeLayerAppearance = components["schemas"]["ModeLayerAppearance"];
 export type VisualizationClientAckEntry =
   components["schemas"]["VisualizationClientAckEntry"];
 export type VisualizationClientAckRequest =

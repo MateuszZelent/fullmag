@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -20,16 +21,19 @@ use crate::schemas::visualization_state::{
     default_planar_color_range_state, default_planar_visualization_state, PlanarColorRangeMode,
     PlanarColorRangeState, PlanarSourceSelectionState,
 };
-use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
+use crate::types::{
+    AppState, CurrentWorkspaceLayout, CurrentWorkspaceRibbon, CurrentWorkspaceSelection,
+    DisplayPresentationState, RuntimeStatusView, SessionStateResponse,
+};
 use crate::{
     current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
 };
 
 use fullmag_session::{
-    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, unpack_fms, CaptureRequest,
-    CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy, FmsExportProfile,
-    FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SaveProfile,
-    SessionInspection, SessionStore, SolverEnergies,
+    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, preflight_fms, unpack_fms,
+    CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
+    FmsExportProfile, FmsPreflight, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest,
+    PackOptions, SaveProfile, SessionInspection, SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -64,6 +68,12 @@ struct PersistedCurrentLiveSnapshot {
     display_presentation_schema_version: Option<u32>,
     #[serde(default)]
     display_presentation: serde_json::Value,
+    #[serde(default)]
+    workspace_selection: CurrentWorkspaceSelection,
+    #[serde(default)]
+    workspace_ribbon: CurrentWorkspaceRibbon,
+    #[serde(default)]
+    workspace_layout: CurrentWorkspaceLayout,
     preview_config: crate::types::CurrentPreviewConfig,
     preview: Option<crate::types::PreviewState>,
     builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
@@ -105,6 +115,9 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             mesh_build_revision: value.mesh_build_revision,
             region_realization_revisions: value.region_realization_revisions,
             display_presentation: serde_json::Value::Null,
+            workspace_selection: CurrentWorkspaceSelection::default(),
+            workspace_ribbon: CurrentWorkspaceRibbon::default(),
+            workspace_layout: CurrentWorkspaceLayout::default(),
         }
     }
 }
@@ -411,17 +424,76 @@ pub(crate) struct SessionImportInspectResponse {
 pub(crate) struct SessionImportCommitRequest {
     /// Base64-encoded `.fms` file content.
     pub fms_base64: String,
-    /// Restore mode: "resume", "initial_condition", "config_only".
+    /// Requested import behavior. Defaults to a visualization-only restore.
     #[serde(default)]
-    #[allow(dead_code)]
-    pub restore_mode: Option<String>,
+    pub restore_mode: SessionRestoreMode,
+}
+
+/// Explicit import behavior for an FMS archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionRestoreMode {
+    VisualizationOnly,
+    ReplaceProject,
+    Resume,
+}
+
+impl Default for SessionRestoreMode {
+    fn default() -> Self {
+        Self::VisualizationOnly
+    }
+}
+
+/// Whether a semantic category could be compared from both snapshots.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionRestoreCompatibilityBasis {
+    Available,
+    Unavailable,
+}
+
+/// Non-blocking semantic differences in one restore category.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct SessionRestoreCompatibilityCategory {
+    pub basis: SessionRestoreCompatibilityBasis,
+    pub differences: Vec<String>,
+}
+
+/// Semantic compatibility report returned with every accepted FMS import.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct SessionRestoreCompatibility {
+    pub geometry: SessionRestoreCompatibilityCategory,
+    pub materials_physics: SessionRestoreCompatibilityCategory,
+    pub mesh: SessionRestoreCompatibilityCategory,
+    pub study_stages: SessionRestoreCompatibilityCategory,
+    pub execution: SessionRestoreCompatibilityCategory,
+    pub problem_ir: SessionRestoreCompatibilityCategory,
+}
+
+impl SessionRestoreCompatibility {
+    fn warnings(&self) -> Vec<String> {
+        [
+            ("geometry", &self.geometry),
+            ("materials_physics", &self.materials_physics),
+            ("mesh", &self.mesh),
+            ("study_stages", &self.study_stages),
+            ("execution", &self.execution),
+            ("problem_ir", &self.problem_ir),
+        ]
+        .into_iter()
+        .filter(|(_, category)| !category.differences.is_empty())
+        .map(|(name, _)| format!("non-blocking semantic difference in {name}"))
+        .collect()
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionImportCommitResponse {
     pub session_id: String,
+    pub restore_mode: SessionRestoreMode,
     pub restore_class: fullmag_session::RestoreClass,
     pub warnings: Vec<String>,
+    pub compatibility: SessionRestoreCompatibility,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_state: Option<serde_json::Value>,
 }
@@ -631,6 +703,7 @@ async fn current_session_id(state: &AppState) -> Result<String, ApiError> {
 async fn collect_project_documents(
     state: &AppState,
     ui_state: Option<&serde_json::Value>,
+    script: Vec<u8>,
 ) -> HashMap<String, Vec<u8>> {
     let mut docs = HashMap::new();
     let guard = state.current_live_state.read().await;
@@ -657,11 +730,17 @@ async fn collect_project_documents(
         }
         // Full workspace/session snapshot used for exact workspace restore.
         let presentation = state.current_display_presentation.read().await.clone();
+        let workspace_selection = state.current_workspace_selection.read().await.clone();
+        let workspace_ribbon = state.current_workspace_ribbon.read().await.clone();
+        let workspace_layout = state.current_workspace_layout.read().await.clone();
         let persisted = PersistedCurrentLiveSnapshot::from(snapshot);
         let persisted = PersistedCurrentLiveSnapshot {
             display_presentation_schema_version: Some(DISPLAY_PRESENTATION_SCHEMA_VERSION),
             display_presentation: persisted_display_presentation(&presentation)
                 .expect("display presentation must serialize"),
+            workspace_selection,
+            workspace_ribbon,
+            workspace_layout,
             ..persisted
         };
         if let Ok(data) = serde_json::to_vec_pretty(&persisted) {
@@ -669,17 +748,233 @@ async fn collect_project_documents(
         }
     }
 
-    // Try to read the main script from disk.
-    if let Some(snapshot) = guard.as_ref() {
-        let script_path = std::path::Path::new(&snapshot.session.script_path);
-        if script_path.exists() {
-            if let Ok(data) = std::fs::read(script_path) {
-                docs.insert("main.py".into(), data);
-            }
+    docs.insert("main.py".into(), script);
+
+    docs
+}
+
+async fn read_canonical_script(state: &AppState) -> Result<Vec<u8>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active workspace"))?;
+    let script_path = Path::new(&snapshot.session.script_path);
+    let metadata = std::fs::symlink_metadata(script_path).map_err(|_| {
+        ApiError::unprocessable(
+            "invalid_script: session script_path must name a readable regular Python file",
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(ApiError::unprocessable(
+            "invalid_script: session script_path must name a readable regular Python file",
+        ));
+    }
+    let script = std::fs::read(script_path).map_err(|_| {
+        ApiError::unprocessable(
+            "invalid_script: session script_path must name a readable regular Python file",
+        )
+    })?;
+    if script.is_empty() {
+        return Err(ApiError::unprocessable(
+            "invalid_script: session script_path must name a non-empty Python file",
+        ));
+    }
+    Ok(script)
+}
+
+fn session_store_run_artifact_dir(store: &SessionStore, run_id: &str) -> PathBuf {
+    store.root().join("runs").join(run_id).join("artifacts")
+}
+
+fn copy_artifact_tree(source: &Path, destination: &Path) -> Result<(), ApiError> {
+    std::fs::create_dir_all(destination).map_err(|error| {
+        ApiError::internal(format!(
+            "creating session artifact snapshot '{}': {error}",
+            destination.display()
+        ))
+    })?;
+    for entry in std::fs::read_dir(source).map_err(|error| {
+        ApiError::internal(format!(
+            "reading solved artifact directory '{}': {error}",
+            source.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            ApiError::internal(format!(
+                "reading solved artifact directory entry '{}': {error}",
+                source.display()
+            ))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            ApiError::internal(format!(
+                "reading solved artifact type '{}': {error}",
+                entry.path().display()
+            ))
+        })?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err(ApiError::conflict(format!(
+                "solved session export rejects symbolic-link artifact '{}'",
+                entry.path().display()
+            )));
+        }
+        if file_type.is_dir() {
+            copy_artifact_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target).map_err(|error| {
+                ApiError::internal(format!(
+                    "copying solved artifact to '{}': {error}",
+                    target.display()
+                ))
+            })?;
+        } else {
+            return Err(ApiError::conflict(format!(
+                "solved session export rejects non-regular artifact '{}'",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn capture_solved_artifacts(
+    store: &SessionStore,
+    run_id: &str,
+    source: &Path,
+) -> Result<PathBuf, ApiError> {
+    if !source.is_dir() {
+        return Err(ApiError::conflict(format!(
+            "solved session export requires an existing artifact directory for run '{run_id}': {}",
+            source.display()
+        )));
+    }
+
+    let destination = session_store_run_artifact_dir(store, run_id);
+    if destination.exists() {
+        let source_canonical = source.canonicalize().map_err(|error| {
+            ApiError::internal(format!(
+                "resolving solved artifact source '{}': {error}",
+                source.display()
+            ))
+        })?;
+        let destination_canonical = destination.canonicalize().map_err(|error| {
+            ApiError::internal(format!(
+                "resolving session artifact destination '{}': {error}",
+                destination.display()
+            ))
+        })?;
+        if source_canonical == destination_canonical {
+            return Ok(destination);
         }
     }
 
-    docs
+    let temporary = store.root().join("runs").join(format!(
+        ".artifacts.save-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    if let Err(error) = copy_artifact_tree(source, &temporary) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(error);
+    }
+
+    let destination_parent = destination
+        .parent()
+        .expect("artifact destination has run parent");
+    let destination_parent_existed = destination_parent.exists();
+    if let Err(error) = std::fs::create_dir_all(destination_parent) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(ApiError::internal(format!(
+            "creating session artifact run directory '{}': {error}",
+            destination_parent.display()
+        )));
+    }
+
+    let previous = destination.with_file_name(format!(
+        "artifacts.previous-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    if destination.exists() {
+        std::fs::rename(&destination, &previous).map_err(|error| {
+            let _ = std::fs::remove_dir_all(&temporary);
+            ApiError::internal(format!(
+                "preparing session artifact snapshot replacement '{}': {error}",
+                destination.display()
+            ))
+        })?;
+    }
+    if let Err(error) = std::fs::rename(&temporary, &destination) {
+        if previous.exists() {
+            let _ = std::fs::rename(&previous, &destination);
+        }
+        let _ = std::fs::remove_dir_all(&temporary);
+        if !destination_parent_existed {
+            let _ = std::fs::remove_dir(destination_parent);
+        }
+        return Err(ApiError::internal(format!(
+            "committing session artifact snapshot '{}': {error}",
+            destination.display()
+        )));
+    }
+    if previous.exists() {
+        std::fs::remove_dir_all(&previous).map_err(|error| {
+            ApiError::internal(format!(
+                "removing superseded session artifact snapshot '{}': {error}",
+                previous.display()
+            ))
+        })?;
+    }
+    Ok(destination)
+}
+
+#[cfg(test)]
+mod artifact_capture_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_artifact_copy_leaves_no_published_or_staged_artifact_tree() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-api-artifact-capture-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let source = root.join("source");
+        std::fs::create_dir_all(source.join("eigen/modes"))
+            .expect("source artifact fixture should be created");
+        std::fs::write(source.join("eigen/spectrum.v2.json"), b"spectrum")
+            .expect("spectrum fixture should be written");
+        symlink(
+            "/not-a-real-mode.bin",
+            source.join("eigen/modes/mode_0000.bin"),
+        )
+        .expect("symlink fixture should be created");
+        let store = SessionStore::open(root.join("store")).expect("session store should open");
+
+        let error = capture_solved_artifacts(&store, "run-001", &source)
+            .expect_err("symbolic-link artifact must reject the snapshot");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        let run_dir = store.root().join("runs/run-001");
+        assert!(!run_dir.exists(), "failed copy must not publish a run tree");
+        assert!(
+            !store.root().join("runs").exists()
+                || std::fs::read_dir(store.root().join("runs"))
+                    .expect("runs staging parent should be readable")
+                    .all(|entry| {
+                        !entry
+                            .expect("staging entry should be readable")
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(".artifacts.save-")
+                    }),
+            "failed copy must clean its staging tree"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────
@@ -690,6 +985,7 @@ pub(crate) async fn export_session(
     Json(req): Json<SessionExportRequest>,
 ) -> Result<Json<SessionExportResponse>, ApiError> {
     let session_id = current_session_id(&state).await?;
+    let script = read_canonical_script(&state).await?;
     let store = open_store(&state)?;
 
     let name = if let Some(n) = req.name {
@@ -704,8 +1000,10 @@ pub(crate) async fn export_session(
 
     let mut session_manifest = FmsSessionManifest::new(&session_id, &name, req.profile);
 
-    // Collect run info from the current state.
-    {
+    // Capture the actual local-live artifact directory into the SessionStore.
+    // The store is the only artifact source that `pack_fms` reads, so packing
+    // directly from it makes a solved save independent of local-live history.
+    let run_capture = {
         let guard = state.current_live_state.read().await;
         if let Some(snapshot) = guard.as_ref() {
             let run_ref = format!("runs/{}/run_manifest.json", snapshot.session.run_id);
@@ -734,16 +1032,32 @@ pub(crate) async fn export_session(
                 latest_checkpoint_ref: None,
                 artifact_index_ref: None,
             };
-            store
-                .commit_run(&run_manifest)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
+            Some((run_manifest, crate::session::current_artifact_dir(snapshot)))
+        } else {
+            None
         }
-    }
+    };
 
+    let export_profile = FmsExportProfile::for_profile(req.profile);
+    if export_profile.include_artifacts() {
+        let (run_manifest, artifact_source) = run_capture.as_ref().ok_or_else(|| {
+            ApiError::conflict("solved session export requires an active run artifact directory")
+        })?;
+        let artifact_source = artifact_source.as_ref().ok_or_else(|| {
+            ApiError::conflict("solved session export requires an active run artifact directory")
+        })?;
+        capture_solved_artifacts(&store, &run_manifest.run_id, artifact_source)?;
+    }
+    let docs = collect_project_documents(&state, req.ui_state.as_ref(), script).await;
+    let script = docs
+        .get("main.py")
+        .expect("validated canonical script must be present in project documents");
     let workspace_manifest = FmsWorkspaceManifest {
         workspace_id: "local-live".into(),
         problem_name: name.clone(),
         project_ref: "project/".into(),
+        script_ref: "project/main.py".into(),
+        script_sha256: fullmag_session::hex_sha256(script),
         ui_state_ref: "project/ui_state.json".into(),
         scene_document_ref: "project/scene_document.json".into(),
         script_builder_ref: Some("project/script_builder.json".into()),
@@ -751,15 +1065,17 @@ pub(crate) async fn export_session(
         asset_index_ref: None,
     };
 
-    let export_profile = FmsExportProfile::for_profile(req.profile);
-    let docs = collect_project_documents(&state, req.ui_state.as_ref()).await;
-
     let opts = PackOptions {
         compression: req
             .compression
             .unwrap_or(fullmag_session::CompressionProfile::Balanced),
     };
 
+    if let Some((run_manifest, _)) = run_capture {
+        store
+            .commit_run(&run_manifest)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
     store
         .commit_session(&session_manifest)
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -801,6 +1117,339 @@ pub(crate) async fn import_session_inspect(
     Ok(Json(SessionImportInspectResponse { inspection }))
 }
 
+fn json_field_subset(value: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let source = value.as_object();
+    serde_json::Value::Object(
+        fields
+            .iter()
+            .map(|field| {
+                (
+                    (*field).to_string(),
+                    source
+                        .and_then(|object| object.get(*field))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn scene_objects_subset(
+    scene: &fullmag_authoring::SceneDocument,
+    fields: &[&str],
+) -> Option<serde_json::Value> {
+    scene
+        .objects
+        .iter()
+        .map(|object| {
+            serde_json::to_value(object)
+                .ok()
+                .map(|value| json_field_subset(&value, fields))
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(serde_json::Value::Array)
+}
+
+fn scene_study_subset(
+    scene: &fullmag_authoring::SceneDocument,
+    fields: &[&str],
+) -> Option<serde_json::Value> {
+    serde_json::to_value(&scene.study)
+        .ok()
+        .map(|value| json_field_subset(&value, fields))
+}
+
+fn scene_semantic_section(
+    snapshot: &SessionStateResponse,
+    category: &str,
+) -> Option<serde_json::Value> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let scene_value = serde_json::to_value(scene).ok()?;
+    let scene_fields = |fields: &[&str]| json_field_subset(&scene_value, fields);
+
+    match category {
+        "geometry" => Some(serde_json::json!({
+            "objects": scene_objects_subset(scene, &["id", "geometry", "transform", "region_name"])?,
+            "universe": scene_fields(&["universe"]),
+        })),
+        "materials_physics" => Some(serde_json::json!({
+            "scene": scene_fields(&[
+                "materials",
+                "magnetization_assets",
+                "couplings",
+                "field_drives",
+                "current_modules",
+                "current_transports",
+                "spin_transports",
+                "spin_torques",
+                "oersted_fields",
+            ]),
+            "objects": scene_objects_subset(scene, &[
+                "id",
+                "material_ref",
+                "magnetization_ref",
+                "region_overrides",
+                "physics_stack",
+                "material_parameter_fields",
+                "absorbing_boundary",
+            ])?,
+        })),
+        "mesh" => Some(serde_json::json!({
+            "universe": scene_fields(&["universe"]),
+            "study": scene_study_subset(scene, &[
+                "fdm",
+                "universe_mesh",
+                "shared_domain_mesh",
+                "mesh_defaults",
+                "mesh_interfaces",
+            ])?,
+            "objects": scene_objects_subset(scene, &[
+                "id",
+                "object_mesh",
+                "mesh_override",
+                "regions",
+                "allocated_region_ids",
+            ])?,
+        })),
+        "study_stages" => Some(serde_json::json!({
+            "study": scene_study_subset(scene, &["stages", "study_pipeline", "initial_state"])?,
+            "outputs": scene_fields(&["outputs"]),
+        })),
+        _ => None,
+    }
+}
+
+fn execution_semantic_section(snapshot: &SessionStateResponse) -> serde_json::Value {
+    serde_json::json!({
+        "requested_backend": snapshot.session.requested_backend,
+        "authored_requested_device": snapshot.session.authored_requested_device,
+        "requested_device": snapshot.session.requested_device,
+        "requested_precision": snapshot.session.requested_precision,
+        "requested_mode": snapshot.session.requested_mode,
+        "resolved_backend": snapshot.session.resolved_backend,
+        "resolved_device": snapshot.session.resolved_device,
+        "resolved_precision": snapshot.session.resolved_precision,
+        "resolved_mode": snapshot.session.resolved_mode,
+        "resolved_runtime_family": snapshot.session.resolved_runtime_family,
+        "resolved_engine_id": snapshot.session.resolved_engine_id,
+        "plan_summary": snapshot.session.plan_summary,
+        "runtime_status": snapshot.runtime_status,
+    })
+}
+
+fn problem_ir_semantic_section(snapshot: &SessionStateResponse) -> Option<serde_json::Value> {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| {
+            metadata
+                .get("problem_ir")
+                .or_else(|| metadata.get("normalized_problem_ir"))
+        })
+        .cloned()
+}
+
+fn compare_restore_category(
+    active: Option<serde_json::Value>,
+    imported: Option<serde_json::Value>,
+    difference: &str,
+) -> SessionRestoreCompatibilityCategory {
+    match (active, imported) {
+        (Some(active), Some(imported)) => SessionRestoreCompatibilityCategory {
+            basis: SessionRestoreCompatibilityBasis::Available,
+            differences: (active != imported)
+                .then(|| vec![difference.to_string()])
+                .unwrap_or_default(),
+        },
+        _ => SessionRestoreCompatibilityCategory {
+            basis: SessionRestoreCompatibilityBasis::Unavailable,
+            differences: Vec::new(),
+        },
+    }
+}
+
+fn session_restore_compatibility(
+    active: Option<&SessionStateResponse>,
+    imported: &SessionStateResponse,
+) -> SessionRestoreCompatibility {
+    let compare_scene = |category, difference| {
+        compare_restore_category(
+            active.and_then(|snapshot| scene_semantic_section(snapshot, category)),
+            scene_semantic_section(imported, category),
+            difference,
+        )
+    };
+
+    SessionRestoreCompatibility {
+        geometry: compare_scene("geometry", "geometry differs"),
+        materials_physics: compare_scene("materials_physics", "materials or physics differs"),
+        mesh: compare_scene("mesh", "mesh differs"),
+        study_stages: compare_scene("study_stages", "study stages differ"),
+        execution: compare_restore_category(
+            active.map(execution_semantic_section),
+            Some(execution_semantic_section(imported)),
+            "execution differs",
+        ),
+        problem_ir: compare_restore_category(
+            active.and_then(problem_ir_semantic_section),
+            problem_ir_semantic_section(imported),
+            "ProblemIR differs",
+        ),
+    }
+}
+
+fn safe_import_session_id(session_id: &str) -> String {
+    let safe = session_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if safe.is_empty() {
+        "session".to_string()
+    } else {
+        safe
+    }
+}
+
+fn validate_imported_snapshot_run(
+    preflight: &FmsPreflight,
+    persisted: &PersistedCurrentLiveSnapshot,
+) -> Result<(), ApiError> {
+    if persisted.session.session_id != preflight.session.session_id {
+        return Err(ApiError::bad_request(
+            "invalid_fms_snapshot: snapshot session_id does not match manifest/session.json",
+        ));
+    }
+    let run_id = &persisted.session.run_id;
+    let run_ref = format!("runs/{run_id}/run_manifest.json");
+    if !preflight
+        .session
+        .run_refs
+        .iter()
+        .any(|reference| reference == &run_ref)
+    {
+        return Err(ApiError::bad_request(format!(
+            "invalid_fms_snapshot: active run '{run_id}' is not declared by manifest/session.json"
+        )));
+    }
+    let run_bytes = preflight.documents.get(&run_ref).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "invalid_fms_snapshot: declared run manifest '{run_ref}' is missing"
+        ))
+    })?;
+    let run_manifest: FmsRunManifest = serde_json::from_slice(run_bytes).map_err(|error| {
+        ApiError::bad_request(format!(
+            "invalid_fms_snapshot: declared run manifest '{run_ref}' is invalid: {error}"
+        ))
+    })?;
+    if run_manifest.run_id != *run_id {
+        return Err(ApiError::bad_request(format!(
+            "invalid_fms_snapshot: declared run manifest '{run_ref}' has run_id '{}'",
+            run_manifest.run_id
+        )));
+    }
+    for document in [
+        "project/main.py",
+        "project/ui_state.json",
+        "project/current_live_snapshot.json",
+    ] {
+        if !preflight.documents.contains_key(document) {
+            return Err(ApiError::bad_request(format!(
+                "invalid_fms_snapshot: required document '{document}' is missing"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_imported_read_only(persisted: &mut PersistedCurrentLiveSnapshot) {
+    persisted.session.status = "completed".to_string();
+    persisted.runtime_status = RuntimeStatusView {
+        kind: fullmag_runner::RuntimeStatus::Completed,
+        code: "imported_read_only".to_string(),
+        is_busy: false,
+        can_accept_commands: false,
+    };
+    if let Some(run) = persisted.run.as_mut() {
+        run.status = "completed".to_string();
+    }
+    if let Some(live_state) = persisted.live_state.as_mut() {
+        live_state.status = "completed".to_string();
+        live_state.latest_step.finished = true;
+    }
+    if let Some(execution) = persisted.stage_execution.as_mut() {
+        let total_stages = execution
+            .total_stages
+            .max(execution.stage_statuses.len())
+            .max(execution.stages.len());
+        execution.total_stages = total_stages;
+        execution.completed_stage_indexes = (0..total_stages).collect();
+        execution.stage_statuses = vec![crate::types::StageLifecycleState::Completed; total_stages];
+        for stage in &mut execution.stages {
+            stage.status = crate::types::StageLifecycleState::Completed;
+        }
+        execution.active_stage_index = None;
+        execution.active_stage_kind = None;
+        execution.runtime_state = crate::types::RuntimeLifecycleState::Completed;
+    }
+}
+
+fn publish_imported_session(
+    state: &AppState,
+    fms_bytes: &[u8],
+    preflight: &FmsPreflight,
+    persisted: &PersistedCurrentLiveSnapshot,
+    import_id: &str,
+) -> Result<PathBuf, ApiError> {
+    let imports = session_store_root(state).join("imports");
+    std::fs::create_dir_all(&imports)
+        .map_err(|error| ApiError::internal(format!("creating import root: {error}")))?;
+    let published = imports.join(&import_id);
+    let staging = imports.join(format!(".{import_id}.staging"));
+
+    let result = (|| -> Result<(), ApiError> {
+        let staging_store = SessionStore::open(&staging)
+            .map_err(|error| ApiError::internal(format!("creating import staging: {error}")))?;
+        let imported_session = unpack_fms(Cursor::new(fms_bytes), &staging_store)
+            .map_err(|error| ApiError::bad_request(format!("invalid_fms_unpack: {error}")))?;
+        if imported_session.session_id != preflight.session.session_id {
+            return Err(ApiError::bad_request(
+                "invalid_fms_unpack: session manifest changed during import",
+            ));
+        }
+        validate_imported_snapshot_run(preflight, persisted)?;
+        staging_store
+            .write_document(
+                "project/current_live_snapshot.json",
+                &serde_json::to_vec_pretty(persisted).map_err(|error| {
+                    ApiError::internal(format!(
+                        "serializing rebased imported session snapshot: {error}"
+                    ))
+                })?,
+            )
+            .map_err(|error| {
+                ApiError::internal(format!(
+                    "persisting rebased imported session snapshot: {error}"
+                ))
+            })?;
+        std::fs::rename(&staging, &published).map_err(|error| {
+            ApiError::internal(format!("publishing imported session snapshot: {error}"))
+        })?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    Ok(published)
+}
+
 /// `POST /v2/sessions/current/persistence/imports`
 pub(crate) async fn import_session_commit(
     State(state): State<Arc<AppState>>,
@@ -809,69 +1458,108 @@ pub(crate) async fn import_session_commit(
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
-    let store = open_store(&state)?;
+    // The archive, persisted snapshot, presentation migration, and semantic
+    // report must all be valid before opening a SessionStore or mutating live
+    // application state.
+    let preflight = preflight_fms(
+        Cursor::new(&fms_bytes),
+        &["project/current_live_snapshot.json"],
+    )
+    .map_err(|error| ApiError::bad_request(format!("invalid_fms_preflight: {error}")))?;
+    let snapshot_bytes = preflight
+        .documents
+        .get("project/current_live_snapshot.json")
+        .expect("preflight required the current snapshot document");
+    let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(snapshot_bytes)
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
+    let restored_display_presentation = restore_display_presentation(
+        persisted.display_presentation_schema_version,
+        &persisted.display_presentation,
+    )
+    .map_err(|error| {
+        ApiError::bad_request(format!(
+            "invalid_fms_snapshot: unsupported or invalid persisted display presentation ({error})"
+        ))
+    })?;
+    let imported_snapshot: SessionStateResponse = persisted.clone().into();
+    let active_snapshot = state.current_live_state.read().await.clone();
+    let compatibility = session_restore_compatibility(active_snapshot.as_ref(), &imported_snapshot);
+    let mut warnings = preflight.inspection.warnings.clone();
+    warnings.extend(compatibility.warnings());
 
-    let session = unpack_fms(Cursor::new(&fms_bytes), &store)
-        .map_err(|e| ApiError::internal(format!("unpacking .fms: {e}")))?;
-
-    // Determine restore class.
-    let inspection = inspect_fms(Cursor::new(&fms_bytes))
-        .map_err(|e| ApiError::internal(format!("re-inspecting .fms: {e}")))?;
-
-    // Try to restore the current live workspace snapshot from packaged docs.
-    if let Some(snapshot_bytes) = store
-        .read_document("project/current_live_snapshot.json")
-        .map_err(|e| ApiError::internal(format!("reading snapshot document: {e}")))?
-    {
-        if let Ok(snapshot_document) = serde_json::from_slice::<serde_json::Value>(&snapshot_bytes)
-        {
-            if let Ok(persisted) =
-                serde_json::from_value::<PersistedCurrentLiveSnapshot>(snapshot_document.clone())
-            {
-                let restored_display_presentation = restore_display_presentation(
-                    persisted.display_presentation_schema_version,
-                    &persisted.display_presentation,
-                )
-                .map_err(|error| {
-                    ApiError::bad_request(format!(
-                        "unsupported or invalid persisted display presentation ({error}); session restore did not mutate the active workspace"
-                    ))
-                })?;
-                let restored: SessionStateResponse = persisted.into();
-                // Refresh the in-memory active workspace.
-                {
-                    let mut current = state.current_live_state.write().await;
-                    *current = Some(restored.clone());
-                }
-                {
-                    let mut selection = state.current_display_selection.write().await;
-                    *selection = restored.display_selection.clone();
-                }
-                {
-                    let mut presentation = state.current_display_presentation.write().await;
-                    *presentation = restored_display_presentation;
-                }
-                let realtime_state = current_live_realtime_state_from_snapshot(
-                    &state,
-                    &restored,
-                    restored.display_selection.revision,
-                )
-                .await;
-                publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
-                    .await?;
-            }
-        }
+    if matches!(req.restore_mode, SessionRestoreMode::Resume) {
+        return Err(ApiError::conflict(
+            "checkpoint_restore_unsupported: this runtime cannot restore an FMS checkpoint",
+        ));
     }
 
-    let restored_ui_state = store
+    normalize_imported_read_only(&mut persisted);
+    let import_id = format!(
+        "{}-{}",
+        safe_import_session_id(&preflight.session.session_id),
+        crate::uuid_v4_hex()
+    );
+    let published_root = session_store_root(&state).join("imports").join(&import_id);
+    persisted.session.script_path = published_root.join("project/main.py").display().to_string();
+    let restored_artifact_dir = published_root
+        .join("runs")
+        .join(&persisted.session.run_id)
+        .join("artifacts")
+        .display()
+        .to_string();
+    persisted.session.artifact_dir = restored_artifact_dir.clone();
+    if let Some(run) = persisted.run.as_mut() {
+        run.artifact_dir = restored_artifact_dir;
+    }
+    let restored: SessionStateResponse = persisted.clone().into();
+    let published_root =
+        publish_imported_session(&state, &fms_bytes, &preflight, &persisted, &import_id)?;
+    let published_store = SessionStore::open(&published_root)
+        .map_err(|error| ApiError::internal(format!("opening published import: {error}")))?;
+
+    {
+        let mut current = state.current_live_state.write().await;
+        *current = Some(restored.clone());
+    }
+    {
+        let mut selection = state.current_display_selection.write().await;
+        *selection = restored.display_selection.clone();
+    }
+    {
+        let mut presentation = state.current_display_presentation.write().await;
+        *presentation = restored_display_presentation;
+    }
+    {
+        let mut selection = state.current_workspace_selection.write().await;
+        *selection = persisted.workspace_selection.clone();
+    }
+    {
+        let mut ribbon = state.current_workspace_ribbon.write().await;
+        *ribbon = persisted.workspace_ribbon.clone();
+    }
+    {
+        let mut layout = state.current_workspace_layout.write().await;
+        *layout = persisted.workspace_layout.clone();
+    }
+    let realtime_state = current_live_realtime_state_from_snapshot(
+        &state,
+        &restored,
+        restored.display_selection.revision,
+    )
+    .await;
+    publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
+
+    let restored_ui_state = published_store
         .read_document("project/ui_state.json")
         .map_err(|e| ApiError::internal(format!("reading ui_state document: {e}")))?
         .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok());
 
     Ok(Json(SessionImportCommitResponse {
-        session_id: session.session_id,
-        restore_class: inspection.restore_class,
-        warnings: inspection.warnings,
+        session_id: preflight.session.session_id,
+        restore_mode: req.restore_mode,
+        restore_class: preflight.inspection.restore_class,
+        warnings,
+        compatibility,
         ui_state: restored_ui_state,
     }))
 }

@@ -16,6 +16,7 @@
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/runtime/hypre_device_policy.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -163,6 +164,12 @@ bool initialize_demag_poisson_hypre_device_solver(
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
     if (!configure_hypre_device_vendor_kernels(error)) {
+    const HypreDevicePolicySnapshot hypre_policy =
+        configure_hypre_cuda_device_policy();
+    if (!hypre_cuda_device_policy_is_available(hypre_policy)) {
+        error = hypre_policy.failure_reason.empty()
+            ? kHypreCudaDevicePolicyUnavailable
+            : hypre_policy.failure_reason;
         return false;
     }
 

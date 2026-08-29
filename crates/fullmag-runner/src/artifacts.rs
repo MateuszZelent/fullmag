@@ -424,6 +424,7 @@ fn actual_engine_backend_and_device(engine: &str) -> std::io::Result<(&'static s
         | "fdm_gpu_native" => ("fdm", "gpu"),
         "fem_native_gpu" | "fem_eigen_native_gpu" => ("fem", "gpu"),
         "fem_cpu_native"
+        | "fem_eigen_cpu_baseline"
         | "native_fem_cpu"
         | "native_fem.frequency_domain.production_cpu"
         | "runner.frequency_response_test"
@@ -5417,6 +5418,7 @@ mod tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         }
@@ -5797,6 +5799,7 @@ mod tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         }
@@ -6485,6 +6488,7 @@ mod tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         }
@@ -8774,6 +8778,8 @@ mod tests {
             ignored_terms: Vec::new(),
             random_seed: None,
             resolved_fallback: None,
+            fem_eigen_execution_resolution: None,
+            fem_eigen_native_execution_attestation: None,
             fem_crossover_decision: None,
             requested_integrator: None,
             resolved_integrator: None,
@@ -9668,6 +9674,8 @@ mod tests {
             ignored_terms: Vec::new(),
             random_seed: None,
             resolved_fallback: None,
+            fem_eigen_execution_resolution: None,
+            fem_eigen_native_execution_attestation: None,
             fem_crossover_decision: None,
             requested_integrator: None,
             resolved_integrator: None,

@@ -853,6 +853,72 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("rejects unavailable K0 periodic-airbox prerequisites", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic", deviceTarget: "gpu", dampingPolicy: "ignore",
+      frequencyMax: "2e9", frequencyMin: "1e9", includeDemag: true,
+      kVector: "0,0,0", magnetostaticBc: "periodic_airbox_k0", target: "frequency_window",
+    };
+    const messages = validateStudyStageDraft(draft, {
+      acceptedEquilibriumReady: false, backend: "fem", device: "gpu", mode: "strict",
+      periodicCertificateReady: false, sharedDomainMeshReady: false, strictGpuReady: false,
+    }).map((issue) => issue.message);
+    expect(messages).toEqual(expect.arrayContaining([
+      "periodic_airbox_k0 requires a shared-domain mesh.",
+      "periodic_airbox_k0 requires a periodic certificate.",
+      "periodic_airbox_k0 requires an accepted equilibrium.",
+      "Strict GPU K0 modal demag prerequisites are unavailable.",
+    ]));
+  });
+
+  it("uses the requested global GPU intent for K0 strict readiness", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      frequencyMax: "2e9",
+      frequencyMin: "1e9",
+      includeDemag: true,
+      kVector: "0,0,0",
+      magnetostaticBc: "periodic_airbox_k0",
+      target: "frequency_window",
+    };
+
+    expect(
+      validateStudyStageDraft(draft, {
+        acceptedEquilibriumReady: true,
+        backend: "fem",
+        device: "gpu",
+        mode: "strict",
+        periodicCertificateReady: true,
+        sharedDomainMeshReady: true,
+        strictGpuReady: false,
+      }),
+    ).toContainEqual({
+      message: "Strict GPU K0 modal demag prerequisites are unavailable.",
+      severity: "error",
+    });
+  });
+
+  it("serializes the canonical K0 periodic-airbox demag intent for eigenmodes", () => {
+    const stage = studyStageDraftToSceneStage({
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      includeDemag: true,
+      kVector: "0,0,0",
+      magnetostaticBc: "periodic_airbox_k0",
+      stageId: "k0-modal",
+    });
+
+    expect(stage).toMatchObject({
+      eigen_magnetostatic_bc: "periodic_airbox_k0",
+      include_demag: true,
+      magnetostatic_bc: "periodic_airbox_k0",
+    });
+  });
+
   it("requires both static and advertised capability for TPI", () => {
     expect(
       relaxationAlgorithmAvailability("tangent_plane_implicit", {
@@ -1502,6 +1568,7 @@ describe("StudyStageAuthoringModel", () => {
       eigen_include_demag: false,
       eigen_k_sampling: { points: 5 },
       eigen_k_vector: [0, 1, -1],
+      eigen_magnetostatic_bc: "open",
       eigen_normalization: "unit_max_amplitude",
       eigen_operator: "linearized_llg",
       eigen_spin_wave_bc: { axes: ["x"], kind: "periodic" },
@@ -1513,6 +1580,7 @@ describe("StudyStageAuthoringModel", () => {
       include_demag: false,
       k_sampling: { points: 5 },
       k_vector: [0, 1, -1],
+      magnetostatic_bc: "open",
       kind: "eigenmodes",
       normalization: "unit_max_amplitude",
       operator: "linearized_llg",

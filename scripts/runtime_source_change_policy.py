@@ -15,6 +15,7 @@ from typing import Any
 
 NON_RUNTIME_PREFIXES = (
     ".agents/",
+    ".claude/",
     ".codex/",
     # Codex-Usage is a local tooling checkout, not runtime source.
     "Codex-Usage/",

@@ -70,6 +70,7 @@ import type { KernelApi } from "./types";
 import { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "./visualization/CameraRegistryController";
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
+import { ModeCompositionController } from "./visualization/ModeCompositionController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
 import {
   ObjectVisualizationController,
@@ -132,6 +133,12 @@ function createKernel(): KernelApi {
     api: api.visualization,
   });
   const analysisFieldOverlay = new AnalysisFieldOverlayController();
+  const modeComposition = new ModeCompositionController({
+    getActiveModeComposition: (options) =>
+      api.visualization.modeComposition.active(options),
+    patchActiveModeComposition: (patch, options) =>
+      api.visualization.modeComposition.patch(patch, options),
+  });
   const visualization = new ObjectVisualizationController();
   const visualizationDebug = new VisualizationDebugController();
   const visualizationSync = new VisualizationRegistrySyncController({
@@ -193,6 +200,7 @@ function createKernel(): KernelApi {
     diagnostics,
     diagnosticRecorder,
     layout,
+    modeComposition,
     modules,
     objectMoveTool,
     realtime,

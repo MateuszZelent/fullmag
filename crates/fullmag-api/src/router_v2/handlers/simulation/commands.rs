@@ -54,6 +54,7 @@ pub(crate) async fn submit_structured_command_impl(
     mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
     enforce_session_command_admission(&state).await?;
+    reject_imported_read_only_command(&state).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
     if request_has_adaptive_solver_policy(&req) {
@@ -113,6 +114,18 @@ async fn enforce_session_command_admission(state: &Arc<AppState>) -> Result<(), 
     if let Some(connectivity_code) = connectivity_code {
         return Err(ApiError::conflict(format!(
             "session_connectivity_{connectivity_code}: mutating commands require a connected runner publication path"
+        )));
+    }
+    Ok(())
+}
+async fn reject_imported_read_only_command(state: &Arc<AppState>) -> Result<(), ApiError> {
+    let current = state.current_live_state.read().await;
+    let snapshot = current
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    if snapshot.runtime_status.code == "imported_read_only" {
+        return Err(ApiError::conflict(format!(
+            "imported_read_only: simulation commands are unavailable for an imported snapshot"
         )));
     }
     Ok(())

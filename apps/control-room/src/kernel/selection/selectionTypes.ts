@@ -617,6 +617,48 @@ export type SelectionRef =
       type: "study-stage";
     }
   | {
+      artifactRevision: string;
+      kind: "results.eigen.spectrum";
+      nodeId: string;
+      runId: string;
+      stageId: string;
+      type: "eigen-spectrum";
+    }
+  | {
+      artifactRevision: string;
+      kind: "results.eigen.mode";
+      modeId: string;
+      nodeId: string;
+      runId: string;
+      sampleId: string;
+      stageId: string;
+      type: "eigen-mode";
+    }
+  | {
+      compositionId: string;
+      kind: "results.eigen.composition";
+      nodeId: string;
+      revision: string;
+      type: "mode-composition";
+    }
+  | {
+      compositionId: string;
+      kind: "results.eigen.composition.objects";
+      nodeId: string;
+      revision: string;
+      type: "mode-composition-objects";
+    }
+  | {
+      compositionId: string;
+      compositionRevision: string;
+      kind: "results.eigen.composition.object";
+      layerId?: string;
+      nodeId: string;
+      objectId: string;
+      targetId: `object:${string}`;
+      type: "mode-composition-object";
+    }
+  | {
       analysisRunId?: string;
       analysisStageId?: string;
       artifactRevision?: number | string;
@@ -628,23 +670,30 @@ export type SelectionRef =
       artifactPath?: string;
       branchId?: string;
       calculationMode?: string;
+      detail?: string;
       fieldId?: string;
+      fitId?: string;
       fmrPeakIndex?: number;
       frequencyHz?: number;
       frequencyIndex?: number;
       kPathCoordinateRadPerM?: number;
       normalization?: string;
       kind: string;
+      modeId?: string;
       modeIndex?: number;
       nodeId: string;
       observableId?: string;
+      pointId?: string;
+      rawModeIndex?: number;
       representation?: AnalysisFieldOverlayRepresentation | string;
       resourceRef?: string;
       resourceState?: ResourceStatus;
+      sampleId?: string;
       sampleIndex?: number;
       source?: AnalysisFieldOverlaySource;
       studyProduct?: string;
       type: "frequency-domain";
+      viewId?: string;
       wavevectorKf?: readonly [number, number, number];
     }
   | {
@@ -658,7 +707,11 @@ export type SelectionRef =
       kContextKind?: AnalysisFieldOverlayKContextKind;
       kPathCoordinateRadPerM?: number;
       normalization?: string;
-      kind: "object.mode_visualization";
+      kind:
+        | "object.mode_visualization"
+        | "object.mode_visualization.group"
+        | "object.mode_visualization.field"
+        | "object.mode_visualization.view";
       modeIndex?: number;
       nodeId: string;
       objectId: string;
@@ -747,6 +800,53 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         nullableStringEquals(left.objectId, right.objectId) &&
         nullableStringEquals(left.regionId, right.regionId)
+      );
+    case "eigen-spectrum":
+      return (
+        right.type === "eigen-spectrum" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.artifactRevision === right.artifactRevision &&
+        left.runId === right.runId &&
+        left.stageId === right.stageId
+      );
+    case "eigen-mode":
+      return (
+        right.type === "eigen-mode" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.artifactRevision === right.artifactRevision &&
+        left.modeId === right.modeId &&
+        left.runId === right.runId &&
+        left.sampleId === right.sampleId &&
+        left.stageId === right.stageId
+      );
+    case "mode-composition":
+      return (
+        right.type === "mode-composition" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.compositionId === right.compositionId &&
+        left.revision === right.revision
+      );
+    case "mode-composition-objects":
+      return (
+        right.type === "mode-composition-objects" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.compositionId === right.compositionId &&
+        left.revision === right.revision
+      );
+    case "mode-composition-object":
+      return (
+        right.type === "mode-composition-object" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.compositionId === right.compositionId &&
+        left.compositionRevision === right.compositionRevision &&
+        left.objectId === right.objectId &&
+        nullableStringEquals(left.layerId, right.layerId) &&
+        left.targetId === right.targetId
       );
     case "runtime-explorer":
       return (
@@ -1103,9 +1203,11 @@ export function selectionRefEquals(
         nullableStringEquals(left.artifactPath, right.artifactPath) &&
         nullableStringEquals(left.branchId, right.branchId) &&
         nullableStringEquals(left.calculationMode, right.calculationMode) &&
+        nullableStringEquals(left.detail, right.detail) &&
         (left.artifactRevision ?? null) === (right.artifactRevision ?? null) &&
         nullableStringEquals(left.equilibriumId, right.equilibriumId) &&
         nullableStringEquals(left.fieldId, right.fieldId) &&
+        nullableStringEquals(left.fitId, right.fitId) &&
         (left.fmrPeakIndex ?? null) === (right.fmrPeakIndex ?? null) &&
         (left.frequencyHz ?? null) === (right.frequencyHz ?? null) &&
         left.frequencyIndex === right.frequencyIndex &&
@@ -1114,14 +1216,19 @@ export function selectionRefEquals(
         (left.kPathCoordinateRadPerM ?? null) ===
           (right.kPathCoordinateRadPerM ?? null) &&
         left.modeIndex === right.modeIndex &&
+        nullableStringEquals(left.modeId, right.modeId) &&
         nullableStringEquals(left.observableId, right.observableId) &&
+        nullableStringEquals(left.pointId, right.pointId) &&
+        left.rawModeIndex === right.rawModeIndex &&
         nullableStringEquals(left.representation, right.representation) &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
         left.resourceState === right.resourceState &&
+        nullableStringEquals(left.sampleId, right.sampleId) &&
         left.sampleIndex === right.sampleIndex &&
         left.executionState === right.executionState &&
         nullableStringEquals(left.source, right.source) &&
         nullableStringEquals(left.studyProduct, right.studyProduct) &&
+        nullableStringEquals(left.viewId, right.viewId) &&
         centroidEquals(left.wavevectorKf, right.wavevectorKf)
       );
     case "mode-visualization":

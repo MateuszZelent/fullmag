@@ -1619,6 +1619,8 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "operators.cpp");
     const std::string hypre_solver =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
+    const std::string hypre_policy =
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "hypre_device_policy.cpp");
     const std::string stage_compute =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string compact_stage_compute = without_whitespace(stage_compute);
@@ -1820,21 +1822,24 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
             hypre_solver.find("HypreBoomerAMG") != std::string::npos,
         "GPU CUDA Poisson demag Hypre solver module must own persistent setup, MFEM initial-guess policy, and iteration stats");
     check(
-        hypre_solver.find("HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE)") !=
+        hypre_solver.find("#include \"gpu/cuda/runtime/hypre_device_policy.hpp\"") !=
                 std::string::npos &&
-            hypre_solver.find("HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE)") !=
+            hypre_solver.find("configure_hypre_cuda_device_policy()") !=
                 std::string::npos &&
-            hypre_solver.find("HYPRE_SetSpTransUseVendor(1)") !=
+            hypre_solver.find("HYPRE_SetMemoryLocation(") == std::string::npos &&
+            hypre_solver.find("HYPRE_SetExecutionPolicy(") == std::string::npos &&
+            hypre_policy.find("HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE)") !=
                 std::string::npos &&
-            hypre_solver.find("HYPRE_SetSpMVUseVendor(1)") !=
+            hypre_policy.find("HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE)") !=
                 std::string::npos &&
-            hypre_solver.find("HYPRE_SetSpGemmUseVendor(1)") !=
+            hypre_policy.find("HYPRE_SetSpTransUseVendor(1)") !=
                 std::string::npos &&
-            hypre_solver.find("HYPRE_ClearAllErrors()") !=
+            hypre_policy.find("HYPRE_SetSpMVUseVendor(1)") !=
                 std::string::npos &&
-            hypre_solver.find("HYPRE_SetSpGemmUseVendor(1) failed") ==
-                std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver setup must best-effort enable public device vendor sparse kernels");
+            hypre_policy.find("HYPRE_SetSpGemmUseVendor(1)") !=
+                std::string::npos &&
+            hypre_policy.find("HYPRE_ClearAllErrors()") != std::string::npos,
+        "GPU CUDA Poisson demag must consume the shared fail-closed HYPRE CUDA device policy owner");
     check(
         stage_compute.find("#include \"gpu/cuda/demag_poisson/stage_compute.hpp\"") !=
                 std::string::npos &&

@@ -19,6 +19,7 @@ import {
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
+  readEigenSpectrumPayload,
   frequencyResponseSeriesUnit,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
@@ -54,7 +55,7 @@ function fieldVectorResourceKey(
 }
 
 describe("frequencyDomainChartModels", () => {
-  it("maps eigen spectrum rows into finite GHz chart points with mode identity", () => {
+  it("maps eigen spectrum rows into finite Hz chart points with mode identity", () => {
     const model = buildEigenSpectrumChartModel(
       jsonResource({
         modes: [
@@ -84,8 +85,11 @@ describe("frequencyDomainChartModels", () => {
         sampleIndex: 2,
       }),
     ]);
-    expect(model.series[0]?.points).toEqual([{ rowIndex: 0, x: 3, y: 2.5 }]);
-    expect(model.series[0]?.unit).toBe("GHz");
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 3, y: 2.5e9 },
+    ]);
+    expect(model.series[0]?.unit).toBe("Hz");
+    expect(model.series[0]?.xUnit).toBe("1");
   });
 
   it("maps canonical v2 sample modes into finite spectrum points with field ids", () => {
@@ -147,9 +151,63 @@ describe("frequencyDomainChartModels", () => {
       }),
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 1.481196536 },
-      { rowIndex: 1, x: 1, y: 2.25 },
+      { rowIndex: 0, x: 0, y: 1.481196536e9 },
+      { rowIndex: 1, x: 1, y: 2.25e9 },
     ]);
+  });
+
+  it("uses stable mode-id rank instead of a raw solver index on the public axis", () => {
+    const model = buildEigenSpectrumChartModel(
+      jsonResource({
+        modes: [
+          { frequency_hz: 3e9, mode_id: "mode-alpha", raw_mode_index: 17 },
+          { frequency_hz: 4e9, mode_id: "mode-beta", raw_mode_index: 99 },
+        ],
+      }),
+    );
+
+    expect(
+      model.points.map((point) => ({
+        displayModeIndex: point.displayModeIndex,
+        modeId: point.modeId,
+        rawModeIndex: point.rawModeIndex,
+      })),
+    ).toEqual([
+      { displayModeIndex: 0, modeId: "mode-alpha", rawModeIndex: 17 },
+      { displayModeIndex: 1, modeId: "mode-beta", rawModeIndex: 99 },
+    ]);
+    expect(model.series[0]?.points).toEqual([
+      { rowIndex: 0, x: 0, y: 3e9 },
+      { rowIndex: 1, x: 1, y: 4e9 },
+    ]);
+  });
+
+  it("narrows both a spectrum payload and an artifact-wrapped payload", () => {
+    const payload = {
+      modes: [
+        {
+          frequency_hz: 3e9,
+          mode_id: "mode-alpha",
+          raw_mode_index: 17,
+          sample_index: 0,
+        },
+      ],
+    };
+
+    expect(readEigenSpectrumPayload(payload)?.modes[0]).toEqual(
+      expect.objectContaining({
+        displayModeIndex: 0,
+        frequencyHz: 3e9,
+        modeId: "mode-alpha",
+        rawModeIndex: 17,
+      }),
+    );
+    expect(
+      readEigenSpectrumPayload({
+        artifact_path: "eigen/spectrum.v2.json",
+        payload,
+      })?.modes[0],
+    ).toEqual(expect.objectContaining({ rawModeIndex: 17 }));
   });
 
   it("accepts modal writer frequency_real_hz fields without inventing missing field resources", () => {

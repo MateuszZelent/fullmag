@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME_ROOT="${REPO_ROOT}/.fullmag/runtimes/fem-gpu-host"
+RUNTIME_ROOT="${FULLMAG_FEM_RUNTIME_ROOT:-${REPO_ROOT}/.fullmag/runtimes/fem-gpu-host}"
 RESULTS_DIR="${REPO_ROOT}/tests/fem_exchange_validation/results"
 
 if [[ ! -f "${RUNTIME_ROOT}/manifest.json" ]]; then

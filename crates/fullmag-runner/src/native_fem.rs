@@ -6,7 +6,7 @@
 //! - native MFEM/libCEED/hypre time-domain FEM execution
 //! - mesh-native Poisson demag on shared-domain meshes with air
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use fullmag_fem_sys as ffi;
 
 mod availability;
@@ -32,12 +32,14 @@ pub(crate) use availability::{
 };
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
+#[cfg(test)]
+pub(crate) use frequency_domain::measured_modal_gpu_attestation_fixture;
 #[allow(unused_imports)]
 pub(crate) use frequency_domain::{
     solve_native_driven_frequency_response, solve_native_driven_response_contract,
-    solve_native_modal_eigen, NativeDrivenFrequencyResponseDmiElement,
-    NativeDrivenFrequencyResponseDmiKind, NativeDrivenFrequencyResponseExchangeEdge,
-    NativeDrivenFrequencyResponseFloquetPeriodicPair,
+    solve_native_modal_eigen, validate_planned_modal_execution_attestation,
+    NativeDrivenFrequencyResponseDmiElement, NativeDrivenFrequencyResponseDmiKind,
+    NativeDrivenFrequencyResponseExchangeEdge, NativeDrivenFrequencyResponseFloquetPeriodicPair,
     NativeDrivenFrequencyResponseMfemOperatorProblem,
     NativeDrivenFrequencyResponsePeriodicAirboxCoupledBlockProblem,
     NativeDrivenFrequencyResponsePeriodicNodePair, NativeDrivenFrequencyResponseRequest,
@@ -48,7 +50,8 @@ pub(crate) use frequency_domain::{
     NativeFrequencyDomainStatus, NativeModalEigenCsrMatrixView,
     NativeModalEigenFloquetPeriodicPair, NativeModalEigenMfemOperatorProblem,
     NativeModalEigenPoissonAirboxBlockProblem, NativeModalEigenRequest,
-    NativeModalEigenSparseOperatorProblem,
+    NativeModalEigenSharedDomainProblem, NativeModalEigenSparseOperatorProblem,
+    NativeModalExecutionTarget, NativeModalGpuAttestation,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
@@ -115,7 +118,7 @@ use std::ffi::c_void;
 use std::ffi::CStr;
 #[cfg(feature = "fem-gpu")]
 use std::io::Write;
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 use std::path::{Path, PathBuf};
 #[cfg(feature = "fem-gpu")]
 use std::ptr;
@@ -352,7 +355,7 @@ const FALLBACK_POISSON_BOUNDARY_MARKER: i32 = 99;
 #[cfg(feature = "fem-gpu")]
 const FALLBACK_ROBIN_BETA_FACTOR: f64 = 2.0;
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
     if slice.is_empty() {
         std::ptr::null()
@@ -361,19 +364,20 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
-struct PackedNativeMesh {
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+pub(crate) struct PackedNativeMesh {
     nodes_xyz: Vec<f64>,
     cell_types: Vec<u32>,
+    cell_markers: Vec<u32>,
     facet_types: Vec<u32>,
     facet_roles: Vec<u32>,
     periodic_node_pairs: Vec<u32>,
     periodic_boundary_pair_markers: Vec<u32>,
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl PackedNativeMesh {
-    fn new(mesh: &fullmag_ir::MeshIR) -> Self {
+    pub(crate) fn new(mesh: &fullmag_ir::MeshIR) -> Self {
         Self {
             nodes_xyz: mesh.nodes.iter().flatten().copied().collect(),
             cell_types: mesh
@@ -387,6 +391,7 @@ impl PackedNativeMesh {
                     fullmag_ir::FemCellTypeIR::Hex8 => ffi::FULLMAG_FEM_CELL_HEX8,
                 })
                 .collect(),
+            cell_markers: mesh.element_markers.clone(),
             facet_types: mesh
                 .facets
                 .types
@@ -423,7 +428,7 @@ impl PackedNativeMesh {
         }
     }
 
-    fn descriptor(&self, mesh: &fullmag_ir::MeshIR) -> ffi::fullmag_fem_mesh_desc {
+    pub(crate) fn descriptor(&self, mesh: &fullmag_ir::MeshIR) -> ffi::fullmag_fem_mesh_desc {
         ffi::fullmag_fem_mesh_desc {
             abi_version: ffi::FULLMAG_FEM_MESH_DESC_ABI_VERSION,
             struct_size: std::mem::size_of::<ffi::fullmag_fem_mesh_desc>() as u32,
@@ -437,8 +442,8 @@ impl PackedNativeMesh {
             cell_nodes_len: mesh.cells.nodes.len() as u64,
             cell_global_ordinals: optional_slice_ptr(&mesh.cells.global_ordinals),
             cell_global_ordinals_len: mesh.cells.global_ordinals.len() as u64,
-            cell_markers: optional_slice_ptr(&mesh.element_markers),
-            cell_markers_len: mesh.element_markers.len() as u64,
+            cell_markers: optional_slice_ptr(&self.cell_markers),
+            cell_markers_len: self.cell_markers.len() as u64,
             facet_types: optional_slice_ptr(&self.facet_types),
             facet_types_len: self.facet_types.len() as u64,
             facet_roles: optional_slice_ptr(&self.facet_roles),
@@ -458,6 +463,11 @@ impl PackedNativeMesh {
             ),
             periodic_boundary_pair_markers_len: self.periodic_boundary_pair_markers.len() as u64,
         }
+    }
+
+    pub(crate) fn replace_cell_markers(&mut self, cell_markers: &[u32]) {
+        self.cell_markers.clear();
+        self.cell_markers.extend_from_slice(cell_markers);
     }
 }
 
@@ -1900,7 +1910,7 @@ fn native_fem_object_ids_match(a: &str, b: &str) -> bool {
     clean_a == clean_b
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn managed_fem_runtime_root() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("FULLMAG_FEM_RUNTIME_ROOT").map(PathBuf::from) {
         if root.join("openmpi/share/openmpi").is_dir() {
@@ -1932,14 +1942,14 @@ fn managed_fem_runtime_root() -> Option<PathBuf> {
     None
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn set_env_if_missing(key: &str, value: impl AsRef<std::ffi::OsStr>) {
     if std::env::var_os(key).is_none() {
         std::env::set_var(key, value);
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn configure_openmpi_loopback_oob_if_missing() {
     set_env_if_missing("OMPI_MCA_oob", "tcp");
     if std::env::var_os("OMPI_MCA_oob_tcp_if_include").is_none()
@@ -1949,7 +1959,7 @@ fn configure_openmpi_loopback_oob_if_missing() {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn configure_pmix_loopback_ptl_if_missing() {
     if std::env::var_os("PMIX_MCA_ptl_tcp_if_include").is_none()
         && std::env::var_os("PMIX_MCA_ptl_tcp_if_exclude").is_none()
@@ -1958,7 +1968,7 @@ fn configure_pmix_loopback_ptl_if_missing() {
     }
 }
 
-#[cfg(feature = "fem-gpu")]
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 fn configure_managed_openmpi_environment() {
     let Some(runtime_root) = managed_fem_runtime_root() else {
         return;
@@ -3787,6 +3797,27 @@ impl NativeFemBackend {
         };
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM GPU copy_field failed"));
+        }
+        Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    }
+
+    pub fn copy_linearization_field(
+        &self,
+        observable: ffi::fullmag_fem_observable,
+        node_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        let len = node_count * 3;
+        let mut flat = vec![0.0f64; len];
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_copy_linearization_field_f64(
+                self.handle,
+                observable,
+                flat.as_mut_ptr(),
+                len as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM copy_linearization_field failed"));
         }
         Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
     }

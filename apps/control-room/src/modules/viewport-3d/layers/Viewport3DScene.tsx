@@ -48,6 +48,7 @@ import type {
   VisualizationTargetRef,
   VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import type {
@@ -223,6 +224,9 @@ interface Viewport3DSceneProps {
   maxVectorGlyphs: number;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
+  modeCompositionFieldLayers: ModeCompositionFieldLayerSnapshotMap;
+  modeCompositionId: string | null;
+  modeCompositionPhaseByLayerId: ReadonlyMap<string, number>;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
   periodicOverlayModel: PeriodicOverlayModel | null;
@@ -1063,6 +1067,9 @@ function Viewport3DModelLayerStack({
   materialProfile,
   meshQualityColors,
   meshQualityOverlayVisible,
+  modeCompositionFieldLayers,
+  modeCompositionId,
+  modeCompositionPhaseByLayerId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1091,6 +1098,7 @@ function Viewport3DModelLayerStack({
   topologyRevision,
   tracker,
   vectorColorMode,
+  vectorScale,
   vectorStyle,
   visualizationRevision,
   fdmCuboidLayerEnabled,
@@ -1120,6 +1128,9 @@ function Viewport3DModelLayerStack({
   | "magnetizationTexturePreviews"
   | "meshQualityColors"
   | "meshQualityOverlayVisible"
+  | "modeCompositionFieldLayers"
+  | "modeCompositionId"
+  | "modeCompositionPhaseByLayerId"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
   | "periodicOverlayModel"
@@ -1148,6 +1159,7 @@ function Viewport3DModelLayerStack({
   | "topologyRevision"
   | "tracker"
   | "vectorColorMode"
+  | "vectorScale"
   | "vectorStyle"
   | "visualizationRevision"
 > & {
@@ -1431,11 +1443,15 @@ function Viewport3DModelLayerStack({
           magnetizationTexturePreviews={magnetizationTexturePreviews}
           meshQualityColors={stagedMeshQualityColors}
           meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
+          modeCompositionFieldLayers={modeCompositionFieldLayers}
+          modeCompositionId={modeCompositionId}
+          modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
           onSelectPart={onSelectPart}
           tracker={tracker}
           topologyFreshness={topologyFreshness}
           topologyModel={topologyModel}
           vectorColorMode={vectorColorMode}
+          vectorScale={vectorScale}
           vectorStyle={vectorStyle}
         />
       ) : null}
@@ -1709,6 +1725,9 @@ export function Viewport3DScene({
   magnetizationTexturePreviews,
   meshQualityColors,
   meshQualityOverlayVisible,
+  modeCompositionFieldLayers,
+  modeCompositionId,
+  modeCompositionPhaseByLayerId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1745,6 +1764,7 @@ export function Viewport3DScene({
   topologyModel,
   topologyRevision,
   vectorColorMode,
+  vectorScale,
   vectorStyle,
   visualizationRevision,
   hslReferenceVisible,
@@ -2039,6 +2059,9 @@ export function Viewport3DScene({
         materialProfile={materialProfile}
         meshQualityColors={meshQualityColors}
         meshQualityOverlayVisible={meshQualityOverlayVisible}
+        modeCompositionFieldLayers={modeCompositionFieldLayers}
+        modeCompositionId={modeCompositionId}
+        modeCompositionPhaseByLayerId={modeCompositionPhaseByLayerId}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
         periodicOverlayModel={periodicOverlayModel}
@@ -2069,6 +2092,7 @@ export function Viewport3DScene({
         topologyRevision={topologyRevision}
         tracker={tracker}
         vectorColorMode={vectorColorMode}
+        vectorScale={vectorScale}
         vectorStyle={vectorStyle}
         visualizationRevision={visualizationRevision}
       />

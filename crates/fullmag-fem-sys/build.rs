@@ -106,6 +106,12 @@ fn main() {
     std::fs::create_dir_all(&build_dir).expect("creating native build dir should succeed");
 
     let cmake = std::env::var("FULLMAG_CMAKE").unwrap_or_else(|_| "cmake".to_string());
+    let cargo_profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let cmake_build_type = if cargo_profile == "release" {
+        "Release"
+    } else {
+        "Debug"
+    };
     let use_mfem_stack = env_flag("FULLMAG_USE_MFEM_STACK");
     let require_gpu = env_flag("FULLMAG_FEM_REQUIRE_GPU");
     let enable_nvtx = env_flag("FULLMAG_ENABLE_NVTX");
@@ -127,6 +133,7 @@ fn main() {
         .arg(&native_root)
         .arg("-B")
         .arg(&build_dir)
+        .arg(format!("-DCMAKE_BUILD_TYPE={}", cmake_build_type))
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
             if use_mfem_stack { "ON" } else { "OFF" }
@@ -164,11 +171,18 @@ fn main() {
         );
     }
 
-    let build_status = std::process::Command::new(&cmake)
+    let mut build = std::process::Command::new(&cmake);
+    build
         .arg("--build")
         .arg(&build_dir)
         .arg("--target")
-        .arg("fullmag_fem")
+        .arg("fullmag_fem");
+    if let Ok(jobs) = std::env::var("NUM_JOBS") {
+        if jobs.parse::<usize>().is_ok_and(|value| value > 0) {
+            build.arg("--parallel").arg(jobs);
+        }
+    }
+    let build_status = build
         .status()
         .expect("cmake build invocation failed; verify the native toolchain and FEM backend setup");
     if !build_status.success() {

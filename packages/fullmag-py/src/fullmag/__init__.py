@@ -102,6 +102,7 @@ from .model import (
     Intersection,
     InterfacialDMI,
     BulkDMI,
+    BiasFieldSweep,
     CubicAnisotropy,
     FieldRefreshPolicy,
     FieldTarget,

@@ -3,15 +3,20 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V3_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_DIAGNOSTICS_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_FREQUENCY_POINT_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-  ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
   ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
@@ -186,6 +191,7 @@ import {
   SIMULATION_STAGE_HYSTERESIS_SETTLE_PIPELINE_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
   VISUALIZATION_CLIENT_ACKS_PATH,
+  VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
 import {
@@ -268,6 +274,8 @@ import type {
   PlatformCapabilitiesResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
+  ModeCompositionPatch,
+  ModeCompositionResource,
   MagneticResponseSweepResource,
   FrequencyDomainManifestResource,
   FrequencyDomainJsonArtifactResource,
@@ -275,7 +283,6 @@ import type {
   ArtifactResource,
   FrequencyDomainFieldResource,
   FrequencyDomainSweepProgressResource,
-  JsonValue,
   HysteresisAdaptiveRefinementResource,
   HysteresisAngularFamilyResource,
   HysteresisBookmarkPointRequest,
@@ -837,20 +844,14 @@ export class ControlRoomApi {
             },
           },
         ),
-      modeV2: (
-        sampleIndex: number,
-        modeIndex: number,
-        options?: RequestOptions,
-      ) =>
-        this.requestJson<JsonValue>(ANALYSIS_EIGEN_MODE_V2_PATH, options, {
-          path: {
-            sample_index: sampleIndex,
-            mode_index: modeIndex,
-          },
-        }),
       eigenSpectrumV2: (options?: RequestOptions) =>
         this.requestJson<FrequencyDomainJsonArtifactResource>(
           ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+          options,
+        ),
+      eigenSpectrumV3: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V3_PATH,
           options,
         ),
     },
@@ -861,6 +862,21 @@ export class ControlRoomApi {
         this.analysis.eigen.eigenDiagnosticsV2(options),
       eigenDispersion: (options?: RequestOptions) =>
         this.analysis.eigen.eigenDispersion(options),
+      eigenMode: (
+        sampleIndex: number,
+        modeIndex: number,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
+          options,
+          {
+            path: {
+              sample_index: sampleIndex,
+              mode_index: modeIndex,
+            },
+          },
+        ),
       eigenModeFieldMeta: (
         sampleIndex: number,
         modeIndex: number,
@@ -868,6 +884,28 @@ export class ControlRoomApi {
       ) => this.analysis.eigen.eigenModeFieldMeta(sampleIndex, modeIndex, options),
       eigenSpectrumV2: (options?: RequestOptions) =>
         this.analysis.eigen.eigenSpectrumV2(options),
+      eigenSpectrumV3: (options?: RequestOptions) =>
+        this.analysis.eigen.eigenSpectrumV3(options),
+      eigenFieldSweep: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+          options,
+        ),
+      fmrKittelFit: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
+          options,
+        ),
+      fmrPeaks: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
+          options,
+        ),
+      fmrResonanceFits: (options?: RequestOptions) =>
+        this.requestJson<FrequencyDomainJsonArtifactResource>(
+          ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
+          options,
+        ),
       manifestV1: (options?: RequestOptions) =>
         this.requestJson<FrequencyDomainManifestResource>(
           ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
@@ -2440,6 +2478,19 @@ export class ControlRoomApi {
         VISUALIZATION_CLIENT_ACKS_PATH,
         options,
       ),
+    modeComposition: {
+      active: (options?: RequestOptions) =>
+        this.requestJson<ModeCompositionResource>(
+          VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
+          options,
+        ),
+      patch: (patch: ModeCompositionPatch, options?: RequestOptions) =>
+        this.patchJson<ModeCompositionResource, ModeCompositionPatch>(
+          VISUALIZATION_MODE_COMPOSITION_ACTIVE_PATH,
+          patch,
+          options,
+        ),
+    },
     patch: (patch: VisualizationStatePatch, options?: RequestOptions) =>
       this.patchJson<VisualizationStateResource, VisualizationStatePatch>(
         VISUALIZATION_STATE_PATH,

@@ -16,8 +16,9 @@ import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBrid
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
 import { ObjectMoveToolController } from "../authoring/ObjectMoveToolController";
-import type { KernelApi } from "../types";
+import type { KernelApi, ModuleManifest } from "../types";
 import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
+import { ModeCompositionController } from "../visualization/ModeCompositionController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
 import { CameraRegistryController } from "../visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
@@ -25,7 +26,7 @@ import { VisualizationDebugController } from "../visualization/VisualizationDebu
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 import { viewport3dManifest } from "@/modules/viewport-3d/manifest";
 
-import { SlotHost } from "./SlotHost";
+import { resolveSlotModuleManifest, SlotHost } from "./SlotHost";
 
 function TestModule() {
   return <div>Auto-discovered module</div>;
@@ -54,6 +55,12 @@ function makeKernel(): KernelApi {
     resources,
     selection: new SelectionController(bus),
     layout: new LayoutController(bus),
+    modeComposition: new ModeCompositionController({
+      getActiveModeComposition: (options) =>
+        api.visualization.modeComposition.active(options),
+      patchActiveModeComposition: (patch, options) =>
+        api.visualization.modeComposition.patch(patch, options),
+    }),
     visualization: new ObjectVisualizationController(),
     visualizationDebug: new VisualizationDebugController(),
     visualizationSync: new VisualizationRegistrySyncController({
@@ -64,6 +71,29 @@ function makeKernel(): KernelApi {
 }
 
 describe("SlotHost", () => {
+  it("activates a shared panel module from the canonical Results ribbon tab", () => {
+    const explorer: ModuleManifest = {
+      id: "explorer",
+      title: "Explorer",
+      version: "0.1.0",
+      slots: ["panel-left"],
+      component: async () => ({ default: TestModule }),
+    };
+    const results: ModuleManifest = {
+      ...explorer,
+      activationTab: "results" as const,
+      id: "results-navigator",
+      title: "Results",
+    };
+
+    expect(resolveSlotModuleManifest([explorer, results], "results")?.id).toBe(
+      "results-navigator",
+    );
+    expect(resolveSlotModuleManifest([explorer, results], "home")?.id).toBe(
+      "explorer",
+    );
+  });
+
   it("renders an empty slot fallback when no module is active", () => {
     const kernel = makeKernel();
     const html = renderToStaticMarkup(

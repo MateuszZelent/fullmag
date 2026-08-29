@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  MESHING_PERIODIC_PAIRS_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
+  MODEL_SCRIPT_PATH,
+} from "@/kernel/api/apiPaths";
+
 const smokeScript = readFileSync(
   new URL("../../../../scripts/smoke-study-authoring-ui.mjs", import.meta.url),
   "utf8",
@@ -36,6 +42,33 @@ describe("study authoring smoke script", () => {
     expect(smokeScript).toContain("eigen_frequency_min");
     expect(smokeScript).toContain("eigen_frequency_max");
     expect(smokeScript).toContain("eigen_operator");
+  });
+
+  it("executes qualified K0 modal-demag authoring for CPU and CUDA and checks canonical export", () => {
+    expect(smokeScript).toContain("CONTROL_ROOM_STUDY_AUTHORING_SMOKE_K0_ONLY");
+    expect(smokeScript).toContain("authorK0ModalDemagForDevice");
+    expect(smokeScript).toContain("periodic_airbox_k0");
+    expect(smokeScript).toContain(MESHING_SHARED_DOMAIN_MANIFEST_PATH);
+    expect(smokeScript).toContain(MESHING_PERIODIC_PAIRS_PATH);
+    expect(smokeScript).toContain(MODEL_SCRIPT_PATH);
+    expect(smokeScript).toContain("assertK0CanonicalPythonRoundTrip");
+    expect(smokeScript).toContain('authorK0ModalDemagForDevice("cpu")');
+    expect(smokeScript).toContain('authorK0ModalDemagForDevice("gpu")');
+    expect(smokeScript).toContain("requested_backend");
+    expect(smokeScript).toContain("execution_precision");
+    expect(smokeScript).toContain("execution_mode");
+  });
+
+  it("retains the current full-smoke projected-gradient BB availability assertions", () => {
+    expect(smokeScript).toContain(
+      "FEM demag projected-gradient BB must be available when advertised by runtime capabilities.",
+    );
+    expect(smokeScript).toContain(
+      "FEM demag projected-gradient BB must not retain a stale quarantine reason when available.",
+    );
+    expect(smokeScript).not.toContain(
+      "FEM demag projected-gradient BB must be unavailable.",
+    );
   });
 
   it("asserts transaction-backed frequency-response response-map authoring", () => {

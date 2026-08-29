@@ -4428,6 +4428,7 @@ def _infer_axis_aligned_periodic_pairs(
                 "pair_id": pair_id,
                 "marker_a": marker_a,
                 "marker_b": marker_b,
+                "axis_hint": axis_label,
                 "translation": translation,
                 "tolerance_m": tol,
             }

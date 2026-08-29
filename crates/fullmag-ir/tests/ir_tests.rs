@@ -35,6 +35,164 @@ fn planar_monitor_previous_payload_defaults_to_no_monitors() {
 }
 
 #[test]
+fn eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples() {
+    let mut encoded = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    encoded["study"] = serde_json::json!({
+        "kind": "eigenmodes",
+        "dynamics": {"kind": "llg", "gyromagnetic_ratio": 221100.0, "integrator": "auto"},
+        "operator": {"kind": "linearized_llg", "include_demag": true},
+        "count": 1,
+        "target": {"kind": "lowest"},
+        "equilibrium": {"kind": "provided"},
+        "k_sampling": {"kind": "single", "k_vector": [0.0, 0.0, 0.0]},
+        "normalization": "unit_l2",
+        "damping_policy": "ignore",
+        "spin_wave_bc": {"kind": "periodic", "pair_ids": []},
+        "magnetostatic_bc": "periodic_airbox_k0",
+        "sampling": {"outputs": []},
+        "bias_field_sweep": {
+            "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+            "equilibrium_policy": "relax_each",
+            "ordering": "declared",
+            "continuation_seed": "initial_state"
+        }
+    });
+
+    let parsed: ProblemIR = serde_json::from_value(encoded.clone())
+        .expect("bias-field sweep is canonical Eigenmodes IR");
+    assert_eq!(
+        serde_json::to_value(&parsed).unwrap()["study"]["bias_field_sweep"],
+        encoded["study"]["bias_field_sweep"],
+    );
+
+    let mut damped = parsed.clone();
+    damped.materials[0].damping = 0.1;
+    assert!(damped
+        .validate()
+        .expect_err("material alpha must fail closed for a bias-field sweep")
+        .iter()
+        .any(|reason| reason == "eigenmodes.bias_field_sweep_requires_alpha_zero"));
+
+    let mut infinite = parsed.clone();
+    let StudyIR::Eigenmodes {
+        bias_field_sweep: Some(sweep),
+        ..
+    } = &mut infinite.study
+    else {
+        panic!("fixture must retain an active bias-field sweep");
+    };
+    sweep.samples_a_per_m[0][0] = f64::INFINITY;
+    assert!(infinite
+        .validate()
+        .expect_err("infinite bias-field sample must fail closed")
+        .iter()
+        .any(|reason| reason.contains("samples_a_per_m[0]")));
+
+    for (mut invalid_value, token) in [
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["k_sampling"] = serde_json::json!({"kind":"path","points":[],"samples_per_segment":[],"closed":false});
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_single_gamma",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["k_sampling"]["k_vector"] = serde_json::json!([1.0, 0.0, 0.0]);
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_single_gamma",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["pbc"]["axes"] = serde_json::json!(["periodic", "periodic", "periodic"]);
+                value["pbc"]["demag"] = serde_json::json!("periodic_airbox_k0");
+                value
+            },
+            "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["backend_policy"]["execution_precision"] = serde_json::json!("single");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_double_precision",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["operator"]["include_demag"] = serde_json::json!(false);
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_demag",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["study"]["magnetostatic_bc"] = serde_json::json!("open");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["validation_profile"]["execution_mode"] = serde_json::json!("extended");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_strict_execution_mode",
+        ),
+        (
+            {
+                let mut value = serde_json::to_value(&parsed).unwrap();
+                value["pbc"]["axes"] = serde_json::json!(["open", "periodic", "open"]);
+                value["pbc"]["demag"] = serde_json::json!("periodic_airbox_k0");
+                value
+            },
+            "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z",
+        ),
+    ] {
+        let invalid: ProblemIR = serde_json::from_value(invalid_value.take()).unwrap();
+        assert!(
+            invalid
+                .validate()
+                .expect_err("K0 bias-field legality must fail closed")
+                .iter()
+                .any(|reason| reason == token),
+            "missing {token}"
+        );
+    }
+
+    encoded["study"]["bias_field_sweep"]["samples_a_per_m"] = serde_json::json!([]);
+    let invalid: ProblemIR = serde_json::from_value(encoded.clone())
+        .expect("empty sample payload still reaches canonical validation");
+    assert!(invalid
+        .validate()
+        .expect_err("empty bias field sweep must fail closed")
+        .iter()
+        .any(|reason| reason.contains("eigenmodes.bias_field_sweep")),);
+
+    encoded["study"]["bias_field_sweep"]["samples_a_per_m"] =
+        serde_json::json!([["NaN", 0.0, 0.0]]);
+    assert!(
+        serde_json::from_value::<ProblemIR>(encoded.clone()).is_err(),
+        "NaN bias-field samples must fail closed"
+    );
+
+    encoded["study"]["bias_field_sweep"]["samples_a_per_m"] =
+        serde_json::json!([[12500.0, 0.0, 0.0]]);
+    encoded["study"]["bias_field_sweep"]["field_units"] = serde_json::json!("T");
+    assert!(
+        serde_json::from_value::<ProblemIR>(encoded).is_err(),
+        "bias-field sweep accepts A/m only"
+    );
+}
+
+#[test]
 fn planar_monitor_validation_accepts_physical_targets_and_all_operators() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.planar_monitors = vec![
@@ -900,6 +1058,86 @@ fn magnetostatic_bc_floquet_airbox_round_trips_as_snake_case_json() {
     let decoded: MagnetostaticBoundaryConditionIR =
         serde_json::from_str(&json).expect("floquet_airbox magnetostatic BC should deserialize");
     assert_eq!(decoded, MagnetostaticBoundaryConditionIR::FloquetAirbox);
+}
+
+#[test]
+fn periodic_airbox_k0_rejections_use_stable_reason_tokens() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    let dynamics = value["study"]["dynamics"].clone();
+    value["energy_terms"] = serde_json::json!([{"kind": "exchange"}, {"kind": "demag"}]);
+    value["pbc"] = serde_json::json!({"axes": ["periodic", "periodic", "open"], "demag": "periodic_airbox_k0"});
+    value["study"] = serde_json::json!({
+        "kind": "eigenmodes", "dynamics": dynamics,
+        "operator": {"kind": "linearized_llg", "include_demag": true},
+        "count": 1, "target": {"kind": "frequency_window", "frequency_min_hz": 1.0e9, "frequency_max_hz": 2.0e9},
+        "equilibrium": {"kind": "provided"}, "k_sampling": {"kind": "single", "k_vector": [0.0, 0.0, 0.0]},
+        "normalization": "unit_l2", "damping_policy": "ignore", "spin_wave_bc": "periodic",
+        "magnetostatic_bc": "periodic_airbox_k0", "sampling": {"outputs": [{"kind": "eigen_spectrum", "quantity": "frequency_hz"}]}
+    });
+    let cases = [
+        (
+            "backend_policy.execution_precision",
+            serde_json::json!("single"),
+            "eigenmodes.k0_periodic_airbox_requires_double_precision",
+        ),
+        (
+            "operator.include_demag",
+            serde_json::json!(false),
+            "eigenmodes.k0_periodic_airbox_requires_demag",
+        ),
+        (
+            "k_sampling.k_vector",
+            serde_json::json!([1.0, 0.0, 0.0]),
+            "eigenmodes.k0_periodic_airbox_requires_exact_zero_k",
+        ),
+        (
+            "spin_wave_bc",
+            serde_json::json!("free"),
+            "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc",
+        ),
+        (
+            "pbc.axes",
+            serde_json::json!(["periodic", "periodic", "periodic"]),
+            "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d",
+        ),
+        (
+            "damping_policy",
+            serde_json::json!("include"),
+            "eigenmodes.k0_periodic_airbox_requires_alpha_zero",
+        ),
+    ];
+    for (path, replacement, token) in cases {
+        let mut candidate = value.clone();
+        match path {
+            "backend_policy.execution_precision" => {
+                candidate["backend_policy"]["execution_precision"] = replacement
+            }
+            "operator.include_demag" => {
+                candidate["study"]["operator"]["include_demag"] = replacement
+            }
+            "k_sampling.k_vector" => candidate["study"]["k_sampling"]["k_vector"] = replacement,
+            "spin_wave_bc" => candidate["study"]["spin_wave_bc"] = replacement,
+            "pbc.axes" => candidate["pbc"]["axes"] = replacement,
+            "damping_policy" => candidate["study"]["damping_policy"] = replacement,
+            _ => unreachable!(),
+        }
+        let ir: ProblemIR = serde_json::from_value(candidate).unwrap();
+        assert!(
+            ir.validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| error == token),
+            "missing {token}"
+        );
+    }
+    let mut without_demag = value;
+    without_demag["energy_terms"] = serde_json::json!([{"kind": "exchange"}]);
+    let ir: ProblemIR = serde_json::from_value(without_demag).unwrap();
+    assert!(ir
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| { error == "eigenmodes.k0_periodic_airbox_requires_demag_energy" }));
 }
 
 #[test]
@@ -4388,9 +4626,23 @@ fn managed_runtime_device_override_has_a_separate_validated_identity() {
         .validate()
         .expect("a typed managed launcher override must preserve valid authored intent");
 
+    problem.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".into(),
+        serde_json::json!({
+            "device": "cpu",
+            "source": "managed_launcher",
+            "fallback_reason": "gpu_modal_device_krylov_unavailable",
+        }),
+    );
+    problem
+        .validate()
+        .expect("a managed CPU fallback may carry an explicit stable reason");
+
     for invalid in [
         serde_json::json!({"device": "auto", "source": "managed_launcher"}),
         serde_json::json!({"device": "cpu", "source": "unknown"}),
+        serde_json::json!({"device": "cpu", "source": "managed_launcher", "fallback_reason": ""}),
+        serde_json::json!({"device": "gpu", "source": "managed_launcher", "fallback_reason": "gpu_modal_device_krylov_unavailable"}),
         serde_json::json!("cpu"),
     ] {
         let mut rejected = problem.clone();
@@ -4691,6 +4943,7 @@ fn execution_plan_ir_serializes() {
         provenance: ProvenancePlanIR {
             notes: vec!["planner stub".to_string()],
             integrator_resolution: None,
+            fem_eigen_execution_resolution: None,
             physics_graph: None,
         },
     };
@@ -4735,9 +4988,11 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
         k_sampling: Some(KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -4779,9 +5034,11 @@ fn unsampled_time_evolution_is_valid_but_eigenmodes_require_outputs() {
         k_sampling: Some(KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -4845,9 +5102,11 @@ fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
             samples_per_segment: vec![2],
             closed: false,
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -4936,9 +5195,11 @@ fn eigenmodes_closed_k_path_sample_count_and_segment_length_validate() {
         },
         equilibrium: EquilibriumSourceIR::Provided,
         k_sampling: Some(sampling),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -4989,9 +5250,11 @@ fn eigenmodes_rejects_closed_k_path_with_open_segment_count() {
             samples_per_segment: vec![2, 3],
             closed: true,
         }),
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -5921,9 +6184,11 @@ fn eigenmodes_require_spectrum_or_mode_output() {
         target: EigenTargetIR::Lowest,
         equilibrium: EquilibriumSourceIR::Provided,
         k_sampling: None,
+        bias_field_sweep: None,
         normalization: EigenNormalizationIR::UnitL2,
         damping_policy: EigenDampingPolicyIR::Ignore,
         spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: MagnetostaticBoundaryConditionIR::default(),
         sampling: SamplingIR {
             table_autosave: None,
             stage_autosave: None,

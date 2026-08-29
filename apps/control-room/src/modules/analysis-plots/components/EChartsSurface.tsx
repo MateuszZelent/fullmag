@@ -146,6 +146,7 @@ function analysisChartSurfaceIdentity(
       loading: "Loading table samples",
     },
     provenance: {
+      ...series[0]?.sourceIdentity,
       dataRevision: series[0]?.dataRevision ?? null,
       decimation: "minmax_lttb",
       descriptorId: descriptorId ?? `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,
