@@ -25,7 +25,7 @@ windows-build backend="fdm" device="cpu" frontend="dev":
     case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
     case "$frontend" in frontend=*) frontend="${frontend#frontend=}" ;; --frontend=*) frontend="${frontend#--frontend=}" ;; esac; \
     if [ "$backend" = "fem" ]; then \
-      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device"; \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_docker.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device"; \
     else \
       powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device"; \
     fi
@@ -5177,7 +5177,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       host_windows="false"; \
       case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
       if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_docker.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \

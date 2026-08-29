@@ -19,31 +19,31 @@ services:
         source: ${FULLMAG_WINDOWS_REPO:-.}
         target: /workspace
       - type: bind
-        source: ${FULLMAG_WINDOWS_STATE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_STATE_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag
       - type: bind
-        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-build
       - type: bind
-        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-cache
       - type: bind
-        source: ${FULLMAG_WINDOWS_CARGO_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_CARGO_HOME:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-cargo
       - type: bind
-        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-rustup
       - type: bind
-        source: ${FULLMAG_WINDOWS_PNPM_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_PNPM_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /pnpm
       - type: bind
-        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/node_modules
       - type: bind
-        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
-        source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /tmp/fullmag-windows
     environment:
       RUST_LOG: ${RUST_LOG:-info}
@@ -92,34 +92,34 @@ services:
     command: ["sleep", "infinity"]
     volumes:
       - type: bind
-        source: ${FULLMAG_WINDOWS_REPO:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_REPO:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace
       - type: bind
-        source: ${FULLMAG_WINDOWS_STATE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_STATE_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag
       - type: bind
-        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_BUILD_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-build
       - type: bind
-        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_CACHE_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-cache
       - type: bind
-        source: ${FULLMAG_WINDOWS_CARGO_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_CARGO_HOME:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-cargo
       - type: bind
-        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_RUSTUP_HOME:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/.fullmag-rustup
       - type: bind
-        source: ${FULLMAG_WINDOWS_PNPM_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_PNPM_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /pnpm
       - type: bind
-        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/node_modules
       - type: bind
-        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /workspace/apps/control-room/node_modules
       - type: bind
-        source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_wsl.ps1}
+        source: ${FULLMAG_WINDOWS_TEMP_ROOT:?set by scripts/windows/run_fullmag_docker.ps1}
         target: /tmp/fullmag-windows
     environment:
       RUST_LOG: ${RUST_LOG:-info}

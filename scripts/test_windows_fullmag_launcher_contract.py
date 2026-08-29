@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 JUSTFILE = ROOT / "justfile"
 LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag.ps1"
 CONTROL_ROOM = ROOT / "crates" / "fullmag-cli" / "src" / "control_room.rs"
-WSL_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
+DOCKER_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_docker.ps1"
 WINDOWS_COMPOSE = ROOT / "compose.windows.yaml"
 FEM_GPU_DOCKERFILE = ROOT / "docker" / "fem-gpu" / "Dockerfile"
 FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
@@ -135,20 +135,20 @@ def test_windows_launcher_recognizes_pnpm_windows_swc_store_entry() -> None:
     assert "$env:FULLMAG_PNPM_CLI = $PinnedPnpmCli" in launcher
 
 
-def test_windows_fem_gpu_routes_to_wsl_before_posix_host_setup() -> None:
+def test_windows_fem_routes_to_docker_before_posix_host_setup() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
-    assert "scripts/windows/run_fullmag_wsl.ps1" in justfile
+    assert "scripts/windows/run_fullmag_docker.ps1" in justfile
     assert '[ "$backend" = "fem" ]' in justfile
     assert '[ "$device" = "gpu" ]' in justfile
     fullmag_start = justfile.index("fullmag opt_1")
-    assert justfile.index("run_fullmag_wsl.ps1", fullmag_start) < justfile.index(
+    assert justfile.index("run_fullmag_docker.ps1", fullmag_start) < justfile.index(
         "just ensure-python", fullmag_start
     )
 
 
 def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = DOCKER_LAUNCHER.read_text(encoding="utf-8")
 
     for required in (
         "GetPathRoot($RepoRoot)",
@@ -216,8 +216,8 @@ def test_justfile_exposes_windows_setup_doctor_and_build_only_routes() -> None:
     assert "-BuildOnly" in justfile
 
 
-def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+def test_windows_docker_build_script_uses_binary_safe_bash_payload() -> None:
+    launcher = DOCKER_LAUNCHER.read_text(encoding="utf-8")
 
     assert '[System.Text.Encoding]::UTF8.GetBytes($buildCommand)' in launcher
     assert '[Convert]::ToBase64String($buildCommandBytes)' in launcher
@@ -225,8 +225,8 @@ def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
     assert '.Replace("`r`n", "`n").Replace("`r", "`n")' in launcher
 
 
-def test_windows_wsl_launcher_uses_windows_powershell_relative_path_api() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+def test_windows_docker_launcher_uses_windows_powershell_relative_path_api() -> None:
+    launcher = DOCKER_LAUNCHER.read_text(encoding="utf-8")
 
     assert "MakeRelativeUri" in launcher
     assert "Path.GetRelativePath" not in launcher

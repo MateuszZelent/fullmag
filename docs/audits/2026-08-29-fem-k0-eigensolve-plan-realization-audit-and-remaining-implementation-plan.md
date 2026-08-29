@@ -1,13 +1,13 @@
 # Audyt realizacji planu FEM eigensolve K0 CPU/GPU i plan domknięcia
 
 **Data audytu:** 2026-08-29
-**Aktualizacja po konsolidacji i re-audycie GPT Pro:** 2026-08-29
+**Ostatnia aktualizacja wykonawcza (Windows/Docker Desktop):** 2026-08-29
 **Audytowany task Codex:** `codex://threads/019ff50c-f17c-79f2-9473-edac793b79c4`
 **Tytuł tasku:** `Dokończ eigensolve k0 demag (2)`
 **Bieżący worktree:** `C:\git\fullmag\worktrees\eigensolve-k0-finalization`
 **Bieżący branch:** `codex/eigensolve-k0-finalization-20260829`
 **Commit bazowy audytu:** `5e5849c8acf8ec0f80c0f463fc5d9109ea9a4e14`
-**Tryb audytu:** analiza źródeł i dokumentów; bez nowego managed solve, GPU profile i browser proof
+**Tryb audytu:** analiza źródeł i dokumentów oraz świeży CPU solve przez Docker Desktop; bez GPU profile i browser proof
 **Werdykt:** **GO dla dalszej implementacji w dedykowanym worktree; NO-GO dla claimu produkcyjnego CPU/GPU i bezpośredniej promocji do `master`**
 
 > **Uwaga o aktualności:** sekcje 1–12 zachowują stan i rozumowanie audytu
@@ -992,3 +992,149 @@ dokumentu na nowym, nieruchomym HEAD.
 
 Synchronizacja nie zmienia końcowego werdyktu: **NO-GO dla claimu produkcyjnego
 K0**, dopóki nowy HEAD nie uzyska managed CPU Q1, a później niezależnego GPU Q2.
+
+## 17. Aktualizacja wykonawcza: Windows-only CPU nearest na realnym antydocie
+
+### 17.1. Twarda granica środowiska
+
+Od tej aktualizacji jedynym checkoutem roboczym jest:
+
+`C:\git\fullmag\worktrees\eigensolve-k0-finalization`
+
+Git, edycja, testy źródłowe i sterowanie runtime odbywają się w Windows.
+Kontenery Linux są uruchamiane wyłącznie przez Docker Desktop bezpośrednio z
+PowerShella, z bind mountem powyższego Windowsowego worktree do `/workspace`.
+WSL, checkouty `/home/...`, ścieżki `/mnt/...` i alias runtime wskazujący poza
+Windowsowy worktree nie należą do workflow i nie mogą być używane jako dowód.
+
+Historyczna nazwa launchera została usunięta. Kanoniczny launcher FEM na Windows
+to `scripts/windows/run_fullmag_docker.ps1`, a `justfile`,
+`compose.windows.yaml`, kontrakty i reguła repozytorium wskazują teraz tę nazwę.
+Launcher używa Docker Desktop, zewnętrznych Windowsowych katalogów build/cache i
+fail-closed wyboru CPU/GPU. Wszystkie 22 testy kontraktu launchera przeszły, a
+plik PowerShell przeszedł parser składni.
+
+### 17.2. Regresja residualu i naprawa przyczynowa
+
+Pierwszy świeży solve realnego `fem_periodic_antidot_relax_eigenmodes.py`
+ujawnił regresję inną niż wcześniejszy handoff. SLEPc zwrócił 40 zbieżnych par,
+30 dodatnich częstotliwości i 30 zrekonstruowanych wektorów, lecz 28 par trafiło
+do niepoprawnej korekty KSP i zostało odrzuconych. Opublikowano tylko jeden mod
+`2.54879717697576 GHz`, a przebieg trwał `1093.689 s`.
+
+Przyczyną było niespójne mapowanie wartości własnej obróconego pencila. Dla
+`w = kr + i*ki` oryginalny descriptor wymaga
+`lambda = i*w = -ki + i*kr`, lecz produkcyjny kod zerował część `-ki` przy
+certyfikacji residualu i przekazywał zero również do refinement. Nawet małe
+`ki` tworzyło fałszywy residual ponad tolerancją i kierowało poprawne wektory do
+źle postawionej korekty.
+
+Commit `7d0a6580d` wprowadził jedno kanoniczne mapowanie
+`original_descriptor_eigenvalue_from_rotated`, używane przez residual i
+refinement. Publiczna częstotliwość niedampowanego moda nadal ma zerową
+publikowaną część rzeczywistą; surowe `-ki` jest zachowane wyłącznie tam, gdzie
+wymaga go matematyka certyfikacji.
+
+Dowody źródłowe:
+
+- nowy test `fem_real_frequency_rotated_pencil_contract` — **PASS**;
+- `cargo test -p fullmag-runner fem::eigen_tests` — **133/133 PASS**;
+- szerszy `fem_poisson_airbox_modal_eigen_slepc_contract` nadal ma jeden
+  niezależny, istniejący również przed zmianą błąd bramki frequency-window:
+  `production shared-domain K0 Schur frequency window was not certified`.
+  Nie jest on zaliczony jako regresja nearest ani jako dowód Q1.
+
+### 17.3. Świeży wynik CPU nearest
+
+Runtime zbudowano bezpośrednio z czystego Windowsowego źródła przez Docker
+Desktop. Tożsamość solve:
+
+- commit: `7d0a6580d971537bbefa44f942dccd6e71078096`;
+- source snapshot:
+  `8c6b2d06931f348d69af02f0da5c3f9cd2cfbe0602d5a622549e229422c21d30`;
+- binary SHA-256:
+  `cfe7f707d88e0deb028947efe7a4f3d102fc4f574bfe1234fbd8a9ad428e1dce`;
+- native FEM library SHA-256:
+  `2adac303affc8a6e3a4493e7995bf6c0ca615582cff29f8cfd02644dbd03220c`;
+- źródło było czyste (`source_snapshot_dirty=false`).
+
+Raport:
+
+`.fullmag/reports/fem-periodic-antidot-relax-eigenmodes/windows-cpu-nearest-7d0a6580d-cache-mfem`
+
+Wynik:
+
+- realny mesh okresowej warstwy z otworem: 5156 węzłów i 27384 Tet4;
+- target `nearest_frequency=2 GHz`, żądane 8 modów, zapisane pola 4 modów;
+- **8/8 modów zaakceptowanych**, najniższy `2.54879717697576 GHz`;
+- residuale opublikowanych modów od `7.89e-14` do `3.68e-12`;
+- `full_residual_accepted_count=15`, `full_residual_rejected_count=15`;
+- `refinement_succeeded_count=30`, `refinement_failed_count=0`;
+- brak fallbacku, lane `production_cpu`, pełny residual certyfikowany;
+- czas `144.063 s`, wobec `1093.689 s` w przebiegu diagnostycznym przed
+  naprawą;
+- walidator artefaktów z `--require-k0-periodic-airbox-production` — **PASS**;
+- walidator kompletnego relax-to-eigen handoff — **PASS**.
+
+Cache equilibrium nie jest skrótem fizycznym eigensolve: przechowuje wcześniej
+zaakceptowany stan tego samego meshu. Walidator dopuszcza teraz `executed_steps=0`
+wyłącznie dla `fem_periodic_antidot_equilibrium_cache.v2` z niepustym i dokładnie
+zgodnym `mesh_generation_id` oraz `topology_fingerprint`. Brak cache, stary schema
+albo drift meshu są odrzucane fail-closed. Poprawka jest w commicie `73c39d4ed`.
+Rzeczywisty raport i 19 uruchomionych natywnie przypadków walidatora przeszły;
+pełny runner `pytest` nie był dostępny w Windowsowym Pythonie ani lokalnym obrazie,
+co pozostaje jawną granicą dowodu.
+
+### 17.4. Aktualny stopień realizacji planu v2
+
+| Etap | Stan | Ocena | Co jest dowiedzione / czego brakuje |
+|---|---|---:|---|
+| R0–R2 | DONE-D1 | 100% | recovery, dedykowany Windows worktree i synchronizacja z master wykonane |
+| R3 | DONE dla solve `7d0a6580d`; otwarty dla finalnego SHA | 85% | clean source identity, build i runtime hash są związane; późniejsze zmiany walidatora/launchera wymagają finalnego recapture, nie ponownego recovery |
+| R4 | PARTIAL | 80% | natywny recompute, certyfikat, negatywne testy i FE-weighted leakage istnieją; pozostaje pełne związanie operator/pencil/acceptance/source SHA oraz domknięcie testów masy/energii |
+| R5 | PARTIAL | 30% | realny raport ujawnia `production_cpu`, brak fallbacku i osobny `window_completeness`; nadal brakuje pełnego call graphu/engine ID oraz jednoznacznego publicznego `selected_only` |
+| R6 | PARTIAL, solve działa | 85% | poprawny obrócony pencil, pełne residuale i realny nearest 8/8 są zielone; bramka nie jest DONE, bo status nearest nie publikuje jeszcze jawnego `selected_only` |
+| R7 | NOT DONE | 15% | infrastruktura window istnieje, ale znany test window jest czerwony; brak complete-window certificate i convergence |
+| R8 | NOT VERIFIED | 10% | źródła artifact/API/UI istnieją historycznie; brak FMS restart/import i live browser proof na obecnym candidate |
+| R9 | NOT VERIFIED | 10% | kod GPU istnieje; brak profiler-backed Q2 na tym samym wejściu |
+| R10 | NOT STARTED | 0% | nie ma immutable final candidate ani podstaw do promocji na master |
+
+Ważona realizacja skorygowanego planu R0–R10 wynosi obecnie około **50–55%**.
+Gotowość do uruchamiania wiarygodnego przykładu CPU nearest warstwy z dziurą jest
+wysoka, około **85–90%**, i sam solve już działa. Gotowość do claimu pełnego
+spektrum/okna Q1 pozostaje niska, około **15–25%**, ponieważ nearest nie dowodzi
+kompletności okna. Gotowość produkcyjna całego CPU+GPU+UI release pozostaje
+**0%**, dopóki R7, R8, R9 i R10 nie przejdą swoich terminalnych bramek.
+
+### 17.5. Nowy plan wdrożenia tego, co pozostało
+
+Kolejność poniżej zastępuje sekcję 16.4 i nie wraca do recovery ani WSL:
+
+1. **R5/R6 — domknąć semantykę nearest.** Dodać stabilny `engine_id`, osobny
+   status `selected_only`, rozdzielić sukces solve od kompletności okna i dodać
+   testy propagacji backend -> artifact. `complete=true` nie może być
+   interpretowane jako `window_complete=true`.
+2. **R4 — domknąć certificate binding.** Związać recompute certificate z
+   operator/pencil, acceptance artifact, pełnym source identity oraz dowieść
+   invariance/skaling rzeczywistej masy FE na aktualnym true-DOF mesh.
+3. **R7 — naprawić istniejącą bramkę frequency-window.** Ustalić, czy problemem
+   jest coverage/oversampling, deduplikacja, subwindow termination czy certificate;
+   dodać adaptacyjne `nev/ncv` i fail-closed incomplete zamiast pozornego sukcesu.
+4. **R7/Q1 — wykonać pełne CPU window.** Na realnym antydocie uruchomić base i
+   refinement, Kittel oracle oraz uzgodnioną convergence mesh/airbox. Wszystkie
+   opublikowane mody muszą mieć pełny residual, a `window_complete=true` wymaga
+   niezależnego certificate.
+5. **R8 — artifact/API/FMS/UI.** Propagować statusy i identity tuple, wykonać
+   export -> restart -> import bez historii, naprawić Vitest i zrobić 60-sekundowy
+   live browser/WebGL proof na artefaktach CPU Q1.
+6. **R9 — GPU Q2.** Uruchomić produkcyjny PETSc/SLEPc CUDA lane na tym samym
+   antydocie, zebrać profiler trace, wykazać brak transferów/fallbacku oraz parity
+   częstotliwości, residuali i podprzestrzeni klastrów.
+7. **R10 — finalizacja.** Dopiero po powyższych zmianach uchwycić nowy czysty
+   source identity, przebudować runtime, powtórzyć bramki, zsynchronizować z
+   najnowszym masterem i przygotować jeden immutable candidate do promocji.
+
+Najbliższy krok implementacyjny to punkt 1, nie ponowne liczenie tego samego
+nearest i nie ponowny recovery. Aktualny wynik rozstrzyga pierwotną wątpliwość:
+**warstwę z dziurą można już policzyć na CPU w trybie nearest; brakuje przede
+wszystkim uczciwej semantyki statusu i pełnego, certyfikowanego okna.**
