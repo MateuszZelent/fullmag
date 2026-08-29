@@ -48,6 +48,12 @@ __device__ __forceinline__ void publish_adaptive_attempt(
 
 __device__ __forceinline__ void evaluate_adaptive_error_policy_device(
     double max_error_sq,
+    double max_norm_defect,
+    double max_spin_rotation,
+    int has_norm_tolerance,
+    double norm_tolerance,
+    int has_max_spin_rotation,
+    double max_spin_rotation_limit,
     AdaptiveDeviceControl *policy_out,
     fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
     double dt,
@@ -65,10 +71,25 @@ __device__ __forceinline__ void evaluate_adaptive_error_policy_device(
     int force_retry)
 {
     const bool finite_max_sq = isfinite(max_error_sq) && max_error_sq >= 0.0;
-    const double error = finite_max_sq
+    const double embedded_error = finite_max_sq
         ? (max_error_sq > 0.0 ? sqrt(max_error_sq) : 0.0)
         : CUDART_INF;
+    const bool finite_guard_metrics =
+        isfinite(max_norm_defect) && max_norm_defect >= 0.0 &&
+        isfinite(max_spin_rotation) && max_spin_rotation >= 0.0;
+    double error = embedded_error;
+    if (!finite_guard_metrics) {
+        error = CUDART_INF;
+    } else {
+        if (has_norm_tolerance != 0) {
+            error = fmax(error, max_norm_defect / norm_tolerance);
+        }
+        if (has_max_spin_rotation != 0) {
+            error = fmax(error, max_spin_rotation / max_spin_rotation_limit);
+        }
+    }
     policy_out->error = error;
+    policy_out->embedded_error = embedded_error;
     policy_out->dt_candidate = dt;
     policy_out->ratio = 1.0;
     policy_out->previous_error = previous_error;
@@ -86,7 +107,7 @@ __device__ __forceinline__ void evaluate_adaptive_error_policy_device(
         publish_adaptive_attempt(attempt_trace, *policy_out, dt);
         return;
     }
-    if (!finite_max_sq) {
+    if (!finite_max_sq || !finite_guard_metrics || !isfinite(error)) {
         publish_adaptive_attempt(attempt_trace, *policy_out, dt);
         return;
     }
@@ -163,6 +184,12 @@ __device__ __forceinline__ void evaluate_adaptive_error_policy_device(
 
 __device__ __forceinline__ void evaluate_adaptive_error_policy_loop_device(
     double max_error_sq,
+    double max_norm_defect,
+    double max_spin_rotation,
+    int has_norm_tolerance,
+    double norm_tolerance,
+    int has_max_spin_rotation,
+    double max_spin_rotation_limit,
     AdaptiveDeviceControl *control,
     fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
     double adaptive_dt_min,
@@ -179,6 +206,12 @@ __device__ __forceinline__ void evaluate_adaptive_error_policy_loop_device(
     const uint32_t attempt = control->next_rejected_attempts;
     evaluate_adaptive_error_policy_device(
         max_error_sq,
+        max_norm_defect,
+        max_spin_rotation,
+        has_norm_tolerance,
+        norm_tolerance,
+        has_max_spin_rotation,
+        max_spin_rotation_limit,
         control,
         attempt_trace,
         control->dt_candidate,

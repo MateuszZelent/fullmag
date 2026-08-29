@@ -151,6 +151,10 @@ __global__ void adaptive_error_policy_kernel(
     double adaptive_safety,
     double adaptive_growth_limit,
     double adaptive_shrink_limit,
+    int has_norm_tolerance,
+    double norm_tolerance,
+    int has_max_spin_rotation,
+    double max_spin_rotation_limit,
     double exponent,
     int order_est,
     int canonical_controller,
@@ -163,6 +167,12 @@ __global__ void adaptive_error_policy_kernel(
     const uint32_t input_has_previous_error = has_previous_error != 0 ? 1U : 0U;
     evaluate_adaptive_error_policy_device(
         max_error_sq != nullptr ? max_error_sq[0] : 0.0,
+        max_norm_defect != nullptr ? max_norm_defect[0] : 0.0,
+        max_spin_rotation != nullptr ? max_spin_rotation[0] : 0.0,
+        has_norm_tolerance,
+        norm_tolerance,
+        has_max_spin_rotation,
+        max_spin_rotation_limit,
         policy_out,
         attempt_trace,
         dt,
@@ -185,14 +195,14 @@ __global__ void adaptive_error_policy_kernel(
     policy_out->last_max_spin_rotation_radians =
         max_spin_rotation != nullptr ? max_spin_rotation[0] : 0.0;
     if (rejected_attempts == 0) {
-        policy_out->max_attempt_error = policy_out->error;
+        policy_out->max_attempt_error = policy_out->embedded_error;
         policy_out->max_attempt_norm_defect = policy_out->last_max_norm_defect;
         policy_out->max_attempt_spin_rotation_radians =
             policy_out->last_max_spin_rotation_radians;
     } else {
         policy_out->max_attempt_error = fmax(
             policy_out->max_attempt_error,
-            policy_out->error);
+            policy_out->embedded_error);
         policy_out->max_attempt_norm_defect = fmax(
             policy_out->max_attempt_norm_defect,
             policy_out->last_max_norm_defect);
@@ -213,6 +223,10 @@ __global__ void adaptive_error_policy_loop_kernel(
     double adaptive_safety,
     double adaptive_growth_limit,
     double adaptive_shrink_limit,
+    int has_norm_tolerance,
+    double norm_tolerance,
+    int has_max_spin_rotation,
+    double max_spin_rotation_limit,
     double exponent,
     int order_est,
     int canonical_controller,
@@ -223,6 +237,12 @@ __global__ void adaptive_error_policy_loop_kernel(
     const uint32_t input_has_previous_error = control->has_previous_error;
     evaluate_adaptive_error_policy_loop_device(
         max_error_sq != nullptr ? max_error_sq[0] : 0.0,
+        max_norm_defect != nullptr ? max_norm_defect[0] : 0.0,
+        max_spin_rotation != nullptr ? max_spin_rotation[0] : 0.0,
+        has_norm_tolerance,
+        norm_tolerance,
+        has_max_spin_rotation,
+        max_spin_rotation_limit,
         control,
         attempt_trace,
         adaptive_dt_min,
@@ -242,14 +262,14 @@ __global__ void adaptive_error_policy_loop_kernel(
     control->last_max_spin_rotation_radians =
         max_spin_rotation != nullptr ? max_spin_rotation[0] : 0.0;
     if (attempt == 0) {
-        control->max_attempt_error = control->error;
+        control->max_attempt_error = control->embedded_error;
         control->max_attempt_norm_defect = control->last_max_norm_defect;
         control->max_attempt_spin_rotation_radians =
             control->last_max_spin_rotation_radians;
     } else {
         control->max_attempt_error = fmax(
             control->max_attempt_error,
-            control->error);
+            control->embedded_error);
         control->max_attempt_norm_defect = fmax(
             control->max_attempt_norm_defect,
             control->last_max_norm_defect);
@@ -970,6 +990,10 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         ctx.adaptive_safety,
         ctx.adaptive_growth_limit,
         ctx.adaptive_shrink_limit,
+        ctx.has_adaptive_norm_tolerance ? 1 : 0,
+        ctx.adaptive_norm_tolerance,
+        ctx.has_adaptive_max_spin_rotation ? 1 : 0,
+        ctx.adaptive_max_spin_rotation,
         exponent,
         order_est,
         ctx.adaptive_canonical_controller ? 1 : 0,
@@ -1076,6 +1100,10 @@ bool enqueue_adaptive_error_policy_device_loop(
         ctx.adaptive_safety,
         ctx.adaptive_growth_limit,
         ctx.adaptive_shrink_limit,
+        ctx.has_adaptive_norm_tolerance ? 1 : 0,
+        ctx.adaptive_norm_tolerance,
+        ctx.has_adaptive_max_spin_rotation ? 1 : 0,
+        ctx.adaptive_max_spin_rotation,
         exponent,
         order_est,
         ctx.adaptive_canonical_controller ? 1 : 0,

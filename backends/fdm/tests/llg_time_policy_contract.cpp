@@ -344,6 +344,94 @@ int main() {
     check_advanced_tolerance(0.0, 1e-4,
                              "advanced relative-only tolerance is accepted by v2 behavior");
 
+    auto valid_guards = invalid;
+    valid_guards.base.integrator = FULLMAG_FDM_INTEGRATOR_DP45;
+    valid_guards.time_policy = {
+        1, FULLMAG_FDM_ADAPTIVE_ADVANCED, 1e-6, 0.0,
+        1e-18, 5e-13, 0.9, 2.0, 0.2,
+        1, 0.01, 1, 1e-6};
+    auto *valid_guard_handle =
+        fullmag_fdm_backend_create_time_policy_v2(&valid_guards);
+    check(valid_guard_handle != nullptr &&
+              fullmag_fdm_backend_last_error(valid_guard_handle) == nullptr,
+          "finite positive CUDA adaptive guards pass checked-v2 validation");
+    fullmag_fdm_backend_destroy(valid_guard_handle);
+
+    const std::array<double, 4> invalid_guards{
+        0.0,
+        -1.0,
+        std::numeric_limits<double>::infinity(),
+        std::numeric_limits<double>::quiet_NaN(),
+    };
+    for (const double invalid_guard : invalid_guards) {
+        auto invalid_guard_plan = valid_guards;
+        invalid_guard_plan.time_policy.adaptive_norm_tolerance = invalid_guard;
+        auto *invalid_guard_handle =
+            fullmag_fdm_backend_create_time_policy_v2(&invalid_guard_plan);
+        check(invalid_guard_handle != nullptr,
+              "invalid guard validation returns a deferred-error handle");
+        const char *guard_error =
+            fullmag_fdm_backend_last_error(invalid_guard_handle);
+        check(guard_error != nullptr &&
+                  std::string(guard_error).find("invalid complete adaptive") !=
+                      std::string::npos,
+              "invalid CUDA adaptive guard fails before the first step");
+        fullmag_fdm_backend_destroy(invalid_guard_handle);
+    }
+
+    auto check_rotation_guard = [&](fullmag_fdm_precision precision,
+                                     fullmag_fdm_integrator integrator) {
+        auto guarded = valid_guards;
+        guarded.base.precision = precision;
+        guarded.base.integrator = integrator;
+        guarded.base.stats_mode = FULLMAG_FDM_STATS_NONE;
+        guarded.base.has_external_field = 1;
+        guarded.base.external_field_am[2] = 2.0e5;
+        guarded.time_policy.adaptive_atol = 1.0;
+        guarded.time_policy.adaptive_max_spin_rotation = 5.0e-3;
+        auto *backend = fullmag_fdm_backend_create_time_policy_v2(&guarded);
+        check(backend != nullptr && fullmag_fdm_backend_last_error(backend) == nullptr,
+              "rotation-guard fixture passes checked-v2 validation");
+        fullmag_fdm_adaptive_batch_step_v1 step{};
+        uint32_t step_count = 0;
+        check(fullmag_fdm_backend_step_adaptive_batch_v1(
+                  backend, 5.0e-13, 5.0e-13, 1, &step, 1,
+                  &step_count) == FULLMAG_FDM_OK &&
+                  step_count == 1,
+              "rotation guard retries on device and publishes one accepted step");
+        fullmag_fdm_adaptive_attempt_v1 attempts
+            [FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1]{};
+        uint32_t attempt_count = 0;
+        check(fullmag_fdm_backend_copy_adaptive_attempts_v1(
+                  backend, attempts, FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+                  &attempt_count) == FULLMAG_FDM_OK &&
+                  attempt_count > 1 &&
+                  attempts[0].decision == FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY &&
+                  attempts[0].normalized_error > 1.0 &&
+                  attempts[attempt_count - 1].decision ==
+                      FULLMAG_FDM_ADAPTIVE_ATTEMPT_ACCEPTED &&
+                  attempts[attempt_count - 1].normalized_error <= 1.0,
+              "rotation guard contributes to the normalized device acceptance metric");
+        fullmag_fdm_adaptive_numerics_telemetry_v1 numerics{};
+        numerics.abi_version =
+            FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1;
+        numerics.struct_size = sizeof(numerics);
+        check(fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+                  backend, &numerics) == FULLMAG_FDM_OK &&
+                  numerics.decision_divergence_count == 0 &&
+                  numerics.max_attempt_spin_rotation_radians > 5.0e-3 &&
+                  numerics.last_terminal_max_spin_rotation_radians <= 5.0e-3 &&
+                  numerics.max_attempt_normalized_error <
+                      attempts[0].normalized_error,
+              "guard telemetry separates raw embedded error from the combined acceptance metric");
+        fullmag_fdm_backend_destroy(backend);
+    };
+    for (const auto precision : {FULLMAG_FDM_PRECISION_DOUBLE,
+                                 FULLMAG_FDM_PRECISION_SINGLE}) {
+        check_rotation_guard(precision, FULLMAG_FDM_INTEGRATOR_RK23);
+        check_rotation_guard(precision, FULLMAG_FDM_INTEGRATOR_DP45);
+    }
+
     auto check_device_controller = [&](fullmag_fdm_precision precision,
                                        fullmag_fdm_integrator integrator) {
         auto plan = invalid;

@@ -192,6 +192,7 @@ enum AdaptiveDeviceReason : uint32_t {
 
 struct AdaptiveDeviceControl {
     double error = 0.0;
+    double embedded_error = 0.0;
     double dt_candidate = 0.0;
     double ratio = 1.0;
     double previous_error = 0.0;
@@ -212,7 +213,7 @@ struct AdaptiveDeviceControl {
     uint32_t reserved1 = 0;
 };
 
-static_assert(sizeof(AdaptiveDeviceControl) == 120);
+static_assert(sizeof(AdaptiveDeviceControl) == 128);
 static_assert(sizeof(fullmag_fdm_adaptive_attempt_v1) == 56);
 
 constexpr uint32_t ADAPTIVE_ACCEPTED_BATCH_CAPACITY = 64;

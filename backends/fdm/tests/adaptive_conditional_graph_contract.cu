@@ -58,6 +58,12 @@ __global__ void evaluate_attempt_kernel(
         : CUDART_INF;
     evaluate_adaptive_error_policy_loop_device(
         error_sq,
+        0.0,
+        0.0,
+        0,
+        0.0,
+        0,
+        0.0,
         control,
         trace,
         dt_min,
@@ -70,6 +76,82 @@ __global__ void evaluate_attempt_kernel(
         1,
         0,
         loop_handle);
+}
+
+__global__ void evaluate_guard_kernel(
+    double error_sq,
+    double norm_defect,
+    double spin_rotation,
+    int has_norm_tolerance,
+    double norm_tolerance,
+    int has_max_spin_rotation,
+    double max_spin_rotation,
+    AdaptiveDeviceControl *control)
+{
+    fullmag::fdm::evaluate_adaptive_error_policy_device(
+        error_sq,
+        norm_defect,
+        spin_rotation,
+        has_norm_tolerance,
+        norm_tolerance,
+        has_max_spin_rotation,
+        max_spin_rotation,
+        control,
+        nullptr,
+        1.0e-12,
+        1.0e-18,
+        1.0e-9,
+        0.8,
+        2.0,
+        0.2,
+        1.0 / 3.0,
+        2,
+        1,
+        0.0,
+        0,
+        0,
+        0);
+}
+
+bool run_guard_case(
+    double norm_defect,
+    double spin_rotation,
+    bool has_norm_tolerance,
+    double norm_tolerance,
+    bool has_max_spin_rotation,
+    double max_spin_rotation,
+    uint32_t expected_decision,
+    double expected_acceptance_metric)
+{
+    DeviceAllocation control_device;
+    if (!cuda_ok(cudaMalloc(
+            &control_device.value, sizeof(AdaptiveDeviceControl)),
+            "cudaMalloc(guard control)")) {
+        return false;
+    }
+    auto *control = static_cast<AdaptiveDeviceControl *>(control_device.value);
+    evaluate_guard_kernel<<<1, 1>>>(
+        0.25,
+        norm_defect,
+        spin_rotation,
+        has_norm_tolerance ? 1 : 0,
+        norm_tolerance,
+        has_max_spin_rotation ? 1 : 0,
+        max_spin_rotation,
+        control);
+    if (!cuda_ok(cudaGetLastError(), "evaluate_guard_kernel")) return false;
+    AdaptiveDeviceControl observed{};
+    if (!cuda_ok(cudaMemcpy(
+            &observed,
+            control,
+            sizeof(observed),
+            cudaMemcpyDeviceToHost),
+            "cudaMemcpy(guard control D2H)")) {
+        return false;
+    }
+    return observed.decision == expected_decision &&
+        std::abs(observed.embedded_error - 0.5) <= 2.0e-15 &&
+        std::abs(observed.error - expected_acceptance_metric) <= 2.0e-15;
 }
 
 bool add_kernel_node(
@@ -264,6 +346,42 @@ bool run_case(
 
 int main() {
     bool passed = true;
+    passed = run_guard_case(
+        0.02,
+        0.0,
+        true,
+        0.01,
+        false,
+        0.0,
+        ADAPTIVE_DEVICE_DECISION_RETRY,
+        2.0) && passed;
+    passed = run_guard_case(
+        0.0,
+        0.2,
+        false,
+        0.0,
+        true,
+        0.1,
+        ADAPTIVE_DEVICE_DECISION_RETRY,
+        2.0) && passed;
+    passed = run_guard_case(
+        0.01,
+        0.1,
+        true,
+        0.01,
+        true,
+        0.1,
+        ADAPTIVE_DEVICE_DECISION_ACCEPTED,
+        1.0) && passed;
+    passed = run_guard_case(
+        0.02,
+        0.2,
+        true,
+        1.0,
+        true,
+        1.0,
+        ADAPTIVE_DEVICE_DECISION_ACCEPTED,
+        0.5) && passed;
     passed = run_case(
         {4.0, 0.25},
         1.0e-12,

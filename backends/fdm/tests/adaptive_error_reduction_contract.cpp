@@ -127,6 +127,20 @@ void adaptive_error_reductions_stay_device_side() {
             metrics.find("acos(cosine)") != std::string::npos,
         "adaptive metrics must publish post-projection unit-norm defect and geodesic rotation");
     check(
+        controller.find("max_norm_defect / norm_tolerance") !=
+                std::string::npos &&
+            controller.find(
+                "max_spin_rotation / max_spin_rotation_limit") !=
+                std::string::npos &&
+            controller.find("error = fmax(error") != std::string::npos,
+        "device controller must enforce norm and rotation guards through one combined max metric");
+    check(
+        reductions.find("max_attempt_error = policy_out->embedded_error") !=
+                std::string::npos &&
+            reductions.find("max_attempt_error = control->embedded_error") !=
+                std::string::npos,
+        "embedded-error telemetry must remain distinct from the combined guard acceptance metric");
+    check(
         reductions.find("reduce_max_metric_triplet_blocks_kernel") !=
                 std::string::npos &&
             reductions.find("src + metric_stride") != std::string::npos &&

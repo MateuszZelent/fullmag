@@ -78,7 +78,7 @@ void context_record_adaptive_numerics_terminal(
         return true;
     };
     checked_increment(ctx.adaptive_numerics_terminal_observation_count);
-    ctx.adaptive_numerics_last_terminal_error = control.error;
+    ctx.adaptive_numerics_last_terminal_error = control.embedded_error;
     ctx.adaptive_numerics_last_terminal_norm_defect =
         control.last_max_norm_defect;
     ctx.adaptive_numerics_last_terminal_spin_rotation =
@@ -1269,11 +1269,18 @@ int fullmag_fdm_backend_create_time_policy_v2_checked(
         std::isfinite(policy.adaptive_growth_limit) && policy.adaptive_growth_limit > 1.0 &&
         std::isfinite(policy.adaptive_shrink_limit) && policy.adaptive_shrink_limit > 0.0 &&
         policy.adaptive_shrink_limit < 1.0;
-    const bool guards_disabled_until_enforced =
-        !policy.has_adaptive_max_spin_rotation && !policy.has_adaptive_norm_tolerance;
+    const bool valid_guards =
+        (policy.has_adaptive_max_spin_rotation == 0 ||
+         (policy.has_adaptive_max_spin_rotation == 1 &&
+          std::isfinite(policy.adaptive_max_spin_rotation) &&
+          policy.adaptive_max_spin_rotation > 0.0)) &&
+        (policy.has_adaptive_norm_tolerance == 0 ||
+         (policy.has_adaptive_norm_tolerance == 1 &&
+          std::isfinite(policy.adaptive_norm_tolerance) &&
+          policy.adaptive_norm_tolerance > 0.0));
     if (!compatible_integrator || !valid_mode || !valid_tolerances ||
         !compatible_tolerance_mode || !valid_bounds || !valid_controller ||
-        !guards_disabled_until_enforced)
+        !valid_guards)
     {
         ctx->last_error = "invalid complete adaptive timestep policy in fullmag_fdm_plan_desc_v2";
         return FULLMAG_FDM_OK;

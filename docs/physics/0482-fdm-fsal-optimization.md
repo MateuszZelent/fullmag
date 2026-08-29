@@ -178,8 +178,8 @@ study.stages.add_run(stage_id="transient", until=2.0e-10)
 | `AdaptiveTimestep.safety` | `float` | `0.9` | $1$ | $0<\mathrm{safety}\leq1$ | `study.dynamics.adaptive_timestep.safety` |
 | `AdaptiveTimestep.growth_limit` | `float` | `2.0` | $1$ | większe od $1$ | `study.dynamics.adaptive_timestep.growth_limit` |
 | `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $1$ | w przedziale $(0,1)$ | `study.dynamics.adaptive_timestep.shrink_limit` |
-| `AdaptiveTimestep.max_spin_rotation` | `float | None` | `None` | $1$ | dodatnie; obecny FDM odrzuca | `study.dynamics.adaptive_timestep.max_spin_rotation` |
-| `AdaptiveTimestep.norm_tolerance` | `float | None` | `None` | $1$ | dodatnie; obecny FDM odrzuca | `study.dynamics.adaptive_timestep.norm_tolerance` |
+| `AdaptiveTimestep.max_spin_rotation` | `float | None` | `None` | $1$ | dodatnie; egzekwowane przez adaptacyjne RK23/RK45 dla jawnego urządzenia CUDA; FDM CPU odrzuca | `study.dynamics.adaptive_timestep.max_spin_rotation` |
+| `AdaptiveTimestep.norm_tolerance` | `float | None` | `None` | $1$ | dodatnie; egzekwowane przez adaptacyjne RK23/RK45 dla jawnego urządzenia CUDA; FDM CPU odrzuca | `study.dynamics.adaptive_timestep.norm_tolerance` |
 | `StudyBuilder.thermal_noise(temperature, seed=...)` | `float, int | None` | `required, None` | $\mathrm{K}$, $1$ | temperature positive; seed positive or None; Brown thermal field intent | single-grid FDM; adaptive Brown rejected; `temperature and energy_terms[].thermal_noise` |
 
 (problem-ir)=

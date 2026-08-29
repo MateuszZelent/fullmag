@@ -9289,6 +9289,46 @@ fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_or_cuda_routes() {
 }
 
 #[test]
+fn adaptive_fdm_geometry_guards_are_cuda_only_and_preserved() {
+    let mut cuda = ProblemIR::bootstrap_example();
+    set_adaptive_rk45(&mut cuda, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+    cuda.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cuda"}),
+    );
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut cuda.study else {
+        unreachable!()
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        adaptive_timestep, ..
+    } = dynamics;
+    let adaptive = adaptive_timestep.as_mut().expect("adaptive policy");
+    adaptive.max_spin_rotation = Some(0.2);
+    adaptive.norm_tolerance = Some(1.0e-6);
+    let planned = plan(&cuda).expect("CUDA FDM must preserve enforced geometry guards");
+    let BackendPlanIR::Fdm(fdm_plan) = planned.backend_plan else {
+        panic!("bootstrap CUDA fixture must produce a single-grid FDM plan");
+    };
+    let resolved = fdm_plan
+        .adaptive_timestep
+        .expect("planned adaptive policy");
+    assert_eq!(resolved.max_spin_rotation, Some(0.2));
+    assert_eq!(resolved.norm_tolerance, Some(1.0e-6));
+
+    cuda.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    let error = plan(&cuda).expect_err("CPU FDM must reject CUDA-only geometry guards");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("max_spin_rotation") && reason.contains("unsupported by CPU FDM")
+    }));
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("norm_tolerance") && reason.contains("unsupported by CPU FDM")
+    }));
+}
+
+#[test]
 fn adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified() {
     let mut ir = ProblemIR::bootstrap_example();
     set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);

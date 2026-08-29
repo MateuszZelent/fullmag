@@ -168,8 +168,17 @@ fn validate_native_adaptive_policy(
         }
         _ => {}
     }
-    if policy.max_spin_rotation.is_some() || policy.norm_tolerance.is_some() {
-        return Err(RunError { message: "adaptive CUDA FDM norm/rotation guards are transported but unsupported until native enforcement is implemented".to_string() });
+    for (name, value) in [
+        ("max_spin_rotation", policy.max_spin_rotation),
+        ("norm_tolerance", policy.norm_tolerance),
+    ] {
+        if value.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err(RunError {
+                message: format!(
+                    "adaptive CUDA FDM {name} must be finite and positive when enabled"
+                ),
+            });
+        }
     }
     if thermal_active {
         return Err(RunError {
@@ -295,7 +304,31 @@ mod adaptive_policy_validation_tests {
             false,
         )
         .is_err());
-        for unsupported in [(true, false, false), (false, true, false), (false, false, true)] {
+        let mut guarded = absolute.clone();
+        guarded.max_spin_rotation = Some(0.2);
+        guarded.norm_tolerance = Some(1.0e-6);
+        validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Rk45,
+            Some(&guarded),
+            false,
+            false,
+            false,
+        )
+        .expect("native CUDA enforces transported norm and rotation guards");
+        guarded.norm_tolerance = Some(f64::NAN);
+        assert!(validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Rk45,
+            Some(&guarded),
+            false,
+            false,
+            false,
+        )
+        .is_err());
+        for unsupported in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
             assert!(validate_native_adaptive_policy(
                 fullmag_ir::IntegratorChoice::Rk45,
                 Some(&absolute),
@@ -342,7 +375,10 @@ fn validate_adaptive_attempt_batch(
 ) -> Result<(u32, f64), RunError> {
     if records.is_empty() || records.len() > ffi::FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1 {
         return Err(RunError {
-            message: format!("native FDM adaptive attempt count is invalid: {}", records.len()),
+            message: format!(
+                "native FDM adaptive attempt count is invalid: {}",
+                records.len()
+            ),
         });
     }
     for (index, record) in records.iter().enumerate() {
@@ -1872,7 +1908,9 @@ impl NativeFdmBackend {
         }
         let records = unsafe {
             std::slice::from_raw_parts(
-                records.as_ptr().cast::<ffi::fullmag_fdm_adaptive_attempt_v1>(),
+                records
+                    .as_ptr()
+                    .cast::<ffi::fullmag_fdm_adaptive_attempt_v1>(),
                 copied as usize,
             )
         };
@@ -3288,7 +3326,10 @@ mod tests {
             ratio: 1.5,
             dt_next_seconds: 1.5e-15,
         };
-        assert_eq!(validate_adaptive_attempt_batch(&[record]).unwrap(), (0, 0.25));
+        assert_eq!(
+            validate_adaptive_attempt_batch(&[record]).unwrap(),
+            (0, 0.25)
+        );
     }
 
     #[test]

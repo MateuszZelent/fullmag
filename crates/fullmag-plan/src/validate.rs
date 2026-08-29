@@ -552,12 +552,12 @@ pub(crate) fn planned_study_controls(
             if adaptive.dt_max.is_none() {
                 errors.push("adaptive_timestep.dt_max is required; planner will not invent a hidden upper bound".to_string());
             }
-            if resolved_backend == BackendTarget::Fdm {
+            if resolved_backend == BackendTarget::Fdm && requested_device == Some("cpu") {
                 if adaptive.max_spin_rotation.is_some() {
-                    errors.push("adaptive_timestep.max_spin_rotation is unsupported by current FDM execution lanes and cannot be dropped".to_string());
+                    errors.push("adaptive_timestep.max_spin_rotation is supported by the CUDA FDM lane but unsupported by CPU FDM and cannot be dropped".to_string());
                 }
                 if adaptive.norm_tolerance.is_some() {
-                    errors.push("adaptive_timestep.norm_tolerance is unsupported by current FDM execution lanes and cannot be dropped".to_string());
+                    errors.push("adaptive_timestep.norm_tolerance is supported by the CUDA FDM lane but unsupported by CPU FDM and cannot be dropped".to_string());
                 }
             }
         }
