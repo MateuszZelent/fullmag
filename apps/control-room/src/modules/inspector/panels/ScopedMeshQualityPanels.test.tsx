@@ -152,6 +152,13 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     `meshing/objects/${objectId}/report`,
   resolveMeshRegionQualityResourceKey: (regionId: string) =>
     `meshing/regions/${regionId}/quality`,
+  useSceneResource: () => ({
+    data: null,
+    error: null,
+    refetch: vi.fn(),
+    revision: null,
+    status: "idle",
+  }),
   useMeshSummaryResource: () => ({
     data: {
       effective_airbox_target: {
