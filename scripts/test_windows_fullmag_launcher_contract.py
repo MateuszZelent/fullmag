@@ -65,6 +65,21 @@ def test_windows_gpu_route_builds_cuda_and_fails_closed() -> None:
     assert "fullmag_fdm.dll" in launcher
 
 
+def test_windows_launcher_stages_cuda_dll_from_target_triple_build_directory() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'Join-Path $TargetRoot "$TargetTriple\\release\\build"' in launcher
+    assert 'Join-Path $TargetRoot "release\\build"' not in launcher
+
+
+def test_windows_build_recipe_normalizes_named_arguments() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    assert 'case "$backend" in backend=*)' in justfile
+    assert 'case "$device" in device=*)' in justfile
+    assert '-Backend "$backend" -Device "$device"' in justfile
+
+
 def test_windows_fdm_build_does_not_emit_unix_linker_rpath() -> None:
     build_script = (ROOT / "crates" / "fullmag-fdm-sys" / "build.rs").read_text(encoding="utf-8")
 

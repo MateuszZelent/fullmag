@@ -1379,6 +1379,7 @@ impl InteractiveFdmPreviewRuntime {
         requested_device: &str,
         execution_mode: fullmag_ir::ExecutionMode,
     ) -> Result<Self, RunError> {
+        let _ = (requested_device, execution_mode);
         let inner = match engine {
             FdmEngine::CpuReference => {
                 let (problem, state) = cpu_reference::build_snapshot_problem_and_state(plan)?;
@@ -5778,6 +5779,8 @@ fn fem_gpu_execution_provenance(
         fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
+        fdm_gpu_observation_policy: None,
+        fdm_gpu_endpoint_cache_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution: None,

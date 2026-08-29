@@ -45,6 +45,7 @@ fn finalize_receipt_result<T>(
 
 const KNOWN_OPERATOR_MASK: u64 = (1_u64 << 19) - 1;
 
+#[cfg(test)]
 pub(super) fn known_operator_mask() -> u64 {
     KNOWN_OPERATOR_MASK
 }
@@ -310,7 +311,7 @@ fn integrator_realization(integrator: u32, precision: &str) -> Result<String, Ru
         other => {
             return Err(preflight_error(format!(
                 "unknown integrator discriminant={other}"
-            )))
+            )));
         }
     };
     let suffix = if precision == "single" {
@@ -430,7 +431,7 @@ fn adaptive_execution_telemetry_from_native(
         other => {
             return Err(preflight_error(format!(
                 "unknown adaptive control realization={other}"
-            )))
+            )));
         }
     };
     Ok(FdmGpuAdaptiveExecutionTelemetry {
@@ -504,7 +505,7 @@ fn adaptive_numerics_telemetry_from_native(
         other => {
             return Err(preflight_error(format!(
                 "unknown adaptive embedded-error semantics={other}"
-            )))
+            )));
         }
     };
     let norm_defect_semantics = match native.norm_defect_semantics {
@@ -514,7 +515,7 @@ fn adaptive_numerics_telemetry_from_native(
         other => {
             return Err(preflight_error(format!(
                 "unknown adaptive norm-defect semantics={other}"
-            )))
+            )));
         }
     };
     let spin_rotation_semantics = match native.spin_rotation_semantics {
@@ -524,7 +525,7 @@ fn adaptive_numerics_telemetry_from_native(
         other => {
             return Err(preflight_error(format!(
                 "unknown adaptive spin-rotation semantics={other}"
-            )))
+            )));
         }
     };
     for (name, value) in [

@@ -3951,9 +3951,10 @@ mod tests {
         let error = crate::plan(&problem)
             .expect_err("adaptive CUDA spin transport must fail before runtime");
         assert!(
-            error.reasons.iter().any(|reason| {
-                reason.contains("adaptive_cuda_fdm_spin_transport_unsupported")
-            }),
+            error
+                .reasons
+                .iter()
+                .any(|reason| { reason.contains("adaptive_cuda_fdm_spin_transport_unsupported") }),
             "unexpected planner errors: {:?}",
             error.reasons
         );

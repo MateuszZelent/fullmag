@@ -170,6 +170,28 @@ describe("viewport3DFieldDataPlan", () => {
     });
   });
 
+  it("routes Frozen Spins through the standard scalar 3D quantity request", () => {
+    const plan = objectPlan("object:frozen", {
+      activeQuantityId: "frozen_spins",
+      surfaceColorSource: "colormap",
+      vectorsVisible: false,
+    });
+    const requests = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(plan),
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      query: {
+        component: "full",
+        scope_id: "object:frozen",
+        scope_kind: "object",
+      },
+      quantityId: "frozen_spins",
+    });
+    expect(plan.vectors.visible).toBe(false);
+  });
+
   it("keeps vector components and scalar colormaps on distinct viewport requests", () => {
     const vectorRequests = planViewport3DFieldResourceRequests(
       buildViewport3DPassDemands(

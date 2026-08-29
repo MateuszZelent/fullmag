@@ -94,6 +94,74 @@ describe("quantityItemsForVisualizationTarget", () => {
     ).toEqual(["H_demag", "eden_demag"]);
   });
 
+  it("offers a resolved Frozen Spins mask as a standard object quantity", () => {
+    const fieldCatalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [],
+      revision: 4,
+    } as FieldCatalogResource;
+    const quantityCatalog = {
+      schema_version: "v1",
+      quantities: [
+        {
+          capability_state: "supported",
+          description: "Resolved Frozen Spins mask",
+          domain: "magnetic_only",
+          id: "frozen_spins",
+          interactive_preview: true,
+          label: "Frozen Spins",
+          location: "node",
+          materializable: true,
+          materialization_state: "unmaterialized",
+          n_comp: 1,
+          normalization_hint: "none",
+          publication_state: "published",
+          renderable: true,
+          requestable: true,
+          resolved_capability: {
+            carriers: [],
+            lane: "fdm_cpu_reference",
+            materialization: "unmaterialized",
+            precision: "double",
+            provider: "available",
+            publication: "interactive",
+            reason_code: "field_unmaterialized",
+            render: "renderable",
+            request: "field_vector",
+            scope: "magnetic_only",
+          },
+          shape: "spatial_scalar",
+          solver_capability: "supported",
+          supports_export: true,
+          supports_history: false,
+          supports_preview_2d: true,
+          supports_preview_3d: true,
+          unit: "1",
+        },
+      ],
+    } as unknown as QuantityCatalogResource;
+
+    expect(
+      quantityItemsForVisualizationTarget(
+        "m",
+        "object",
+        fieldCatalog,
+        quantityCatalog,
+      ),
+    ).toEqual([
+      { disabled: true, label: "Unavailable / m", value: "m" },
+      { label: "Frozen Spins / 1", value: "frozen_spins" },
+    ]);
+    expect(
+      quantityItemsForVisualizationTarget(
+        "H_demag",
+        "airbox",
+        fieldCatalog,
+        quantityCatalog,
+      ),
+    ).toEqual([]);
+  });
+
   it("offers only catalog full-domain quantities for an Airbox", () => {
     const fieldCatalog = {
       domain_generation_id: "fdm-generation-1",

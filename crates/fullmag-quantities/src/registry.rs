@@ -272,6 +272,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
     for id in [
         ModeAmplitude,
         ModePhase,
+        FrozenSpins,
         // Second wave (QB-17): energy densities
         EdenEx,
         EdenDemag,

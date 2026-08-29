@@ -5,9 +5,10 @@
 
 mod fft_backend;
 
+#[cfg(test)]
+pub(crate) use fft_backend::resolve_cpu_fft_backend_for_demag;
 pub(crate) use fft_backend::{
-    resolve_cpu_fft_backend_for_demag, resolve_cpu_fft_backend_name_for_demag,
-    resolve_cpu_fft_execution_for_demag,
+    resolve_cpu_fft_backend_name_for_demag, resolve_cpu_fft_execution_for_demag,
 };
 
 use fullmag_engine::{
@@ -898,13 +899,20 @@ fn apply_cpu_adaptive_attempt_telemetry(
 pub(crate) fn build_snapshot_problem_and_state(
     plan: &FdmPlanIR,
 ) -> Result<(ExchangeLlgProblem, ExchangeLlgState), RunError> {
-    let problem = build_reference_problem(plan)?;
+    let mut problem = build_reference_problem(plan)?;
     let mut state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
     state.time_seconds = plan.time_stage.start_time_s;
+    if let Some(frozen_plan) = plan.frozen_spins.as_ref() {
+        problem
+            .capture_frozen_spins_at_activation(frozen_plan, &mut state)
+            .map_err(|error| RunError {
+                message: format!("Frozen Spins snapshot activation: {error}"),
+            })?;
+    }
     Ok((problem, state))
 }
 
@@ -3305,7 +3313,8 @@ fn direct_field_values_available(name: &str) -> bool {
 fn direct_scalar_values_available(name: &str) -> bool {
     matches!(
         name,
-        "eden_ex"
+        "frozen_spins"
+            | "eden_ex"
             | "eden_demag"
             | "eden_ext"
             | "eden_ani"
@@ -3374,6 +3383,20 @@ impl<'a> DirectFieldSnapshotCache<'a> {
 
     fn select_scalar(&mut self, name: &str) -> Result<Vec<f64>, RunError> {
         match name {
+            "frozen_spins" => self
+                .problem
+                .frozen_spins()
+                .map(|frozen_spins| {
+                    frozen_spins
+                        .mask()
+                        .iter()
+                        .map(|frozen| f64::from(*frozen))
+                        .collect()
+                })
+                .ok_or_else(|| RunError {
+                    message: "CPU FDM snapshot 'frozen_spins': constraint is not active"
+                        .to_string(),
+                }),
             "eden_ex" => {
                 let magnetization = self.base_values("m", name)?.to_vec();
                 let field = self.base_values("H_ex", name)?.to_vec();
@@ -3725,6 +3748,52 @@ mod tests {
             interfacial_dmi: None,
             bulk_dmi: None,
             ..Default::default()
+        }
+    }
+
+    fn resolved_frozen_spins_test_plan(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+        let active_dof_count = mask.len() as u64;
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let mut hash = Sha256::new();
+        hash.update(active_dof_count.to_le_bytes());
+        hash.update(
+            mask.iter()
+                .map(|frozen| u8::from(*frozen))
+                .collect::<Vec<_>>(),
+        );
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["viewport-mask".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: mask_sha256.clone(),
+            grid_or_mesh_fingerprint: "viewport-test-grid".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["viewport-mask".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "viewport-mask".to_string(),
+                    selector_sha256: "a".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "viewport-test-grid".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256,
+                resolved_reference_sha256: "b".repeat(64),
+                warnings: Vec::new(),
+            },
         }
     }
 
@@ -4574,6 +4643,36 @@ mod tests {
         assert!(err
             .message
             .contains("supported CPU FDM FFT backends: auto, rustfft"));
+    }
+
+    #[test]
+    fn snapshot_preview_exposes_resolved_frozen_spins_as_binary_scalar_quantity() {
+        let mut mask = vec![false; 16];
+        mask[1] = true;
+        mask[14] = true;
+        let plan = FdmPlanIR {
+            frozen_spins: Some(resolved_frozen_spins_test_plan(mask.clone())),
+            ..make_test_plan()
+        };
+
+        let preview = snapshot_preview(
+            &plan,
+            &LivePreviewRequest {
+                quantity: "frozen_spins".to_string(),
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+        )
+        .expect("Frozen Spins scalar preview should build from the active runtime mask");
+
+        assert_eq!(preview.quantity, "frozen_spins");
+        assert_eq!(preview.unit, "1");
+        assert_eq!(preview.spatial_kind, "grid");
+        assert_eq!(
+            preview.vector_field_values,
+            mask.into_iter().map(f64::from).collect::<Vec<_>>()
+        );
+        assert!(can_materialize_preview_quantity(QuantityId::FrozenSpins));
     }
 
     #[test]

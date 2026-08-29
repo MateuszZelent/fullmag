@@ -102,6 +102,7 @@ impl FrozenSpinsActivation {
 }
 
 /// Snapshot of the runtime state read during the first phase of activation.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrozenSpinsActivationSnapshot {
     pub model_revision: u64,
@@ -111,6 +112,7 @@ pub struct FrozenSpinsActivationSnapshot {
     pub total_dofs: usize,
 }
 
+#[cfg(test)]
 impl FrozenSpinsActivationSnapshot {
     pub fn validate_preconditions(
         &self,

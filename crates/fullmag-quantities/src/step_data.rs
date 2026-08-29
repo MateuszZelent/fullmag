@@ -25,6 +25,7 @@ pub struct EndpointCacheTelemetry {
 /// Solver-internal telemetry for one integration step.
 ///
 /// This is _not_ physics — it is implementation and performance metadata.
+#[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StepDiagnostics {
     pub step: u64,

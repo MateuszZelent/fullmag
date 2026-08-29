@@ -541,10 +541,7 @@ fn same_side_face_count(
             let mut face_scale: f64 = 0.0;
             for left in 0..coordinates.len() {
                 for right in left + 1..coordinates.len() {
-                    face_scale = face_scale.max(norm3(sub3(
-                        coordinates[right],
-                        coordinates[left],
-                    )));
+                    face_scale = face_scale.max(norm3(sub3(coordinates[right], coordinates[left])));
                 }
             }
             let side_tolerance = tolerance.max(f64::EPSILON * face_scale.max(1.0e-30) * 64.0);
@@ -557,10 +554,9 @@ fn same_side_face_count(
                 let mut interior = [0.0; 3];
                 let mut opposite_count = 0usize;
                 for node in owner_nodes.iter().filter(|node| !face.contains(node)) {
-                    let point = mesh
-                        .nodes
-                        .get(*node as usize)
-                        .ok_or_else(|| format!("mixed certificate cell {owner} references missing node {node}"))?;
+                    let point = mesh.nodes.get(*node as usize).ok_or_else(|| {
+                        format!("mixed certificate cell {owner} references missing node {node}")
+                    })?;
                     for axis in 0..3 {
                         interior[axis] += point[axis];
                     }
@@ -589,6 +585,7 @@ pub(crate) struct MixedExplicitRoleCounts {
     pub(crate) interface: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn mixed_explicit_role_counts(
     faces: &[(Vec<u32>, FemFacetRoleIR)],
 ) -> BTreeMap<Vec<u32>, MixedExplicitRoleCounts> {
@@ -722,6 +719,7 @@ fn mixed_conformity_counts_fast(
 /// historical helper exposed an ordered `BTreeMap<Vec<u32>, ...>` to tests and
 /// mesh-asset validation, so keep that narrow API while converting once at the
 /// boundary instead of paying the tree cost in the hot path.
+#[cfg(test)]
 pub(crate) fn mixed_conformity_counts(
     mesh: &MeshIR,
     adjacency: &BTreeMap<Vec<u32>, Vec<(usize, u32)>>,
@@ -731,20 +729,9 @@ pub(crate) fn mixed_conformity_counts(
 ) -> Result<(u64, u64, u64, u64), String> {
     let compact = adjacency
         .iter()
-        .map(|(key, owners)| {
-            (
-                key.iter().copied().collect::<FaceKey>(),
-                owners.clone(),
-            )
-        })
+        .map(|(key, owners)| (key.iter().copied().collect::<FaceKey>(), owners.clone()))
         .collect::<HashMap<_, _>>();
-    mixed_conformity_counts_fast(
-        mesh,
-        &compact,
-        tolerance,
-        interface_marker,
-        outer_marker,
-    )
+    mixed_conformity_counts_fast(mesh, &compact, tolerance, interface_marker, outer_marker)
 }
 
 pub(crate) fn mixed_coordinate_key(point: [f64; 3], scale: f64) -> Result<[u64; 3], String> {

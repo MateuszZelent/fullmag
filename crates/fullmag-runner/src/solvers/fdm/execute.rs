@@ -13,6 +13,7 @@ use crate::solvers::fdm::interactions::capabilities::unsupported_cpu_fdm_terms;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError, StepAction, StepUpdate};
 
 /// Execute an FDM plan using the selected engine.
+#[cfg(test)]
 pub(crate) fn execute_fdm<'a>(
     engine: FdmEngine,
     plan: &FdmPlanIR,

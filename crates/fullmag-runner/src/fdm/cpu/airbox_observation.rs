@@ -43,6 +43,7 @@ impl AirboxObservationTarget {
     /// Build a target-only grid around one magnetic support.  This helper is
     /// used by the contract tests to prove that padding changes only the
     /// observation layout, not the native/common magnetic source grid.
+    #[cfg(test)]
     pub(crate) fn from_support(
         source_shape: [usize; 3],
         source_spacing_m: [f64; 3],

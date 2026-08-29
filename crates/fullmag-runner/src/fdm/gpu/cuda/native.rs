@@ -18,7 +18,7 @@ use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
 #[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, build_grid_scalar_preview_field, plan_grid_preview,
-    resample_grid_mask, GridPreviewPlan,
+    resample_grid_mask, resample_grid_scalars, GridPreviewPlan,
 };
 #[cfg(feature = "cuda")]
 use crate::quantities::normalized_quantity_name;
@@ -100,7 +100,8 @@ impl CudaSnapshotObservable {
 }
 
 pub(crate) fn can_materialize_preview_quantity(id: QuantityId) -> bool {
-    id == QuantityId::Torque || CudaSnapshotObservable::from_quantity(id).is_some()
+    matches!(id, QuantityId::Torque | QuantityId::FrozenSpins)
+        || CudaSnapshotObservable::from_quantity(id).is_some()
 }
 
 /// Check whether the native CUDA FDM backend is compiled and available.
@@ -157,14 +158,14 @@ fn validate_native_adaptive_policy(
         fullmag_ir::AdaptiveToleranceModeIR::MaxError if policy.rtol != 0.0 => {
             return Err(RunError {
                 message: "maximum-error CUDA FDM requires rtol=0".to_string(),
-            })
+            });
         }
         fullmag_ir::AdaptiveToleranceModeIR::Advanced
             if policy.atol <= 0.0 && policy.rtol <= 0.0 =>
         {
             return Err(RunError {
                 message: "advanced CUDA FDM requires positive atol or rtol".to_string(),
-            })
+            });
         }
         _ => {}
     }
@@ -573,6 +574,7 @@ pub(crate) struct NativeFdmBackend {
     handle: *mut ffi::fullmag_fdm_backend,
     cell_count: usize,
     active_mask: Option<Vec<bool>>,
+    frozen_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
     precession_enabled: bool,
@@ -627,6 +629,7 @@ pub(crate) struct EndpointCacheTelemetry {
 pub(crate) enum NativeStatsMode {
     Full,
     None,
+    #[allow(dead_code)]
     Control,
     Requested,
 }
@@ -696,6 +699,7 @@ pub(crate) use device::DeviceInfo;
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct NativeLlgCheckpointV3 {
     pub info: ffi::fullmag_fdm_llg_checkpoint_info_v3,
     pub payload_sha256: [u8; 32],
@@ -1057,6 +1061,7 @@ impl NativeFdmBackend {
             handle,
             cell_count,
             active_mask,
+            frozen_mask: None,
             precision: plan.precision,
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -1070,6 +1075,7 @@ impl NativeFdmBackend {
         Self::create_with_stats_policy(plan, NativeStatsPolicy::full(1))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn create_for_adaptive_batch(
         plan: &fullmag_ir::FdmPlanIR,
     ) -> Result<Self, RunError> {
@@ -1738,6 +1744,10 @@ impl NativeFdmBackend {
             handle,
             cell_count: m_flat.len() / 3,
             active_mask: plan.active_mask.clone(),
+            frozen_mask: plan
+                .frozen_spins
+                .as_ref()
+                .map(|frozen_spins| frozen_spins.frozen_mask.clone()),
             precision: plan.precision,
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
@@ -1751,6 +1761,7 @@ impl NativeFdmBackend {
         self.stats_policy
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_stats_policy(
         &mut self,
         stats_policy: NativeStatsPolicy,
@@ -2097,7 +2108,7 @@ impl NativeFdmBackend {
                     message: format!(
                         "FDM CUDA checkpoint identity cannot request backend '{other:?}'"
                     ),
-                })
+                });
             }
         };
         let requested_device = match requested_device {
@@ -2108,7 +2119,7 @@ impl NativeFdmBackend {
                     message: format!(
                         "FDM CUDA checkpoint identity cannot request device '{other}'"
                     ),
-                })
+                });
             }
         };
         let policy = match execution_mode {
@@ -2118,7 +2129,7 @@ impl NativeFdmBackend {
                 return Err(RunError {
                     message: "FDM CUDA checkpoint identity does not support hybrid execution"
                         .to_string(),
-                })
+                });
             }
         };
         let precision = match self.precision {
@@ -2186,6 +2197,7 @@ impl NativeFdmBackend {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV3, RunError> {
         let mut required_bytes = 0u64;
         let rc = unsafe {
@@ -2231,6 +2243,7 @@ impl NativeFdmBackend {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn restore_llg_checkpoint(
         &mut self,
         checkpoint: &NativeLlgCheckpointV3,
@@ -2352,6 +2365,7 @@ impl NativeFdmBackend {
     }
 
     /// Copy a canonical scalar quantity from device to host as f64.
+    #[allow(dead_code)]
     pub fn copy_scalar_quantity(
         &self,
         quantity: &str,
@@ -2708,6 +2722,29 @@ impl NativeFdmBackend {
     ) -> Result<NativeFdmPreviewSnapshot, RunError> {
         let plan = plan_grid_preview(request, original_grid);
         let quantity = normalized_quantity_name(&request.quantity)?.to_string();
+        if quantity == QuantityId::FrozenSpins.as_str() {
+            let values = self.frozen_mask_values()?;
+            let sampled = resample_grid_scalars(&values, &plan);
+            let mut data = Vec::with_capacity(sampled.len() * std::mem::size_of::<f64>());
+            for value in &sampled {
+                data.extend_from_slice(&value.to_ne_bytes());
+            }
+            return Ok(NativeFdmPreviewSnapshot {
+                handle: std::ptr::null_mut(),
+                request: request.clone(),
+                plan,
+                quantity,
+                ready: Some(NativeFieldSnapshotReady {
+                    data,
+                    info: NativeFieldSnapshotInfo {
+                        cell_count: sampled.len(),
+                        component_count: 1,
+                        scalar_bytes: std::mem::size_of::<f64>(),
+                        scalar_type: NativeFieldSnapshotScalarType::F64,
+                    },
+                }),
+            });
+        }
         let observable = snapshot_observable(&quantity).ok_or_else(|| RunError {
             message: format!("unsupported CUDA preview snapshot '{}'", request.quantity),
         })?;
@@ -2749,6 +2786,15 @@ impl NativeFdmBackend {
             return Err(RunError {
                 message: "copy_field_preview planned an empty preview grid".to_string(),
             });
+        }
+
+        if quantity == QuantityId::FrozenSpins.as_str() {
+            return Ok(build_grid_scalar_preview_field(
+                request,
+                &self.frozen_mask_values()?,
+                original_grid,
+                active_mask,
+            ));
         }
 
         if is_scalar_quantity_name(quantity) {
@@ -2835,6 +2881,15 @@ impl NativeFdmBackend {
             quantity,
             active_mask.map(|mask| resample_grid_mask(mask, &plan)),
         ))
+    }
+
+    fn frozen_mask_values(&self) -> Result<Vec<f64>, RunError> {
+        self.frozen_mask
+            .as_deref()
+            .map(|mask| mask.iter().map(|frozen| f64::from(*frozen)).collect())
+            .ok_or_else(|| RunError {
+                message: "CUDA FDM snapshot 'frozen_spins': constraint is not active".to_string(),
+            })
     }
 
     pub fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
@@ -3420,8 +3475,11 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
 fn is_scalar_quantity_name(name: &str) -> bool {
     crate::quantities::normalize_quantity_id(name)
         .ok()
-        .and_then(CudaSnapshotObservable::from_quantity)
-        .is_some_and(CudaSnapshotObservable::is_scalar)
+        .is_some_and(|id| {
+            id == QuantityId::FrozenSpins
+                || CudaSnapshotObservable::from_quantity(id)
+                    .is_some_and(CudaSnapshotObservable::is_scalar)
+        })
 }
 
 #[cfg(feature = "cuda")]
@@ -3566,6 +3624,42 @@ mod tests {
         assert!(error.message.contains("frozen_spins_cuda_unqualified"));
         ensure_cuda_frozen_spins_supported(true, ffi::FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1)
             .expect("the versioned capability bit admits the single-grid ABI payload");
+    }
+
+    #[test]
+    fn frozen_spins_preview_uses_retained_plan_mask_without_cuda_snapshot() {
+        let backend = NativeFdmBackend {
+            handle: std::ptr::null_mut(),
+            cell_count: 4,
+            active_mask: None,
+            frozen_mask: Some(vec![true, false, false, true]),
+            precision: ExecutionPrecision::Double,
+            damping: 0.01,
+            precession_enabled: true,
+            gpu_transport_bound: false,
+            adaptive_timestep_enabled: false,
+            stats_policy: NativeStatsPolicy::full(1),
+        };
+        let request = LivePreviewRequest {
+            quantity: "frozen_spins".to_string(),
+            auto_scale_enabled: false,
+            ..Default::default()
+        };
+
+        let sync = backend
+            .copy_live_preview_field(&request, [2, 2, 1], None)
+            .expect("synchronous Frozen Spins preview");
+        let asynchronous = backend
+            .begin_live_preview_snapshot(&request, [2, 2, 1])
+            .expect("begin host-backed Frozen Spins preview")
+            .into_live_preview_field(None)
+            .expect("collect host-backed Frozen Spins preview");
+
+        assert_eq!(sync.quantity, "frozen_spins");
+        assert_eq!(sync.unit, "1");
+        assert_eq!(sync.vector_field_values, vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(asynchronous, sync);
+        assert!(can_materialize_preview_quantity(QuantityId::FrozenSpins));
     }
 
     #[test]

@@ -140,25 +140,109 @@ def _empty_tet_gmsh_mock() -> Mock:
     return gmsh
 
 
-def test_mixed_tetrahedra_repair_uses_versioned_default_policy() -> None:
+class _LocalRepairTetMesh:
+    def __init__(self) -> None:
+        self.coordinates = {
+            1: np.asarray([0.0, 0.0, 0.0]),
+            2: np.asarray([1.0e-3, 0.0, 0.0]),
+            3: np.asarray([0.0, 1.0e-3, 0.0]),
+            4: np.asarray([5.0e-4, 5.0e-4, 1.0e-12]),
+            # This disconnected point establishes the full-domain scale used
+            # by the native certificate threshold.
+            5: np.asarray([1.0, 1.0, 1.0]),
+        }
+        self.dimensions = {1: 2, 2: 2, 3: 2, 4: 3, 5: 3}
+        self.optimize = Mock()
+
+    def getNodes(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        tags = np.asarray(sorted(self.coordinates), dtype=np.int64)
+        coordinates = np.concatenate([self.coordinates[int(tag)] for tag in tags])
+        return tags, coordinates, np.asarray([], dtype=np.float64)
+
+    def getElementsByType(self, element_type: int) -> tuple[np.ndarray, np.ndarray]:
+        assert element_type == 4
+        return np.asarray([101], dtype=np.int64), np.asarray([1, 2, 3, 4])
+
+    def getNode(self, node_tag: int) -> tuple[np.ndarray, list[float], int, int]:
+        return self.coordinates[node_tag], [], self.dimensions[node_tag], 1
+
+    def setNode(
+        self,
+        node_tag: int,
+        coordinates: list[float],
+        parameters: list[float],
+    ) -> None:
+        del parameters
+        self.coordinates[node_tag] = np.asarray(coordinates, dtype=np.float64)
+
+
+def _local_repair_gmsh(mesh: _LocalRepairTetMesh) -> object:
+    return type(
+        "Gmsh",
+        (),
+        {
+            "model": type("Model", (), {"mesh": mesh})(),
+            "option": Mock(),
+        },
+    )()
+
+
+def test_mixed_tet_global_threshold_matches_native_scale_gate() -> None:
+    mesh = _LocalRepairTetMesh()
+    gmsh = _local_repair_gmsh(mesh)
+
+    local = gmsh_swept._mixed_tet_degeneracy_report(gmsh)
+    global_scale = gmsh_swept._mixed_tet_degeneracy_report(
+        gmsh,
+        use_global_scale=True,
+    )
+
+    assert local.element_tags == frozenset()
+    assert global_scale.element_tags == frozenset({101})
+    assert global_scale.worst_threshold == pytest.approx(6.0e-18)
+
+
+def test_mixed_tet_local_first_repair_avoids_global_optimizer() -> None:
+    mesh = _LocalRepairTetMesh()
+    gmsh = _local_repair_gmsh(mesh)
+
+    gmsh_swept._repair_mixed_tetrahedra(gmsh)
+
+    assert mesh.coordinates[4][2] > 1.0e-12
+    assert gmsh.model.mesh.optimize.call_count == 0
+    assert not gmsh_swept._mixed_tet_degeneracy_report(
+        gmsh,
+        use_global_scale=True,
+    ).element_tags
+
+
+def test_mixed_tetrahedra_repair_uses_versioned_local_first_policy() -> None:
     gmsh = _empty_tet_gmsh_mock()
 
     gmsh_swept._repair_mixed_tetrahedra(gmsh)
 
-    gmsh.model.mesh.optimize.assert_called_once_with("", force=True, niter=1)
+    gmsh.model.mesh.optimize.assert_not_called()
     policy = gmsh_swept._STRICT_MIXED_TET_REPAIR_POLICY
-    assert policy.algorithm_id == "fullmag.mixed-tet-repair.v2"
-    assert policy.method == ""
+    assert policy.algorithm_id == "fullmag.mixed-tet-repair.v1"
+    assert policy.method == "Relocate3D"
     assert policy.optimize_threshold == 1.0e-6
     assert policy.force is True
+    assert policy.local_first is True
 
 
 def test_mixed_tetrahedra_repair_uses_one_iteration() -> None:
     gmsh = _empty_tet_gmsh_mock()
+    policy = gmsh_swept._MixedTetRepairPolicy(
+        algorithm_id="qualification",
+        method="Relocate3D",
+        iterations=1,
+    )
 
-    gmsh_swept._repair_mixed_tetrahedra(gmsh)
+    gmsh_swept._execute_mixed_tet_repair_policy(gmsh, policy)
 
-    assert gmsh.model.mesh.optimize.call_args.kwargs == {"force": True, "niter": 1}
+    assert gmsh.model.mesh.optimize.call_args == call(
+        "Relocate3D", force=True, niter=1
+    )
     gmsh.option.setNumber.assert_any_call("Mesh.OptimizeThreshold", 1.0e-6)
 
 
@@ -166,9 +250,14 @@ def test_mixed_tetrahedra_repair_restores_gmsh_threshold_after_optimizer_failure
     gmsh = _empty_tet_gmsh_mock()
     gmsh.option.getNumber.return_value = 0.42
     gmsh.model.mesh.optimize.side_effect = RuntimeError("optimizer failed")
+    policy = gmsh_swept._MixedTetRepairPolicy(
+        algorithm_id="qualification",
+        method="Relocate3D",
+        iterations=1,
+    )
 
     with pytest.raises(RuntimeError, match="optimizer failed"):
-        gmsh_swept._repair_mixed_tetrahedra(gmsh)
+        gmsh_swept._execute_mixed_tet_repair_policy(gmsh, policy)
 
     assert gmsh.option.setNumber.call_args_list == [
         call("Mesh.OptimizeThreshold", 1.0e-6),
@@ -196,9 +285,9 @@ def test_mixed_tetrahedra_repair_rejects_created_degenerate_tet4() -> None:
             return np.asarray([101], dtype=np.int64), np.asarray([1, 2, 3, 4])
 
         def optimize(self, method: str, *, force: bool, niter: int) -> None:
-            assert (method, force, niter) == ("", True, 1)
+            assert (method, force, niter) == ("Relocate3D", True, 1)
             self.coordinates[4] = np.asarray(
-                [0.0, 0.0, np.finfo(np.float64).eps]
+                [0.0, 0.0, np.finfo(np.float64).eps * 1.0e-3]
             )
 
     mesh = MutableTetMesh()
@@ -209,7 +298,7 @@ def test_mixed_tetrahedra_repair_rejects_created_degenerate_tet4() -> None:
     )()
 
     with pytest.raises(RuntimeError, match="repair.*created: count=1"):
-        gmsh_swept._repair_mixed_tetrahedra(gmsh)
+        gmsh_swept._repair_mixed_tetrahedra_for_qualification("Relocate3D", gmsh)
 
 
 def test_mixed_tetrahedra_repair_rejects_generated_sliver_left_by_policy() -> None:
@@ -232,7 +321,7 @@ def test_mixed_tetrahedra_repair_rejects_generated_sliver_left_by_policy() -> No
             return np.asarray([101], dtype=np.int64), np.asarray([1, 2, 3, 4])
 
         def optimize(self, method: str, *, force: bool, niter: int) -> None:
-            assert (method, force, niter) == ("", True, 1)
+            assert (method, force, niter) == ("Relocate3D", True, 1)
 
     mesh = GeneratedSliverMesh()
     gmsh = type(
@@ -242,7 +331,7 @@ def test_mixed_tetrahedra_repair_rejects_generated_sliver_left_by_policy() -> No
     )()
 
     with pytest.raises(RuntimeError, match="left: count=1.*worst_element_tag=101"):
-        gmsh_swept._repair_mixed_tetrahedra(gmsh)
+        gmsh_swept._repair_mixed_tetrahedra_for_qualification("Relocate3D", gmsh)
 
     assert mesh.coordinates[4][2] == 0.0
 
@@ -274,7 +363,7 @@ def test_mixed_tetrahedra_repair_reports_created_and_left_worst_separately() -> 
             )
 
         def optimize(self, method: str, *, force: bool, niter: int) -> None:
-            assert (method, force, niter) == ("", True, 1)
+            assert (method, force, niter) == ("Relocate3D", True, 1)
             self.coordinates[8] = np.asarray([2.0, 0.0, 0.0])
 
     mesh = MixedFailureMesh()
@@ -285,7 +374,7 @@ def test_mixed_tetrahedra_repair_reports_created_and_left_worst_separately() -> 
     )()
 
     with pytest.raises(RuntimeError) as caught:
-        gmsh_swept._repair_mixed_tetrahedra(gmsh)
+        gmsh_swept._repair_mixed_tetrahedra_for_qualification("Relocate3D", gmsh)
 
     message = str(caught.value)
     assert "created: count=1, worst_element_tag=102" in message
@@ -359,7 +448,7 @@ def test_qualification_relocate_selector_uses_its_own_policy(
     )
 
 
-def test_qualification_default_selector_uses_immutable_production_policy(
+def test_qualification_default_selector_uses_an_exact_candidate_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gmsh = Mock()
@@ -373,7 +462,14 @@ def test_qualification_default_selector_uses_immutable_production_policy(
 
     gmsh_swept._repair_mixed_tetrahedra_for_qualification("", gmsh)
 
-    assert delegated == [gmsh_swept._STRICT_MIXED_TET_REPAIR_POLICY]
+    assert len(delegated) == 1
+    policy = delegated[0]
+    assert policy is not gmsh_swept._STRICT_MIXED_TET_REPAIR_POLICY
+    assert policy.algorithm_id == (
+        gmsh_swept._qualification_mixed_tet_repair_algorithm_id("default", 1)
+    )
+    assert policy.method == ""
+    assert policy.local_first is False
 
 
 @pytest.mark.parametrize(

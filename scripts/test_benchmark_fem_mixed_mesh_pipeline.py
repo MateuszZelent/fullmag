@@ -117,7 +117,7 @@ def _document() -> dict[str, object]:
         "scenario": {
             "id": "sp4_mixed",
             "requested_layers": 1,
-            "repair_method": "default",
+            "repair_method": benchmark.PRODUCTION_REPAIR_METHOD,
             "gmsh_threads": 1,
             "rayon_threads": 1,
             "python_audit_runs": 0,
@@ -479,7 +479,7 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                         with self.assertRaises(SystemExit):
                             benchmark._parse_args([*common, *thread_args])
 
-    def test_parser_preserves_literal_default_baseline_provenance(self) -> None:
+    def test_parser_preserves_literal_production_baseline_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             common = [*_cli_args(root), "--rayon-threads", "1", "--gmsh-threads", "1"]
@@ -498,11 +498,11 @@ class BenchmarkEvidenceTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     benchmark._config_from_argv(
-                        [*common, "--mode", "baseline", "--repair-method", "Relocate3D"]
-                    )
+                    [*common, "--mode", "baseline", "--repair-method", "default"]
+                )
 
             mode, config = benchmark._config_from_argv(
-                [*common, "--mode", "baseline", "--repair-method", "default"]
+                [*common, "--mode", "baseline", "--repair-method", "Relocate3D"]
             )
             self.assertEqual(mode, "baseline")
             self.assertIsNone(config.repair_method_override)
@@ -534,7 +534,7 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                 qualification_selector=None,
             )
 
-    def test_baseline_evidence_records_literal_default(self) -> None:
+    def test_baseline_evidence_records_literal_production_method(self) -> None:
         with tempfile.TemporaryDirectory() as root_name:
             root = Path(root_name)
             dependencies = benchmark._BenchmarkDependencies(
@@ -556,7 +556,10 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                 dependencies=dependencies,
             )
 
-            self.assertEqual(document["scenario"]["repair_method"], "default")
+            self.assertEqual(
+                document["scenario"]["repair_method"],
+                benchmark.PRODUCTION_REPAIR_METHOD,
+            )
 
     def test_qualification_executes_and_records_each_selected_repair_method(
         self,
@@ -624,13 +627,13 @@ class BenchmarkEvidenceTests(unittest.TestCase):
                     )
 
     def test_baseline_validator_rejects_noncanonical_repair_provenance(self) -> None:
-        for method in ("Relocate3D", "Netgen"):
+        for method in ("default", "Netgen"):
             with self.subTest(method=method):
                 document = _document()
                 document["scenario"]["repair_method"] = method  # type: ignore[index]
                 with self.assertRaisesRegex(
                     ValueError,
-                    "baseline_recorded.*default",
+                    "baseline_recorded.*Relocate3D",
                 ):
                     validate_evidence_document(document)
 

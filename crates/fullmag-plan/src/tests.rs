@@ -9309,9 +9309,7 @@ fn adaptive_fdm_geometry_guards_are_cuda_only_and_preserved() {
     let BackendPlanIR::Fdm(fdm_plan) = planned.backend_plan else {
         panic!("bootstrap CUDA fixture must produce a single-grid FDM plan");
     };
-    let resolved = fdm_plan
-        .adaptive_timestep
-        .expect("planned adaptive policy");
+    let resolved = fdm_plan.adaptive_timestep.expect("planned adaptive policy");
     assert_eq!(resolved.max_spin_rotation, Some(0.2));
     assert_eq!(resolved.norm_tolerance, Some(1.0e-6));
 

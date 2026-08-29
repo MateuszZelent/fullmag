@@ -239,7 +239,8 @@ function Get-GitCommit {
 }
 
 function Stage-NativeFdmDll {
-  $searchRoot = Join-Path $TargetRoot "release\build"
+  # Cargo places build-script output below the target triple directory.
+  $searchRoot = Join-Path $TargetRoot "$TargetTriple\release\build"
   $dll = Get-ChildItem -LiteralPath $searchRoot -Filter "fullmag_fdm.dll" -File -Recurse -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1

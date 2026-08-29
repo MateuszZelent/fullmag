@@ -20,10 +20,14 @@ windows-setup:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/setup_fullmag.ps1" -InstallMissing
 
 windows-build backend="fdm" device="cpu" frontend="dev":
-    if [ "{{backend}}" = "fem" ]; then \
-      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode true -BuildOnly -Frontend "{{frontend}}" -Backend fem -Device "{{device}}"; \
+    backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; \
+    case "$backend" in backend=*) backend="${backend#backend=}" ;; --backend=*) backend="${backend#--backend=}" ;; esac; \
+    case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
+    case "$frontend" in frontend=*) frontend="${frontend#frontend=}" ;; --frontend=*) frontend="${frontend#--frontend=}" ;; esac; \
+    if [ "$backend" = "fem" ]; then \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device"; \
     else \
-      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "{{frontend}}" -Backend "{{backend}}" -Device "{{device}}"; \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device"; \
     fi
 
 ensure-python:

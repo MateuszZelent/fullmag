@@ -871,6 +871,7 @@ pub(crate) struct NativeFemBackend {
     stage_oersted_provider: Option<Box<StageOerstedProvider>>,
     stage_transport_provider: Option<Box<StageTransportProvider>>,
     magnetic_node_mask: Arc<[bool]>,
+    frozen_mask: Option<Arc<[bool]>>,
     saturation_magnetisation_by_node: Arc<[f64]>,
     dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
     energy_density_terms: NativeFemEnergyDensityTerms,
@@ -1454,7 +1455,8 @@ pub(crate) fn can_materialize_preview_quantity(
     plan: &fullmag_ir::FemPlanIR,
     id: QuantityId,
 ) -> bool {
-    NativeFemPreviewObservable::from_quantity(id).is_some()
+    (id == QuantityId::FrozenSpins && plan.frozen_spins.is_some())
+        || NativeFemPreviewObservable::from_quantity(id).is_some()
         || NativeFemEnergyDensityTerms::from_plan(plan)
             .observables_for(id.as_str())
             .is_some()
@@ -1707,11 +1709,38 @@ fn build_native_fem_energy_density_preview_field(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn build_native_fem_frozen_spins_preview_field(
+    request: &LivePreviewRequest,
+    frozen_mask: &[bool],
+    active_mask: &[bool],
+) -> Result<LivePreviewField, RunError> {
+    if frozen_mask.len() != active_mask.len() {
+        return Err(RunError {
+            message: format!(
+                "native FEM Frozen Spins mask length {} differs from magnetic node mask length {}",
+                frozen_mask.len(),
+                active_mask.len()
+            ),
+        });
+    }
+    let values = frozen_mask
+        .iter()
+        .map(|frozen| f64::from(*frozen))
+        .collect::<Vec<_>>();
+    Ok(build_mesh_scalar_preview_field_with_active_mask(
+        request,
+        &values,
+        Some(active_mask.to_vec()),
+    ))
+}
+
+#[cfg(feature = "fem-gpu")]
 #[derive(Debug)]
 pub(crate) struct NativeFemPreviewSnapshot {
     handle: *mut ffi::fullmag_fem_preview_snapshot,
     request: LivePreviewRequest,
     active_mask: Option<Arc<[bool]>>,
+    host_frozen_mask: Option<Arc<[bool]>>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2836,6 +2865,10 @@ impl NativeFemBackend {
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()])
                 .into(),
+            frozen_mask: plan
+                .frozen_spins
+                .as_ref()
+                .map(|frozen_spins| Arc::<[bool]>::from(frozen_spins.frozen_mask.clone())),
             saturation_magnetisation_by_node: saturation_magnetisation_by_node.into(),
             dg0_energy_projection,
             energy_density_terms: NativeFemEnergyDensityTerms::from_plan(plan),
@@ -4193,6 +4226,18 @@ impl NativeFemBackend {
         &self,
         request: &LivePreviewRequest,
     ) -> Result<NativeFemPreviewSnapshot, RunError> {
+        let quantity = crate::quantities::normalize_quantity_id(&request.quantity)?;
+        if quantity == QuantityId::FrozenSpins {
+            let frozen_mask = self.frozen_mask.clone().ok_or_else(|| RunError {
+                message: "native FEM preview 'frozen_spins': constraint is not active".to_string(),
+            })?;
+            return Ok(NativeFemPreviewSnapshot {
+                handle: ptr::null_mut(),
+                request: request.clone(),
+                active_mask: Some(self.magnetic_node_mask.clone()),
+                host_frozen_mask: Some(frozen_mask),
+            });
+        }
         let observable = fem_preview_observable(&request.quantity)?;
         let handle =
             unsafe { ffi::fullmag_fem_backend_begin_preview_snapshot(self.handle, observable) };
@@ -4206,6 +4251,7 @@ impl NativeFemBackend {
             handle,
             request: request.clone(),
             active_mask,
+            host_frozen_mask: None,
         })
     }
 
@@ -4273,6 +4319,24 @@ impl NativeFemBackend {
         request: &LivePreviewRequest,
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
+        if crate::quantities::normalize_quantity_id(&request.quantity)? == QuantityId::FrozenSpins {
+            if node_count != self.magnetic_node_mask.len() {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM Frozen Spins preview requested {node_count} nodes for a {}-node carrier",
+                        self.magnetic_node_mask.len()
+                    ),
+                });
+            }
+            let frozen_mask = self.frozen_mask.as_deref().ok_or_else(|| RunError {
+                message: "native FEM preview 'frozen_spins': constraint is not active".to_string(),
+            })?;
+            return build_native_fem_frozen_spins_preview_field(
+                request,
+                frozen_mask,
+                &self.magnetic_node_mask,
+            );
+        }
         let conservative_dg0_energy = self.dg0_energy_projection.is_some()
             && matches!(
                 crate::quantities::normalized_quantity_name(&request.quantity)?,
@@ -4420,6 +4484,17 @@ impl NativeFemBackend {
 #[cfg(feature = "fem-gpu")]
 impl NativeFemPreviewSnapshot {
     pub fn into_live_preview_field(mut self) -> Result<LivePreviewField, RunError> {
+        if let Some(frozen_mask) = self.host_frozen_mask.take() {
+            let active_mask = self.active_mask.take().ok_or_else(|| RunError {
+                message: "native FEM Frozen Spins preview is missing its magnetic carrier mask"
+                    .to_string(),
+            })?;
+            return build_native_fem_frozen_spins_preview_field(
+                &self.request,
+                &frozen_mask,
+                &active_mask,
+            );
+        }
         let mut data: *const std::ffi::c_void = ptr::null();
         let mut len_bytes = 0u64;
         let mut desc = ffi::fullmag_fem_snapshot_desc {
@@ -5222,6 +5297,35 @@ fn last_global_error_or(fallback: &str) -> String {
 #[cfg(all(test, feature = "fem-gpu"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frozen_spins_preview_is_a_binary_scalar_on_the_magnetic_fem_carrier() {
+        let request = LivePreviewRequest {
+            quantity: "frozen_spins".to_string(),
+            auto_scale_enabled: false,
+            ..Default::default()
+        };
+        let active_mask = Arc::<[bool]>::from(vec![true, true, false, true]);
+        let frozen_mask = Arc::<[bool]>::from(vec![true, false, false, true]);
+
+        let direct =
+            build_native_fem_frozen_spins_preview_field(&request, &frozen_mask, &active_mask)
+                .expect("direct FEM Frozen Spins preview");
+        let asynchronous = NativeFemPreviewSnapshot {
+            handle: ptr::null_mut(),
+            request,
+            active_mask: Some(active_mask),
+            host_frozen_mask: Some(frozen_mask),
+        }
+        .into_live_preview_field()
+        .expect("host-backed FEM Frozen Spins preview snapshot");
+
+        assert_eq!(direct.quantity, "frozen_spins");
+        assert_eq!(direct.unit, "1");
+        assert_eq!(direct.vector_field_values, vec![1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(direct.active_mask, Some(vec![true, true, false, true]));
+        assert_eq!(asynchronous, direct);
+    }
 
     #[test]
     fn demag_diagnostics_mapping_preserves_each_ffi_field() {

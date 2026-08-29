@@ -858,6 +858,56 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(false);
   });
 
+  it.each(["fdm", "fem"] as const)(
+    "adopts a topology-aware %s Frozen Spins scalar carrier for 3D surfaces",
+    (discretization) => {
+      const buffer = buildViewport3DTargetFieldBuffer({
+        domain: {
+          discretization,
+          domainGenerationId: `${discretization}-generation-7`,
+          meshTopologyHash: `${discretization}-topology-hash`,
+          meshTopologyRevision: "11",
+          pointCount: 4,
+        },
+        fieldVector: vectorFixture({
+          domainGenerationId: `${discretization}-generation-7`,
+          formatVersion: 3,
+          indexing: "explicit_node_indices",
+          meshTopologyHash: `${discretization}-topology-hash`,
+          meshTopologyRevision: "11",
+          nComp: 1,
+          nodeIndices: new Uint32Array([0, 1, 2, 3]),
+          pointCount: 4,
+          quantityId: "frozen_spins",
+          scopeId: "film",
+          scopeKind: "object",
+          valueCount: 4,
+          values: new Float64Array([1, 0, 0, 1]),
+        }),
+        query: {
+          component: "full",
+          scope_id: "film",
+          scope_kind: "object",
+        },
+        targetIds: ["part:film"],
+        topologyRevision: "11",
+      });
+
+      expect(buffer.capability).toBe("scalar-complete");
+      expect(buffer.component).toBe("magnitude");
+      expect(buffer.domainCompatibility.status).toBe("compatible");
+      expect(buffer.quantityId).toBe("frozen_spins");
+      expect(
+        viewport3DTargetFieldBufferCanServeSurface(
+          buffer,
+          "magnitude",
+          "frozen_spins",
+        ),
+      ).toBe(true);
+      expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(false);
+    },
+  );
+
   it("rejects otherwise compatible buffers from another requested quantity", () => {
     const scalarBuffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture({

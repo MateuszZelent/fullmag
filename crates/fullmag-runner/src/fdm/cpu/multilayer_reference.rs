@@ -622,7 +622,7 @@ fn snapshot_fields(
                             message: format!(
                             "multilayer scalar quantity '{}' is unavailable for the current plan",
                             quantity
-                            ),
+                        ),
                         })?;
             }
             fullmag_quantities::QuantityShape::VectorField => {
@@ -940,7 +940,7 @@ fn build_multilayer_demag_runtime(
         other => {
             return Err(RunError {
                 message: format!("unsupported resolved multilayer mode '{other}'"),
-            })
+            });
         }
     };
     let conv_grid = [
@@ -1009,7 +1009,7 @@ fn build_multilayer_demag_runtime(
                             "layer '{}' has unsupported transfer_kind '{other}'",
                             layer.layer_id
                         ),
-                    })
+                    });
                 }
             };
             FdmLayerDescriptor::new(
@@ -1598,6 +1598,7 @@ fn max_norm(values: &[[f64; 3]]) -> f64 {
     values.iter().map(|value| norm(*value)).fold(0.0, f64::max)
 }
 
+#[cfg(test)]
 fn restore_frozen_reference_by_layer_offsets(
     frozen: &fullmag_engine::FrozenSpinsState,
     layers: &mut [Vec<[f64; 3]>],

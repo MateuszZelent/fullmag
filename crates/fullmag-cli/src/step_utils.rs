@@ -635,7 +635,7 @@ pub(crate) fn final_stage_step_update(
             terminal_field_snapshot: false,
             finished,
         },
-        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
@@ -652,7 +652,7 @@ pub(crate) fn final_stage_step_update(
             terminal_field_snapshot: false,
             finished,
         },
-        BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
@@ -669,7 +669,7 @@ pub(crate) fn final_stage_step_update(
             terminal_field_snapshot: false,
             finished,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
@@ -735,7 +735,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             terminal_field_snapshot: false,
             finished,
         },
-        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
@@ -752,7 +752,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             terminal_field_snapshot: false,
             finished,
         },
-        BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
@@ -769,7 +769,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             terminal_field_snapshot: false,
             finished,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],

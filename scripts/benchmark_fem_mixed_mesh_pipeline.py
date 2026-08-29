@@ -37,6 +37,15 @@ from fem_mixed_mesh_benchmark_evidence import (
 _T = TypeVar("_T")
 _QualificationRepairSelector = Callable[[str, object], None]
 
+# The harness imports the canonical scenario as ``tests.*``.  When Python
+# executes this file by path, ``sys.path[0]`` is ``scripts/`` rather than the
+# repository root, so an unrelated installed package named ``tests`` can win
+# the import.  Make the script self-contained for both direct and `just`
+# invocations without requiring callers to remember a second PYTHONPATH entry.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkConfig:
@@ -707,7 +716,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         arguments.mode == "baseline"
         and arguments.repair_method != PRODUCTION_REPAIR_METHOD
     ):
-        parser.error("baseline requires --repair-method default")
+        parser.error(
+            "baseline requires --repair-method "
+            f"{PRODUCTION_REPAIR_METHOD}"
+        )
     return arguments
 
 
