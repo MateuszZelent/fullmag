@@ -78,7 +78,10 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # Keep the shared-domain cache namespace separate from the older per-object
 # ``.npz`` cache.  The version is part of the digest, so changing the cache
 # document or the generation contract cannot silently reuse an old artifact.
-_FEM_MESH_CACHE_VERSION = "v6"
+# v8 invalidates artifacts made with the v7 source-face corner target.  The
+# mixed swept source is now uniformly targeted; reusing a v7 artifact would
+# silently retain the unnecessary corner refinement and its old topology.
+_FEM_MESH_CACHE_VERSION = "v8"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
 
 

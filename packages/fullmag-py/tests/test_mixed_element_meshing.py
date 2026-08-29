@@ -15,6 +15,7 @@ import pytest
 
 import fullmag as fm
 import fullmag.meshing._gmsh_generators as gmsh_generators
+import fullmag.meshing._gmsh_airbox as gmsh_airbox
 import fullmag.meshing._gmsh_swept as gmsh_swept
 import fullmag.meshing._gmsh_types as gmsh_types
 from fullmag import world as flat_world
@@ -49,6 +50,35 @@ from fullmag.meshing.remesh_cli import _mesh_result_payload
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "gmsh" / "mixed_prism_pyramid_airbox.geo"
+
+
+def test_mixed_transition_shell_expands_only_for_large_far_field_jump() -> None:
+    expanded = gmsh_airbox._mixed_transition_shell_parameters(
+        h_outer=20.0e-9,
+        h_inner=2.0e-9,
+        hmax=2.0e-9,
+        clearance_limit=31.25e-9,
+        grading_ratio=1.7,
+    )
+    assert expanded == pytest.approx((20.0e-9, 20.0e-9 / 1.7))
+
+    ordinary = gmsh_airbox._mixed_transition_shell_parameters(
+        h_outer=1.2e-6,
+        h_inner=0.4e-6,
+        hmax=0.8e-6,
+        clearance_limit=1.0e-6,
+        grading_ratio=1.3,
+    )
+    assert ordinary == pytest.approx((0.8e-6, 0.8e-6))
+
+    insufficient_clearance = gmsh_airbox._mixed_transition_shell_parameters(
+        h_outer=20.0e-9,
+        h_inner=2.0e-9,
+        hmax=2.0e-9,
+        clearance_limit=10.0e-9,
+        grading_ratio=1.7,
+    )
+    assert insufficient_clearance == pytest.approx((2.0e-9, 2.0e-9))
 
 CELL_FACES = {
     "Tetrahedron 4": ((0, 2, 1), (0, 1, 3), (1, 2, 3), (2, 0, 3)),

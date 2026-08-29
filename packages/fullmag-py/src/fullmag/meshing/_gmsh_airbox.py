@@ -60,6 +60,46 @@ from ._gmsh_extraction import _extract_quality_metrics
 _MIXED_SHARED_GEO_STRATEGY = MIXED_SHARED_GEO_STRATEGY
 _MIXED_SHARED_GMSH_VERSION = MIXED_SHARED_GMSH_VERSION
 
+# A thin transition shell at the film target can make a large airbox target
+# pathological: the geometric field then keeps the fine target over most of
+# the far-air volume before it is allowed to grow.  Only a genuinely large
+# jump is eligible for the bounded shell expansion below.  Smaller jumps keep
+# the historical shell dimensions and therefore retain their existing mesh
+# contract.
+_MIXED_TRANSITION_SHELL_EXPANSION_RATIO = 4.0
+
+
+def _mixed_transition_shell_parameters(
+    *,
+    h_outer: float,
+    h_inner: float,
+    hmax: float,
+    clearance_limit: float,
+    grading_ratio: float,
+) -> tuple[float, float]:
+    """Resolve the mixed-domain shell thickness and outer target size.
+
+    When the far-air target is at least four times the film/interface target,
+    absorb that jump in the conforming shell and start the far-air field one
+    requested grading step below ``h_outer``.  The expansion is disabled when
+    the airbox cannot contain the shell; then the pre-existing thin-shell
+    policy is preserved exactly.
+    """
+    base_target = max(float(h_inner), float(hmax))
+    if (
+        math.isfinite(float(h_outer))
+        and math.isfinite(base_target)
+        and math.isfinite(float(clearance_limit))
+        and base_target > 0.0
+        and float(h_outer) >= _MIXED_TRANSITION_SHELL_EXPANSION_RATIO * base_target
+        and float(h_outer) <= float(clearance_limit)
+    ):
+        growth = float(grading_ratio)
+        if not math.isfinite(growth) or growth <= 1.0:
+            growth = 1.0
+        return float(h_outer), max(base_target, float(h_outer) / growth)
+    return min(base_target, float(clearance_limit)), base_target
+
 
 def _add_geo_box_surface_loop(
     gmsh: Any,
@@ -374,15 +414,17 @@ def _add_conforming_swept_box_airbox_geo(
     if not math.isfinite(h_inner) or h_inner <= 0.0:
         raise ValueError("mixed shared-domain airbox minimum element size must be positive")
     clearance = 0.5 * (outer_size - body_size)
-    shell_thickness = min(
-        max(float(h_inner), float(hmax_scaled)),
-        0.5 * float(np.min(clearance)),
+    shell_thickness, shell_outer_mesh_size = _mixed_transition_shell_parameters(
+        h_outer=h_outer,
+        h_inner=h_inner,
+        hmax=hmax_scaled,
+        clearance_limit=0.5 * float(np.min(clearance)),
+        grading_ratio=float(airbox.grading_ratio),
     )
     if not math.isfinite(shell_thickness) or shell_thickness <= 0.0:
         raise ValueError("mixed shared-domain transition shell has no positive thickness")
     shell_min = body_min - shell_thickness
     shell_max = body_max + shell_thickness
-    shell_outer_mesh_size = max(float(h_inner), float(hmax_scaled))
 
     outer_surfaces, outer_loop = _add_geo_box_surface_loop(
         gmsh,

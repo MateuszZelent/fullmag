@@ -911,9 +911,12 @@ def _prepare_mixed_apex_face_side_constraints(
                 )
                 return normal, edges
 
-            def owner_determinant(owner: NDArray[np.int64], alpha: float) -> float:
-                normal_area, _edges = face_geometry(alpha)
-                origin = point(face[0], alpha)
+            def owner_determinant(
+                owner: NDArray[np.int64],
+                origin: NDArray[np.float64],
+                normal_area: NDArray[np.float64],
+                alpha: float,
+            ) -> float:
                 opposite = [
                     point(int(tag), alpha)
                     for tag in owner
@@ -924,10 +927,21 @@ def _prepare_mixed_apex_face_side_constraints(
                 owner_interior = np.mean(np.asarray(opposite), axis=0)
                 return float(np.dot(owner_interior - origin, normal_area))
 
-            starts = [owner_determinant(owner, 0.0) for owner in owners]
-            ends = [owner_determinant(owner, 1.0) for owner in owners]
+            # Every owner determinant and the stored side guard use the same
+            # face geometry at alpha=0 or alpha=1.  Materialize each endpoint
+            # once instead of recomputing the cross products for every owner.
+            origin_start = point(face[0], 0.0)
+            origin_end = point(face[0], 1.0)
             normal_start, edge_starts = face_geometry(0.0)
             normal_end, edge_ends = face_geometry(1.0)
+            starts = [
+                owner_determinant(owner, origin_start, normal_start, 0.0)
+                for owner in owners
+            ]
+            ends = [
+                owner_determinant(owner, origin_end, normal_end, 1.0)
+                for owner in owners
+            ]
             apex_constraints.append(
                 _MixedApexFaceSideConstraint(
                     first_start=starts[0],
@@ -1003,6 +1017,32 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
     if len(pyramid_tags) == 0:
         raise RuntimeError("mixed shared-domain realization produced no pyramid5 cells")
     pyramids = np.asarray(pyramid_nodes, dtype=np.int64).reshape((-1, 5))
+
+    # The optimizer's only acceptance objective is the all-family p05 floor.
+    # A healthy Gmsh mesh can already satisfy that floor after the local
+    # tetrahedral repair; in that case running a line-search for every apex
+    # cannot improve the accepted result and only repeats expensive geometry
+    # work.  Check the strict tet gate before taking the fast path; if it
+    # fails, retain the original line-search fallback below.
+    initial_p05 = _mixed_gmsh_scaled_jacobian_p05(gmsh)
+    if initial_p05 and all(
+        value >= MIXED_SCALED_JACOBIAN_P05_MIN
+        for value in initial_p05.values()
+    ):
+        degenerate_tets = _mixed_tet_degeneracy_report(
+            gmsh,
+            use_global_scale=True,
+        )
+        if not degenerate_tets.element_tags:
+            emit_progress(
+                "Gmsh mixed pyramid apex quality optimization: "
+                f"moved=0/{len(pyramids)}, max_scale=1.000, p05={initial_p05}"
+            )
+            return 1.0
+        # Preserve the original line-search fallback for a mesh whose p05
+        # already passes but still contains a strict tet degeneracy.  The
+        # optimizer may be able to repair that apex before the final gate.
+
     node_tags, node_coordinates, _ = gmsh.model.mesh.getNodes()
     coordinates = {
         int(tag): point
@@ -1969,7 +2009,14 @@ def generate_swept_box_mesh(
         corner3 = list(origin)
         corner3[face_axes[0]] += w
         corner3[face_axes[1]] += h
-        p3_mesh_size = source_hmax_scaled * (0.5 if airbox is not None else 1.0)
+        # Keep the source face uniformly targeted.  The old mixed-airbox
+        # special case refined only this opposite corner to 0.5*h, which
+        # increased the 2-D triangulation without improving the certified
+        # transition quality and made the finest SP4 level produce pyramid
+        # slivers.  The bounded source-face field already carries the exact
+        # target to the surface, so an extra point-only refinement is both
+        # unnecessary and harmful for the 3-D transition.
+        p3_mesh_size = source_hmax_scaled
         p3 = gmsh.model.geo.addPoint(
             corner3[0], corner3[1], corner3[2], p3_mesh_size
         )

@@ -1546,25 +1546,25 @@ void airbox_dirichlet_and_robin_match_manufactured_slab_oracle() {
     }
 }
 
-void nonperiodic_poisson_uses_p2_potential_over_p1_magnetization() {
-    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+void nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization() {
+    mfem::Mesh mesh = independent_all_tet_poisson_mesh();
     mfem::H1_FECollection state_fec(1, 3);
     mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
     fullmag::fem::Context ctx;
-    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+    mixed_poisson_context(ctx, mesh, state_fes, element_mask_for_attribute(mesh, 7));
 
     std::string error;
     check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
-                 "nonperiodic P2 Poisson workspace initialization");
+                 "all-tet nonperiodic P2 Poisson workspace initialization");
     auto &potential_fes =
         *static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
 
     check(state_fes.GetOrder(0) == 1,
           "magnetization state space must remain P1");
     check(potential_fes.GetOrder(0) == 2,
-          "nonperiodic scalar-potential space must be P2");
+          "all-tet nonperiodic scalar-potential space must remain P2");
     check(ctx.poisson_demag.potential_order == 2,
-          "resolved Poisson provenance must publish P2 potential order");
+          "all-tet Poisson provenance must publish P2 potential order");
     check(ctx.poisson_demag.potential_true_dof_count ==
               static_cast<uint64_t>(potential_fes.GetTrueVSize()),
           "resolved Poisson provenance must publish potential true-DOF count");
@@ -1583,6 +1583,43 @@ void nonperiodic_poisson_uses_p2_potential_over_p1_magnetization() {
                  "P1 magnetization to P2 potential RHS assembly");
     check(rhs != nullptr && rhs->Size() == potential_fes.GetTrueVSize(),
           "Poisson RHS rows must span P2 potential true DOFs");
+
+    fullmag::fem::context_destroy_poisson(ctx);
+}
+
+void mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential() {
+    mfem::Mesh mesh = mixed_prism_pyramid_tet_poisson_mesh();
+    mfem::H1_FECollection state_fec(1, 3);
+    mfem::FiniteElementSpace state_fes(&mesh, &state_fec);
+    fullmag::fem::Context ctx;
+    mixed_poisson_context(ctx, mesh, state_fes, {1u, 0u, 0u});
+
+    std::string error;
+    check_result(fullmag::fem::context_initialize_poisson(ctx, error), error,
+                 "mixed prism/pyramid/tet P1 Poisson workspace initialization");
+    auto &potential_fes =
+        *static_cast<mfem::FiniteElementSpace *>(ctx.poisson_demag.potential_fes);
+
+    check(state_fes.GetOrder(0) == 1,
+          "mixed prism/pyramid/tet magnetization state space must remain P1");
+    check(potential_fes.GetOrder(0) == 1,
+          "mixed prism/pyramid/tet scalar-potential space must resolve to MFEM-compatible P1");
+    check(ctx.poisson_demag.potential_order == 1,
+          "mixed prism/pyramid/tet provenance must publish the resolved P1 potential order");
+    check(ctx.poisson_demag.potential_true_dof_count ==
+              static_cast<uint64_t>(potential_fes.GetTrueVSize()) &&
+              potential_fes.GetTrueVSize() == state_fes.GetTrueVSize(),
+          "mixed prism/pyramid/tet P1 potential true DOFs must match P1 state nodes");
+
+    std::vector<double> m_xyz(
+        3u * static_cast<size_t>(state_fes.GetNDofs()), 0.0);
+    mfem::Vector *rhs = nullptr;
+    check_result(fullmag::fem::assemble_demag_poisson_rhs(
+                     ctx, m_xyz, rhs, error),
+                 error,
+                 "P1 magnetization to mixed P1 potential RHS assembly");
+    check(rhs != nullptr && rhs->Size() == potential_fes.GetTrueVSize(),
+          "mixed P1 Poisson RHS rows must span the resolved potential true DOFs");
 
     fullmag::fem::context_destroy_poisson(ctx);
 }
@@ -2405,7 +2442,7 @@ void mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace() {
     check_result(fullmag::fem::assemble_demag_poisson_rhs(
                      ctx, magnetization, rhs, error),
                  error,
-                 "mixed manufactured P1-to-P2 Poisson RHS");
+                  "mixed manufactured P1-to-resolved-order Poisson RHS");
     check(rhs != nullptr && rhs->Size() == ku.Size(), "mixed Poisson manufactured RHS extent");
     for (int dof = 0; dof < ku.Size(); ++dof) {
         check_near((*rhs)[dof], ku[dof], 2.0e-12,
@@ -2418,7 +2455,7 @@ void mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace() {
     check_result(fullmag::fem::recover_demag_poisson_field(
                      ctx, u_true, recovered, energy, magnetization, &energy_ns, error),
                  error,
-                 "mixed manufactured P2-to-P1 field recovery");
+                 "mixed manufactured resolved-order-to-P1 field recovery");
     for (int dof = 0; dof < fixture_fes.GetNDofs(); ++dof) {
         const size_t base = 3u * static_cast<size_t>(dof);
         check_near(recovered[base], -1.0, 2.0e-12, "mixed recovered Hx=-du/dx");
@@ -2435,8 +2472,8 @@ void mixed_poisson_manufactured_rhs_stiffness_recovery_and_trace() {
             check_near(u[a], u[b], 0.0, "mixed H1 potential trace uses one shared DOF");
             ++shared;
         }
-        check(shared == (interface.first == 0 ? 9 : 6),
-              "mixed P2 Poisson trace must preserve quadratic quad and triangle shared DOFs");
+        check(shared == (interface.first == 0 ? 4 : 3),
+              "mixed P1 Poisson trace must preserve quad and triangle shared vertex DOFs");
     }
     fullmag::fem::context_destroy_poisson(ctx);
 }
@@ -3791,7 +3828,8 @@ int main() {
     sharp_ms_demag_rhs_uses_typed_element_accessor();
 #if FULLMAG_HAS_MFEM_STACK
     sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
-    nonperiodic_poisson_uses_p2_potential_over_p1_magnetization();
+    nonperiodic_all_tet_poisson_uses_p2_potential_over_p1_magnetization();
+    mixed_pyramid_nonperiodic_poisson_uses_mfem_compatible_p1_potential();
     periodic_poisson_remains_explicit_p1_node_class_space();
     poisson_dependency_key_fails_closed_after_mesh_or_policy_mutation();
     nonperiodic_poisson_reuses_setup_owned_workspace_for_repeated_solves();

@@ -75,6 +75,28 @@ function Require-Command {
   }
 }
 
+function Get-Sha256File {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  # Do not depend on the optional Microsoft.PowerShell.Utility module here.
+  # Some Windows PowerShell installations expose the module only after an
+  # explicit import, which made a successful container build fail while
+  # writing its manifest.  The .NET implementation is available in the
+  # Windows PowerShell versions supported by this launcher.
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+      return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+      $stream.Dispose()
+    }
+  }
+  finally {
+    $hasher.Dispose()
+  }
+}
+
 function Invoke-External {
   param(
     [Parameter(Mandatory = $true)][string]$Command,
@@ -138,8 +160,11 @@ function Ensure-BuildxBuilder {
   $savedErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    $builderList = (& docker buildx ls 2>$null | Out-String)
+    # Capture the native command result before running a PowerShell pipeline.
+    # Select-Object/Out-String can clear LASTEXITCODE even when Docker exits 0.
+    $builderListOutput = @(& docker buildx ls 2>$null)
     $builderListExitCode = $LASTEXITCODE
+    $builderList = ($builderListOutput -join [Environment]::NewLine)
   }
   finally {
     $ErrorActionPreference = $savedErrorActionPreference
@@ -172,7 +197,9 @@ function Invoke-DockerImageBuild {
   $savedErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    & docker image inspect $image --format '{{.Id}}' 2>$null | Out-Null
+    # Do not pipe the native command to Out-Null: PowerShell may clear
+    # LASTEXITCODE and turn a valid existing image into a false miss.
+    $null = @(& docker image inspect $image --format '{{.Id}}' 2>$null)
     $imageInspectExitCode = $LASTEXITCODE
   }
   finally {
@@ -233,8 +260,11 @@ function Get-DockerImageId {
   $savedErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    $imageId = (& docker image inspect $Image --format '{{.Id}}' 2>$null | Select-Object -First 1).Trim()
+    # Capture LASTEXITCODE immediately after Docker; Select-Object can reset it.
+    $imageOutput = @(& docker image inspect $Image --format '{{.Id}}' 2>$null)
     $imageExitCode = $LASTEXITCODE
+    $imageId = if ($imageOutput.Count -gt 0) { [string]$imageOutput[0] } else { "" }
+    $imageId = $imageId.Trim()
   }
   finally {
     $ErrorActionPreference = $savedErrorActionPreference
@@ -319,6 +349,7 @@ $env:FULLMAG_WINDOWS_PNPM_ROOT = To-ComposePath $PnpmRoot
 $env:FULLMAG_WINDOWS_NODE_MODULES_ROOT = To-ComposePath $NodeModulesRoot
 $env:FULLMAG_WINDOWS_CONTROL_ROOM_NODE_MODULES_ROOT = To-ComposePath $ControlRoomNodeModulesRoot
 $env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()
+$containerWebPort = 3100
 $env:COMPOSE_PROJECT_NAME = "fullmag-windows-fem"
 $identityPython = Get-Command "python" -ErrorAction SilentlyContinue
 if (-not $identityPython) {
@@ -357,9 +388,30 @@ if ($ScriptPath) {
 }
 
 $makeTarget = if ($Frontend -eq "static") { "install-cli-static" } else { "install-cli-dev" }
+$buildMutex = $null
+$buildMutexHeld = $false
 Push-Location $RepoRoot
 try {
   if ($BuildMode -eq "true") {
+    # The dev and static targets intentionally share the local launcher and
+    # Cargo target cache.  Serialize Windows builds so a concurrent frontend
+    # cannot replace the binaries or manifest while this invocation is
+    # validating them.
+    $buildMutex = New-Object -TypeName System.Threading.Mutex -ArgumentList @($false, "Local\FullmagWindowsFEMBuild")
+    Write-Host "Waiting for Fullmag Windows build lock..."
+    try {
+      $buildMutexHeld = $buildMutex.WaitOne()
+    }
+    catch [System.Threading.AbandonedMutexException] {
+      # The previous owner exited unexpectedly; the OS grants ownership to
+      # this waiter, so the build can safely repair the shared state.
+      $buildMutexHeld = $true
+      Write-Warning "Recovered an abandoned Fullmag Windows build lock"
+    }
+    if (-not $buildMutexHeld) {
+      throw "Could not acquire the Fullmag Windows build lock"
+    }
+    Write-Host "Acquired Fullmag Windows build lock"
     Invoke-DockerImageBuild
     $buildCommand = if ($Device -eq "gpu") { @"
 set -euo pipefail
@@ -421,8 +473,8 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
       git_commit = [string]$sourceIdentity.head_commit_full
       worktree_state = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
       source_snapshot_sha256 = [string]$sourceIdentity.source_snapshot_sha256
-      binary_sha256 = (Get-FileHash -LiteralPath $RuntimeBinaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
-      api_binary_sha256 = (Get-FileHash -LiteralPath $RuntimeApiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+      binary_sha256 = Get-Sha256File -Path $RuntimeBinaryPath
+      api_binary_sha256 = Get-Sha256File -Path $RuntimeApiPath
       built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
     }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
@@ -431,8 +483,8 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
       throw "Windows FEM $Device build manifest is missing at $ManifestPath; rerun with build=True"
     }
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-    $binaryHash = (Get-FileHash -LiteralPath $RuntimeBinaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $apiBinaryHash = (Get-FileHash -LiteralPath $RuntimeApiPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $binaryHash = Get-Sha256File -Path $RuntimeBinaryPath
+    $apiBinaryHash = Get-Sha256File -Path $RuntimeApiPath
     $expectedWorktreeState = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
     if ([int]$manifest.schema_version -ne 2 -or
         [string]$manifest.git_commit -ne [string]$sourceIdentity.head_commit_full -or
@@ -463,13 +515,38 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
   foreach ($entry in @(
     "FULLMAG_FEM_EXECUTION=$Device",
     "FULLMAG_RELAX_DEVICE=$Device",
+    "FULLMAG_SP4_DEVICE=$Device",
     $(if ($Device -eq "gpu") { "FULLMAG_FEM_MFEM_DEVICE=cuda" } else { "FULLMAG_FEM_MFEM_DEVICE=cpu" }),
     $(if ($Device -eq "gpu") { "FULLMAG_FEM_REQUIRE_GPU=1" } else { "FULLMAG_FEM_REQUIRE_GPU=0" }),
     $(if ($Device -eq "gpu") { "FULLMAG_FEM_REQUIRE_CEED=1" } else { "FULLMAG_FEM_REQUIRE_CEED=0" }),
     "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1",
-    "FULLMAG_FDM_EXECUTION=cpu"
+    "FULLMAG_FDM_EXECUTION=cpu",
+    $(if ($RunMode -eq "headless") { "FULLMAG_API_PORT=0" } else { $null })
   )) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry)) {
+      continue
+    }
     $runArguments += @("-e", $entry)
+  }
+  # Keep the canonical SP4 scenario configurable from the Windows shell while
+  # forwarding only its documented scalar controls.  Arbitrary host
+  # environment is deliberately not copied into the container.
+  foreach ($name in @(
+    "FULLMAG_SP4_PHASE",
+    "FULLMAG_SP4_CASE",
+    "FULLMAG_SP4_MESH",
+    "FULLMAG_SP4_AIRBOX",
+    "FULLMAG_SP4_TOPOLOGY_VARIANT",
+    "FULLMAG_SP4_LAYERS",
+    "FULLMAG_SP4_DURATION_S",
+    "FULLMAG_SP4_RELAX_ALGORITHM",
+    "FULLMAG_SP4_RELAX_MAX_STEPS",
+    "FULLMAG_SP4_RELAX_TOL_APM"
+  )) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ($null -ne $value -and $value -ne "") {
+      $runArguments += @("-e", "${name}=$value")
+    }
   }
   if ($Device -eq "gpu") {
     $runArguments += @("-e", "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson")
@@ -483,7 +560,10 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
   if ($RunMode -eq "headless") {
     $cliArguments += @("--headless", "--json")
   } else {
-    $cliArguments += @("--web-port", $WebPort.ToString())
+    # Compose publishes the caller-selected host port as host:$WebPort ->
+    # container:3100.  The CLI must therefore always bind the container-side
+    # port; passing $WebPort here makes every non-default host port unreachable.
+    $cliArguments += @("--web-port", $containerWebPort.ToString())
   }
   $quotedCli = ($cliArguments | ForEach-Object { Quote-Bash $_ }) -join " "
   $runCommand = "set -euo pipefail; cd /workspace; export PYTHONPATH=/workspace/packages/fullmag-py/src; exec /workspace/.fullmag/local/bin/fullmag $quotedCli"
@@ -491,5 +571,16 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
   Invoke-DockerCompose $runArguments
 }
 finally {
+  if ($null -ne $buildMutex) {
+    if ($buildMutexHeld) {
+      try {
+        $buildMutex.ReleaseMutex()
+      }
+      catch [System.Threading.SynchronizationLockException] {
+        Write-Warning "Fullmag Windows build lock was not owned during release"
+      }
+    }
+    $buildMutex.Dispose()
+  }
   Pop-Location
 }

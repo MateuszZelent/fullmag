@@ -158,9 +158,17 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "fullmag-windows",
         "buildx",
         "builderListExitCode",
+        "builderListOutput",
         'ErrorActionPreference = "Continue"',
+        "Get-Sha256File",
+        "System.Security.Cryptography.SHA256",
         "FULLMAG_WINDOWS_REBUILD_FEM_IMAGE",
+        "FullmagWindowsFEMBuild",
+        "Waiting for Fullmag Windows build lock",
+        "AbandonedMutexException",
+        "ReleaseMutex",
         "docker image inspect",
+        "imageOutput",
         "capture_source_snapshot_identity.py",
         "--ignore-non-runtime-dirty",
         "FULLMAG_SOURCE_SNAPSHOT_SHA256",
@@ -179,6 +187,11 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "grep -Fxq cuda-fem-gpu",
         "FULLMAG_FEM_EXECUTION",
         "FULLMAG_RELAX_DEVICE",
+        "FULLMAG_SP4_DEVICE",
+        "FULLMAG_SP4_TOPOLOGY_VARIANT",
+        "FULLMAG_SP4_RELAX_MAX_STEPS",
+        "GetEnvironmentVariable",
+        "FULLMAG_API_PORT=0",
         "CPU fallback",
     ):
         assert required in launcher
@@ -230,6 +243,25 @@ def test_windows_wsl_launcher_uses_windows_powershell_relative_path_api() -> Non
 
     assert "MakeRelativeUri" in launcher
     assert "Path.GetRelativePath" not in launcher
+
+
+def test_windows_fem_interactive_launch_omits_empty_compose_environment_entries() -> None:
+    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+
+    assert '$(if ($RunMode -eq "headless") { "FULLMAG_API_PORT=0" } else { $null })' in launcher
+    assert "[string]::IsNullOrWhiteSpace([string]$entry)" in launcher
+    assert 'if ([string]::IsNullOrWhiteSpace([string]$entry)) {\n      continue\n    }' in launcher
+
+
+def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
+    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
+
+    assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher
+    assert '$containerWebPort = 3100' in launcher
+    assert '$cliArguments += @("--web-port", $containerWebPort.ToString())' in launcher
+    assert '$cliArguments += @("--web-port", $WebPort.ToString())' not in launcher
+    assert '"${FULLMAG_WINDOWS_WEB_PORT:-3100}:3100"' in compose
 
 
 def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
