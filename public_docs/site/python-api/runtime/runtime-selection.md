@@ -110,6 +110,20 @@ No physical model is introduced.
 
 (python-api-runtime-runtime-selection-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Runtime and provenance data are inspection-only; they are not standalone authoring controls.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for runtime-selection and artifact-publication parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|

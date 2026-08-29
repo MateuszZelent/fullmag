@@ -188,6 +188,11 @@ bounded by the Python validators and does not represent arbitrary multilayer dis
 - Canonical modal owner: {doc}`linearized-llg`.
 
 (numerical-methods-modal-validation-source-code-index)=
+
+## Control Room crosswalk
+
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. TODO: frontend support applies to numerical parameters without a matching control. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |

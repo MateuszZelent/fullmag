@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-build)=
 # Airbox Build API
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## 1. What it is and when to use it
 
 `study.build_domain_mesh()` explicitly materializes the shared domain mesh
@@ -138,3 +142,7 @@ No page-specific physical claims; airbox physics: {doc}`index`.
 | explicit domain build | `packages/fullmag-py/src/fullmag/world.py` | `StudyBuilder.build_domain_mesh`, `build_domain_mesh` | module function implementation |
 | artifact persistence | `packages/fullmag-py/src/fullmag/world.py` | `StudyMeshHandle.save/load/save_or_load`, `MeshPersistenceResult` | facade implementation |
 | quality result | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.quality` | method signature |
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
+

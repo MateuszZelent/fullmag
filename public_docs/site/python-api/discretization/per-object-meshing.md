@@ -455,6 +455,10 @@ layer convergence rather than treating one layer as universally sufficient.
 | MeshOperation.params | dict[str, Any] | {} | $1$ | Preserved as authored data; execution validation is unavailable. | Authored operation parameters. | Unavailable | mesh_workflow.per_geometry.<object>.operations[].params |
 | MeshOperation.enabled | bool | True | $1$ | Boolean, but false does not bypass rejection of the nonempty operation list. | Authored enable flag only; no operation currently executes. | Unavailable | mesh_workflow.per_geometry.<object>.operations[].enabled |
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## Source-code index
 
 | Claim | Lane | Path | Stable symbol | Evidence | Evidence status | Immutable revision |
@@ -464,3 +468,4 @@ layer convergence rather than treating one layer as universally sufficient.
 | capability scope | Control Room, FEM CPU/GPU | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts` | `resolveObjectMeshTopologyCapabilities` | capability tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) |
 | rendered groups and transactions | Control Room, FEM | `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx` | `ObjectMeshPolicyPanel` | component tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx) |
 | realized topology and fallback | FEM CPU/GPU shared mesh | `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | meshing fallback/report tests | source-backed | [reviewed source](https://github.com/MateuszZelent/fullmag/blob/888a82b9c4b0fea3bca4d7fff973f629c7080409/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) |
+

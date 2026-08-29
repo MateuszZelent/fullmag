@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-free-tetrahedral)=
 # Free-Tetrahedral API
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## 1. What it is and when to use it
 
 `object.mesh(...)` is the default object meshing strategy: an unstructured
@@ -163,3 +167,7 @@ recipe; **Build Mesh** materializes it. Full description:
 | `object.mesh(...)` facade | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.__call__` / `configure` | signature and validation in code |
 | object recipe | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` | validation tests |
 | size fields | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.size_field` | method signature |
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
+

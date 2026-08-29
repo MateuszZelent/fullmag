@@ -123,6 +123,25 @@ Capabilities not listed as executable must fail closed. Source presence alone is
 The principal references are listed in the interaction-specific bibliography above.
 
 (api-magnetoelastic-source-code-index)=
+
+## Control Room crosswalk
+
+Status: Interaction selection is partial; only fields advertised by the current physics panel are UI-supported.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Physics` | `partial` | Apply physics draft; solver/stage resources are invalidated |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Physics` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for interaction-specific parameters absent from PhysicsInteractionPanel.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx (PhysicsInteractionPanel)`.
+
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## Source-code index
 
 The implementation owners are listed in the interaction-specific source table above.
+

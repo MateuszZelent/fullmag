@@ -37,6 +37,77 @@ canonical study or a compatible legacy dynamics/output route must be supplied. A
 selection, constraint, torque, transport, geometry, material, stage, and interface references are
 validated before execution.
 
+(python-api-problem-problem-frozen-spins)=
+## Frozen-spin constraints
+
+`Problem.magnetization_constraints` carries `FrozenSpins` intent as stage-first, typed contract
+data:
+
+- `selector`: geometry/object/region selection used for the frozen region.
+- `membership`: static freeze or snapshot-at-activation behavior.
+- `reference`: source orientation mode (`capture_current_at_activation`, `initial_state`,
+  `explicit_field_asset`).
+- `stage_ids` / `activation`: stage-scoped applicability controls.
+
+Constraint definitions are validated before planning. Unsupported runtime/lane combinations must fail
+closed rather than silently rewrite intent.
+
+## Standard entry: Frozen-spins (source-first, argument-complete)
+
+### Wprowadzenie
+
+`Problem.magnetization_constraints` przechowuje instancje `FrozenSpins` jako część intencji
+kontrakcyjnej problemu. Kontrakt pozostaje typowany aż do warstwy planera i nie jest
+redukowany do masek backendowych wcześniej.
+
+### Bezpośredni dowód z kodu
+
+- `class FrozenSpins` (`packages/fullmag-py/src/fullmag/model/constraints.py`) waliduje wejście w
+  `__init__` i normalizuje `reference`/`activation`.
+- `ObjectRegion.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) buduje
+  `FrozenSpins` dla regionu (`in_region_selection`).
+- `Ferromagnet.freeze_spins(...)` (`packages/fullmag-py/src/fullmag/model/structure.py`) buduje
+  `FrozenSpins` dla obiektu (`in_object_selection`), wymaga `object_id`.
+- `Problem` (`packages/fullmag-py/src/fullmag/model/problem.py`) serializuje constrainty do IR.
+
+### Implementacja w Pythonie (source-first)
+
+```python
+from fullmag.model.constraints import FrozenSpins
+from fullmag.model.selection import in_object_selection
+
+constraint = FrozenSpins(
+    id="film_frozen_capture",
+    selector=in_object_selection("film"),
+    reference="capture_current_at_activation",
+    membership="dynamic",
+    stage_ids=("run",),
+    empty_selection="error",
+    inactive_selection="warn_and_intersect",
+)
+```
+
+### Funkcje i argumenty (z podpisów)
+
+| Funkcja | Argumenty |
+|---|---|
+| `FrozenSpins.__init__(*, id, selector, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | W pełnym kontrakcie źródłowym z walidacją polityk i domyślnymi wartościami. |
+| `ObjectRegion.freeze_spins(*, id=None, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Wrapper regionowy: domyślny `id` to `<region_id>_frozen`, selector to `in_region_selection`. |
+| `Ferromagnet.freeze_spins(*, id, name=None, enabled=True, reference="capture_current_at_activation", membership=None, activation=None, stage_ids=None, empty_selection="error", inactive_selection="warn_and_intersect")` | Wrapper obiektowy: selector to `in_object_selection`, twardy wymóg `object_id`. |
+| `Problem(..., magnetization_constraints=(...))` | Przenosi constraints do pola problem-level i potem do IR (`ProblemIR`). |
+
+### Referencje kodowe
+
+- `packages/fullmag-py/src/fullmag/model/constraints.py:137`
+- `packages/fullmag-py/src/fullmag/model/constraints.py:148`
+- `packages/fullmag-py/src/fullmag/model/structure.py:516`
+- `packages/fullmag-py/src/fullmag/model/structure.py:769`
+- `packages/fullmag-py/src/fullmag/model/problem.py`
+
+### Bibliografia
+
+- Abert, C. “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+
 (python-api-problem-problem-python-api)=
 ## Python API
 
@@ -141,6 +212,20 @@ primary user surface while direct construction stays fully documented for reprod
 No independent physical equation is introduced.
 
 (python-api-problem-problem-source-code-index)=
+
+## Control Room crosswalk
+
+Status: The Control Room authors a study and lowers it to ProblemIR; direct Problem/IR editing is not exposed.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `No standalone Control Room route` | `TODO` | No supported frontend transaction |
+| Parameters without a named UI field | `No standalone Control Room route` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for standalone Problem/ProblemIR authoring.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`.
+
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

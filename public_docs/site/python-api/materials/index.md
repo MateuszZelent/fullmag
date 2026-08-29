@@ -70,3 +70,14 @@ Material authoring, numerical materialization, and scientific qualification are 
 
 Use the detailed pages above for exact constructor fields, ProblemIR destinations, backend
 boundaries, and validation requirements.
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Material` for supported scalar material fields. Spatial fields, elastic laws, magnetostriction, and other parameters not exposed by `ObjectMaterialPanel` are `TODO: frontend support`. See {doc}`/frontend/capability-register`.
+
+## API and source scope
+
+The category index introduces the precedence model but no standalone constructor. Child pages provide exact Python fields, units, realization semantics, limitations, bibliography, and source-code references.
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

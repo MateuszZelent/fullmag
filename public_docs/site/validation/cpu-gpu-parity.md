@@ -48,3 +48,18 @@ the interaction consistency preset is
 Compiling CUDA code on a host, loading a CUDA library, or passing a source-only counter check is
 not parity proof. Parity is claimed only when executed same-workload CPU and GPU artifacts agree
 within documented tolerances and the GPU run records its device identity.
+## Control Room crosswalk
+
+Validation pages are `inspection-only` in Control Room. The UI may expose runtime metadata, fields, tables, or reports for inspection, but it does not create a qualification claim. `TODO: frontend support` applies to validation workflow authoring and report publication unless a specific control is named. See {doc}`/frontend/capability-register`.
+
+## Python/API crosswalk
+
+Validation is not a standalone Python constructor unless the linked case page names one. Reproduce the exact case, inputs, device, precision, and receipt described by the page; use the referenced API pages for callable signatures.
+
+## Physics and bibliography scope
+
+The page either states the governing benchmark model or delegates it to the linked physics/numerical-methods page. Any missing derivation is a documented boundary, not an implicit equation. Bibliography and source evidence remain the authoritative references listed by the validation case.
+## Source-code index
+
+- No standalone implementation function is introduced by this validation page. Source evidence is the exact API, managed recipe, runtime manifest, and receipt named by the validation case.
+

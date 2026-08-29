@@ -106,6 +106,20 @@ Constitutive references belong to the magnetoelastic page.
 
 (python-api-materials-magnetostriction-laws-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Scalar magnetic fields are partial; spatial fields and material-law-specific parameters remain TODO.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` | `partial` | Apply material draft; dependent physics and mesh resources become stale |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx (ObjectMaterialPanel)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|

@@ -91,3 +91,11 @@ fallbacks, and digest are backend evidence.
 
 Until a versioned release with a persistent identifier is available, cite the repository and exact
 commit used for the reported result.
+
+## Bibliography
+
+No independent scientific model is introduced by this navigation page. Use the bibliography on the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

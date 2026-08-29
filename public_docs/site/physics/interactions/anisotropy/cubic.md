@@ -299,6 +299,20 @@ remain explicitly distinguished. GPU production qualification remains an execute
 - FullMag implementation: `packages/fullmag-py/src/fullmag/model/energy.py` and `structure.py`.
 
 (cubic-source-code-index)=
+
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. TODO: frontend support applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+
 ## Source-code index
 
 | Repository path | Stable symbol | Responsibility |

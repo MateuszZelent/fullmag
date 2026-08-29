@@ -119,6 +119,20 @@ model, and public boundary-correction fields do not establish universal kernel s
    **92**, 120 (2019).
 
 (python-api-meshing-fdm-source-code-index)=
+
+## Control Room crosswalk
+
+Status: Frontend support is TODO unless a named source-backed panel is added.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `See the capability register; no page-specific route is established` | `TODO` | No supported frontend transaction |
+| Parameters without a named UI field | `See the capability register; no page-specific route is established` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for this API surface and its parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/inspectorRouteCatalog.tsx (inspectorRouteCatalog)`.
+
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

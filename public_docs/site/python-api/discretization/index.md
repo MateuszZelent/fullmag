@@ -21,3 +21,14 @@ owners.
 discretization-hints
 hybrid
 ```
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Mesh` for advertised mesh fields. The legacy `DiscretizationHints` and `Hybrid` branch has no separate authoring screen; `TODO: frontend support` applies to those compatibility-only fields. Canonical FDM/FEM routes are documented under {doc}`../meshing/index` and the capability register {doc}`/frontend/capability-register`.
+
+## API and source scope
+
+This index does not introduce a separate numerical model. Exact equations, Python signatures, backend realization, limitations, bibliography, and source references belong to the terminal pages and the canonical meshing branch.
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

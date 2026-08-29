@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-thin-film-tetrahedral)=
 # Thin-Film Tetrahedral API
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## 1. What it is and when to use it
 
 `object.mesh.thin_film(...)` requests a thickness-aware tetrahedral mesh: the
@@ -205,3 +209,7 @@ not keep exact node planes. Always check the build report.
 | prismatic → swept_prism canonicalization | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (prismatic branch) | recipe round-trip tests |
 | object recipe and strategies | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.mesh_strategy` | strategy validation tests |
 | $h_\perp = t/N$ target | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.thin_film` (tetrahedral branch) | `body_hmin` derived from `classify_sweepability().thickness` |
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
+

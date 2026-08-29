@@ -398,3 +398,19 @@ executed-device evidence.
 | `backends/fem/gpu/cuda/demag_poisson/operators.cpp` | `upload_demag_poisson_operators` | Device CSR operator upload and boundary-policy transfer. | FEM GPU |
 | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | FDM open/periodic convolution realization. | FDM CPU |
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | FDM device convolution state; no FEM boundary matrix. | FDM GPU |
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. TODO: frontend support applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+## Source-code index
+
+- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+
