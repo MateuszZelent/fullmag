@@ -347,6 +347,44 @@ pub(super) fn materialize_equilibrium(
             &handoff.certified_fields,
             state.magnetization().len(),
         )?;
+        let require_recomputed_match =
+            |label: &str, accepted: &[Vector3], recomputed: &[Vector3]| {
+                let difference = max_vector_field_difference(accepted, recomputed).ok_or_else(|| {
+                    RunError {
+                        message: format!(
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted and recomputed field shapes differ"
+                        ),
+                    }
+                })?;
+                if !difference.is_finite() || difference > 1.0e-8 {
+                    return Err(RunError {
+                        message: format!(
+                            "relax_stage_handoff_{label}_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-8 A/m"
+                        ),
+                    });
+                }
+                Ok(())
+            };
+        require_recomputed_match(
+            "h_ex0",
+            &handoff.certified_fields.h_ex_a_per_m,
+            &observables.exchange_field,
+        )?;
+        require_recomputed_match(
+            "h_demag0",
+            &handoff.certified_fields.h_demag_a_per_m,
+            &observables.demag_field,
+        )?;
+        require_recomputed_match(
+            "h_ext0",
+            &handoff.certified_fields.h_ext_a_per_m,
+            &observables.external_field,
+        )?;
+        require_recomputed_match(
+            "h_eff0",
+            &handoff.certified_fields.h_eff_a_per_m,
+            &observables.effective_field,
+        )?;
         observables.magnetization = state.magnetization().to_vec();
         observables.exchange_field = handoff.certified_fields.h_ex_a_per_m.clone();
         observables.demag_field = handoff.certified_fields.h_demag_a_per_m.clone();

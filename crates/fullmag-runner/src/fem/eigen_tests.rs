@@ -922,6 +922,118 @@ fn accepted_relax_stage_handoff_preserves_exact_equilibrium_after_state_normaliz
 }
 
 #[test]
+fn accepted_relax_stage_handoff_rejects_digest_valid_but_physically_forged_static_fields() {
+    let mut plan = minimal_native_modal_plan();
+    plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+    let node_count = plan.mesh.nodes.len();
+    let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+    let forged_external = vec![[1.0, 0.0, 0.0]; node_count];
+    let forged_fields = crate::types::CertifiedFemEquilibriumFields::from_fields(
+        zeros.clone(),
+        zeros.clone(),
+        forged_external.clone(),
+        forged_external,
+        vec![0.0; node_count],
+    )
+    .expect("internally coherent forged fields should have a valid content digest");
+    let source_plan = relax_source_plan_from_eigen(&plan);
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+        "run-relax",
+        "stage-000",
+        "flat_relax",
+        true,
+        &source_plan,
+        &crate::types::FemMeshPayload::from(&plan),
+        &accepted_relax_completion(),
+        plan.equilibrium_magnetization.clone(),
+        forged_fields,
+    )
+    .expect("the handoff hash contract alone cannot prove the physical field values");
+
+    let error = materialize_equilibrium(&plan, &plan.equilibrium_magnetization, Some(&handoff))
+        .expect_err("independent field recomputation must reject a physically forged handoff");
+
+    assert!(
+        error
+            .message
+            .contains("relax_stage_handoff_h_ext0_recompute_mismatch"),
+        "unexpected rejection: {}",
+        error.message
+    );
+}
+
+#[test]
+fn shared_domain_linearization_rejects_digest_valid_but_forged_phi0() {
+    let mut plan = minimal_native_modal_plan();
+    add_minimal_shared_domain_periodic_airbox(&mut plan);
+    plan.equilibrium = EquilibriumSourceIR::Provided;
+    let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+    let node_count = topology.n_nodes;
+    let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+    let forged_fields = crate::types::CertifiedFemEquilibriumFields::from_fields(
+        zeros.clone(),
+        zeros.clone(),
+        zeros.clone(),
+        zeros,
+        vec![1.0; node_count],
+    )
+    .expect("internally coherent forged potential should have a valid content digest");
+    let source_plan = relax_source_plan_from_eigen(&plan);
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+        "run-relax",
+        "stage-000",
+        "flat_relax",
+        true,
+        &source_plan,
+        &crate::types::FemMeshPayload::from(&plan),
+        &accepted_relax_completion(),
+        plan.equilibrium_magnetization.clone(),
+        forged_fields,
+    )
+    .unwrap();
+    let material = MaterialParameters::new(
+        plan.material.saturation_magnetisation,
+        plan.material.exchange_stiffness,
+        plan.material.damping,
+    )
+    .unwrap();
+    let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::RK23).unwrap();
+    let problem = FemLlgProblem::with_terms(
+        topology.clone(),
+        material,
+        dynamics,
+        EffectiveFieldTerms {
+            exchange: plan.enable_exchange,
+            external_field: plan.external_field,
+            ..EffectiveFieldTerms::default()
+        },
+    );
+    let state = problem
+        .new_state(handoff.equilibrium_magnetization.clone())
+        .unwrap();
+    let observables = problem.observe(&state).unwrap();
+
+    let error = build_shared_domain_linearization_state(
+        &plan,
+        &topology,
+        &problem,
+        None,
+        Some(&handoff),
+        &handoff.equilibrium_magnetization,
+        &observables,
+    )
+    .expect_err("independent potential recomputation must reject a forged handoff");
+
+    assert!(
+        error
+            .message
+            .contains("relax_stage_handoff_phi0_recompute_mismatch"),
+        "unexpected rejection: {}",
+        error.message
+    );
+}
+
+#[test]
 fn gpu_stage_handoff_rejects_plan_outside_native_shared_domain_lane_before_progress() {
     let mut plan = minimal_native_modal_plan();
     add_minimal_shared_domain_periodic_airbox(&mut plan);
@@ -962,30 +1074,31 @@ fn equilibrium_artifact_v7_writer_preserves_stage_handoff_certificate() {
     add_minimal_shared_domain_periodic_airbox(&mut plan);
     plan.equilibrium = EquilibriumSourceIR::Provided;
     let completion = accepted_relax_completion();
-    let handoff = relax_handoff_from_completion(&plan, &completion)
-        .expect("accepted completion should create a certified handoff");
     let topology = MeshTopology::from_ir(&plan.mesh).unwrap();
-    let material = MaterialParameters::new(
-        plan.material.saturation_magnetisation,
-        plan.material.exchange_stiffness,
-        plan.material.damping,
+    let (problem, equilibrium, _steps, observables, _source) =
+        materialize_equilibrium(&plan, &plan.equilibrium_magnetization, None)
+            .expect("the fixture equilibrium must support an independent static-field evaluation");
+    let phi0 = problem.demag_potential_from_vectors(&equilibrium).unwrap();
+    let certified = crate::types::CertifiedFemEquilibriumFields::from_fields(
+        observables.exchange_field.clone(),
+        observables.demag_field.clone(),
+        observables.external_field.clone(),
+        observables.effective_field.clone(),
+        phi0,
     )
     .unwrap();
-    let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, TimeIntegrator::RK23).unwrap();
-    let problem = FemLlgProblem::with_terms(
-        topology.clone(),
-        material,
-        dynamics,
-        EffectiveFieldTerms {
-            exchange: plan.enable_exchange,
-            external_field: plan.external_field,
-            ..EffectiveFieldTerms::default()
-        },
-    );
-    let state = problem
-        .new_state(handoff.equilibrium_magnetization.clone())
-        .unwrap();
-    let observables = problem.observe(&state).unwrap();
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+        "run-relax",
+        "stage-000",
+        "flat_relax",
+        true,
+        &relax_source_plan_from_eigen(&plan),
+        &crate::types::FemMeshPayload::from(&plan),
+        &completion,
+        equilibrium.clone(),
+        certified,
+    )
+    .expect("accepted completion should create a physically consistent certified handoff");
 
     let linearization = build_shared_domain_linearization_state(
         &plan,
@@ -993,7 +1106,7 @@ fn equilibrium_artifact_v7_writer_preserves_stage_handoff_certificate() {
         &problem,
         None,
         Some(&handoff),
-        &handoff.equilibrium_magnetization,
+        &equilibrium,
         &observables,
     )
     .unwrap();

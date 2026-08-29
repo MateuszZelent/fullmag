@@ -229,17 +229,33 @@ pub(super) fn build_shared_domain_linearization_state(
     observables: &EffectiveFieldObservables,
 ) -> Result<SharedDomainLinearizationState, RunError> {
     validate_shared_domain_modal_scope(plan, topology, equilibrium, observables)?;
+    let recomputed_phi0 = problem
+        .demag_potential_from_vectors(equilibrium)
+        .map_err(|error| RunError {
+            message: format!(
+                "shared-domain modal equilibrium potential materialization failed: {error}"
+            ),
+        })?;
     let phi0 = if let Some(handoff) = source_relax_handoff {
         validate_certified_equilibrium_fields(&handoff.certified_fields, topology.n_nodes)?;
+        let difference = max_scalar_field_difference(
+            &handoff.certified_fields.phi_a,
+            &recomputed_phi0,
+        )
+        .ok_or_else(|| RunError {
+            message: "relax_stage_handoff_phi0_recompute_mismatch: accepted and recomputed potential shapes differ"
+                .to_string(),
+        })?;
+        if !difference.is_finite() || difference > 1.0e-10 {
+            return Err(RunError {
+                message: format!(
+                    "relax_stage_handoff_phi0_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-10 A"
+                ),
+            });
+        }
         handoff.certified_fields.phi_a.clone()
     } else {
-        problem
-            .demag_potential_from_vectors(equilibrium)
-            .map_err(|error| RunError {
-                message: format!(
-                    "shared-domain modal equilibrium potential materialization failed: {error}"
-                ),
-            })?
+        recomputed_phi0
     };
     if phi0.len() != topology.n_nodes || phi0.iter().any(|value| !value.is_finite()) {
         return Err(RunError {
