@@ -35,6 +35,82 @@ An empty output sequence is legal. Constraints must be typed `FrozenSpins` defin
 selection, activation, reference, and failure policies. The selected planner/runtime remains the
 source of truth for whether a constraint and output combination is executable.
 
+(python-api-studies-time-evolution-frozen-spins)=
+## Frozen-spin constraints
+
+`TimeEvolution.constraints` transports `FrozenSpins` to study execution with stage-aware intent:
+
+- `stage_ids` / `activation` control when the freeze starts and stops.
+- `reference` controls whether frozen vectors come from capture-at-activation, initial state, or an
+  explicit field asset.
+- `membership` controls whether frozen cells stay fixed or are sampled at activation.
+
+Execution should fail closed on unsupported combinations; no planner may silently rewrite a requested
+constraint into a permissive equivalent.
+
+## Standard entry: time-evolution frozen-spins and autosave (source-first)
+
+### Wprowadzenie
+
+`TimeEvolution` carries `constraints` (typed `FrozenSpins`) and optional `table_autosave` exactly as
+request-time intent. Study-level intent is passed to planner/runtime conversion without lossy lowering.
+
+### Bezpośredni dowód z kodu
+
+- `TimeEvolution.__init__` (`packages/fullmag-py/src/fullmag/model/study.py`) przyjmuje:
+  `dynamics`, `outputs`, `constraints=()`, `table_autosave=None`.
+- `TimeEvolution.table_autosave(...)` buduje nową instancję `TimeEvolution` z
+  `TableAutosave(...)`.
+- `TimeEvolution.tableadd(...)` dopina dodatkowe wyrażenie tylko wtedy, gdy tabela już istnieje.
+
+### Implementacja w Pythonie (bezpośrednio)
+
+```python
+study = fm.study("te_source")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.solver(integrator="rk45", fix_dt=1e-15)
+study.stages.add_run(stage_id="run", until=1e-12)
+
+te = fm.TimeEvolution(
+    dynamics=study.dynamics,
+    outputs=(),
+    constraints=(),
+    table_autosave=None,
+)
+```
+
+```python
+# Canonical method call to add autosave:
+te = te.table_autosave(
+    t_sampl=1e-12,
+    quantities=("M", "E"),
+    extra_quantities=("mx", "my", "mz"),
+    table_id="primary",
+)
+```
+
+### Funkcje i argumenty (z kodu źródłowego)
+
+| Funkcja | Argumenty |
+|---|---|
+| `TimeEvolution.__init__(self, dynamics, outputs, constraints=(), table_autosave=None)` | Konstruktor klasy study-stage. `constraints` i `table_autosave` są częścią kontraktu. |
+| `TimeEvolution.table_autosave(*, t_sampl, quantities=None, extra_quantities=(), table_id="default")` | Definiuje próbkowanie do tabeli; zwraca nowy obiekt `TimeEvolution`. |
+| `TimeEvolution.tableadd(expression)` / `table_add` | Dopina ekspresję do istniejącej tabeli; błędy przy braku uprzedniej konfiguracji. |
+| `ProblemIR.study.sampling` | Przeniesienie pola `sampling` (`outputs`, `table_autosave`) do wykonania runtime. |
+
+### Referencje do kodu
+
+- `packages/fullmag-py/src/fullmag/model/study.py:613` (`class TimeEvolution`)
+- `packages/fullmag-py/src/fullmag/model/study.py:619` (`TimeEvolution.__init__`)
+- `packages/fullmag-py/src/fullmag/model/study.py:649` (`TimeEvolution.table_autosave`)
+- `packages/fullmag-py/src/fullmag/model/study.py:689` (`tableadd`)
+- `packages/fullmag-py/src/fullmag/model/problem.py` (integracja z `ProblemIR`)
+
+### Bibliografia
+
+- Abert, C. “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+
 (python-api-studies-time-evolution-python-api)=
 ## Python API
 
@@ -108,6 +184,20 @@ combination executable.
 Physical references belong to LLG, thermal-noise, torque, and constraint pages.
 
 (python-api-studies-time-evolution-source-code-index)=
+
+## Control Room crosswalk
+
+Status: Stage authoring and inspection are partial; the stage editor exposes only its advertised fields.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
+
+frontend support is not implemented for study parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
+
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

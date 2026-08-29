@@ -191,18 +191,20 @@ the family globally `implemented` while the solved-current public path is mainly
 2. P. Monk, *Finite Element Methods for Maxwell's Equations*, Oxford University Press, 2003.
 
 (physics-oersted-field-source-code-index)=
-## Source-code index
 
-| Repository path | Stable symbol / area | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/energy.py` | `OerstedCylinder, OerstedField` | two public model families |
-| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `CurrentTransport and ConservativeCurrentView` | solved-current source and closure |
-| `crates/fullmag-plan/src/oersted.rs` | `Oersted planning` | source resolution and fail-closed capability |
-| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `RT0 current view` | accepted conservative source |
-| `backends/fem/cpu` | `OE-F1/OE-F2` | bounded FEM CPU realizations |
-| `backends/fdm/gpu/cuda/interactions` | `analytic Oersted branches` | prescribed-cylinder realization |
+## Control Room crosswalk
 
-(physics-oersted-field-round-trip-and-failure-semantics)=
+This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -216,3 +218,16 @@ The authored model is valid only within the continuum, discretization, boundary,
 ## Implementation mapping
 
 Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
+
+## Source-code index
+
+| Repository path | Stable symbol / area | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/energy.py` | `OerstedCylinder, OerstedField` | two public model families |
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `CurrentTransport and ConservativeCurrentView` | solved-current source and closure |
+| `crates/fullmag-plan/src/oersted.rs` | `Oersted planning` | source resolution and fail-closed capability |
+| `crates/fullmag-runner/src/native_fem/steady_transport.rs` | `RT0 current view` | accepted conservative source |
+| `backends/fem/cpu` | `OE-F1/OE-F2` | bounded FEM CPU realizations |
+| `backends/fdm/gpu/cuda/interactions` | `analytic Oersted branches` | prescribed-cylinder realization |
+
+(physics-oersted-field-round-trip-and-failure-semantics)=

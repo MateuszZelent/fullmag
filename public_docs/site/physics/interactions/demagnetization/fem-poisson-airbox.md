@@ -504,3 +504,19 @@ execution, never hidden behind a GPU request.
 | `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp` | `initialize_demag_poisson_hypre_device_solver` | Device Hypre solver and preconditioner setup. | FEM GPU |
 | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` | `compute_device_demag_for_device_stage_impl` | Device-stage demag orchestration and timings. | FEM GPU |
 | `backends/fem/gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu` | `gpu_rk_reduce_final_demag_energy_terms` | Device demag energy reduction and ownership checks. | FEM GPU |
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+## Source-code index
+
+- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+

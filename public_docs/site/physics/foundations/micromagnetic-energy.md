@@ -133,3 +133,19 @@ The demagnetization field $\mathbf{H}_{\mathrm{d}}$ may be solved on a larger do
 3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
    Physical Journal B* **92**, 120 (2019).
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+## Control Room crosswalk
+
+No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+## Source-code index
+
+- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+

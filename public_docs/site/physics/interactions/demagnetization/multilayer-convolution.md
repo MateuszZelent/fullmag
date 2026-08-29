@@ -898,3 +898,19 @@ Fullmag code.
 | Fullmag Explorer omission | `apps/control-room/src/modules/explorer/builders/buildModelTree.ts` | `buildModelTree` | Omits unavailable layout nodes and keeps native-layer targets separate. | Explorer | Explorer tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Fullmag native-layer domains | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerNativeLayerDomains` | Adapts physical native-layer carriers only. | Viewport | viewport adapter tests | contract-verified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Fullmag target-only Airbox domain | `apps/control-room/src/modules/viewport-3d/viewport3dDomainAdapter.ts` | `adaptFdmMultilayerAirboxDomain` | Adapts target-only Airbox and validates field availability. | Viewport | viewport adapter tests | contract-verified, no fresh browser proof | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Physics` when `PhysicsInteractionPanel` exposes the interaction. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+## Source-code index
+
+- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+

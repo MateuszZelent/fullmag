@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-swept-hex)=
 # Swept-Hex API
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## 1. What it is and when to use it
 
 `mesh_strategy="swept_hex"` represents a swept hexahedral mesh: quadrilateral
@@ -96,3 +100,7 @@ No physical claims on this page.
 |---|---|---|---|
 | allowed `mesh_strategy` values | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe.mesh_strategy` | name-set validation |
 | rejection of the contradictory combination | `packages/fullmag-py/src/fullmag/model/discretization.py` | `PerObjectMeshRecipe` (hex validation) | validation branch `hex mesh requires mesh_strategy='swept_hex'` |
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
+

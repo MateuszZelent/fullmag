@@ -155,6 +155,20 @@ introduced here.
 
 (python-api-studies-relaxation-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Stage authoring and inspection are partial; the stage editor exposes only its advertised fields.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for study parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|

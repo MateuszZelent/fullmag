@@ -340,6 +340,7 @@ A production mesh study should include:
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
 (python-api-discretization-fem-source-code-index)=
+
 ## Source-code index
 
 | Claim | Lane | Path | Stable symbol | Responsibility | Evidence | Evidence status | Immutable revision |

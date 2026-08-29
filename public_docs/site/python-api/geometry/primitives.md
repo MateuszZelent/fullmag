@@ -241,6 +241,20 @@ No physical model is introduced; primary references belong to consuming interact
 
 (python-api-geometry-primitives-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Basic object/shape fields are partial; advanced boolean, imported, auxiliary, and transform parameters remain not implemented.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Geometry` | `partial` | Apply geometry draft; object resources become stale |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Geometry` | `not implemented` | Python-only until implemented |
+
+frontend support is not implemented for every geometry parameter not rendered by GeometryObjectPanel.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx (GeometryObjectPanel)`.
+
 ## Source-code index
 
 | Claim | Path | Stable symbol | Responsibility | Evidence |

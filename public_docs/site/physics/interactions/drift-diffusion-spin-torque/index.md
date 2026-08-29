@@ -207,19 +207,20 @@ documented lane boundary.
    DOI: 10.1038/s41598-016-0019-y.
 
 (physics-drift-diffusion-spin-torque-source-code-index)=
-## Source-code index
 
-| Repository path | Stable symbol / area | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `CurrentTransport` | charge solve and conservative current |
-| `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `SpinDriftDiffusion` | canonical spin solve |
-| `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `DriftDiffusionSpinTorque` | canonical torque consumer |
-| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `duplicate placeholder` | maintenance hazard to remove |
-| `crates/fullmag-plan/src/spin_transport.rs` | `transport planning` | M1/M2 capability and validation |
-| `crates/fullmag-runner/src` | `steady transport` | CPU reference realizations |
-| `scripts/run_fullmag_m2_nf_reference.py` | `M2 reference workflow` | bounded executable evidence |
+## Control Room crosswalk
 
-(physics-drift-diffusion-spin-torque-round-trip-and-failure-semantics)=
+This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
@@ -238,3 +239,17 @@ Python owns authoring and serialization, ProblemIR owns canonical intent, planne
 ## Limitations
 
 Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
+
+## Source-code index
+
+| Repository path | Stable symbol / area | Responsibility |
+|---|---|---|
+| `packages/fullmag-py/src/fullmag/model/current_transport.py` | `CurrentTransport` | charge solve and conservative current |
+| `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `SpinDriftDiffusion` | canonical spin solve |
+| `packages/fullmag-py/src/fullmag/model/spin_transport.py` | `DriftDiffusionSpinTorque` | canonical torque consumer |
+| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `duplicate placeholder` | maintenance hazard to remove |
+| `crates/fullmag-plan/src/spin_transport.rs` | `transport planning` | M1/M2 capability and validation |
+| `crates/fullmag-runner/src` | `steady transport` | CPU reference realizations |
+| `scripts/run_fullmag_m2_nf_reference.py` | `M2 reference workflow` | bounded executable evidence |
+
+(physics-drift-diffusion-spin-torque-round-trip-and-failure-semantics)=

@@ -62,3 +62,19 @@ build report. No result is currently claimed by this page.
 This page does not yet qualify adaptive refinement, all boolean geometry operations, every
 periodic boundary combination or every mixed FEM topology. Those topics remain deferred until
 their public API, certificates and validation artifacts are linked.
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Geometry` or `Material` as named by the linked API page. Status: `partial`. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
+
+## Python/API crosswalk
+
+The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
+ot applicable here and must be taken from the terminal API page.
+
+## Bibliography and source scope
+
+Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+## Source-code index
+
+- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
+

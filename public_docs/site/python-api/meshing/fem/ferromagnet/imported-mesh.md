@@ -9,6 +9,10 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-imported-mesh)=
 # Imported-Mesh API
 
+## Python API
+
+The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
 ## 1. What it is and when to use it
 
 Importing a prebuilt FEM mesh instead of generating it with Gmsh. At study level:
@@ -136,3 +140,7 @@ respect to generation parameters; quality and history inspection remain availabl
 | study level (`mesh=`) | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | signature and IR tests |
 | object level (`source`) | `packages/fullmag-py/src/fullmag/world.py` | `GeometryMeshHandle.configure` | field signature |
 | mesh artifact persistence | `packages/fullmag-py/src/fullmag/world.py` | `StudyMeshHandle.save/load/save_or_load` | facade implementation |
+## Source-code index
+
+- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
+

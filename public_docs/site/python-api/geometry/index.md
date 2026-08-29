@@ -24,3 +24,14 @@ regions
 universe-and-domain
 auxiliary-geometry
 ```
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Geometry` for supported primitive and transform fields. Boolean, imported-CAD, auxiliary, and other fields without a matching control are `TODO: frontend support`; do not infer an editor from the Python page alone. See {doc}`/frontend/capability-register`.
+
+## API and source scope
+
+This is a navigation index, not an independent constructor contract. Terminal pages own the exact Python example, geometric assumptions, failure semantics, bibliography, and source-code index.
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

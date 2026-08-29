@@ -12,6 +12,10 @@ owner: fullmag-public-docs
 FullMag's public authoring surface is the embedded stage-first Python DSL
 (`import fullmag as fm`). The tree is organized by authoring owner.
 
+Every terminal API page follows the public entry contract and must include a
+Control Room crosswalk. Frontend coverage and explicit missing-UI notes are centralized in
+{doc}`../frontend/capability-register`.
+
 Meshing is a dedicated family with separate FDM and FEM branches. Within FEM, ferromagnet and
 airbox commands are separated, and every topology mode has its own page. Low-level composite
 discretization objects remain in a small compatibility branch instead of mixing with mesh workflows.
@@ -33,3 +37,11 @@ studies/index
 outputs/index
 runtime/index
 ```
+
+## Bibliography
+
+No independent scientific model is introduced by this navigation page. Use the bibliography on the selected terminal page; this statement is an explicit applicability boundary, not an omitted reference.
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

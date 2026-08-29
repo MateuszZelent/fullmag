@@ -25,3 +25,14 @@ uniform-texture
 preset-textures
 mumax3-compatibility
 ```
+## Control Room crosswalk
+
+Use `Model Explorer -> Objects -> <object> -> Magnetization` for supported texture controls. Presets or parameters without a matching control are `TODO: frontend support`; do not claim UI support from Python availability. See {doc}`/frontend/capability-register`.
+
+## API and source scope
+
+This page is a navigation index. Terminal texture pages own the exact equations, coordinate conventions, Python arguments, validation, bibliography, and source-code index.
+
+## Source-code index
+
+This is a navigation page and introduces no standalone implementation symbol. The exact source-code index is maintained by the selected terminal page.

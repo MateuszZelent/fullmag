@@ -7955,6 +7955,7 @@ class ProblemApiTests(unittest.TestCase):
         fm.reset()
         study = fm.study("mixed-p1-layers")
         study.engine("fem")
+        study.device("cpu", precision="double")
         study.mode("strict")
         study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
         film = study.geometry(

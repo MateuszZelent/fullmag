@@ -110,6 +110,20 @@ Mode and spectrum definitions belong to the eigensolver pages.
 
 (python-api-outputs-modes-and-spectra-source-code-index)=
 <!-- (source-code-index)= -->
+
+## Control Room crosswalk
+
+Status: Table/field autosave and result inspection are partial; unsupported output formats remain TODO.
+
+| Python/API surface | Control Room path | Status | Transaction |
+|---|---|---|---|
+| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | Submit autosave draft; output resources are revised after execution |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `TODO` | Python-only until implemented |
+
+TODO: frontend support for output parameters not rendered by the autosave/result inspectors.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`.
+
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
