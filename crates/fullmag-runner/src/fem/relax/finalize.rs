@@ -89,6 +89,18 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(terminal_side_effects, 0);
     }
+
+    #[test]
+    fn native_fem_accepted_steps_reach_the_diagnostic_trace_boundary() {
+        let direct = include_str!("direct_minimizer.rs");
+        let llg = include_str!("llg_overdamped.rs");
+        let finalize = include_str!("finalize.rs");
+
+        assert!(direct.contains("artifacts.record_solver_step(&accepted_stats);"));
+        assert!(llg.contains("artifacts.record_solver_step(&stats);"));
+        assert!(finalize.contains("artifacts.take_solver_steps()"));
+        assert!(finalize.contains("solver_diagnostic_trace_artifact(diagnostic_steps)"));
+    }
 }
 
 fn run_after_strict_receipt_gate<T>(
@@ -114,7 +126,7 @@ pub(crate) struct NativeFemRelaxationFinalization {
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
     pub(crate) preview_handoff: FemPreviewHandoff,
-    pub(crate) fem_gpu_receipt_request: String,
+    pub(crate) fem_gpu_receipt_request: Option<String>,
 }
 
 fn terminal_scheduled_field_actions(
@@ -173,12 +185,16 @@ pub(crate) fn finalize_native_fem_relaxation(
         Some(&gpu_rk_plan_info),
     );
     if engine == FemEngine::NativeGpu {
-        let receipt = backend
-            .gpu_execution_receipt()?
-            .into_provenance(&finalization.fem_gpu_receipt_request);
-        run_after_strict_receipt_gate(&receipt, &finalization.fem_gpu_receipt_request, || {
-            final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
-        })?;
+        // The backend receipt describes the resolved RK execution plan. Direct
+        // minimizers publish their own policy and realization provenance.
+        if let Some(receipt_request) = finalization.fem_gpu_receipt_request.as_deref() {
+            let receipt = backend
+                .gpu_execution_receipt()?
+                .into_provenance(receipt_request);
+            run_after_strict_receipt_gate(&receipt, receipt_request, || {
+                final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
+            })?;
+        }
     }
     artifacts.replace_provenance_synchronously(final_provenance)?;
     if let Some(mut terminal_stats) = finalization.terminal_stats {
@@ -394,6 +410,7 @@ pub(crate) fn finalize_native_fem_relaxation(
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
+    let mut diagnostic_steps = artifacts.take_solver_steps();
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
     if let Some(telemetry) = backend.stage_oersted_telemetry() {
@@ -427,6 +444,17 @@ pub(crate) fn finalize_native_fem_relaxation(
         last_step.wall_time_ns = last_step
             .wall_time_ns
             .saturating_add(finalization_wall_time_ns);
+    }
+    if let Some(last_step) = diagnostic_steps.last_mut() {
+        last_step.finalization_wall_time_ns = finalization_wall_time_ns;
+        last_step.finalization_field_copy_wall_time_ns = finalization_field_copy_wall_time_ns;
+        last_step.finalization_field_copy_bytes = finalization_field_copy_bytes;
+        last_step.wall_time_ns = last_step
+            .wall_time_ns
+            .saturating_add(finalization_wall_time_ns);
+    }
+    if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_steps) {
+        auxiliary_artifacts.push(trace);
     }
     let status = if finalization.paused {
         RunStatus::Paused

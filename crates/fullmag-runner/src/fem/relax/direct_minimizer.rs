@@ -248,6 +248,7 @@ pub(crate) fn execute_direct_minimizer(
             let artifact_metrics = artifacts.record_native_fem_field_snapshot(snapshot)?;
             apply_artifact_enqueue_metrics(&mut accepted_stats, artifact_metrics);
         }
+        artifacts.record_solver_step(&accepted_stats);
         steps.push(accepted_stats.clone());
         latest_stats = Some(accepted_stats.clone());
         current_stats = accepted_stats;

@@ -609,6 +609,57 @@ def test_export_uses_a_stable_compose_project_name() -> None:
     assert 'COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-fullmag-fem-runtime}" \\' in image_helper
 
 
+def test_managed_fem_build_cache_key_uses_content_not_image_id(
+    tmp_path: Path,
+) -> None:
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+case "$3" in
+  image-a) image_id="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+  image-b) image_id="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ;;
+  image-c) image_id="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" ;;
+  *) exit 1 ;;
+esac
+last_layer="sha256:2222222222222222222222222222222222222222222222222222222222222222"
+if [ "$3" = "image-c" ]; then
+  last_layer="sha256:3333333333333333333333333333333333333333333333333333333333333333"
+fi
+printf '[{"Id":"%s","Architecture":"amd64","Os":"linux","RootFS":{"Type":"layers","Layers":["sha256:1111111111111111111111111111111111111111111111111111111111111111","%s"]},"Config":{"Env":["PATH=/toolchain"],"WorkingDir":"/workspace","Labels":{"volatile":"%s"}}}]\n' "$image_id" "$last_layer" "$image_id"
+""",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            f"""
+source "{IMAGE_IDENTITY_HELPER}"
+capture_managed_fem_build_cache_key image-a
+capture_managed_fem_build_cache_key image-b
+capture_managed_fem_build_cache_key image-c
+""",
+        ],
+        cwd=REPO_ROOT,
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    keys = result.stdout.splitlines()
+    assert len(keys) == 3
+    assert keys[0] == keys[1]
+    assert keys[0] != keys[2]
+    assert all(len(key) == 64 for key in keys)
+
+
 def test_managed_fem_build_capture_ignores_compatibility_retag(
     tmp_path: Path,
 ) -> None:
@@ -621,12 +672,16 @@ printf '%s|%s\n' "${FULLMAG_FEM_GPU_IMAGE:-<unset>}" "$*" >> "${FAKE_DOCKER_CALL
 if [ "$1" = "compose" ]; then
   exit 0
 fi
-if [ "$1 $2" = "image inspect" ]; then
+if [ "$1 $2" = "image inspect" ] && [ "${4:-}" = "--format" ]; then
   case "$3" in
     fullmag/fem-gpu:runtime-export-test) printf 'sha256:%064d\n' 1 ;;
     fullmag/fem-gpu:local) printf 'sha256:%064d\n' 2 ;;
     *) exit 1 ;;
   esac
+  exit 0
+fi
+if [ "$1 $2" = "image inspect" ]; then
+  printf '[{"Architecture":"amd64","Os":"linux","RootFS":{"Type":"layers","Layers":["sha256:%064d"]},"Config":{"Env":["PATH=/toolchain"]}}]\n' 3
   exit 0
 fi
 if [ "$1 $2" = "image tag" ]; then
@@ -668,6 +723,7 @@ printf '%s\n' "${{MANAGED_FEM_BUILT_IMAGE_ID}}"
     assert docker_calls == [
         "fullmag/fem-gpu:runtime-export-test|compose --profile fem-gpu build fem-gpu",
         "<unset>|image inspect fullmag/fem-gpu:runtime-export-test --format {{.Id}}",
+        f"<unset>|image inspect sha256:{1:064d}",
         f"<unset>|image tag sha256:{1:064d} fullmag/fem-gpu:local",
     ]
 
@@ -1279,6 +1335,71 @@ def test_managed_runtime_exports_cuda_dependency_closure_without_driver_librarie
         assert f"/usr/local/cuda-12.4/targets/x86_64-linux/lib/{library}" in exporter
 
     assert "/usr/local/cuda-12.4/targets/x86_64-linux/lib/libcuda.so" not in exporter
+
+
+def test_managed_host_runtime_build_uses_glibc_231_cuda_baseline() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "fem-gpu" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'ARG FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:12.4.1-devel-ubuntu20.04"'
+        in dockerfile
+    )
+
+
+def test_managed_runtime_selects_distribution_slepc_development_package() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "fem-gpu" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "slepc_dev_package=libslepc-real-dev" in dockerfile
+    assert "apt-cache show \"${slepc_dev_package}\"" in dockerfile
+    assert "slepc_dev_package=libslepc-real3.12-dev" in dockerfile
+    assert '"${slepc_dev_package}"' in dockerfile
+
+
+def test_managed_host_runtime_builds_abi3_python_on_glibc_baseline() -> None:
+    dockerfile = (REPO_ROOT / "docker" / "fem-gpu" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ARG PYTHON_VERSION=3.10.21" in dockerfile
+    assert (
+        "ARG PYTHON_SHA256="
+        "a0da1e72132e950154eca0f6f47d5db828454700de20e5113667940d81e0db04"
+        in dockerfile
+    )
+    assert 'Python-${PYTHON_VERSION}.tar.xz' in dockerfile
+    assert 'echo "${PYTHON_SHA256}  /tmp/${python_archive}" | sha256sum -c -' in dockerfile
+    assert "./configure --prefix=/usr/local --enable-shared --with-ensurepip=install" in dockerfile
+    assert "make altinstall" in dockerfile
+    assert "ldconfig" in dockerfile
+    assert "ln -sfn /usr/local/bin/python3.10 /usr/local/bin/python3" in dockerfile
+    assert "python3 -m pip install --no-cache-dir" in dockerfile
+
+
+def test_managed_runtime_normalizes_supported_pmix_layouts() -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "/usr/lib/x86_64-linux-gnu/pmix2" in exporter
+    assert "/usr/lib/x86_64-linux-gnu/pmix" in exporter
+    assert "/usr/share/pmix" in exporter
+    assert (
+        "require_exported_path "
+        '${runtime_root}/lib/pmix2/lib/pmix/mca_gds_hash.so '
+        '"PMIx hash datastore component"'
+        in exporter
+    )
+    assert (
+        'if [ -e "${RUNTIME_ROOT}/lib/pmix2/lib/pmix/'
+        'mca_pcompress_zlib.so" ]; then'
+        in exporter
+    )
+    assert (
+        '"${RUNTIME_ROOT}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so" \\\n'
+        not in exporter
+    )
 
 
 def test_managed_runtime_validator_rejects_unaddressed_variant_by_default(
@@ -2025,7 +2146,10 @@ def test_export_script_hashes_host_source_provenance_before_starting_docker_buil
 def test_export_script_replaces_existing_runtime_binaries_before_copying() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     function_start = script.find("copy_runtime_binary() {")
-    function_end = script.find("copy_runtime_binary target/release/fullmag", function_start)
+    function_end = script.find(
+        'copy_runtime_binary "${CARGO_TARGET_DIR}/release/fullmag"',
+        function_start,
+    )
     copy_binary_function = script[function_start:function_end]
 
     assert function_start != -1
@@ -2102,3 +2226,29 @@ def test_export_invalidates_only_native_sys_crates_when_native_inputs_change() -
     stamp_move_index = script.find(
         'mv "${native_build_stamp_tmp}" "${native_build_stamp}"'
     )
+    assert build_index != -1
+    assert stamp_move_index != -1
+    assert build_index < stamp_move_index
+
+
+def test_export_isolates_release_cache_by_build_image_content() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    target_assignment = (
+        'cargo_target_dir="/workspace/target/cargo-targets/'
+        '${FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY:?missing managed FEM build cache key}"'
+    )
+    target_index = script.find(target_assignment)
+    export_index = script.find('export CARGO_TARGET_DIR="${cargo_target_dir}"')
+    build_index = script.find("cargo +nightly -Z checksum-freshness build")
+    assert target_index != -1
+    assert export_index != -1
+    assert build_index != -1
+    assert target_index < export_index < build_index
+    assert 'FULLMAG_MANAGED_FEM_IMAGE_ID="${docker_image_id}"' in script
+    assert 'FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY="${docker_build_cache_key}"' in script
+    assert "build_cache=${FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY}" in script
+    assert "image=${FULLMAG_MANAGED_FEM_IMAGE_ID}" not in script
+    assert '${CARGO_TARGET_DIR}/release/fullmag' in script
+    assert '${CARGO_TARGET_DIR}/release/fullmag-api' in script
+    assert '${CARGO_TARGET_DIR}/release/lib_fullmag_core.so' in script

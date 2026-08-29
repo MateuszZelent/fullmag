@@ -133,6 +133,94 @@ def test_materialize_excludes_administrative_worktree_symlink(tmp_path: Path) ->
     assert not os.path.lexists(snapshot / ".worktrees")
 
 
+def test_materialize_excludes_nonruntime_agent_metadata_with_empty_symlink(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    def create_tree(entries: list[tuple[str, str, str]]) -> str:
+        payload = b"".join(
+            f"{mode} {name}".encode("utf-8")
+            + b"\0"
+            + bytes.fromhex(object_id)
+            for mode, name, object_id in entries
+        )
+        return subprocess.run(
+            ("git", "hash-object", "-t", "tree", "-w", "--stdin"),
+            cwd=repo,
+            input=payload,
+            capture_output=True,
+            check=True,
+        ).stdout.decode("ascii").strip()
+
+    empty_blob = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=b"",
+        capture_output=True,
+        check=True,
+    ).stdout.decode("ascii").strip()
+    skills_tree = create_tree([("120000", "empty", empty_blob)])
+    claude_tree = create_tree([("40000", "skills", skills_tree)])
+    tracked_blob = subprocess.run(
+        ("git", "rev-parse", "HEAD:tracked.txt"),
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    root_tree = create_tree(
+        [
+            ("40000", ".claude", claude_tree),
+            ("100644", "tracked.txt", tracked_blob),
+        ]
+    )
+    parent = subprocess.run(
+        ("git", "rev-parse", "HEAD"),
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    commit = subprocess.run(
+        (
+            "git",
+            "commit-tree",
+            root_tree,
+            "-p",
+            parent,
+            "-m",
+            "track empty non-runtime agent link",
+        ),
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    _git(repo, "update-ref", "HEAD", commit)
+
+    identity_path = tmp_path / "identity.json"
+    snapshot = tmp_path / "snapshot"
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+            "--output",
+            str(identity_path),
+            "--materialize",
+            str(snapshot),
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not os.path.lexists(snapshot / ".claude")
+
+
 def test_runtime_materialize_ignores_dirty_administrative_worktree_symlink(
     tmp_path: Path,
 ) -> None:

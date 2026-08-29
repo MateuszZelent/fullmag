@@ -3483,8 +3483,9 @@ verify-fem-relaxation-cpu-gpu-consistency-smoke:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports
     docker compose --profile fem-gpu run --rm \
+      -v "$(readlink -f .fullmag/runtimes/fem-gpu-host):/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
-      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_PYTHON=/usr/local/bin/python3 \
       -e FULLMAG_BENCH_INTEGRATORS="${FULLMAG_BENCH_INTEGRATORS:-heun}" \
       -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg}" \
       -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-16}" \
@@ -3492,6 +3493,7 @@ verify-fem-relaxation-cpu-gpu-consistency-smoke:
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
       -e FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
+      -e FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T:-1e-4}" \
       -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke.csv}" \
       -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_relaxation_cpu_gpu_consistency_smoke_summary.json}" \
       -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-250e-9}" \
@@ -3505,6 +3507,7 @@ verify-fem-relaxation-cpu-gpu-consistency-smoke:
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
         --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \
         --cpu-gpu-torque-rtol "$FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL" \
+        --relax-torque-tolerance-t "$FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T" \
         --output "$FULLMAG_BENCH_OUTPUT" \
         --cpu-gpu-summary-output "$FULLMAG_BENCH_SUMMARY" \
         --quiet-json-summary \

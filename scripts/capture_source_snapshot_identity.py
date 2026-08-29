@@ -57,10 +57,13 @@ NON_RUNTIME_EXACT_PATHS = {
 }
 NON_RUNTIME_SUFFIXES = (".md", ".rst", ".source-map.json")
 
-# Worktree administration is intentionally excluded from the immutable source
-# snapshot even when Git records it in the committed tree.  In this repository
-# it is an absolute symlink, which is valid metadata but unsafe to materialize.
-EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset({".worktrees"})
+# Agent metadata and worktree administration are intentionally excluded from
+# the immutable native-runtime source snapshot. They are already classified as
+# non-runtime inputs above and may contain host-specific or empty symlinks that
+# cannot be materialized on the Linux build filesystem.
+EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset(
+    {".agents", ".claude", ".codex", ".worktrees"}
+)
 
 
 class SourceIdentityError(RuntimeError):

@@ -613,6 +613,7 @@ pub(crate) fn execute_llg_overdamped(
 
         let artifact_metrics = artifacts.record_scalar(&stats)?;
         apply_artifact_enqueue_metrics(&mut stats, artifact_metrics);
+        artifacts.record_solver_step(&stats);
         steps.push(stats);
 
         let latest = steps.last().expect("just pushed stats");
