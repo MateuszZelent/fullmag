@@ -436,7 +436,11 @@ $env:FULLMAG_SOURCE_GIT_COMMIT = $sourceCommit
 $env:FULLMAG_SOURCE_WORKTREE_STATE = $sourceWorktreeState
 $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
 
-$needsControlRoomToolchain = $Frontend -eq "static" -or -not $BuildOnly
+# Headless runs never launch the Control Room, so they must not be coupled to
+# the Node/pnpm profile recorded by a binary-only (`-BuildOnly`) build.  Static
+# exports always need the frontend toolchain; interactive dev runs do as well.
+$needsControlRoomToolchain = $Frontend -eq "static" -or
+  (-not $BuildOnly -and $RunMode -eq "interactive")
 if ($needsControlRoomToolchain) {
   Ensure-NodeToolchain
 }
@@ -464,7 +468,7 @@ if ($BuildMode -eq "true") {
   Invoke-External "cargo" @("--version")
 
   $cargoArguments = @(
-    "build", "--release", "--target", $TargetTriple,
+    "build", "--locked", "--release", "--target", $TargetTriple,
     "-p", "fullmag-cli", "-p", "fullmag-api"
   )
   if ($useCuda) {

@@ -18,6 +18,8 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  watch,
+  writeFileSync,
 } from "node:fs";
 import { createServer, request } from "node:http";
 import { resolve, dirname, extname, join, relative } from "node:path";
@@ -91,6 +93,13 @@ function startDevServer() {
     return;
   }
 
+  // Next.js writes port-specific type includes to tracked tsconfig files on
+  // startup. Keep those generated edits scoped to this process so a dev run
+  // cannot dirty the checkout or change the source identity used by the
+  // runtime manifest.
+  const restoreGeneratedTypeConfig = snapshotGeneratedTypeConfig();
+  process.once("exit", restoreGeneratedTypeConfig);
+
   const child = spawn(
     pnpm.command,
     [
@@ -163,6 +172,7 @@ function startDevServer() {
 
   child.on("exit", (code, signal) => {
     childExited = true;
+    restoreGeneratedTypeConfig();
     if (signal) {
       process.exit(signalExitCodes[signal] ?? 1);
       return;
@@ -170,11 +180,62 @@ function startDevServer() {
     process.exit(code ?? 0);
   });
   child.on("error", (err) => {
+    restoreGeneratedTypeConfig();
     process.stderr.write(
       `[control-room dev-server] failed to spawn pnpm via ${pnpm.source}: ${err.message}\n`,
     );
     process.exit(1);
   });
+}
+
+function snapshotGeneratedTypeConfig() {
+  const snapshots = ["next-env.d.ts", "tsconfig.json"].flatMap((name) => {
+    const path = join(appDir, name);
+    try {
+      return [{ path, contents: readFileSync(path) }];
+    } catch {
+      return [];
+    }
+  });
+  let finalized = false;
+  let restoring = false;
+  const restore = () => {
+    if (finalized || restoring) {
+      return;
+    }
+    restoring = true;
+    try {
+      for (const snapshot of snapshots) {
+        try {
+          const current = readFileSync(snapshot.path);
+          if (!current.equals(snapshot.contents)) {
+            writeFileSync(snapshot.path, snapshot.contents);
+          }
+        } catch {
+          // A concurrent cleanup or read-only packaged tree is harmless here.
+        }
+      }
+    } finally {
+      restoring = false;
+    }
+  };
+  const watchers = snapshots.flatMap((snapshot) => {
+    try {
+      return [watch(snapshot.path, restore)];
+    } catch {
+      return [];
+    }
+  });
+  return () => {
+    if (finalized) {
+      return;
+    }
+    for (const watcher of watchers) {
+      watcher.close();
+    }
+    restore();
+    finalized = true;
+  };
 }
 
 function removeStaleNextDevLock(distDir) {
