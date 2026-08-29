@@ -963,7 +963,7 @@ fn accepted_relax_stage_handoff_rejects_digest_valid_but_physically_forged_stati
 }
 
 #[test]
-fn shared_domain_linearization_rejects_digest_valid_but_forged_phi0() {
+fn shared_domain_linearization_does_not_compare_periodic_phi0_with_open_reference_problem() {
     let mut plan = minimal_native_modal_plan();
     add_minimal_shared_domain_periodic_airbox(&mut plan);
     plan.equilibrium = EquilibriumSourceIR::Provided;
@@ -1013,7 +1013,7 @@ fn shared_domain_linearization_rejects_digest_valid_but_forged_phi0() {
         .unwrap();
     let observables = problem.observe(&state).unwrap();
 
-    let error = build_shared_domain_linearization_state(
+    let linearization = build_shared_domain_linearization_state(
         &plan,
         &topology,
         &problem,
@@ -1022,15 +1022,9 @@ fn shared_domain_linearization_rejects_digest_valid_but_forged_phi0() {
         &handoff.equilibrium_magnetization,
         &observables,
     )
-    .expect_err("independent potential recomputation must reject a forged handoff");
+    .expect("periodic native phi0 must not be compared with an open reference problem");
 
-    assert!(
-        error
-            .message
-            .contains("relax_stage_handoff_phi0_recompute_mismatch"),
-        "unexpected rejection: {}",
-        error.message
-    );
+    assert_eq!(linearization.phi0, handoff.certified_fields.phi_a);
 }
 
 #[test]

@@ -6,7 +6,7 @@
 **Tytuł tasku:** `Dokończ eigensolve k0 demag (2)`
 **Bieżący worktree:** `C:\git\fullmag\worktrees\eigensolve-k0-finalization`
 **Bieżący branch:** `codex/eigensolve-k0-finalization-20260829`
-**Bieżący commit:** `5e5849c8acf8ec0f80c0f463fc5d9109ea9a4e14`
+**Commit bazowy audytu:** `5e5849c8acf8ec0f80c0f463fc5d9109ea9a4e14`
 **Tryb audytu:** analiza źródeł i dokumentów; bez nowego managed solve, GPU profile i browser proof
 **Werdykt:** **GO dla dalszej implementacji w dedykowanym worktree; NO-GO dla claimu produkcyjnego CPU/GPU i bezpośredniej promocji do `master`**
 
@@ -15,6 +15,47 @@
 > windowsowego worktree i merge aktualnego `master` z rescue. Sekcje 13–15 są
 > aktualizacją po konsolidacji i zastępują wcześniejszy plan tam, gdzie występuje
 > różnica.
+
+### Aktualizacja wykonawcza: regresja przykładu okresowego antidot K0
+
+Próba odtworzenia historycznej ścieżki `nearest` na rzeczywistym przykładzie
+`fem_periodic_antidot_relax_eigenmodes.py` potwierdziła, że funkcja istniała i
+nie została usunięta. Aktualna regresja składała się z dwóch niezależnych
+problemów integracyjnych:
+
+1. Usługa `fem-modal-cpu` uruchamiała wspólny, CUDA-capable managed binary bez
+   dostępnego `libcuda.so.1`. Nie był to wybór urządzenia GPU ani błąd solvera.
+   CPU lane nadal nie żąda GPU i używa `FULLMAG_FEM_MFEM_DEVICE=cpu`; loader
+   otrzymał image-owned `/usr/local/cuda/compat` w commitcie `90b738179`.
+2. Dodany później check handoffu porównywał natywne okresowe
+   `H_demag0/H_eff0/phi0` z wynikiem referencyjnego `FemLlgProblem`, który nie
+   implementuje produkcyjnej redukcji Poissona `periodic_airbox_k0`. Było to
+   porównanie dwóch różnych warunków brzegowych, a nie niezależny recompute tego
+   samego problemu.
+
+Dowód z managed CPU przed korektą drugiego problemu:
+
+- źródło/runtime: exact schema 3, commit `937b5d694`, dirty patch
+  `4e697d6a5513b241b4c45306930d1318ef5ecaa7b62d526cdbb01f3e616efe16`;
+- mesh: 5156 węzłów, 27384 tetraedry; część magnetyczna 3036 tetraedrów;
+- relaksacja: zakończona kryterium torque w kroku 3135,
+  `max_torque=9.9930e-7 T`, `E_total=-2.3662e-18 J`;
+- przejście do etapu `flat_eigenmodes` nastąpiło, lecz fałszywy check zatrzymał
+  wykonanie komunikatem
+  `relax_stage_handoff_h_demag0_recompute_mismatch` i różnicą `9.995e4 A/m`.
+
+Korekta zachowuje niezależny check zgodnych składników `H_ex/H_ext` oraz pełny
+check nieokresowych problemów. Dla meshu z parami okresowymi nie używa solvera
+otwartego jako rzekomego oracle dla okresowego `H_demag/H_eff/phi`; pola nadal
+są kompletne, digest-bound i sprawdzane pod kątem dekompozycji. Testy źródłowe
+`fem::eigen_tests`: **132/132 PASS**. Ponowny managed solve po tej korekcie jest
+**NOT VERIFIED** z powodu bieżącego `WSL/Service/E_ACCESSDENIED` przy tworzeniu
+nowych sesji WSL.
+
+Konsekwencja dla planu: R4 pozostaje **PARTIAL**, dopóki recompute okresowego
+`H_demag0/phi0` nie zostanie wykonany przez niezależne wywołanie tego samego
+natywnego operatora `periodic_airbox_k0` i związany osobnym certyfikatem. Nie
+wolno uznać samego usunięcia fałszywego porównania za realizację bramki R4.
 
 ## 1. Wynik pierwotnego audytu w skrócie (stan przed konsolidacją)
 

@@ -238,20 +238,27 @@ pub(super) fn build_shared_domain_linearization_state(
         })?;
     let phi0 = if let Some(handoff) = source_relax_handoff {
         validate_certified_equilibrium_fields(&handoff.certified_fields, topology.n_nodes)?;
-        let difference = max_scalar_field_difference(
-            &handoff.certified_fields.phi_a,
-            &recomputed_phi0,
-        )
-        .ok_or_else(|| RunError {
-            message: "relax_stage_handoff_phi0_recompute_mismatch: accepted and recomputed potential shapes differ"
-                .to_string(),
-        })?;
-        if !difference.is_finite() || difference > 1.0e-10 {
-            return Err(RunError {
-                message: format!(
-                    "relax_stage_handoff_phi0_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-10 A"
-                ),
-            });
+        // The Rust reference problem does not carry the native k=0 periodic
+        // Poisson reduction. Its potential is therefore not an independent
+        // recomputation of the same boundary-value problem. For the production
+        // shared-domain lane consume the digest-bound native phi0; non-periodic
+        // lanes may still compare the reference potential directly.
+        if plan.mesh.periodic_node_pairs.is_empty() {
+            let difference = max_scalar_field_difference(
+                &handoff.certified_fields.phi_a,
+                &recomputed_phi0,
+            )
+            .ok_or_else(|| RunError {
+                message: "relax_stage_handoff_phi0_recompute_mismatch: accepted and recomputed potential shapes differ"
+                    .to_string(),
+            })?;
+            if !difference.is_finite() || difference > 1.0e-10 {
+                return Err(RunError {
+                    message: format!(
+                        "relax_stage_handoff_phi0_recompute_mismatch: accepted/recomputed maximum difference {difference:.3e} exceeds 1.000e-10 A"
+                    ),
+                });
+            }
         }
         handoff.certified_fields.phi_a.clone()
     } else {

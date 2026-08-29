@@ -371,20 +371,29 @@ pub(super) fn materialize_equilibrium(
             &observables.exchange_field,
         )?;
         require_recomputed_match(
-            "h_demag0",
-            &handoff.certified_fields.h_demag_a_per_m,
-            &observables.demag_field,
-        )?;
-        require_recomputed_match(
             "h_ext0",
             &handoff.certified_fields.h_ext_a_per_m,
             &observables.external_field,
         )?;
-        require_recomputed_match(
-            "h_eff0",
-            &handoff.certified_fields.h_eff_a_per_m,
-            &observables.effective_field,
-        )?;
+        // FemLlgProblem is a useful independent reference for the local terms,
+        // but it does not implement the production periodic-airbox k=0 Poisson
+        // reduction. Comparing its open/Robin demag field with a field certified
+        // by the native periodic producer would reject two physically different
+        // boundary-value problems. Keep the independent comparison for lanes
+        // where both sides implement the same demag problem; the periodic lane
+        // remains bound to the native producer's digest/decomposition contract.
+        if plan.mesh.periodic_node_pairs.is_empty() {
+            require_recomputed_match(
+                "h_demag0",
+                &handoff.certified_fields.h_demag_a_per_m,
+                &observables.demag_field,
+            )?;
+            require_recomputed_match(
+                "h_eff0",
+                &handoff.certified_fields.h_eff_a_per_m,
+                &observables.effective_field,
+            )?;
+        }
         observables.magnetization = state.magnetization().to_vec();
         observables.exchange_field = handoff.certified_fields.h_ex_a_per_m.clone();
         observables.demag_field = handoff.certified_fields.h_demag_a_per_m.clone();
