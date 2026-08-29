@@ -225,6 +225,20 @@ pub(super) fn native_modal_artifacts(
         Some("k0_poisson_airbox_gpu_petsc_slepc")
             | Some("k0_poisson_airbox_gpu_modal_device_krylov")
     );
+    if pa_e2_cpu_periodic_airbox_k0 || pa_e2_gpu_periodic_airbox_k0 {
+        let valid_fe_mass = node_mass_weights.is_some_and(|weights| {
+            weights.len() == reduction.active_nodes.len()
+                && weights
+                    .iter()
+                    .all(|weight| weight.is_finite() && *weight > 0.0)
+        });
+        if !valid_fe_mass {
+            return Err(RunError {
+                message: "production K0 mode artifacts require one positive FE mass weight per active magnetic node"
+                    .to_string(),
+            });
+        }
+    }
     let gpu_scalable_selected_spectrum = solver_diagnostics
         .get("scalable_selected_spectrum")
         .and_then(|value| value.as_bool())
@@ -374,8 +388,17 @@ pub(super) fn native_modal_artifacts(
             equilibrium,
             max_amplitude,
         );
-        let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
-            mode_tangent_leakage(equilibrium, &real, &imag);
+        let (
+            tangent_leakage_mean_abs,
+            tangent_leakage_max_abs,
+            tangent_leakage_weighted_relative_l2,
+        ) = mode_tangent_leakage(
+            equilibrium,
+            &real,
+            &imag,
+            &reduction.active_nodes,
+            node_mass_weights,
+        );
         let component_participation = modal_participation_for_mode(
             &participation_context,
             plan,
@@ -442,6 +465,7 @@ pub(super) fn native_modal_artifacts(
             "native_q_phi_payload": has_native_q_phi_payload,
             "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
             "tangent_leakage_max_abs": tangent_leakage_max_abs,
+            "tangent_leakage_weighted_relative_l2": tangent_leakage_weighted_relative_l2,
             "gamma_rad_s_T": gamma_rad_s_t,
             "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
             "mu0_T_m_per_A": mu0_t_m_per_a,
@@ -501,6 +525,7 @@ pub(super) fn native_modal_artifacts(
                 "phi_imag": phi_imag,
                 "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
                 "tangent_leakage_max_abs": tangent_leakage_max_abs,
+                "tangent_leakage_weighted_relative_l2": tangent_leakage_weighted_relative_l2,
                 "gamma_rad_s_T": gamma_rad_s_t,
                 "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
                 "mu0_T_m_per_A": mu0_t_m_per_a,

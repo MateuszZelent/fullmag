@@ -1034,6 +1034,37 @@ fn shared_domain_linearization_rejects_digest_valid_but_forged_phi0() {
 }
 
 #[test]
+fn tangent_leakage_publishes_fe_mass_weighted_relative_l2() {
+    let equilibrium = vec![[0.0, 0.0, 1.0]; 2];
+    let real = vec![[1.0, 0.0, 1.0], [1.0, 0.0, 0.0]];
+    let imag = vec![[0.0, 0.0, 0.0]; 2];
+    let active_nodes = vec![0usize, 1usize];
+    let weights = vec![1.0, 9.0];
+
+    let (mean_abs, max_abs, weighted_relative_l2) =
+        mode_tangent_leakage(&equilibrium, &real, &imag, &active_nodes, Some(&weights));
+
+    assert!((mean_abs - 0.25).abs() < 1.0e-15);
+    assert_eq!(max_abs, 1.0);
+    assert!(
+        (weighted_relative_l2.unwrap() - (1.0_f64 / 11.0).sqrt()).abs() < 1.0e-15,
+        "weighted leakage must use the FE mass in both numerator and mode norm"
+    );
+    assert!(
+        mode_tangent_leakage(
+            &equilibrium,
+            &real,
+            &imag,
+            &active_nodes,
+            Some(&weights[..1]),
+        )
+        .2
+        .is_none(),
+        "a malformed FE mass view must not produce an unweighted substitute"
+    );
+}
+
+#[test]
 fn gpu_stage_handoff_rejects_plan_outside_native_shared_domain_lane_before_progress() {
     let mut plan = minimal_native_modal_plan();
     add_minimal_shared_domain_periodic_airbox(&mut plan);
@@ -4122,6 +4153,7 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         "mass_norm": 1.0,
         "tangent_leakage_mean_abs": 0.0,
         "tangent_leakage_max_abs": 0.0,
+        "tangent_leakage_weighted_relative_l2": 0.0,
         "phasor_convention": "exp_plus_i_omega_t",
         "eigenvalue_mapping": "lambda_imag_positive_frequency",
         "gamma_rad_s_T": 1.0,

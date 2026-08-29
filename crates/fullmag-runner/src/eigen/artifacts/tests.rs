@@ -67,6 +67,7 @@ fn sample_result_with_solver_model(solver_model: EigenSolverModel) -> PathSolveR
                 residual_linf: Some(2.5e-10),
                 tangent_leakage_mean_abs: Some(3.0e-12),
                 tangent_leakage_max_abs: Some(4.0e-12),
+                tangent_leakage_weighted_relative_l2: Some(3.5e-12),
                 dominant_polarization: "linear".to_string(),
                 reduced_vector: Some(vec![Complex64::new(1.0, 0.0)]),
                 lifted_real: Some(vec![[1.0, 0.0, 0.0]]),
@@ -380,6 +381,7 @@ fn eigen_artifact_writer_emits_v2_contract_files() {
         "residual_linf",
         "tangent_leakage_mean_abs",
         "tangent_leakage_max_abs",
+        "tangent_leakage_weighted_relative_l2",
     ] {
         assert!(
             mode[required].as_f64().is_some(),

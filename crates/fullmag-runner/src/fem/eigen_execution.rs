@@ -1149,6 +1149,11 @@ pub(super) fn execute_fem_eigen_inner(
     };
     let mut modes_summary = Vec::with_capacity(total_modes);
     let participation_context = modal_participation_mesh_context(plan);
+    let tangent_leakage_mass_weights = reduction
+        .active_nodes
+        .iter()
+        .map(|&node| topology.magnetic_node_volumes[node])
+        .collect::<Vec<_>>();
     let participation_solver_device = if try_gpu { "gpu" } else { "cpu" };
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
     let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
@@ -1294,8 +1299,17 @@ pub(super) fn execute_fem_eigen_inner(
             &equilibrium,
             max_amplitude,
         );
-        let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
-            mode_tangent_leakage(&equilibrium, &real, &imag);
+        let (
+            tangent_leakage_mean_abs,
+            tangent_leakage_max_abs,
+            tangent_leakage_weighted_relative_l2,
+        ) = mode_tangent_leakage(
+            &equilibrium,
+            &real,
+            &imag,
+            &reduction.active_nodes,
+            Some(&tangent_leakage_mass_weights),
+        );
         let component_participation = modal_participation_for_mode(
             &participation_context,
             plan,
@@ -1325,6 +1339,7 @@ pub(super) fn execute_fem_eigen_inner(
             "mass_norm": mass_norm,
             "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
             "tangent_leakage_max_abs": tangent_leakage_max_abs,
+            "tangent_leakage_weighted_relative_l2": tangent_leakage_weighted_relative_l2,
             "gamma_rad_s_T": gamma_rad_s_t,
             "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
             "mu0_T_m_per_A": mu0_t_m_per_a,
@@ -1371,6 +1386,7 @@ pub(super) fn execute_fem_eigen_inner(
                 "mass_norm": mass_norm,
                 "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
                 "tangent_leakage_max_abs": tangent_leakage_max_abs,
+                "tangent_leakage_weighted_relative_l2": tangent_leakage_weighted_relative_l2,
                 "gamma_rad_s_T": gamma_rad_s_t,
                 "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
                 "mu0_T_m_per_A": mu0_t_m_per_a,

@@ -396,6 +396,9 @@ pub(crate) fn execute_fem_eigen_path(
                     residual_linf: mode_json["residual_linf"].as_f64(),
                     tangent_leakage_mean_abs: mode_json["tangent_leakage_mean_abs"].as_f64(),
                     tangent_leakage_max_abs: mode_json["tangent_leakage_max_abs"].as_f64(),
+                    tangent_leakage_weighted_relative_l2: mode_json
+                        ["tangent_leakage_weighted_relative_l2"]
+                        .as_f64(),
                     dominant_polarization: mode_json["dominant_polarization"]
                         .as_str()
                         .unwrap_or("unknown")
@@ -667,6 +670,7 @@ pub(crate) fn execute_fem_eigen_path(
                         "residual_linf": mode.and_then(|mode| mode.residual_linf),
                         "tangent_leakage_mean_abs": mode.and_then(|mode| mode.tangent_leakage_mean_abs),
                         "tangent_leakage_max_abs": mode.and_then(|mode| mode.tangent_leakage_max_abs),
+                        "tangent_leakage_weighted_relative_l2": mode.and_then(|mode| mode.tangent_leakage_weighted_relative_l2),
                         "mode_field_id": eigen_path_mode_field_id(
                             p.sample_index,
                             p.raw_mode_index,

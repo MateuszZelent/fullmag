@@ -56,6 +56,8 @@ struct ModeArtifact {
     tangent_leakage_mean_abs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tangent_leakage_max_abs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tangent_leakage_weighted_relative_l2: Option<f64>,
     dominant_polarization: String,
     k_vector: [f64; 3],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -267,6 +269,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 mass_norm: resolved_mode_mass_norm(mode),
                 tangent_leakage_mean_abs: Some(tangent_leakage_mean_abs),
                 tangent_leakage_max_abs: Some(tangent_leakage_max_abs),
+                tangent_leakage_weighted_relative_l2: mode.tangent_leakage_weighted_relative_l2,
                 dominant_polarization: mode.dominant_polarization.clone(),
                 k_vector: sample.sample.k_vector,
                 external_field_a_per_m: sample_external_field(result, sample.sample.sample_index),

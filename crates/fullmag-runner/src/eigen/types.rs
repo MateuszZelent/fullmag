@@ -410,6 +410,7 @@ pub struct SingleKModeResult {
     pub residual_linf: Option<f64>,
     pub tangent_leakage_mean_abs: Option<f64>,
     pub tangent_leakage_max_abs: Option<f64>,
+    pub tangent_leakage_weighted_relative_l2: Option<f64>,
     pub dominant_polarization: String,
     pub reduced_vector: Option<Vec<Complex64>>,
     pub lifted_real: Option<Vec<[f64; 3]>>,

@@ -561,6 +561,8 @@ pub(super) fn eigen_path_mode_json(
     let tangent_leakage_max_abs =
         finite_or_default(mode.tangent_leakage_max_abs, tangent_leakage_mean_abs)
             .max(tangent_leakage_mean_abs);
+    let tangent_leakage_weighted_relative_l2 =
+        finite_or_default(mode.tangent_leakage_weighted_relative_l2, 0.0);
     let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
     let gamma_rad_s_t = gamma0_rad_s_per_a_m / crate::MU0;
     let mass_norm = finite_or_default(
@@ -606,6 +608,7 @@ pub(super) fn eigen_path_mode_json(
         "mass_norm": mass_norm,
         "tangent_leakage_mean_abs": tangent_leakage_mean_abs,
         "tangent_leakage_max_abs": tangent_leakage_max_abs,
+        "tangent_leakage_weighted_relative_l2": tangent_leakage_weighted_relative_l2,
         "gamma_rad_s_T": gamma_rad_s_t,
         "gamma0_rad_s_per_A_m": gamma0_rad_s_per_a_m,
         "mu0_T_m_per_A": crate::MU0,

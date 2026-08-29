@@ -6575,6 +6575,7 @@ mod tests {
                     residual_linf: Some(1.0e-10),
                     tangent_leakage_mean_abs: Some(0.0),
                     tangent_leakage_max_abs: Some(0.0),
+                    tangent_leakage_weighted_relative_l2: Some(0.0),
                     dominant_polarization: "linear".to_string(),
                     reduced_vector: None,
                     lifted_real: None,
@@ -7549,6 +7550,7 @@ mod tests {
                     residual_linf: Some(1.0e-10),
                     tangent_leakage_mean_abs: Some(0.0),
                     tangent_leakage_max_abs: Some(0.0),
+                    tangent_leakage_weighted_relative_l2: Some(0.0),
                     dominant_polarization: "linear".to_string(),
                     reduced_vector: Some(vec![
                         num_complex::Complex64::new(1.0, 0.0),

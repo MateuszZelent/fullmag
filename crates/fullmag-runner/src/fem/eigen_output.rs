@@ -701,6 +701,10 @@ pub(super) fn write_eigen_v2_bundle(
                 legacy_mode["tangent_leakage_max_abs"].clone(),
             );
             object.insert(
+                "tangent_leakage_weighted_relative_l2".to_string(),
+                legacy_mode["tangent_leakage_weighted_relative_l2"].clone(),
+            );
+            object.insert(
                 "omega_rad_s".to_string(),
                 legacy_mode["omega_rad_s"].clone(),
             );

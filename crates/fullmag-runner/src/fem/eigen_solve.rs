@@ -522,18 +522,66 @@ pub(super) fn mode_tangent_leakage(
     equilibrium: &[[f64; 3]],
     real: &[[f64; 3]],
     imag: &[[f64; 3]],
-) -> (f64, f64) {
+    active_nodes: &[usize],
+    node_mass_weights: Option<&[f64]>,
+) -> (f64, f64, Option<f64>) {
     let real_summary = tangent_leakage_summary(equilibrium, real);
     let imag_summary = tangent_leakage_summary(equilibrium, imag);
     if real.is_empty() && imag.is_empty() {
-        return (0.0, 0.0);
+        return (0.0, 0.0, Some(0.0));
     }
     let sample_count = real.len() + imag.len();
     (
         (real_summary.mean_abs * real.len() as f64 + imag_summary.mean_abs * imag.len() as f64)
             / sample_count as f64,
         real_summary.max_abs.max(imag_summary.max_abs),
+        tangent_leakage_weighted_relative_l2(
+            equilibrium,
+            real,
+            imag,
+            active_nodes,
+            node_mass_weights,
+        ),
     )
+}
+
+fn tangent_leakage_weighted_relative_l2(
+    equilibrium: &[[f64; 3]],
+    real: &[[f64; 3]],
+    imag: &[[f64; 3]],
+    active_nodes: &[usize],
+    node_mass_weights: Option<&[f64]>,
+) -> Option<f64> {
+    let weights = node_mass_weights?;
+    if active_nodes.len() != weights.len() {
+        return None;
+    }
+    let mut leakage_squared = 0.0_f64;
+    let mut mode_squared = 0.0_f64;
+    for (&node, &weight) in active_nodes.iter().zip(weights) {
+        if node >= equilibrium.len()
+            || node >= real.len()
+            || node >= imag.len()
+            || !weight.is_finite()
+            || weight <= 0.0
+        {
+            return None;
+        }
+        let m0 = equilibrium[node];
+        for delta_m in [real[node], imag[node]] {
+            let leakage = m0[0] * delta_m[0] + m0[1] * delta_m[1] + m0[2] * delta_m[2];
+            leakage_squared += weight * leakage * leakage;
+            mode_squared += weight
+                * (delta_m[0] * delta_m[0] + delta_m[1] * delta_m[1] + delta_m[2] * delta_m[2]);
+        }
+    }
+    if mode_squared > 0.0 && leakage_squared.is_finite() && mode_squared.is_finite() {
+        Some((leakage_squared / mode_squared).sqrt())
+    } else if mode_squared == 0.0 {
+        Some(0.0)
+    } else {
+        None
+    }
 }
 
 fn tangent_leakage_summary(
