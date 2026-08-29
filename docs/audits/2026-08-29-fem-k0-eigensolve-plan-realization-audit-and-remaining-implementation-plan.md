@@ -1094,12 +1094,12 @@ co pozostaje jawną granicą dowodu.
 | R4 | PARTIAL | 80% | natywny recompute, certyfikat, negatywne testy i FE-weighted leakage istnieją; pozostaje pełne związanie operator/pencil/acceptance/source SHA oraz domknięcie testów masy/energii |
 | R5 | PARTIAL | 45% | źródło publikuje lane, stabilny `engine_id`, `solve_succeeded`, `fields_available`, `spectrum_completeness` i `window_complete`; pozostaje pełny call graph oraz runtime/API proof nowych pól |
 | R6 | PARTIAL, solve działa | 90% | poprawny obrócony pencil, pełne residuale i realny nearest 8/8 są zielone; źródłowy kontrakt nearest jest jawnie `selected_only`, lecz świeży runtime z tym polem nie został jeszcze przebudowany |
-| R7 | NOT DONE | 15% | infrastruktura window istnieje, ale znany test window jest czerwony; brak complete-window certificate i convergence |
+| R7 | PARTIAL, source gate zielony | 55% | syntetyczny complete-window certificate i pełny CPU/SLEPc kontrakt przechodzą; brak jeszcze realnego antidot window receipt i convergence mesh/airbox |
 | R8 | NOT VERIFIED | 10% | źródła artifact/API/UI istnieją historycznie; brak FMS restart/import i live browser proof na obecnym candidate |
 | R9 | NOT VERIFIED | 10% | kod GPU istnieje; brak profiler-backed Q2 na tym samym wejściu |
 | R10 | NOT STARTED | 0% | nie ma immutable final candidate ani podstaw do promocji na master |
 
-Ważona realizacja skorygowanego planu R0–R10 wynosi obecnie około **50–55%**.
+Ważona realizacja skorygowanego planu R0–R10 wynosi obecnie około **55–60%**.
 Gotowość do uruchamiania wiarygodnego przykładu CPU nearest warstwy z dziurą jest
 wysoka, około **85–90%**, i sam solve już działa. Gotowość do claimu pełnego
 spektrum/okna Q1 pozostaje niska, około **15–25%**, ponieważ nearest nie dowodzi
@@ -1158,3 +1158,32 @@ naprawiony tak, aby jawnie żądał `nearest_frequency`, zamiast odziedziczyć
 CPU/SLEPc nadal zatrzymuje się na osobnym, rzeczywistym teście window z tym samym
 komunikatem; R7 pozostaje zatem czerwone i nie jest maskowane przez naprawę
 fixture nearest. Rust `fem::eigen_tests` pozostaje zielony: **133/133 PASS**.
+
+### 17.7. Aktualizacja źródłowa R7: certyfikat pełnego okna
+
+Dokładna diagnostyka czerwonej bramki wykazała, że oba przebiegi solvera były
+numerycznie poprawne: 16/16 base i 34/34 refinement subwindowów zakończyło się,
+znaleziono dwa oczekiwane mody 1 i 2 GHz, residual pełnego descriptora wynosił
+około `1.34e-15`, a marginesy pokrycia obu krawędzi były dodatnie. Certyfikat był
+odrzucany wyłącznie przez `frequency_window_schedule_summary_truncated`:
+64-kilobajtowy bufor nie mieścił 50 wpisów z osadzoną klasyfikacją Ritz.
+
+Wewnętrzny, nie-ABI rekord wyniku ma teraz 256 KiB na pełny
+`executed_subwindows_json` i 512 KiB na diagnostics, który osadza ten dowód.
+Fail-closed zachowanie pozostaje: każde rzeczywiste przepełnienie nadal ustawia
+`diagnostics_truncated` i blokuje certyfikat. Po czystym rebuildzie przeszły:
+
+- focused window suite: complete window, invariant subspace dla klastra
+  zdegenerowanego, split klastra fail-closed, failure accounting i cancellation;
+- focused nearest semantics;
+- pełny kontrakt CPU/SLEPc z wyłączoną częścią GPU.
+
+Przy pełnym przebiegu ujawniono także stary drift fixture GMRES: jego split
+dimension wynosił 1028, podczas gdy aktualny exact-preconditioner cap to 8192.
+Fixture ma teraz minimalny wymiar 8196 i ponownie rzeczywiście testuje skalowalną
+ścieżkę GMRES. Jest to korekta testu do istniejącego kontraktu solvera, nie zmiana
+cap ani poluzowanie bramki.
+
+R7 pozostaje `PARTIAL`: powyższe dowodzi algorytmu i certyfikatu na kontrolowanym
+spektrum, lecz realny periodic-antidot `frequency_window` oraz convergence
+mesh/airbox nie zostały jeszcze wykonane na świeżym immutable source identity.

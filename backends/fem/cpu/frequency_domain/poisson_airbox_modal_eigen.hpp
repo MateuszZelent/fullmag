@@ -225,7 +225,12 @@ struct PoissonAirboxModalEigenResult {
     char raw_ritz_classification_json[2048]{};
     // Exact provenance for every shift executed by a frequency-window solve.
     // Kept separate so the common diagnostics writer can embed it verbatim.
-    char executed_subwindows_json[65536]{};
+    // Two-pass production windows currently execute 16 base plus 34 refined
+    // shifts. Each entry embeds bounded raw-Ritz evidence, so 64 KiB can
+    // truncate an otherwise complete certificate. Keep enough fixed storage
+    // for the full fail-closed schedule without allocating across the native
+    // result boundary.
+    char executed_subwindows_json[262144]{};
     // Stable solver/window outcome fields.  These are native diagnostics, not
     // part of the public C ABI request/result layout.
     char slepc_converged_reason[64]{};
@@ -312,7 +317,8 @@ struct PoissonAirboxModalEigenResult {
     };
     std::vector<AcceptedMode> accepted_modes{};
 
-    char diagnostics_json[131072]{};
+    // The top-level diagnostics embed executed_subwindows_json verbatim.
+    char diagnostics_json[524288]{};
 };
 
 struct PoissonAirboxModalResidualMetrics {

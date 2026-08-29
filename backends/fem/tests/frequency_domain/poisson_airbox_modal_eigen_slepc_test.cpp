@@ -1361,9 +1361,18 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
         2);
 
     fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result);
+    if (status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(
+            stderr,
+            "WINDOW FAILURE: stop_reason=%s\ncertificate=%s\ndiagnostics=%s\n",
+            result.stop_reason,
+            result.window_certificate_json,
+            result.diagnostics_json);
+    }
     check(
-        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
-            fd::FrequencyDomainStatus::ok,
+        status == fd::FrequencyDomainStatus::ok,
         result.error_message);
     check(result.window_complete,
           "synthetic CPU frequency window must expose a complete-window certificate");
@@ -1954,7 +1963,10 @@ void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
     double descriptor_scale,
     bool require_scaled_pencil_diagnostics)
 {
-    constexpr std::uint64_t q_count = 514;
+    // The production exact shifted preconditioner is capped at split dimension
+    // 8192. Use the smallest even q-space whose real split is genuinely above
+    // that cap so this fixture cannot silently fall back to PREONLY.
+    constexpr std::uint64_t q_count = 4098;
     constexpr std::uint64_t pair_count = q_count / 2;
     CsrOwned a_qq{};
     CsrOwned a_qphi{};
