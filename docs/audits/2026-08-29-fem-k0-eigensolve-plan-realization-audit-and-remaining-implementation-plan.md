@@ -909,8 +909,10 @@ Obie porażki zostały rozdzielone od K0 i naprawione przyczynowo:
   `1bb2bfac...a36730f8d`.
 
 Oba wcześniej nieudane testy przeszły następnie w osobnym przebiegu (**2 passed**).
-Pełny zestaw należy jeszcze powtórzyć na zamrożonym commicie, aby zamknąć ten
-source gate jednym terminalnym receipt.
+Pełny zestaw powtórzony na zamrożonym commicie kodu `af4a87c37` zakończył się
+terminalnie wynikiem **277 passed, 15 skipped, 37 subtests passed** w 163.06 s.
+Source gate mixed mesh/persistence/native certificate jest zatem zielony; nie
+jest to jednak substytut managed runtime receipt R3 ani naukowej kwalifikacji R7.
 
 Pełna receptura `verify-fem-frequency-domain-native-contract` rozpoczęta przed
 synchronizacją została świadomie przerwana, ponieważ jej wynik dotyczyłby
@@ -919,11 +921,9 @@ dokumentu na nowym, nieruchomym HEAD.
 
 ### 16.4. Zmieniona kolejność najbliższych prac
 
-1. Zamrozić commit zawierający merge, korekty mixed-mesh i ten dokument.
-2. Powtórzyć pełny targetowany zestaw Python na dokładnym SHA.
-3. Wykonać pełne R3 na tym samym, nieruchomym SHA.
-4. Sprawdzić R4 względem nowych adapterów local/true i mixed certificate.
-5. Dopiero na tej bazie kontynuować R5–R7 i policzyć antydot CPU.
+1. Wykonać pełne R3 na nieruchomym HEAD po tej aktualizacji dokumentu.
+2. Sprawdzić R4 względem nowych adapterów local/true i mixed certificate.
+3. Dopiero na tej bazie kontynuować R5–R7 i policzyć antydot CPU.
 
 Synchronizacja nie zmienia końcowego werdyktu: **NO-GO dla claimu produkcyjnego
 K0**, dopóki nowy HEAD nie uzyska managed CPU Q1, a później niezależnego GPU Q2.
