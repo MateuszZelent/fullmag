@@ -647,6 +647,32 @@ def test_materialize_rejects_unsafe_committed_symlink_graph(
     assert expected_detail in result.stderr
 
 
+def test_materialize_rejects_committed_symlink_with_empty_target(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    empty_object = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=b"",
+        capture_output=True,
+        check=True,
+    ).stdout.decode("ascii").strip()
+    _git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"120000,{empty_object},empty-link",
+    )
+    _git(repo, "commit", "-qm", "add empty symlink target")
+
+    result = _materialize(repo, tmp_path / "snapshot", tmp_path / "identity.json")
+
+    assert result.returncode == 2
+    assert "source symlink has empty target: empty-link" in result.stderr
+
+
 def test_verify_materialized_binds_identity_to_exact_snapshot_content_and_mode(
     tmp_path: Path,
 ) -> None:

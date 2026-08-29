@@ -219,6 +219,8 @@ def _validate_tree_symlinks(entries: dict[str, dict[str, object]]) -> None:
             target = entry.get("target")
             if not isinstance(target, str):
                 raise SourceIdentityError(f"source symlink has invalid target: {current}")
+            if not target:
+                raise SourceIdentityError(f"source symlink has empty target: {current}")
             if posixpath.isabs(target):
                 raise SourceIdentityError(
                     f"unsafe source symlink has absolute target: {current}"
