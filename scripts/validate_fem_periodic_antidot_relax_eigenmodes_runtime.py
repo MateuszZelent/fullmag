@@ -181,9 +181,46 @@ def validate_relaxation(metadata: dict[str, Any]) -> None:
     )
     steps = qualification.get("executed_steps")
     require(
-        isinstance(steps, int) and not isinstance(steps, bool) and steps > 0,
-        "relaxation must execute at least one step",
+        isinstance(steps, int) and not isinstance(steps, bool) and steps >= 0,
+        "relaxation executed_steps must be a non-negative integer",
     )
+    if steps == 0:
+        source = require_object(
+            scenario_metadata(metadata, "relax").get("equilibrium_state_source"),
+            "relax.periodic_antidot_eigensolve.equilibrium_state_source",
+        )
+        require(
+            source.get("kind") == "reusable_cache",
+            "zero-step relaxation requires a reusable equilibrium cache",
+        )
+        require(
+            source.get("schema_version")
+            == "fem_periodic_antidot_equilibrium_cache.v2",
+            "zero-step relaxation requires equilibrium cache schema v2",
+        )
+        source_generation_id = require_non_empty_string(
+            source.get("mesh_generation_id"),
+            "relax.equilibrium_state_source.mesh_generation_id",
+        )
+        source_topology_fingerprint = require_non_empty_string(
+            source.get("topology_fingerprint"),
+            "relax.equilibrium_state_source.topology_fingerprint",
+        )
+        require(
+            source_topology_fingerprint.startswith("sha256:"),
+            "relax equilibrium cache topology_fingerprint must be a sha256 identity",
+        )
+        stage_generation_id, stage_topology_fingerprint = mesh_identity(
+            metadata, "relax"
+        )
+        require(
+            source_generation_id == stage_generation_id,
+            "relax equilibrium cache mesh_generation_id does not match the stage mesh",
+        )
+        require(
+            source_topology_fingerprint == stage_topology_fingerprint,
+            "relax equilibrium cache topology_fingerprint does not match the stage mesh",
+        )
     require(qualification.get("stop_reason") == "torque", "relaxation must stop on torque")
     require(
         qualification.get("stop_metric_kind") == "max_torque_apm",

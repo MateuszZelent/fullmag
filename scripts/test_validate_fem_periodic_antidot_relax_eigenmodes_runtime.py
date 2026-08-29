@@ -84,6 +84,7 @@ def write_runtime_fixture(
     modal_target: str = "frequency_window",
     mode_count: int = 8,
     saved_mode_count: int = 4,
+    cached_relaxation: bool = False,
 ) -> Path:
     report_root = root / device
     session_root = report_root / "workspace-history/session-123"
@@ -93,16 +94,26 @@ def write_runtime_fixture(
     handoff_sha256 = "sha256:" + "a" * 64
     equilibrium_sha256 = "sha256:" + "b" * 64
 
+    relax_runtime_metadata = runtime_metadata(
+        device,
+        modal_target=modal_target,
+        mode_count=mode_count,
+        saved_mode_count=saved_mode_count,
+    )
+    if cached_relaxation:
+        relax_runtime_metadata["periodic_antidot_eigensolve"][
+            "equilibrium_state_source"
+        ] = {
+            "kind": "reusable_cache",
+            "schema_version": "fem_periodic_antidot_equilibrium_cache.v2",
+            "mesh_generation_id": "mesh-generation-1",
+            "topology_fingerprint": "sha256:" + "1" * 64,
+        }
     relax_metadata = {
         "status": "completed",
         "problem_meta": {
             "entrypoint_kind": "flat_relax",
-            "runtime_metadata": runtime_metadata(
-                device,
-                modal_target=modal_target,
-                mode_count=mode_count,
-                saved_mode_count=saved_mode_count,
-            ),
+            "runtime_metadata": relax_runtime_metadata,
         },
         "requested_execution": requested_execution("cpu"),
         "mesh": mesh_metadata(),
@@ -113,7 +124,7 @@ def write_runtime_fixture(
         "fem_cpu_relaxation_qualification": {
             "schema_version": "fem_cpu_relaxation_qualification.v1",
             "relaxation_algorithm": "nonlinear_cg",
-            "executed_steps": 42,
+            "executed_steps": 0 if cached_relaxation else 42,
             "stop_reason": "torque",
             "stop_metric_kind": "max_torque_apm",
             "stop_metric_value": 7.0e-4,
@@ -139,6 +150,14 @@ def write_runtime_fixture(
             "demag": "periodic_airbox_k0",
         },
     }
+    if cached_relaxation:
+        final_metadata["problem_meta"]["runtime_metadata"][
+            "periodic_antidot_eigensolve"
+        ]["equilibrium_state_source"] = dict(
+            relax_runtime_metadata["periodic_antidot_eigensolve"][
+                "equilibrium_state_source"
+            ]
+        )
     state = {
         "observable": "m",
         "unit": "dimensionless",
@@ -390,6 +409,64 @@ def test_validator_accepts_current_v3_relax_to_eigen_handoff(tmp_path: Path) -> 
     result = run_validator(report_root, "cpu")
 
     assert result.returncode == 0, result.stderr
+
+
+def test_validator_accepts_zero_step_reusable_equilibrium_cache(tmp_path: Path) -> None:
+    report_root = write_runtime_fixture(tmp_path, "cpu", cached_relaxation=True)
+
+    result = run_validator(report_root, "cpu")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_zero_steps_without_reusable_cache(tmp_path: Path) -> None:
+    report_root = write_runtime_fixture(tmp_path, "cpu")
+    metadata_path = (
+        report_root
+        / "workspace-history/session-123/stages/stage_00_flat_relax/metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["fem_cpu_relaxation_qualification"]["executed_steps"] = 0
+    write_json(metadata_path, metadata)
+
+    result = run_validator(report_root, "cpu")
+
+    assert result.returncode != 0
+    assert "equilibrium_state_source" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "field,drift",
+    [
+        ("schema_version", "fem_periodic_antidot_equilibrium_cache.v1"),
+        ("mesh_generation_id", "mesh-generation-other"),
+        ("topology_fingerprint", "sha256:" + "2" * 64),
+    ],
+)
+def test_validator_rejects_zero_step_cache_identity_drift(
+    tmp_path: Path, field: str, drift: str
+) -> None:
+    report_root = write_runtime_fixture(tmp_path, "cpu", cached_relaxation=True)
+    metadata_path = (
+        report_root
+        / "workspace-history/session-123/stages/stage_00_flat_relax/metadata.json"
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["problem_meta"]["runtime_metadata"]["periodic_antidot_eigensolve"][
+        "equilibrium_state_source"
+    ][field] = drift
+    write_json(metadata_path, metadata)
+    final_metadata_path = report_root / "artifacts/metadata.json"
+    final_metadata = json.loads(final_metadata_path.read_text(encoding="utf-8"))
+    final_metadata["problem_meta"]["runtime_metadata"][
+        "periodic_antidot_eigensolve"
+    ]["equilibrium_state_source"][field] = drift
+    write_json(final_metadata_path, final_metadata)
+
+    result = run_validator(report_root, "cpu")
+
+    assert result.returncode != 0
+    assert "equilibrium cache" in result.stderr
 
 
 def test_validator_accepts_one_mode_nearest_frequency_run(tmp_path: Path) -> None:
