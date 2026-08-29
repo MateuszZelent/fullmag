@@ -14,6 +14,21 @@ enum class AosVectorFieldSpace : std::uint8_t {
 };
 
 /*
+ * Immutable typed map between the full local-node state space and the
+ * periodic reduced (true-node) space. Empty periodic topology is represented
+ * as an identity map with null index arrays and equal local/true extents.
+ */
+struct PeriodicNodeMapView {
+    const std::uint32_t *local_to_true = nullptr;
+    const std::uint32_t *true_representatives = nullptr;
+    std::size_t local_node_count = 0;
+    std::size_t true_node_count = 0;
+    std::uint64_t revision = 0;
+
+    bool reduced() const noexcept { return local_to_true != nullptr; }
+};
+
+/*
  * Typed boundary for a mutable AoS vector field.
  *
  * The view is only valid for the storage and map revision checked by
@@ -27,19 +42,11 @@ struct AosVectorFieldView {
     std::uint64_t periodic_map_revision = 0;
 };
 
-/*
- * Immutable typed map between the full local-node state space and the
- * periodic reduced (true-node) space. Empty periodic topology is represented
- * as an identity map with null index arrays and equal local/true extents.
- */
-struct PeriodicNodeMapView {
-    const std::uint32_t *local_to_true = nullptr;
-    const std::uint32_t *true_representatives = nullptr;
-    std::size_t local_node_count = 0;
-    std::size_t true_node_count = 0;
-    std::uint64_t revision = 0;
-
-    bool reduced() const noexcept { return local_to_true != nullptr; }
+struct ConstAosVectorFieldView {
+    const double *data = nullptr;
+    std::size_t node_count = 0;
+    AosVectorFieldSpace space = AosVectorFieldSpace::local_nodes;
+    PeriodicNodeMapView periodic_map{};
 };
 
 struct RepresentationAuditCounters {
@@ -64,6 +71,31 @@ bool bind_local_node_aos_vector_field(
     std::vector<double> &field_xyz,
     AosVectorFieldView &view,
     std::string &error);
+
+bool bind_local_node_aos_vector_field(
+    const Context &ctx,
+    const std::vector<double> &field_xyz,
+    ConstAosVectorFieldView &view,
+    std::string &error);
+
+#if FULLMAG_HAS_MFEM_STACK
+/*
+ * Canonical adapter between authoritative local-node AoS state and the three
+ * scalar MFEM GridFunctions. The reverse direction performs an explicit
+ * GridFunction local -> MFEM true DOF -> local -> AoS round-trip using
+ * setup-owned workspaces. Both directions reject inconsistent periodic
+ * classes before publishing a converted state.
+ */
+bool copy_local_node_aos_to_mfem_state(
+    Context &ctx,
+    const std::vector<double> &local_aos,
+    std::string &error);
+
+bool copy_mfem_state_to_local_node_aos(
+    Context &ctx,
+    std::vector<double> &local_aos,
+    std::string &error);
+#endif
 
 /*
  * Split an AoS-3 vector field into component arrays.

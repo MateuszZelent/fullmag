@@ -445,6 +445,8 @@ void c_abi_exposes_native_relaxation_step() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.cpp");
     const std::string dmi_workspace =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_workspace.cpp");
+    const std::string aos_field =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "aos_field.cpp");
     const std::string dmi_interfacial =
         read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_interfacial.cpp");
     const std::string dmi_bulk =
@@ -472,16 +474,20 @@ void c_abi_exposes_native_relaxation_step() {
     check(
         dmi_workspace.find("bool refresh_dmi_grid_functions_from_magnetization(") !=
                 std::string::npos &&
-            dmi_workspace.find("audited_host_write(*gf_mx)") != std::string::npos &&
-            dmi_workspace.find("audited_host_write(*gf_my)") != std::string::npos &&
-            dmi_workspace.find("audited_host_write(*gf_mz)") != std::string::npos &&
+            dmi_workspace.find(
+                "copy_local_node_aos_to_mfem_state(ctx, m_xyz, error)") !=
+                std::string::npos &&
+            dmi_workspace.find("audited_host_write(*gf_mx)") == std::string::npos &&
+            aos_field.find("bool copy_local_node_aos_to_mfem_state(") !=
+                std::string::npos &&
+            aos_field.find("audited_host_write(target)") != std::string::npos &&
             dmi_interfacial.find(
                 "refresh_dmi_grid_functions_from_magnetization(ctx, *dmi_input, error)") !=
                 std::string::npos &&
             dmi_bulk.find(
                 "refresh_dmi_grid_functions_from_magnetization(ctx, *exchange_input, error)") !=
                 std::string::npos,
-        "native FEM DMI field and energy owners must refresh MFEM grid functions from every trial magnetization before derivative evaluation");
+        "native FEM DMI field and energy owners must refresh MFEM grid functions through the canonical AoS adapter before derivative evaluation");
     const auto tangent_gradient_start =
         relaxation_math.find("void tangent_gradient_from_field(");
     const auto tangent_gradient_end =

@@ -144,12 +144,28 @@ void mfem_context_lifecycle_is_owned_by_runtime_module() {
             runtime_header.find("mfem::GridFunction *gf_mx") != std::string::npos &&
             runtime_header.find("mfem::GridFunction *gf_my") != std::string::npos &&
             runtime_header.find("mfem::GridFunction *gf_mz") != std::string::npos &&
+            runtime_header.find("mfem::Vector *true_mx") != std::string::npos &&
+            runtime_header.find("mfem::Vector *true_my") != std::string::npos &&
+            runtime_header.find("mfem::Vector *true_mz") != std::string::npos &&
             runtime_header.find("mfem::GridFunction *gf_a") != std::string::npos &&
             runtime_header.find("mfem::GridFunction *gf_ms") != std::string::npos &&
             runtime_header.find("mfem::Coefficient *a_coeff") != std::string::npos &&
             runtime_header.find("mfem::Coefficient *ms_coeff") != std::string::npos &&
             runtime_header.find("bool ready") != std::string::npos,
         "MFEM context runtime state must own mesh/FES/GridFunction lifecycle handles and component buffers");
+    check(
+        runtime.find("std::make_unique<mfem::Vector>(fes->GetTrueVSize())") !=
+                std::string::npos &&
+            runtime.find("ctx.mfem_context.true_mx = true_mx.release()") !=
+                std::string::npos &&
+            runtime.find("delete static_cast<mfem::Vector *>(ctx.mfem_context.true_mx)") !=
+                std::string::npos &&
+            runtime.find("ctx.mfem_context.true_mx = nullptr") != std::string::npos &&
+            runtime.find("copy_local_node_aos_to_mfem_state(ctx, ctx.state.m_xyz, error)") !=
+                std::string::npos &&
+            runtime.find("copy_mfem_state_to_local_node_aos(ctx, recovered_state, error)") !=
+                std::string::npos,
+        "MFEM context must own true-DOF workspaces and verify the initial state round-trip before commit");
     check(
         context_header.find("MfemContextRuntimeState mfem_context{}") != std::string::npos,
         "Context must store actual MFEM context runtime state under mfem_context");
