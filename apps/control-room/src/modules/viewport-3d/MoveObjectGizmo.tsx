@@ -121,8 +121,6 @@ export function MoveObjectGizmo({
   onGestureActiveChange?: (active: boolean) => void;
 }) {
   const { colors } = useViewport3DColors();
-  if (!colors) return null;
-
   const origin = object.translation ?? object.bounds.center;
   const [originX, originY, originZ] = origin;
   const [draft, setDraft] = useState<MoveDraft | null>(null);
@@ -154,6 +152,8 @@ export function MoveObjectGizmo({
   useEffect(() => {
     return installMoveGestureTerminalListeners(controller, window);
   }, [controller]);
+
+  if (!colors) return null;
 
   const offset: Translation3 = draft
     ? [

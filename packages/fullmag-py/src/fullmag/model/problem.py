@@ -2038,10 +2038,11 @@ class Problem:
         script_source: str | None = None,
         source_root: str | Path | None = None,
         entrypoint_kind: str = "direct",
-        asset_cache: dict[str, dict[str, Any] | None] | None = None,
-        include_geometry_assets: bool = True,
-        study_pipeline: dict[str, object] | None = None,
-        _copy_cached_geometry_assets: bool = True,
+          asset_cache: dict[str, dict[str, Any] | None] | None = None,
+          include_geometry_assets: bool = True,
+          study_pipeline: dict[str, object] | None = None,
+          runtime_device_override: str | None = None,
+          _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         runtime = self.runtime.resolved(
             backend=requested_backend,
@@ -2085,8 +2086,14 @@ class Problem:
         mesh_workflow = runtime_metadata.get("mesh_workflow")
         if not isinstance(mesh_workflow, dict):
             mesh_workflow = None
+        authored_runtime_selection = runtime_metadata["runtime_selection"]
+        if runtime_device_override in {"cpu", "gpu"}:
+            authored_runtime_selection = {
+                **authored_runtime_selection,
+                "device": runtime_device_override,
+            }
         _validate_authored_mixed_p1_scope(
-            runtime_selection=runtime_metadata["runtime_selection"],
+            runtime_selection=authored_runtime_selection,
             mesh_workflow=mesh_workflow,
             materials=materials,
             energy_terms=self.energy,
