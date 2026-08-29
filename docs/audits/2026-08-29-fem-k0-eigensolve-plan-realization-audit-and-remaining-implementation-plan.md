@@ -1187,3 +1187,32 @@ cap ani poluzowanie bramki.
 R7 pozostaje `PARTIAL`: powyższe dowodzi algorytmu i certyfikatu na kontrolowanym
 spektrum, lecz realny periodic-antidot `frequency_window` oraz convergence
 mesh/airbox nie zostały jeszcze wykonane na świeżym immutable source identity.
+
+### 17.8. Windows-only rebuild po usunięciu niespójnego cache
+
+Kanoniczny build wykonano wyłącznie z PowerShella i Docker Desktop, z
+Windowsowego worktree
+`C:\git\fullmag\worktrees\eigensolve-k0-finalization`. Nie użyto WSL ani
+linuxowego checkoutu. Pierwszy świeży przebieg ujawnił, że zewnętrzny katalog
+`C:\fullmag-build\cargo-targets\fem-cpu` zawierał niespójne metadane Cargo:
+kompilator zgłaszał brak typów i metod, które były obecne w bieżących źródłach.
+Po wyczyszczeniu wyłącznie tego odtwarzalnego targetu pełny runner, CLI, API i
+Python core skompilowały się poprawnie.
+
+Build ujawnił następnie niezależny błąd Windowsowego launchera. Funkcja
+`Get-DockerImageId` odczytywała `$LASTEXITCODE` dopiero po potoku PowerShell,
+przez co poprawne `docker image inspect` było klasyfikowane jako brak obrazu.
+Exit code jest teraz przechwytywany bezpośrednio po wywołaniu Dockera, zanim
+wynik trafi do `Select-Object`. Dowody:
+
+- 23/23 testów `test_windows_fullmag_launcher_contract.py` — **PASS**;
+- parser PowerShell dla `run_fullmag_docker.ps1` — **PASS**;
+- pełny `BuildMode=true -BuildOnly -Backend fem -Device cpu` — **PASS**;
+- runtime zapisany w `C:\fullmag-cache\state\fem-cpu`;
+- obraz `fullmag/fem-cpu:windows-local`, ID
+  `sha256:6ceeda1637917e5289b4f17a2277a6d9b8aff26ef6d6720c8bb76a745fcb7d83`.
+
+Manifest tego przebiegu prawidłowo wskazuje dedykowany Windowsowy worktree.
+Ponieważ poprawka launchera była jeszcze niezatwierdzona podczas tego builda,
+manifest ma jawny `worktree_state=dirty`; po commicie wymagany jest krótki
+recapture/rebuild tożsamości przed realnym przebiegiem R7.

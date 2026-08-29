@@ -233,8 +233,13 @@ function Get-DockerImageId {
   $savedErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
-    $imageId = (& docker image inspect $Image --format '{{.Id}}' 2>$null | Select-Object -First 1).Trim()
+    # Capture the native exit code before passing the output through a
+    # PowerShell pipeline.  On PowerShell 7, $LASTEXITCODE can be cleared by
+    # the pipeline even when `docker image inspect` succeeded.
+    $imageInspectOutput = & docker image inspect $Image --format '{{.Id}}' 2>$null
     $imageExitCode = $LASTEXITCODE
+    $imageId = [string]($imageInspectOutput | Select-Object -First 1)
+    $imageId = $imageId.Trim()
   }
   finally {
     $ErrorActionPreference = $savedErrorActionPreference

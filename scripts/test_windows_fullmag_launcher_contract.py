@@ -188,6 +188,16 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     assert "run_fullmag.ps1" not in launcher
 
 
+def test_windows_fem_launcher_captures_docker_exit_code_before_pipelining_output() -> None:
+    launcher = DOCKER_LAUNCHER.read_text(encoding="utf-8")
+
+    inspect = launcher.index("$imageInspectOutput = & docker image inspect")
+    exit_code = launcher.index("$imageExitCode = $LASTEXITCODE", inspect)
+    select = launcher.index("$imageInspectOutput | Select-Object -First 1", inspect)
+
+    assert inspect < exit_code < select
+
+
 def test_windows_setup_bootstraps_tools_and_validates_storage() -> None:
     setup = SETUP.read_text(encoding="utf-8")
 
