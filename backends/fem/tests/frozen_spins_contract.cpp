@@ -292,6 +292,28 @@ void test_frozen_spins_solver_step_contract() {
     fullmag_fem_backend *handle = fullmag_fem_backend_create(&plan);
     check(handle != nullptr, "FEM backend create for frozen spins P1 Heun must succeed");
 
+    fullmag_fem_representation_receipt_v1 representation{};
+    check(
+        fullmag_fem_backend_snapshot_representation_receipt_v1(
+            handle, &representation) == FULLMAG_FEM_OK,
+        "public FEM backend exposes the executed representation receipt");
+    check(
+        representation.abi_version == FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION &&
+            representation.struct_size == sizeof(representation),
+        "representation receipt has the frozen v1 ABI identity");
+    check(sizeof(representation) == 88u,
+          "representation receipt v1 has the frozen 88-byte C ABI layout");
+    check(
+        representation.state_space == FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS &&
+            representation.local_node_count == 4u &&
+            representation.true_node_count == 4u &&
+            representation.periodic_map_revision == 0u,
+        "representation receipt proves the executed identity local/true map");
+    check(
+        representation.ms_location == FULLMAG_FEM_MATERIAL_LOCATION_SCALAR &&
+            representation.a_location == FULLMAG_FEM_MATERIAL_LOCATION_SCALAR,
+        "representation receipt reports executed scalar material locations");
+
     fullmag_fem_step_stats stats = {};
     constexpr double dt = 1.0e-13;
     for (int step = 0; step < 10; ++step) {

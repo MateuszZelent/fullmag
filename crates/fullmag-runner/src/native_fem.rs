@@ -93,7 +93,8 @@ use crate::quantities::QuantityId;
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{
-    LivePreviewField, LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
+    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, LivePreviewField,
+    LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
 };
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::{dot, MU0};
@@ -277,6 +278,79 @@ fn endpoint_cache_telemetry_from_ffi(
         endpoint_refreshes: raw.endpoint_refreshes,
         accepted_step_wall_time_ns: raw.accepted_step_wall_time_ns,
     }))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn representation_material_location_from_ffi(
+    label: &str,
+    value: u32,
+) -> Result<FemMaterialFieldLocation, RunError> {
+    match value {
+        ffi::FULLMAG_FEM_MATERIAL_LOCATION_SCALAR => Ok(FemMaterialFieldLocation::Scalar),
+        ffi::FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1 => Ok(FemMaterialFieldLocation::NodalP1),
+        ffi::FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0 => Ok(FemMaterialFieldLocation::ElementDg0),
+        _ => Err(RunError {
+            message: format!("native FEM returned unknown {label} material location {value}"),
+        }),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn representation_receipt_from_ffi(
+    raw: &ffi::fullmag_fem_representation_receipt_v1,
+) -> Result<FemRepresentationReceipt, RunError> {
+    if raw.abi_version != ffi::FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION
+        || raw.struct_size as usize
+            != std::mem::size_of::<ffi::fullmag_fem_representation_receipt_v1>()
+    {
+        return Err(RunError {
+            message: "native FEM returned an incompatible representation receipt ABI v1 record"
+                .to_string(),
+        });
+    }
+    let state_space = match raw.state_space {
+        ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS => {
+            FemStateRepresentation::LocalNodeAos
+        }
+        value => {
+            return Err(RunError {
+                message: format!("native FEM returned unknown state representation {value}"),
+            })
+        }
+    };
+    if raw.local_node_count == 0
+        || raw.true_node_count == 0
+        || raw.true_node_count > raw.local_node_count
+        || (raw.true_node_count < raw.local_node_count && raw.periodic_map_revision == 0)
+        || raw.reserved0 != 0
+        || raw.hot_loop_representation_copy_count > raw.representation_copy_count
+        || raw.hot_loop_gather_scatter_bytes > raw.gather_scatter_bytes
+    {
+        return Err(RunError {
+            message: "native FEM returned an internally inconsistent representation receipt"
+                .to_string(),
+        });
+    }
+    Ok(FemRepresentationReceipt {
+        schema_version: raw.abi_version,
+        state_space,
+        ms_location: representation_material_location_from_ffi(
+            "saturation magnetisation",
+            raw.ms_location,
+        )?,
+        a_location: representation_material_location_from_ffi(
+            "exchange stiffness",
+            raw.a_location,
+        )?,
+        local_node_count: raw.local_node_count,
+        true_node_count: raw.true_node_count,
+        periodic_map_revision: raw.periodic_map_revision,
+        representation_copy_count: raw.representation_copy_count,
+        gather_scatter_bytes: raw.gather_scatter_bytes,
+        invalid_space_assertion_count: raw.invalid_space_assertion_count,
+        hot_loop_representation_copy_count: raw.hot_loop_representation_copy_count,
+        hot_loop_gather_scatter_bytes: raw.hot_loop_gather_scatter_bytes,
+    })
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -3089,6 +3163,18 @@ impl NativeFemBackend {
         Ok(())
     }
 
+    fn attach_representation_receipt(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        let mut raw = ffi::fullmag_fem_representation_receipt_v1::default();
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_snapshot_representation_receipt_v1(self.handle, &mut raw)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM representation receipt read failed"));
+        }
+        stats.fem_representation_receipt = Some(representation_receipt_from_ffi(&raw)?);
+        Ok(())
+    }
+
     fn average_m_for_nodes(&self, node_indices: &[u32]) -> Result<Option<[f64; 3]>, RunError> {
         if node_indices.is_empty() {
             return Ok(None);
@@ -3352,6 +3438,7 @@ impl NativeFemBackend {
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
+        self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -3793,6 +3880,7 @@ impl NativeFemBackend {
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
+        self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -4120,6 +4208,7 @@ impl NativeFemBackend {
         copy_demag_diagnostics(&mut step_stats, &stats);
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
+        self.attach_representation_receipt(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
                 single_object_scalars("free", &step_stats)
@@ -5391,6 +5480,88 @@ mod tests {
         raw.final_refresh_reason = ffi::FULLMAG_FEM_ENDPOINT_REFRESH_CACHE_HIT;
         raw.cache_state_valid = 2;
         assert!(endpoint_cache_telemetry_from_ffi(&raw).is_err());
+    }
+
+    #[test]
+    fn representation_receipt_mapping_preserves_public_provenance() {
+        let raw = ffi::fullmag_fem_representation_receipt_v1 {
+            abi_version: ffi::FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_representation_receipt_v1>() as u32,
+            state_space: ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS,
+            ms_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0,
+            a_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1,
+            reserved0: 0,
+            local_node_count: 8,
+            true_node_count: 6,
+            periodic_map_revision: 17,
+            representation_copy_count: 11,
+            gather_scatter_bytes: 1_056,
+            invalid_space_assertion_count: 0,
+            hot_loop_representation_copy_count: 7,
+            hot_loop_gather_scatter_bytes: 672,
+        };
+
+        let receipt = representation_receipt_from_ffi(&raw).unwrap();
+        assert_eq!(receipt.schema_version, 1);
+        assert_eq!(receipt.state_space, FemStateRepresentation::LocalNodeAos);
+        assert_eq!(receipt.ms_location, FemMaterialFieldLocation::ElementDg0);
+        assert_eq!(receipt.a_location, FemMaterialFieldLocation::NodalP1);
+        assert_eq!(receipt.local_node_count, 8);
+        assert_eq!(receipt.true_node_count, 6);
+        assert_eq!(receipt.periodic_map_revision, 17);
+        assert_eq!(receipt.representation_copy_count, 11);
+        assert_eq!(receipt.gather_scatter_bytes, 1_056);
+        assert_eq!(receipt.hot_loop_representation_copy_count, 7);
+        assert_eq!(receipt.hot_loop_gather_scatter_bytes, 672);
+    }
+
+    #[test]
+    fn representation_receipt_mapping_rejects_corrupt_provenance() {
+        let mut raw = ffi::fullmag_fem_representation_receipt_v1 {
+            abi_version: ffi::FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_representation_receipt_v1>() as u32,
+            state_space: ffi::FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS,
+            ms_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_SCALAR,
+            a_location: ffi::FULLMAG_FEM_MATERIAL_LOCATION_SCALAR,
+            local_node_count: 4,
+            true_node_count: 2,
+            periodic_map_revision: 0,
+            ..Default::default()
+        };
+        assert!(representation_receipt_from_ffi(&raw).is_err());
+
+        raw.periodic_map_revision = 1;
+        raw.reserved0 = 1;
+        assert!(representation_receipt_from_ffi(&raw).is_err());
+
+        raw.reserved0 = 0;
+        raw.hot_loop_representation_copy_count = 2;
+        raw.representation_copy_count = 1;
+        assert!(representation_receipt_from_ffi(&raw).is_err());
+    }
+
+    #[test]
+    fn representation_receipt_reaches_public_step_stats() {
+        if !is_gpu_available() {
+            eprintln!("skipping representation receipt E2E: native MFEM stack unavailable");
+            return;
+        }
+        let plan = make_exchange_only_plan();
+        let mut backend = NativeFemBackend::create(&plan).expect("native FEM receipt create");
+        let stats = backend
+            .step(plan.fixed_timestep.expect("fixed timestep"))
+            .expect("native FEM receipt step");
+        let receipt = stats
+            .fem_representation_receipt
+            .expect("public StepStats representation receipt");
+        assert_eq!(receipt.schema_version, 1);
+        assert_eq!(receipt.state_space, FemStateRepresentation::LocalNodeAos);
+        assert_eq!(receipt.ms_location, FemMaterialFieldLocation::Scalar);
+        assert_eq!(receipt.a_location, FemMaterialFieldLocation::Scalar);
+        assert_eq!(receipt.local_node_count, plan.mesh.nodes.len() as u64);
+        assert_eq!(receipt.true_node_count, plan.mesh.nodes.len() as u64);
+        assert_eq!(receipt.periodic_map_revision, 0);
+        assert_eq!(receipt.invalid_space_assertion_count, 0);
     }
 
     #[test]

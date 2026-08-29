@@ -35,7 +35,10 @@ pub use eval::{eval_global_scalar, reduce_scalars, reduce_vector_field, Quantity
 pub use id::{normalize_quantity_id, QuantityId, QuantityIdError};
 pub use reduction::QuantityReduction;
 pub use schema_version::SCHEMA_VERSION;
-pub use step_data::{EndpointCacheTelemetry, GlobalQuantityRow, StepDiagnostics};
+pub use step_data::{
+    EndpointCacheTelemetry, FemMaterialFieldLocation, FemRepresentationReceipt,
+    FemStateRepresentation, GlobalQuantityRow, StepDiagnostics,
+};
 pub use transport::{
     build_wire_catalog, LiveQuantityFrame, LiveQuantityFrameLayout, LiveQuantityFrameProvenance,
     QuantityCatalogResponse, QuantityDescriptorLive, QuantityDescriptorWire,

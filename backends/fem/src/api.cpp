@@ -3399,6 +3399,66 @@ int fullmag_fem_backend_snapshot_endpoint_cache_telemetry_v1(
 #endif
 }
 
+int fullmag_fem_backend_snapshot_representation_receipt_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_representation_receipt_v1 *out_receipt)
+{
+    if (out_receipt == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_snapshot_representation_receipt_v1 received null out_receipt");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_snapshot_representation_receipt_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    fullmag::fem::PeriodicNodeMapView map;
+    std::string error;
+    if (!fullmag::fem::bind_periodic_node_map(handle->context, map, error)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "representation receipt rejected invalid periodic map: " + error);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto material_location = [](
+        const std::vector<double> &nodal,
+        const std::vector<double> &element) -> uint32_t {
+        if (!nodal.empty()) {
+            return FULLMAG_FEM_MATERIAL_LOCATION_NODAL_P1;
+        }
+        if (!element.empty()) {
+            return FULLMAG_FEM_MATERIAL_LOCATION_ELEMENT_DG0;
+        }
+        return FULLMAG_FEM_MATERIAL_LOCATION_SCALAR;
+    };
+    const auto counters = fullmag::fem::representation_audit_snapshot(handle->context);
+    *out_receipt = {};
+    out_receipt->abi_version = FULLMAG_FEM_REPRESENTATION_RECEIPT_V1_ABI_VERSION;
+    out_receipt->struct_size = sizeof(*out_receipt);
+    out_receipt->state_space = FULLMAG_FEM_REPRESENTATION_SPACE_LOCAL_NODE_AOS;
+    out_receipt->ms_location = material_location(
+        handle->context.material_fields.Ms_field,
+        handle->context.material_fields.Ms_element_field);
+    out_receipt->a_location = material_location(
+        handle->context.material_fields.A_field,
+        handle->context.material_fields.A_element_field);
+    out_receipt->local_node_count = map.local_node_count;
+    out_receipt->true_node_count = map.true_node_count;
+    out_receipt->periodic_map_revision = map.revision;
+    out_receipt->representation_copy_count = counters.representation_copy_count;
+    out_receipt->gather_scatter_bytes = counters.gather_scatter_bytes;
+    out_receipt->invalid_space_assertion_count = counters.invalid_space_assertion_count;
+    out_receipt->hot_loop_representation_copy_count =
+        counters.hot_loop_representation_copy_count;
+    out_receipt->hot_loop_gather_scatter_bytes = counters.hot_loop_gather_scatter_bytes;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
 int fullmag_fem_backend_solver_attempt_count_v1(
     fullmag_fem_backend *handle,
     uint64_t *out_count)
