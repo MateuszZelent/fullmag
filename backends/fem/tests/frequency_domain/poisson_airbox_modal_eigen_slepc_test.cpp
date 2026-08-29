@@ -1860,6 +1860,7 @@ void SolvesSharedDomainCpuSchurModalFixture()
     problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
     // Keep the shift strictly off the exact eigenvalue: shift-invert is
     // undefined for a singular A-tau B factorization.
+    problem.target_kind = "nearest_frequency";
     problem.target_frequency_hz = 1.9e9;
     problem.expected_reference_frequency_hz = 0.0;
     problem.residual_tolerance = 1.0e-8;
@@ -1881,6 +1882,18 @@ void SolvesSharedDomainCpuSchurModalFixture()
     check(contains(result.diagnostics_json,
                    "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\""),
           "shared-domain CPU diagnostics must identify the Schur adapter");
+    check(contains(result.diagnostics_json,
+                   "\"engine_id\":\"native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1\""),
+          "shared-domain CPU diagnostics must publish a stable engine identity");
+    check(contains(result.diagnostics_json, "\"solve_succeeded\":true"),
+          "shared-domain CPU diagnostics must separate solve success from completeness");
+    check(contains(result.diagnostics_json, "\"fields_available\":true"),
+          "shared-domain CPU diagnostics must disclose accepted mode availability");
+    check(contains(result.diagnostics_json,
+                   "\"spectrum_completeness\":\"selected_only\""),
+          "nearest-frequency CPU diagnostics must remain explicitly selected-only");
+    check(contains(result.diagnostics_json, "\"window_complete\":false"),
+          "nearest-frequency CPU diagnostics must never claim a complete window");
     check(contains(result.diagnostics_json,
                    "\"requested_execution\":\"production_cpu\""),
           "shared-domain CPU diagnostics must preserve the requested execution lane");
@@ -2387,6 +2400,10 @@ int main()
     // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;
     // GPU qualification remains a separate device-backed test lane.
     const bool skip_gpu_tests = std::getenv("FULLMAG_SKIP_GPU_TESTS") != nullptr;
+    if (std::getenv("FULLMAG_NEAREST_SEMANTICS_FOCUSED") != nullptr) {
+        SolvesSharedDomainCpuSchurModalFixture();
+        return 0;
+    }
     if (std::getenv("FULLMAG_REFINEMENT_TELEMETRY_FOCUSED") != nullptr) {
         SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();
         return 0;

@@ -1092,8 +1092,8 @@ co pozostaje jawną granicą dowodu.
 | R0–R2 | DONE-D1 | 100% | recovery, dedykowany Windows worktree i synchronizacja z master wykonane |
 | R3 | DONE dla solve `7d0a6580d`; otwarty dla finalnego SHA | 85% | clean source identity, build i runtime hash są związane; późniejsze zmiany walidatora/launchera wymagają finalnego recapture, nie ponownego recovery |
 | R4 | PARTIAL | 80% | natywny recompute, certyfikat, negatywne testy i FE-weighted leakage istnieją; pozostaje pełne związanie operator/pencil/acceptance/source SHA oraz domknięcie testów masy/energii |
-| R5 | PARTIAL | 30% | realny raport ujawnia `production_cpu`, brak fallbacku i osobny `window_completeness`; nadal brakuje pełnego call graphu/engine ID oraz jednoznacznego publicznego `selected_only` |
-| R6 | PARTIAL, solve działa | 85% | poprawny obrócony pencil, pełne residuale i realny nearest 8/8 są zielone; bramka nie jest DONE, bo status nearest nie publikuje jeszcze jawnego `selected_only` |
+| R5 | PARTIAL | 45% | źródło publikuje lane, stabilny `engine_id`, `solve_succeeded`, `fields_available`, `spectrum_completeness` i `window_complete`; pozostaje pełny call graph oraz runtime/API proof nowych pól |
+| R6 | PARTIAL, solve działa | 90% | poprawny obrócony pencil, pełne residuale i realny nearest 8/8 są zielone; źródłowy kontrakt nearest jest jawnie `selected_only`, lecz świeży runtime z tym polem nie został jeszcze przebudowany |
 | R7 | NOT DONE | 15% | infrastruktura window istnieje, ale znany test window jest czerwony; brak complete-window certificate i convergence |
 | R8 | NOT VERIFIED | 10% | źródła artifact/API/UI istnieją historycznie; brak FMS restart/import i live browser proof na obecnym candidate |
 | R9 | NOT VERIFIED | 10% | kod GPU istnieje; brak profiler-backed Q2 na tym samym wejściu |
@@ -1110,9 +1110,10 @@ kompletności okna. Gotowość produkcyjna całego CPU+GPU+UI release pozostaje
 
 Kolejność poniżej zastępuje sekcję 16.4 i nie wraca do recovery ani WSL:
 
-1. **R5/R6 — domknąć semantykę nearest.** Dodać stabilny `engine_id`, osobny
-   status `selected_only`, rozdzielić sukces solve od kompletności okna i dodać
-   testy propagacji backend -> artifact. `complete=true` nie może być
+1. **R5/R6 — domknąć propagację semantyki nearest.** Przebudować runtime z
+   nowymi polami `engine_id`, `solve_succeeded`, `fields_available`,
+   `spectrum_completeness=selected_only` i `window_complete=false`, a następnie
+   dodać testy propagacji backend -> artifact/API. `complete=true` nie może być
    interpretowane jako `window_complete=true`.
 2. **R4 — domknąć certificate binding.** Związać recompute certificate z
    operator/pencil, acceptance artifact, pełnym source identity oraz dowieść
@@ -1138,3 +1139,22 @@ Najbliższy krok implementacyjny to punkt 1, nie ponowne liczenie tego samego
 nearest i nie ponowny recovery. Aktualny wynik rozstrzyga pierwotną wątpliwość:
 **warstwę z dziurą można już policzyć na CPU w trybie nearest; brakuje przede
 wszystkim uczciwej semantyki statusu i pełnego, certyfikowanego okna.**
+
+### 17.6. Aktualizacja źródłowa R5/R6 po audycie raportu
+
+Natywny Schur/SLEPc diagnostics rozdziela teraz techniczny sukces wywołania od
+zakresu spektrum. Dla `nearest_frequency` publikuje:
+
+- `solve_succeeded=true` dopiero przy statusie `ok`;
+- `fields_available=true` tylko przy co najmniej jednym zaakceptowanym modzie;
+- stabilny `engine_id`:
+  `native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1`;
+- `spectrum_completeness="selected_only"`;
+- `window_complete=false` niezależnie od technicznego `complete=true`.
+
+Skupiony natywny kontrakt nearest przeszedł. Fixture kontraktu został również
+naprawiony tak, aby jawnie żądał `nearest_frequency`, zamiast odziedziczyć
+`frequency_window` z helpera i generować mylący błąd kompletności. Pełny zestaw
+CPU/SLEPc nadal zatrzymuje się na osobnym, rzeczywistym teście window z tym samym
+komunikatem; R7 pozostaje zatem czerwone i nie jest maskowane przez naprawę
+fixture nearest. Rust `fem::eigen_tests` pozostaje zielony: **133/133 PASS**.

@@ -2726,12 +2726,15 @@ void write_production_schur_diagnostics(
         "\"schema_version\":\"poisson_airbox_modal_eigen_schur_slepc.v1\","
         "\"status\":\"%s\","
         "\"complete\":%s,"
+        "\"solve_succeeded\":%s,"
+        "\"fields_available\":%s,"
         "\"reason\":\"%s\","
         "\"slepc_converged_reason\":\"%s\","
         "\"slepc_converged_reason_code\":%d,"
         "\"stop_reason\":\"%s\","
         "\"study_product\":\"modal_eigen\","
         "\"solver_adapter\":\"k0_poisson_airbox_cpu_schur_slepc\","
+        "\"engine_id\":\"native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1\","
         "\"requested_solver_adapter\":\"%s\","
         "\"execution_lane\":\"production_cpu\","
         "\"requested_execution\":\"production_cpu\","
@@ -2765,6 +2768,8 @@ void write_production_schur_diagnostics(
         "\"spectral_pencil_kind\":\"real_frequency_rotated\","
         "\"target_representation\":\"tau=omega_target\","
         "\"target_kind\":\"%s\","
+        "\"spectrum_completeness\":\"%s\","
+        "\"window_complete\":%s,"
         "\"requested_window_hz\":[%.17g,%.17g],"
         "\"target_tau_rad_s\":%.17g,"
         "\"target_omega_rad_s\":%.17g,"
@@ -2842,6 +2847,8 @@ void write_production_schur_diagnostics(
         "}",
         status != nullptr ? status : "unknown",
         status != nullptr && std::strcmp(status, "ok") == 0 ? "true" : "false",
+        status != nullptr && std::strcmp(status, "ok") == 0 ? "true" : "false",
+        result.accepted_mode_count > 0u ? "true" : "false",
         reason != nullptr ? reason : "",
         result.slepc_converged_reason[0] != '\0'
             ? result.slepc_converged_reason
@@ -2869,6 +2876,10 @@ void write_production_schur_diagnostics(
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
         problem.target_kind != nullptr ? problem.target_kind : "",
+        production_string_equals(problem.target_kind, "nearest_frequency")
+            ? "selected_only"
+            : (result.window_complete ? "certified_window" : "incomplete_window"),
+        result.window_complete ? "true" : "false",
         problem.frequency_min_hz,
         problem.frequency_max_hz,
         omega_rad_s_from_frequency_hz(std::max(0.0, problem.target_frequency_hz)),
