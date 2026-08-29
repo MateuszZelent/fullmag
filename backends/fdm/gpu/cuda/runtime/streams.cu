@@ -149,7 +149,7 @@ bool context_complete_solver_receipt_attempt(Context &ctx, const char *operation
     if (ctx.adaptive_enabled) {
         context_record_adaptive_execution_counter(
             ctx, ctx.adaptive_step_completion_host_sync_count);
-        if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
+        if (ctx.stats_mode != FULLMAG_FDM_STATS_FULL) {
             context_record_adaptive_execution_counter(
                 ctx, ctx.adaptive_stats_none_host_sync_count);
         }

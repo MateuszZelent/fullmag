@@ -509,7 +509,7 @@ bool context_launch_adaptive_step_graph_batch(
             max_steps * sizeof(AdaptiveDeviceControl));
     context_record_adaptive_execution_counter(
         ctx, ctx.adaptive_terminal_control_host_sync_count);
-    if (ctx.stats_mode == FULLMAG_FDM_STATS_NONE) {
+    if (ctx.stats_mode != FULLMAG_FDM_STATS_FULL) {
         context_record_adaptive_execution_counter(
             ctx, ctx.adaptive_stats_none_host_sync_count);
     }

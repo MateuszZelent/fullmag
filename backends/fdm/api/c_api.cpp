@@ -1600,12 +1600,12 @@ int fullmag_fdm_backend_step_adaptive_batch_v1(
     }
     auto *ctx = reinterpret_cast<Context *>(handle);
     if (ctx->has_multilayer_plan_v2 || !ctx->adaptive_enabled ||
-        ctx->stats_mode != FULLMAG_FDM_STATS_NONE ||
+        ctx->stats_mode == FULLMAG_FDM_STATS_FULL ||
         (ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK23 &&
          ctx->integrator != FULLMAG_FDM_INTEGRATOR_DP45) ||
         !(target_time_seconds > ctx->current_time)) {
         ctx->last_error =
-            "adaptive_batch_v1_requires_stats_none_single_grid_rk23_or_rk45";
+            "adaptive_batch_v1_requires_nonfull_stats_single_grid_rk23_or_rk45";
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (!context_adaptive_step_graph_configuration_supported(*ctx)) {

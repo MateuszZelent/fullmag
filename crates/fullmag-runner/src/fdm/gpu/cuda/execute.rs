@@ -12,7 +12,7 @@ use crate::fdm::gpu::cuda::artifacts::{
     capture_initial_cuda_fields, record_cuda_due_outputs, record_cuda_final_outputs,
 };
 #[cfg(feature = "cuda")]
-use crate::fdm::gpu::cuda::native::NativeFdmBackend;
+use crate::fdm::gpu::cuda::native::{NativeFdmBackend, NativeStatsPolicy};
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::spin_transport::{
     GpuM1TransportSession, NativeGpuM1TransportAbi, PreparedGpuM1Descriptor,
@@ -38,7 +38,10 @@ use crate::schedules::{
 };
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 #[cfg(feature = "cuda")]
-use crate::types::{ExecutionProvenance, RunResult, RunStatus, StepAction, StepStats, StepUpdate};
+use crate::types::{
+    ExecutionProvenance, FdmGpuEndpointCacheTelemetry, FdmGpuObservationPolicyProvenance,
+    RunResult, RunStatus, StepAction, StepStats, StepUpdate,
+};
 
 #[cfg(feature = "cuda")]
 fn frozen_spins_checkpoint_value(
@@ -103,6 +106,106 @@ fn adaptive_batch_execution_eligible(plan: &FdmPlanIR, live: bool) -> bool {
 }
 
 #[cfg(feature = "cuda")]
+#[derive(Debug, Clone)]
+struct ResolvedObservationPolicy {
+    native: NativeStatsPolicy,
+    requested_contract: String,
+    requested_quantity_ids: Vec<String>,
+    requested_min_period_s: Option<f64>,
+}
+
+#[cfg(feature = "cuda")]
+fn scalar_stats_quantity_mask(name: &str) -> u64 {
+    match name {
+        "E_ex" => fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_EX,
+        "E_demag" => fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_DEMAG,
+        "E_ext" | "E_drive" => fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_EXT,
+        "E_total" => fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_TOTAL,
+        "max_dm_dt" => fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_MAX_RHS,
+        "max_h_eff" => fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_MAX_H_EFF,
+        "time" | "step" | "solver_dt" | "mx" | "my" | "mz" => 0,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn resolve_observation_policy(
+    plan: &FdmPlanIR,
+    outputs: &[OutputIR],
+    live: bool,
+) -> ResolvedObservationPolicy {
+    if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        return ResolvedObservationPolicy {
+            native: NativeStatsPolicy::full(1),
+            requested_contract: "direct_minimizer_full_step_diagnostics".to_string(),
+            requested_quantity_ids: vec!["all".to_string()],
+            requested_min_period_s: None,
+        };
+    }
+
+    let mut mask = 0;
+    let mut requested_quantity_ids = Vec::new();
+    let mut requested_min_period_s: Option<f64> = None;
+    for output in outputs {
+        let (name, every_seconds) = match output {
+            OutputIR::Scalar {
+                name,
+                every_seconds,
+            }
+            | OutputIR::ScalarResolvedAuto {
+                name,
+                every_seconds,
+                ..
+            } => (name, *every_seconds),
+            _ => continue,
+        };
+        mask |= scalar_stats_quantity_mask(name);
+        if !requested_quantity_ids.contains(name) {
+            requested_quantity_ids.push(name.clone());
+        }
+        requested_min_period_s = Some(
+            requested_min_period_s.map_or(every_seconds, |current| current.min(every_seconds)),
+        );
+    }
+
+    let default_final_scalar = requested_quantity_ids.is_empty();
+    if default_final_scalar || live {
+        mask |= fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_ALL;
+    }
+    if plan.relaxation.is_some() {
+        mask |= fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_TOTAL
+            | fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_MAX_TORQUE;
+    }
+
+    let stride = match (requested_min_period_s, plan.fixed_timestep) {
+        (Some(period), Some(dt)) if period.is_finite() && dt.is_finite() && dt > 0.0 => {
+            (period / dt).ceil().clamp(1.0, u32::MAX as f64) as u32
+        }
+        _ => 1,
+    };
+    let native = if mask == 0 {
+        NativeStatsPolicy::none(stride)
+    } else {
+        NativeStatsPolicy::requested(stride, mask)
+    };
+    let requested_contract = if plan.relaxation.is_some() {
+        "relaxation_control_plus_scheduled_outputs"
+    } else if live {
+        "interactive_selection_plus_scheduled_outputs"
+    } else if default_final_scalar {
+        "default_final_scalar"
+    } else {
+        "scheduled_outputs"
+    };
+    ResolvedObservationPolicy {
+        native,
+        requested_contract: requested_contract.to_string(),
+        requested_quantity_ids,
+        requested_min_period_s,
+    }
+}
+
+#[cfg(feature = "cuda")]
 fn adaptive_batch_target(
     current_time: f64,
     current_dt: f64,
@@ -154,6 +257,10 @@ pub(crate) fn execute_cuda_fdm(
         });
     }
 
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let mut field_schedules = collect_field_schedules(outputs)?;
+    let observation_policy = resolve_observation_policy(plan, outputs, live.is_some());
+
     let mut gpu_transport = if plan.spin_transport_plans.is_empty() {
         None
     } else {
@@ -172,9 +279,9 @@ pub(crate) fn execute_cuda_fdm(
     };
     let use_adaptive_batch = adaptive_batch_execution_eligible(plan, live.is_some());
     let mut backend = if use_adaptive_batch {
-        NativeFdmBackend::create_for_adaptive_batch(plan)?
+        NativeFdmBackend::create_for_adaptive_batch_with_policy(plan, observation_policy.native)?
     } else {
-        NativeFdmBackend::create(plan)?
+        NativeFdmBackend::create_with_stats_policy(plan, observation_policy.native)?
     };
     if let Some(session) = gpu_transport.as_ref() {
         let binding = session.llg_binding().map_err(|error| RunError {
@@ -252,6 +359,17 @@ pub(crate) fn execute_cuda_fdm(
             plan,
         ),
         fdm_gpu_execution_receipt: Some(initial_execution_receipt),
+        fdm_gpu_observation_policy: Some(FdmGpuObservationPolicyProvenance {
+            requested_contract: observation_policy.requested_contract.clone(),
+            requested_quantity_ids: observation_policy.requested_quantity_ids.clone(),
+            requested_min_period_s: observation_policy.requested_min_period_s,
+            resolved_mode: observation_policy.native.mode.as_str().to_string(),
+            resolved_quantity_mask: observation_policy.native.quantity_mask,
+            resolved_stride: observation_policy.native.stride,
+            executed_mode: backend.stats_policy().mode.as_str().to_string(),
+            executed_quantity_mask: backend.stats_policy().quantity_mask,
+            executed_stride: backend.stats_policy().stride,
+        }),
         fdm_fft_execution,
         timestep_policy,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
@@ -270,8 +388,6 @@ pub(crate) fn execute_cuda_fdm(
     } else {
         ArtifactRecorder::in_memory(provenance.clone())
     };
-    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let mut field_schedules = collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
     capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
 
@@ -412,6 +528,12 @@ pub(crate) fn execute_cuda_fdm(
             let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
                 continue;
             };
+            let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
+            let control_observation_due = plan.relaxation.is_some();
+            let native_stats_observed = due_scalar_row || control_observation_due;
+            if native_stats_observed {
+                stats = backend.snapshot_step_stats(plan.grid.cells)?;
+            }
             ensure_single_object_scalars(&mut stats, "free");
             current_time = stats.time;
             latest_stats = Some(stats.clone());
@@ -427,7 +549,6 @@ pub(crate) fn execute_cuda_fdm(
                     stats.dt,
                 )?;
             }
-            let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);
             let mut sampled_stats = stats.clone();
             let mut magnetization_cache: Option<Vec<[f64; 3]>> = None;
             if due_scalar_row {
@@ -467,6 +588,23 @@ pub(crate) fn execute_cuda_fdm(
                 let preview_targets_global_scalar = display_selection
                     .as_ref()
                     .is_some_and(display_is_global_scalar);
+                if preview_due && preview_targets_global_scalar && !native_stats_observed {
+                    stats = backend.snapshot_step_stats(plan.grid.cells)?;
+                    ensure_single_object_scalars(&mut stats, "free");
+                    sampled_stats = stats.clone();
+                    latest_stats = Some(stats.clone());
+                    current_stats = stats.clone();
+                    if magnetization_cache.is_none() {
+                        magnetization_cache = Some(backend.copy_m(cell_count)?);
+                    }
+                    apply_average_m_to_step_stats_with_active_mask(
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
+                        plan.active_mask.as_deref(),
+                    );
+                }
                 let magnetization = if heavy_payload_due {
                     if magnetization_cache.is_none() {
                         magnetization_cache = Some(backend.copy_m(cell_count)?);
@@ -551,6 +689,12 @@ pub(crate) fn execute_cuda_fdm(
         }
     }
 
+    if latest_stats.is_some() && observation_policy.native.quantity_mask != 0 {
+        let mut final_stats = backend.snapshot_step_stats(plan.grid.cells)?;
+        ensure_single_object_scalars(&mut final_stats, "free");
+        latest_stats = Some(final_stats.clone());
+    }
+
     record_cuda_final_outputs(
         &backend,
         cell_count,
@@ -577,6 +721,35 @@ pub(crate) fn execute_cuda_fdm(
             message: format!("closing public GPU M1 transport session failed: {error}"),
         })?;
     }
+    let endpoint = backend.endpoint_cache_telemetry()?;
+    provenance.fdm_gpu_endpoint_cache_telemetry = Some(FdmGpuEndpointCacheTelemetry {
+        cache_identity_valid: endpoint.cache_identity_valid,
+        stats_valid: endpoint.stats_valid,
+        accepted_state_revision: endpoint.accepted_state_revision,
+        valid_field_mask: endpoint.valid_field_mask,
+        refresh_request_count: endpoint.refresh_request_count,
+        refresh_execution_count: endpoint.refresh_execution_count,
+        refresh_cache_hit_count: endpoint.refresh_cache_hit_count,
+        invalidation_count: endpoint.invalidation_count,
+        stats_snapshot_request_count: endpoint.stats_snapshot_request_count,
+        stats_snapshot_cache_hit_count: endpoint.stats_snapshot_cache_hit_count,
+        field_snapshot_request_count: endpoint.field_snapshot_request_count,
+        field_snapshot_latency_total_ns: endpoint.field_snapshot_latency_total_ns,
+        field_snapshot_latency_max_ns: endpoint.field_snapshot_latency_max_ns,
+        exchange_evaluation_count: endpoint.exchange_evaluation_count,
+        demag_evaluation_count: endpoint.demag_evaluation_count,
+        demag_forward_fft_count: endpoint.demag_forward_fft_count,
+        demag_inverse_fft_count: endpoint.demag_inverse_fft_count,
+        effective_field_evaluation_count: endpoint.effective_field_evaluation_count,
+        energy_reduction_count: endpoint.energy_reduction_count,
+        last_step_exchange_evaluation_count: endpoint.last_step_exchange_evaluation_count,
+        last_step_demag_evaluation_count: endpoint.last_step_demag_evaluation_count,
+        last_step_demag_forward_fft_count: endpoint.last_step_demag_forward_fft_count,
+        last_step_demag_inverse_fft_count: endpoint.last_step_demag_inverse_fft_count,
+        last_step_effective_field_evaluation_count: endpoint
+            .last_step_effective_field_evaluation_count,
+        last_step_energy_reduction_count: endpoint.last_step_energy_reduction_count,
+    });
     receipt_lifecycle.finalize_after_outcome(
         &backend,
         &mut provenance,
@@ -650,7 +823,10 @@ pub(crate) fn execute_cuda_fdm(
 
 #[cfg(all(test, feature = "cuda"))]
 mod adaptive_batch_tests {
-    use super::{adaptive_batch_target, execute_cuda_fdm, OutputSchedule};
+    use super::{
+        adaptive_batch_target, execute_cuda_fdm, resolve_observation_policy, OutputSchedule,
+    };
+    use crate::fdm::gpu::cuda::native::NativeStatsMode;
     use fullmag_ir::{
         AdaptiveTimeStepIR, AdaptiveToleranceModeIR, BackendTarget, ExchangeBoundaryCondition,
         ExecutionMode, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
@@ -692,6 +868,53 @@ mod adaptive_batch_tests {
 
         assert_eq!(target, 1.0e-11);
         assert_eq!(max_steps, 64);
+    }
+
+    #[test]
+    fn scalar_output_resolves_requested_mask_and_fixed_step_stride() {
+        let mut plan = FdmPlanIR::default();
+        plan.fixed_timestep = Some(1.0e-15);
+        let outputs = vec![OutputIR::Scalar {
+            name: "E_demag".to_string(),
+            every_seconds: 5.0e-15,
+        }];
+
+        let resolved = resolve_observation_policy(&plan, &outputs, false);
+
+        assert_eq!(resolved.native.mode, NativeStatsMode::Requested);
+        assert_eq!(
+            resolved.native.quantity_mask,
+            fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_DEMAG
+        );
+        assert_eq!(resolved.native.stride, 5);
+        assert_eq!(resolved.requested_quantity_ids, vec!["E_demag".to_string()]);
+    }
+
+    #[test]
+    fn magnetization_only_output_avoids_native_scalar_reductions() {
+        let plan = FdmPlanIR::default();
+        let outputs = vec![OutputIR::Scalar {
+            name: "mz".to_string(),
+            every_seconds: 5.0e-15,
+        }];
+
+        let resolved = resolve_observation_policy(&plan, &outputs, false);
+
+        assert_eq!(resolved.native.mode, NativeStatsMode::None);
+        assert_eq!(resolved.native.quantity_mask, 0);
+    }
+
+    #[test]
+    fn interactive_execution_resolves_all_on_demand_scalar_quantities() {
+        let plan = FdmPlanIR::default();
+
+        let resolved = resolve_observation_policy(&plan, &[], true);
+
+        assert_eq!(resolved.native.mode, NativeStatsMode::Requested);
+        assert_eq!(
+            resolved.native.quantity_mask,
+            fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_ALL
+        );
     }
 
     #[test]
@@ -780,5 +1003,25 @@ mod adaptive_batch_tests {
             adaptive.stats_none_host_sync_count,
             adaptive.terminal_control_host_sync_count
         );
+        let observation = executed
+            .provenance
+            .fdm_gpu_observation_policy
+            .as_ref()
+            .expect("resolved observation policy must be published");
+        assert_eq!(observation.requested_contract, "scheduled_outputs");
+        assert_eq!(observation.resolved_mode, "requested");
+        assert_eq!(observation.executed_mode, "requested");
+        assert_eq!(
+            observation.executed_quantity_mask,
+            fullmag_fdm_sys::FULLMAG_FDM_STATS_QUANTITY_E_TOTAL
+        );
+        let endpoint = executed
+            .provenance
+            .fdm_gpu_endpoint_cache_telemetry
+            .as_ref()
+            .expect("endpoint cache telemetry must be published");
+        assert!(endpoint.cache_identity_valid);
+        assert!(endpoint.stats_snapshot_request_count > 0);
+        assert_eq!(endpoint.demag_evaluation_count, 0);
     }
 }

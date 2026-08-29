@@ -578,6 +578,7 @@ pub(crate) struct NativeFdmBackend {
     precession_enabled: bool,
     gpu_transport_bound: bool,
     adaptive_timestep_enabled: bool,
+    stats_policy: NativeStatsPolicy,
 }
 
 #[cfg(feature = "cuda")]
@@ -623,9 +624,11 @@ pub(crate) struct EndpointCacheTelemetry {
 
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativeStatsMode {
+pub(crate) enum NativeStatsMode {
     Full,
     None,
+    Control,
+    Requested,
 }
 
 #[cfg(feature = "cuda")]
@@ -634,6 +637,52 @@ impl NativeStatsMode {
         match self {
             Self::Full => ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_FULL,
             Self::None => ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_NONE,
+            Self::Control => ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_CONTROL,
+            Self::Requested => ffi::fullmag_fdm_stats_mode::FULLMAG_FDM_STATS_REQUESTED,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::None => "none",
+            Self::Control => "control",
+            Self::Requested => "requested",
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NativeStatsPolicy {
+    pub mode: NativeStatsMode,
+    pub stride: u32,
+    pub quantity_mask: u64,
+}
+
+#[cfg(feature = "cuda")]
+impl NativeStatsPolicy {
+    pub(crate) const fn full(stride: u32) -> Self {
+        Self {
+            mode: NativeStatsMode::Full,
+            stride,
+            quantity_mask: ffi::FULLMAG_FDM_STATS_QUANTITY_ALL,
+        }
+    }
+
+    pub(crate) const fn none(stride: u32) -> Self {
+        Self {
+            mode: NativeStatsMode::None,
+            stride,
+            quantity_mask: 0,
+        }
+    }
+
+    pub(crate) const fn requested(stride: u32, quantity_mask: u64) -> Self {
+        Self {
+            mode: NativeStatsMode::Requested,
+            stride,
+            quantity_mask,
         }
     }
 }
@@ -1013,15 +1062,23 @@ impl NativeFdmBackend {
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
+            stats_policy: NativeStatsPolicy::full(1),
         })
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
-        Self::create_with_stats_mode(plan, NativeStatsMode::Full)
+        Self::create_with_stats_policy(plan, NativeStatsPolicy::full(1))
     }
 
     pub(crate) fn create_for_adaptive_batch(
         plan: &fullmag_ir::FdmPlanIR,
+    ) -> Result<Self, RunError> {
+        Self::create_for_adaptive_batch_with_policy(plan, NativeStatsPolicy::none(1))
+    }
+
+    pub(crate) fn create_for_adaptive_batch_with_policy(
+        plan: &fullmag_ir::FdmPlanIR,
+        stats_policy: NativeStatsPolicy,
     ) -> Result<Self, RunError> {
         if plan.adaptive_timestep.is_none() {
             return Err(RunError {
@@ -1029,12 +1086,12 @@ impl NativeFdmBackend {
                     .to_string(),
             });
         }
-        Self::create_with_stats_mode(plan, NativeStatsMode::None)
+        Self::create_with_stats_policy(plan, stats_policy)
     }
 
-    fn create_with_stats_mode(
+    pub(crate) fn create_with_stats_policy(
         plan: &fullmag_ir::FdmPlanIR,
-        stats_mode: NativeStatsMode,
+        stats_policy: NativeStatsPolicy,
     ) -> Result<Self, RunError> {
         let integrator_choice = plan
             .integrator
@@ -1563,8 +1620,12 @@ impl NativeFdmBackend {
             adaptive_dt_min: 0.0,
             adaptive_dt_max: 0.0,
             adaptive_headroom: 0.0,
-            stats_mode: stats_mode.as_ffi(),
-            stats_stride: 1,
+            stats_mode: if stats_policy.mode == NativeStatsMode::Requested {
+                NativeStatsMode::None.as_ffi()
+            } else {
+                stats_policy.mode.as_ffi()
+            },
+            stats_stride: stats_policy.stride,
             frozen_mask: frozen_mask_flat
                 .as_ref()
                 .map_or(std::ptr::null(), |mask| mask.as_ptr()),
@@ -1629,6 +1690,28 @@ impl NativeFdmBackend {
             return Err(RunError { message: msg });
         }
 
+        let native_stats_policy = ffi::fullmag_fdm_stats_policy_v1 {
+            abi_version: ffi::FULLMAG_FDM_STATS_POLICY_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_stats_policy_v1>() as u32,
+            mode: stats_policy.mode.as_ffi(),
+            stride: stats_policy.stride,
+            quantity_mask: stats_policy.quantity_mask,
+        };
+        let policy_status =
+            unsafe { ffi::fullmag_fdm_backend_set_stats_policy_v1(handle, &native_stats_policy) };
+        if policy_status != ffi::FULLMAG_FDM_OK {
+            let message = unsafe {
+                let err = ffi::fullmag_fdm_backend_last_error(handle);
+                if err.is_null() {
+                    "failed to apply resolved CUDA FDM stats policy".to_string()
+                } else {
+                    CStr::from_ptr(err).to_string_lossy().to_string()
+                }
+            };
+            unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+            return Err(RunError { message });
+        }
+
         if let Some(field) = static_external_field_flat.as_ref() {
             let marked = unsafe {
                 ffi::fullmag_fdm_backend_set_static_external_field_f64(
@@ -1660,7 +1743,31 @@ impl NativeFdmBackend {
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
             adaptive_timestep_enabled: adaptive.is_some(),
+            stats_policy,
         })
+    }
+
+    pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {
+        self.stats_policy
+    }
+
+    pub(crate) fn set_stats_policy(
+        &mut self,
+        stats_policy: NativeStatsPolicy,
+    ) -> Result<(), RunError> {
+        let policy = ffi::fullmag_fdm_stats_policy_v1 {
+            abi_version: ffi::FULLMAG_FDM_STATS_POLICY_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_stats_policy_v1>() as u32,
+            mode: stats_policy.mode.as_ffi(),
+            stride: stats_policy.stride,
+            quantity_mask: stats_policy.quantity_mask,
+        };
+        let status = unsafe { ffi::fullmag_fdm_backend_set_stats_policy_v1(self.handle, &policy) };
+        if status != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("setting CUDA FDM stats policy failed"));
+        }
+        self.stats_policy = stats_policy;
+        Ok(())
     }
 
     pub(crate) fn bind_gpu_transport(

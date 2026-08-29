@@ -3505,6 +3505,50 @@ pub struct FdmFftExecutionProvenance {
     pub runtime_telemetry: Option<FdmFftRuntimeTelemetry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmGpuObservationPolicyProvenance {
+    pub requested_contract: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_quantity_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_min_period_s: Option<f64>,
+    pub resolved_mode: String,
+    pub resolved_quantity_mask: u64,
+    pub resolved_stride: u32,
+    pub executed_mode: String,
+    pub executed_quantity_mask: u64,
+    pub executed_stride: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuEndpointCacheTelemetry {
+    pub cache_identity_valid: bool,
+    pub stats_valid: bool,
+    pub accepted_state_revision: u64,
+    pub valid_field_mask: u64,
+    pub refresh_request_count: u64,
+    pub refresh_execution_count: u64,
+    pub refresh_cache_hit_count: u64,
+    pub invalidation_count: u64,
+    pub stats_snapshot_request_count: u64,
+    pub stats_snapshot_cache_hit_count: u64,
+    pub field_snapshot_request_count: u64,
+    pub field_snapshot_latency_total_ns: u64,
+    pub field_snapshot_latency_max_ns: u64,
+    pub exchange_evaluation_count: u64,
+    pub demag_evaluation_count: u64,
+    pub demag_forward_fft_count: u64,
+    pub demag_inverse_fft_count: u64,
+    pub effective_field_evaluation_count: u64,
+    pub energy_reduction_count: u64,
+    pub last_step_exchange_evaluation_count: u64,
+    pub last_step_demag_evaluation_count: u64,
+    pub last_step_demag_forward_fft_count: u64,
+    pub last_step_demag_inverse_fft_count: u64,
+    pub last_step_effective_field_evaluation_count: u64,
+    pub last_step_energy_reduction_count: u64,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
@@ -3532,6 +3576,12 @@ pub struct ExecutionProvenance {
     /// Native CUDA counters for FDM GPU step-transaction capture and rollback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_gpu_step_transaction_telemetry: Option<FdmGpuStepTransactionTelemetry>,
+    /// Requested, resolved, and executed native CUDA observation schedule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_observation_policy: Option<FdmGpuObservationPolicyProvenance>,
+    /// Native CUDA accepted-endpoint cache and operator counters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_endpoint_cache_telemetry: Option<FdmGpuEndpointCacheTelemetry>,
     /// CPU reference counters for accepted/rejected FDM step transactions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_step_transaction_telemetry: Option<FdmCpuStepTransactionTelemetry>,

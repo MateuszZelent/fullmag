@@ -161,6 +161,8 @@ pub(crate) fn execute_reference_fdm_multilayer(
         fdm_cpu_state_layout: None,
         fdm_gpu_execution_receipt: None,
         fdm_gpu_step_transaction_telemetry: None,
+        fdm_gpu_observation_policy: None,
+        fdm_gpu_endpoint_cache_telemetry: None,
         fdm_cpu_step_transaction_telemetry: None,
         fdm_cpu_evaluation_telemetry: None,
         fdm_fft_execution,
