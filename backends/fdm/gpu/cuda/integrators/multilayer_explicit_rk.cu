@@ -9,6 +9,7 @@
 
 #include "context.hpp"
 #include "../interactions/dmi_boundary.cuh"
+#include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -714,8 +715,7 @@ void launch_multilayer_rk4_step_impl(
         if (!ctx.last_error.empty()) return;
     }
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
     fullmag_fdm_note_multilayer_rhs_device_execution(ctx);
     fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
 }
@@ -783,8 +783,7 @@ void launch_multilayer_rk23_step_impl(
         if (!ctx.last_error.empty()) return;
     }
 
-    ctx.step_count++;
-    ctx.current_time += dt;
+    context_stage_accepted_step(ctx, dt);
     fullmag_fdm_note_multilayer_rhs_device_execution(ctx);
     fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
 }

@@ -139,6 +139,7 @@ struct DeviceMultilayerLayer {
     uint64_t cell_count = 0;
     uint64_t convolution_cell_count = 0;
     DeviceVectorField m;
+    DeviceVectorField pre_step_m;
     DeviceVectorField h_ex;
     DeviceVectorField h_demag;
     DeviceVectorField h_dmi;
@@ -503,6 +504,7 @@ struct Context {
     DeviceVectorField gpu_transport_pre_step_abm_f_n2;
     bool gpu_transport_pre_step_m_valid = false;
     bool gpu_transport_pre_step_abm_valid = false;
+    bool multilayer_pre_step_m_valid = false;
     uint64_t gpu_transport_pre_step_step_count = 0;
     uint64_t gpu_transport_pre_step_accepted_step_index = 0;
     uint64_t gpu_transport_pre_step_accepted_state_revision = 1;

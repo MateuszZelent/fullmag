@@ -5,8 +5,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
+
+extern "C" int fullmag_fdm_test_inject_step_transaction_failure_once(
+    fullmag_fdm_backend *handle,
+    uint32_t phase);
 
 namespace {
 
@@ -192,6 +197,18 @@ fullmag_fdm_execution_receipt_v2 receipt(fullmag_fdm_backend *backend) {
     return value;
 }
 
+fullmag_fdm_step_transaction_telemetry_v1 transaction_telemetry(
+    fullmag_fdm_backend *backend)
+{
+    fullmag_fdm_step_transaction_telemetry_v1 value{};
+    value.abi_version = FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
+    value.struct_size = sizeof(value);
+    check(fullmag_fdm_backend_get_step_transaction_telemetry_v1(
+              backend, &value) == FULLMAG_FDM_OK,
+          "step transaction telemetry query failed");
+    return value;
+}
+
 void verify_single_grid(
     fullmag_fdm_precision precision,
     bool bulk,
@@ -290,6 +307,8 @@ void verify_multilayer(
     layer.initial_magnetization_len = m_flat.size();
     layer.active_mask = active.data();
     layer.active_mask_len = active.size();
+    std::array<fullmag_fdm_layer_desc_v2, 2> layers = {layer, layer};
+    layers[1].layer_index = 1;
 
     fullmag_fdm_multilayer_plan_desc_v2 plan{};
     plan.kind = FULLMAG_FDM_PLAN_MULTILAYER_CONV;
@@ -297,15 +316,15 @@ void verify_multilayer(
     plan.integrator = integrator;
     plan.has_interfacial_dmi = 1;
     plan.dmi_D_interfacial = d;
-    plan.layers = &layer;
-    plan.layer_count = 1;
+    plan.layers = layers.data();
+    plan.layer_count = layers.size();
     plan.stats_mode = FULLMAG_FDM_STATS_NONE;
     plan.stats_stride = 1;
 
     fullmag_fdm_backend *backend = fullmag_fdm_backend_create_v2(&plan);
     check(backend != nullptr, "multilayer DMI backend create returned null");
     const char *create_status = fullmag_fdm_backend_last_error(backend);
-    check(create_status != nullptr && std::string(create_status).find("uploaded 1 layers") != std::string::npos,
+    check(create_status != nullptr && std::string(create_status).find("uploaded 2 layers") != std::string::npos,
           "multilayer DMI backend create failed");
     std::vector<double> actual(m_flat.size());
     check(fullmag_fdm_backend_copy_layer_field_f64(
@@ -327,7 +346,103 @@ void verify_multilayer(
               execution.hot_loop_full_vector_d2h_count == 0 &&
               execution.hot_loop_host_compute_count == 0,
           "multilayer DMI step performed forbidden hot-loop host work or full transfer");
+    check(fullmag_fdm_backend_copy_layer_field_f64(
+              backend, 0, FULLMAG_FDM_OBSERVABLE_M,
+              actual.data(), actual.size()) == FULLMAG_FDM_OK,
+          "multilayer accepted magnetization copy failed");
+    const auto accepted_m = actual;
+    std::vector<double> accepted_m_second(m_flat.size());
+    check(fullmag_fdm_backend_copy_layer_field_f64(
+              backend, 1, FULLMAG_FDM_OBSERVABLE_M,
+              accepted_m_second.data(), accepted_m_second.size()) == FULLMAG_FDM_OK,
+          "second multilayer accepted magnetization copy failed");
     fullmag_fdm_backend_destroy(backend);
+
+    const uint64_t scalar_bytes = precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? sizeof(double) : sizeof(float);
+    const uint64_t payload_bytes =
+        layers.size() * layer.initial_magnetization_len * scalar_bytes;
+    for (const uint32_t phase : {2U, 3U, 4U, 5U}) {
+        auto *replayed = fullmag_fdm_backend_create_v2(&plan);
+        check(replayed != nullptr, "multilayer transaction backend create returned null");
+        const char *replay_status = fullmag_fdm_backend_last_error(replayed);
+        check(replay_status != nullptr &&
+                  std::string(replay_status).find("uploaded 2 layers") !=
+                      std::string::npos,
+              "multilayer transaction backend create failed");
+        std::vector<double> before_failure(m_flat.size());
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  replayed, 0, FULLMAG_FDM_OBSERVABLE_M,
+                  before_failure.data(), before_failure.size()) == FULLMAG_FDM_OK,
+              "multilayer pre-failure magnetization copy failed");
+        std::vector<double> before_failure_second(m_flat.size());
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  replayed, 1, FULLMAG_FDM_OBSERVABLE_M,
+                  before_failure_second.data(), before_failure_second.size()) ==
+                  FULLMAG_FDM_OK,
+              "second multilayer pre-failure magnetization copy failed");
+        check(fullmag_fdm_test_inject_step_transaction_failure_once(
+                  replayed, phase) == FULLMAG_FDM_OK,
+              "multilayer transaction fault setup failed");
+        fullmag_fdm_step_stats failed_stats{};
+        std::memset(&failed_stats, 0x5a, sizeof(failed_stats));
+        const auto failed_stats_before = failed_stats;
+        check(fullmag_fdm_backend_step(replayed, 1.0e-15, &failed_stats) ==
+                  FULLMAG_FDM_ERR_CUDA,
+              "multilayer injected fault did not fail the transaction");
+        check(std::memcmp(
+                  &failed_stats, &failed_stats_before, sizeof(failed_stats)) == 0,
+              "failed multilayer transaction published caller step stats");
+        std::vector<double> after_failure(m_flat.size());
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  replayed, 0, FULLMAG_FDM_OBSERVABLE_M,
+                  after_failure.data(), after_failure.size()) == FULLMAG_FDM_OK,
+              "multilayer rolled-back magnetization copy failed");
+        check(after_failure == before_failure,
+              "failed multilayer transaction did not restore accepted magnetization exactly");
+        std::vector<double> after_failure_second(m_flat.size());
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  replayed, 1, FULLMAG_FDM_OBSERVABLE_M,
+                  after_failure_second.data(), after_failure_second.size()) ==
+                  FULLMAG_FDM_OK,
+              "second multilayer rolled-back magnetization copy failed");
+        check(after_failure_second == before_failure_second,
+              "failed multilayer transaction did not restore the second layer exactly");
+        const auto failed_transaction = transaction_telemetry(replayed);
+        check(failed_transaction.accounting_valid == 1 &&
+                  failed_transaction.capture_count == 1 &&
+                  failed_transaction.rollback_count == 1 &&
+                  failed_transaction.capture_d2d_bytes == payload_bytes &&
+                  failed_transaction.rollback_d2d_bytes == payload_bytes &&
+                  failed_transaction.accepted_step_index == 0 &&
+                  failed_transaction.attempt_generation == 1,
+              "failed multilayer transaction did not publish an exact D2D rollback receipt");
+        fullmag_fdm_step_stats retry_stats{};
+        check(fullmag_fdm_backend_step(replayed, 1.0e-15, &retry_stats) ==
+                  FULLMAG_FDM_OK,
+              "multilayer retry after rollback failed");
+        std::vector<double> retried_m(m_flat.size());
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  replayed, 0, FULLMAG_FDM_OBSERVABLE_M,
+                  retried_m.data(), retried_m.size()) == FULLMAG_FDM_OK,
+              "multilayer retried magnetization copy failed");
+        check(retried_m == accepted_m,
+              "multilayer retry did not reproduce the clean accepted step exactly");
+        std::vector<double> retried_m_second(m_flat.size());
+        check(fullmag_fdm_backend_copy_layer_field_f64(
+                  replayed, 1, FULLMAG_FDM_OBSERVABLE_M,
+                  retried_m_second.data(), retried_m_second.size()) == FULLMAG_FDM_OK,
+              "second multilayer retried magnetization copy failed");
+        check(retried_m_second == accepted_m_second,
+              "multilayer retry did not reproduce the second clean layer exactly");
+        const auto committed_transaction = transaction_telemetry(replayed);
+        check(committed_transaction.capture_count == 2 &&
+                  committed_transaction.rollback_count == 1 &&
+                  committed_transaction.accepted_step_index == 1 &&
+                  committed_transaction.attempt_generation == 2,
+              "multilayer retry did not commit one accepted transaction");
+        fullmag_fdm_backend_destroy(replayed);
+    }
 }
 
 } // namespace
