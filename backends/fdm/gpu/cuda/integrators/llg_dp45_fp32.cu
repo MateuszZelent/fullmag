@@ -7,6 +7,7 @@
 
 #include "context.hpp"
 #include "../runtime/adaptive_controller.cuh"
+#include "../runtime/adaptive_metrics.cuh"
 #include "fsal_policy.hpp"
 
 #include <cuda_runtime.h>
@@ -37,6 +38,7 @@ extern AdaptiveErrorPolicy reduce_adaptive_error_policy(
     Context &ctx,
     double *device_values,
     uint64_t n,
+    uint64_t metric_stride,
     double dt,
     double exponent);
 
@@ -165,30 +167,49 @@ __global__ void dp45_error_fp32_kernel(
     int has_active_mask,
     int has_frozen_mask,
     double * __restrict__ error_sq,
+    uint64_t metric_stride,
     int n, double host_dt, double atol, double rtol,
     const AdaptiveDeviceControl *adaptive_control)
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n) return;
-    const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
-    if ((has_active_mask && active_mask[idx] == 0) ||
-        (has_frozen_mask && frozen_mask[idx] != 0)) {
-        error_sq[idx] = 0.0;
-        return;
+    __shared__ double shared_error[256];
+    __shared__ double shared_norm_defect[256];
+    __shared__ double shared_spin_rotation[256];
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    double local_error_sq = 0.0;
+    double local_norm_defect = 0.0;
+    double local_spin_rotation = 0.0;
+    if (idx < n &&
+        (!has_active_mask || active_mask[idx] != 0) &&
+        (!has_frozen_mask || frozen_mask[idx] == 0)) {
+        const double dt = adaptive_attempt_dt(adaptive_control, host_dt);
+        const double E1 = 71.0/57600.0, E3 = -71.0/16695.0, E4 = 71.0/1920.0;
+        const double E5 = -17253.0/339200.0, E6 = 22.0/525.0, E7 = -1.0/40.0;
+        const double ex = dt*(E1*(double)k1x[idx] + E3*(double)k3x[idx] + E4*(double)k4x[idx] + E5*(double)k5x[idx] + E6*(double)k6x[idx] + E7*(double)k7x[idx]);
+        const double ey = dt*(E1*(double)k1y[idx] + E3*(double)k3y[idx] + E4*(double)k4y[idx] + E5*(double)k5y[idx] + E6*(double)k6y[idx] + E7*(double)k7y[idx]);
+        const double ez = dt*(E1*(double)k1z[idx] + E3*(double)k3z[idx] + E4*(double)k4z[idx] + E5*(double)k5z[idx] + E6*(double)k6z[idx] + E7*(double)k7z[idx]);
+        const double m0_norm = sqrt((double)m0x[idx] * m0x[idx] +
+                                    (double)m0y[idx] * m0y[idx] +
+                                    (double)m0z[idx] * m0z[idx]);
+        const double m1_norm = sqrt((double)m1x[idx] * m1x[idx] +
+                                    (double)m1y[idx] * m1y[idx] +
+                                    (double)m1z[idx] * m1z[idx]);
+        const double scale = atol + rtol * fmax(m0_norm, m1_norm);
+        local_error_sq = (ex*ex + ey*ey + ez*ez) / (scale * scale);
+        const auto metrics = adaptive_local_metrics(
+            m0x[idx], m0y[idx], m0z[idx],
+            m1x[idx], m1y[idx], m1z[idx]);
+        local_norm_defect = metrics.norm_defect;
+        local_spin_rotation = metrics.spin_rotation_radians;
     }
-    const double E1 = 71.0/57600.0, E3 = -71.0/16695.0, E4 = 71.0/1920.0;
-    const double E5 = -17253.0/339200.0, E6 = 22.0/525.0, E7 = -1.0/40.0;
-    double ex = dt*(E1*(double)k1x[idx] + E3*(double)k3x[idx] + E4*(double)k4x[idx] + E5*(double)k5x[idx] + E6*(double)k6x[idx] + E7*(double)k7x[idx]);
-    double ey = dt*(E1*(double)k1y[idx] + E3*(double)k3y[idx] + E4*(double)k4y[idx] + E5*(double)k5y[idx] + E6*(double)k6y[idx] + E7*(double)k7y[idx]);
-    double ez = dt*(E1*(double)k1z[idx] + E3*(double)k3z[idx] + E4*(double)k4z[idx] + E5*(double)k5z[idx] + E6*(double)k6z[idx] + E7*(double)k7z[idx]);
-    double m0_norm = sqrt((double)m0x[idx] * m0x[idx] +
-                          (double)m0y[idx] * m0y[idx] +
-                          (double)m0z[idx] * m0z[idx]);
-    double m1_norm = sqrt((double)m1x[idx] * m1x[idx] +
-                          (double)m1y[idx] * m1y[idx] +
-                          (double)m1z[idx] * m1z[idx]);
-    double scale = atol + rtol * fmax(m0_norm, m1_norm);
-    error_sq[idx] = (ex*ex + ey*ey + ez*ez) / (scale * scale);
+    reduce_adaptive_metric_triplet_block<256>(
+        local_error_sq,
+        local_norm_defect,
+        local_spin_rotation,
+        shared_error,
+        shared_norm_defect,
+        shared_spin_rotation,
+        error_sq,
+        metric_stride);
 }
 
 /* ── Helpers ── */
@@ -239,7 +260,9 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
 }
 
 static AdaptiveErrorPolicy reduce_error_policy(Context &ctx, uint64_t n, double dt) {
-    return reduce_adaptive_error_policy(ctx, ctx.reduction_scratch, n, dt, 0.2);
+    const uint64_t blocks = (n + 255ULL) / 256ULL;
+    return reduce_adaptive_error_policy(
+        ctx, ctx.reduction_scratch, blocks, blocks, dt, 0.2);
 }
 
 static void finish_dp45_accepted_step_fp32(
@@ -476,6 +499,7 @@ static bool enqueue_dp45_adaptive_attempt_fp32(
         ctx.has_active_mask ? 1 : 0,
         ctx.has_frozen_mask ? 1 : 0,
         ctx.reduction_scratch,
+        static_cast<uint64_t>(grid),
         n,
         0.0,
         ctx.adaptive_atol,
@@ -484,7 +508,8 @@ static bool enqueue_dp45_adaptive_attempt_fp32(
     return enqueue_adaptive_error_policy_device_loop(
         ctx,
         ctx.reduction_scratch,
-        ctx.cell_count,
+        static_cast<uint64_t>(grid),
+        static_cast<uint64_t>(grid),
         0.2,
         ctx.adaptive_loop_handle);
 }
@@ -541,6 +566,7 @@ static void launch_dp45_adaptive_graph_step_fp32(
     AdaptiveDeviceControl terminal{};
     ctx.trial_dt = dt;
     if (!context_launch_adaptive_step_graph(ctx, initial, terminal)) return;
+    context_record_adaptive_numerics_terminal(ctx, terminal, 4);
     ctx.adaptive_attempt_trace_count = terminal.attempt_index + 1;
     ctx.adaptive_rejected_attempts = terminal.next_rejected_attempts;
     if (poll_interrupt(ctx)) {
@@ -744,7 +770,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
             ctx.active_mask, ctx.frozen_mask,
             ctx.has_active_mask ? 1 : 0, ctx.has_frozen_mask ? 1 : 0,
-            ctx.reduction_scratch, n, dt, ctx.adaptive_atol, ctx.adaptive_rtol,
+            ctx.reduction_scratch, static_cast<uint64_t>(grid),
+            n, dt, ctx.adaptive_atol, ctx.adaptive_rtol,
             nullptr);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);

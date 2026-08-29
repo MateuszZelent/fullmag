@@ -4,8 +4,8 @@ use crate::types::{FdmGpuExecutionReceipt, RunError};
 use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
 use crate::types::{
-    FdmGpuAdaptiveExecutionTelemetry, FdmGpuOperatorResidency, FdmGpuStepTransactionTelemetry,
-    FdmGpuTransferCounts,
+    FdmGpuAdaptiveExecutionTelemetry, FdmGpuAdaptiveNumericsTelemetry, FdmGpuOperatorResidency,
+    FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts,
 };
 
 fn preflight_error(detail: impl AsRef<str>) -> RunError {
@@ -473,6 +473,134 @@ fn query_adaptive_execution_telemetry(
 }
 
 #[cfg(feature = "cuda")]
+fn adaptive_numerics_telemetry_v1_request() -> ffi::fullmag_fdm_adaptive_numerics_telemetry_v1 {
+    ffi::fullmag_fdm_adaptive_numerics_telemetry_v1 {
+        abi_version: ffi::FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_adaptive_numerics_telemetry_v1>() as u32,
+        embedded_error_semantics: 0,
+        norm_defect_semantics: 0,
+        spin_rotation_semantics: 0,
+        accounting_valid: 0,
+        terminal_observation_count: 0,
+        decision_comparison_count: 0,
+        decision_divergence_count: 0,
+        last_terminal_normalized_error: 0.0,
+        last_terminal_max_norm_defect: 0.0,
+        last_terminal_max_spin_rotation_radians: 0.0,
+        max_attempt_normalized_error: 0.0,
+        max_attempt_norm_defect: 0.0,
+        max_attempt_spin_rotation_radians: 0.0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn adaptive_numerics_telemetry_from_native(
+    native: ffi::fullmag_fdm_adaptive_numerics_telemetry_v1,
+) -> Result<FdmGpuAdaptiveNumericsTelemetry, RunError> {
+    let embedded_error_semantics = match native.embedded_error_semantics {
+        ffi::FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE => {
+            "pre_projection_embedded_difference_v1"
+        }
+        other => {
+            return Err(preflight_error(format!(
+                "unknown adaptive embedded-error semantics={other}"
+            )))
+        }
+    };
+    let norm_defect_semantics = match native.norm_defect_semantics {
+        ffi::FULLMAG_FDM_NORM_DEFECT_POST_PROJECTION_ABS_UNIT => {
+            "post_projection_abs_unit_norm_defect_v1"
+        }
+        other => {
+            return Err(preflight_error(format!(
+                "unknown adaptive norm-defect semantics={other}"
+            )))
+        }
+    };
+    let spin_rotation_semantics = match native.spin_rotation_semantics {
+        ffi::FULLMAG_FDM_SPIN_ROTATION_ATTEMPT_GEODESIC_RADIANS => {
+            "attempt_geodesic_rotation_radians_v1"
+        }
+        other => {
+            return Err(preflight_error(format!(
+                "unknown adaptive spin-rotation semantics={other}"
+            )))
+        }
+    };
+    for (name, value) in [
+        (
+            "last_terminal_normalized_error",
+            native.last_terminal_normalized_error,
+        ),
+        (
+            "last_terminal_max_norm_defect",
+            native.last_terminal_max_norm_defect,
+        ),
+        (
+            "last_terminal_max_spin_rotation_radians",
+            native.last_terminal_max_spin_rotation_radians,
+        ),
+        (
+            "max_attempt_normalized_error",
+            native.max_attempt_normalized_error,
+        ),
+        ("max_attempt_norm_defect", native.max_attempt_norm_defect),
+        (
+            "max_attempt_spin_rotation_radians",
+            native.max_attempt_spin_rotation_radians,
+        ),
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(preflight_error(format!(
+                "invalid adaptive numerics {name}={value}"
+            )));
+        }
+    }
+    Ok(FdmGpuAdaptiveNumericsTelemetry {
+        embedded_error_semantics: embedded_error_semantics.to_string(),
+        norm_defect_semantics: norm_defect_semantics.to_string(),
+        spin_rotation_semantics: spin_rotation_semantics.to_string(),
+        accounting_valid: native.accounting_valid == 1,
+        terminal_observation_count: native.terminal_observation_count,
+        decision_comparison_count: native.decision_comparison_count,
+        decision_divergence_count: native.decision_divergence_count,
+        last_terminal_normalized_error: native.last_terminal_normalized_error,
+        last_terminal_max_norm_defect: native.last_terminal_max_norm_defect,
+        last_terminal_max_spin_rotation_radians: native.last_terminal_max_spin_rotation_radians,
+        max_attempt_normalized_error: native.max_attempt_normalized_error,
+        max_attempt_norm_defect: native.max_attempt_norm_defect,
+        max_attempt_spin_rotation_radians: native.max_attempt_spin_rotation_radians,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn query_adaptive_numerics_telemetry(
+    backend: &NativeFdmBackend,
+) -> Result<FdmGpuAdaptiveNumericsTelemetry, RunError> {
+    let mut native = adaptive_numerics_telemetry_v1_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+            backend.handle as *mut _,
+            &mut native,
+        )
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(RunError {
+            message: "fdm_gpu_adaptive_numerics_telemetry_query_failed".to_string(),
+        });
+    }
+    if native.abi_version != ffi::FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1
+        || native.struct_size
+            != std::mem::size_of::<ffi::fullmag_fdm_adaptive_numerics_telemetry_v1>() as u32
+    {
+        return Err(RunError {
+            message: "fdm_gpu_adaptive_numerics_telemetry_abi_mismatch".to_string(),
+        });
+    }
+    adaptive_numerics_telemetry_from_native(native)
+}
+
+#[cfg(feature = "cuda")]
 fn step_transaction_telemetry_from_native(
     native: ffi::fullmag_fdm_step_transaction_telemetry_v1,
 ) -> FdmGpuStepTransactionTelemetry {
@@ -709,6 +837,11 @@ pub(super) fn query_execution_receipt(
     });
 
     let adaptive_execution = query_adaptive_execution_telemetry(backend)?;
+    let adaptive_numerics = query_adaptive_numerics_telemetry(backend)?;
+    let accounting_valid = native.accounting_valid == 1
+        && adaptive_execution.accounting_valid
+        && adaptive_numerics.accounting_valid
+        && adaptive_numerics.decision_divergence_count == 0;
     let receipt = FdmGpuExecutionReceipt {
         requested: requested_device_name(requested_device)?.to_string(),
         resolved: execution_class_name(native.execution_class)?.to_string(),
@@ -743,8 +876,9 @@ pub(super) fn query_execution_receipt(
             hot_loop_control_scalar_host_sync_count: native.hot_loop_control_scalar_host_sync_count,
         },
         adaptive_execution: Some(adaptive_execution),
+        adaptive_numerics: Some(adaptive_numerics),
         validation_state: "unvalidated".to_string(),
-        accounting_valid: native.accounting_valid == 1,
+        accounting_valid,
     };
     let _ = requested_mode;
     Ok(receipt)
@@ -790,6 +924,65 @@ mod tests {
         )
         .expect("batched realization must map");
         assert_eq!(batched.realization, "cuda_conditional_graph_batched_v1");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn adaptive_numerics_telemetry_maps_semantics_and_counters() {
+        let native = super::ffi::fullmag_fdm_adaptive_numerics_telemetry_v1 {
+            abi_version: super::ffi::FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1,
+            struct_size: std::mem::size_of::<super::ffi::fullmag_fdm_adaptive_numerics_telemetry_v1>(
+            ) as u32,
+            embedded_error_semantics:
+                super::ffi::FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE,
+            norm_defect_semantics: super::ffi::FULLMAG_FDM_NORM_DEFECT_POST_PROJECTION_ABS_UNIT,
+            spin_rotation_semantics: super::ffi::FULLMAG_FDM_SPIN_ROTATION_ATTEMPT_GEODESIC_RADIANS,
+            accounting_valid: 1,
+            terminal_observation_count: 2,
+            decision_comparison_count: 2,
+            decision_divergence_count: 0,
+            last_terminal_normalized_error: 0.25,
+            last_terminal_max_norm_defect: 1.0e-15,
+            last_terminal_max_spin_rotation_radians: 0.125,
+            max_attempt_normalized_error: 1.5,
+            max_attempt_norm_defect: 2.0e-15,
+            max_attempt_spin_rotation_radians: 0.5,
+        };
+        let telemetry = super::adaptive_numerics_telemetry_from_native(native)
+            .expect("known adaptive numerics semantics must map");
+        assert_eq!(
+            telemetry.embedded_error_semantics,
+            "pre_projection_embedded_difference_v1"
+        );
+        assert_eq!(
+            telemetry.norm_defect_semantics,
+            "post_projection_abs_unit_norm_defect_v1"
+        );
+        assert_eq!(
+            telemetry.spin_rotation_semantics,
+            "attempt_geodesic_rotation_radians_v1"
+        );
+        assert!(telemetry.accounting_valid);
+        assert_eq!(telemetry.terminal_observation_count, 2);
+        assert_eq!(telemetry.decision_comparison_count, 2);
+        assert_eq!(telemetry.decision_divergence_count, 0);
+        assert_eq!(telemetry.max_attempt_normalized_error, 1.5);
+
+        let unknown = super::adaptive_numerics_telemetry_from_native(
+            super::ffi::fullmag_fdm_adaptive_numerics_telemetry_v1 {
+                embedded_error_semantics: u32::MAX,
+                ..native
+            },
+        );
+        assert!(unknown.is_err());
+
+        let invalid = super::adaptive_numerics_telemetry_from_native(
+            super::ffi::fullmag_fdm_adaptive_numerics_telemetry_v1 {
+                max_attempt_norm_defect: f64::INFINITY,
+                ..native
+            },
+        );
+        assert!(invalid.is_err());
     }
 
     #[cfg(feature = "cuda")]

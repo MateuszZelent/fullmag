@@ -2837,7 +2837,7 @@ pub struct FdmGpuOperatorResidency {
     pub location: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FdmGpuExecutionReceipt {
     pub requested: String,
     pub resolved: String,
@@ -2856,6 +2856,8 @@ pub struct FdmGpuExecutionReceipt {
     pub transfer_counts: FdmGpuTransferCounts,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_execution: Option<FdmGpuAdaptiveExecutionTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_numerics: Option<FdmGpuAdaptiveNumericsTelemetry>,
     pub validation_state: String,
     pub accounting_valid: bool,
 }
@@ -2870,6 +2872,23 @@ pub struct FdmGpuAdaptiveExecutionTelemetry {
     pub terminal_control_host_sync_count: u64,
     pub step_completion_host_sync_count: u64,
     pub stats_none_host_sync_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmGpuAdaptiveNumericsTelemetry {
+    pub embedded_error_semantics: String,
+    pub norm_defect_semantics: String,
+    pub spin_rotation_semantics: String,
+    pub accounting_valid: bool,
+    pub terminal_observation_count: u64,
+    pub decision_comparison_count: u64,
+    pub decision_divergence_count: u64,
+    pub last_terminal_normalized_error: f64,
+    pub last_terminal_max_norm_defect: f64,
+    pub last_terminal_max_spin_rotation_radians: f64,
+    pub max_attempt_normalized_error: f64,
+    pub max_attempt_norm_defect: f64,
+    pub max_attempt_spin_rotation_radians: f64,
 }
 
 /// Native CUDA step-transaction counters captured after FDM GPU execution.
@@ -2962,6 +2981,7 @@ impl FdmGpuExecutionReceipt {
             fallback_count: 0,
             transfer_counts: FdmGpuTransferCounts::default(),
             adaptive_execution: None,
+            adaptive_numerics: None,
             validation_state: "unvalidated".to_string(),
             accounting_valid: false,
         }
@@ -3145,6 +3165,21 @@ mod fdm_gpu_execution_receipt_contract_tests {
                 step_completion_host_sync_count: 0,
                 stats_none_host_sync_count: 2,
             }),
+            adaptive_numerics: Some(FdmGpuAdaptiveNumericsTelemetry {
+                embedded_error_semantics: "pre_projection_embedded_difference_v1".into(),
+                norm_defect_semantics: "post_projection_abs_unit_norm_defect_v1".into(),
+                spin_rotation_semantics: "attempt_geodesic_rotation_radians_v1".into(),
+                accounting_valid: true,
+                terminal_observation_count: 2,
+                decision_comparison_count: 2,
+                decision_divergence_count: 0,
+                last_terminal_normalized_error: 0.25,
+                last_terminal_max_norm_defect: 1.0e-15,
+                last_terminal_max_spin_rotation_radians: 0.125,
+                max_attempt_normalized_error: 1.5,
+                max_attempt_norm_defect: 2.0e-15,
+                max_attempt_spin_rotation_radians: 0.5,
+            }),
             validation_state: "unvalidated".into(),
             accounting_valid: true,
         });
@@ -3174,6 +3209,15 @@ mod fdm_gpu_execution_receipt_contract_tests {
         );
         assert_eq!(receipt["adaptive_execution"]["graph_build_count"], 1);
         assert_eq!(receipt["adaptive_execution"]["graph_launch_count"], 2);
+        assert_eq!(
+            receipt["adaptive_numerics"]["embedded_error_semantics"],
+            "pre_projection_embedded_difference_v1"
+        );
+        assert_eq!(receipt["adaptive_numerics"]["decision_divergence_count"], 0);
+        assert_eq!(
+            receipt["adaptive_numerics"]["max_attempt_normalized_error"],
+            1.5
+        );
     }
 }
 

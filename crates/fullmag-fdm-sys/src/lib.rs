@@ -645,12 +645,16 @@ pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY: fullmag_fdm_adaptive_attempt_decis
 pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_FAILED: fullmag_fdm_adaptive_attempt_decision_v1 = 3;
 pub type fullmag_fdm_adaptive_attempt_reason_v1 = u32;
 pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_WITHIN_TOLERANCE: fullmag_fdm_adaptive_attempt_reason_v1 = 1;
-pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_ERROR_ABOVE_TOLERANCE: fullmag_fdm_adaptive_attempt_reason_v1 = 2;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_ERROR_ABOVE_TOLERANCE:
+    fullmag_fdm_adaptive_attempt_reason_v1 = 2;
 pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_DT_MIN_EXHAUSTED: fullmag_fdm_adaptive_attempt_reason_v1 = 3;
 pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_TIMESTEP: fullmag_fdm_adaptive_attempt_reason_v1 = 4;
-pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_CURRENT_ERROR: fullmag_fdm_adaptive_attempt_reason_v1 = 5;
-pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_PREVIOUS_ERROR: fullmag_fdm_adaptive_attempt_reason_v1 = 6;
-pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY_LIMIT_EXHAUSTED: fullmag_fdm_adaptive_attempt_reason_v1 = 7;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_CURRENT_ERROR:
+    fullmag_fdm_adaptive_attempt_reason_v1 = 5;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_INVALID_PREVIOUS_ERROR:
+    fullmag_fdm_adaptive_attempt_reason_v1 = 6;
+pub const FULLMAG_FDM_ADAPTIVE_ATTEMPT_RETRY_LIMIT_EXHAUSTED:
+    fullmag_fdm_adaptive_attempt_reason_v1 = 7;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -819,6 +823,37 @@ pub struct fullmag_fdm_adaptive_execution_telemetry_v1 {
     pub terminal_control_host_sync_count: u64,
     pub step_completion_host_sync_count: u64,
     pub stats_none_host_sync_count: u64,
+}
+
+pub const FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1: u32 = 1;
+pub type fullmag_fdm_embedded_error_semantics_v1 = u32;
+pub const FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE:
+    fullmag_fdm_embedded_error_semantics_v1 = 1;
+pub type fullmag_fdm_norm_defect_semantics_v1 = u32;
+pub const FULLMAG_FDM_NORM_DEFECT_POST_PROJECTION_ABS_UNIT: fullmag_fdm_norm_defect_semantics_v1 =
+    1;
+pub type fullmag_fdm_spin_rotation_semantics_v1 = u32;
+pub const FULLMAG_FDM_SPIN_ROTATION_ATTEMPT_GEODESIC_RADIANS:
+    fullmag_fdm_spin_rotation_semantics_v1 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_adaptive_numerics_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub embedded_error_semantics: fullmag_fdm_embedded_error_semantics_v1,
+    pub norm_defect_semantics: fullmag_fdm_norm_defect_semantics_v1,
+    pub spin_rotation_semantics: fullmag_fdm_spin_rotation_semantics_v1,
+    pub accounting_valid: u32,
+    pub terminal_observation_count: u64,
+    pub decision_comparison_count: u64,
+    pub decision_divergence_count: u64,
+    pub last_terminal_normalized_error: f64,
+    pub last_terminal_max_norm_defect: f64,
+    pub last_terminal_max_spin_rotation_radians: f64,
+    pub max_attempt_normalized_error: f64,
+    pub max_attempt_norm_defect: f64,
+    pub max_attempt_spin_rotation_radians: f64,
 }
 
 pub const FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
@@ -1863,6 +1898,11 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_adaptive_execution_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_adaptive_numerics_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_last_error(handle: *mut fullmag_fdm_backend) -> *const c_char;
 
     pub fn fullmag_fdm_backend_destroy(handle: *mut fullmag_fdm_backend);
@@ -1901,6 +1941,30 @@ mod tests {
     fn adaptive_execution_telemetry_v1_has_stable_layout() {
         assert_eq!(size_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 64);
         assert_eq!(align_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 8);
+    }
+
+    #[test]
+    fn adaptive_numerics_telemetry_v1_has_stable_layout_and_ffi_symbol() {
+        assert_eq!(size_of::<fullmag_fdm_adaptive_numerics_telemetry_v1>(), 96);
+        assert_eq!(align_of::<fullmag_fdm_adaptive_numerics_telemetry_v1>(), 8);
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_adaptive_numerics_telemetry_v1,
+                terminal_observation_count
+            ),
+            24
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_adaptive_numerics_telemetry_v1,
+                last_terminal_normalized_error
+            ),
+            48
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_adaptive_numerics_telemetry_v1,
+        ) -> i32 = fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1;
     }
 
     fn layout_record<'a>(
@@ -2331,9 +2395,18 @@ mod tests {
     fn adaptive_attempt_v1_is_a_fixed_batched_trace_record() {
         assert_eq!(size_of::<fullmag_fdm_adaptive_attempt_v1>(), 56);
         assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, abi_version), 0);
-        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, attempt_index), 8);
-        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, dt_attempt_seconds), 24);
-        assert_eq!(offset_of!(fullmag_fdm_adaptive_attempt_v1, dt_next_seconds), 48);
+        assert_eq!(
+            offset_of!(fullmag_fdm_adaptive_attempt_v1, attempt_index),
+            8
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_adaptive_attempt_v1, dt_attempt_seconds),
+            24
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_adaptive_attempt_v1, dt_next_seconds),
+            48
+        );
         assert_eq!(FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1, 51);
         let _copy: unsafe extern "C" fn(
             *mut fullmag_fdm_backend,

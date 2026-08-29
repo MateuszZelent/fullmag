@@ -101,8 +101,48 @@ __global__ void reduce_max_blocks_kernel(const double *input, double *output, ui
     }
 }
 
+__global__ void reduce_max_metric_triplet_blocks_kernel(
+    const double *input,
+    double *output,
+    uint64_t n,
+    uint64_t metric_stride)
+{
+    __shared__ double shared[3][REDUCTION_BLOCK_SIZE];
+    const uint64_t global =
+        static_cast<uint64_t>(blockIdx.x) * blockDim.x * 2ULL + threadIdx.x;
+    const uint64_t other = global + blockDim.x;
+
+    for (int metric = 0; metric < 3; ++metric) {
+        const double *metric_input = input + metric * metric_stride;
+        double local_max = -1.0e300;
+        if (global < n) local_max = metric_input[global];
+        if (other < n) local_max = fmax(local_max, metric_input[other]);
+        shared[metric][threadIdx.x] = local_max;
+    }
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            for (int metric = 0; metric < 3; ++metric) {
+                shared[metric][threadIdx.x] = fmax(
+                    shared[metric][threadIdx.x],
+                    shared[metric][threadIdx.x + stride]);
+            }
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        for (int metric = 0; metric < 3; ++metric) {
+            output[metric * metric_stride + blockIdx.x] = shared[metric][0];
+        }
+    }
+}
+
 __global__ void adaptive_error_policy_kernel(
     const double *max_error_sq,
+    const double *max_norm_defect,
+    const double *max_spin_rotation,
     AdaptiveDeviceControl *policy_out,
     fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
     double dt,
@@ -119,6 +159,8 @@ __global__ void adaptive_error_policy_kernel(
     uint32_t rejected_attempts,
     int force_retry)
 {
+    const double input_previous_error = previous_error;
+    const uint32_t input_has_previous_error = has_previous_error != 0 ? 1U : 0U;
     evaluate_adaptive_error_policy_device(
         max_error_sq != nullptr ? max_error_sq[0] : 0.0,
         policy_out,
@@ -136,10 +178,34 @@ __global__ void adaptive_error_policy_kernel(
         has_previous_error,
         rejected_attempts,
         force_retry);
+    policy_out->decision_input_previous_error = input_previous_error;
+    policy_out->decision_input_has_previous_error = input_has_previous_error;
+    policy_out->last_max_norm_defect =
+        max_norm_defect != nullptr ? max_norm_defect[0] : 0.0;
+    policy_out->last_max_spin_rotation_radians =
+        max_spin_rotation != nullptr ? max_spin_rotation[0] : 0.0;
+    if (rejected_attempts == 0) {
+        policy_out->max_attempt_error = policy_out->error;
+        policy_out->max_attempt_norm_defect = policy_out->last_max_norm_defect;
+        policy_out->max_attempt_spin_rotation_radians =
+            policy_out->last_max_spin_rotation_radians;
+    } else {
+        policy_out->max_attempt_error = fmax(
+            policy_out->max_attempt_error,
+            policy_out->error);
+        policy_out->max_attempt_norm_defect = fmax(
+            policy_out->max_attempt_norm_defect,
+            policy_out->last_max_norm_defect);
+        policy_out->max_attempt_spin_rotation_radians = fmax(
+            policy_out->max_attempt_spin_rotation_radians,
+            policy_out->last_max_spin_rotation_radians);
+    }
 }
 
 __global__ void adaptive_error_policy_loop_kernel(
     const double *max_error_sq,
+    const double *max_norm_defect,
+    const double *max_spin_rotation,
     AdaptiveDeviceControl *control,
     fullmag_fdm_adaptive_attempt_v1 *attempt_trace,
     double adaptive_dt_min,
@@ -152,6 +218,9 @@ __global__ void adaptive_error_policy_loop_kernel(
     int canonical_controller,
     cudaGraphConditionalHandle loop_handle)
 {
+    const uint32_t attempt = control->next_rejected_attempts;
+    const double input_previous_error = control->previous_error;
+    const uint32_t input_has_previous_error = control->has_previous_error;
     evaluate_adaptive_error_policy_loop_device(
         max_error_sq != nullptr ? max_error_sq[0] : 0.0,
         control,
@@ -166,6 +235,28 @@ __global__ void adaptive_error_policy_loop_kernel(
         canonical_controller,
         0,
         loop_handle);
+    control->decision_input_previous_error = input_previous_error;
+    control->decision_input_has_previous_error = input_has_previous_error;
+    control->last_max_norm_defect =
+        max_norm_defect != nullptr ? max_norm_defect[0] : 0.0;
+    control->last_max_spin_rotation_radians =
+        max_spin_rotation != nullptr ? max_spin_rotation[0] : 0.0;
+    if (attempt == 0) {
+        control->max_attempt_error = control->error;
+        control->max_attempt_norm_defect = control->last_max_norm_defect;
+        control->max_attempt_spin_rotation_radians =
+            control->last_max_spin_rotation_radians;
+    } else {
+        control->max_attempt_error = fmax(
+            control->max_attempt_error,
+            control->error);
+        control->max_attempt_norm_defect = fmax(
+            control->max_attempt_norm_defect,
+            control->last_max_norm_defect);
+        control->max_attempt_spin_rotation_radians = fmax(
+            control->max_attempt_spin_rotation_radians,
+            control->last_max_spin_rotation_radians);
+    }
 }
 
 static const char *adaptive_device_reason_id(uint32_t reason) {
@@ -835,6 +926,7 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
     Context &ctx,
     double *device_values,
     uint64_t n,
+    uint64_t metric_stride,
     double dt,
     double exponent)
 {
@@ -854,10 +946,9 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
     uint64_t current = n;
     while (current > 1) {
         uint64_t blocks = (current + REDUCTION_BLOCK_SIZE * 2 - 1) / (REDUCTION_BLOCK_SIZE * 2);
-        reduce_max_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE, 0, stream>>>(
-            src,
-            dst,
-            current);
+        reduce_max_metric_triplet_blocks_kernel<<<
+            static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE, 0, stream>>>(
+            src, dst, current, metric_stride);
         current = blocks;
         double *tmp = src;
         src = dst;
@@ -869,6 +960,8 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
     const int order_est = exponent == 0.2 ? 4 : 2;
     adaptive_error_policy_kernel<<<1, 1, 0, stream>>>(
         src,
+        src + metric_stride,
+        src + 2 * metric_stride,
         ctx.adaptive_policy_scratch,
         ctx.adaptive_attempt_trace_device,
         dt,
@@ -929,6 +1022,10 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         !policy.dt_min_exhausted) {
         ctx.last_error = adaptive_device_reason_id(host_control.reason);
     }
+    if (host_control.decision != ADAPTIVE_DEVICE_DECISION_RETRY) {
+        context_record_adaptive_numerics_terminal(
+            ctx, host_control, order_est);
+    }
     return policy;
 }
 
@@ -936,6 +1033,7 @@ bool enqueue_adaptive_error_policy_device_loop(
     Context &ctx,
     double *device_values,
     uint64_t n,
+    uint64_t metric_stride,
     double exponent,
     cudaGraphConditionalHandle loop_handle)
 {
@@ -956,11 +1054,11 @@ bool enqueue_adaptive_error_policy_device_loop(
         const uint64_t blocks =
             (current + REDUCTION_BLOCK_SIZE * 2 - 1) /
             (REDUCTION_BLOCK_SIZE * 2);
-        reduce_max_blocks_kernel<<<
+        reduce_max_metric_triplet_blocks_kernel<<<
             static_cast<unsigned int>(blocks),
             REDUCTION_BLOCK_SIZE,
             0,
-            stream>>>(src, dst, current);
+            stream>>>(src, dst, current, metric_stride);
         current = blocks;
         double *temporary = src;
         src = dst;
@@ -969,6 +1067,8 @@ bool enqueue_adaptive_error_policy_device_loop(
     const int order_est = exponent == 0.2 ? 4 : 2;
     adaptive_error_policy_loop_kernel<<<1, 1, 0, stream>>>(
         src,
+        src + metric_stride,
+        src + 2 * metric_stride,
         ctx.adaptive_policy_scratch,
         ctx.adaptive_attempt_trace_device,
         ctx.adaptive_dt_min,

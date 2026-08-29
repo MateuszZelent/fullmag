@@ -479,6 +479,39 @@ int main() {
                   telemetry.stats_none_host_sync_count == 1,
               "two production adaptive steps cross one host synchronization boundary");
 
+        fullmag_fdm_adaptive_numerics_telemetry_v1 numerics{};
+        numerics.abi_version =
+            FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1;
+        numerics.struct_size = sizeof(numerics);
+        check(fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+                  backend, &numerics) == FULLMAG_FDM_OK &&
+                  numerics.embedded_error_semantics ==
+                      FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE &&
+                  numerics.norm_defect_semantics ==
+                      FULLMAG_FDM_NORM_DEFECT_POST_PROJECTION_ABS_UNIT &&
+                  numerics.spin_rotation_semantics ==
+                      FULLMAG_FDM_SPIN_ROTATION_ATTEMPT_GEODESIC_RADIANS &&
+                  numerics.accounting_valid == 1 &&
+                  numerics.terminal_observation_count == 2 &&
+                  numerics.decision_comparison_count == 2 &&
+                  numerics.decision_divergence_count == 0 &&
+                  std::isfinite(numerics.last_terminal_normalized_error) &&
+                  std::isfinite(numerics.last_terminal_max_norm_defect) &&
+                  std::isfinite(
+                      numerics.last_terminal_max_spin_rotation_radians) &&
+                  numerics.max_attempt_normalized_error >=
+                      numerics.last_terminal_normalized_error &&
+                  numerics.max_attempt_norm_defect >=
+                      numerics.last_terminal_max_norm_defect &&
+                  numerics.max_attempt_spin_rotation_radians >=
+                      numerics.last_terminal_max_spin_rotation_radians,
+              "adaptive numerics telemetry publishes explicit semantics and zero CPU/device decision divergence");
+        auto invalid_numerics = numerics;
+        invalid_numerics.struct_size = sizeof(invalid_numerics) - 1;
+        check(fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+                  backend, &invalid_numerics) == FULLMAG_FDM_ERR_ABI,
+              "adaptive numerics telemetry rejects an incompatible ABI layout");
+
         fullmag_fdm_step_transaction_telemetry_v1 transaction{};
         transaction.abi_version = FULLMAG_FDM_STEP_TRANSACTION_TELEMETRY_ABI_V1;
         transaction.struct_size = sizeof(transaction);
@@ -543,6 +576,21 @@ int main() {
                      static_cast<unsigned>(integrator), count, max_error, tolerance);
         check(max_error <= tolerance,
               "batched adaptive CUDA trajectory matches the independent Gilbert oracle");
+
+        fullmag_fdm_adaptive_numerics_telemetry_v1 numerics{};
+        numerics.abi_version =
+            FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1;
+        numerics.struct_size = sizeof(numerics);
+        check(fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+                  backend, &numerics) == FULLMAG_FDM_OK &&
+                  numerics.terminal_observation_count == count &&
+                  numerics.decision_comparison_count == count &&
+                  numerics.decision_divergence_count == 0 &&
+                  numerics.max_attempt_spin_rotation_radians > 0.0 &&
+                  numerics.max_attempt_spin_rotation_radians <= M_PI &&
+                  numerics.max_attempt_norm_defect >= 0.0 &&
+                  std::isfinite(numerics.max_attempt_norm_defect),
+              "macrospin telemetry measures a nonzero geodesic rotation and zero decision divergence");
 
         fullmag_fdm_execution_receipt_v2 receipt{};
         receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;

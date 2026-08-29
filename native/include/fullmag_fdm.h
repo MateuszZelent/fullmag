@@ -825,6 +825,43 @@ static_assert(sizeof(fullmag_fdm_adaptive_execution_telemetry_v1) == 64,
               "adaptive execution telemetry v1 ABI size changed");
 #endif
 
+#define FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE = 1,
+} fullmag_fdm_embedded_error_semantics_v1;
+
+typedef enum {
+    FULLMAG_FDM_NORM_DEFECT_POST_PROJECTION_ABS_UNIT = 1,
+} fullmag_fdm_norm_defect_semantics_v1;
+
+typedef enum {
+    FULLMAG_FDM_SPIN_ROTATION_ATTEMPT_GEODESIC_RADIANS = 1,
+} fullmag_fdm_spin_rotation_semantics_v1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fdm_embedded_error_semantics_v1 embedded_error_semantics;
+    fullmag_fdm_norm_defect_semantics_v1 norm_defect_semantics;
+    fullmag_fdm_spin_rotation_semantics_v1 spin_rotation_semantics;
+    uint32_t accounting_valid;
+    uint64_t terminal_observation_count;
+    uint64_t decision_comparison_count;
+    uint64_t decision_divergence_count;
+    double last_terminal_normalized_error;
+    double last_terminal_max_norm_defect;
+    double last_terminal_max_spin_rotation_radians;
+    double max_attempt_normalized_error;
+    double max_attempt_norm_defect;
+    double max_attempt_spin_rotation_radians;
+} fullmag_fdm_adaptive_numerics_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_adaptive_numerics_telemetry_v1) == 96,
+              "adaptive numerics telemetry v1 ABI size changed");
+#endif
+
 /* ── Device info ── */
 
 typedef struct {
@@ -1070,6 +1107,10 @@ int fullmag_fdm_backend_get_step_transaction_telemetry_v1(
 int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_adaptive_execution_telemetry_v1 *out_telemetry);
+
+int fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_adaptive_numerics_telemetry_v1 *out_telemetry);
 
 /* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
 int fullmag_fdm_context_bind_gpu_transport_v1(

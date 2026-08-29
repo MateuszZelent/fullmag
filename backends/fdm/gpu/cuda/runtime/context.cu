@@ -1312,15 +1312,20 @@ static void free_exchange_lut(Context &ctx) {
 }
 
 static bool alloc_reduction_scratch(Context &ctx) {
+    const uint64_t adaptive_metric_blocks =
+        (ctx.cell_count + 255ULL) / 256ULL;
+    const uint64_t scratch_len = std::max<uint64_t>(
+        ctx.cell_count,
+        uint64_t{3} * adaptive_metric_blocks);
     cudaError_t err = cudaMalloc(reinterpret_cast<void **>(&ctx.reduction_scratch),
-        ctx.cell_count * sizeof(double));
+        scratch_len * sizeof(double));
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMalloc(reduction_scratch)", err);
         return false;
     }
-    ctx.reduction_scratch_len = ctx.cell_count;
+    ctx.reduction_scratch_len = scratch_len;
     err = cudaMalloc(reinterpret_cast<void **>(&ctx.reduction_scratch_aux),
-        ctx.cell_count * sizeof(double));
+        scratch_len * sizeof(double));
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMalloc(reduction_scratch_aux)", err);
         cudaFree(ctx.reduction_scratch);
@@ -1328,7 +1333,7 @@ static bool alloc_reduction_scratch(Context &ctx) {
         ctx.reduction_scratch_len = 0;
         return false;
     }
-    ctx.reduction_scratch_aux_len = ctx.cell_count;
+    ctx.reduction_scratch_aux_len = scratch_len;
     err = cudaMalloc(reinterpret_cast<void **>(&ctx.adaptive_policy_scratch),
         sizeof(AdaptiveDeviceControl));
     if (err != cudaSuccess) {

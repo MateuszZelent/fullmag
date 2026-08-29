@@ -1,9 +1,9 @@
 /*
  * adaptive_error_reduction_contract.cpp - native FDM adaptive-step reduction contract.
  *
- * Adaptive RK23/DP45 kernels must not download the whole per-cell error buffer
- * to the host.  They may copy the final reduced scalar, but the max reduction
- * itself must stay on the device-side reduction path.
+ * Adaptive RK23/DP45 kernels must not download per-cell error or guard metrics
+ * to the host. The embedded error, post-projection norm defect, and geodesic
+ * spin rotation share one device pass and one triplet reduction.
  */
 
 #include <cstdio>
@@ -69,6 +69,7 @@ void adaptive_error_reductions_stay_device_side() {
     const auto cuda = root / "gpu" / "cuda";
     const std::string reductions = read_text_file(cuda / "runtime" / "reductions_fp64.cu");
     const std::string controller = read_text_file(cuda / "runtime" / "adaptive_controller.cuh");
+    const std::string metrics = read_text_file(cuda / "runtime" / "adaptive_metrics.cuh");
     const std::string dp45_fp64 = read_text_file(cuda / "integrators" / "llg_dp45_fp64.cu");
     const std::string dp45_fp32 = read_text_file(cuda / "integrators" / "llg_dp45_fp32.cu");
     const std::string rk23_fp64 = read_text_file(cuda / "integrators" / "llg_rk23_fp64.cu");
@@ -90,9 +91,12 @@ void adaptive_error_reductions_stay_device_side() {
         adaptive_sources.find("host_err.data()") == std::string::npos,
         "adaptive RK23/DP45 steps must not download the whole error buffer to host_err");
     check(
-        adaptive_sources.find("reduce_adaptive_error_policy(ctx, ctx.reduction_scratch") !=
-            std::string::npos,
-        "adaptive RK23/DP45 steps must call the shared device-side adaptive policy reduction");
+        adaptive_sources.find("return reduce_adaptive_error_policy(") !=
+                std::string::npos &&
+            adaptive_sources.find(
+                "ctx, ctx.reduction_scratch, blocks, blocks") !=
+                std::string::npos,
+        "adaptive RK23/DP45 steps must call the shared block-triplet device policy reduction");
     check(
         adaptive_sources.find("pow(ctx.adaptive_max_error / error") == std::string::npos,
         "adaptive RK23/DP45 steps must not compute dt policy with host-side pow()");
@@ -105,15 +109,29 @@ void adaptive_error_reductions_stay_device_side() {
             source->find("const uint8_t * __restrict__ frozen_mask") != std::string::npos,
             "adaptive error kernels must receive the frozen-spin mask");
         check(
-            source->find("has_active_mask && active_mask[idx] == 0") != std::string::npos,
+            source->find("!has_active_mask || active_mask[idx] != 0") != std::string::npos,
             "adaptive error kernels must exclude inactive cells from the norm");
         check(
-            source->find("has_frozen_mask && frozen_mask[idx] != 0") != std::string::npos,
+            source->find("!has_frozen_mask || frozen_mask[idx] == 0") != std::string::npos,
             "adaptive error kernels must exclude frozen cells from the norm");
         check(
             source->find("ctx.active_mask, ctx.frozen_mask") != std::string::npos,
             "adaptive error launches must pass both canonical masks");
+        check(
+            source->find("reduce_adaptive_metric_triplet_block<256>") !=
+                std::string::npos,
+            "adaptive error kernels must reduce all numerical metrics in the same per-cell pass");
     }
+    check(
+        metrics.find("fabs(norm1 - 1.0)") != std::string::npos &&
+            metrics.find("acos(cosine)") != std::string::npos,
+        "adaptive metrics must publish post-projection unit-norm defect and geodesic rotation");
+    check(
+        reductions.find("reduce_max_metric_triplet_blocks_kernel") !=
+                std::string::npos &&
+            reductions.find("src + metric_stride") != std::string::npos &&
+            reductions.find("src + 2 * metric_stride") != std::string::npos,
+        "adaptive metrics must stay in one persistent device triplet reduction");
     check(
         controller.find("const bool finite_max_sq = isfinite(max_error_sq)") !=
             std::string::npos,

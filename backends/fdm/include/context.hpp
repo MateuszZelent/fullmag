@@ -202,9 +202,17 @@ struct AdaptiveDeviceControl {
     uint32_t attempt_index = 0;
     uint32_t next_rejected_attempts = 0;
     uint32_t reserved0 = 0;
+    double last_max_norm_defect = 0.0;
+    double last_max_spin_rotation_radians = 0.0;
+    double max_attempt_norm_defect = 0.0;
+    double max_attempt_spin_rotation_radians = 0.0;
+    double decision_input_previous_error = 0.0;
+    double max_attempt_error = 0.0;
+    uint32_t decision_input_has_previous_error = 0;
+    uint32_t reserved1 = 0;
 };
 
-static_assert(sizeof(AdaptiveDeviceControl) == 64);
+static_assert(sizeof(AdaptiveDeviceControl) == 120);
 static_assert(sizeof(fullmag_fdm_adaptive_attempt_v1) == 56);
 
 constexpr uint32_t ADAPTIVE_ACCEPTED_BATCH_CAPACITY = 64;
@@ -533,6 +541,16 @@ struct Context {
     uint64_t adaptive_stats_none_host_sync_count = 0;
     uint64_t adaptive_public_batch_call_count = 0;
     bool adaptive_execution_accounting_valid = true;
+    bool adaptive_numerics_accounting_valid = true;
+    uint64_t adaptive_numerics_terminal_observation_count = 0;
+    uint64_t adaptive_numerics_decision_comparison_count = 0;
+    uint64_t adaptive_numerics_decision_divergence_count = 0;
+    double adaptive_numerics_last_terminal_error = 0.0;
+    double adaptive_numerics_last_terminal_norm_defect = 0.0;
+    double adaptive_numerics_last_terminal_spin_rotation = 0.0;
+    double adaptive_numerics_max_attempt_error = 0.0;
+    double adaptive_numerics_max_attempt_norm_defect = 0.0;
+    double adaptive_numerics_max_attempt_spin_rotation = 0.0;
     bool has_adaptive_max_spin_rotation = false;
     double adaptive_max_spin_rotation = 0.0;
     bool has_adaptive_norm_tolerance = false;
@@ -664,6 +682,7 @@ bool enqueue_adaptive_error_policy_device_loop(
     Context &ctx,
     double *device_values,
     uint64_t n,
+    uint64_t metric_stride,
     double exponent,
     cudaGraphConditionalHandle loop_handle);
 bool context_begin_adaptive_step_graph_build(
@@ -919,6 +938,10 @@ inline bool context_record_adaptive_execution_counter(
     counter += increment;
     return true;
 }
+void context_record_adaptive_numerics_terminal(
+    Context &ctx,
+    const AdaptiveDeviceControl &control,
+    int order_estimate);
 bool context_capture_pre_step_state(Context &ctx);
 bool context_rollback_pre_step_state(Context &ctx);
 void context_discard_pre_step_state(Context &ctx);

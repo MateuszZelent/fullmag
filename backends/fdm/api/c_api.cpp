@@ -6,6 +6,7 @@
  */
 
 #include "fullmag_fdm.h"
+#include "fullmag_adaptive_step_decision.hpp"
 #include "context.hpp"
 #include "plan_ingestion_v2.hpp"
 #include "../gpu/cuda/integrators/fsal_policy.hpp"
@@ -20,6 +21,7 @@
 #include <random>
 #include <array>
 #include <cmath>
+#include <limits>
 
 using namespace fullmag::fdm;
 
@@ -58,6 +60,90 @@ extern void launch_multilayer_rk23_step_fp32(Context &ctx, double dt, fullmag_fd
 #if FULLMAG_HAS_CUDA
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 #endif
+} }
+
+namespace fullmag { namespace fdm {
+
+void context_record_adaptive_numerics_terminal(
+    Context &ctx,
+    const AdaptiveDeviceControl &control,
+    int order_estimate)
+{
+    const auto checked_increment = [&ctx](uint64_t &counter) {
+        if (counter == std::numeric_limits<uint64_t>::max()) {
+            ctx.adaptive_numerics_accounting_valid = false;
+            return false;
+        }
+        ++counter;
+        return true;
+    };
+    checked_increment(ctx.adaptive_numerics_terminal_observation_count);
+    ctx.adaptive_numerics_last_terminal_error = control.error;
+    ctx.adaptive_numerics_last_terminal_norm_defect =
+        control.last_max_norm_defect;
+    ctx.adaptive_numerics_last_terminal_spin_rotation =
+        control.last_max_spin_rotation_radians;
+    ctx.adaptive_numerics_max_attempt_error = fmax(
+        ctx.adaptive_numerics_max_attempt_error,
+        control.max_attempt_error);
+    ctx.adaptive_numerics_max_attempt_norm_defect = fmax(
+        ctx.adaptive_numerics_max_attempt_norm_defect,
+        control.max_attempt_norm_defect);
+    ctx.adaptive_numerics_max_attempt_spin_rotation = fmax(
+        ctx.adaptive_numerics_max_attempt_spin_rotation,
+        control.max_attempt_spin_rotation_radians);
+
+    if (control.reason == ADAPTIVE_DEVICE_REASON_RETRY_LIMIT_EXHAUSTED) {
+        return;
+    }
+    const adaptive::Policy policy{
+        order_estimate,
+        ctx.adaptive_dt_min,
+        ctx.adaptive_dt_max,
+        ctx.adaptive_safety,
+        ctx.adaptive_growth_limit,
+        ctx.adaptive_shrink_limit};
+    const adaptive::Input input{
+        control.dt_attempt,
+        control.error,
+        control.decision_input_previous_error,
+        control.decision_input_has_previous_error != 0};
+    const auto expected = adaptive::decide(policy, input);
+    checked_increment(ctx.adaptive_numerics_decision_comparison_count);
+
+    const uint32_t expected_decision =
+        expected.kind == adaptive::DecisionKind::accepted
+            ? ADAPTIVE_DEVICE_DECISION_ACCEPTED
+            : expected.kind == adaptive::DecisionKind::retry
+                ? ADAPTIVE_DEVICE_DECISION_RETRY
+                : ADAPTIVE_DEVICE_DECISION_FAILED;
+    uint32_t expected_reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
+    switch (expected.reason) {
+        case adaptive::DecisionReason::within_tolerance:
+            expected_reason = ADAPTIVE_DEVICE_REASON_WITHIN_TOLERANCE;
+            break;
+        case adaptive::DecisionReason::error_above_tolerance:
+            expected_reason = ADAPTIVE_DEVICE_REASON_ERROR_ABOVE_TOLERANCE;
+            break;
+        case adaptive::DecisionReason::dt_min_exhausted:
+            expected_reason = ADAPTIVE_DEVICE_REASON_DT_MIN_EXHAUSTED;
+            break;
+        case adaptive::DecisionReason::invalid_timestep:
+            expected_reason = ADAPTIVE_DEVICE_REASON_INVALID_TIMESTEP;
+            break;
+        case adaptive::DecisionReason::invalid_previous_error:
+            expected_reason = ADAPTIVE_DEVICE_REASON_INVALID_PREVIOUS_ERROR;
+            break;
+        default:
+            expected_reason = ADAPTIVE_DEVICE_REASON_INVALID_CURRENT_ERROR;
+            break;
+    }
+    if (control.decision != expected_decision ||
+        control.reason != expected_reason) {
+        checked_increment(ctx.adaptive_numerics_decision_divergence_count);
+    }
+}
+
 } }
 
 namespace {
@@ -1468,6 +1554,10 @@ int fullmag_fdm_backend_step_adaptive_batch_v1(
                FULLMAG_FDM_ADAPTIVE_BATCH_STEP_CAPACITY_V1> published{};
     for (uint32_t index = 0; index < accepted_count; ++index) {
         const auto &control = accepted[index];
+        context_record_adaptive_numerics_terminal(
+            *ctx,
+            control,
+            ctx->integrator == FULLMAG_FDM_INTEGRATOR_DP45 ? 4 : 2);
         if (index + 1 == accepted_count) {
             context_stage_fsal_accepted_step(*ctx, control.dt_attempt);
         } else {
@@ -2422,6 +2512,54 @@ int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
     auto *ctx = reinterpret_cast<Context *>(handle);
     return context_get_adaptive_execution_telemetry_v1(*ctx, out_telemetry)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_adaptive_numerics_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    if (out_telemetry->abi_version !=
+            FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size != sizeof(*out_telemetry)) {
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    const auto *ctx = reinterpret_cast<const Context *>(handle);
+    fullmag_fdm_adaptive_numerics_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    result.embedded_error_semantics =
+        FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE;
+    result.norm_defect_semantics =
+        FULLMAG_FDM_NORM_DEFECT_POST_PROJECTION_ABS_UNIT;
+    result.spin_rotation_semantics =
+        FULLMAG_FDM_SPIN_ROTATION_ATTEMPT_GEODESIC_RADIANS;
+    result.accounting_valid =
+        ctx->adaptive_numerics_accounting_valid ? 1U : 0U;
+    result.terminal_observation_count =
+        ctx->adaptive_numerics_terminal_observation_count;
+    result.decision_comparison_count =
+        ctx->adaptive_numerics_decision_comparison_count;
+    result.decision_divergence_count =
+        ctx->adaptive_numerics_decision_divergence_count;
+    result.last_terminal_normalized_error =
+        ctx->adaptive_numerics_last_terminal_error;
+    result.last_terminal_max_norm_defect =
+        ctx->adaptive_numerics_last_terminal_norm_defect;
+    result.last_terminal_max_spin_rotation_radians =
+        ctx->adaptive_numerics_last_terminal_spin_rotation;
+    result.max_attempt_normalized_error =
+        ctx->adaptive_numerics_max_attempt_error;
+    result.max_attempt_norm_defect =
+        ctx->adaptive_numerics_max_attempt_norm_defect;
+    result.max_attempt_spin_rotation_radians =
+        ctx->adaptive_numerics_max_attempt_spin_rotation;
+    *out_telemetry = result;
+    return FULLMAG_FDM_OK;
 #else
     return FULLMAG_FDM_ERR_CUDA;
 #endif
