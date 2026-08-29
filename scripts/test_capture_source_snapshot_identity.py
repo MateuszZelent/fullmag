@@ -745,3 +745,35 @@ def test_materialized_snapshot_is_normalized_and_independent_of_worktree(
 
     tracked.write_text("later mutation\n", encoding="utf-8")
     assert (snapshot / "tracked.txt").read_text(encoding="utf-8") == "captured tracked\n"
+
+
+def test_materialize_uses_committed_bytes_when_parent_git_enables_autocrlf(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    snapshot = tmp_path / "snapshot-autocrlf"
+    identity_path = tmp_path / "identity-autocrlf.json"
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_COUNT"] = "1"
+    environment["GIT_CONFIG_KEY_0"] = "core.autocrlf"
+    environment["GIT_CONFIG_VALUE_0"] = "true"
+
+    captured = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--output",
+            str(identity_path),
+            "--materialize",
+            str(snapshot),
+        ),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert captured.returncode == 0, captured.stderr
+    assert (snapshot / "tracked.txt").read_bytes() == b"committed\n"

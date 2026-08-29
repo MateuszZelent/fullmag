@@ -784,6 +784,8 @@ def materialize(
         snapshot_root.mkdir(parents=True)
     archive_command = (
         "git",
+        "-c",
+        "core.autocrlf=false",
         "archive",
         "--format=tar",
         str(identity["head_commit_full"]),
