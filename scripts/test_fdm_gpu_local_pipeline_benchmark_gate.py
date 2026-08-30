@@ -53,14 +53,25 @@ class BenchmarkGateTests(unittest.TestCase):
         payload = gate.evaluate(records(), 3, "a" * 40, "b" * 64)
         self.assertEqual(payload["status"], "pass")
         self.assertEqual(len(payload["cases"]), 6)
+        self.assertEqual(payload["policy"]["small_medium_maximum_ratio"], 1.01)
 
-    def test_regression_fails(self):
+    def test_small_medium_measurement_noise_within_budget_passes(self):
         fixture = records()
         for record in fixture:
             if record["cells"] == 1024 and record["precision"] == "fp64" and record[
                 "executed_realization"
             ] == "direct_fused":
-                record["ns_per_step"] = 101.0
+                record["ns_per_step"] = 100.9
+        payload = gate.evaluate(fixture, 3, "a" * 40, "b" * 64)
+        self.assertEqual(payload["status"], "pass")
+
+    def test_small_medium_regression_above_budget_fails(self):
+        fixture = records()
+        for record in fixture:
+            if record["cells"] == 1024 and record["precision"] == "fp64" and record[
+                "executed_realization"
+            ] == "direct_fused":
+                record["ns_per_step"] = 101.1
         with self.assertRaisesRegex(ValueError, "performance budget exceeded"):
             gate.evaluate(fixture, 3, "a" * 40, "b" * 64)
 

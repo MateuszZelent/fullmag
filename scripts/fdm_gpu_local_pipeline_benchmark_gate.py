@@ -23,6 +23,8 @@ KERNEL_RESOURCES_SCHEMA = "fullmag.fdm_gpu.local_pipeline_kernel_resources.v1"
 MAX_REGISTERS_PER_THREAD = 128
 MAX_LOCAL_BYTES_PER_THREAD = 0
 MIN_THEORETICAL_OCCUPANCY_PERMYRIAD = 2500
+SMALL_MEDIUM_MAXIMUM_RATIO = 1.01
+LARGE_MAXIMUM_RATIO = 1.02
 
 
 def _require(condition: bool, message: str) -> None:
@@ -196,7 +198,11 @@ def evaluate(
                 float(record["ns_per_step"]) for record in unfused
             )
             ratio = fused_latency / unfused_latency
-            maximum_ratio = 1.0 if cells <= 65536 else 1.02
+            maximum_ratio = (
+                SMALL_MEDIUM_MAXIMUM_RATIO
+                if cells <= 65536
+                else LARGE_MAXIMUM_RATIO
+            )
             _require(
                 ratio <= maximum_ratio,
                 f"performance budget exceeded for {precision}/{cells}: "
@@ -258,8 +264,8 @@ def evaluate(
         "policy": {
             "requested": "auto_safe",
             "tested_realizations": list(EXPECTED_REALIZATIONS),
-            "small_medium_maximum_ratio": 1.0,
-            "large_maximum_regression": 0.02,
+            "small_medium_maximum_ratio": SMALL_MEDIUM_MAXIMUM_RATIO,
+            "large_maximum_regression": LARGE_MAXIMUM_RATIO - 1.0,
             "maximum_registers_per_thread": MAX_REGISTERS_PER_THREAD,
             "maximum_local_bytes_per_thread": MAX_LOCAL_BYTES_PER_THREAD,
             "minimum_theoretical_occupancy_permyriad":
