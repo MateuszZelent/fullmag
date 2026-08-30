@@ -63,6 +63,17 @@ fullmag_fdm_multilayer_plan_desc_v2 make_plan(
     return plan;
 }
 
+fullmag_fdm_plan_desc make_single_grid_plan(const double *m) {
+    fullmag_fdm_plan_desc plan{};
+    plan.grid = {1, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.material = {800000.0, 1.3e-11, 0.02, 2.211e5};
+    plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.initial_magnetization_xyz = m;
+    plan.initial_magnetization_len = 3;
+    return plan;
+}
+
 fullmag_fdm_tensor_kernel_desc_v2 make_kernel(
     uint32_t dst_layer,
     uint32_t src_layer,
@@ -103,6 +114,92 @@ void invalid_transfer_kind_reports_validation_error() {
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
     check(handle != nullptr, "invalid transfer_kind should return an error handle");
     check_error_contains(handle, "unknown layer transfer_kind in v2 plan");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void check_failed_before_workspace_setup(fullmag_fdm_backend *handle) {
+    fullmag_fdm_gpu_workspace_telemetry_v1 telemetry{};
+    telemetry.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    telemetry.struct_size = sizeof(telemetry);
+    check(
+        fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(handle, &telemetry) ==
+            FULLMAG_FDM_OK,
+        "overflowed descriptor should expose fail-before-setup telemetry");
+    check(telemetry.setup_complete == 0,
+          "overflowed descriptor must fail before workspace setup completes");
+    check(telemetry.total_device_allocation_count == 0 &&
+              telemetry.total_fft_plan_creation_count == 0 &&
+              telemetry.observed_step_count == 0,
+          "overflowed descriptor must fail before allocations, plans, or steps");
+}
+
+void overflowed_single_grid_is_rejected_before_workspace_setup() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("overflowed single grid check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double dummy_m[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(dummy_m);
+    plan.grid.nx = 1U << 31;
+    plan.grid.ny = 1U << 31;
+    plan.grid.nz = 4;
+    plan.initial_magnetization_len = 0;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "overflowed single grid should return an error handle");
+    check_error_contains(handle, "grid cell count overflows uint64_t");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void overflowed_fft_spectrum_is_rejected_before_workspace_setup() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("overflowed FFT spectrum check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double dummy_m[3] = {1.0, 0.0, 0.0};
+    const double dummy_spectrum[2] = {0.0, 0.0};
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(dummy_m);
+    plan.enable_demag = 1;
+    plan.demag_fft_nx = 1U << 31;
+    plan.demag_fft_ny = 1U << 31;
+    plan.demag_fft_nz = 4;
+    plan.demag_kernel_spectrum_len = 1;
+    plan.demag_kernel_xx_spectrum = dummy_spectrum;
+    plan.demag_kernel_yy_spectrum = dummy_spectrum;
+    plan.demag_kernel_zz_spectrum = dummy_spectrum;
+    plan.demag_kernel_xy_spectrum = dummy_spectrum;
+    plan.demag_kernel_xz_spectrum = dummy_spectrum;
+    plan.demag_kernel_yz_spectrum = dummy_spectrum;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "overflowed FFT spectrum should return an error handle");
+    check_error_contains(handle, "demag FFT spectrum length overflows uint64_t");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void overflowed_grid_is_rejected_before_workspace_setup() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("overflowed grid check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double dummy_m[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, dummy_m);
+    layer.native_grid.nx = 1U << 31;
+    layer.native_grid.ny = 1U << 31;
+    layer.native_grid.nz = 4;
+    layer.initial_magnetization_len = 0;
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "overflowed grid should return an error handle");
+    check_error_contains(handle, "layer native_grid cell count overflows uint64_t");
+
+    check_failed_before_workspace_setup(handle);
     fullmag_fdm_backend_destroy(handle);
 }
 
@@ -397,6 +494,9 @@ void valid_plan_runs_fixed_step_rk23_without_demag() {
 int main() {
     invalid_plan_reports_validation_error();
     invalid_transfer_kind_reports_validation_error();
+    overflowed_single_grid_is_rejected_before_workspace_setup();
+    overflowed_fft_spectrum_is_rejected_before_workspace_setup();
+    overflowed_grid_is_rejected_before_workspace_setup();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();
