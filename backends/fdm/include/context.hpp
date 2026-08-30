@@ -2650,6 +2650,7 @@ inline bool abort_step_from_tmp(Context &ctx, bool invalidate_fsal = true) {
 
 /// Allocate all device buffers.
 bool context_alloc_device(Context &ctx);
+bool context_preflight_single_grid_workspace(Context &ctx);
 
 /// Free all device buffers.
 void context_free_device(Context &ctx);

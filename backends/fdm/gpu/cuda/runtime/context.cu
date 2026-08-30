@@ -130,6 +130,105 @@ cudaError_t context_gpu_workspace_cuda_malloc_raw(
     return status;
 }
 
+bool context_preflight_single_grid_workspace(Context &ctx)
+{
+    const uint64_t scalar_bytes =
+        ctx.precision == FULLMAG_FDM_PRECISION_SINGLE
+            ? sizeof(float) : sizeof(double);
+    if (ctx.cell_count > std::numeric_limits<uint64_t>::max() / scalar_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
+        return false;
+    }
+    const uint64_t component_bytes = ctx.cell_count * scalar_bytes;
+
+    uint64_t vector_field_count = 10;
+    if (ctx.has_frozen_mask) ++vector_field_count;
+    switch (ctx.integrator) {
+    case FULLMAG_FDM_INTEGRATOR_DP45:
+        vector_field_count += 6;
+        break;
+    case FULLMAG_FDM_INTEGRATOR_RK23:
+    case FULLMAG_FDM_INTEGRATOR_RK4:
+        vector_field_count += 3;
+        break;
+    case FULLMAG_FDM_INTEGRATOR_ABM3:
+        vector_field_count += 6;
+        break;
+    default:
+        break;
+    }
+    if (ctx.has_oersted_field) ++vector_field_count;
+
+    // Base solver fields, scalar energy density, and both four-slot snapshot
+    // pools are mandatory setup-owned device storage.  cuFFT work areas,
+    // spectra, masks, material fields, and fixed-size control records only add
+    // to this lower bound.
+    constexpr uint64_t snapshot_vector_fields =
+        kFdmAsyncFieldSnapshotPoolCapacity +
+        kFdmAsyncPreviewSnapshotPoolCapacity;
+    const uint64_t scalar_component_count =
+        3 * (vector_field_count + snapshot_vector_fields) + 1;
+    if (component_bytes != 0 &&
+        scalar_component_count >
+            std::numeric_limits<uint64_t>::max() / component_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
+        return false;
+    }
+    uint64_t required_minimum_workspace_bytes =
+        scalar_component_count * component_bytes;
+
+    // The two reduction arrays are always FP64, including FP32 execution.
+    if (ctx.cell_count >
+        std::numeric_limits<uint64_t>::max() / (2 * sizeof(double))) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
+        return false;
+    }
+    const uint64_t reduction_bytes =
+        ctx.cell_count * 2 * sizeof(double);
+    if (required_minimum_workspace_bytes >
+        std::numeric_limits<uint64_t>::max() - reduction_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
+        return false;
+    }
+    required_minimum_workspace_bytes += reduction_bytes;
+
+    size_t free_device_bytes = 0;
+    size_t total_device_bytes = 0;
+    const cudaError_t query_status =
+        ::cudaMemGetInfo(&free_device_bytes, &total_device_bytes);
+    if (query_status != cudaSuccess) {
+        ctx.last_error =
+            "fdm_gpu_workspace_memory_query_failed: cuda_error=" +
+            std::to_string(static_cast<int>(query_status));
+        return false;
+    }
+    constexpr uint64_t minimum_safety_reserve =
+        uint64_t{256} * 1024 * 1024;
+    const uint64_t proportional_reserve =
+        static_cast<uint64_t>(total_device_bytes) / 20;
+    const uint64_t safety_reserve =
+        std::max(minimum_safety_reserve, proportional_reserve);
+    const uint64_t free_bytes = static_cast<uint64_t>(free_device_bytes);
+    const uint64_t usable_device_bytes =
+        free_bytes > safety_reserve ? free_bytes - safety_reserve : 0;
+    if (required_minimum_workspace_bytes > usable_device_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: required_minimum_workspace_bytes=" +
+            std::to_string(required_minimum_workspace_bytes) +
+            " usable_device_bytes=" + std::to_string(usable_device_bytes) +
+            " free_device_bytes=" + std::to_string(free_bytes) +
+            " total_device_bytes=" +
+            std::to_string(static_cast<uint64_t>(total_device_bytes)) +
+            " safety_reserve_bytes=" + std::to_string(safety_reserve);
+        return false;
+    }
+    return true;
+}
+
 cudaError_t context_gpu_workspace_cuda_free(Context &ctx, void *pointer) {
     const cudaError_t status = ::cudaFree(pointer);
     if (status == cudaSuccess) {

@@ -1269,6 +1269,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         }
     }
 
+    if (!context_preflight_single_grid_workspace(*ctx)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+
     // Allocate device buffers
     if (!context_alloc_device(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);

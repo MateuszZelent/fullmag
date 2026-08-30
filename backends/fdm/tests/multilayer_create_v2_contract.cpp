@@ -219,6 +219,36 @@ uint32_t oversized_fp64_cell_count() {
     return static_cast<uint32_t>(oversized_cells);
 }
 
+uint32_t aggregate_oversized_fp64_cell_count() {
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    check(cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess,
+          "cudaMemGetInfo failed before aggregate workspace preflight check");
+    check(total_bytes > 0 && free_bytes <= total_bytes,
+          "cudaMemGetInfo returned an invalid device-memory range");
+    constexpr uint64_t minimum_safety_reserve =
+        uint64_t{256} * 1024 * 1024;
+    const uint64_t proportional_reserve =
+        static_cast<uint64_t>(total_bytes) / 20;
+    const uint64_t safety_reserve =
+        std::max(minimum_safety_reserve, proportional_reserve);
+    const uint64_t usable_bytes =
+        static_cast<uint64_t>(free_bytes) > safety_reserve
+            ? static_cast<uint64_t>(free_bytes) - safety_reserve
+            : 0;
+    check(usable_bytes > 64 * sizeof(double),
+          "test device has no usable memory for aggregate workspace preflight");
+
+    // One component consumes only one eighth of the usable device budget, so
+    // the existing per-allocation preflight accepts it.  The minimal Heun
+    // workspace owns at least 57 component-equivalents and cannot fit.
+    const uint64_t oversized_cells =
+        usable_bytes / (8 * sizeof(double));
+    check(oversized_cells > 0 && oversized_cells <= UINT32_MAX,
+          "aggregate test grid cannot be represented by a one-dimensional FDM grid");
+    return static_cast<uint32_t>(oversized_cells);
+}
+
 void oversized_single_grid_allocation_is_rejected_by_memory_preflight() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("device-memory preflight check skipped: CUDA backend unavailable\n");
@@ -236,7 +266,7 @@ void oversized_single_grid_allocation_is_rejected_by_memory_preflight() {
     check(handle != nullptr,
           "oversized setup allocation should return an error handle");
     check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
-    check_error_contains(handle, "required_new_bytes=");
+    check_error_contains(handle, "required_minimum_workspace_bytes=");
     check_error_contains(handle, "usable_device_bytes=");
     check_failed_before_workspace_setup(handle);
     fullmag_fdm_backend_destroy(handle);
@@ -263,6 +293,28 @@ void oversized_multilayer_allocation_is_rejected_by_memory_preflight() {
     check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
     check_error_contains(handle, "required_new_bytes=");
     check_error_contains(handle, "usable_device_bytes=");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void aggregate_single_grid_workspace_is_rejected_before_any_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("aggregate workspace preflight check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const uint32_t oversized_cells = aggregate_oversized_fp64_cell_count();
+    const double dummy_m[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(dummy_m);
+    plan.grid.nx = oversized_cells;
+    plan.initial_magnetization_len =
+        static_cast<uint64_t>(oversized_cells) * 3;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr,
+          "aggregate oversized setup should return an error handle");
+    check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
+    check_error_contains(handle, "required_minimum_workspace_bytes=");
     check_failed_before_workspace_setup(handle);
     fullmag_fdm_backend_destroy(handle);
 }
@@ -675,6 +727,7 @@ int main() {
     overflowed_grid_is_rejected_before_workspace_setup();
     oversized_single_grid_allocation_is_rejected_by_memory_preflight();
     oversized_multilayer_allocation_is_rejected_by_memory_preflight();
+    aggregate_single_grid_workspace_is_rejected_before_any_allocation();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();
