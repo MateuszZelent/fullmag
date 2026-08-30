@@ -27866,6 +27866,20 @@ fn fdm_v2_membership_binary(counts: [u32; 3], memberships: &[u32]) -> Vec<u8> {
 }
 
 fn write_test_fdm_membership_artifact(artifact_dir: &std::path::Path, counts: [u32; 3]) {
+    write_test_fdm_membership_artifact_with_geometry(
+        artifact_dir,
+        counts,
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+    );
+}
+
+fn write_test_fdm_membership_artifact_with_geometry(
+    artifact_dir: &std::path::Path,
+    counts: [u32; 3],
+    origin_m: [f64; 3],
+    cell_m: [f64; 3],
+) {
     let mesh_dir = artifact_dir.join("mesh");
     fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
     let cell_count = counts.into_iter().map(u64::from).product::<u64>();
@@ -27875,9 +27889,9 @@ fn write_test_fdm_membership_artifact(artifact_dir: &std::path::Path, counts: [u
             "schema_version": "fdm_region_membership.v2",
             "binary_path": "mesh/fdm_region_membership.v2.bin",
             "grid_fingerprint": "00".repeat(32),
-            "origin_m": [0.0, 0.0, 0.0],
+            "origin_m": origin_m,
             "counts": counts,
-            "cell_m": [1.0, 1.0, 1.0],
+            "cell_m": cell_m,
             "cell_count": cell_count,
             "object_ids": ["body"],
             "region_legend": [],
@@ -39364,7 +39378,17 @@ async fn default_planar_fdm_test_state() -> Arc<AppState> {
 
 async fn planar_fdm_test_state(counts: [u32; 3]) -> Arc<AppState> {
     let (_, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
-    write_test_fdm_membership_artifact(&artifact_dir, counts);
+    let (origin_m, cell_m) = if counts == [2, 2, 1] {
+        ([10.0, 20.0, 30.0], [1.0, 2.0, 4.0])
+    } else {
+        ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
+    };
+    write_test_fdm_membership_artifact_with_geometry(
+        &artifact_dir,
+        counts,
+        origin_m,
+        cell_m,
+    );
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.session.artifact_dir = artifact_dir.display().to_string();
     }
