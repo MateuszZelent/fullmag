@@ -2,7 +2,7 @@
   "document": {"path": "docs/physics/0482-fdm-fsal-optimization.md"},
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "separate-contract", "scope": "reference RK23/RK45", "qualification": "not promoted by this note", "evidence": "fullmag-engine tests"},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "scope": "single-grid RK23/DP45 FP32 and FP64 FSAL invalidation", "qualification": "bounded managed-CUDA runtime contract passed; public adaptive lane remains unvalidated", "evidence": "fdm_fsal_retry_transaction_contract and fdm_fsal_thermal_cuda_runtime_contract"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "scope": "single-grid RK23/DP45 FP32 and FP64 FSAL invalidation plus workspace-bound checkpoint v4", "qualification": "bounded managed-CUDA runtime contract passed; public adaptive lane remains unvalidated", "evidence": "fdm_fsal_retry_transaction_contract, fdm_fsal_thermal_cuda_runtime_contract, checkpoint restore and workspace identity matrix"},
     {"solver": "FEM", "device": "CPU", "status": "separate-contract", "scope": "MFEM/hypre time integration", "qualification": "not promoted by this note", "evidence": "none claimed"},
     {"solver": "FEM", "device": "GPU", "status": "separate-contract", "scope": "MFEM/hypre/libCEED/CUDA time integration", "qualification": "not promoted by this note", "evidence": "none claimed"}
   ],
@@ -46,8 +46,8 @@
     {"id": "rk23_fp32", "path": "backends/fdm/gpu/cuda/integrators/llg_rk23_fp32.cu", "symbol": "launch_rk23_step_fp32", "responsibility": "Execute FP32 Bogacki--Shampine 3(2) with transactional FSAL."},
     {"id": "dp45_fp64", "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu", "symbol": "launch_dp45_step_fp64", "responsibility": "Execute FP64 Dormand--Prince 5(4) with transactional FSAL."},
     {"id": "dp45_fp32", "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp32.cu", "symbol": "launch_dp45_step_fp32", "responsibility": "Execute FP32 Dormand--Prince 5(4) with transactional FSAL."},
-    {"id": "thermal_fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "launch_effective_field_fp64", "responsibility": "Materialize FP64 Brown field keyed by seed, cell and accepted interval."},
-    {"id": "thermal_fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_effective_field_fp32", "responsibility": "Materialize FP32 Brown field keyed by seed, cell and accepted interval."},
+    {"id": "thermal_fp64", "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu", "symbol": "combine_effective_field_fp64_kernel", "responsibility": "Materialize FP64 Brown field keyed by seed, cell and accepted interval."},
+    {"id": "thermal_fp32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "combine_effective_field_fp32_kernel", "responsibility": "Materialize FP32 Brown field keyed by seed, cell and accepted interval."},
     {"id": "c_abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_backend_get_fsal_telemetry_v2", "responsibility": "Define append-only typed FSAL telemetry ABI."},
     {"id": "api", "path": "backends/fdm/api/c_api.cpp", "symbol": "fullmag_fdm_backend_get_fsal_telemetry_v2", "responsibility": "Expose runtime FSAL telemetry through C ABI."},
     {"id": "python_llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Validate and lower public integrator and timestep policy."},
@@ -57,7 +57,11 @@
     {"id": "planner", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Reject adaptive Brown execution until SDE replay is qualified."},
     {"id": "runtime_deterministic", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_deterministic", "responsibility": "Prove actual-device FSAL reuse, exact RHS savings and the constant-field macrospin oracle."},
     {"id": "runtime_thermal", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_thermal", "responsibility": "Prove actual-device Brown-field invalidation and accepted-interval RNG renewal."},
-    {"id": "runtime_waveform", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_dynamic_oersted", "responsibility": "Prove actual-device invalidation for a time-dependent Oersted source."}
+    {"id": "runtime_waveform", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "run_dynamic_oersted", "responsibility": "Prove actual-device invalidation for a time-dependent Oersted source."},
+    {"id": "workspace_identity", "path": "backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp", "symbol": "context_build_workspace_dependency_identity_v1", "responsibility": "Build the canonical workspace dependency digest from grid, FFT, precision, PBC, mask, resolved material layout and integrator."},
+    {"id": "checkpoint_v4", "path": "backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp", "symbol": "context_llg_checkpoint_import_v4", "responsibility": "Reject incompatible workspace identity before checkpoint upload and commit."},
+    {"id": "checkpoint_v4_abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_backend_llg_checkpoint_import_v4", "responsibility": "Define the append-only workspace-bound LLG checkpoint import ABI."},
+    {"id": "runtime_checkpoint_identity", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "verify_workspace_dependency_identity_matrix", "responsibility": "Prove deterministic dependency identity, fail-closed ABI handling and category-by-category invalidation on an actual CUDA device."}
   ],
   "public_api": {
     "parameters": [

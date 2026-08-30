@@ -116,6 +116,11 @@ $\boldsymbol\xi_{n+1}$, więc dla $T>0$ warunek FSAL jest zawsze fałszywy.
   niezgodne z FSAL. To może kosztować jedno RHS, lecz nie zmienia fizyki.
 - Odrzucona próba, błąd kroku, import checkpointu, zmiana pola lub transportu
   oraz nieaktualna publikacja unieważniają cache z typowanym powodem.
+- Checkpoint LLG schema v4 wiąże stan zaakceptowany i historię FSAL z dokładną
+  tożsamością workspace: siatką i krokiem komórki, paddingiem i zawartością
+  widm FFT, precision, PBC, topologią masek, rozwiązanym układem materiałowym
+  oraz integratorem. Niezgodność kończy import przed uploadem i commit; schema
+  v3 jest odrzucana jawnie, ponieważ nie zawiera tej tożsamości.
 - Bounded test natywnego ABI nie promuje całego publicznego adaptive FDM GPU do
   statusu zwalidowanego produkcyjnie.
 
@@ -231,6 +236,9 @@ runtime, a faktyczne wykonanie musi być widoczne w receipt/proweniencji.
   dynamiczny Oersted w natywnym ABI wyłącza FSAL konserwatywnie.
 - Nieznana albo niezgodna tożsamość cache daje typowany reason code. Stan
   zaakceptowany nie jest mutowany przez samą odmowę reuse.
+- Checkpoint schema v4 jest jedyną eksportowaną wersją natywnego LLG CUDA.
+  Import i eksport schema v3 kończą się fail-closed z komunikatem migracji do
+  v4; nie istnieje adapter, który mógłby odtworzyć brakujący dependency key.
 
 W terminologii kontraktu są to: **requested intent** (integrator, temperatura,
 device i precision zapisane przez autora), **resolved execution** (jeden plan
@@ -265,6 +273,9 @@ indeks zaakceptowanego kroku i licznik każdego stabilnego powodu invalidation.
 | DP45 FP64 / FP32 | `backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu` + `launch_dp45_step_fp64`; `llg_dp45_fp32.cu` + `launch_dp45_step_fp32` |
 | ABI telemetrii | `native/include/fullmag_fdm.h` + `fullmag_fdm_fsal_telemetry_v2` |
 | odczyt telemetrii przez C ABI | `backends/fdm/api/c_api.cpp` + `fullmag_fdm_backend_get_fsal_telemetry_v2` |
+| kanoniczny dependency key workspace | `backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp` + `context_build_workspace_dependency_identity_v1` |
+| checkpoint LLG schema v4 | `backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp` + `context_llg_checkpoint_export_v4`, `context_llg_checkpoint_import_v4` |
+| publiczne ABI tożsamości workspace | `native/include/fullmag_fdm.h` + `fullmag_fdm_workspace_dependency_identity_v1`, `fullmag_fdm_llg_checkpoint_info_v4` |
 | termiczna realizacja FP64 / FP32 | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` + `compute_demag_field_fp64`; `demag_fp32.cu` + `compute_demag_field_fp32` |
 | Python i IR | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `LLG`; `model/energy.py` + `ThermalNoise`; `crates/fullmag-ir/src/execution.rs` + `IntegratorChoice`; `crates/fullmag-ir/src/study.rs` + `EnergyTermIR` |
 | planner fail-closed | `crates/fullmag-plan/src/fdm.rs` + `plan_fdm` |
@@ -285,6 +296,10 @@ Wymagane bramki dla bounded FDM CUDA obejmują:
    precision, accepted/rejected counts, telemetrię i pusty fallback trail.
 5. Managed/container `just` z buildem poza repozytorium oraz walidator
    dokumentacji naukowej.
+6. Macierz dependency key i checkpointu v4 na rzeczywistym CUDA: zgodny
+   workspace odtwarza stan bitowo bez nowych alokacji, natomiast zmiana każdej
+   z kategorii grid/FFT/precision/PBC/mask/material/integrator zmienia digest;
+   różny kształt siatki o tej samej liczbie komórek musi zostać odrzucony.
 
 Wszystkie powyższe bramki przeszły 2026-08-28 w zarządzanym kontenerze CUDA
 12.4 na `NVIDIA GeForce RTX 3070 Laptop GPU` (compute capability 8.6). Dla
@@ -299,6 +314,16 @@ publicznego adaptive FDM GPU. Rejestr pozostaje `source_visible/unvalidated`,
 ponieważ nie istnieje jeszcze pełny Python--IR--runner E2E ani produkcyjny
 time-to-accuracy gate dla całej kombinacji interakcji.
 
+Rozszerzenie checkpointu v4 przeszło 2026-08-30 na czystym commicie
+`68d47001eb2c80c1593be12da65dd7afcbf9018e` z SHA-256 pustego diffu
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+Zarządzany `just verify-fdm-gpu-transaction-contract` wykonał CTest **3/3**,
+bitowy restore i odrzucenie korupcji **1/1** oraz rollback wszystkich pięciu
+integratorów **1/1**. `just verify-fdm-gpu-workspace-contract` wykonał CTest
+**4/4**, oba testy layoutu FFI, mapowanie telemetryki, provenance, `rustfmt` i
+`cargo check --features cuda`. Receipt wskazał `cuda_fdm`, RTX 3070 Laptop,
+compute capability 8.6 i brak fallbacku.
+
 (limitations)=
 ## Ograniczenia
 
@@ -310,6 +335,9 @@ time-to-accuracy gate dla całej kombinacji interakcji.
   workloadu.
 - Adaptive Brown SDE replay pozostaje niewspierany i fail-closed.
 - Ta nota nie promuje FEM ani FDM multilayer.
+- Dependency key i checkpoint v4 są obecnie kwalifikowane tylko dla single-grid
+  FDM CUDA; schema v3 nie ma bezpiecznej migracji, a pełne publiczne
+  Python--IR--runner checkpoint E2E pozostaje otwarte.
 
 (scientific-bibliography)=
 ## Bibliografia naukowa
@@ -333,10 +361,14 @@ time-to-accuracy gate dla całej kombinacji interakcji.
 | transactional commit/publish | `backends/fdm/gpu/cuda/integrators/fsal_policy.hpp` + `context_commit_accepted_step`, `context_publish_pending_fsal` | FDM GPU | fault-injection source contract |
 | RK23 FP32/FP64 | `backends/fdm/gpu/cuda/integrators/llg_rk23_fp32.cu` + `launch_rk23_step_fp32`; `llg_rk23_fp64.cu` + `launch_rk23_step_fp64` | FDM GPU | managed CUDA oracle/FSAL PASS |
 | DP45 FP32/FP64 | `backends/fdm/gpu/cuda/integrators/llg_dp45_fp32.cu` + `launch_dp45_step_fp32`; `llg_dp45_fp64.cu` + `launch_dp45_step_fp64` | FDM GPU | managed CUDA oracle/FSAL PASS |
-| termiczny seed i accepted interval FP64 | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` + `launch_effective_field_fp64` | FDM GPU | `fdm_thermal_brown_contract`; managed CUDA PASS |
-| termiczny seed i accepted interval FP32 | `backends/fdm/gpu/cuda/interactions/demag_fp32.cu` + `launch_effective_field_fp32` | FDM GPU | `fdm_thermal_brown_contract`; managed CUDA PASS |
+| termiczny seed i accepted interval FP64 | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` + `combine_effective_field_fp64_kernel` | FDM GPU | `fdm_thermal_brown_contract`; managed CUDA PASS |
+| termiczny seed i accepted interval FP32 | `backends/fdm/gpu/cuda/interactions/demag_fp32.cu` + `combine_effective_field_fp32_kernel` | FDM GPU | `fdm_thermal_brown_contract`; managed CUDA PASS |
 | sprzętowy oracle, termika, waveform i receipt | `backends/fdm/tests/fsal_thermal_cuda_runtime.cpp` + `run_deterministic`, `run_thermal`, `run_dynamic_oersted` | FDM GPU | `fdm_fsal_thermal_cuda_runtime_contract`; 12/12 przypadków PASS |
+| macierz tożsamości workspace | `backends/fdm/tests/fsal_thermal_cuda_runtime.cpp` + `verify_workspace_dependency_identity_matrix` | FDM GPU | actual-device category matrix i fail-closed ABI PASS |
 | append-only ABI v2 | `native/include/fullmag_fdm.h` + `fullmag_fdm_backend_get_fsal_telemetry_v2`; `crates/fullmag-fdm-sys/src/lib.rs` + `fullmag_fdm_fsal_telemetry_v2` | C/Rust ABI | layout tests |
+| dependency key workspace | `backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp` + `context_build_workspace_dependency_identity_v1` | FDM GPU | actual-device matrix grid/FFT/precision/PBC/mask/material/integrator PASS |
+| checkpoint LLG schema v4 | `backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp` + `context_llg_checkpoint_export_v4`, `context_llg_checkpoint_import_v4` | FDM GPU | bitowy restore, odrzucenie korupcji i kolizji cell-count PASS |
+| ABI checkpointu v4 | `native/include/fullmag_fdm.h` + `fullmag_fdm_backend_llg_checkpoint_import_v4`; `crates/fullmag-fdm-sys/src/lib.rs` + `fullmag_fdm_llg_checkpoint_info_v4` | C/Rust ABI | dokładny layout 200/520 B i symbole FFI PASS |
 | publiczne mapowanie LLG | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `class LLG` | Python/IR | Python round-trip i planner tests |
 | publiczne mapowanie termiki | `packages/fullmag-py/src/fullmag/model/energy.py` + `class ThermalNoise` | Python/IR | Python round-trip i planner tests |
 | adaptive Brown fail-closed | `crates/fullmag-plan/src/fdm.rs` + `plan_fdm` | planner FDM | `adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified` |

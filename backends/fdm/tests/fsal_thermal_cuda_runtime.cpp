@@ -827,7 +827,9 @@ int main() {
     verify_checkpoint_import_keeps_setup_workspace_stable(
         FULLMAG_FDM_INTEGRATOR_DP45);
     verify_checkpoint_rejects_grid_identity_collision();
-    verify_workspace_dependency_identity_matrix();
+    const auto verify_dependency_identity =
+        &verify_workspace_dependency_identity_matrix;
+    verify_dependency_identity();
     const char *evidence_path =
         std::getenv("FULLMAG_FDM_FSAL_CUDA_EVIDENCE_PATH");
     if (evidence_path != nullptr && *evidence_path != '\0') {
