@@ -4084,6 +4084,7 @@ mod tests {
             },
             gyromagnetic_ratio: 2.211e5,
             precision,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::resolve(precision),
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(2.5e-13),

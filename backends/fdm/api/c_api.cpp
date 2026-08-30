@@ -156,6 +156,13 @@ void context_record_adaptive_numerics_terminal(
 
 namespace {
 
+bool reject_step_transaction_mutation(Context &ctx, const char *operation)
+{
+    if (!ctx.gpu_workspace_step_active) return false;
+    ctx.last_error = std::string(operation) + "_during_step_transaction";
+    return true;
+}
+
 class ReceiptSolverPhaseGuard {
 public:
     explicit ReceiptSolverPhaseGuard(Context &context)
@@ -1668,6 +1675,9 @@ int fullmag_fdm_backend_set_stats_policy_v1(
         ctx->last_error = "stats_policy_change_during_step_transaction";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    if (reject_step_transaction_mutation(*ctx, "stats_policy_change")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if ((policy->quantity_mask & ~FULLMAG_FDM_STATS_QUANTITY_ALL) != 0) {
         ctx->last_error = "stats_policy_v1_unknown_quantity_mask";
         return FULLMAG_FDM_ERR_INVALID;
@@ -1933,6 +1943,9 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr || binding == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "gpu_transport_bind")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if (ctx->has_multilayer_plan_v2) {
         ctx->last_error =
             "spin transport is unsupported for v2 multilayer handles";
@@ -1986,6 +1999,9 @@ int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "gpu_transport_unbind")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if (!context_unbind_gpu_transport_rhs(*ctx)) return FULLMAG_FDM_ERR_INVALID;
     context_note_transport_revision_change(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
@@ -2418,6 +2434,9 @@ int fullmag_fdm_backend_upload_magnetization_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (len != ctx->cell_count * 3) {
         ctx->last_error = "magnetization length mismatch";
@@ -2443,6 +2462,9 @@ int fullmag_fdm_backend_upload_magnetization_f32(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (len != ctx->cell_count * 3) {
         ctx->last_error = "magnetization length mismatch";
@@ -2500,6 +2522,9 @@ int fullmag_fdm_backend_llg_checkpoint_import_v1(
 #if FULLMAG_HAS_CUDA
     if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_llg_checkpoint_import_v1(
         *ctx, source, exact_bytes, *expected_info);
 #else
@@ -2517,6 +2542,9 @@ int fullmag_fdm_backend_upload_layer_magnetization_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "layer_magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (!context_upload_layer_magnetization_f64(*ctx, layer_index, m_xyz, len)) {
         return FULLMAG_FDM_ERR_CUDA;
@@ -2538,6 +2566,9 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "layer_magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (!context_upload_layer_magnetization_f32(*ctx, layer_index, m_xyz, len)) {
         return FULLMAG_FDM_ERR_CUDA;
@@ -2703,6 +2734,9 @@ int fullmag_fdm_backend_llg_checkpoint_import_v2(
 #if FULLMAG_HAS_CUDA
     if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_llg_checkpoint_import_v2(
         *ctx, source, exact_bytes, *expected_info);
 #else
@@ -2718,6 +2752,9 @@ int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
 #if FULLMAG_HAS_CUDA
     if (!handle || !identity) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_execution_identity_change")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_set_checkpoint_execution_identity_v3(*ctx, *identity)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 #else
@@ -2766,6 +2803,9 @@ int fullmag_fdm_backend_llg_checkpoint_import_v3(
 #if FULLMAG_HAS_CUDA
     if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_llg_checkpoint_import_v3(
         *ctx, source, exact_bytes, *expected_info);
 #else
@@ -3045,6 +3085,9 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !field_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "static_external_field_change")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     const bool extends_setup_workspace =
         ctx->h_oe_static.x == nullptr && ctx->h_oe_static.y == nullptr &&
         ctx->h_oe_static.z == nullptr;

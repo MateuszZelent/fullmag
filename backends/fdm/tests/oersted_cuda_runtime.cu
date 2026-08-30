@@ -223,6 +223,98 @@ int interrupt_after_n_polls(void *user_data) {
     return state->polls >= state->interrupt_at ? 1 : 0;
 }
 
+fullmag_fdm_gpu_workspace_telemetry_v1 workspace_telemetry(
+    fullmag_fdm_backend *handle)
+{
+    fullmag_fdm_gpu_workspace_telemetry_v1 telemetry{};
+    telemetry.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    telemetry.struct_size = sizeof(telemetry);
+    check(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+              handle, &telemetry) == FULLMAG_FDM_OK,
+          "workspace telemetry query failed");
+    return telemetry;
+}
+
+struct ReentrantMutationState {
+    fullmag_fdm_backend *handle = nullptr;
+    const double *replacement_field = nullptr;
+    const double *replacement_magnetization = nullptr;
+    int field_status = FULLMAG_FDM_OK;
+    int magnetization_status = FULLMAG_FDM_OK;
+    int stats_status = FULLMAG_FDM_OK;
+};
+
+int mutate_during_step(void *user_data) {
+    auto *state = static_cast<ReentrantMutationState *>(user_data);
+    state->field_status = fullmag_fdm_backend_set_static_external_field_f64(
+        state->handle, state->replacement_field, 3);
+    state->magnetization_status = fullmag_fdm_backend_upload_magnetization_f64(
+        state->handle, state->replacement_magnetization, 3);
+    fullmag_fdm_stats_policy_v1 policy{};
+    policy.abi_version = FULLMAG_FDM_STATS_POLICY_ABI_V1;
+    policy.struct_size = sizeof(policy);
+    policy.mode = FULLMAG_FDM_STATS_NONE;
+    policy.stride = 1;
+    state->stats_status = fullmag_fdm_backend_set_stats_policy_v1(
+        state->handle, &policy);
+    return 1;
+}
+
+void verify_reentrant_mutations_are_rejected() {
+    const double initial_m[3] = {1.0, 0.0, 0.0};
+    const double replacement_m[3] = {0.0, 1.0, 0.0};
+    const double initial_field[3] = {0.0, 2.0, 0.0};
+    const double replacement_field[3] = {0.0, -3.0, 0.0};
+    const uint8_t active_mask[1] = {1};
+    auto plan = base_plan(
+        FULLMAG_FDM_PRECISION_DOUBLE,
+        FULLMAG_FDM_INTEGRATOR_HEUN,
+        initial_m,
+        active_mask);
+    plan.has_oersted_cylinder = 0;
+    fullmag_fdm_backend *handle = create_backend(
+        plan, "reentrant mutation backend create failed");
+    check(fullmag_fdm_backend_set_static_external_field_f64(
+              handle, initial_field, 3) == FULLMAG_FDM_OK,
+          "initial reentrant-mutation field setup failed");
+    const auto before = workspace_telemetry(handle);
+
+    ReentrantMutationState mutation{
+        handle, replacement_field, replacement_m};
+    check(fullmag_fdm_backend_set_interrupt_poll(
+              handle, mutate_during_step, &mutation) == FULLMAG_FDM_OK,
+          "reentrant mutation callback installation failed");
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-3, &stats) ==
+              FULLMAG_FDM_ERR_INTERRUPTED,
+          "reentrant mutation callback did not interrupt the step");
+    check(mutation.field_status == FULLMAG_FDM_ERR_INVALID &&
+              mutation.magnetization_status == FULLMAG_FDM_ERR_INVALID &&
+              mutation.stats_status == FULLMAG_FDM_ERR_INVALID,
+          "a public state/source/policy mutation succeeded during a step transaction");
+
+    const auto after = workspace_telemetry(handle);
+    check(after.workspace_revision == before.workspace_revision &&
+              after.source_revision == before.source_revision &&
+              after.field_revision == before.field_revision &&
+              after.total_device_allocation_count ==
+                  before.total_device_allocation_count &&
+              after.total_device_allocation_bytes ==
+                  before.total_device_allocation_bytes,
+          "rejected reentrant mutations changed workspace or source revisions");
+    const auto field = copy_vector(
+        handle, FULLMAG_FDM_PRECISION_DOUBLE, FULLMAG_FDM_OBSERVABLE_H_EXT);
+    const auto magnetization = copy_vector(
+        handle, FULLMAG_FDM_PRECISION_DOUBLE, FULLMAG_FDM_OBSERVABLE_M);
+    for (size_t component = 0; component < 3; ++component) {
+        check_close(field[component], initial_field[component], 1.0e-14,
+                    "rejected reentrant mutation changed the external field");
+        check_close(magnetization[component], initial_m[component], 1.0e-14,
+                    "rejected reentrant mutation changed accepted magnetization");
+    }
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void verify_interrupt_rollback(fullmag_fdm_precision precision) {
     const double m0[3] = {1.0, 0.0, 0.0};
     const uint8_t active_mask[1] = {1};
@@ -470,6 +562,7 @@ void verify_precision(fullmag_fdm_precision precision, double stage_tolerance) {
 }  // namespace
 
 int main() {
+    verify_reentrant_mutations_are_rejected();
     verify_precision(FULLMAG_FDM_PRECISION_DOUBLE, 1.0e-12);
     verify_precision(FULLMAG_FDM_PRECISION_SINGLE, 1.0e-7);
     std::puts("PASS: CUDA Oersted stage-time, rollback, adaptive, FSAL, ABM3, and axis oracle contract");
