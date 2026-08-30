@@ -338,6 +338,96 @@ void optional_demag_workspace_is_rejected_before_any_allocation() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void synchronous_preview_reuses_setup_owned_workspace() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("synchronous preview workspace check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double magnetization[12] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+    };
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(magnetization);
+    plan.grid = {4, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.precision = FULLMAG_FDM_PRECISION_SINGLE;
+    plan.initial_magnetization_len = 12;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "synchronous preview plan returned null");
+    check(fullmag_fdm_backend_last_error(handle) == nullptr,
+          "synchronous preview plan failed during setup");
+
+    fullmag_fdm_gpu_workspace_telemetry_v1 before{};
+    before.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    before.struct_size = sizeof(before);
+    check(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(handle, &before) ==
+              FULLMAG_FDM_OK,
+          "synchronous preview setup telemetry is unavailable");
+    check(before.setup_complete == 1 && before.accounting_valid == 1,
+          "synchronous preview requires a complete setup workspace");
+
+    double preview[6] = {};
+    check(fullmag_fdm_backend_copy_field_preview_f64(
+              handle,
+              FULLMAG_FDM_OBSERVABLE_M,
+              2,
+              1,
+              1,
+              0,
+              1,
+              preview,
+              6) == FULLMAG_FDM_OK,
+          "FP32 context should expose a downsampled FP64 preview");
+    const double expected_preview[6] = {
+        0.5, 0.5, 0.0,
+        0.5, 0.0, 0.5,
+    };
+    for (uint64_t index = 0; index < 6; ++index) {
+        check_close(preview[index], expected_preview[index], 0.0,
+                    "downsampled preview changed magnetization");
+    }
+
+    double oversized_preview[15] = {};
+    check(fullmag_fdm_backend_copy_field_preview_f64(
+              handle,
+              FULLMAG_FDM_OBSERVABLE_M,
+              5,
+              1,
+              1,
+              0,
+              1,
+              oversized_preview,
+              15) == FULLMAG_FDM_ERR_CUDA,
+          "preview larger than setup-owned capacity should fail closed");
+    const char *oversized_preview_error =
+        fullmag_fdm_backend_last_error(handle);
+    check(oversized_preview_error != nullptr &&
+              std::strcmp(
+                  oversized_preview_error,
+                  "synchronous preview exceeds the setup-owned download workspace") == 0,
+          "oversized preview should report its setup-owned capacity boundary");
+
+    fullmag_fdm_gpu_workspace_telemetry_v1 after{};
+    after.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    after.struct_size = sizeof(after);
+    check(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(handle, &after) ==
+              FULLMAG_FDM_OK,
+          "synchronous preview telemetry is unavailable after download");
+    check(after.accounting_valid == 1,
+          "synchronous preview invalidated workspace accounting");
+    check(after.total_device_allocation_count ==
+              before.total_device_allocation_count &&
+              after.total_device_allocation_bytes ==
+                  before.total_device_allocation_bytes &&
+              after.workspace_bytes == before.workspace_bytes,
+          "synchronous preview allocated device scratch after setup");
+
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void oversized_single_grid_allocation_is_rejected_by_memory_preflight() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("device-memory preflight check skipped: CUDA backend unavailable\n");
@@ -818,6 +908,7 @@ int main() {
     oversized_multilayer_allocation_is_rejected_by_memory_preflight();
     aggregate_single_grid_workspace_is_rejected_before_any_allocation();
     optional_demag_workspace_is_rejected_before_any_allocation();
+    synchronous_preview_reuses_setup_owned_workspace();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();

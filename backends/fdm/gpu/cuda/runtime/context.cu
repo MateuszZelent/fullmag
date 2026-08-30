@@ -189,6 +189,13 @@ bool context_preflight_single_grid_workspace(
         3 * (vector_field_count + snapshot_vector_fields) + 1;
     if (!add_product(scalar_component_count, component_bytes)) return false;
 
+    // Synchronous preview accepts FP64 output even for an FP32 context. Keep
+    // its maximum downsample target setup-owned so observation never extends
+    // the device workspace after the setup baseline has been sealed.
+    if (!add_product(ctx.cell_count, uint64_t{3} * sizeof(double))) {
+        return false;
+    }
+
     // Reduction arrays are always FP64. Fixed control, accepted-batch, and
     // attempt-trace records are allocated in the same setup transaction.
     if (ctx.cell_count > maximum - 255ULL) return overflow();
@@ -1772,6 +1779,11 @@ static bool ensure_preview_download_scratch(Context &ctx, size_t required_bytes)
     {
         return true;
     }
+    if (ctx.gpu_workspace_setup_complete) {
+        ctx.last_error =
+            "synchronous preview exceeds the setup-owned download workspace";
+        return false;
+    }
     if (ctx.preview_download_scratch) {
         cudaFree(ctx.preview_download_scratch);
         ctx.preview_download_scratch = nullptr;
@@ -2483,6 +2495,12 @@ bool context_alloc_device(Context &ctx) {
 
     if (!initialize_async_field_snapshot_pool(ctx)) return false;
     if (!initialize_async_preview_snapshot_pool(ctx)) {
+        destroy_async_field_snapshot_pool(ctx);
+        return false;
+    }
+    if (!ensure_preview_download_scratch(
+            ctx, ctx.cell_count * 3u * sizeof(double))) {
+        destroy_async_preview_snapshot_pool(ctx);
         destroy_async_field_snapshot_pool(ctx);
         return false;
     }
