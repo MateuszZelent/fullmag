@@ -7,6 +7,8 @@
 
 #include "fullmag_fdm.h"
 
+#include <cuda_runtime_api.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -489,6 +491,118 @@ void valid_plan_runs_fixed_step_rk23_without_demag() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void run_repeated_multilayer_demag_session() {
+    const double m0[3] = {1.0, 0.0, 0.0};
+    const fullmag_fdm_complex64 kernel_component[8] = {
+        {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
+        {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
+    };
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, m0);
+    fullmag_fdm_tensor_kernel_desc_v2 kernel =
+        make_kernel(0, 0, kernel_component);
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.enable_exchange = 1;
+    plan.enable_demag = 1;
+    plan.kernels = &kernel;
+    plan.kernel_count = 1;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr, "repeated create_v2 returned null");
+    check_error_contains(handle, "prepared all FFT workspaces");
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_OK,
+          "repeated create_v2 session step failed");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void run_repeated_single_grid_session() {
+    const double magnetization[12] = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+    };
+    const double static_field[12] = {
+        1.0e3, 0.0, 0.0,
+        0.0, 1.0e3, 0.0,
+        0.0, 0.0, 1.0e3,
+        1.0e3, 1.0e3, 1.0e3,
+    };
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(magnetization);
+    plan.grid = {4, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.initial_magnetization_len = 12;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "repeated single-grid create returned null");
+    check(fullmag_fdm_backend_last_error(handle) == nullptr,
+          "repeated single-grid create failed");
+    check(fullmag_fdm_backend_set_static_external_field_f64(
+              handle, static_field, 12) == FULLMAG_FDM_OK,
+          "repeated single-grid setup profile failed");
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_OK,
+          "repeated single-grid session step failed");
+    fullmag_fdm_backend_destroy(handle);
+}
+
+uint64_t free_device_bytes() {
+    check(cudaDeviceSynchronize() == cudaSuccess,
+          "failed to synchronize before CUDA memory query");
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    check(cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess,
+          "cudaMemGetInfo failed during repeated-session qualification");
+    check(total_bytes > 0 && free_bytes <= total_bytes,
+          "cudaMemGetInfo returned an invalid device-memory range");
+    return static_cast<uint64_t>(free_bytes);
+}
+
+void repeated_create_destroy_reclaims_cuda_workspace() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("repeated create/destroy check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    // Warm up module loading and allocator metadata before taking each baseline.
+    run_repeated_single_grid_session();
+    run_repeated_single_grid_session();
+    const uint64_t single_grid_baseline_free_bytes = free_device_bytes();
+    constexpr uint32_t session_count = 32;
+    for (uint32_t session = 0; session < session_count; ++session) {
+        run_repeated_single_grid_session();
+    }
+    const uint64_t single_grid_final_free_bytes = free_device_bytes();
+    if (single_grid_final_free_bytes < single_grid_baseline_free_bytes) {
+        std::fprintf(
+            stderr,
+            "FAIL: repeated single-grid create/destroy retained %llu device bytes after %u sessions\n",
+            static_cast<unsigned long long>(
+                single_grid_baseline_free_bytes - single_grid_final_free_bytes),
+            session_count);
+        std::exit(1);
+    }
+
+    run_repeated_multilayer_demag_session();
+    run_repeated_multilayer_demag_session();
+    const uint64_t baseline_free_bytes = free_device_bytes();
+    for (uint32_t session = 0; session < session_count; ++session) {
+        run_repeated_multilayer_demag_session();
+    }
+    const uint64_t final_free_bytes = free_device_bytes();
+    if (final_free_bytes < baseline_free_bytes) {
+        std::fprintf(
+            stderr,
+            "FAIL: repeated create/destroy retained %llu device bytes after %u sessions\n",
+            static_cast<unsigned long long>(
+                baseline_free_bytes - final_free_bytes),
+            session_count);
+        std::exit(1);
+    }
+    std::printf(
+        "repeated create/destroy reclaimed single-grid and multilayer CUDA workspace across %u sessions each\n",
+        session_count);
+}
+
 } // namespace
 
 int main() {
@@ -500,6 +614,7 @@ int main() {
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();
+    repeated_create_destroy_reclaims_cuda_workspace();
     std::printf("multilayer create_v2 contract: PASS\n");
     return 0;
 }

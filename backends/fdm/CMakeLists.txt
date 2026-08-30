@@ -853,7 +853,8 @@ if(FULLMAG_ENABLE_CUDA)
     add_test(NAME fdm_async_snapshot_contract COMMAND async_snapshot_contract)
 
     add_executable(multilayer_create_v2_contract tests/multilayer_create_v2_contract.cpp)
-    target_link_libraries(multilayer_create_v2_contract PRIVATE fullmag_fdm)
+    target_link_libraries(multilayer_create_v2_contract PRIVATE
+        fullmag_fdm CUDA::cudart)
     set_target_properties(multilayer_create_v2_contract PROPERTIES
         BUILD_RPATH "$<TARGET_FILE_DIR:fullmag_fdm>"
     )
