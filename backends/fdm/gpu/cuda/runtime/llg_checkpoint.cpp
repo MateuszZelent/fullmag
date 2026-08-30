@@ -692,7 +692,9 @@ int context_llg_checkpoint_import_v3(
     const bool include_abm_history = (expected_mask & kArrayAbmFn) != 0;
     if (!context_prepare_checkpoint_import_staging(
             ctx, include_fsal, include_abm_history)) {
-        ctx.last_error = "failed to allocate atomic checkpoint import staging";
+        if (ctx.last_error.empty()) {
+            ctx.last_error = "checkpoint import staging is unavailable";
+        }
         return FULLMAG_FDM_ERR_CUDA;
     }
     uint64_t offset = sizeof(header);

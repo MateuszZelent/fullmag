@@ -134,6 +134,125 @@ fullmag_fdm_execution_receipt_v2 execution_receipt(fullmag_fdm_backend *backend)
     return receipt;
 }
 
+fullmag_fdm_gpu_workspace_telemetry_v1 workspace_telemetry(
+    fullmag_fdm_backend *backend)
+{
+    fullmag_fdm_gpu_workspace_telemetry_v1 telemetry{};
+    telemetry.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    telemetry.struct_size = sizeof(telemetry);
+    check(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+              backend, &telemetry) == FULLMAG_FDM_OK,
+          "GPU workspace telemetry query failed");
+    return telemetry;
+}
+
+void set_checkpoint_identity(
+    fullmag_fdm_backend *backend,
+    fullmag_fdm_integrator integrator)
+{
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt.struct_size = sizeof(receipt);
+    check(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
+              FULLMAG_FDM_OK,
+          "checkpoint device receipt query failed");
+    check(receipt.device_ordinal >= 0,
+          "checkpoint device receipt has no CUDA ordinal");
+    fullmag_fdm_checkpoint_execution_identity_v3 identity{};
+    identity.abi_version = FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3;
+    identity.struct_size = sizeof(identity);
+    identity.requested_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.resolved_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.executed_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.requested_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.resolved_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.executed_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.requested_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.resolved_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.executed_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.requested_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.resolved_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.executed_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.requested_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.resolved_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.executed_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.requested_integrator = integrator;
+    identity.resolved_integrator = integrator;
+    identity.executed_integrator = integrator;
+    identity.device_ordinal = receipt.device_ordinal;
+    check(fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+              backend, &identity) == FULLMAG_FDM_OK,
+          "checkpoint execution identity setup failed");
+}
+
+void verify_checkpoint_import_keeps_setup_workspace_stable(
+    fullmag_fdm_integrator integrator)
+{
+    auto plan = base_plan(FULLMAG_FDM_PRECISION_DOUBLE, integrator);
+    auto *source = create_backend(plan);
+    set_checkpoint_identity(source, integrator);
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(source, kDt, &stats) == FULLMAG_FDM_OK,
+          "checkpoint source step failed");
+
+    uint64_t checkpoint_bytes = 0;
+    check(fullmag_fdm_backend_llg_checkpoint_query_size_v3(
+              source, &checkpoint_bytes) == FULLMAG_FDM_OK,
+          "checkpoint size query failed");
+    std::vector<unsigned char> checkpoint(
+        static_cast<std::size_t>(checkpoint_bytes));
+    fullmag_fdm_llg_checkpoint_info_v3 info{};
+    check(fullmag_fdm_backend_llg_checkpoint_export_v3(
+              source, checkpoint.data(), checkpoint_bytes, &info) ==
+              FULLMAG_FDM_OK,
+          "checkpoint export failed");
+
+    auto *destination = create_backend(plan);
+    set_checkpoint_identity(destination, integrator);
+    const auto before = workspace_telemetry(destination);
+    check(fullmag_fdm_backend_llg_checkpoint_import_v3(
+              destination, checkpoint.data(), checkpoint_bytes, &info) ==
+              FULLMAG_FDM_OK,
+          "checkpoint import failed");
+    const auto after = workspace_telemetry(destination);
+    check(after.accounting_valid == 1 && after.setup_complete == 1,
+          "checkpoint import invalidated workspace accounting");
+    const bool stable_workspace =
+        after.workspace_revision == before.workspace_revision &&
+        after.total_device_allocation_count ==
+            before.total_device_allocation_count &&
+        after.total_device_allocation_bytes ==
+            before.total_device_allocation_bytes &&
+        after.total_fft_plan_creation_count ==
+            before.total_fft_plan_creation_count;
+    if (!stable_workspace) {
+        std::fprintf(
+            stderr,
+            "checkpoint import workspace delta integrator=%s revision=%lld allocations=%lld bytes=%lld fft_plans=%lld\n",
+            integrator_name(integrator),
+            static_cast<long long>(after.workspace_revision) -
+                static_cast<long long>(before.workspace_revision),
+            static_cast<long long>(after.total_device_allocation_count) -
+                static_cast<long long>(before.total_device_allocation_count),
+            static_cast<long long>(after.total_device_allocation_bytes) -
+                static_cast<long long>(before.total_device_allocation_bytes),
+            static_cast<long long>(after.total_fft_plan_creation_count) -
+                static_cast<long long>(before.total_fft_plan_creation_count));
+    }
+    check(stable_workspace,
+          "checkpoint import allocated or rebuilt setup-owned GPU workspace");
+    check(after.setup_device_allocation_count ==
+                  after.total_device_allocation_count &&
+              after.setup_device_allocation_bytes ==
+                  after.total_device_allocation_bytes &&
+              after.setup_fft_plan_creation_count ==
+                  after.total_fft_plan_creation_count,
+          "checkpoint import escaped the setup workspace baseline");
+
+    fullmag_fdm_backend_destroy(destination);
+    fullmag_fdm_backend_destroy(source);
+}
+
 std::array<double, 3> copy_m(
     fullmag_fdm_backend *backend,
     fullmag_fdm_precision precision)
@@ -511,6 +630,10 @@ int main() {
             }
         }
     }
+    verify_checkpoint_import_keeps_setup_workspace_stable(
+        FULLMAG_FDM_INTEGRATOR_RK23);
+    verify_checkpoint_import_keeps_setup_workspace_stable(
+        FULLMAG_FDM_INTEGRATOR_DP45);
     const char *evidence_path =
         std::getenv("FULLMAG_FDM_FSAL_CUDA_EVIDENCE_PATH");
     if (evidence_path != nullptr && *evidence_path != '\0') {

@@ -146,9 +146,11 @@ bool context_preflight_single_grid_workspace(Context &ctx)
     if (ctx.has_frozen_mask) ++vector_field_count;
     switch (ctx.integrator) {
     case FULLMAG_FDM_INTEGRATOR_DP45:
-        vector_field_count += 6;
+        vector_field_count += 7;
         break;
     case FULLMAG_FDM_INTEGRATOR_RK23:
+        vector_field_count += 4;
+        break;
     case FULLMAG_FDM_INTEGRATOR_RK4:
         vector_field_count += 3;
         break;
@@ -2261,6 +2263,12 @@ bool context_alloc_device(Context &ctx) {
     if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45
         || ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
         if (!alloc_vector_field(ctx, ctx.k_fsal)) return false;
+        // Checkpoint import swaps the accepted FSAL derivative atomically.
+        // Its peer buffer is setup-owned so restore never allocates after
+        // workspace accounting has been sealed.
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+            return false;
+        }
         ctx.fsal_valid = false;
     }
 
@@ -2599,20 +2607,25 @@ void context_discard_pre_step_state(Context &ctx) {
 bool context_prepare_checkpoint_import_staging(
     Context &ctx, bool include_fsal, bool include_abm_history)
 {
-    if (ctx.gpu_transport_pre_step_m.x == nullptr &&
-        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) {
+    const auto field_is_complete = [](const DeviceVectorField &field) {
+        return field.x != nullptr && field.y != nullptr && field.z != nullptr;
+    };
+    if (!field_is_complete(ctx.gpu_transport_pre_step_m)) {
+        ctx.last_error =
+            "checkpoint import magnetization staging is unavailable after setup";
         return false;
     }
     if ((include_fsal || include_abm_history) &&
-        ctx.gpu_transport_pre_step_abm_f_n.x == nullptr &&
-        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+        !field_is_complete(ctx.gpu_transport_pre_step_abm_f_n)) {
+        ctx.last_error =
+            "checkpoint import derivative staging is unavailable after setup";
         return false;
     }
     if (include_abm_history &&
-        ((ctx.gpu_transport_pre_step_abm_f_n1.x == nullptr &&
-          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) ||
-         (ctx.gpu_transport_pre_step_abm_f_n2.x == nullptr &&
-          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2)))) {
+        (!field_is_complete(ctx.gpu_transport_pre_step_abm_f_n1) ||
+         !field_is_complete(ctx.gpu_transport_pre_step_abm_f_n2))) {
+        ctx.last_error =
+            "checkpoint import ABM history staging is unavailable after setup";
         return false;
     }
     return true;
