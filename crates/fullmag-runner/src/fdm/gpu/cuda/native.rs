@@ -5419,6 +5419,23 @@ mod tests {
         let cell_count = plan.initial_magnetization.len();
 
         let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let receipt = backend
+            .execution_receipt("gpu", fullmag_ir::ExecutionMode::Strict)
+            .expect("static profile construction receipt");
+        let workspace = receipt
+            .gpu_workspace
+            .expect("static profile GPU workspace receipt");
+        assert!(workspace.accounting_valid);
+        assert!(workspace.setup_complete);
+        assert_eq!(
+            workspace.total_device_allocation_count,
+            workspace.setup_device_allocation_count
+        );
+        assert_eq!(
+            workspace.total_device_allocation_bytes,
+            workspace.setup_device_allocation_bytes
+        );
+        assert_eq!(workspace.observed_step_count, 0);
         backend
             .step(plan.fixed_timestep.expect("fixed dt"))
             .expect("native fdm static profile step");

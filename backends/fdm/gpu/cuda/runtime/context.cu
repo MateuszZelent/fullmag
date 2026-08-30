@@ -3549,6 +3549,20 @@ bool context_mark_static_external_field_profile(
         ctx.last_error = "static external field profile requires a cell-wise field";
         return false;
     }
+    const bool has_any_storage = ctx.h_oe_static.x != nullptr ||
+        ctx.h_oe_static.y != nullptr || ctx.h_oe_static.z != nullptr;
+    const bool has_complete_storage = ctx.h_oe_static.x != nullptr &&
+        ctx.h_oe_static.y != nullptr && ctx.h_oe_static.z != nullptr;
+    if (has_any_storage != has_complete_storage) {
+        ctx.last_error = "static external field profile workspace is partially initialized";
+        return false;
+    }
+    if (!has_complete_storage && ctx.gpu_workspace_setup_complete &&
+        ctx.gpu_workspace_observed_step_count != 0) {
+        ctx.last_error =
+            "static external field profile requires setup-owned workspace before the first step";
+        return false;
+    }
     if (!upload_cell_profile(ctx, field_xyz, len, "static external field profile")) {
         return false;
     }

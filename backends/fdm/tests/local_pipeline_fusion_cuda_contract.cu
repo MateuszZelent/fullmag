@@ -524,13 +524,13 @@ void qualify_case(
         static_cast<unsigned long long>(fused.peak_vram_bytes));
     require(fused.setup_device_allocation_count > 0 &&
                 fused.setup_device_allocation_bytes > 0 &&
-                fused.total_device_allocation_count >=
+                fused.total_device_allocation_count ==
                     fused.setup_device_allocation_count &&
-                fused.total_device_allocation_bytes >=
+                fused.total_device_allocation_bytes ==
                     fused.setup_device_allocation_bytes &&
                 fused.step_device_allocation_count == 0 &&
                 fused.step_device_allocation_bytes == 0,
-            "steady-state step performed an unplanned device allocation");
+            "construction or steady-state execution performed an unplanned device allocation");
     require(fused.total_fft_plan_creation_count ==
                 fused.setup_fft_plan_creation_count &&
                 fused.step_fft_plan_creation_count == 0,
@@ -893,6 +893,63 @@ void qualify_graph_recapture_case(
         static_cast<unsigned long long>(after.field_revision));
 }
 
+void qualify_late_static_profile_rejection() {
+    const std::array<double, 6> magnetization = {
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    const std::array<double, 6> profile = {
+        1.0e3, 0.0, 0.0,
+        0.0, 1.0e3, 0.0,
+    };
+    fullmag_fdm_plan_desc plan{};
+    plan.grid = {2, 1, 1, 1.0e-9, 1.0e-9, 1.0e-9};
+    plan.material = {8.0e5, 0.0, 0.1, 2.211e5};
+    plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.initial_magnetization_xyz = magnetization.data();
+    plan.initial_magnetization_len = magnetization.size();
+    plan.stats_mode = FULLMAG_FDM_STATS_NONE;
+
+    auto *handle = fullmag_fdm_backend_create(&plan);
+    require(handle != nullptr, "late-profile backend creation returned null");
+    require(fullmag_fdm_backend_last_error(handle) == nullptr,
+            "late-profile backend creation failed");
+    fullmag_fdm_step_stats stats{};
+    require(fullmag_fdm_backend_step(handle, 1.0e-13, &stats) == FULLMAG_FDM_OK,
+            "late-profile baseline step failed");
+
+    auto query_workspace = [handle]() {
+        fullmag_fdm_gpu_workspace_telemetry_v1 telemetry{};
+        telemetry.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+        telemetry.struct_size = sizeof(telemetry);
+        require(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+                    handle, &telemetry) == FULLMAG_FDM_OK,
+                "late-profile workspace telemetry query failed");
+        return telemetry;
+    };
+    const auto before = query_workspace();
+    require(fullmag_fdm_backend_set_static_external_field_f64(
+                handle, profile.data(), profile.size()) ==
+                FULLMAG_FDM_ERR_INVALID,
+            "first static profile after stepping must fail closed");
+    const char *error = fullmag_fdm_backend_last_error(handle);
+    require(error != nullptr && std::strstr(error, "before the first step") != nullptr,
+            "late static profile rejection must expose a typed lifecycle reason");
+    const auto after = query_workspace();
+    require(after.total_device_allocation_count ==
+                before.total_device_allocation_count &&
+                after.total_device_allocation_bytes ==
+                    before.total_device_allocation_bytes &&
+                after.setup_device_allocation_count ==
+                    before.setup_device_allocation_count &&
+                after.setup_device_allocation_bytes ==
+                    before.setup_device_allocation_bytes &&
+                after.accounting_valid == 1,
+            "late static profile rejection mutated workspace accounting");
+    fullmag_fdm_backend_destroy(handle);
+}
+
 } // namespace
 
 int main() {
@@ -960,6 +1017,7 @@ int main() {
         qualify_graph_recapture_case(
             integrator, FULLMAG_FDM_PRECISION_SINGLE);
     }
+    qualify_late_static_profile_rejection();
     std::puts("FDM_GPU_PERF003_LOCAL_PIPELINE_FUSION_PASS");
     return 0;
 }

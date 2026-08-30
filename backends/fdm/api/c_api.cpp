@@ -3045,10 +3045,49 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !field_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    const bool extends_setup_workspace =
+        ctx->h_oe_static.x == nullptr && ctx->h_oe_static.y == nullptr &&
+        ctx->h_oe_static.z == nullptr;
+    const uint64_t allocation_count_before =
+        ctx->gpu_workspace_total_device_allocation_count;
+    const uint64_t allocation_bytes_before =
+        ctx->gpu_workspace_total_device_allocation_bytes;
     if (!context_mark_static_external_field_profile(*ctx, field_xyz, field_len)) {
         return FULLMAG_FDM_ERR_INVALID;
     }
+    if (extends_setup_workspace && ctx->gpu_workspace_setup_complete) {
+        uint64_t expected_bytes = 0;
+        const uint64_t scalar_bytes =
+            ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? sizeof(double) : sizeof(float);
+        const bool baseline_was_current =
+            allocation_count_before ==
+                ctx->gpu_workspace_setup_device_allocation_count &&
+            allocation_bytes_before ==
+                ctx->gpu_workspace_setup_device_allocation_bytes;
+        const bool expected_extension =
+            ctx->gpu_workspace_total_device_allocation_count -
+                    allocation_count_before ==
+                3 &&
+            fullmag_fdm_checked_vector_bytes(
+                ctx->cell_count, scalar_bytes, expected_bytes) &&
+            ctx->gpu_workspace_total_device_allocation_bytes -
+                    allocation_bytes_before ==
+                expected_bytes;
+        if (!baseline_was_current || !expected_extension ||
+            ctx->gpu_workspace_observed_step_count != 0) {
+            ctx->gpu_workspace_accounting_valid = false;
+            ctx->last_error =
+                "static external field profile workspace extension violated setup accounting";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        ctx->gpu_workspace_setup_device_allocation_count =
+            ctx->gpu_workspace_total_device_allocation_count;
+        ctx->gpu_workspace_setup_device_allocation_bytes =
+            ctx->gpu_workspace_total_device_allocation_bytes;
+    }
     context_note_field_source_revision_change(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
     return FULLMAG_FDM_OK;
 #else
     (void)handle;
