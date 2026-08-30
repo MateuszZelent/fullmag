@@ -16,10 +16,12 @@ import {
   FrozenSpinsEditor,
   FrozenSpinsInspectorPanel,
   FrozenSpinsPreviewDetails,
+  resolveFrozenSpinsSolverBinding,
 } from "./FrozenSpinsInspectorPanel";
 
 const preview = {
   activation_candidate_token: "fsact-candidate-1",
+  authority: "speculative_authoring_preview" as const,
   bounds_m: [[0, 1e-9], [0, 2e-9], [0, 3e-9]],
   current: true,
   fraction: 0.25,
@@ -47,7 +49,48 @@ const preview = {
   },
   revision: 8,
   schema_version: "fullmag.frozen-spins.preview.v1",
+  solver_binding: "unbound" as const,
   warnings: [{ code: "bounded", message: "Preview is bounded." }],
+};
+
+const activationReceipt = {
+  active_site_count: 8,
+  activation_candidate_token_consumed: true,
+  activation_scope: "authoring_commit" as const,
+  authority: "speculative_authoring_preview" as const,
+  definition: definitionFixture(),
+  free_site_count: 6,
+  frozen_site_count: 2,
+  mask_resource: preview.mask_resource,
+  mask_sha256: preview.mask_sha256,
+  preview_id: preview.preview_id,
+  revision: 8,
+  runtime_application: {
+    apply_boundary: "next_runtime_plan" as const,
+    current_runtime_unchanged: true,
+    pending_revision: 8,
+    state: "pending_runtime_plan" as const,
+  },
+  schema_version: "frozen_spins_activation.v1",
+  solver_binding: "pending_runtime_activation" as const,
+  source_state_revision: 41,
+  topology_fingerprint: "sha256:topology",
+};
+
+const solverRuntime = {
+  active_constraint_ids: ["pin-edge"],
+  active_site_count: 8,
+  constraint_activation_epochs: { "pin-edge": 1 },
+  free_site_count: 6,
+  frozen_site_count: 2,
+  mask_sha256: "mask",
+  reference_sha256: "sha256:reference",
+  resolved_constraint_set_revision: 1,
+  scalar_component_dof_count: 24,
+  schema: "fullmag.frozen_spins.runtime-status.v1",
+  source_state_revision: 41,
+  topology_fingerprint: "sha256:topology",
+  vector_dimension: 3,
 };
 
 const mocks = vi.hoisted(() => ({
@@ -57,6 +100,12 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   invalidate: vi.fn(),
   patch: vi.fn(),
+  flushVisualization: vi.fn(),
+  queueVisualizationPatch: vi.fn(),
+  refetchSolverStatus: vi.fn(),
+  setActiveViewportMainModule: vi.fn(),
+  setFocusedSlot: vi.fn(),
+  solverStatusData: null as unknown,
   definitionResource: {
     data: null as unknown,
     error: null as unknown,
@@ -77,6 +126,14 @@ vi.mock("@/kernel/KernelContext", () => ({
     },
     resources: { invalidate: mocks.invalidate },
     selection: { clear: mocks.clear },
+    layout: {
+      setActiveViewportMainModule: mocks.setActiveViewportMainModule,
+      setFocusedSlot: mocks.setFocusedSlot,
+    },
+    visualizationSync: {
+      flushNow: mocks.flushVisualization,
+      queuePatch: mocks.queueVisualizationPatch,
+    },
   }),
 }));
 
@@ -86,6 +143,10 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
       publication_bundle: { topology_hash: "sha256:topology" },
       source_revision: 41,
     },
+  }),
+  useSolverStatusResource: () => ({
+    data: mocks.solverStatusData,
+    refetch: mocks.refetchSolverStatus,
   }),
 }));
 
@@ -99,18 +160,15 @@ vi.mock("@/kernel/resources/frozenSpinsResources", () => ({
 describe("FrozenSpinsInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.activatePreview.mockResolvedValue({
-      activation_candidate_token_consumed: true,
-      definition: definitionFixture(),
-      mask_resource: preview.mask_resource,
-      mask_sha256: preview.mask_sha256,
-      preview_id: preview.preview_id,
-      revision: 8,
-      schema_version: "frozen_spins_activation.v1",
-      source_state_revision: 41,
-      topology_fingerprint: "sha256:topology",
-    });
+    mocks.activatePreview.mockResolvedValue(activationReceipt);
+    mocks.flushVisualization.mockResolvedValue(undefined);
+    mocks.solverStatusData = null;
     mocks.createPreview.mockResolvedValue(preview);
+    mocks.patch.mockResolvedValue({
+      definition: definitionFixture(),
+      revision: 8,
+      runtime_application: activationReceipt.runtime_application,
+    });
     mocks.definitionResource = {
       data: {
         definition: {
@@ -131,10 +189,72 @@ describe("FrozenSpinsInspectorPanel", () => {
       <FrozenSpinsPreviewDetails preview={preview} />,
     );
     expect(markup).toContain("Frozen DOFs");
+    expect(markup).toContain("speculative_authoring_preview");
+    expect(markup).toContain("unbound");
     expect(markup).toContain("25.00%");
     expect(markup).toContain("sha256:mask");
     expect(markup).toContain("current");
     expect(markup).toContain("bounded: Preview is bounded.");
+  });
+
+  it("confirms solver ownership only when the runtime certificate matches every activation identity", () => {
+    expect(
+      resolveFrozenSpinsSolverBinding(
+        activationReceipt,
+        solverRuntime,
+        "pin-edge",
+      ),
+    ).toEqual({
+      state: "confirmed",
+      message: "Solver certificate matches the committed preview identity.",
+    });
+    expect(
+      resolveFrozenSpinsSolverBinding(
+        activationReceipt,
+        { ...solverRuntime, mask_sha256: "solver-recomputed" },
+        "pin-edge",
+      ).state,
+    ).toBe("mismatch");
+    expect(
+      resolveFrozenSpinsSolverBinding(
+        activationReceipt,
+        { ...solverRuntime, frozen_site_count: 3 },
+        "pin-edge",
+      ).state,
+    ).toBe("mismatch");
+  });
+
+  it("switches 3D to the solver-owned frozen_spins quantity after certificate confirmation", async () => {
+    mocks.solverStatusData = { frozen_spins: solverRuntime };
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+      await act(async () => findButton(container, "Commit preview").click());
+      await act(async () =>
+        findButton(container, "Show solver frozen_spins in 3D").click(),
+      );
+
+      expect(mocks.queueVisualizationPatch).toHaveBeenCalledWith({
+        active_quantity_id: "frozen_spins",
+        quantity: { active_quantity_id: "frozen_spins" },
+      });
+      expect(mocks.flushVisualization).toHaveBeenCalledTimes(1);
+      expect(mocks.setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
+      expect(mocks.setFocusedSlot).toHaveBeenCalledWith("viewport-main");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("requests a revision-bound preview and publishes only its preview identity", async () => {
@@ -187,7 +307,70 @@ describe("FrozenSpinsInspectorPanel", () => {
     }
   });
 
-  it("atomically activates the exact preview candidate and prevents UI replay", async () => {
+  it("reports an authored edit as a pending runtime revision instead of an in-place solver mutation", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Apply").click());
+
+      expect(container.textContent).toContain("current solver is unchanged");
+      expect(container.textContent).toContain("pending_runtime_plan");
+      expect(container.textContent).toContain("Pending scene revision");
+      expect(container.textContent).toContain("next_runtime_plan");
+      expect(container.textContent).toContain("unchanged");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("reports the tracked accepted-step application command while the solver is running", async () => {
+    mocks.patch.mockResolvedValueOnce({
+      definition: definitionFixture(),
+      revision: 8,
+      runtime_application: {
+        application_command_id: "fm-frozen-replan-123",
+        apply_boundary: "accepted_step",
+        current_runtime_unchanged: true,
+        pending_revision: 8,
+        state: "pending_runtime_plan",
+      },
+    });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Apply").click());
+
+      expect(container.textContent).toContain("next accepted solver step");
+      expect(container.textContent).toContain("accepted_step");
+      expect(container.textContent).toContain("Application command ID");
+      expect(container.textContent).toContain("fm-frozen-replan-123");
+      expect(container.textContent).toContain("unchanged");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("atomically commits the exact speculative preview candidate and awaits solver binding", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -201,7 +384,7 @@ describe("FrozenSpinsInspectorPanel", () => {
         />,
       ));
       await act(async () => findButton(container, "Preview mask").click());
-      await act(async () => findButton(container, "Activate preview").click());
+      await act(async () => findButton(container, "Commit preview").click());
 
       expect(mocks.activatePreview).toHaveBeenCalledWith("preview-1", {
         activation_candidate_token: "fsact-candidate-1",
@@ -216,8 +399,11 @@ describe("FrozenSpinsInspectorPanel", () => {
         "model:frozen-spins:active-preview",
         "",
       );
-      expect(container.textContent).toContain("one-time candidate consumed");
-      expect(findOptionalButton(container, "Activate preview")).toBeNull();
+      expect(container.textContent).toContain("solver activation is still pending");
+      expect(container.textContent).toContain("authoring_commit");
+      expect(container.textContent).toContain("Waiting for a solver stage");
+      expect(findOptionalButton(container, "Commit preview")).toBeNull();
+      expect(mocks.refetchSolverStatus).toHaveBeenCalledTimes(1);
       expect(mocks.activatePreview).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
@@ -242,10 +428,10 @@ describe("FrozenSpinsInspectorPanel", () => {
         />,
       ));
       await act(async () => findButton(container, "Preview mask").click());
-      await act(async () => findButton(container, "Activate preview").click());
+      await act(async () => findButton(container, "Commit preview").click());
 
       expect(container.textContent).toContain("activation_definition_mismatch");
-      expect(findButton(container, "Activate preview").disabled).toBe(false);
+      expect(findButton(container, "Commit preview").disabled).toBe(false);
       expect(container.textContent).toContain("ready (one-time)");
     } finally {
       await act(async () => root.unmount());
@@ -276,7 +462,7 @@ describe("FrozenSpinsInspectorPanel", () => {
         selectorKind.dispatchEvent(new TestEvent("change", { bubbles: true }));
       });
 
-      expect(findButton(container, "Activate preview").disabled).toBe(true);
+      expect(findButton(container, "Commit preview").disabled).toBe(true);
       expect(container.textContent).toContain("requires new preview");
       expect(mocks.activatePreview).not.toHaveBeenCalled();
     } finally {
@@ -307,7 +493,7 @@ describe("FrozenSpinsInspectorPanel", () => {
         container,
         "data-frozen-spins-inspector-id",
       );
-      await act(async () => { findButton(container, "Activate preview").click(); });
+      await act(async () => { findButton(container, "Commit preview").click(); });
 
       const nameInput = findByAttribute(container, "aria-label", "Name");
       expect(nameInput.disabled).toBe(false);
@@ -325,13 +511,20 @@ describe("FrozenSpinsInspectorPanel", () => {
         selectorKind.dispatchEvent(new TestEvent("change", { bubbles: true }));
       });
       await act(async () => resolveActivation({
+        active_site_count: 8,
+        activation_scope: "authoring_commit",
         activation_candidate_token_consumed: true,
+        authority: "speculative_authoring_preview",
         definition: definitionFixture(),
+        free_site_count: 6,
+        frozen_site_count: 2,
         mask_resource: preview.mask_resource,
         mask_sha256: preview.mask_sha256,
         preview_id: preview.preview_id,
         revision: 8,
+        runtime_application: activationReceipt.runtime_application,
         schema_version: "frozen_spins_activation.v1",
+        solver_binding: "pending_runtime_activation",
         source_state_revision: 41,
         topology_fingerprint: "sha256:topology",
       }));
@@ -366,7 +559,7 @@ describe("FrozenSpinsInspectorPanel", () => {
       ));
       await act(async () => findButton(container, "Preview mask").click());
 
-      expect(findButton(container, "Activate preview").disabled).toBe(true);
+      expect(findButton(container, "Commit preview").disabled).toBe(true);
       expect(container.textContent).toContain("Activation candidate");
       expect(container.textContent).toContain("stale");
       expect(mocks.activatePreview).not.toHaveBeenCalled();

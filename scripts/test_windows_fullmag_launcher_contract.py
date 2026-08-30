@@ -66,11 +66,27 @@ def test_windows_gpu_route_builds_cuda_and_fails_closed() -> None:
     assert "fullmag_fdm.dll" in launcher
 
 
-def test_windows_launcher_stages_cuda_dll_from_target_triple_build_directory() -> None:
+def test_windows_launcher_stages_cuda_dll_from_short_external_native_build_root() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
 
-    assert 'Join-Path $TargetRoot "$TargetTriple\\release\\build"' in launcher
+    assert 'FULLMAG_FDM_NATIVE_BUILD_ROOT' in launcher
+    assert 'Join-Path $nativeFdmBuildRoot "backends\\fdm\\Release\\fullmag_fdm.dll"' in launcher
+    assert launcher.index("$nativeFdmBuildRoot =") < launcher.index(
+        "$env:FULLMAG_FDM_NATIVE_BUILD_ROOT = $nativeFdmBuildRoot"
+    )
+    assert 'Join-Path $TargetRoot "$TargetTriple\\release\\build"' not in launcher
     assert 'Join-Path $TargetRoot "release\\build"' not in launcher
+
+
+def test_windows_launcher_rechecks_source_identity_before_publishing_manifest() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "$finalSourceIdentity = Get-SourceIdentity" in launcher
+    assert "GIT_OPTIONAL_LOCKS" in launcher
+    assert launcher.index("$finalSourceIdentity = Get-SourceIdentity") < launcher.index(
+        "$manifest = [ordered]@{"
+    )
+    assert "source changed while the native runtime was building" in launcher
 
 
 def test_windows_build_recipe_normalizes_named_arguments() -> None:
@@ -171,6 +187,7 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "imageOutput",
         "capture_source_snapshot_identity.py",
         "--ignore-non-runtime-dirty",
+        "GIT_OPTIONAL_LOCKS",
         "FULLMAG_SOURCE_SNAPSHOT_SHA256",
         "--load",
         "docker info",
@@ -199,6 +216,14 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     assert 'Invoke-External "wsl.exe"' not in launcher
     assert '"buildx", "build"' in launcher
     assert "run_fullmag.ps1" not in launcher
+
+
+def test_windows_fem_image_override_is_used_for_runtime_validation() -> None:
+    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+
+    runtime_image_block = launcher[launcher.index("$RuntimeImage ="):]
+    assert "FULLMAG_WINDOWS_FEM_CPU_IMAGE" in runtime_image_block
+    assert "FULLMAG_WINDOWS_FEM_GPU_IMAGE" in runtime_image_block
 
 
 def test_windows_setup_bootstraps_tools_and_validates_storage() -> None:
@@ -253,6 +278,19 @@ def test_windows_fem_interactive_launch_omits_empty_compose_environment_entries(
     assert 'if ([string]::IsNullOrWhiteSpace([string]$entry)) {\n      continue\n    }' in launcher
 
 
+def test_windows_fem_build_mutex_is_released_before_long_running_simulation() -> None:
+    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+
+    manifest_boundary = launcher.index('  if ($BuildOnly) {')
+    release_boundary = launcher.index(
+        '  if ($buildMutexHeld) {', manifest_boundary
+    )
+    run_boundary = launcher.index('  if ($Device -eq "gpu") {', release_boundary)
+    assert manifest_boundary < release_boundary < run_boundary
+    assert '$buildMutexHeld = $false' in launcher[release_boundary:run_boundary]
+    assert '$buildMutex = $null' in launcher[release_boundary:run_boundary]
+
+
 def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
     launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
@@ -276,6 +314,7 @@ def test_windows_compose_uses_only_bind_mounts_for_build_and_cache() -> None:
     assert "FULLMAG_WINDOWS_TEMP_ROOT" in compose
     assert compose.count("CMAKE_BUILD_PARALLEL_LEVEL") == 2
     assert compose.count("CARGO_BUILD_JOBS") == 2
+    assert compose.count("GIT_OPTIONAL_LOCKS") == 2
     assert compose.count("FULLMAG_SOURCE_SNAPSHOT_SHA256") == 4
     assert "FULLMAG_WINDOWS_NODE_MODULES_ROOT" in compose
     assert "FULLMAG_CUDA_BASE_IMAGE" in compose

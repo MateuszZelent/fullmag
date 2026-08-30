@@ -5641,16 +5641,20 @@ export interface components {
             /** @enum {string} */
             kind: "explicit_field_asset";
         };
+        /** @enum {string} */
+        FrozenSpinsActivationScope: "authoring_commit";
         FrozenSpinsCollectionResource: {
             count: number;
             definitions: components["schemas"]["FrozenSpinsSchema"][];
             /** Format: int64 */
             revision: number;
+            runtime_application?: null | components["schemas"]["FrozenSpinsRuntimeApplication"];
         };
         FrozenSpinsDefinitionResource: {
             definition: components["schemas"]["FrozenSpinsSchema"];
             /** Format: int64 */
             revision: number;
+            runtime_application?: null | components["schemas"]["FrozenSpinsRuntimeApplication"];
         };
         FrozenSpinsDeleteRequest: {
             /** Format: int64 */
@@ -5669,17 +5673,29 @@ export interface components {
         };
         FrozenSpinsPreviewActivationResponse: {
             activation_candidate_token_consumed: boolean;
+            activation_scope: components["schemas"]["FrozenSpinsActivationScope"];
+            /** Format: int64 */
+            active_site_count: number;
+            authority: components["schemas"]["FrozenSpinsPreviewAuthority"];
             definition: components["schemas"]["FrozenSpinsSchema"];
+            /** Format: int64 */
+            free_site_count: number;
+            /** Format: int64 */
+            frozen_site_count: number;
             mask_resource: string;
             mask_sha256: string;
             preview_id: string;
             /** Format: int64 */
             revision: number;
+            runtime_application: components["schemas"]["FrozenSpinsRuntimeApplication"];
             schema_version: string;
+            solver_binding: components["schemas"]["FrozenSpinsSolverBinding"];
             /** Format: int64 */
             source_state_revision: number;
             topology_fingerprint: string;
         };
+        /** @enum {string} */
+        FrozenSpinsPreviewAuthority: "speculative_authoring_preview";
         FrozenSpinsPreviewRequest: {
             /** Format: int64 */
             expected_revision: number;
@@ -5692,6 +5708,7 @@ export interface components {
         };
         FrozenSpinsPreviewResponse: {
             activation_candidate_token: string;
+            authority: components["schemas"]["FrozenSpinsPreviewAuthority"];
             bounds_m?: number[][] | null;
             current: boolean;
             /** Format: double */
@@ -5708,6 +5725,7 @@ export interface components {
             /** Format: int64 */
             revision: number;
             schema_version: string;
+            solver_binding: components["schemas"]["FrozenSpinsSolverBinding"];
             warnings: components["schemas"]["FrozenSpinsWarning"][];
         };
         FrozenSpinsRequestedIntent: {
@@ -5727,6 +5745,18 @@ export interface components {
             source_state_revision?: number | null;
             topology_fingerprint: string;
         };
+        FrozenSpinsRuntimeApplication: {
+            application_command_id?: string | null;
+            apply_boundary: components["schemas"]["FrozenSpinsRuntimeApplyBoundary"];
+            current_runtime_unchanged: boolean;
+            /** Format: int64 */
+            pending_revision: number;
+            state: components["schemas"]["FrozenSpinsRuntimeApplicationState"];
+        };
+        /** @enum {string} */
+        FrozenSpinsRuntimeApplicationState: "pending_runtime_plan";
+        /** @enum {string} */
+        FrozenSpinsRuntimeApplyBoundary: "next_runtime_plan" | "accepted_step";
         FrozenSpinsSchema: {
             activation?: components["schemas"]["ConstraintActivationSchema"];
             empty_selection?: components["schemas"]["EmptySelectionPolicySchema"];
@@ -5738,6 +5768,32 @@ export interface components {
             reference?: components["schemas"]["FrozenReferencePolicySchema"];
             schema_version: string;
             selector: components["schemas"]["SelectionExprSchema"];
+        };
+        /** @enum {string} */
+        FrozenSpinsSolverBinding: "unbound" | "pending_runtime_activation";
+        FrozenSpinsSolverRuntimeStatus: {
+            active_constraint_ids: string[];
+            /** Format: int64 */
+            active_site_count: number;
+            constraint_activation_epochs: {
+                [key: string]: number;
+            };
+            /** Format: int64 */
+            free_site_count: number;
+            /** Format: int64 */
+            frozen_site_count: number;
+            mask_sha256: string;
+            reference_sha256: string;
+            /** Format: int64 */
+            resolved_constraint_set_revision: number;
+            /** Format: int64 */
+            scalar_component_dof_count: number;
+            schema: string;
+            /** Format: int64 */
+            source_state_revision?: number | null;
+            topology_fingerprint: string;
+            /** Format: int32 */
+            vector_dimension: number;
         };
         FrozenSpinsWarning: {
             code: string;
@@ -10118,6 +10174,7 @@ export interface components {
             dt_suggested_seconds?: number | null;
             /** Format: double */
             error_estimate?: number | null;
+            frozen_spins?: null | components["schemas"]["FrozenSpinsSolverRuntimeStatus"];
             integrator?: string | null;
             is_busy: boolean;
             last_error?: string | null;

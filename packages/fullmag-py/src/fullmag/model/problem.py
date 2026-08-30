@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import warnings
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -83,6 +84,72 @@ _FEM_M2_OPERATOR_VERSION = "fem_charge_spin_conforming_h1_p1.reciprocal_m2.v1"
 # silently retain the unnecessary corner refinement and its old topology.
 _FEM_MESH_CACHE_VERSION = "v8"
 _FEM_SHARED_DOMAIN_CACHE_SCHEMA = "fullmag.fem.shared-domain-cache.v1"
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _fem_verified_source_snapshot_sha256() -> str | None:
+    """Return the launcher-provided source identity when it is well formed.
+
+    The native Windows/managed launchers verify the source snapshot before
+    exporting this value.  Local/source-only Python runs intentionally do not
+    opt into the trusted cache when the value is absent or malformed.
+    """
+    raw = os.environ.get("FULLMAG_SOURCE_SNAPSHOT_SHA256", "").strip().lower()
+    return raw if _SHA256_RE.fullmatch(raw) is not None else None
+
+
+def _fem_resolved_mesh_policy_sha256(
+    hints: FEM,
+    *,
+    study_universe: Mapping[str, object] | None,
+    mesh_workflow: Mapping[str, object] | None,
+    per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
+    object_regions: Sequence[Mapping[str, object]] | None,
+) -> str:
+    """Hash the complete resolved mixed-mesh policy used by the producer.
+
+    This is deliberately separate from the authoring-document digest in the
+    receipt.  It binds the execution policy (Gmsh/repair/certifier algorithms
+    and thread contract) as well as every resolved mesh control, so a trusted
+    artifact cannot survive a policy change merely because its geometry key
+    stayed the same.
+    """
+    from fullmag.meshing._certification_receipt import (
+        ARTIFACT_SCHEMA_V2,
+        MIXED_CERTIFIER_ALGORITHM,
+        MIXED_REPAIR_ALGORITHM,
+    )
+    from fullmag.meshing._gmsh_types import MIXED_SHARED_GMSH_VERSION
+
+    policy = {
+        "schema": "fullmag.fem.mixed-resolved-policy.v1",
+        "cache_version": _FEM_MESH_CACHE_VERSION,
+        "fem": hints.to_ir(),
+        "study_universe": study_universe,
+        "mesh_workflow": mesh_workflow,
+        "per_object_recipes": {
+            str(name): recipe.to_ir()
+            for name, recipe in (per_object_recipes or {}).items()
+        },
+        "object_regions": [dict(region) for region in (object_regions or [])],
+        "gmsh_version": MIXED_SHARED_GMSH_VERSION,
+        "gmsh_threads": 1,
+        "repair_algorithm_id": MIXED_REPAIR_ALGORITHM,
+        "repair_method": "Relocate3D",
+        "repair_iterations": 1,
+        "certifier_algorithm_id": MIXED_CERTIFIER_ALGORITHM,
+        "artifact_schema": ARTIFACT_SCHEMA_V2,
+        "topology_fingerprint_version": "v3",
+    }
+    encoded = json.dumps(
+        policy,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,6 +418,7 @@ def _fem_shared_domain_cache_document(
     mesh_workflow: dict[str, object] | None,
     per_object_recipes: Mapping[str, PerObjectMeshRecipe] | None,
     object_regions: Sequence[dict[str, object]] | None,
+    cache_identity: Mapping[str, object] | None = None,
 ) -> tuple[str, dict[str, object]]:
     """Return the persistent identity for a generated shared FEM domain.
 
@@ -374,6 +442,8 @@ def _fem_shared_domain_cache_document(
         },
         "object_regions": [dict(region) for region in (object_regions or [])],
     }
+    if cache_identity is not None:
+        document["cache_identity"] = dict(cache_identity)
     encoded = json.dumps(
         document,
         sort_keys=True,
@@ -477,6 +547,7 @@ def build_geometry_assets_for_request(
     object_regions: Sequence[dict[str, object]] | None = None,
     asset_cache: dict[str, dict[str, Any] | None] | None = None,
     _copy_cached_assets: bool = True,
+    _include_domain_mesh_ir: bool = True,
     _realized_domain_mesh_sink: list[
         tuple[object, list[dict[str, object]], object | None]
     ] | None = None,
@@ -764,7 +835,56 @@ def build_geometry_assets_for_request(
             shared_cache_path: Path | None = None
             shared_cache_document: dict[str, object] | None = None
             shared_cache_key: str | None = None
+            verified_source_snapshot = _fem_verified_source_snapshot_sha256()
+            resolved_policy_sha256 = _fem_resolved_mesh_policy_sha256(
+                discretization.fem,
+                study_universe=study_universe,
+                mesh_workflow=mesh_workflow,
+                per_object_recipes=per_object_recipes,
+                object_regions=authored_regions,
+            )
+            from fullmag import _core as _fullmag_core
+
+            v2_cache_enabled = bool(
+                verified_source_snapshot
+                and _fullmag_core._native_core is not None
+                and callable(
+                    getattr(_fullmag_core._native_core, "certify_mixed_mesh_arrays", None)
+                )
+                and callable(
+                    getattr(_fullmag_core._native_core, "preflight_mixed_mesh_arrays", None)
+                )
+            )
+            # v2 entries are internal, content-addressed artifacts produced
+            # only after the launcher supplied a verified source snapshot and
+            # native certifier.  Their cache hit can therefore use the native
+            # structural preflight plus receipt bindings without rebuilding
+            # the large Python topology fingerprint.  Keep an explicit
+            # fail-safe opt-out for diagnostics and rollback.
+            trusted_cache_mode = os.environ.get(
+                "FULLMAG_FEM_MESH_TRUSTED_CACHE", ""
+            ).strip().lower()
+            use_trusted_cache = bool(
+                v2_cache_enabled
+                and trusted_cache_mode not in {"0", "false", "no", "off"}
+            )
             if fem_mesh_cache_dir is not None:
+                cache_identity = (
+                    {
+                        "source_snapshot_sha256": verified_source_snapshot,
+                        "resolved_policy_sha256": resolved_policy_sha256,
+                        "gmsh_version": "4.15.2",
+                        "gmsh_threads": 1,
+                        "repair_algorithm_id": "fullmag.mixed-tet-repair.v1",
+                        "repair_method": "Relocate3D",
+                        "repair_iterations": 1,
+                        "certifier_algorithm_id": "fullmag.mixed-certificate.rust-rayon.v1",
+                        "artifact_schema": "fullmag.mesh-artifact.v2",
+                        "topology_fingerprint_version": "v3",
+                    }
+                    if v2_cache_enabled
+                    else None
+                )
                 (
                     shared_cache_key,
                     shared_cache_document,
@@ -775,8 +895,11 @@ def build_geometry_assets_for_request(
                     mesh_workflow=mesh_workflow,
                     per_object_recipes=per_object_recipes,
                     object_regions=authored_regions,
+                    cache_identity=cache_identity,
                 )
-                shared_cache_dir = fem_mesh_cache_dir / "shared_domains"
+                shared_cache_dir = fem_mesh_cache_dir / (
+                    "shared_domains-v2" if v2_cache_enabled else "shared_domains"
+                )
                 shared_cache_dir.mkdir(parents=True, exist_ok=True)
                 shared_cache_path = shared_cache_dir / f"{shared_cache_key}.fullmag-mesh"
 
@@ -787,20 +910,59 @@ def build_geometry_assets_for_request(
             if shared_cache_path is not None and shared_cache_path.exists():
                 from fullmag.meshing.persistence import (
                     MeshArtifactError,
+                    MeshArtifactVersionError,
+                    _document_sha256,
+                    _load_trusted_cached_mesh_artifact,
                     load_mesh_artifact,
                 )
 
                 try:
-                    cached_artifact = load_mesh_artifact(
-                        shared_cache_path,
-                        expected_authoring_document=shared_cache_document,
-                    )
+                    try:
+                        if use_trusted_cache:
+                            assert shared_cache_document is not None
+                            assert verified_source_snapshot is not None
+                            cached_artifact = _load_trusted_cached_mesh_artifact(
+                                shared_cache_path,
+                                expected_authoring_sha256=_document_sha256(
+                                    shared_cache_document
+                                ),
+                                expected_policy_sha256=resolved_policy_sha256,
+                                expected_source_snapshot_sha256=verified_source_snapshot,
+                                expected_gmsh_version="4.15.2",
+                                expected_repair_algorithm_id=(
+                                    "fullmag.mixed-tet-repair.v1"
+                                ),
+                                expected_certifier_algorithm_id=(
+                                    "fullmag.mixed-certificate.rust-rayon.v1"
+                                ),
+                                use_native_fingerprint=True,
+                            )
+                        else:
+                            cached_artifact = load_mesh_artifact(
+                                shared_cache_path,
+                                expected_authoring_document=shared_cache_document,
+                            )
+                    except MeshArtifactVersionError:
+                        # A v1 entry can only be consumed through the public
+                        # full audit.  This compatibility branch is safe for a
+                        # cache directory that predates the v2 producer.
+                        cached_artifact = load_mesh_artifact(
+                            shared_cache_path,
+                            expected_authoring_document=shared_cache_document,
+                        )
                     cached_provenance = dict(cached_artifact.provenance or {})
                     if cached_provenance.get("cache_key") != shared_cache_key:
                         raise MeshArtifactError(
                             "shared-domain cache provenance does not match cache key"
                         )
-                except (MeshArtifactError, OSError, ValueError, TypeError, KeyError) as exc:
+                except (
+                    MeshArtifactError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                ) as exc:
                     emit_progress(
                         "Ignoring invalid cached shared-domain FEM mesh "
                         f"'{shared_cache_path}': {exc}"
@@ -844,6 +1006,44 @@ def build_geometry_assets_for_request(
                         if report_payload is not None
                         else []
                     )
+                    certification_bindings = None
+                    native_certificate_result = None
+                    if (
+                        v2_cache_enabled
+                        and domain_mesh.mixed_layer_topology_certificate is not None
+                    ):
+                        from fullmag._core import certify_mixed_mesh_arrays
+                        from fullmag.meshing._certification_receipt import (
+                            CertificationReceiptBindingsV1,
+                            MIXED_CERTIFIER_ALGORITHM,
+                            MIXED_REPAIR_ALGORITHM,
+                        )
+
+                        native_certificate_result = certify_mixed_mesh_arrays(
+                            mesh=domain_mesh,
+                            metadata={"mesh_name": "study_domain"},
+                            certificate=(
+                                domain_mesh.mixed_layer_topology_certificate.to_dict()
+                            ),
+                            require_native=True,
+                        )
+                        if native_certificate_result is None:
+                            raise RuntimeError(
+                                "trusted shared-domain cache requires native mixed certification"
+                            )
+                        certificate = domain_mesh.mixed_layer_topology_certificate
+                        certification_bindings = CertificationReceiptBindingsV1(
+                            resolved_policy_sha256=resolved_policy_sha256,
+                            source_snapshot_sha256=verified_source_snapshot,
+                            gmsh_version=certificate.gmsh_version,
+                            repair_algorithm_id=MIXED_REPAIR_ALGORITHM,
+                            repair_method="Relocate3D",
+                            repair_iterations=1,
+                            gmsh_threads=certificate.effective_gmsh_thread_count,
+                            certifier_algorithm_id=MIXED_CERTIFIER_ALGORITHM,
+                            certifier_backend="rust_rayon",
+                            certifier_threads=native_certificate_result.rayon_threads,
+                        )
                     save_mesh_artifact(
                         shared_cache_path,
                         mesh=domain_mesh,
@@ -858,6 +1058,8 @@ def build_geometry_assets_for_request(
                             "cache_key": shared_cache_key,
                             "cache_schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
                         },
+                        certification_bindings=certification_bindings,
+                        _native_certificate_result=native_certificate_result,
                     )
                     emit_progress(f"Cached shared-domain FEM mesh at '{shared_cache_path}'")
 
@@ -876,23 +1078,32 @@ def build_geometry_assets_for_request(
                         build_report,
                     )
                 )
-            with indeterminate_progress_phase(
-                phase="postprocessing",
-                progress_label="serializing and validating shared-domain mesh",
-                message="Serializing and validating the shared-domain mesh",
-            ):
-                domain_mesh_ir = domain_mesh.to_ir("study_domain")
-                # ``MeshData.to_ir`` already performs the native mixed-mesh
-                # certificate audit for a certified prism/pyramid/tet mesh.
-                # Running the generic JSON validator immediately afterwards
-                # reparses and walks the same 800k-cell payload.  Keep that
-                # preflight for source-only/generic meshes, where no mixed
-                # certificate provides the stronger proof.
-                is_valid = (
-                    True
-                    if domain_mesh.mixed_layer_topology_certificate is not None
-                    else validate_mesh_ir(domain_mesh_ir)
-                )
+            if _include_domain_mesh_ir:
+                with indeterminate_progress_phase(
+                    phase="postprocessing",
+                    progress_label="serializing and validating shared-domain mesh",
+                    message="Serializing and validating the shared-domain mesh",
+                ):
+                    domain_mesh_ir = domain_mesh.to_ir("study_domain")
+                    # ``MeshData.to_ir`` already performs the native mixed-mesh
+                    # certificate audit for a certified prism/pyramid/tet mesh.
+                    # Running the generic JSON validator immediately afterwards
+                    # reparses and walks the same 800k-cell payload.  Keep that
+                    # preflight for source-only/generic meshes, where no mixed
+                    # certificate provides the stronger proof.
+                    is_valid = (
+                        True
+                        if domain_mesh.mixed_layer_topology_certificate is not None
+                        else validate_mesh_ir(domain_mesh_ir)
+                    )
+            else:
+                # The world-level build path retains the exact typed mesh in
+                # ``_realized_domain_mesh_sink`` and immediately binds it to
+                # the active study artifact.  Materializing a JSON MeshIR here
+                # would allocate and serialize the same large CSR payload only
+                # to discard it.  ProblemIR callers keep the default True.
+                domain_mesh_ir = None
+                is_valid = True
             if is_valid is False:
                 raise ValueError(
                     "generated shared FEM domain mesh asset failed Rust validation"
@@ -928,7 +1139,7 @@ def build_geometry_assets_for_request(
     else:
         result = assets
 
-    if asset_cache is not None:
+    if asset_cache is not None and _include_domain_mesh_ir:
         asset_cache[asset_cache_key] = (
             copy.deepcopy(result) if _copy_cached_assets else result
         )

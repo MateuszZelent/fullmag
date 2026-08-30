@@ -500,19 +500,32 @@ def _mixed_gmsh_node_metadata(
         return None
 
 
-def _repair_remaining_mixed_tet_slivers(gmsh: Any) -> bool:
+def _repair_remaining_mixed_tet_slivers(
+    gmsh: Any,
+    *,
+    initial_report: _MixedTetDegeneracyReport | None = None,
+) -> bool:
     """Repair residual slivers with a bounded local interior-node move.
 
-    This fallback considers only volume nodes of the offending tet, checks
-    every incident tet, preserves their orientation and rejects any candidate
-    that lowers a healthy neighbour's scaled quality by more than five percent.
+    ``initial_report`` may be supplied by a caller that has already scanned
+    the current mesh; subsequent passes still rescan after every accepted
+    move. This fallback considers only volume nodes of the offending tet,
+    checks every incident tet, preserves their orientation and rejects any
+    candidate that lowers a healthy neighbour's scaled quality by more than
+    five percent.
     The boolean result tells the caller whether at least one node moved; a
     caller may still select a slower global qualification method if residual
     degeneracies remain.
     """
     moved_any = False
+    first_report = initial_report
     for _pass in range(_MIXED_TET_LOCAL_REPAIR_MAX_PASSES):
-        report = _mixed_tet_degeneracy_report(gmsh, use_global_scale=True)
+        report = (
+            first_report
+            if first_report is not None
+            else _mixed_tet_degeneracy_report(gmsh, use_global_scale=True)
+        )
+        first_report = None
         if not report.element_tags:
             return moved_any
         element_tags, element_nodes = gmsh.model.mesh.getElementsByType(4)
@@ -1011,7 +1024,11 @@ def _iter_mixed_apex_face_side_constraints(
         )[apex]
 
 
-def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
+def _optimize_mixed_pyramid_apices(
+    gmsh: Any,
+    *,
+    initial_tet_report: _MixedTetDegeneracyReport | None = None,
+) -> float:
     """Deterministically improve pyramid p05 without degrading incident cells."""
     pyramid_tags, pyramid_nodes = gmsh.model.mesh.getElementsByType(7)
     if len(pyramid_tags) == 0:
@@ -1029,9 +1046,10 @@ def _optimize_mixed_pyramid_apices(gmsh: Any) -> float:
         value >= MIXED_SCALED_JACOBIAN_P05_MIN
         for value in initial_p05.values()
     ):
-        degenerate_tets = _mixed_tet_degeneracy_report(
-            gmsh,
-            use_global_scale=True,
+        degenerate_tets = (
+            initial_tet_report
+            if initial_tet_report is not None
+            else _mixed_tet_degeneracy_report(gmsh, use_global_scale=True)
         )
         if not degenerate_tets.element_tags:
             emit_progress(
@@ -1322,8 +1340,8 @@ def _qualification_mixed_tet_repair_algorithm_id(
 def _execute_mixed_tet_repair_policy(
     gmsh: Any,
     policy: _MixedTetRepairPolicy,
-) -> None:
-    """Execute one validated policy independently of instrumented wrappers."""
+) -> _MixedTetDegeneracyReport:
+    """Execute one validated policy and return its final tet gate report."""
     if not isinstance(policy, _MixedTetRepairPolicy):
         raise TypeError("mixed tetrahedral repair policy has an invalid type")
     _validate_mixed_tet_repair_policy(policy)
@@ -1333,8 +1351,11 @@ def _execute_mixed_tet_repair_policy(
     )
     if policy.local_first:
         if not before.element_tags:
-            return
-        local_repair_moved = _repair_remaining_mixed_tet_slivers(gmsh)
+            return before
+        local_repair_moved = _repair_remaining_mixed_tet_slivers(
+            gmsh,
+            initial_report=before,
+        )
         after = _mixed_tet_degeneracy_report(
             gmsh,
             use_global_scale=True,
@@ -1344,7 +1365,7 @@ def _execute_mixed_tet_repair_policy(
                 emit_progress(
                     "Gmsh mixed local tet repair completed without global optimization"
                 )
-            return
+            return after
     else:
         after = before
     emit_progress("Gmsh: repairing mixed-domain tetrahedra")
@@ -1365,7 +1386,7 @@ def _execute_mixed_tet_repair_policy(
         use_global_scale=True,
     )
     if after.element_tags:
-        _repair_remaining_mixed_tet_slivers(gmsh)
+        _repair_remaining_mixed_tet_slivers(gmsh, initial_report=after)
         after = _mixed_tet_degeneracy_report(
             gmsh,
             use_global_scale=True,
@@ -1392,15 +1413,16 @@ def _execute_mixed_tet_repair_policy(
             "mixed tetrahedral repair left or created degenerate tet4; "
             + "; ".join(reports)
         )
+    return after
 
 
 def _repair_mixed_tetrahedra(
     gmsh: Any,
     *,
     policy: _MixedTetRepairPolicy = _STRICT_MIXED_TET_REPAIR_POLICY,
-) -> None:
+) -> _MixedTetDegeneracyReport:
     """Repair Delaunay tetrahedra before certifying a mixed prism mesh."""
-    _execute_mixed_tet_repair_policy(gmsh, policy)
+    return _execute_mixed_tet_repair_policy(gmsh, policy)
 
 
 def _repair_mixed_tetrahedra_for_qualification(
@@ -1408,7 +1430,7 @@ def _repair_mixed_tetrahedra_for_qualification(
     gmsh: Any,
     *,
     iterations: int = 1,
-) -> None:
+) -> _MixedTetDegeneracyReport:
     """Run one private qualification candidate through the canonical repair."""
     selected_method = "" if method == "default" else method
     if (
@@ -1435,7 +1457,7 @@ def _repair_mixed_tetrahedra_for_qualification(
             force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
             local_first=False,
         )
-    _execute_mixed_tet_repair_policy(gmsh, policy)
+    return _execute_mixed_tet_repair_policy(gmsh, policy)
 
 
 class SweepabilityResult:
@@ -2188,13 +2210,16 @@ def generate_swept_box_mesh(
                 progress_label="repairing mixed-domain tetrahedra",
                 message="Repairing mixed-domain tetrahedra",
             ):
-                _repair_mixed_tetrahedra(gmsh)
+                mixed_tet_report = _repair_mixed_tetrahedra(gmsh)
             with indeterminate_progress_phase(
                 phase="meshing",
                 progress_label="optimizing mixed-pyramid apices",
                 message="Optimizing mixed-pyramid apices",
             ):
-                _optimize_mixed_pyramid_apices(gmsh)
+                _optimize_mixed_pyramid_apices(
+                    gmsh,
+                    initial_tet_report=mixed_tet_report,
+                )
 
         # Extract → same pipeline as cylinder
         if airbox is not None:

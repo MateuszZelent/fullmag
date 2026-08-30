@@ -92,6 +92,11 @@ impl LocalLiveWorkspaceState {
     ) -> CurrentLiveSnapshotPayload {
         let live_state = self.live_state.clone();
         let mut metadata = self.metadata.clone();
+        let frozen_spins_runtime_status = metadata
+            .as_ref()
+            .and_then(|value| value.get("frozen_spins_runtime_status"))
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok());
 
         let fem_mesh = include_mesh
             .then(|| {
@@ -117,6 +122,7 @@ impl LocalLiveWorkspaceState {
             stage_execution: self.stage_execution.clone(),
             simulation_preparation: self.simulation_preparation.clone(),
             runtime_status: live_state.runtime_status,
+            frozen_spins_runtime_status,
             live_state: Some(live_state),
             mesh_workspace: self.mesh_workspace.clone(),
             latest_scalar_row: self.latest_scalar_row.clone(),
@@ -1594,14 +1600,13 @@ fn scalar_payload_finished(payload: &CurrentLiveSnapshotPayload) -> bool {
 impl CurrentLivePublisher {
     pub fn spawn(session_id: &str) -> Self {
         if !live_api_publish_enabled(api_port()) {
-            let sink: LivePublishSink = Arc::new(|_, _| Ok(()));
-            return Self::spawn_with_sinks(
-                session_id,
-                std::time::Duration::ZERO,
-                false,
-                Arc::clone(&sink),
-                sink,
-            );
+            // Headless runs deliberately disable the live API.  There is no
+            // consumer for the snapshot in that mode, so starting a worker
+            // would still clone the full FEM mesh and execution-plan metadata
+            // on every state update before handing it to a no-op sink.  Large
+            // mixed-P1 plans make that otherwise invisible work dominate
+            // time-to-first-step on the Windows Docker lane.
+            return Self::disabled();
         }
         Self::spawn_with_sinks(
             session_id,
@@ -1610,6 +1615,27 @@ impl CurrentLivePublisher {
             Arc::new(sync_current_live_delta),
             Arc::new(sync_current_live_snapshot),
         )
+    }
+
+    fn disabled() -> Self {
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        drop(wake_rx);
+        Self {
+            pending: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            sending: Arc::new(AtomicBool::new(false)),
+            fast_mode: Arc::new(AtomicBool::new(false)),
+            pending_scalar_rows: Arc::new(Mutex::new(PendingScalarRows::default())),
+            #[cfg(test)]
+            payload: Arc::new(Mutex::new(CurrentLiveSnapshotPayload::default())),
+            scalar_gate: Arc::new(Mutex::new(LiveTelemetryPublishGate::default())),
+            diagnostics: Arc::new(Mutex::new(
+                fullmag_runner::LivePublisherDiagnostics::default(),
+            )),
+            last_request_at: Arc::new(Mutex::new(None)),
+            state_source: Arc::new(Mutex::new(None)),
+            wake_tx,
+        }
     }
 
     fn spawn_with_sinks(
@@ -4295,6 +4321,7 @@ mod tests {
         assert_eq!(session_frame["simulation_preparation"]["revision"], 7);
 
         let runtime_frame = serde_json::to_value(CurrentLiveRuntimeFrameRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session",
             live_state: payload.live_state.as_ref(),
             engine_log: payload.engine_log.as_deref(),

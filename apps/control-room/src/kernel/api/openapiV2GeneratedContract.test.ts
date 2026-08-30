@@ -258,6 +258,49 @@ describe("generated OpenAPI v2 transport", () => {
         "resolvedMask",
       ]),
     );
+
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const schemas = document.components.schemas;
+    expect(schemas.FrozenSpinsPreviewAuthority.enum).toEqual([
+      "speculative_authoring_preview",
+    ]);
+    expect(schemas.FrozenSpinsPreviewResponse.required).toEqual(
+      expect.arrayContaining(["authority", "solver_binding"]),
+    );
+    expect(schemas.FrozenSpinsPreviewActivationResponse.required).toEqual(
+      expect.arrayContaining([
+        "activation_scope",
+        "active_site_count",
+        "authority",
+        "free_site_count",
+        "frozen_site_count",
+        "runtime_application",
+        "solver_binding",
+      ]),
+    );
+    expect(schemas.FrozenSpinsRuntimeApplication.required).toEqual(
+      expect.arrayContaining([
+        "apply_boundary",
+        "current_runtime_unchanged",
+        "pending_revision",
+        "state",
+      ]),
+    );
+    expect(schemas.FrozenSpinsRuntimeApplicationState.enum).toEqual([
+      "pending_runtime_plan",
+    ]);
+    expect(
+      schemas.FrozenSpinsRuntimeApplication.properties.application_command_id,
+    ).toEqual(expect.objectContaining({ type: ["string", "null"] }));
+    expect(schemas.FrozenSpinsRuntimeApplication.required).not.toContain(
+      "application_command_id",
+    );
+    expect(schemas.FrozenSpinsRuntimeApplyBoundary.enum).toEqual([
+      "next_runtime_plan",
+      "accepted_step",
+    ]);
   });
 
   it("keeps structured-current closure authoring closed, typed, and region-scoped", () => {

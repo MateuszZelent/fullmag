@@ -1634,7 +1634,7 @@ function useViewport3DRenderAdoptionFrame({
   useEffect(() => {
     if (!adoptionRegistry) return;
     let frameId: number | null = null;
-    const unsubscribe = adoptionRegistry.subscribe(() => {
+    const unsubscribe = adoptionRegistry.subscribeActive(() => {
       tracker.recordDirtyFrame("render-adoption");
       invalidate();
       if (

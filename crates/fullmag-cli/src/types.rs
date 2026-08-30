@@ -761,6 +761,8 @@ pub(crate) struct SessionCommand {
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
     #[serde(default)]
     pub profile: Option<serde_json::Value>,
+    #[serde(default)]
+    pub frozen_spins_runtime_plan_binding: Option<fullmag_ir::FrozenSpinsRuntimePlanBindingIR>,
 }
 
 #[cfg(test)]
@@ -930,6 +932,8 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     /// Typed runtime status for the frontend typed protocol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_status: Option<fullmag_runner::RuntimeStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_spins_runtime_status: Option<fullmag_runner::constraints::FrozenSpinsRuntimeStatus>,
     /// Explicit mesh payload — promoted to top-level so the mesh lifecycle is
     /// an independent event, not hidden inside `live_state.latest_step`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1024,6 +1028,9 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live_state: Option<&'a LiveStateManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_spins_runtime_status:
+        Option<&'a fullmag_runner::constraints::FrozenSpinsRuntimeStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_scalar_row: Option<&'a CurrentLiveScalarRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
@@ -1071,6 +1078,9 @@ pub(crate) struct CurrentLiveRuntimeFrameRequest<'a> {
     pub session_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live_state: Option<&'a LiveStateManifest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_spins_runtime_status:
+        Option<&'a fullmag_runner::constraints::FrozenSpinsRuntimeStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_log: Option<&'a [EngineLogEntry]>,
     #[serde(skip_serializing_if = "Option::is_none")]

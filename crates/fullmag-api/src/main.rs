@@ -1606,6 +1606,7 @@ mod scratch_session_lifecycle_tests {
         let stale = sync_current_live_snapshot(
             State(state.clone()),
             Json(CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: first.session_id,
                 session: None,
                 session_status: None,
@@ -1673,6 +1674,7 @@ mod scratch_session_lifecycle_tests {
             sync_current_live_snapshot(
                 State(runner_state),
                 Json(CurrentLiveSnapshotRequest {
+                    frozen_spins_runtime_status: None,
                     session_id: runner_session_id,
                     session: None,
                     session_status: None,
@@ -3149,6 +3151,7 @@ where
         }
         _ => (
             default_current_live_state(&CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: session_id.to_string(),
                 session: None,
                 session_status: None,

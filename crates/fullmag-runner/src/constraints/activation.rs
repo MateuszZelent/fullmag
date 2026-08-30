@@ -1,10 +1,72 @@
 //! Activation metadata for durable hard constraints.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub const FROZEN_SPINS_ACTIVATION_SCHEMA: &str = "fullmag.frozen_spins.activation.v1";
+pub const FROZEN_SPINS_RUNTIME_STATUS_SCHEMA: &str = "fullmag.frozen_spins.runtime-status.v1";
+
+/// Lightweight solver-owned activation certificate suitable for status and
+/// realtime telemetry. The dense mask and reference remain in the field/data
+/// plane; status carries only their identities and scalar counts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenSpinsRuntimeStatus {
+    pub schema: String,
+    pub constraint_activation_epochs: BTreeMap<String, u64>,
+    pub active_constraint_ids: BTreeSet<String>,
+    pub resolved_constraint_set_revision: u64,
+    pub topology_fingerprint: String,
+    pub source_state_revision: Option<u64>,
+    pub mask_sha256: String,
+    pub reference_sha256: String,
+    pub active_site_count: u64,
+    pub frozen_site_count: u64,
+    pub free_site_count: u64,
+    pub vector_dimension: u8,
+    pub scalar_component_dof_count: u64,
+}
+
+impl FrozenSpinsRuntimeStatus {
+    pub fn from_resolved_state(
+        plan: &fullmag_ir::ResolvedFrozenSpinsPlanIR,
+        state: &fullmag_engine::FrozenSpinsState,
+    ) -> Self {
+        let mut reference_hash = Sha256::new();
+        reference_hash.update((state.reference().len() as u64).to_le_bytes());
+        for value in state.reference() {
+            for component in value {
+                reference_hash.update(component.to_bits().to_le_bytes());
+            }
+        }
+        let mut mask_hash = Sha256::new();
+        mask_hash.update((state.mask().len() as u64).to_le_bytes());
+        mask_hash.update(
+            state
+                .mask()
+                .iter()
+                .map(|value| u8::from(*value))
+                .collect::<Vec<_>>(),
+        );
+        Self {
+            schema: FROZEN_SPINS_RUNTIME_STATUS_SCHEMA.to_string(),
+            constraint_activation_epochs: state.constraint_activation_epochs().clone(),
+            active_constraint_ids: state.active_constraint_ids().clone(),
+            resolved_constraint_set_revision: state.resolved_constraint_set_revision(),
+            topology_fingerprint: plan.grid_or_mesh_fingerprint.clone(),
+            source_state_revision: plan.source_state_revision,
+            mask_sha256: format!("{:x}", mask_hash.finalize()),
+            reference_sha256: format!("{:x}", reference_hash.finalize()),
+            active_site_count: plan.active_dof_count,
+            frozen_site_count: state.frozen_dof_count() as u64,
+            free_site_count: state.free_dof_count() as u64,
+            vector_dimension: 3,
+            scalar_component_dof_count: plan.active_dof_count.saturating_mul(3),
+        }
+    }
+}
 
 /// Immutable activation identity attached to a resolved constraint state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +149,48 @@ impl FrozenSpinsActivationSet {
         self.constraint_activation_epochs
             .get(constraint_id)
             .copied()
+    }
+
+    /// Prepare an explicit authoring reactivation. Every active constraint
+    /// advances even when its ID and resolved mask are unchanged, because
+    /// CaptureCurrentAtActivation replaces the solver-owned reference.
+    pub fn prepare_reactivation(
+        &self,
+        active_constraint_ids: impl IntoIterator<Item = String>,
+    ) -> Result<Self, FrozenSpinsActivationError> {
+        let active_constraint_ids = active_constraint_ids.into_iter().collect::<BTreeSet<_>>();
+        if active_constraint_ids.iter().any(|id| id.trim().is_empty()) {
+            return Err(FrozenSpinsActivationError::Invalid(
+                "frozen_spins_activation_constraint_id_invalid".to_string(),
+            ));
+        }
+        let mut constraint_activation_epochs = self.constraint_activation_epochs.clone();
+        for id in &active_constraint_ids {
+            let next = constraint_activation_epochs
+                .get(id)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| {
+                    FrozenSpinsActivationError::Invalid(
+                        "frozen_spins_activation_epoch_overflow".to_string(),
+                    )
+                })?;
+            constraint_activation_epochs.insert(id.clone(), next);
+        }
+        let resolved_constraint_set_revision = self
+            .resolved_constraint_set_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                FrozenSpinsActivationError::Invalid(
+                    "frozen_spins_resolved_constraint_set_revision_overflow".to_string(),
+                )
+            })?;
+        Ok(Self {
+            resolved_constraint_set_revision,
+            constraint_activation_epochs,
+            active_constraint_ids,
+        })
     }
 }
 
@@ -316,5 +420,13 @@ mod tests {
         assert_eq!(reentered.epoch("always"), Some(1));
         assert_eq!(reentered.epoch("stage-a"), Some(2));
         assert_eq!(reentered.epoch("stage-b"), Some(1));
+
+        let explicitly_reactivated = reentered
+            .prepare_reactivation(["always".to_string(), "stage-a".to_string()])
+            .unwrap();
+        assert_eq!(explicitly_reactivated.resolved_constraint_set_revision, 4);
+        assert_eq!(explicitly_reactivated.epoch("always"), Some(2));
+        assert_eq!(explicitly_reactivated.epoch("stage-a"), Some(3));
+        assert_eq!(explicitly_reactivated.epoch("stage-b"), Some(1));
     }
 }

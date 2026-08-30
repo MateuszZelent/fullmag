@@ -21,6 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../backends/fdm/gpu/cuda");
     println!("cargo:rerun-if-changed=../../backends/fdm/include");
     println!("cargo:rerun-if-env-changed=FULLMAG_FDM_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=FULLMAG_FDM_NATIVE_BUILD_ROOT");
 
     let build_native_cuda = std::env::var_os("CARGO_FEATURE_BUILD_NATIVE").is_some();
     let build_native_cpu = std::env::var_os("CARGO_FEATURE_BUILD_NATIVE_CPU").is_some();
@@ -31,27 +32,33 @@ fn main() {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let native_root = manifest_dir.join("../../native");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    let build_dir = out_dir.join("native-build");
+    let build_dir = std::env::var_os("FULLMAG_FDM_NATIVE_BUILD_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| out_dir.join("native-build"));
 
     std::fs::create_dir_all(&build_dir).expect("creating native build dir should succeed");
 
     let cmake = std::env::var("FULLMAG_CMAKE").unwrap_or_else(|_| "cmake".to_string());
     let mut configure = std::process::Command::new(&cmake);
     let mut enable_cuda = false;
+    let mut cuda_compiler = None;
     if build_native_cuda {
         if let Ok(cudacxx) = std::env::var("CUDACXX") {
             if !cudacxx.trim().is_empty() {
                 configure.env("CUDACXX", &cudacxx);
+                cuda_compiler = Some(cudacxx);
                 enable_cuda = true;
             }
         } else if std::path::Path::new("/usr/local/cuda/bin/nvcc").exists() {
             configure.env("CUDACXX", "/usr/local/cuda/bin/nvcc");
             configure.env("CUDAToolkit_ROOT", "/usr/local/cuda");
+            cuda_compiler = Some("/usr/local/cuda/bin/nvcc".to_string());
             enable_cuda = true;
         }
     }
 
-    let configure_status = configure
+    configure
         .arg("-S")
         .arg(&native_root)
         .arg("-B")
@@ -59,7 +66,11 @@ fn main() {
         .arg(format!(
             "-DFULLMAG_ENABLE_CUDA={}",
             if enable_cuda { "ON" } else { "OFF" }
-        ))
+        ));
+    if let Some(cuda_compiler) = cuda_compiler {
+        configure.arg(format!("-DCMAKE_CUDA_COMPILER={cuda_compiler}"));
+    }
+    let configure_status = configure
         .status()
         .expect("cmake not found; install cmake, set FULLMAG_CMAKE, or set FULLMAG_FDM_LIB_DIR to a prebuilt native backend");
     if !configure_status.success() {

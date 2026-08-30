@@ -104,6 +104,73 @@ impl FrozenSpinsState {
             .filter_map(|id| next.constraint_activation_epochs.get(id).copied())
             .max()
             .unwrap_or(1);
+        for index in 0..next.reference.len() {
+            if previous.frozen_mask.get(index).copied().unwrap_or(false) && next.frozen_mask[index]
+            {
+                next.reference[index] = previous.reference[index];
+            }
+        }
+        Ok(next)
+    }
+
+    /// Prepare an inactive stage while retaining epoch history for later
+    /// re-entry. The dense mask is cleared so an inactive constraint cannot
+    /// affect the RHS, projection, convergence metrics, or quantity payload.
+    pub fn deactivate_at_stage_boundary(previous: &Self) -> Result<Self> {
+        let mut next = previous.clone();
+        next.frozen_mask.fill(false);
+        next.frozen_dof_count = 0;
+        next.free_dof_count = previous
+            .frozen_dof_count
+            .checked_add(previous.free_dof_count)
+            .ok_or_else(|| EngineError::new("frozen_spins_active_dof_count_overflow"))?;
+        next.active_constraint_ids.clear();
+        next.resolved_constraint_set_revision = previous
+            .resolved_constraint_set_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                EngineError::new("frozen_spins_resolved_constraint_set_revision_overflow")
+            })?;
+        Ok(next)
+    }
+
+    /// Atomically recapture an explicitly reactivated constraint set.
+    ///
+    /// Unlike a stage transition, an explicit reactivation starts a new epoch
+    /// for every active constraint, even when the resolved mask is unchanged.
+    /// This distinction is required because `CaptureCurrentAtActivation`
+    /// replaces the reference and therefore invalidates every solver history.
+    pub fn reactivate_at_activation(
+        previous: &Self,
+        plan: &ResolvedFrozenSpinsPlanIR,
+        active_mask: Option<&[bool]>,
+        state: &[Vector3],
+    ) -> Result<Self> {
+        let mut next = Self::capture_at_activation(plan, active_mask, state)?;
+        next.constraint_activation_epochs = previous.constraint_activation_epochs.clone();
+        next.active_constraint_ids = plan.constraint_ids.iter().cloned().collect();
+        for id in &next.active_constraint_ids {
+            let epoch = next
+                .constraint_activation_epochs
+                .get(id)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| EngineError::new("frozen_spins_activation_epoch_overflow"))?;
+            next.constraint_activation_epochs.insert(id.clone(), epoch);
+        }
+        next.resolved_constraint_set_revision = previous
+            .resolved_constraint_set_revision
+            .checked_add(1)
+            .ok_or_else(|| {
+                EngineError::new("frozen_spins_resolved_constraint_set_revision_overflow")
+            })?;
+        next.activation_epoch = next
+            .active_constraint_ids
+            .iter()
+            .filter_map(|id| next.constraint_activation_epochs.get(id).copied())
+            .max()
+            .unwrap_or(1);
         Ok(next)
     }
 
@@ -295,6 +362,10 @@ impl FrozenSpinsState {
 
     pub fn same_mask(&self, other: &Self) -> bool {
         self.frozen_mask == other.frozen_mask
+    }
+
+    pub fn same_constraint_values(&self, other: &Self) -> bool {
+        self.frozen_mask == other.frozen_mask && self.reference == other.reference
     }
 
     pub fn frozen_dof_count(&self) -> usize {

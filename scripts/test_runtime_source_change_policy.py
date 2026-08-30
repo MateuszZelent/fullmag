@@ -27,6 +27,10 @@ def write_manifest(
 
 
 def test_non_runtime_path_policy_covers_docs_ci_and_packaging_helpers() -> None:
+    assert is_non_runtime_path(".fullmag-cache/control-room-node-modules/@dnd-kit/core")
+    assert is_non_runtime_path(".fullmag-build/cargo-targets/fem-cpu")
+    assert is_non_runtime_path(".fullmag-cargo/registry/index")
+    assert is_non_runtime_path(".fullmag-rustup/toolchains/nightly")
     assert is_non_runtime_path("public_docs/site/physics.md")
     assert is_non_runtime_path(".github/workflows/release.yml")
     assert is_non_runtime_path("scripts/test_release_workflow_contract.py")

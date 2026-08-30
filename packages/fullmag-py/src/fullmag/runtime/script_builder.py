@@ -1127,7 +1127,25 @@ def _study_pipeline_stage_label(
     original_kind = str(stage_draft.get("kind") or "").strip()
     if original_kind and original_kind.lower() != stage_kind:
         return f"Imported {index + 1} · {original_kind}"
-    return ""
+    kind_label = {
+        "add_field_drive": "Add Antenna",
+        "autosave": "Autosave",
+        "change_device": "Change Device",
+        "eigenmodes": "Eigenmodes",
+        "export": "Export",
+        "fft_response": "FFT Response",
+        "frequency_response": "Frequency Response",
+        "hysteresis": "Hysteresis",
+        "load_state": "Load State",
+        "relax": "Relax",
+        "remove_field_drive": "Remove Antenna",
+        "run": "Run",
+        "save_state": "Save State",
+        "set_spin_torque_enabled": "Set Spin Torque",
+        "set_transport_current": "Set Transport Current",
+        "table_autosave": "Table Autosave",
+    }.get(stage_kind, stage_kind.replace("_", " ").title())
+    return f"{kind_label} {index + 1}"
 
 
 def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:

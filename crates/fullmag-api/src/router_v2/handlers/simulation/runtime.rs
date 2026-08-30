@@ -1592,6 +1592,16 @@ pub async fn get_solver_status(
 
     let stage_completion = current_stage_completion(snapshot);
     let max_torque_apm = latest.and_then(|value| canonical_torque_apm(value.max_torque_Apm));
+    let frozen_spins = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("frozen_spins_runtime_status"))
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<fullmag_runner::constraints::FrozenSpinsRuntimeStatus>(value)
+                .ok()
+        })
+        .map(crate::schemas::runtime::FrozenSpinsSolverRuntimeStatus::from);
     Ok(Json(SolverStatusResource {
         revision: snapshot.state_version,
         runtime_state: runtime_status.code.clone(),
@@ -1647,6 +1657,7 @@ pub async fn get_solver_status(
         max_rhs_norm_per_s: latest.map(|value| value.max_dm_dt),
         max_torque: max_torque_apm,
         converged: stage_completion.map(|value| value.converged),
+        frozen_spins,
         last_error: snapshot
             .engine_log
             .iter()

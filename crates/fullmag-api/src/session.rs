@@ -1657,6 +1657,29 @@ pub(crate) fn apply_current_live_metadata(current: &mut SessionStateResponse, me
     }
 }
 
+fn apply_frozen_spins_runtime_status(
+    current: &mut SessionStateResponse,
+    status: Option<fullmag_runner::constraints::FrozenSpinsRuntimeStatus>,
+) {
+    let Some(metadata) = current
+        .metadata
+        .get_or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return;
+    };
+    match status {
+        Some(status) => {
+            if let Ok(value) = serde_json::to_value(status) {
+                metadata.insert("frozen_spins_runtime_status".to_string(), value);
+            }
+        }
+        None => {
+            metadata.remove("frozen_spins_runtime_status");
+        }
+    }
+}
+
 fn finite_material_scalar(value: &Value, key: &str) -> Option<f64> {
     value
         .get(key)
@@ -2013,6 +2036,7 @@ fn apply_current_live_snapshot_in_place(
     if let Some(metadata) = req.metadata {
         apply_current_live_metadata(current, metadata);
     }
+    apply_frozen_spins_runtime_status(current, req.frozen_spins_runtime_status.take());
     if let Some(mesh_workspace) = req.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
     }
@@ -2195,6 +2219,7 @@ pub(crate) fn apply_current_live_runtime_frame(
     }
     let previous_field_sources =
         capture_effective_field_sources(current, &affected_field_quantities);
+    apply_frozen_spins_runtime_status(current, frame.frozen_spins_runtime_status);
     if let Some(mut live_state) = frame.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
@@ -2720,6 +2745,7 @@ mod tests {
     #[test]
     fn current_session_keeps_newest_preparation_revision() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             session: None,
             session_status: None,
@@ -2910,6 +2936,7 @@ mod tests {
     #[test]
     fn metadata_material_fields_use_canonical_preview_quantity_ids() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -2964,6 +2991,7 @@ mod tests {
     #[test]
     fn metadata_uniform_material_constants_publish_material_quantities() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -3047,6 +3075,7 @@ mod tests {
             CurrentLiveRuntimeFrameRequest {
                 session_id: session_id.clone(),
                 live_state: None,
+                frozen_spins_runtime_status: None,
                 engine_log: None,
                 solver_profile: None,
                 fem_mesh: Some(domain_fem_mesh("domain-gen-1")),
@@ -3061,6 +3090,7 @@ mod tests {
                 CurrentLiveRuntimeFrameRequest {
                     session_id: session_id.clone(),
                     live_state: None,
+                    frozen_spins_runtime_status: None,
                     engine_log: None,
                     solver_profile: None,
                     fem_mesh: None,
@@ -3094,6 +3124,63 @@ mod tests {
 
         assert!(current.mesh_revision > mesh_revision);
         assert!(current.mesh_build_revision > mesh_build_revision);
+    }
+
+    #[test]
+    fn runtime_frame_publishes_and_clears_solver_owned_frozen_spins_status() {
+        let mut current = test_current_snapshot();
+        let session_id = current.session.session_id.clone();
+        let status = fullmag_runner::constraints::FrozenSpinsRuntimeStatus {
+            schema: fullmag_runner::constraints::FROZEN_SPINS_RUNTIME_STATUS_SCHEMA.to_string(),
+            constraint_activation_epochs: [("pin".to_string(), 2)].into_iter().collect(),
+            active_constraint_ids: ["pin".to_string()].into_iter().collect(),
+            resolved_constraint_set_revision: 3,
+            topology_fingerprint: "grid-sha".to_string(),
+            source_state_revision: Some(17),
+            mask_sha256: "a".repeat(64),
+            reference_sha256: "b".repeat(64),
+            active_site_count: 8,
+            frozen_site_count: 1,
+            free_site_count: 7,
+            vector_dimension: 3,
+            scalar_component_dof_count: 24,
+        };
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: session_id.clone(),
+                live_state: None,
+                frozen_spins_runtime_status: Some(status.clone()),
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("solver activation status frame should apply");
+        let published: fullmag_runner::constraints::FrozenSpinsRuntimeStatus =
+            serde_json::from_value(
+                current.metadata.as_ref().unwrap()["frozen_spins_runtime_status"].clone(),
+            )
+            .unwrap();
+        assert_eq!(published, status);
+
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id,
+                live_state: None,
+                frozen_spins_runtime_status: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: None,
+            },
+        )
+        .expect("constraint-free runtime status frame should apply");
+        assert!(current
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("frozen_spins_runtime_status"))
+            .is_none());
     }
 
     #[test]
@@ -3199,6 +3286,7 @@ mod tests {
     #[test]
     fn scalar_frame_revisions_track_latest_replacements_not_stale_rows() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -3319,6 +3407,7 @@ mod tests {
         apply_current_live_snapshot(
             &mut current,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: "test-session".to_string(),
                 coupled_checkpoint: None,
                 session: None,
@@ -3354,6 +3443,7 @@ mod tests {
         apply_current_live_snapshot(
             &mut current,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: "test-session".to_string(),
                 coupled_checkpoint: None,
                 session: None,
@@ -3393,6 +3483,7 @@ mod tests {
     #[test]
     fn stage_execution_reconciliation_marks_matching_command_terminal() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -4008,6 +4099,7 @@ mod tests {
     #[test]
     fn session_frame_preserves_stage_checkpoint_linkage_for_same_command() {
         let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -4173,6 +4265,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
             field_materialization_requirements: Vec::new(),
         }
     }
@@ -4283,6 +4376,7 @@ mod tests {
 
     fn test_current_snapshot() -> SessionStateResponse {
         default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -4464,6 +4558,7 @@ mod tests {
         apply_current_live_snapshot(
             &mut current,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: "test-session".to_string(),
                 coupled_checkpoint: None,
                 session: None,
@@ -4674,6 +4769,7 @@ mod tests {
         let legacy_mesh = domain_fem_mesh("legacy-domain-gen");
 
         let req = CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -4810,6 +4906,7 @@ mod tests {
         terminal.vector_field_values = vec![0.0, 0.0, 52.0];
 
         let req = CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             session: None,
             session_status: None,
@@ -5532,6 +5629,7 @@ mod tests {
         // preview_fields or live_state.  This simulates a mesh change where the
         // runner clears old cached fields.
         let req = CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "test-session".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -5654,6 +5752,7 @@ mod tests {
                         finished: false,
                     },
                 }),
+                frozen_spins_runtime_status: None,
                 engine_log: None,
                 solver_profile: None,
                 fem_mesh: None,

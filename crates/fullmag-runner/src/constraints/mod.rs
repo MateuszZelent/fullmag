@@ -10,7 +10,7 @@ mod checkpoint;
 
 pub use activation::{
     FrozenSpinsActivation, FrozenSpinsActivationSet, FrozenSpinsActivationSnapshot,
-    FROZEN_SPINS_ACTIVATION_SCHEMA,
+    FrozenSpinsRuntimeStatus, FROZEN_SPINS_ACTIVATION_SCHEMA, FROZEN_SPINS_RUNTIME_STATUS_SCHEMA,
 };
 pub use checkpoint::{
     FrozenSpinsCheckpointError, FrozenSpinsCheckpointV1, FROZEN_SPINS_CHECKPOINT_SCHEMA,

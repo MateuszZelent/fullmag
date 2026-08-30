@@ -35,7 +35,7 @@ from fem_mixed_mesh_benchmark_evidence import (
 )
 
 _T = TypeVar("_T")
-_QualificationRepairSelector = Callable[[str, object], None]
+_QualificationRepairSelector = Callable[[str, object], object]
 
 # The harness imports the canonical scenario as ``tests.*``.  When Python
 # executes this file by path, ``sys.path[0]`` is ``scripts/`` rather than the
@@ -226,18 +226,17 @@ def _execute_repair(
     *,
     repair_method_override: str | None,
     gmsh_api: object,
-    canonical_repair: Callable[[object], None],
+    canonical_repair: Callable[[object], object],
     qualification_selector: _QualificationRepairSelector | None,
-) -> None:
+) -> object:
     if repair_method_override is None:
-        canonical_repair(gmsh_api)
-        return
+        return canonical_repair(gmsh_api)
     if qualification_selector is None:
         raise RuntimeError(
             "repair_method_override requires the canonical qualification selector "
             "introduced by Task 1; Task 0 does not duplicate production repair policy"
         )
-    qualification_selector(repair_method_override, gmsh_api)
+    return qualification_selector(repair_method_override, gmsh_api)
 
 
 @contextlib.contextmanager
@@ -274,8 +273,11 @@ def _mesh_phase_probe(
             lambda: original_occ(*args, **kwargs),
         )
 
-    def repair(gmsh_api: object) -> None:
-        _measure(
+    def repair(gmsh_api: object) -> object:
+        # Preserve the production repair report so the apex optimizer can
+        # reuse the completed tet gate instead of scanning the same mesh once
+        # more.  The benchmark wrapper must not perturb the measured path.
+        return _measure(
             timings_ns,
             "gmsh_repair_s",
             lambda: _execute_repair(

@@ -110,22 +110,75 @@ pub(crate) fn publish_atomic_terminal_update(
 /// `enum { Fdm(...), Fem(...) }` with delegation boilerplate.
 pub struct InteractiveRuntime {
     backend: Box<dyn InteractiveBackend>,
+    frozen_spins_activation_set: crate::constraints::FrozenSpinsActivationSet,
     state_revision: u64,
     display_revision: u64,
     selected_display: DisplaySelection,
     display_cache: DisplayCache,
 }
 
+fn prepare_runtime_frozen_spins_activation_set(
+    previous: Option<crate::constraints::FrozenSpinsActivationSet>,
+    active_constraint_ids: std::collections::BTreeSet<String>,
+    explicit_reactivation: bool,
+) -> Result<crate::constraints::FrozenSpinsActivationSet, RunError> {
+    let previous = previous.unwrap_or_default();
+    if active_constraint_ids.is_empty() && previous.resolved_constraint_set_revision == 0 {
+        return Ok(previous);
+    }
+    let prepared = if explicit_reactivation {
+        previous.prepare_reactivation(active_constraint_ids)
+    } else {
+        previous.prepare_transition(active_constraint_ids)
+    };
+    prepared.map_err(|error| RunError {
+        message: format!("preparing Frozen Spins runtime activation metadata failed: {error}"),
+    })
+}
+
+fn frozen_spins_resolved_identity_changed(
+    before: Option<&crate::constraints::FrozenSpinsRuntimeStatus>,
+    after: Option<&crate::constraints::FrozenSpinsRuntimeStatus>,
+) -> bool {
+    match (before, after) {
+        (None, None) => false,
+        (Some(_), None) | (None, Some(_)) => true,
+        (Some(before), Some(after)) => {
+            before.active_constraint_ids != after.active_constraint_ids
+                || before.topology_fingerprint != after.topology_fingerprint
+                || before.source_state_revision != after.source_state_revision
+                || before.mask_sha256 != after.mask_sha256
+                || before.reference_sha256 != after.reference_sha256
+                || before.active_site_count != after.active_site_count
+                || before.frozen_site_count != after.frozen_site_count
+                || before.free_site_count != after.free_site_count
+        }
+    }
+}
+
 impl InteractiveRuntime {
-    /// Create a new runtime wrapping the given backend.
-    pub(crate) fn new(backend: Box<dyn InteractiveBackend>) -> Self {
-        Self {
+    pub(crate) fn new_with_frozen_spins_activation_set(
+        backend: Box<dyn InteractiveBackend>,
+        previous: Option<crate::constraints::FrozenSpinsActivationSet>,
+        explicit_reactivation: bool,
+    ) -> Result<Self, RunError> {
+        let active_constraint_ids = backend
+            .frozen_spins_runtime_status()
+            .map(|status| status.active_constraint_ids)
+            .unwrap_or_default();
+        let frozen_spins_activation_set = prepare_runtime_frozen_spins_activation_set(
+            previous,
+            active_constraint_ids,
+            explicit_reactivation,
+        )?;
+        Ok(Self {
             backend,
+            frozen_spins_activation_set,
             state_revision: 0,
             display_revision: 0,
             selected_display: DisplaySelection::default(),
             display_cache: DisplayCache::new(),
-        }
+        })
     }
 
     /// Upload new magnetization into the backend.
@@ -153,6 +206,60 @@ impl InteractiveRuntime {
         self.backend.can_continue_with_plan(plan)
     }
 
+    /// Commit stage-scoped solver state without replacing the persistent
+    /// backend. This is intentionally separate from the compatibility probe:
+    /// callers must not mutate a runtime while merely deciding whether it can
+    /// be reused.
+    pub fn apply_stage_plan(&mut self, plan: &ExecutionPlanIR) -> Result<(), RunError> {
+        let before = self.backend.frozen_spins_runtime_status();
+        self.backend.apply_stage_plan(plan)?;
+        let after = self.backend.frozen_spins_runtime_status();
+        if frozen_spins_resolved_identity_changed(before.as_ref(), after.as_ref()) {
+            let active_constraint_ids = after
+                .as_ref()
+                .map(|status| status.active_constraint_ids.clone())
+                .unwrap_or_default();
+            self.frozen_spins_activation_set = self
+                .frozen_spins_activation_set
+                .prepare_transition(active_constraint_ids)
+                .map_err(|error| RunError {
+                    message: format!(
+                        "preparing Frozen Spins stage transition metadata failed: {error}"
+                    ),
+                })?;
+        }
+        self.state_revision = self.state_revision.saturating_add(1);
+        self.display_cache.invalidate();
+        Ok(())
+    }
+
+    pub fn supports_frozen_spins_reactivation_in_place(&self) -> bool {
+        self.backend.supports_frozen_spins_reactivation_in_place()
+    }
+
+    pub fn apply_frozen_spins_reactivation_plan(
+        &mut self,
+        plan: &ExecutionPlanIR,
+    ) -> Result<(), RunError> {
+        self.backend.apply_frozen_spins_reactivation_plan(plan)?;
+        let active_constraint_ids = self
+            .backend
+            .frozen_spins_runtime_status()
+            .map(|status| status.active_constraint_ids)
+            .unwrap_or_default();
+        self.frozen_spins_activation_set = self
+            .frozen_spins_activation_set
+            .prepare_reactivation(active_constraint_ids)
+            .map_err(|error| RunError {
+                message: format!(
+                    "preparing explicit Frozen Spins reactivation metadata failed: {error}"
+                ),
+            })?;
+        self.state_revision = self.state_revision.saturating_add(1);
+        self.display_cache.invalidate();
+        Ok(())
+    }
+
     /// Get the current display selection.
     pub fn selected_display(&self) -> &DisplaySelection {
         &self.selected_display
@@ -176,6 +283,28 @@ impl InteractiveRuntime {
     /// Get execution provenance info.
     pub fn execution_provenance(&self) -> crate::types::ExecutionProvenance {
         self.backend.execution_provenance()
+    }
+
+    pub fn frozen_spins_runtime_status(
+        &self,
+    ) -> Option<crate::constraints::FrozenSpinsRuntimeStatus> {
+        let mut status = self.backend.frozen_spins_runtime_status()?;
+        status.constraint_activation_epochs = self
+            .frozen_spins_activation_set
+            .constraint_activation_epochs
+            .clone();
+        status.active_constraint_ids = self
+            .frozen_spins_activation_set
+            .active_constraint_ids
+            .clone();
+        status.resolved_constraint_set_revision = self
+            .frozen_spins_activation_set
+            .resolved_constraint_set_revision;
+        Some(status)
+    }
+
+    pub fn frozen_spins_activation_set(&self) -> &crate::constraints::FrozenSpinsActivationSet {
+        &self.frozen_spins_activation_set
     }
 
     /// Change the display selection. Returns the new display payload
@@ -408,6 +537,37 @@ mod tests {
     use super::*;
     use crate::artifact_pipeline::ArtifactPipelineSender;
     use crate::types::{ExecutionProvenance, RunStatus};
+
+    #[test]
+    fn native_runtime_rebuild_carries_epochs_through_explicit_reactivation_and_stage_gap() {
+        let active = ["pin".to_string()].into_iter().collect();
+        let initial = prepare_runtime_frozen_spins_activation_set(None, active, false)
+            .expect("initial activation");
+        assert_eq!(initial.epoch("pin"), Some(1));
+        assert_eq!(initial.resolved_constraint_set_revision, 1);
+
+        let active = ["pin".to_string()].into_iter().collect();
+        let reactivated = prepare_runtime_frozen_spins_activation_set(Some(initial), active, true)
+            .expect("explicit rebuild reactivation");
+        assert_eq!(reactivated.epoch("pin"), Some(2));
+        assert_eq!(reactivated.resolved_constraint_set_revision, 2);
+
+        let inactive = prepare_runtime_frozen_spins_activation_set(
+            Some(reactivated),
+            Default::default(),
+            false,
+        )
+        .expect("inactive stage rebuild");
+        assert_eq!(inactive.epoch("pin"), Some(2));
+        assert!(inactive.active_constraint_ids.is_empty());
+        assert_eq!(inactive.resolved_constraint_set_revision, 3);
+
+        let active = ["pin".to_string()].into_iter().collect();
+        let reentered = prepare_runtime_frozen_spins_activation_set(Some(inactive), active, false)
+            .expect("stage re-entry rebuild");
+        assert_eq!(reentered.epoch("pin"), Some(3));
+        assert_eq!(reentered.resolved_constraint_set_revision, 4);
+    }
 
     struct SnapshotFailureBackend {
         snapshot_attempts: usize,

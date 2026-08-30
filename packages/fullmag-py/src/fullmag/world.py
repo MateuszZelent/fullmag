@@ -1917,7 +1917,7 @@ class GeometryMeshHandle:
         self._owner._mesh_spec.build_requested = True
         if _capture_enabled:
             return self
-        _build_explicit_mesh_assets()
+        _build_explicit_mesh_assets(_include_mesh_ir=False)
         return self
 
     def optimize(self, method: str | None = None, iterations: int = 1) -> "GeometryMeshHandle":
@@ -6509,7 +6509,7 @@ def build_mesh() -> None:
     _state._default_mesh_spec.build_requested = True
     if _capture_enabled:
         return
-    _build_explicit_mesh_assets()
+    _build_explicit_mesh_assets(_include_mesh_ir=False)
 
 
 def build_domain_mesh() -> None:
@@ -7428,14 +7428,21 @@ def _clear_bound_mesh_artifact() -> None:
     _state._extra_runtime_metadata.pop("mesh_persistence", None)
 
 
-def _build_explicit_mesh_assets() -> dict[str, Any] | None:
+def _build_explicit_mesh_assets(
+    *,
+    _include_mesh_ir: bool = True,
+) -> dict[str, Any] | None:
     from fullmag.meshing.persistence import MeshArtifact, mesh_authoring_fingerprint
 
     active = _state._active_mesh_artifact
     if isinstance(active, MeshArtifact):
         domain_asset: dict[str, object] = {
             "mesh_source": str(_state._domain_mesh_source) if _state._domain_mesh_source else None,
-            "mesh": active.mesh.to_ir(active.mesh_name),
+            "mesh": (
+                active.mesh.to_ir(active.mesh_name)
+                if _include_mesh_ir
+                else None
+            ),
             "region_markers": [dict(entry) for entry in active.region_markers],
             "object_region_markers": [dict(entry) for entry in active.object_region_markers],
         }
@@ -7488,6 +7495,7 @@ def _build_explicit_mesh_assets() -> dict[str, Any] | None:
         # payload on every cache hit makes large mixed meshes spend minutes in
         # ``copy.deepcopy`` before persistence even starts.
         _copy_cached_assets=False,
+        _include_domain_mesh_ir=_include_mesh_ir,
         _realized_domain_mesh_sink=realized_domain_meshes,
     )
     if len(realized_domain_meshes) == 1:

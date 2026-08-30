@@ -78,6 +78,11 @@ artifacts/
 tmp/
 coverage/
 .fullmag/
+# Windows Docker build/cache mounts are external state, never source files.
+.fullmag-build/
+.fullmag-cache/
+.fullmag-cargo/
+.fullmag-rustup/
 docs/raports/
 docs/reports/*
 !docs/reports/fullmag_native_fem_magnetoelastic_frequency_audit.md

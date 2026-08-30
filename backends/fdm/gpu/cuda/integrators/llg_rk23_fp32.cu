@@ -428,7 +428,6 @@ static void launch_rk23_adaptive_graph_step_fp32(
     if (!context_launch_adaptive_step_graph(ctx, initial, terminal)) return;
     context_record_adaptive_numerics_terminal(ctx, terminal, 2);
 
-    const size_t bytes = ctx.cell_count * sizeof(float);
     ctx.adaptive_attempt_trace_count = terminal.attempt_index + 1;
     ctx.adaptive_rejected_attempts = terminal.next_rejected_attempts;
     if (poll_interrupt(ctx)) {

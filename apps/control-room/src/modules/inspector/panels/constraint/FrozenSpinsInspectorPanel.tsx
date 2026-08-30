@@ -6,8 +6,11 @@ import type {
   FrozenSpinsActivation,
   FrozenSpinsDefinition,
   FrozenSpinsMembershipPolicy,
+  FrozenSpinsPreviewActivationResponse,
   FrozenSpinsPreviewResponse,
   FrozenSpinsReferencePolicy,
+  FrozenSpinsRuntimeApplication,
+  FrozenSpinsSolverRuntimeStatus,
 } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -16,7 +19,10 @@ import {
   frozenSpinsDefinitionResourceKey,
   useFrozenSpinsDefinitionResource,
 } from "@/kernel/resources/frozenSpinsResources";
-import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useFieldMetaResource,
+  useSolverStatusResource,
+} from "@/kernel/resources/studyRuntimeResources";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -25,7 +31,7 @@ import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { SelectionExpressionBuilder } from "../selection/SelectionExpressionBuilder";
 
-type PendingField = "activate" | "apply" | "delete" | "preview" | null;
+type PendingField = "activate" | "apply" | "delete" | "preview" | "quantity" | null;
 
 interface Feedback {
   kind: "error" | "success" | "warning";
@@ -103,7 +109,12 @@ export function FrozenSpinsEditor({
   const [pendingField, setPendingField] = useState<PendingField>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [preview, setPreview] = useState<FrozenSpinsPreviewResponse | null>(null);
+  const [activationReceipt, setActivationReceipt] =
+    useState<FrozenSpinsPreviewActivationResponse | null>(null);
+  const [runtimeApplication, setRuntimeApplication] =
+    useState<FrozenSpinsRuntimeApplication | null>(null);
   const [previewSelectorJson, setPreviewSelectorJson] = useState<string | null>(null);
+  const solverStatus = useSolverStatusResource();
   const fieldMeta = useFieldMetaResource({
     enabled: objectId !== null,
     owner_object_id: objectId,
@@ -129,9 +140,16 @@ export function FrozenSpinsEditor({
       }
       setRevision(response.revision);
       setPreview(null);
+      setActivationReceipt(null);
+      setRuntimeApplication(response.runtime_application ?? null);
       invalidateDefinitionResources(kernel, draft.id, response.revision);
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
-      setFeedback({ kind: "success", message: "Frozen Spins definition updated." });
+      setFeedback({
+        kind: response.runtime_application ? "warning" : "success",
+        message: response.runtime_application
+          ? frozenSpinsRuntimeApplicationMessage(response.runtime_application)
+          : "Frozen Spins definition updated.",
+      });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -172,6 +190,8 @@ export function FrozenSpinsEditor({
       });
       setPreviewSelectorJson(JSON.stringify(draft.selector));
       setPreview(response);
+      setActivationReceipt(null);
+      setRuntimeApplication(null);
       kernel.resources.invalidate(
         FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY,
         response.preview_id,
@@ -179,7 +199,7 @@ export function FrozenSpinsEditor({
       setFeedback({
         kind: response.current ? "success" : "warning",
         message: response.current
-          ? "Frozen Spins preview is current and visible in the 3D viewport."
+          ? "Speculative Frozen Spins preview is current and visible in the 3D viewport. Solver identity is not bound until runtime activation."
           : "Preview was created but is stale against the current model state.",
       });
     } catch (error) {
@@ -216,11 +236,14 @@ export function FrozenSpinsEditor({
       }
       setRevision(response.revision);
       setPreview(null);
+      setActivationReceipt(response);
+      setRuntimeApplication(response.runtime_application);
       invalidateDefinitionResources(kernel, draft.id, response.revision);
       kernel.resources.invalidate(FROZEN_SPINS_ACTIVE_PREVIEW_RESOURCE_KEY, "");
+      solverStatus.refetch();
       setFeedback({
-        kind: "success",
-        message: "Frozen Spins preview activated and its one-time candidate consumed.",
+        kind: "warning",
+        message: `${frozenSpinsRuntimeApplicationMessage(response.runtime_application)} The preview candidate was consumed; solver activation is still pending runtime confirmation and a matching solver-owned certificate.`,
       });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
@@ -252,6 +275,28 @@ export function FrozenSpinsEditor({
     }
   }
 
+  async function showSolverQuantity(): Promise<void> {
+    setPendingField("quantity");
+    setFeedback(null);
+    try {
+      kernel.visualizationSync.queuePatch({
+        active_quantity_id: "frozen_spins",
+        quantity: { active_quantity_id: "frozen_spins" },
+      });
+      await kernel.visualizationSync.flushNow();
+      kernel.layout.setActiveViewportMainModule("viewport-3d");
+      kernel.layout.setFocusedSlot("viewport-main");
+      setFeedback({
+        kind: "success",
+        message: "3D viewport now reads the solver-owned frozen_spins quantity.",
+      });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
+    } finally {
+      setPendingField(null);
+    }
+  }
+
   const activation = draft.activation ?? { kind: "all_stages" };
   const reference = draft.reference ?? { kind: "capture_current_at_activation" };
   const membership = draft.membership ?? { kind: "static" };
@@ -262,6 +307,11 @@ export function FrozenSpinsEditor({
     reference.kind === "capture_current_at_activation" &&
     previewSelectorJson === JSON.stringify(draft.selector) &&
     activationIncludesStage(activation, preview.requested.stage_id),
+  );
+  const solverBinding = resolveFrozenSpinsSolverBinding(
+    activationReceipt,
+    solverStatus.data?.frozen_spins ?? null,
+    draft.id,
   );
 
   return (
@@ -444,7 +494,7 @@ export function FrozenSpinsEditor({
               variant="primary"
               onClick={() => void activatePreview()}
             >
-              {pendingField === "activate" ? "Activating…" : "Activate preview"}
+              {pendingField === "activate" ? "Committing…" : "Commit preview"}
             </Button>
           ) : null}
           <Button
@@ -462,6 +512,29 @@ export function FrozenSpinsEditor({
             activationCandidateReady={activationCandidateReady}
             preview={preview}
           />
+        ) : null}
+        {activationReceipt ? (
+          <FrozenSpinsSolverBindingDetails
+            binding={solverBinding}
+            receipt={activationReceipt}
+            runtime={solverStatus.data?.frozen_spins ?? null}
+          />
+        ) : null}
+        {runtimeApplication ? (
+          <FrozenSpinsRuntimeApplicationDetails application={runtimeApplication} />
+        ) : null}
+        {solverBinding.state === "confirmed" || solverBinding.state === "mismatch" ? (
+          <Button
+            disabled={toolbarPending}
+            size="sm"
+            type="button"
+            variant="primary"
+            onClick={() => void showSolverQuantity()}
+          >
+            {pendingField === "quantity"
+              ? "Opening solver quantity…"
+              : "Show solver frozen_spins in 3D"}
+          </Button>
         ) : null}
       </InspectorGroup>
     </div>
@@ -483,6 +556,8 @@ export function FrozenSpinsPreviewDetails({
   return (
     <div className="fm-inspector-panel" data-preview-current={preview.current}>
       <FieldRow label="Preview ID" value={preview.preview_id} />
+      <FieldRow label="Authority" value={preview.authority} />
+      <FieldRow label="Solver binding" value={preview.solver_binding} />
       <FieldRow label="Frozen DOFs" value={String(preview.frozen_dof_count)} />
       <FieldRow label="Free DOFs" value={String(preview.free_dof_count)} />
       <FieldRow label="Frozen fraction" value={`${(preview.fraction * 100).toFixed(2)}%`} />
@@ -503,6 +578,134 @@ export function FrozenSpinsPreviewDetails({
       ))}
     </div>
   );
+}
+
+export interface FrozenSpinsSolverBindingModel {
+  state: "confirmed" | "mismatch" | "not_committed" | "pending";
+  message: string;
+}
+
+export function resolveFrozenSpinsSolverBinding(
+  receipt: FrozenSpinsPreviewActivationResponse | null,
+  runtime: FrozenSpinsSolverRuntimeStatus | null,
+  constraintId: string,
+): FrozenSpinsSolverBindingModel {
+  if (!receipt) {
+    return {
+      state: "not_committed",
+      message: "No authoring preview has been committed.",
+    };
+  }
+  if (!runtime || !runtime.active_constraint_ids.includes(constraintId)) {
+    return {
+      state: "pending",
+      message:
+        "Waiting for a solver stage that activates this constraint and publishes its certificate.",
+    };
+  }
+  const matches =
+    runtime.constraint_activation_epochs[constraintId] !== undefined &&
+    runtime.topology_fingerprint === receipt.topology_fingerprint &&
+    runtime.source_state_revision === receipt.source_state_revision &&
+    sameSha256Identity(runtime.mask_sha256, receipt.mask_sha256) &&
+    runtime.active_site_count === receipt.active_site_count &&
+    runtime.frozen_site_count === receipt.frozen_site_count &&
+    runtime.free_site_count === receipt.free_site_count;
+  return matches
+    ? {
+        state: "confirmed",
+        message: "Solver certificate matches the committed preview identity.",
+      }
+    : {
+        state: "mismatch",
+        message:
+          "Solver recomputed a different activation identity. The speculative preview is invalid and the solver-owned quantity must be used.",
+      };
+}
+
+function sameSha256Identity(left: string, right: string): boolean {
+  return normalizeSha256Identity(left) === normalizeSha256Identity(right);
+}
+
+function normalizeSha256Identity(value: string): string {
+  return value.trim().toLowerCase().replace(/^sha256:/, "");
+}
+
+function FrozenSpinsSolverBindingDetails({
+  binding,
+  receipt,
+  runtime,
+}: {
+  binding: FrozenSpinsSolverBindingModel;
+  receipt: FrozenSpinsPreviewActivationResponse;
+  runtime: FrozenSpinsSolverRuntimeStatus | null;
+}) {
+  return (
+    <div className="fm-inspector-panel" data-solver-binding={binding.state}>
+      <FieldRow label="Activation scope" value={receipt.activation_scope} />
+      <FieldRow label="Runtime binding" value={binding.state} />
+      <FieldRow
+        label="Activation epoch"
+        value={
+          runtime?.constraint_activation_epochs[receipt.definition.id]?.toString() ??
+          "pending"
+        }
+      />
+      <FieldRow
+        label="Resolved set revision"
+        value={runtime?.resolved_constraint_set_revision?.toString() ?? "pending"}
+      />
+      <FeedbackBanner
+        kind={binding.state === "confirmed" ? "success" : "warning"}
+        message={binding.message}
+      />
+    </div>
+  );
+}
+
+function FrozenSpinsRuntimeApplicationDetails({
+  application,
+}: {
+  application: FrozenSpinsRuntimeApplication;
+}) {
+  return (
+    <div
+      className="fm-inspector-panel"
+      data-runtime-application={application.state}
+    >
+      <FieldRow label="Runtime application" value={application.state} />
+      <FieldRow
+        label="Pending scene revision"
+        value={application.pending_revision.toString()}
+      />
+      <FieldRow label="Apply boundary" value={application.apply_boundary} />
+      {application.application_command_id ? (
+        <FieldRow
+          label="Application command ID"
+          value={application.application_command_id}
+        />
+      ) : null}
+      <FieldRow
+        label="Current solver"
+        value={
+          application.current_runtime_unchanged ? "unchanged" : "updated"
+        }
+      />
+    </div>
+  );
+}
+
+function frozenSpinsRuntimeApplicationMessage(
+  application: FrozenSpinsRuntimeApplication,
+): string {
+  const boundary =
+    application.apply_boundary === "accepted_step"
+      ? "the next accepted solver step"
+      : "the next runtime plan";
+  const command = application.application_command_id
+    ? ` Application command: ${application.application_command_id}.`
+    : "";
+  return `Frozen Spins definition committed as revision ${application.pending_revision}. The current solver is unchanged until ${boundary}.${command}`;
 }
 
 function normalizeDefinition(definition: FrozenSpinsDefinition): FrozenSpinsDefinition {

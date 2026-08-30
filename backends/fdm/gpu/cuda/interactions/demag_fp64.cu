@@ -133,9 +133,9 @@ __global__ void spectral_projection_fp64_kernel(
     double lx = px * dx;
     double ly = py * dy;
     double lz = pz * dz;
-    double kx = 2.0 * M_PI * static_cast<double>(frequency_index(x, px)) / lx;
-    double ky = 2.0 * M_PI * static_cast<double>(frequency_index(y, py)) / ly;
-    double kz = 2.0 * M_PI * static_cast<double>(frequency_index(z, pz)) / lz;
+    double kx = 2.0 * kFullmagPi * static_cast<double>(frequency_index(x, px)) / lx;
+    double ky = 2.0 * kFullmagPi * static_cast<double>(frequency_index(y, py)) / ly;
+    double kz = 2.0 * kFullmagPi * static_cast<double>(frequency_index(z, pz)) / lz;
     double k2 = kx * kx + ky * ky + kz * kz;
 
     if (k2 == 0.0) {
@@ -311,7 +311,7 @@ __global__ void combine_effective_field_fp64_kernel(
     double hz = hz_ext;
 
     if (has_uniaxial_anisotropy && ms > 0.0) {
-        double mu0 = 4.0 * M_PI * 1e-7;
+        double mu0 = 4.0 * kFullmagPi * 1e-7;
         double ku1_val = ku1_field ? ku1_field[idx] : Ku1;
         double ku2_val = ku2_field ? ku2_field[idx] : Ku2;
         
@@ -326,7 +326,7 @@ __global__ void combine_effective_field_fp64_kernel(
     }
 
     if (has_cubic_anisotropy && ms > 0.0) {
-        double mu0 = 4.0 * M_PI * 1e-7;
+        double mu0 = 4.0 * kFullmagPi * 1e-7;
         double kc1_val = kc1_field ? kc1_field[idx] : Kc1;
         double kc2_val = kc2_field ? kc2_field[idx] : Kc2;
         double kc3_val = kc3_field ? kc3_field[idx] : Kc3;
@@ -391,7 +391,7 @@ __global__ void combine_effective_field_fp64_kernel(
             if (missing_zp) zp = idx;
         }
 
-        double mu0 = 4.0 * M_PI * 1e-7;
+        double mu0 = 4.0 * kFullmagPi * 1e-7;
         double dmi_pf = 2.0 / (mu0 * ms);
 
         const DmiMissingFaces missing{
@@ -437,7 +437,7 @@ __global__ void combine_effective_field_fp64_kernel(
     // H_mel,y = −(2 B1 my ε22 + B2 (mx ε12 + mz ε23)) / (μ0 Ms)
     // H_mel,z = −(2 B1 mz ε33 + B2 (mx ε13 + my ε23)) / (μ0 Ms)
     if (has_magnetoelastic && ms > 0.0) {
-        double mu0 = 4.0 * M_PI * 1e-7;
+        double mu0 = 4.0 * kFullmagPi * 1e-7;
         double inv_mu0_ms = -1.0 / (mu0 * ms);
         hx += inv_mu0_ms * (2.0 * mel_b1 * mx * mel_e11 + mel_b2 * (my * mel_e12 + mz * mel_e13));
         hy += inv_mu0_ms * (2.0 * mel_b1 * my * mel_e22 + mel_b2 * (mx * mel_e12 + mz * mel_e23));
@@ -511,7 +511,7 @@ __global__ void anisotropy_field_fp64_kernel(
         double mz = m_z[idx];
 
         if (has_uniaxial_anisotropy && ms > 0.0) {
-            double mu0 = 4.0 * M_PI * 1e-7;
+            double mu0 = 4.0 * kFullmagPi * 1e-7;
             double ku1_val = ku1_field ? ku1_field[idx] : Ku1;
             double ku2_val = ku2_field ? ku2_field[idx] : Ku2;
             double m_dot_u = mx * ux + my * uy + mz * uz;
@@ -523,7 +523,7 @@ __global__ void anisotropy_field_fp64_kernel(
         }
 
         if (has_cubic_anisotropy && ms > 0.0) {
-            double mu0 = 4.0 * M_PI * 1e-7;
+            double mu0 = 4.0 * kFullmagPi * 1e-7;
             double kc1_val = kc1_field ? kc1_field[idx] : Kc1;
             double kc2_val = kc2_field ? kc2_field[idx] : Kc2;
             double kc3_val = kc3_field ? kc3_field[idx] : Kc3;
@@ -750,7 +750,7 @@ void launch_effective_field_fp64(
     // Compute thermal noise amplitude (FDT)
     const double thermal_dt = ctx.trial_dt > 0.0 ? ctx.trial_dt : ctx.current_dt;
     if (ctx.temperature > 0.0 && ctx.Ms > 0.0 && thermal_dt > 0.0) {
-        double MU0 = 4.0 * M_PI * 1e-7;
+        double MU0 = 4.0 * kFullmagPi * 1e-7;
         double KB = 1.380649e-23;
         double V = ctx.dx * ctx.dy * ctx.dz;
         ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (ctx.gamma * MU0 * ctx.Ms * V * thermal_dt));

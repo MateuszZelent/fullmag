@@ -24,7 +24,7 @@ namespace fdm {
 
 extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err);
 
-static constexpr double MU0 = 4.0 * M_PI * 1e-7;
+static constexpr double MU0 = 4.0 * kFullmagPi * 1e-7;
 static constexpr int REDUCTION_BLOCK_SIZE = 256;
 
 template <typename T>

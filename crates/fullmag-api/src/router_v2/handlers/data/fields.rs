@@ -9301,6 +9301,7 @@ mod tests {
     #[test]
     fn production_cpu_frequency_response_runtime_is_fem_runtime() {
         let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "frequency-response-production-cpu".to_string(),
             coupled_checkpoint: None,
             session: None,
@@ -9377,6 +9378,7 @@ mod tests {
     #[test]
     fn analysis_field_vector_binary_uses_fmvp_v3_explicit_nodes_for_scoped_fem_payload() {
         let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
+            frozen_spins_runtime_status: None,
             session_id: "analysis-field-fem-scope".to_string(),
             coupled_checkpoint: None,
             session: None,

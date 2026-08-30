@@ -120,9 +120,9 @@ __global__ void spectral_projection_fp32_kernel(
     float lx = px * dx;
     float ly = py * dy;
     float lz = pz * dz;
-    float kx = 2.0f * static_cast<float>(M_PI) * static_cast<float>(frequency_index(x, px)) / lx;
-    float ky = 2.0f * static_cast<float>(M_PI) * static_cast<float>(frequency_index(y, py)) / ly;
-    float kz = 2.0f * static_cast<float>(M_PI) * static_cast<float>(frequency_index(z, pz)) / lz;
+    float kx = 2.0f * static_cast<float>(kFullmagPi) * static_cast<float>(frequency_index(x, px)) / lx;
+    float ky = 2.0f * static_cast<float>(kFullmagPi) * static_cast<float>(frequency_index(y, py)) / ly;
+    float kz = 2.0f * static_cast<float>(kFullmagPi) * static_cast<float>(frequency_index(z, pz)) / lz;
     float k2 = kx * kx + ky * ky + kz * kz;
 
     if (k2 == 0.0f) {
@@ -298,7 +298,7 @@ __global__ void combine_effective_field_fp32_kernel(
     float hz = hz_ext;
 
     if (has_uniaxial_anisotropy && ms > 0.0f) {
-        float mu0 = 4.0f * static_cast<float>(M_PI) * 1e-7f;
+        float mu0 = 4.0f * static_cast<float>(kFullmagPi) * 1e-7f;
         float ku1_val = ku1_field ? static_cast<float>(ku1_field[idx]) : Ku1;
         float ku2_val = ku2_field ? static_cast<float>(ku2_field[idx]) : Ku2;
         
@@ -313,7 +313,7 @@ __global__ void combine_effective_field_fp32_kernel(
     }
 
     if (has_cubic_anisotropy && ms > 0.0f) {
-        float mu0 = 4.0f * static_cast<float>(M_PI) * 1e-7f;
+        float mu0 = 4.0f * static_cast<float>(kFullmagPi) * 1e-7f;
         float kc1_val = kc1_field ? static_cast<float>(kc1_field[idx]) : Kc1;
         float kc2_val = kc2_field ? static_cast<float>(kc2_field[idx]) : Kc2;
         float kc3_val = kc3_field ? static_cast<float>(kc3_field[idx]) : Kc3;
@@ -378,7 +378,7 @@ __global__ void combine_effective_field_fp32_kernel(
             if (missing_zp) zp = idx;
         }
 
-        float mu0 = 4.0f * static_cast<float>(M_PI) * 1e-7f;
+        float mu0 = 4.0f * static_cast<float>(kFullmagPi) * 1e-7f;
         float dmi_pf = 2.0f / (mu0 * ms);
 
         const DmiMissingFaces missing{
@@ -693,7 +693,7 @@ void launch_effective_field_fp32(
     // Compute thermal noise amplitude (FDT)
     const double thermal_dt = ctx.trial_dt > 0.0 ? ctx.trial_dt : ctx.current_dt;
     if (ctx.temperature > 0.0 && ctx.Ms > 0.0 && thermal_dt > 0.0) {
-        double MU0 = 4.0 * M_PI * 1e-7;
+        double MU0 = 4.0 * kFullmagPi * 1e-7;
         double KB = 1.380649e-23;
         double V = ctx.dx * ctx.dy * ctx.dz;
         ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (ctx.gamma * MU0 * ctx.Ms * V * thermal_dt));

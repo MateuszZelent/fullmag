@@ -1,9 +1,9 @@
 //! Public and internal types for the runner.
 
 use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR, StageCompletionIR};
-pub use fullmag_quantities::{
-    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
-};
+pub use fullmag_quantities::FemRepresentationReceipt;
+#[cfg(any(feature = "fem-gpu", test))]
+pub use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};

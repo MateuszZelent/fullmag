@@ -42,9 +42,50 @@ function createViewport3DRenderAdoptionRegistry(
 }
 
 describe("viewport3DRenderAdoptionRegistry", () => {
-  it("returns the newest demanded render receipt for a FEM visualization ACK", () => {
+  it("signals renderer adoption without requiring Visualization Debug demand", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
-    registry.retainDemand("object:a");
+    const listener = vi.fn();
+    registry.subscribeActive(listener);
+
+    registry.recordSurfaceAdoption({
+      byteLength: 496,
+      carrierId: "part:frozen",
+      fieldBufferId: "fem:frozen_spins:63",
+      resourceKey: "field:frozen_spins:63",
+      scalarBufferKey: "scalar:frozen_spins:63",
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(registry.latestActiveAdoption({
+      sessionEpoch: "test-session@1000",
+      sessionId: "test-session",
+    })).toMatchObject({
+      fieldBufferId: "fem:frozen_spins:63",
+      kind: "surface",
+      resourceKey: "field:frozen_spins:63",
+    });
+    expect(registry.snapshot("object:frozen")).toEqual([]);
+  });
+
+  it("replays an existing renderer adoption to a late scene subscriber", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.recordSurfaceAdoption({
+      byteLength: 496,
+      carrierId: "part:frozen",
+      fieldBufferId: "fem:frozen_spins:63",
+      resourceKey: "field:frozen_spins:63",
+      scalarBufferKey: "scalar:frozen_spins:63",
+    });
+    const listener = vi.fn();
+
+    registry.subscribeActive(listener);
+
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+
+  it("returns the newest active render receipt without requiring debug demand", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
     registry.recordSurfaceAdoption({
       byteLength: 12,
       carrierId: "part:a",

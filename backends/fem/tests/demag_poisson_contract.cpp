@@ -2825,24 +2825,39 @@ void mixed_poisson_matches_independently_refined_all_tet_reference() {
     check(std::fabs(finest_mixed_energy-refined_mixed_energy) <
               std::fabs(refined_mixed_energy-coarse_mixed_energy),
           "mixed Poisson result must converge under refinement");
-    const double relative_difference = std::fabs(finest_mixed_energy-finest_tet_energy) /
+    // The mixed route is intentionally MFEM-compatible P1 when it contains a
+    // pyramid (MFEM has no higher-order H1 pyramid basis).  Comparing its
+    // last finite P1 level directly with the nearly converged all-tet P2
+    // level therefore includes the expected P1 truncation error.  Uniform
+    // refinement gives the second-order energy limit from the last two mixed
+    // levels; compare that limit with the independent P2 reference instead.
+    const double mixed_richardson_limit = finest_mixed_energy +
+        (finest_mixed_energy - refined_mixed_energy) / 3.0;
+    const double raw_relative_difference =
+        std::fabs(finest_mixed_energy-finest_tet_energy) /
         std::max(std::fabs(finest_mixed_energy), std::fabs(finest_tet_energy));
-    if (relative_difference >= 0.03) {
+    const double relative_difference =
+        std::fabs(mixed_richardson_limit-finest_tet_energy) /
+        std::max(std::fabs(finest_mixed_energy), std::fabs(finest_tet_energy));
+    if (raw_relative_difference >= 0.03 || relative_difference >= 0.03) {
         std::fprintf(
             stderr,
             "mixed/all-tet Poisson diagnostic: coarse_mixed=%.17g refined_mixed=%.17g "
             "finest_mixed=%.17g coarse_tet=%.17g refined_tet=%.17g "
-            "finest_tet=%.17g relative_difference=%.17g\n",
+            "finest_tet=%.17g mixed_richardson_limit=%.17g "
+            "raw_relative_difference=%.17g extrapolated_relative_difference=%.17g\n",
             coarse_mixed_energy,
             refined_mixed_energy,
             finest_mixed_energy,
             coarse_tet_energy,
             refined_tet_energy,
             finest_tet_energy,
+            mixed_richardson_limit,
+            raw_relative_difference,
             relative_difference);
     }
     check(relative_difference < 0.03,
-          "mixed Poisson result must agree with the independently refined all-tet reference");
+          "extrapolated mixed-P1 Poisson result must agree with the independently refined all-tet reference");
 }
 #endif
 

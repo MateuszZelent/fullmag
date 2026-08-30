@@ -47,6 +47,13 @@ services:
         target: /tmp/fullmag-windows
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      # Keep the Rust control-plane pool bounded on the Windows Docker lane;
+      # native FEM resolves its final OpenMP cap after the mesh is known.
+      FULLMAG_CPU_THREADS: "${FULLMAG_CPU_THREADS:-auto}"
+      # libgomp snapshots its initial team size when the Python/native modules
+      # load, before the mesh-aware native FEM policy runs. Set a safe upper
+      # bound at process start; the backend may reduce it for small meshes.
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-16}"
       HOME: /root
       CARGO_HOME: /workspace/.fullmag-cargo
       RUSTUP_HOME: /workspace/.fullmag-rustup
@@ -54,6 +61,9 @@ services:
       FULLMAG_CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
       CARGO_BUILD_JOBS: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
       CMAKE_BUILD_PARALLEL_LEVEL: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
+      # Source-identity probes read Git but never need an optional index
+      # refresh; keep them from competing with a host-side VS Code commit.
+      GIT_OPTIONAL_LOCKS: "0"
       FULLMAG_SOURCE_GIT_COMMIT: "${FULLMAG_SOURCE_GIT_COMMIT:-}"
       FULLMAG_SOURCE_WORKTREE_STATE: "${FULLMAG_SOURCE_WORKTREE_STATE:-}"
       FULLMAG_SOURCE_SNAPSHOT_SHA256: "${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}"
@@ -123,6 +133,11 @@ services:
         target: /tmp/fullmag-windows
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      # Keep the Rust control-plane pool bounded on the Windows Docker lane;
+      # native FEM resolves its final OpenMP cap after the mesh is known.
+      FULLMAG_CPU_THREADS: "${FULLMAG_CPU_THREADS:-auto}"
+      # Keep the initial OpenMP team bounded before MFEM/Hypre initialization.
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-16}"
       HOME: /root
       CARGO_HOME: /workspace/.fullmag-cargo
       RUSTUP_HOME: /workspace/.fullmag-rustup
@@ -130,6 +145,7 @@ services:
       FULLMAG_CARGO_TARGET_ROOT: /workspace/.fullmag-build/cargo-targets
       CARGO_BUILD_JOBS: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
       CMAKE_BUILD_PARALLEL_LEVEL: "${FULLMAG_WINDOWS_BUILD_JOBS:-16}"
+      GIT_OPTIONAL_LOCKS: "0"
       FULLMAG_SOURCE_GIT_COMMIT: "${FULLMAG_SOURCE_GIT_COMMIT:-}"
       FULLMAG_SOURCE_WORKTREE_STATE: "${FULLMAG_SOURCE_WORKTREE_STATE:-}"
       FULLMAG_SOURCE_SNAPSHOT_SHA256: "${FULLMAG_SOURCE_SNAPSHOT_SHA256:-}"

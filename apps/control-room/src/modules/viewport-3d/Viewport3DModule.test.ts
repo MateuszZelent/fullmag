@@ -15,6 +15,7 @@ import {
   resolveRetainedViewport3DColorbarPlansForStore,
   resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
+  resolveViewport3DVisualizationFrameAck,
   resolveViewport3DMeshQualityLegend,
   resolveViewport3DVectorSegmentLengthRange,
   createViewport3DPointerHoldLifecycle,
@@ -60,6 +61,26 @@ describe("viewport vector segment diagnostics", () => {
 });
 
 describe("FEM visualization ACK data identity", () => {
+  it("classifies an early frame as data only when an exact adopted buffer exists", () => {
+    const identity = {
+      fieldBufferId: "fem:frozen_spins:63",
+      fieldRevision: "63",
+      resourceKey: "field:frozen_spins:63",
+      sessionEpoch: "session-fem@1000",
+      sessionId: "session-fem",
+      visualizationRevision: 12,
+    };
+
+    expect(resolveViewport3DVisualizationFrameAck({
+      committedDataIdentity: identity,
+      registeredChangeKind: null,
+    })).toEqual({ changeKind: "data", dataIdentity: identity });
+    expect(resolveViewport3DVisualizationFrameAck({
+      committedDataIdentity: null,
+      registeredChangeKind: null,
+    })).toEqual({ changeKind: "style", dataIdentity: null });
+  });
+
   it("uses the scalar buffer actually adopted by the FEM surface renderer", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
     const sessionIdentity = {
@@ -105,6 +126,25 @@ describe("FEM visualization ACK data identity", () => {
       sessionId: "session-fem",
       visualizationRevision: 12,
     });
+  });
+
+  it("resolves the buffer active at frame commit instead of retaining a pre-switch buffer", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+    const callbackStart = source.indexOf(
+      "const onVisualizationFrameCommitted = useCallback",
+    );
+    const callback = source.slice(
+      callbackStart,
+      source.indexOf("useEffect(() => {", callbackStart),
+    );
+
+    expect(callback).toContain(
+      "committedDataIdentity: resolveViewport3DVisualizationAckDataIdentity({",
+    );
+    expect(callback).not.toContain("ackKind.dataIdentity");
   });
 });
 

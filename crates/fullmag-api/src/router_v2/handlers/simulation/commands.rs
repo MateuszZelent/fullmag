@@ -10,8 +10,8 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
-    CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, SolverPolicyRequest,
-    StructuredCommandRequest, FDM_GRID_REFRESH_DEFERRED_REASON,
+    CommandResponse, RuntimeCommandIntent, RuntimeCommandPrecondition, RuntimeCommandTarget,
+    SolverPolicyRequest, StructuredCommandRequest, FDM_GRID_REFRESH_DEFERRED_REASON,
 };
 use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::session::effective_runtime_status_code;
@@ -74,7 +74,8 @@ pub(crate) async fn submit_structured_command_impl(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let command_id = format!("fm-{}", uuid::Uuid::new_v4());
-    let command = command_from_structured(req, command_id, now);
+    let mut command = command_from_structured(req, command_id, now);
+    attach_frozen_spins_runtime_plan_binding(&state, &mut command).await?;
     if command.kind == "fdm_grid_refresh" {
         let reason = fdm_grid_refresh_rejection_reason(&state).await?;
         return reject_session_command_impl(state, headers, command, reason).await;
@@ -519,6 +520,111 @@ async fn validate_runtime_command_contract(
     }
 
     Ok(())
+}
+
+async fn attach_frozen_spins_runtime_plan_binding(
+    state: &Arc<AppState>,
+    command: &mut SessionCommand,
+) -> Result<(), ApiError> {
+    if !matches!(
+        command.kind.as_str(),
+        "run" | "relax" | "solve" | "apply_frozen_spins"
+    ) {
+        return Ok(());
+    }
+
+    let scene = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.clone());
+    let Some(scene) = scene else {
+        return Ok(());
+    };
+
+    let precondition = command.precondition.get_or_insert_with(Default::default);
+    if let Some(expected) = precondition.scene_revision {
+        if expected != scene.revision {
+            return Err(ApiError::conflict(format!(
+                "scene_revision precondition failed while binding frozen spins: expected {expected}, got {}",
+                scene.revision
+            )));
+        }
+    } else {
+        precondition.scene_revision = Some(scene.revision);
+    }
+
+    command.frozen_spins_runtime_plan_binding = Some(fullmag_ir::FrozenSpinsRuntimePlanBindingIR {
+        schema_version: fullmag_ir::FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION.to_string(),
+        launch_command_id: command.command_id.clone(),
+        source_scene_revision: scene.revision,
+        selection_definitions: scene.selections,
+        magnetization_constraints: scene.magnetization_constraints,
+    });
+    Ok(())
+}
+
+pub(crate) async fn enqueue_frozen_spins_runtime_replan_if_running(
+    state: &Arc<AppState>,
+    source_scene_revision: u64,
+) -> Option<String> {
+    let is_running = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .is_some_and(|snapshot| runtime_state_for_command_validation(snapshot) == "running");
+    if !is_running {
+        return None;
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let command_id = format!("fm-frozen-replan-{}", uuid::Uuid::new_v4());
+    let mut command = new_session_command(command_id.clone(), "apply_frozen_spins", now);
+    command.target = Some(RuntimeCommandTarget::CurrentStage { stage_id: None });
+    command.reason = Some("frozen_spins_authoring_commit".to_string());
+    command.precondition = Some(RuntimeCommandPrecondition {
+        scene_revision: Some(source_scene_revision),
+        runtime_state: Some("running".to_string()),
+        ..Default::default()
+    });
+
+    if let Err(error) = attach_frozen_spins_runtime_plan_binding(state, &mut command).await {
+        eprintln!(
+            "[fullmag-api] frozen spins runtime replan was not queued: {}",
+            error.message
+        );
+        return None;
+    }
+    if let Err(error) = validate_runtime_command_contract(state, &command).await {
+        eprintln!(
+            "[fullmag-api] frozen spins runtime replan validation failed: {}",
+            error.message
+        );
+        return None;
+    }
+
+    let headers = HeaderMap::new();
+    match enqueue_session_command_impl(Arc::clone(state), &headers, command).await {
+        Ok(response) => Some(response.command_id),
+        Err(error) => {
+            let was_queued = state
+                .current_command_ledger
+                .lock()
+                .await
+                .iter()
+                .any(|record| record.command.command_id == command_id);
+            eprintln!(
+                "[fullmag-api] frozen spins runtime replan publication warning: {}",
+                error.message
+            );
+            was_queued.then_some(command_id)
+        }
+    }
 }
 
 fn is_stage_control_command(kind: &str) -> bool {
@@ -1391,6 +1497,7 @@ fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128)
         preview_config: None,
         stages: None,
         profile: None,
+        frozen_spins_runtime_plan_binding: None,
         field_materialization_requirements: Vec::new(),
     }
 }

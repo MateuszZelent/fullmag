@@ -128,6 +128,7 @@ pub struct StageAutosaveResource {
 }
 
 impl StageAutosaveResource {
+    #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if self.kind != "stage_autosave" {
             return Err("stage autosave kind must be 'stage_autosave'".into());

@@ -279,6 +279,8 @@ pub struct FrozenSpinsCollectionResource {
     pub count: usize,
     #[schema(value_type = Vec<FrozenSpinsSchema>)]
     pub definitions: Vec<FrozenSpinsIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_application: Option<FrozenSpinsRuntimeApplication>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -286,6 +288,31 @@ pub struct FrozenSpinsDefinitionResource {
     pub revision: u64,
     #[schema(value_type = FrozenSpinsSchema)]
     pub definition: FrozenSpinsIR,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_application: Option<FrozenSpinsRuntimeApplication>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenSpinsRuntimeApplicationState {
+    PendingRuntimePlan,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenSpinsRuntimeApplyBoundary {
+    NextRuntimePlan,
+    AcceptedStep,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct FrozenSpinsRuntimeApplication {
+    pub state: FrozenSpinsRuntimeApplicationState,
+    pub pending_revision: u64,
+    pub apply_boundary: FrozenSpinsRuntimeApplyBoundary,
+    pub current_runtime_unchanged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_command_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
@@ -339,9 +366,30 @@ pub struct FrozenSpinsResolvedPlanSummary {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenSpinsPreviewAuthority {
+    SpeculativeAuthoringPreview,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenSpinsSolverBinding {
+    Unbound,
+    PendingRuntimeActivation,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenSpinsActivationScope {
+    AuthoringCommit,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FrozenSpinsPreviewResponse {
     pub schema_version: String,
     pub preview_id: String,
+    pub authority: FrozenSpinsPreviewAuthority,
+    pub solver_binding: FrozenSpinsSolverBinding,
     pub activation_candidate_token: String,
     pub revision: u64,
     pub current: bool,
@@ -368,7 +416,14 @@ pub struct FrozenSpinsPreviewActivationRequest {
 pub struct FrozenSpinsPreviewActivationResponse {
     pub schema_version: String,
     pub preview_id: String,
+    pub authority: FrozenSpinsPreviewAuthority,
+    pub activation_scope: FrozenSpinsActivationScope,
+    pub solver_binding: FrozenSpinsSolverBinding,
+    pub runtime_application: FrozenSpinsRuntimeApplication,
     pub activation_candidate_token_consumed: bool,
+    pub active_site_count: u64,
+    pub frozen_site_count: u64,
+    pub free_site_count: u64,
     pub source_state_revision: u64,
     pub topology_fingerprint: String,
     pub mask_sha256: String,

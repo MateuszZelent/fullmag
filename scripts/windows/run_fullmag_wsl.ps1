@@ -328,7 +328,19 @@ $TargetKey = if ($Device -eq "gpu") { $CudaCacheKey } else { "fem-cpu" }
 $TargetRoot = Join-Path $BuildRoot "cargo-targets\$TargetKey"
 $ComposeFile = Join-Path $RepoRoot "compose.windows.yaml"
 $ServiceName = "fullmag-windows-fem-$Device"
-$RuntimeImage = if ($Device -eq "gpu") { "fullmag/fem-gpu:windows-local" } else { "fullmag/fem-cpu:windows-local" }
+$RuntimeImage = if ($Device -eq "gpu") {
+  if ($env:FULLMAG_WINDOWS_FEM_GPU_IMAGE) {
+    $env:FULLMAG_WINDOWS_FEM_GPU_IMAGE
+  } else {
+    "fullmag/fem-gpu:windows-local"
+  }
+} else {
+  if ($env:FULLMAG_WINDOWS_FEM_CPU_IMAGE) {
+    $env:FULLMAG_WINDOWS_FEM_CPU_IMAGE
+  } else {
+    "fullmag/fem-cpu:windows-local"
+  }
+}
 
 foreach ($path in @($CacheRoot, $BuildRoot, $TempRoot, $StateRoot, $CargoHome, $RustupHome, $PnpmRoot, $NodeModulesRoot, $ControlRoomNodeModulesRoot, $TargetRoot)) {
   Require-ExternalBuildPath $path "Fullmag build/cache path"
@@ -355,9 +367,27 @@ $identityPython = Get-Command "python" -ErrorAction SilentlyContinue
 if (-not $identityPython) {
   throw "Python is required to capture the exact Fullmag source identity"
 }
-$identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty | Out-String)
-if ($LASTEXITCODE -ne 0) {
-  throw "Fullmag source identity capture failed with exit code $LASTEXITCODE"
+$previousGitOptionalLocks = $env:GIT_OPTIONAL_LOCKS
+$identityOutput = $null
+$identityExitCode = 0
+try {
+  # Source capture only reads the index and worktree.  Disable Git's optional
+  # index refresh for this probe so a concurrent VS Code commit cannot race
+  # with the launcher over .git/index.lock.  Restore the caller's setting
+  # immediately after the capture; mandatory Git locks remain unaffected.
+  $env:GIT_OPTIONAL_LOCKS = "0"
+  $identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty | Out-String)
+  $identityExitCode = $LASTEXITCODE
+}
+finally {
+  if ($null -eq $previousGitOptionalLocks) {
+    Remove-Item Env:GIT_OPTIONAL_LOCKS -ErrorAction SilentlyContinue
+  } else {
+    $env:GIT_OPTIONAL_LOCKS = $previousGitOptionalLocks
+  }
+}
+if ($identityExitCode -ne 0) {
+  throw "Fullmag source identity capture failed with exit code $identityExitCode"
 }
 $sourceIdentity = $identityOutput | ConvertFrom-Json
 $env:FULLMAG_SOURCE_GIT_COMMIT = [string]$sourceIdentity.head_commit_full
@@ -505,6 +535,17 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     exit 0
   }
 
+  # The mutex protects the shared build outputs and manifest, not the
+  # potentially long-running simulation.  Release it before starting the
+  # container so an interactive/headless run cannot block a later VS Code or
+  # terminal build for the duration of the solve.
+  if ($buildMutexHeld) {
+    $buildMutex.ReleaseMutex()
+    $buildMutexHeld = $false
+    $buildMutex.Dispose()
+    $buildMutex = $null
+  }
+
   if ($Device -eq "gpu") {
     Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "nvidia-smi", "-L")
   }
@@ -566,7 +607,12 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     $cliArguments += @("--web-port", $containerWebPort.ToString())
   }
   $quotedCli = ($cliArguments | ForEach-Object { Quote-Bash $_ }) -join " "
-  $runCommand = "set -euo pipefail; cd /workspace; export PYTHONPATH=/workspace/packages/fullmag-py/src; exec /workspace/.fullmag/local/bin/fullmag $quotedCli"
+  # Keep the packaged PyO3 extension root on PYTHONPATH.  The `fullmag`
+  # wrapper normally adds it itself, but this shell command is the final
+  # process boundary and used to overwrite PYTHONPATH with only the source
+  # package.  That hid `_fullmag_core.so`, forcing every v2 cache hit through
+  # the expensive Python full audit on the Windows bind mount.
+  $runCommand = "set -euo pipefail; cd /workspace; export PYTHONPATH=/workspace/packages/fullmag-py/src:/workspace/.fullmag/local; exec /workspace/.fullmag/local/bin/fullmag $quotedCli"
   $runArguments += $runCommand
   Invoke-DockerCompose $runArguments
 }

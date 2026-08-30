@@ -1287,6 +1287,26 @@ pub(crate) fn resolve_with_registry(
     preview_enabled: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    resolve_with_registry_for_plan(
+        problem,
+        &plan,
+        registry,
+        explicit_selection,
+        preview_enabled,
+    )
+}
+
+/// Resolve the runtime against an already materialized execution plan.
+///
+/// Script-mode orchestration has already paid for planning and must not
+/// rebuild a large FEM plan merely to populate live runtime metadata.
+pub(crate) fn resolve_with_registry_for_plan(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    registry: Option<&RuntimeRegistry>,
+    explicit_selection: bool,
+    preview_enabled: bool,
+) -> Result<DispatchEngineResolution, RunError> {
     match registry {
         Some(registry) => match &plan.backend_plan {
             BackendPlanIR::Fdm(fdm) => resolve_fdm_engine_with_registry(

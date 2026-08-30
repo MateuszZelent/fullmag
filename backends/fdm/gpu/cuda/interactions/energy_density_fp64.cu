@@ -12,7 +12,7 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 
 namespace {
 
-constexpr double MU0 = 4.0 * M_PI * 1.0e-7;
+constexpr double MU0 = 4.0 * kFullmagPi * 1.0e-7;
 constexpr int BLOCK_SIZE = 256;
 
 __device__ __forceinline__ int neighbor_index(

@@ -113,6 +113,7 @@ export interface Viewport3DRenderAdoptionRegistry {
     targetIdsByCarrierId: ReadonlyMap<string, readonly string[]>,
   ): void;
   snapshot(targetId: string): readonly Viewport3DRenderAdoptionReceipt[];
+  subscribeActive(listener: () => void): () => void;
   subscribe(listener: (targetId: string) => void): () => void;
 }
 
@@ -134,6 +135,7 @@ export function createViewport3DRenderAdoptionRegistry({
   const activePasses = new Map<string, Map<string, OwnedAdoption>>();
   const inactiveHistory = new Map<string, AdoptionPass>();
   const listeners = new Set<(targetId: string) => void>();
+  const activeListeners = new Set<() => void>();
   const replaysByCarrier = new Map<string, Set<() => void>>();
   const rejectedTargetPasses = new Set<string>();
   let adoptionSequence = 0;
@@ -143,6 +145,9 @@ export function createViewport3DRenderAdoptionRegistry({
 
   const notify = (targetId: string) => {
     for (const listener of [...listeners]) listener(targetId);
+  };
+  const notifyActive = () => {
+    for (const listener of [...activeListeners]) listener();
   };
   const clearRejectedTargetPasses = (targetId: string) => {
     for (const rejectedKey of [...rejectedTargetPasses]) {
@@ -314,6 +319,10 @@ export function createViewport3DRenderAdoptionRegistry({
     });
     activePasses.set(key, owners);
     syncPass(key);
+    // Renderer completion cannot depend on an expanded Visualization Debug
+    // target. Signal a newly effective WebGL adoption even with zero debug
+    // demand so the viewport can invalidate and commit its ACK frame.
+    if (!matchingActive) notifyActive();
     return { status: "adopted" as const };
   };
   const replayCarrier = (carrierId: string) => {
@@ -345,11 +354,18 @@ export function createViewport3DRenderAdoptionRegistry({
       if (!ownerId) return;
       const owned = owners?.get(ownerId);
       if (!owners || !owned || !adoptionIdentityEquals(owned.receipt, adoption)) return;
+      const selectedBefore = [...owners.values()].sort(
+        (left, right) => right.receipt.adoptionSequence - left.receipt.adoptionSequence,
+      )[0]?.receipt;
       owners.delete(ownerId);
       activeOwnerCount -= 1;
       rememberInactive(owned);
       if (owners.size === 0) activePasses.delete(key);
       syncPass(key);
+      const selectedAfter = [...owners.values()].sort(
+        (left, right) => right.receipt.adoptionSequence - left.receipt.adoptionSequence,
+      )[0]?.receipt;
+      if (selectedBefore !== selectedAfter) notifyActive();
     },
     clearTarget(targetId) {
       const hadReceipts = receipts.delete(targetId);
@@ -370,8 +386,9 @@ export function createViewport3DRenderAdoptionRegistry({
     },
     latestActiveAdoption({ sessionEpoch, sessionId }) {
       let latest: Viewport3DRenderAdoptionReceipt | null = null;
-      for (const targetReceipts of receipts.values()) {
-        for (const receipt of targetReceipts) {
+      for (const owners of activePasses.values()) {
+        for (const owned of owners.values()) {
+          const receipt = owned.receipt;
           if (
             receipt.sessionEpoch !== sessionEpoch ||
             receipt.sessionId !== sessionId ||
@@ -381,7 +398,13 @@ export function createViewport3DRenderAdoptionRegistry({
             continue;
           }
           if (!latest || receipt.adoptionSequence > latest.adoptionSequence) {
-            latest = receipt;
+            latest = {
+              ...receipt,
+              targetId:
+                ownerTargetIds(owned)[0] ??
+                owned.explicitTargetId ??
+                receipt.carrierId,
+            };
           }
         }
       }
@@ -472,6 +495,7 @@ export function createViewport3DRenderAdoptionRegistry({
         return;
       }
       const affectedTargetIds = [...receipts.keys()];
+      const hadActivePasses = activePasses.size > 0;
       currentSessionIdentity = identity;
       receipts.clear();
       activePasses.clear();
@@ -479,6 +503,7 @@ export function createViewport3DRenderAdoptionRegistry({
       rejectedTargetPasses.clear();
       activeOwnerCount = 0;
       for (const targetId of affectedTargetIds) notify(targetId);
+      if (hadActivePasses) notifyActive();
     },
     snapshot(targetId) {
       return receipts.get(targetId) ?? EMPTY_RECEIPTS;
@@ -503,6 +528,19 @@ export function createViewport3DRenderAdoptionRegistry({
         if (!subscribed) return;
         subscribed = false;
         listeners.delete(listener);
+      };
+    },
+    subscribeActive(listener) {
+      activeListeners.add(listener);
+      // React mounts child layer effects before the parent scene effect.  If
+      // the layer adopted its buffer first, replay that active state so the
+      // late scene subscriber still invalidates and commits the rendered ACK.
+      if (activePasses.size > 0) listener();
+      let subscribed = true;
+      return () => {
+        if (!subscribed) return;
+        subscribed = false;
+        activeListeners.delete(listener);
       };
     },
   };

@@ -1633,6 +1633,7 @@ pub(crate) fn sync_current_live_snapshot(
             simulation_preparation: payload.simulation_preparation.as_ref(),
             run: payload.run.as_ref(),
             live_state: payload.live_state.as_ref(),
+            frozen_spins_runtime_status: payload.frozen_spins_runtime_status.as_ref(),
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
             latest_fields: payload.latest_fields.as_ref(),
             replace_latest_fields: payload.replace_latest_fields,
@@ -1682,6 +1683,7 @@ fn sync_current_live_runtime_frame(
         .json(&CurrentLiveRuntimeFrameRequest {
             session_id,
             live_state: payload.live_state.as_ref(),
+            frozen_spins_runtime_status: payload.frozen_spins_runtime_status.as_ref(),
             engine_log: payload.engine_log.as_deref(),
             solver_profile: payload.solver_profile.as_ref(),
             fem_mesh: payload.fem_mesh.as_ref(),
@@ -1747,6 +1749,7 @@ fn payload_has_current_live_delta(payload: &CurrentLiveSnapshotPayload) -> bool 
         || payload.latest_scalar_row.is_some()
         || payload_routes_to_current_live_session_frame(payload)
         || payload.live_state.is_some()
+        || payload.frozen_spins_runtime_status.is_some()
         || payload.engine_log.is_some()
         || payload.solver_profile.is_some()
         || payload.fem_mesh.is_some()
@@ -1794,6 +1797,7 @@ where
     }
 
     if payload.live_state.is_some()
+        || payload.frozen_spins_runtime_status.is_some()
         || payload.engine_log.is_some()
         || payload.solver_profile.is_some()
         || payload.fem_mesh.is_some()

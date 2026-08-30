@@ -885,7 +885,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         double e = ctx->slonczewski_formula == FULLMAG_FDM_SLONCZEWSKI_FULLMAG_V2
             ? 1.602176634e-19
             : 1.60217662e-19;          // Elementary charge (C)
-        double mu_0 = 4.0 * M_PI * 1e-7; // Vacuum permeability
+        double mu_0 = 4.0 * kFullmagPi * 1e-7; // Vacuum permeability
         double js = sqrt(ctx->current_density_x*ctx->current_density_x +
                          ctx->current_density_y*ctx->current_density_y +
                          ctx->current_density_z*ctx->current_density_z);

@@ -2,6 +2,12 @@
 
 #include <cooperative_groups.h>
 
+#ifdef small
+// cooperative_groups.h may restore the Windows RPC `small` type macro after
+// sparse_solver.hpp has cleared it for the Workspace member.
+#undef small
+#endif
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>

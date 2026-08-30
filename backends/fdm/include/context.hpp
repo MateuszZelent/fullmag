@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -28,6 +29,9 @@
 
 namespace fullmag {
 namespace fdm {
+
+inline constexpr double kFullmagPi =
+    3.141592653589793238462643383279502884;
 
 /// Per-component SoA device arrays for a 3D vector field.
 struct DeviceVectorField {
@@ -56,8 +60,8 @@ struct AsyncFieldSnapshotPool {
     std::size_t component_bytes = 0;
     std::size_t host_soa_bytes = 0;
     uint64_t cell_count = 0;
-    uint32_t leased_slots = 0;
-    uint32_t retired_slots = 0;
+    std::atomic<uint32_t> leased_slots{0};
+    std::atomic<uint32_t> retired_slots{0};
     bool initialized = false;
 };
 
@@ -74,8 +78,8 @@ struct AsyncPreviewSnapshotPool {
     AsyncPreviewSnapshotPoolSlot slots[kFdmAsyncPreviewSnapshotPoolCapacity]{};
     std::size_t xyz_bytes = 0;
     uint64_t max_preview_count = 0;
-    uint32_t leased_slots = 0;
-    uint32_t retired_slots = 0;
+    std::atomic<uint32_t> leased_slots{0};
+    std::atomic<uint32_t> retired_slots{0};
     bool initialized = false;
 };
 

@@ -232,8 +232,11 @@ mod tests {
     use fullmag_ir::{
         BackendPlanIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
         GridDimensions, IntegratorChoice, ProblemIR, RelaxationAlgorithmIR, RelaxationControlIR,
-        ResolvedAntennaZeemanMaskIR, TimeDependenceIR,
+        ResolvedAntennaZeemanMaskIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
+        SelectionCertificateIR, TimeDependenceIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
@@ -249,6 +252,26 @@ mod tests {
             .expect("interactive FEM execution function");
         assert!(interactive.contains("runtime.stage_context()"));
         assert!(!interactive.contains("StageFemMeshAsset::build_from_fem_plan"));
+    }
+
+    #[test]
+    fn interactive_fem_activation_materializes_continuation_before_native_create() {
+        let runner_source = include_str!("lib.rs");
+        let create = runner_source
+            .split("pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence")
+            .nth(1)
+            .and_then(|tail| tail.split("/// Run a problem using a unified").next())
+            .expect("planned interactive runtime constructor");
+        let continuation = create
+            .find("activation_plan.initial_magnetization = magnetization.to_vec();")
+            .expect("FEM continuation must be materialized into the activation plan");
+        let native_create = create
+            .rfind("InteractiveFemPreviewRuntime::create_from_plan")
+            .expect("native FEM runtime creation");
+        assert!(
+            continuation < native_create,
+            "CaptureCurrentAtActivation must observe continuation before native FEM construction"
+        );
     }
 
     #[test]
@@ -301,6 +324,407 @@ mod tests {
             enable_demag: true,
             ..Default::default()
         }
+    }
+
+    fn resolved_frozen_spins(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+        let active_dof_count = mask.len() as u64;
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let mut hash = Sha256::new();
+        hash.update(active_dof_count.to_le_bytes());
+        hash.update(
+            mask.iter()
+                .map(|frozen| u8::from(*frozen))
+                .collect::<Vec<_>>(),
+        );
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["stage-pin".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: mask_sha256.clone(),
+            grid_or_mesh_fingerprint: "interactive-stage-grid".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fdm_cell_center.v1".to_string(),
+                constraint_ids: vec!["stage-pin".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "stage-pin".to_string(),
+                    selector_sha256: "a".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "interactive-stage-grid".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256,
+                resolved_reference_sha256: "b".repeat(64),
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn interactive_cpu_runtime_preserves_frozen_spin_epoch_across_stage_gap() {
+        let mut active_plan = make_soa_fdm_plan();
+        active_plan.enable_demag = false;
+        active_plan.frozen_spins = Some(resolved_frozen_spins(vec![
+            true, false, false, false, false, false, false, false,
+        ]));
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &active_plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("create persistent CPU runtime");
+
+        let cpu = match &runtime.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => panic!("test requested the CPU runtime"),
+        };
+        let initial = cpu.problem.frozen_spins().expect("stage A constraint");
+        assert_eq!(initial.constraint_activation_epochs()["stage-pin"], 1);
+        let initial_reference = initial.reference()[0];
+
+        let mut inactive_plan = active_plan.clone();
+        inactive_plan.frozen_spins = None;
+        runtime
+            .apply_stage_plan(&inactive_plan)
+            .expect("deactivate for stage B");
+        let inactive_status = runtime
+            .frozen_spins_runtime_status()
+            .expect("retained inactive-stage certificate");
+        assert!(inactive_status.active_constraint_ids.is_empty());
+        assert_eq!(inactive_status.frozen_site_count, 0);
+        assert_eq!(inactive_status.free_site_count, 8);
+        assert_eq!(inactive_status.resolved_constraint_set_revision, 2);
+        let replacement = vec![[0.0, 1.0, 0.0]; 8];
+        runtime
+            .upload_magnetization(&replacement)
+            .expect("load stage B continuation state");
+        runtime
+            .apply_stage_plan(&active_plan)
+            .expect("reactivate for stage C");
+
+        let cpu = match &runtime.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => panic!("test requested the CPU runtime"),
+        };
+        let reentered = cpu.problem.frozen_spins().expect("stage C constraint");
+        assert_eq!(reentered.constraint_activation_epochs()["stage-pin"], 2);
+        assert_eq!(reentered.reference()[0], replacement[0]);
+        assert_ne!(reentered.reference()[0], initial_reference);
+        assert_eq!(reentered.resolved_constraint_set_revision(), 3);
+        let status = runtime
+            .frozen_spins_runtime_status()
+            .expect("stage C activation certificate");
+        assert_eq!(status.constraint_activation_epochs["stage-pin"], 2);
+        assert_eq!(status.resolved_constraint_set_revision, 3);
+        assert_eq!(status.frozen_site_count, 1);
+        assert_eq!(status.free_site_count, 7);
+        assert_eq!(status.vector_dimension, 3);
+        assert_eq!(status.scalar_component_dof_count, 24);
+    }
+
+    #[test]
+    fn interactive_cpu_explicit_reactivation_recaptures_same_mask_and_advances_epoch() {
+        let mut plan = make_soa_fdm_plan();
+        plan.enable_demag = false;
+        plan.frozen_spins = Some(resolved_frozen_spins(vec![
+            true, false, false, false, false, false, false, false,
+        ]));
+        let mut runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("create persistent CPU runtime");
+        assert!(runtime.supports_frozen_spins_reactivation_in_place());
+
+        let replacement = vec![[0.0, 0.6, 0.8]; 8];
+        runtime
+            .upload_magnetization(&replacement)
+            .expect("install continuation before explicit reactivation");
+        runtime
+            .apply_frozen_spins_reactivation_plan(&plan)
+            .expect("explicitly reactivate the unchanged resolved mask");
+
+        let cpu = match &runtime.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => panic!("test requested the CPU runtime"),
+        };
+        let reactivated = cpu.problem.frozen_spins().expect("reactivated constraint");
+        assert_eq!(reactivated.constraint_activation_epochs()["stage-pin"], 2);
+        assert_eq!(reactivated.resolved_constraint_set_revision(), 2);
+        assert_eq!(reactivated.reference()[0], replacement[0]);
+        let status = runtime
+            .frozen_spins_runtime_status()
+            .expect("solver-owned reactivation status");
+        assert_eq!(status.constraint_activation_epochs["stage-pin"], 2);
+        assert_eq!(status.resolved_constraint_set_revision, 2);
+
+        let carried = crate::constraints::FrozenSpinsActivationSet::default()
+            .prepare_transition(["stage-pin".to_string()])
+            .and_then(|set| set.prepare_reactivation(["stage-pin".to_string()]))
+            .expect("pre-existing native-style activation history");
+        let backend = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &plan,
+            FdmEngine::CpuReference,
+            None,
+            "cpu",
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("create replacement backend");
+        let mut unified =
+            crate::interactive::runtime::InteractiveRuntime::new_with_frozen_spins_activation_set(
+                Box::new(backend),
+                Some(carried),
+                false,
+            )
+            .expect("carry activation history into replacement runtime");
+        unified
+            .upload_magnetization(&replacement)
+            .expect("install replacement continuation");
+        let execution_plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: fullmag_ir::IR_VERSION.to_string(),
+                requested_backend: fullmag_ir::BackendTarget::Fdm,
+                resolved_backend: fullmag_ir::BackendTarget::Fdm,
+                execution_mode: fullmag_ir::ExecutionMode::Extended,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: BackendPlanIR::Fdm(plan.clone()),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: Vec::new(),
+            },
+            provenance: fullmag_ir::ProvenancePlanIR::default(),
+        };
+        unified
+            .apply_frozen_spins_reactivation_plan(&execution_plan)
+            .expect("reactivate after carrying native-style history");
+        let carried_status = unified
+            .frozen_spins_runtime_status()
+            .expect("carried solver-owned status");
+        assert_eq!(carried_status.constraint_activation_epochs["stage-pin"], 3);
+        assert_eq!(carried_status.resolved_constraint_set_revision, 4);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn interactive_cuda_rebuild_reactivation_preserves_continuation_epoch_and_quantity() {
+        let mut initial_plan = make_soa_fdm_plan();
+        initial_plan.enable_demag = false;
+        initial_plan.frozen_spins = Some(resolved_frozen_spins(vec![
+            true, false, false, false, false, false, false, false,
+        ]));
+        let initial_backend = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &initial_plan,
+            FdmEngine::CudaFdm,
+            None,
+            "cuda",
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("create initial native CUDA runtime");
+        let mut initial_runtime =
+            crate::interactive::runtime::InteractiveRuntime::new_with_frozen_spins_activation_set(
+                Box::new(initial_backend),
+                None,
+                false,
+            )
+            .expect("publish initial CUDA activation metadata");
+        let initial_status = initial_runtime
+            .frozen_spins_runtime_status()
+            .expect("initial CUDA solver-owned status");
+        assert_eq!(initial_status.constraint_activation_epochs["stage-pin"], 1);
+        assert_eq!(initial_status.resolved_constraint_set_revision, 1);
+
+        let continuation = vec![[0.0, 0.6, 0.8]; 8];
+        initial_runtime
+            .upload_magnetization(&continuation)
+            .expect("install accepted-step continuation on CUDA");
+        let continuation_field = initial_runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "m".to_string(),
+                ..Default::default()
+            })
+            .expect("snapshot CUDA continuation before rebuild");
+        assert_eq!(
+            continuation_field.vector_field_values,
+            continuation.concat()
+        );
+
+        let carried = initial_runtime.frozen_spins_activation_set().clone();
+        let mut reactivation_plan = initial_plan.clone();
+        reactivation_plan.initial_magnetization = continuation.clone();
+        let reactivated_backend = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &reactivation_plan,
+            FdmEngine::CudaFdm,
+            None,
+            "cuda",
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("rebuild native CUDA runtime from accepted-step continuation");
+        let mut reactivated_runtime =
+            crate::interactive::runtime::InteractiveRuntime::new_with_frozen_spins_activation_set(
+                Box::new(reactivated_backend),
+                Some(carried),
+                true,
+            )
+            .expect("publish explicit CUDA reactivation metadata");
+        let reactivated_status = reactivated_runtime
+            .frozen_spins_runtime_status()
+            .expect("reactivated CUDA solver-owned status");
+        assert_eq!(
+            reactivated_status.constraint_activation_epochs["stage-pin"],
+            2
+        );
+        assert_eq!(reactivated_status.resolved_constraint_set_revision, 2);
+        assert_eq!(reactivated_status.mask_sha256, initial_status.mask_sha256);
+        assert_ne!(
+            reactivated_status.reference_sha256,
+            initial_status.reference_sha256
+        );
+
+        let reactivated_m = reactivated_runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "m".to_string(),
+                ..Default::default()
+            })
+            .expect("snapshot CUDA continuation after rebuild");
+        assert_eq!(reactivated_m.vector_field_values, continuation.concat());
+        let frozen_quantity = reactivated_runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "frozen_spins".to_string(),
+                ..Default::default()
+            })
+            .expect("snapshot solver-owned Frozen Spins quantity after rebuild");
+        assert_eq!(frozen_quantity.quantity, "frozen_spins");
+        assert_eq!(frozen_quantity.unit, "1");
+        assert_eq!(
+            frozen_quantity.vector_field_values,
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn interactive_fem_gpu_rebuild_reactivation_preserves_continuation_epoch_and_quantity() {
+        let mut initial_plan = crate::dispatch::test_tiny_fem_plan();
+        let mesh_fingerprint = initial_plan
+            .mesh
+            .mixed_topology_fingerprint_v3()
+            .expect("fingerprint the serial-P1 FEM carrier");
+        let mut frozen_spins = resolved_frozen_spins(vec![true, false, false, false]);
+        frozen_spins.grid_or_mesh_fingerprint = mesh_fingerprint.clone();
+        frozen_spins.certificate.grid_or_mesh_fingerprint = mesh_fingerprint;
+        frozen_spins.certificate.evaluator_id = "selection.fem_p1_true_dof.v1".to_string();
+        initial_plan.frozen_spins = Some(frozen_spins);
+
+        let initial_backend = super::InteractiveFemPreviewRuntime::from_fem_plan(
+            &initial_plan,
+            crate::dispatch::FemEngine::NativeGpu,
+            None,
+            None,
+            None,
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("create initial native FEM GPU runtime");
+        let mut initial_runtime =
+            crate::interactive::runtime::InteractiveRuntime::new_with_frozen_spins_activation_set(
+                Box::new(initial_backend),
+                None,
+                false,
+            )
+            .expect("publish initial FEM GPU activation metadata");
+        let initial_status = initial_runtime
+            .frozen_spins_runtime_status()
+            .expect("initial FEM GPU solver-owned status");
+        assert_eq!(initial_status.constraint_activation_epochs["stage-pin"], 1);
+        assert_eq!(initial_status.resolved_constraint_set_revision, 1);
+
+        let continuation = vec![[0.0, 0.6, 0.8]; 4];
+        initial_runtime
+            .upload_magnetization(&continuation)
+            .expect("install accepted-step continuation on FEM GPU");
+        let continuation_field = initial_runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "m".to_string(),
+                ..Default::default()
+            })
+            .expect("snapshot FEM GPU continuation before rebuild");
+        assert_eq!(
+            continuation_field.vector_field_values,
+            continuation.concat()
+        );
+
+        let carried = initial_runtime.frozen_spins_activation_set().clone();
+        let mut reactivation_plan = initial_plan.clone();
+        reactivation_plan.initial_magnetization = continuation.clone();
+        let reactivated_backend = super::InteractiveFemPreviewRuntime::from_fem_plan(
+            &reactivation_plan,
+            crate::dispatch::FemEngine::NativeGpu,
+            None,
+            None,
+            None,
+            fullmag_ir::ExecutionMode::Extended,
+        )
+        .expect("rebuild native FEM GPU runtime from accepted-step continuation");
+        let mut reactivated_runtime =
+            crate::interactive::runtime::InteractiveRuntime::new_with_frozen_spins_activation_set(
+                Box::new(reactivated_backend),
+                Some(carried),
+                true,
+            )
+            .expect("publish explicit FEM GPU reactivation metadata");
+        let reactivated_status = reactivated_runtime
+            .frozen_spins_runtime_status()
+            .expect("reactivated FEM GPU solver-owned status");
+        assert_eq!(
+            reactivated_status.constraint_activation_epochs["stage-pin"],
+            2
+        );
+        assert_eq!(reactivated_status.resolved_constraint_set_revision, 2);
+        assert_eq!(reactivated_status.mask_sha256, initial_status.mask_sha256);
+        assert_ne!(
+            reactivated_status.reference_sha256,
+            initial_status.reference_sha256
+        );
+
+        let reactivated_m = reactivated_runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "m".to_string(),
+                ..Default::default()
+            })
+            .expect("snapshot FEM GPU continuation after rebuild");
+        assert_eq!(reactivated_m.vector_field_values, continuation.concat());
+        let frozen_quantity = reactivated_runtime
+            .snapshot_preview(&LivePreviewRequest {
+                quantity: "frozen_spins".to_string(),
+                ..Default::default()
+            })
+            .expect("snapshot solver-owned FEM Frozen Spins quantity after rebuild");
+        assert_eq!(frozen_quantity.quantity, "frozen_spins");
+        assert_eq!(frozen_quantity.unit, "1");
+        assert_eq!(
+            frozen_quantity.vector_field_values,
+            vec![1.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(frozen_quantity.active_mask, Some(vec![true; 4]));
     }
 
     #[test]
@@ -1288,6 +1712,7 @@ struct CpuInteractiveFdmPreviewRuntime {
     integrator_buffers: IntegratorBuffers,
     original_grid: [u32; 3],
     plan_signature: FdmPlanIR,
+    frozen_spins_identity_plan: Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>,
     provenance: ExecutionProvenance,
     total_steps: u64,
 }
@@ -1301,11 +1726,15 @@ struct CudaInteractiveFdmPreviewRuntime {
     provenance: ExecutionProvenance,
     total_steps: u64,
     total_time: f64,
+    frozen_spins_identity_plan: Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+    frozen_spins_state: Option<fullmag_engine::FrozenSpinsState>,
 }
 
 pub struct InteractiveFemPreviewRuntime {
     inner: InteractiveFemPreviewRuntimeInner,
     stage_context: FemStageExecutionContext,
+    frozen_spins_identity_plan: Option<fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+    frozen_spins_state: Option<fullmag_engine::FrozenSpinsState>,
 }
 
 enum InteractiveFemPreviewRuntimeInner {
@@ -1406,6 +1835,7 @@ impl InteractiveFdmPreviewRuntime {
                     integrator_buffers,
                     original_grid: plan.grid.cells,
                     plan_signature: normalize_plan_signature(plan),
+                    frozen_spins_identity_plan: plan.frozen_spins.clone(),
                     provenance,
                     total_steps: 0,
                 })
@@ -1413,6 +1843,22 @@ impl InteractiveFdmPreviewRuntime {
             FdmEngine::CudaFdm => {
                 #[cfg(feature = "cuda")]
                 {
+                    let frozen_spins_state = plan
+                        .frozen_spins
+                        .as_ref()
+                        .map(|frozen_plan| {
+                            fullmag_engine::FrozenSpinsState::capture_at_activation(
+                                frozen_plan,
+                                plan.active_mask.as_deref(),
+                                &plan.initial_magnetization,
+                            )
+                            .map_err(|error| RunError {
+                                message: format!(
+                                    "interactive CUDA Frozen Spins activation metadata failed: {error}"
+                                ),
+                            })
+                        })
+                        .transpose()?;
                     let backend = NativeFdmBackend::create(plan)?;
                     let device_info = backend.device_info()?;
                     let mut provenance = cuda_execution_provenance(plan, &device_info)?;
@@ -1428,6 +1874,8 @@ impl InteractiveFdmPreviewRuntime {
                         provenance,
                         total_steps: 0,
                         total_time: 0.0,
+                        frozen_spins_identity_plan: plan.frozen_spins.clone(),
+                        frozen_spins_state,
                     })
                 }
                 #[cfg(not(feature = "cuda"))]
@@ -1455,15 +1903,60 @@ impl InteractiveFdmPreviewRuntime {
     }
 
     pub fn can_continue_with_plan(&self, plan: &FdmPlanIR) -> bool {
-        let normalized = normalize_runtime_context_signature(plan);
         match &self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => {
-                normalize_runtime_context_signature(&runtime.plan_signature) == normalized
+                normalize_cpu_runtime_context_signature(&runtime.plan_signature)
+                    == normalize_cpu_runtime_context_signature(plan)
             }
             #[cfg(feature = "cuda")]
             InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => {
-                normalize_runtime_context_signature(&runtime.plan_signature) == normalized
+                normalize_runtime_context_signature(&runtime.plan_signature)
+                    == normalize_runtime_context_signature(plan)
             }
+        }
+    }
+
+    /// Apply a compatible stage plan to solver-owned state. CPU FDM supports
+    /// an atomic frozen-spin active-set transition. CUDA keeps the stricter
+    /// compatibility rule until its native backend exposes an equivalent
+    /// transition API, so changed constraints are rebuilt rather than applied
+    /// partially.
+    pub fn apply_stage_plan(&mut self, plan: &FdmPlanIR) -> Result<(), RunError> {
+        match &mut self.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime.apply_stage_plan(plan),
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => {
+                if normalize_runtime_context_signature(&runtime.plan_signature)
+                    != normalize_runtime_context_signature(plan)
+                {
+                    return Err(RunError {
+                        message: "interactive CUDA FDM runtime context mismatch; caller must rebuild runtime before applying the stage plan".to_string(),
+                    });
+                }
+                runtime.plan_signature = normalize_plan_signature(plan);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn supports_frozen_spins_reactivation_in_place(&self) -> bool {
+        matches!(self.inner, InteractiveFdmPreviewRuntimeInner::Cpu(_))
+    }
+
+    pub fn apply_frozen_spins_reactivation_plan(
+        &mut self,
+        plan: &FdmPlanIR,
+    ) -> Result<(), RunError> {
+        match &mut self.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => {
+                runtime.apply_frozen_spins_reactivation_plan(plan)
+            }
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(_) => Err(RunError {
+                message:
+                    "interactive CUDA FDM requires rebuild for explicit Frozen Spins reactivation"
+                        .to_string(),
+            }),
         }
     }
 
@@ -1472,6 +1965,28 @@ impl InteractiveFdmPreviewRuntime {
             InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime.provenance.clone(),
             #[cfg(feature = "cuda")]
             InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => runtime.provenance.clone(),
+        }
+    }
+
+    pub fn frozen_spins_runtime_status(
+        &self,
+    ) -> Option<crate::constraints::FrozenSpinsRuntimeStatus> {
+        match &self.inner {
+            InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime
+                .frozen_spins_identity_plan
+                .as_ref()
+                .zip(runtime.problem.frozen_spins())
+                .map(|(plan, state)| {
+                    crate::constraints::FrozenSpinsRuntimeStatus::from_resolved_state(plan, state)
+                }),
+            #[cfg(feature = "cuda")]
+            InteractiveFdmPreviewRuntimeInner::Cuda(runtime) => runtime
+                .frozen_spins_identity_plan
+                .as_ref()
+                .zip(runtime.frozen_spins_state.as_ref())
+                .map(|(plan, state)| {
+                    crate::constraints::FrozenSpinsRuntimeStatus::from_resolved_state(plan, state)
+                }),
         }
     }
 
@@ -1697,6 +2212,24 @@ impl InteractiveFemPreviewRuntime {
                 }
             };
             let (mesh, stage_context) = reuse_stage_fem_mesh_asset(stage_asset);
+            let magnetic_node_mask = mesh_quantity_active_mask("m", &effective_plan.mesh)
+                .unwrap_or_else(|| vec![true; effective_plan.initial_magnetization.len()]);
+            let frozen_spins_state = effective_plan
+                .frozen_spins
+                .as_ref()
+                .map(|frozen_plan| {
+                    fullmag_engine::FrozenSpinsState::capture_at_activation(
+                        frozen_plan,
+                        Some(&magnetic_node_mask),
+                        &effective_plan.initial_magnetization,
+                    )
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "interactive native FEM Frozen Spins activation metadata failed: {error}"
+                        ),
+                    })
+                })
+                .transpose()?;
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
@@ -1723,6 +2256,8 @@ impl InteractiveFemPreviewRuntime {
             Ok(Self {
                 inner,
                 stage_context,
+                frozen_spins_identity_plan: effective_plan.frozen_spins.clone(),
+                frozen_spins_state,
             })
         }
     }
@@ -1765,6 +2300,17 @@ impl InteractiveFemPreviewRuntime {
             #[cfg(feature = "fem-gpu")]
             InteractiveFemPreviewRuntimeInner::Gpu(runtime) => runtime.provenance.clone(),
         }
+    }
+
+    pub fn frozen_spins_runtime_status(
+        &self,
+    ) -> Option<crate::constraints::FrozenSpinsRuntimeStatus> {
+        self.frozen_spins_identity_plan
+            .as_ref()
+            .zip(self.frozen_spins_state.as_ref())
+            .map(|(plan, state)| {
+                crate::constraints::FrozenSpinsRuntimeStatus::from_resolved_state(plan, state)
+            })
     }
 
     pub fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
@@ -1898,6 +2444,79 @@ impl InteractiveFemPreviewRuntime {
 }
 
 impl CpuInteractiveFdmPreviewRuntime {
+    fn apply_stage_plan(&mut self, plan: &FdmPlanIR) -> Result<(), RunError> {
+        let normalized_plan = normalize_plan_signature(plan);
+        if self.plan_signature == normalized_plan {
+            return Ok(());
+        }
+        if normalize_cpu_runtime_context_signature(&self.plan_signature)
+            != normalize_cpu_runtime_context_signature(plan)
+        {
+            return Err(RunError {
+                message: "interactive CPU FDM runtime context mismatch; caller must rebuild runtime before applying the stage plan".to_string(),
+            });
+        }
+        self.problem
+            .transition_frozen_spins_at_stage_boundary(plan.frozen_spins.as_ref(), &mut self.state)
+            .map_err(|error| RunError {
+                message: format!(
+                    "applying interactive CPU frozen-spin stage transition failed: {error}"
+                ),
+            })?;
+        self.state_soa = if self.problem.soa_fast_path_supported() {
+            Some(self.state.to_soa())
+        } else {
+            None
+        };
+        self.last_step_report = None;
+        if let Some(frozen_spins) = plan.frozen_spins.as_ref() {
+            self.frozen_spins_identity_plan = Some(frozen_spins.clone());
+        }
+        self.plan_signature = normalized_plan;
+        Ok(())
+    }
+
+    fn apply_frozen_spins_reactivation_plan(&mut self, plan: &FdmPlanIR) -> Result<(), RunError> {
+        let normalized_plan = normalize_plan_signature(plan);
+        if normalize_cpu_runtime_context_signature(&self.plan_signature)
+            != normalize_cpu_runtime_context_signature(plan)
+        {
+            return Err(RunError {
+                message: "interactive CPU FDM runtime context mismatch; caller must rebuild runtime before Frozen Spins reactivation".to_string(),
+            });
+        }
+
+        match plan.frozen_spins.as_ref() {
+            Some(frozen_spins) => self
+                .problem
+                .capture_frozen_spins_at_activation(frozen_spins, &mut self.state)
+                .map_err(|error| RunError {
+                    message: format!(
+                        "applying interactive CPU Frozen Spins explicit reactivation failed: {error}"
+                    ),
+                })?,
+            None => self
+                .problem
+                .transition_frozen_spins_at_stage_boundary(None, &mut self.state)
+                .map_err(|error| RunError {
+                    message: format!(
+                        "applying interactive CPU Frozen Spins deactivation failed: {error}"
+                    ),
+                })?,
+        }
+        self.state_soa = if self.problem.soa_fast_path_supported() {
+            Some(self.state.to_soa())
+        } else {
+            None
+        };
+        self.last_step_report = None;
+        if let Some(frozen_spins) = plan.frozen_spins.as_ref() {
+            self.frozen_spins_identity_plan = Some(frozen_spins.clone());
+        }
+        self.plan_signature = normalized_plan;
+        Ok(())
+    }
+
     fn upload_magnetization(&mut self, magnetization: &[[f64; 3]]) -> Result<(), RunError> {
         self.state
             .set_magnetization(magnetization.to_vec())
@@ -4932,6 +5551,12 @@ fn normalize_runtime_context_signature(plan: &FdmPlanIR) -> FdmPlanIR {
     normalized
 }
 
+fn normalize_cpu_runtime_context_signature(plan: &FdmPlanIR) -> FdmPlanIR {
+    let mut normalized = normalize_runtime_context_signature(plan);
+    normalized.frozen_spins = None;
+    normalized
+}
+
 fn normalize_fem_plan_signature(plan: &FemPlanIR) -> FemPlanIR {
     let mut normalized = plan.clone();
     normalized.initial_magnetization.clear();
@@ -6048,6 +6673,10 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
         self.execution_provenance()
     }
 
+    fn frozen_spins_runtime_status(&self) -> Option<crate::constraints::FrozenSpinsRuntimeStatus> {
+        self.frozen_spins_runtime_status()
+    }
+
     fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError> {
         let plan = fullmag_plan::plan(problem)?;
         let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
@@ -6068,6 +6697,33 @@ impl InteractiveBackend for InteractiveFdmPreviewRuntime {
             return Ok(false);
         };
         Ok(self.can_continue_with_plan(fdm))
+    }
+
+    fn apply_stage_plan(&mut self, plan: &fullmag_ir::ExecutionPlanIR) -> Result<(), RunError> {
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Err(RunError {
+                message: "InteractiveBackend(FDM)::apply_stage_plan requires FDM plan".into(),
+            });
+        };
+        self.apply_stage_plan(fdm)
+    }
+
+    fn supports_frozen_spins_reactivation_in_place(&self) -> bool {
+        self.supports_frozen_spins_reactivation_in_place()
+    }
+
+    fn apply_frozen_spins_reactivation_plan(
+        &mut self,
+        plan: &fullmag_ir::ExecutionPlanIR,
+    ) -> Result<(), RunError> {
+        let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+            return Err(RunError {
+                message:
+                    "InteractiveBackend(FDM)::apply_frozen_spins_reactivation_plan requires FDM plan"
+                        .into(),
+            });
+        };
+        self.apply_frozen_spins_reactivation_plan(fdm)
     }
 
     fn geometry(&self) -> BackendGeometry {
@@ -6142,6 +6798,10 @@ impl InteractiveBackend for InteractiveFemPreviewRuntime {
 
     fn execution_provenance(&self) -> ExecutionProvenance {
         self.execution_provenance()
+    }
+
+    fn frozen_spins_runtime_status(&self) -> Option<crate::constraints::FrozenSpinsRuntimeStatus> {
+        self.frozen_spins_runtime_status()
     }
 
     fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError> {

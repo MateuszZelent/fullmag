@@ -480,6 +480,8 @@ def test_runtime_capture_uses_pruned_status_and_untracked_scans(
     status_calls = [call for call in calls if call[:2] == ("status", "--porcelain=v1")]
     assert status_calls
     assert all("--untracked-files=all" not in call for call in status_calls)
+    assert all("--no-renames" in call for call in status_calls)
+    assert any(":(exclude)external_solvers/**" in call for call in status_calls)
     assert any(call[:2] == ("ls-files", "--others") for call in calls)
 
 

@@ -45,6 +45,13 @@ pub(crate) trait InteractiveBackend {
     /// Get execution provenance info (engine, precision, device).
     fn execution_provenance(&self) -> ExecutionProvenance;
 
+    /// Return the lightweight solver-owned Frozen Spins activation
+    /// certificate, if this backend has an active or historically retained
+    /// constraint set.
+    fn frozen_spins_runtime_status(&self) -> Option<crate::constraints::FrozenSpinsRuntimeStatus> {
+        None
+    }
+
     /// Check whether the backend is compatible with the given problem
     /// without needing to rebuild.
     fn matches_problem(&self, problem: &ProblemIR) -> Result<bool, RunError>;
@@ -58,6 +65,38 @@ pub(crate) trait InteractiveBackend {
     /// stage-local execution controls such as relaxation algorithm and
     /// timestep policy.
     fn can_continue_with_plan(&self, plan: &ExecutionPlanIR) -> Result<bool, RunError>;
+
+    /// Apply stage-scoped state after `can_continue_with_plan` has confirmed
+    /// that the physical solver context can be retained. Backends with no
+    /// mutable stage-owned physics may use the default no-op.
+    fn apply_stage_plan(&mut self, plan: &ExecutionPlanIR) -> Result<(), RunError> {
+        if self.can_continue_with_plan(plan)? {
+            Ok(())
+        } else {
+            Err(RunError {
+                message: "interactive runtime context mismatch; caller must rebuild runtime before applying the stage plan".to_string(),
+            })
+        }
+    }
+
+    /// Whether this backend can atomically recapture an explicitly edited
+    /// Frozen Spins constraint without replacing its physical context.
+    fn supports_frozen_spins_reactivation_in_place(&self) -> bool {
+        false
+    }
+
+    /// Apply an authoring-triggered Frozen Spins reactivation. This differs
+    /// from a continuous stage transition: every active constraint receives a
+    /// new epoch and CaptureCurrentAtActivation observes the current solver m.
+    fn apply_frozen_spins_reactivation_plan(
+        &mut self,
+        _plan: &ExecutionPlanIR,
+    ) -> Result<(), RunError> {
+        Err(RunError {
+            message: "interactive backend requires rebuild for explicit Frozen Spins reactivation"
+                .to_string(),
+        })
+    }
 
     /// The geometry of the backend (grid for FDM, mesh for FEM).
     fn geometry(&self) -> BackendGeometry;

@@ -197,6 +197,7 @@ fn scratch_snapshot(
         }),
     };
     let mut snapshot = default_current_live_state(&CurrentLiveSnapshotRequest {
+        frozen_spins_runtime_status: None,
         session_id: session_id.to_string(),
         session: Some(manifest),
         session_status: None,

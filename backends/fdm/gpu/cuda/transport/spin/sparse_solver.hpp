@@ -2,6 +2,12 @@
 
 #include <cuda_runtime_api.h>
 
+#ifdef small
+// The Windows RPC headers define `small` as a legacy type macro.  It cannot
+// be used as a C++ member name by the CUDA translation unit.
+#undef small
+#endif
+
 #include <cstdint>
 
 namespace fullmag::fdm::gpu::transport::spin::sparse {

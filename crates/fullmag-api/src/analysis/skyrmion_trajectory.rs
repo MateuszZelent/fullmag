@@ -1,4 +1,6 @@
 //! Pure v1 skyrmion trajectory and Hall-angle observable.
+
+#![allow(dead_code)]
 //!
 //! This module deliberately consumes only an already accepted, signed-density
 //! trajectory series.  The v2 resource layer has no immutable time-series

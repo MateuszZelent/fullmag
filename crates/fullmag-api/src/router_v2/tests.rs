@@ -2489,6 +2489,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                frozen_spins_runtime_plan_binding: None,
                 field_materialization_requirements: Vec::new(),
             },
             request_id: Some("req-cmd-1".into()),
@@ -2530,6 +2531,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                frozen_spins_runtime_plan_binding: None,
                 field_materialization_requirements: Vec::new(),
             },
             request_id: Some("req-cmd-2".into()),
@@ -2571,6 +2573,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                frozen_spins_runtime_plan_binding: None,
                 field_materialization_requirements: Vec::new(),
             },
             request_id: Some("req-cmd-3".into()),
@@ -5603,6 +5606,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: snapshot.session.session_id.clone(),
                 coupled_checkpoint: None,
                 session: None,
@@ -5730,6 +5734,7 @@ async fn field_meta_keeps_atomic_publication_bundle_after_topology_advances() {
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: snapshot.session.session_id.clone(),
                 session: None,
                 session_status: None,
@@ -11573,6 +11578,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: snapshot.session.session_id.clone(),
                 coupled_checkpoint: None,
                 session: None,
@@ -11630,6 +11636,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: snapshot.session.session_id.clone(),
                 coupled_checkpoint: None,
                 session: None,
@@ -11686,6 +11693,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: snapshot.session.session_id.clone(),
                 coupled_checkpoint: None,
                 session: None,
@@ -11722,6 +11730,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
         crate::session::apply_current_live_snapshot(
             snapshot,
             CurrentLiveSnapshotRequest {
+                frozen_spins_runtime_status: None,
                 session_id: snapshot.session.session_id.clone(),
                 coupled_checkpoint: None,
                 session: None,
@@ -20660,6 +20669,71 @@ async fn commands_endpoint_enqueues_single_command() {
 }
 
 #[tokio::test]
+async fn solver_command_binds_current_frozen_spins_scene_revision_into_canonical_ir_payload() {
+    let state = test_app_state_with_live_session().await;
+    let expected_revision = {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live snapshot");
+        let mut scene = sample_scene_document();
+        scene.revision = 41;
+        scene.selections = serde_json::from_value(serde_json::json!([{
+            "schema_version": "selection_expr.v1",
+            "id": "left-side",
+            "expression": {"kind": "in_object", "object_id": scene.objects[0].id}
+        }]))
+        .expect("selection definitions");
+        scene.magnetization_constraints = serde_json::from_value(serde_json::json!([{
+            "kind": "frozen_spins",
+            "schema_version": "frozen_spins.v1",
+            "id": "pin-left",
+            "name": "Pin left",
+            "enabled": true,
+            "selector": {"kind": "ref", "selection_id": "left-side"},
+            "reference": {"kind": "capture_current_at_activation"},
+            "membership": {"kind": "static"},
+            "activation": {"kind": "all_stages"},
+            "empty_selection": "error",
+            "inactive_selection": "warn_and_intersect"
+        }]))
+        .expect("frozen constraints");
+        snapshot.scene_document = Some(scene);
+        41
+    };
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"kind":"run","until_seconds":1.0}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let queue = state.current_control_queue.lock().await;
+    let command = queue.front().expect("solver command queued");
+    let binding = command
+        .frozen_spins_runtime_plan_binding
+        .as_ref()
+        .expect("solver command must carry a Frozen Spins binding");
+    assert_eq!(binding.source_scene_revision, expected_revision);
+    assert_eq!(binding.launch_command_id, command.command_id);
+    assert_eq!(binding.selection_definitions.len(), 1);
+    assert_eq!(binding.magnetization_constraints.len(), 1);
+    assert_eq!(
+        command
+            .precondition
+            .as_ref()
+            .and_then(|precondition| precondition.scene_revision),
+        Some(expected_revision)
+    );
+}
+
+#[tokio::test]
 async fn commands_endpoint_keeps_control_sequence_monotonic_after_ledger_reset() {
     let state = test_app_state_with_live_session().await;
     {
@@ -22187,6 +22261,7 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                frozen_spins_runtime_plan_binding: None,
                 field_materialization_requirements: Vec::new(),
             },
             request_id: None,
@@ -22642,6 +22717,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                frozen_spins_runtime_plan_binding: None,
                 field_materialization_requirements: Vec::new(),
             },
             request_id: None,
@@ -25348,6 +25424,53 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
         .is_some_and(|warnings| warnings.iter().any(|warning| {
             warning == "sharp Aex in region 'film:core' uses projected approximation"
         })));
+}
+
+#[tokio::test]
+async fn solver_status_exposes_solver_owned_frozen_spins_activation_certificate() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let metadata = snapshot
+            .metadata
+            .get_or_insert_with(|| serde_json::json!({}));
+        metadata["frozen_spins_runtime_status"] = serde_json::json!({
+            "schema": "fullmag.frozen_spins.runtime-status.v1",
+            "constraint_activation_epochs": { "pin": 2 },
+            "active_constraint_ids": ["pin"],
+            "resolved_constraint_set_revision": 3,
+            "topology_fingerprint": "grid-sha",
+            "source_state_revision": 17,
+            "mask_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "reference_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "active_site_count": 8,
+            "frozen_site_count": 1,
+            "free_site_count": 7,
+            "vector_dimension": 3,
+            "scalar_component_dof_count": 24
+        });
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/solver/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["frozen_spins"]["constraint_activation_epochs"]["pin"],
+        2
+    );
+    assert_eq!(json["frozen_spins"]["resolved_constraint_set_revision"], 3);
+    assert_eq!(json["frozen_spins"]["frozen_site_count"], 1);
+    assert_eq!(json["frozen_spins"]["free_site_count"], 7);
+    assert_eq!(json["frozen_spins"]["scalar_component_dof_count"], 24);
 }
 
 #[tokio::test]
@@ -40181,6 +40304,14 @@ fn openapi_relaxation_contract_is_typed() {
     assert!(solver_schema.contains("max_rhs_norm_per_s"));
     assert!(solver_schema.contains("max_torque_Apm"));
     assert!(solver_schema.contains("max_torque_T"));
+    assert!(solver_schema.contains("FrozenSpinsSolverRuntimeStatus"));
+    let frozen_spins_schema = schemas
+        .get("FrozenSpinsSolverRuntimeStatus")
+        .expect("FrozenSpinsSolverRuntimeStatus schema missing")
+        .to_string();
+    assert!(frozen_spins_schema.contains("constraint_activation_epochs"));
+    assert!(frozen_spins_schema.contains("resolved_constraint_set_revision"));
+    assert!(frozen_spins_schema.contains("reference_sha256"));
 
     for schema_name in ["SolverStatusResource", "SolverSummary"] {
         let deprecated = schemas
@@ -45136,6 +45267,19 @@ async fn frozen_spins_crud_is_revision_safe_and_preserves_definition_identity() 
     assert_eq!(created["revision"], 13);
     assert_eq!(created["definition"]["id"], "pin-edge");
     assert_eq!(created["definition"]["name"], "Pinned edge");
+    assert_eq!(
+        created["runtime_application"]["state"],
+        "pending_runtime_plan"
+    );
+    assert_eq!(created["runtime_application"]["pending_revision"], 13);
+    assert_eq!(
+        created["runtime_application"]["apply_boundary"],
+        "next_runtime_plan"
+    );
+    assert_eq!(
+        created["runtime_application"]["current_runtime_unchanged"],
+        true
+    );
     let revision = created["revision"].as_u64().unwrap();
 
     let list = app
@@ -45208,6 +45352,11 @@ async fn frozen_spins_crud_is_revision_safe_and_preserves_definition_identity() 
     assert_eq!(patch.status(), StatusCode::OK);
     let patched = body_json(patch).await;
     assert_eq!(patched["definition"]["name"], "Pinned edge v2");
+    assert_eq!(patched["runtime_application"]["pending_revision"], 14);
+    assert_eq!(
+        patched["runtime_application"]["current_runtime_unchanged"],
+        true
+    );
 
     let delete = app
         .clone()
@@ -45226,6 +45375,72 @@ async fn frozen_spins_crud_is_revision_safe_and_preserves_definition_identity() 
     assert_eq!(delete.status(), StatusCode::OK);
     let deleted = body_json(delete).await;
     assert_eq!(deleted["count"], 0);
+    assert_eq!(
+        deleted["runtime_application"]["state"],
+        "pending_runtime_plan"
+    );
+    assert_eq!(deleted["runtime_application"]["pending_revision"], 15);
+}
+
+#[tokio::test]
+async fn frozen_spins_mutation_queues_accepted_step_replan_while_solver_is_running() {
+    let state = frozen_spins_test_state().await;
+    set_running_stage_execution(&state, 87).await;
+    let app = build_v2_router().with_state(state.clone());
+
+    let create = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/frozen-spins")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_revision": 12,
+                        "definition": frozen_spins_definition("pin-live", "Pinned live")
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    assert_eq!(created["revision"], 13);
+    assert_eq!(
+        created["runtime_application"]["apply_boundary"],
+        "accepted_step"
+    );
+    assert_eq!(
+        created["runtime_application"]["current_runtime_unchanged"],
+        true
+    );
+    let application_command_id = created["runtime_application"]["application_command_id"]
+        .as_str()
+        .expect("running mutation must expose its application command id");
+    assert!(application_command_id.starts_with("fm-frozen-replan-"));
+
+    let queue = state.current_control_queue.lock().await;
+    assert_eq!(queue.len(), 1);
+    let command = queue.front().expect("hot-apply command must be queued");
+    assert_eq!(command.kind, "apply_frozen_spins");
+    assert_eq!(command.command_id, application_command_id);
+    let precondition = command.precondition.as_ref().expect("precondition");
+    assert_eq!(precondition.scene_revision, Some(13));
+    assert_eq!(precondition.runtime_state.as_deref(), Some("running"));
+    let binding = command
+        .frozen_spins_runtime_plan_binding
+        .as_ref()
+        .expect("canonical Frozen Spins runtime binding");
+    assert_eq!(binding.launch_command_id, application_command_id);
+    assert_eq!(binding.source_scene_revision, 13);
+    assert_eq!(binding.magnetization_constraints.len(), 1);
+    assert_eq!(
+        binding.magnetization_constraints[0].frozen_spins().id,
+        "pin-live"
+    );
 }
 
 #[tokio::test]
@@ -46115,6 +46330,8 @@ async fn frozen_spins_activation_candidate_is_consumed_once_and_commits_definiti
     let preview_id = preview["preview_id"].as_str().unwrap();
     let token = preview["activation_candidate_token"].as_str().unwrap();
     assert!(token.starts_with("fsact-"));
+    assert_eq!(preview["authority"], "speculative_authoring_preview");
+    assert_eq!(preview["solver_binding"], "unbound");
     let mut activated_definition = definition;
     activated_definition["name"] = serde_json::json!("Pinned body activated");
     let request_body = serde_json::json!({
@@ -46141,7 +46358,26 @@ async fn frozen_spins_activation_candidate_is_consumed_once_and_commits_definiti
     let activated = body_json(activated).await;
     assert_eq!(activated_status, StatusCode::OK, "{activated}");
     assert_eq!(activated["schema_version"], "frozen_spins_activation.v1");
+    assert_eq!(activated["authority"], "speculative_authoring_preview");
+    assert_eq!(activated["activation_scope"], "authoring_commit");
+    assert_eq!(activated["solver_binding"], "pending_runtime_activation");
+    assert_eq!(
+        activated["runtime_application"]["state"],
+        "pending_runtime_plan"
+    );
+    assert_eq!(activated["runtime_application"]["pending_revision"], 13);
+    assert_eq!(
+        activated["runtime_application"]["apply_boundary"],
+        "next_runtime_plan"
+    );
+    assert_eq!(
+        activated["runtime_application"]["current_runtime_unchanged"],
+        true
+    );
     assert_eq!(activated["activation_candidate_token_consumed"], true);
+    assert_eq!(activated["active_site_count"], 3);
+    assert_eq!(activated["frozen_site_count"], 3);
+    assert_eq!(activated["free_site_count"], 0);
     assert_eq!(activated["revision"], 13);
     assert_eq!(activated["definition"]["name"], "Pinned body activated");
     assert_eq!(activated["mask_sha256"], preview["mask_sha256"]);

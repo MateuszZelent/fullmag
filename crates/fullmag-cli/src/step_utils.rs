@@ -4588,6 +4588,111 @@ pub(crate) fn build_interactive_command_stage(
     }
 }
 
+pub(crate) fn problem_with_frozen_spins_runtime_plan_binding(
+    base_problem: &ProblemIR,
+    command: &crate::types::SessionCommand,
+    last_applied_scene_revision: Option<u64>,
+) -> Result<Option<(ProblemIR, u64)>> {
+    let Some(binding) = command.frozen_spins_runtime_plan_binding.as_ref() else {
+        return Ok(None);
+    };
+    if !matches!(command.kind.as_str(), "run" | "relax" | "solve") {
+        anyhow::bail!(
+            "frozen spins runtime plan binding is not valid for '{}' command",
+            command.kind
+        );
+    }
+    if binding.schema_version != fullmag_ir::FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported frozen spins runtime plan binding schema '{}'",
+            binding.schema_version
+        );
+    }
+    if binding.launch_command_id != command.command_id {
+        anyhow::bail!(
+            "frozen spins runtime plan binding command mismatch: expected {}, got {}",
+            command.command_id,
+            binding.launch_command_id
+        );
+    }
+    let bound_precondition_revision = command
+        .precondition
+        .as_ref()
+        .and_then(|precondition| precondition.scene_revision);
+    if bound_precondition_revision != Some(binding.source_scene_revision) {
+        anyhow::bail!(
+            "frozen spins runtime plan binding revision mismatch: payload={}, precondition={}",
+            binding.source_scene_revision,
+            bound_precondition_revision
+                .map(|revision| revision.to_string())
+                .unwrap_or_else(|| "missing".to_string())
+        );
+    }
+    if last_applied_scene_revision.is_some_and(|revision| binding.source_scene_revision < revision)
+    {
+        anyhow::bail!(
+            "stale frozen spins runtime plan binding: revision {} is older than applied revision {}",
+            binding.source_scene_revision,
+            last_applied_scene_revision.unwrap_or_default()
+        );
+    }
+    if last_applied_scene_revision == Some(binding.source_scene_revision) {
+        if base_problem.selections != binding.selection_definitions
+            || base_problem.magnetization_constraints != binding.magnetization_constraints
+        {
+            anyhow::bail!(
+                "frozen spins runtime plan binding replay changed constraints for scene revision {}",
+                binding.source_scene_revision
+            );
+        }
+        return Ok(None);
+    }
+
+    let mut candidate = base_problem.clone();
+    candidate.selections = binding.selection_definitions.clone();
+    candidate.magnetization_constraints = binding.magnetization_constraints.clone();
+    Ok(Some((candidate, binding.source_scene_revision)))
+}
+
+pub(crate) fn bind_frozen_spins_replan_to_paused_command(
+    mut resumed: crate::types::SessionCommand,
+    application: &crate::types::SessionCommand,
+) -> Result<crate::types::SessionCommand> {
+    if application.kind != "apply_frozen_spins" {
+        anyhow::bail!(
+            "expected apply_frozen_spins command, got '{}'",
+            application.kind
+        );
+    }
+    if application.frozen_spins_runtime_plan_binding.is_none() {
+        anyhow::bail!(
+            "apply_frozen_spins command '{}' is missing its runtime plan binding",
+            application.command_id
+        );
+    }
+    if !matches!(resumed.kind.as_str(), "run" | "relax" | "solve") {
+        anyhow::bail!(
+            "cannot apply frozen spins replan to non-solver command '{}'",
+            resumed.kind
+        );
+    }
+
+    // Preserve the paused solver command's remaining time/step budget and solver
+    // policy. The application command supplies only the new identity, revision
+    // precondition, and canonical Frozen Spins payload that must be consumed at
+    // this accepted-step boundary.
+    resumed.command_id = application.command_id.clone();
+    resumed.created_at_unix_ms = application.created_at_unix_ms;
+    resumed.target = application.target.clone();
+    resumed.reason = application.reason.clone();
+    resumed.precondition = application.precondition.clone();
+    resumed.client_intent_id = application.client_intent_id.clone();
+    resumed.requested_at_unix_ms = application.requested_at_unix_ms;
+    resumed.frozen_spins_runtime_plan_binding =
+        application.frozen_spins_runtime_plan_binding.clone();
+    Ok(resumed)
+}
+
 pub(crate) fn build_resumable_interactive_command(
     command: &crate::types::SessionCommand,
     stage_result: &fullmag_runner::RunResult,
@@ -4675,6 +4780,7 @@ pub(crate) fn sequence_stage_to_session_command(
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         },
         fullmag_runner::SequenceStage::Relax {
             until_seconds,
@@ -4714,6 +4820,7 @@ pub(crate) fn sequence_stage_to_session_command(
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         },
     }
 }
@@ -4814,6 +4921,134 @@ mod tests {
             "until_seconds": 1e-12
         }))
         .expect("minimal solver command")
+    }
+
+    fn frozen_spins_binding_command(source_scene_revision: u64) -> crate::types::SessionCommand {
+        serde_json::from_value(json!({
+            "command_id": "cmd-run-frozen",
+            "kind": "run",
+            "created_at_unix_ms": 0,
+            "until_seconds": 1e-12,
+            "precondition": {"scene_revision": source_scene_revision},
+            "frozen_spins_runtime_plan_binding": {
+                "schema_version": fullmag_ir::FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION,
+                "launch_command_id": "cmd-run-frozen",
+                "source_scene_revision": source_scene_revision,
+                "selection_definitions": [{
+                    "schema_version": "selection_expr.v1",
+                    "id": "left-side",
+                    "expression": {"kind": "in_object", "object_id": "track"}
+                }],
+                "magnetization_constraints": [{
+                    "kind": "frozen_spins",
+                    "schema_version": "frozen_spins.v1",
+                    "id": "pin-left",
+                    "name": "Pin left",
+                    "enabled": true,
+                    "selector": {"kind": "ref", "selection_id": "left-side"},
+                    "reference": {"kind": "capture_current_at_activation"},
+                    "membership": {"kind": "static"},
+                    "activation": {"kind": "all_stages"},
+                    "empty_selection": "error",
+                    "inactive_selection": "warn_and_intersect"
+                }]
+            }
+        }))
+        .expect("frozen spins binding command")
+    }
+
+    #[test]
+    fn frozen_spins_binding_replaces_canonical_ir_at_next_plan_boundary() {
+        let base = sample_problem_ir();
+        let command = frozen_spins_binding_command(17);
+
+        let (updated, revision) =
+            problem_with_frozen_spins_runtime_plan_binding(&base, &command, None)
+                .expect("valid binding")
+                .expect("new revision must update the problem");
+
+        assert_eq!(revision, 17);
+        assert_eq!(updated.selections.len(), 1);
+        assert_eq!(updated.magnetization_constraints.len(), 1);
+        assert_eq!(
+            updated.magnetization_constraints[0].frozen_spins().id,
+            "pin-left"
+        );
+        assert!(base.magnetization_constraints.is_empty());
+    }
+
+    #[test]
+    fn frozen_spins_binding_is_fail_closed_for_mismatch_stale_and_mutating_replay() {
+        let base = sample_problem_ir();
+        let mut mismatched = frozen_spins_binding_command(17);
+        mismatched
+            .frozen_spins_runtime_plan_binding
+            .as_mut()
+            .expect("binding")
+            .launch_command_id = "different-command".to_string();
+        assert!(
+            problem_with_frozen_spins_runtime_plan_binding(&base, &mismatched, None)
+                .expect_err("command mismatch must fail")
+                .to_string()
+                .contains("command mismatch")
+        );
+
+        let stale = frozen_spins_binding_command(16);
+        assert!(
+            problem_with_frozen_spins_runtime_plan_binding(&base, &stale, Some(17))
+                .expect_err("stale revision must fail")
+                .to_string()
+                .contains("stale")
+        );
+
+        let replay = frozen_spins_binding_command(17);
+        assert!(
+            problem_with_frozen_spins_runtime_plan_binding(&base, &replay, Some(17))
+                .expect_err("same revision may not change constraints")
+                .to_string()
+                .contains("replay changed constraints")
+        );
+    }
+
+    #[test]
+    fn frozen_spins_hot_apply_preserves_paused_solver_budget_and_rebinds_identity() {
+        let mut paused = solver_command("relax");
+        paused.command_id = "cmd-original-relax".to_string();
+        paused.max_steps = Some(137);
+        paused.torque_tolerance = Some(1.25e-4);
+        paused.relax_alpha = Some(0.75);
+
+        let mut application = frozen_spins_binding_command(23);
+        application.kind = "apply_frozen_spins".to_string();
+        application.command_id = "cmd-hot-apply".to_string();
+        application.created_at_unix_ms = 1234;
+        application.reason = Some("frozen_spins_authoring_commit".to_string());
+        application
+            .frozen_spins_runtime_plan_binding
+            .as_mut()
+            .expect("binding")
+            .launch_command_id = application.command_id.clone();
+
+        let resumed = bind_frozen_spins_replan_to_paused_command(paused, &application)
+            .expect("valid hot apply command");
+
+        assert_eq!(resumed.kind, "relax");
+        assert_eq!(resumed.command_id, "cmd-hot-apply");
+        assert_eq!(resumed.max_steps, Some(137));
+        assert_eq!(resumed.torque_tolerance, Some(1.25e-4));
+        assert_eq!(resumed.relax_alpha, Some(0.75));
+        assert_eq!(
+            resumed
+                .frozen_spins_runtime_plan_binding
+                .as_ref()
+                .expect("binding")
+                .source_scene_revision,
+            23
+        );
+        assert_eq!(
+            resumed.reason.as_deref(),
+            Some("frozen_spins_authoring_commit")
+        );
     }
 
     #[test]
@@ -6208,6 +6443,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         };
 
         let error = build_interactive_command_stage(&base_problem, &command)
@@ -6291,6 +6527,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)
@@ -6335,6 +6572,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)
@@ -6379,6 +6617,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)
@@ -6423,6 +6662,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         };
 
         let stage = build_interactive_command_stage(&base_problem, &command)

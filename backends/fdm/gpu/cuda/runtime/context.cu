@@ -264,8 +264,8 @@ static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &
     pool.component_bytes = 0;
     pool.host_soa_bytes = 0;
     pool.cell_count = 0;
-    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.leased_slots.store(0u, std::memory_order_release);
+    pool.retired_slots.store(0u, std::memory_order_release);
     pool.initialized = false;
 }
 
@@ -318,8 +318,8 @@ bool initialize_async_field_snapshot_pool(Context &ctx)
         if (error != cudaSuccess) return fail("cudaEventCreate(async_snapshot_pool.done)", error);
         slot.done_event = reinterpret_cast<void *>(done_event);
     }
-    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.leased_slots.store(0u, std::memory_order_release);
+    pool.retired_slots.store(0u, std::memory_order_release);
     pool.initialized = true;
     return true;
 }
@@ -349,9 +349,9 @@ bool acquire_async_field_snapshot_pool_slot(
          candidate < kFdmAsyncFieldSnapshotPoolCapacity;
          ++candidate) {
         const uint32_t bit = uint32_t{1} << candidate;
-        uint32_t leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+        uint32_t leased = pool.leased_slots.load(std::memory_order_acquire);
         if ((leased & bit) != 0) {
-            const uint32_t retired = __atomic_load_n(&pool.retired_slots, __ATOMIC_ACQUIRE);
+            const uint32_t retired = pool.retired_slots.load(std::memory_order_acquire);
             if ((retired & bit) == 0 ||
                 cudaEventQuery(reinterpret_cast<cudaEvent_t>(pool.slots[candidate].done_event)) !=
                     cudaSuccess) {
@@ -360,18 +360,16 @@ bool acquire_async_field_snapshot_pool_slot(
             // A caller released the handle before waiting.  Reclaim it only
             // after the completion event is observable, then retry the same
             // slot through the normal lease CAS.
-            __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
-            __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
-            leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+            pool.retired_slots.fetch_and(~bit, std::memory_order_acq_rel);
+            pool.leased_slots.fetch_and(~bit, std::memory_order_acq_rel);
+            leased = pool.leased_slots.load(std::memory_order_acquire);
         }
         if ((leased & bit) != 0) continue;
-        if (__atomic_compare_exchange_n(
-                &pool.leased_slots,
-                &leased,
+        if (pool.leased_slots.compare_exchange_weak(
+                leased,
                 leased | bit,
-                true,
-                __ATOMIC_ACQ_REL,
-                __ATOMIC_ACQUIRE)) {
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
             slot_index = candidate;
             return true;
         }
@@ -389,10 +387,10 @@ void release_async_field_snapshot_pool_slot(
     if (slot_index >= kFdmAsyncFieldSnapshotPoolCapacity) return;
     const uint32_t bit = uint32_t{1} << slot_index;
     if (work_complete) {
-        __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
-        __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+        pool.retired_slots.fetch_and(~bit, std::memory_order_acq_rel);
+        pool.leased_slots.fetch_and(~bit, std::memory_order_acq_rel);
     } else {
-        __atomic_fetch_or(&pool.retired_slots, bit, __ATOMIC_ACQ_REL);
+        pool.retired_slots.fetch_or(bit, std::memory_order_acq_rel);
     }
 }
 
@@ -427,8 +425,8 @@ static void destroy_async_preview_snapshot_pool_resources(AsyncPreviewSnapshotPo
     }
     pool.xyz_bytes = 0;
     pool.max_preview_count = 0;
-    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.leased_slots.store(0u, std::memory_order_release);
+    pool.retired_slots.store(0u, std::memory_order_release);
     pool.initialized = false;
 }
 
@@ -478,8 +476,8 @@ bool initialize_async_preview_snapshot_pool(Context &ctx)
         if (error != cudaSuccess) return fail("cudaEventCreate(async_preview_pool.done)", error);
         slot.done_event = reinterpret_cast<void *>(done_event);
     }
-    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
-    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.leased_slots.store(0u, std::memory_order_release);
+    pool.retired_slots.store(0u, std::memory_order_release);
     pool.initialized = true;
     return true;
 }
@@ -514,26 +512,24 @@ bool acquire_async_preview_snapshot_pool_slot(
          candidate < kFdmAsyncPreviewSnapshotPoolCapacity;
          ++candidate) {
         const uint32_t bit = uint32_t{1} << candidate;
-        uint32_t leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+        uint32_t leased = pool.leased_slots.load(std::memory_order_acquire);
         if ((leased & bit) != 0) {
-            const uint32_t retired = __atomic_load_n(&pool.retired_slots, __ATOMIC_ACQUIRE);
+            const uint32_t retired = pool.retired_slots.load(std::memory_order_acquire);
             if ((retired & bit) == 0 ||
                 cudaEventQuery(reinterpret_cast<cudaEvent_t>(pool.slots[candidate].done_event)) !=
                     cudaSuccess) {
                 continue;
             }
-            __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
-            __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
-            leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+            pool.retired_slots.fetch_and(~bit, std::memory_order_acq_rel);
+            pool.leased_slots.fetch_and(~bit, std::memory_order_acq_rel);
+            leased = pool.leased_slots.load(std::memory_order_acquire);
         }
         if ((leased & bit) != 0) continue;
-        if (__atomic_compare_exchange_n(
-                &pool.leased_slots,
-                &leased,
+        if (pool.leased_slots.compare_exchange_weak(
+                leased,
                 leased | bit,
-                true,
-                __ATOMIC_ACQ_REL,
-                __ATOMIC_ACQUIRE)) {
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
             slot_index = candidate;
             return true;
         }
@@ -551,10 +547,10 @@ void release_async_preview_snapshot_pool_slot(
     if (slot_index >= kFdmAsyncPreviewSnapshotPoolCapacity) return;
     const uint32_t bit = uint32_t{1} << slot_index;
     if (work_complete) {
-        __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
-        __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+        pool.retired_slots.fetch_and(~bit, std::memory_order_acq_rel);
+        pool.leased_slots.fetch_and(~bit, std::memory_order_acq_rel);
     } else {
-        __atomic_fetch_or(&pool.retired_slots, bit, __ATOMIC_ACQ_REL);
+        pool.retired_slots.fetch_or(bit, std::memory_order_acq_rel);
     }
 }
 
@@ -3370,7 +3366,7 @@ bool context_precompute_oersted_field(Context &ctx) {
         ctx.oersted_axis[2] / axis_norm,
     };
 
-    double inv_2pi = 1.0 / (2.0 * M_PI);
+    double inv_2pi = 1.0 / (2.0 * kFullmagPi);
     double R2 = R * R;
 
     // Compute on host in SoA layout

@@ -507,7 +507,13 @@ class MeshArtifactTrustTests(unittest.TestCase):
         self.assertTrue(certify.call_args.kwargs["require_native"])
         return mesh
 
-    def _trusted(self, path: Path, mesh: MeshData):
+    def _trusted(
+        self,
+        path: Path,
+        mesh: MeshData,
+        *,
+        use_native_fingerprint: bool = False,
+    ):
         return _load_trusted_cached_mesh_artifact(
             path,
             expected_authoring_sha256=sha256(
@@ -518,6 +524,7 @@ class MeshArtifactTrustTests(unittest.TestCase):
             expected_gmsh_version="4.15.2",
             expected_repair_algorithm_id=REPAIR_ALGORITHM,
             expected_certifier_algorithm_id=CERTIFIER_ALGORITHM,
+            use_native_fingerprint=use_native_fingerprint,
         )
 
     def test_v2_manifest_has_acyclic_receipt_binding(self) -> None:
@@ -770,6 +777,31 @@ class MeshArtifactTrustTests(unittest.TestCase):
                 self._trusted(path, mesh)
 
         self.assertEqual(fingerprint_calls, 2)
+
+    def test_native_fast_path_reuses_preflight_topology_fingerprint(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mixed.fullmag-mesh"
+            mesh = self._save_v2(path)
+            native_preflight = _native_preflight_result(mesh)
+            with (
+                mock.patch.object(
+                    MeshData,
+                    "topology_fingerprint_v3",
+                    side_effect=AssertionError("native fast path recomputed Python fingerprint"),
+                ),
+                mock.patch(
+                    "fullmag.meshing.persistence.preflight_mixed_mesh_arrays",
+                    return_value=native_preflight,
+                ) as preflight,
+            ):
+                artifact = self._trusted(
+                    path,
+                    mesh,
+                    use_native_fingerprint=True,
+                )
+
+        preflight.assert_called_once()
+        self.assertEqual(artifact.provenance["artifact_trust"], "trusted_cache_fast")
 
     def test_missing_native_preflight_bypasses_fast_and_runs_public_full_audit(
         self,

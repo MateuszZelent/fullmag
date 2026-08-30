@@ -619,12 +619,18 @@ def _native_mixed_certificate_evidence(
     # Compare native plane clustering against the compact Python geometric
     # view.  This touches only nodes belonging to the magnetic prism region;
     # it does not materialize per-cell Python records.
-    flat_part_labels = np.repeat(
-        mesh.cell_mesh_parts,
-        np.diff(mesh.cell_offsets),
+    # Expand only boolean ownership masks over the CSR connectivity.  The
+    # previous implementation repeated the variable-length UTF-32 part names
+    # for every node entry, creating a large temporary string array solely to
+    # select magnetic/transition nodes.  The masks preserve the exact entry
+    # ordering while avoiding that allocation and its string comparisons.
+    cell_node_counts = np.diff(mesh.cell_offsets)
+    magnetic_entries = np.repeat(mesh.cell_mesh_parts == "magnetic", cell_node_counts)
+    transition_entries = np.repeat(
+        mesh.cell_mesh_parts == "transition_air", cell_node_counts
     )
     magnetic_nodes = np.unique(
-        mesh.cell_nodes[flat_part_labels == "magnetic"]
+        mesh.cell_nodes[magnetic_entries]
     )
     if not len(magnetic_nodes):
         raise RuntimeError("native mixed certificate mesh has no magnetic nodes")
@@ -659,7 +665,7 @@ def _native_mixed_certificate_evidence(
         raise RuntimeError("native mixed certificate plane tolerance is stale")
 
     transition_nodes = np.unique(
-        mesh.cell_nodes[flat_part_labels == "transition_air"]
+        mesh.cell_nodes[transition_entries]
     )
     if not len(transition_nodes):
         raise RuntimeError("native mixed certificate mesh parts are incomplete")

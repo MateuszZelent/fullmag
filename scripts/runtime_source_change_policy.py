@@ -14,6 +14,12 @@ from typing import Any
 
 
 NON_RUNTIME_PREFIXES = (
+    # Windows Docker mounts generated build/cache roots below /workspace;
+    # these are never compiled runtime inputs.
+    ".fullmag-build/",
+    ".fullmag-cache/",
+    ".fullmag-cargo/",
+    ".fullmag-rustup/",
     ".agents/",
     ".codex/",
     # Codex-Usage is a local tooling checkout, not runtime source.
@@ -33,6 +39,10 @@ NON_RUNTIME_FILES = {
     "README.md",
 }
 NON_RUNTIME_EXACT_PATHS = {
+    ".fullmag-build",
+    ".fullmag-cache",
+    ".fullmag-cargo",
+    ".fullmag-rustup",
     "Codex-Usage",
     ".impl-racetrack",
     ".worktrees",

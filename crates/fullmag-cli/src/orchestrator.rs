@@ -1042,7 +1042,8 @@ fn current_live_metadata(
     status: &str,
 ) -> serde_json::Value {
     let runtime_engine_info = fullmag_runner::resolve_planned_runtime_engine(problem, plan).ok();
-    let resolved_session_runtime = fullmag_runner::resolve_session_runtime(problem).ok();
+    let resolved_session_runtime =
+        fullmag_runner::resolve_session_runtime_for_plan_and_preview(problem, plan, u64::MAX).ok();
     let timestep_qualification = resolved_session_runtime.as_ref().and_then(|runtime| {
         fullmag_runner::timestep_qualification_for_plan(plan, &runtime.resolved_device)
     });
@@ -2512,6 +2513,7 @@ pub(crate) fn requested_runtime_selection(
 
 fn session_runtime_selection_for_problem(
     problem: &ProblemIR,
+    plan: Option<&ExecutionPlanIR>,
     field_every_n: u64,
     fallback_requested_backend: &str,
     fallback_requested_mode: &str,
@@ -2531,7 +2533,18 @@ fn session_runtime_selection_for_problem(
         requested_mode,
         requested_cpu_threads,
     );
-    match fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n) {
+    let resolved_runtime = plan
+        .map(|plan| {
+            fullmag_runner::resolve_session_runtime_for_plan_and_preview(
+                problem,
+                plan,
+                field_every_n,
+            )
+        })
+        .unwrap_or_else(|| {
+            fullmag_runner::resolve_session_runtime_for_preview(problem, field_every_n)
+        });
+    match resolved_runtime {
         Ok(resolved) => {
             selection.requested_device = resolved.requested_device;
             selection.requested_cpu_threads = resolved
@@ -6640,6 +6653,36 @@ fn resolve_preview_field_every_n(
     })
 }
 
+const DEFAULT_AUTO_RAYON_THREAD_CAP: usize = 16;
+
+fn parse_positive_thread_count(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|value| value.parse::<usize>().ok())
+        .filter(|&threads| threads >= 1)
+}
+
+fn resolve_rayon_cpu_threads(
+    default_cpu_threads: usize,
+    fullmag_cpu_threads: Option<&str>,
+    rayon_cpu_threads: Option<&str>,
+    external_auto_resolved: Option<&str>,
+) -> (usize, bool) {
+    if fullmag_cpu_threads.is_some_and(|value| value.eq_ignore_ascii_case("auto")) {
+        let external = parse_positive_thread_count(external_auto_resolved);
+        return (
+            external
+                .unwrap_or(DEFAULT_AUTO_RAYON_THREAD_CAP)
+                .min(default_cpu_threads.max(1)),
+            true,
+        );
+    }
+    (
+        parse_positive_thread_count(fullmag_cpu_threads)
+            .or_else(|| parse_positive_thread_count(rayon_cpu_threads))
+            .unwrap_or(default_cpu_threads.max(1)),
+        false,
+    )
+}
+
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let args = ScriptCli::parse_from(raw_args);
     if args.headless {
@@ -6656,20 +6699,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .unwrap_or(1);
     let fullmag_cpu_threads = std::env::var("FULLMAG_CPU_THREADS").ok();
     let rayon_cpu_threads = std::env::var("RAYON_NUM_THREADS").ok();
-    let cpu_threads = fullmag_cpu_threads
-        .as_deref()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n >= 1)
-        .or_else(|| {
-            rayon_cpu_threads
-                .as_deref()
-                .and_then(|v| v.parse::<usize>().ok())
-                .filter(|&n| n >= 1)
-        })
-        .unwrap_or(default_cpu_threads);
+    let external_auto_resolved = std::env::var("FULLMAG_CPU_THREADS_AUTO_RESOLVED").ok();
+    let (cpu_threads, auto_cap_applied) = resolve_rayon_cpu_threads(
+        default_cpu_threads,
+        fullmag_cpu_threads.as_deref(),
+        rayon_cpu_threads.as_deref(),
+        external_auto_resolved.as_deref(),
+    );
     let rayon_log_detail = match fullmag_cpu_threads.as_deref() {
         Some(raw) if raw.eq_ignore_ascii_case("auto") => {
-            " (FULLMAG_CPU_THREADS=auto; MFEM/libCEED/hypre CPU FEM logs resolved OpenMP threads separately)"
+            if auto_cap_applied && external_auto_resolved.is_some() {
+                " (FULLMAG_CPU_THREADS=auto; external auto-resolved cap)"
+            } else {
+                " (FULLMAG_CPU_THREADS=auto; conservative control-plane cap)"
+            }
         }
         Some(_) => " (source=FULLMAG_CPU_THREADS)",
         None => match rayon_cpu_threads {
@@ -6871,67 +6914,76 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     );
 
     // Phase 1: fast pre-pass without geometry assets, runs concurrently with frontend startup.
-    let phase1_script_path = script_path.clone();
-    let phase1_backend = args.backend;
-    let phase1_mode = args.mode;
-    let phase1_precision = args.precision;
-    let phase1_runtime_device = crate::python_bridge::managed_execution_device(
-        phase1_backend,
-        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
-        std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
-    );
-    let phase1_handle = own_preparation_boundary_failure(
-        &live_workspace,
-        "script_materialization_thread_start_failed",
-        "Python script materialization could not start",
-        std::thread::Builder::new()
-            .name("fullmag-materialize-phase1".to_string())
-            .spawn(move || -> Result<ScriptExecutionConfig> {
-                use clap::ValueEnum;
-                let mut helper_args = vec![
-                    "-m".to_string(),
-                    "fullmag.runtime.helper".to_string(),
-                    "export-run-config".to_string(),
-                    "--script".to_string(),
-                    phase1_script_path.display().to_string(),
-                    "--skip-geometry-assets".to_string(),
-                ];
-                if let Some(backend) = phase1_backend {
-                    helper_args.push("--backend".to_string());
-                    helper_args.push(backend.to_possible_value().unwrap().get_name().to_string());
-                }
-                if let Some(mode) = phase1_mode {
-                    helper_args.push("--mode".to_string());
-                    helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
-                }
-                if let Some(precision) = phase1_precision {
-                    helper_args.push("--precision".to_string());
-                    helper_args.push(
-                        precision
-                            .to_possible_value()
-                            .unwrap()
-                            .get_name()
-                            .to_string(),
-                    );
-                }
-                if let Some(device) = phase1_runtime_device {
-                    helper_args.push("--runtime-device".to_string());
-                    helper_args.push(device.to_string());
-                }
-                let output = run_python_helper_with_progress(&helper_args, None)
-                    .context("phase-1 python helper failed")?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
-                }
-                let stdout =
-                    String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
-                let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
-                serde_json::from_str(json_str)
-                    .context("failed to deserialize phase-1 script execution config")
-            })
-            .context("failed to spawn phase-1 materialization thread"),
-    )?;
+    // A headless run has no frontend that can consume the early metadata, and
+    // the full materialization/solver-initialization safety boundary below
+    // performs the authoritative validation.  Skip this duplicate Python
+    // import in headless mode to remove one process start and one script pass.
+    let phase1_handle = if args.headless {
+        None
+    } else {
+        let phase1_script_path = script_path.clone();
+        let phase1_backend = args.backend;
+        let phase1_mode = args.mode;
+        let phase1_precision = args.precision;
+        let phase1_runtime_device = crate::python_bridge::managed_execution_device(
+            phase1_backend,
+            std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+            std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
+        );
+        Some(own_preparation_boundary_failure(
+            &live_workspace,
+            "script_materialization_thread_start_failed",
+            "Python script materialization could not start",
+            std::thread::Builder::new()
+                .name("fullmag-materialize-phase1".to_string())
+                .spawn(move || -> Result<ScriptExecutionConfig> {
+                    use clap::ValueEnum;
+                    let mut helper_args = vec![
+                        "-m".to_string(),
+                        "fullmag.runtime.helper".to_string(),
+                        "export-run-config".to_string(),
+                        "--script".to_string(),
+                        phase1_script_path.display().to_string(),
+                        "--skip-geometry-assets".to_string(),
+                    ];
+                    if let Some(backend) = phase1_backend {
+                        helper_args.push("--backend".to_string());
+                        helper_args
+                            .push(backend.to_possible_value().unwrap().get_name().to_string());
+                    }
+                    if let Some(mode) = phase1_mode {
+                        helper_args.push("--mode".to_string());
+                        helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
+                    }
+                    if let Some(precision) = phase1_precision {
+                        helper_args.push("--precision".to_string());
+                        helper_args.push(
+                            precision
+                                .to_possible_value()
+                                .unwrap()
+                                .get_name()
+                                .to_string(),
+                        );
+                    }
+                    if let Some(device) = phase1_runtime_device {
+                        helper_args.push("--runtime-device".to_string());
+                        helper_args.push(device.to_string());
+                    }
+                    let output = run_python_helper_with_progress(&helper_args, None)
+                        .context("phase-1 python helper failed")?;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
+                    }
+                    let stdout = String::from_utf8(output.stdout)
+                        .context("phase-1 output not valid UTF-8")?;
+                    let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
+                    serde_json::from_str(json_str)
+                        .context("failed to deserialize phase-1 script execution config")
+                })
+                .context("failed to spawn phase-1 materialization thread"),
+        )?)
+    };
 
     eprintln!("fullmag materializing script");
 
@@ -6973,71 +7025,76 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     };
 
     // Join Phase 1 and push early metadata to the already-loaded frontend.
-    let (early_config, authoritative_preflight_error) = match phase1_handle
-        .join()
-        .unwrap_or_else(|_| Err(anyhow::anyhow!("phase-1 thread panicked")))
-    {
-        Ok(early_config) => {
-            let early_problem = early_config
-                .stages
-                .last()
-                .map(|s| &s.ir)
-                .unwrap_or(&early_config.ir);
-            let problem_name = early_problem.problem_meta.name.clone();
-            let stage_names: Vec<String> = early_config
-                .stages
-                .iter()
-                .map(|s| s.ir.problem_meta.name.clone())
-                .collect();
-            let geometry_names: Vec<String> = early_problem
-                .geometry
-                .entries
-                .iter()
-                .map(|e| e.name().to_string())
-                .collect();
-            live_workspace.update(|state| {
-                if state.metadata.is_none() {
-                    state.metadata = Some(serde_json::json!({
-                        "problem_name": problem_name,
-                        "stage_count": early_config.stages.len(),
-                        "stage_names": stage_names,
-                        "geometry_names": geometry_names,
-                        "early_preview": true,
-                    }));
-                }
-            });
-            live_workspace.push_log(
-                "info",
-                format!(
-                    "Problem: {} · {} stage(s) · {} geometry object(s)",
-                    problem_name,
-                    early_config.stages.len().max(1),
-                    geometry_names.len()
-                ),
-            );
-            (Some(early_config), None)
-        }
-        Err(err) => {
-            if project_authoritative_authored_preflight_failure(&live_workspace, &err)? {
-                eprintln!("[fullmag] authored capability preflight rejected the execution plan");
-                (None, Some(err))
-            } else {
-                // A transport or helper failure remains non-fatal; Phase 2 owns the real result.
-                eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
-                let timestamp_unix_ms = preparation_unix_time_millis()?;
-                transition_preparation(&live_workspace, |preparation| {
-                    push_preparation_log_once(
+    let (early_config, authoritative_preflight_error) = match phase1_handle {
+        None => (None, None),
+        Some(phase1_handle) => match phase1_handle
+            .join()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("phase-1 thread panicked")))
+        {
+            Ok(early_config) => {
+                let early_problem = early_config
+                    .stages
+                    .last()
+                    .map(|s| &s.ir)
+                    .unwrap_or(&early_config.ir);
+                let problem_name = early_problem.problem_meta.name.clone();
+                let stage_names: Vec<String> = early_config
+                    .stages
+                    .iter()
+                    .map(|s| s.ir.problem_meta.name.clone())
+                    .collect();
+                let geometry_names: Vec<String> = early_problem
+                    .geometry
+                    .entries
+                    .iter()
+                    .map(|e| e.name().to_string())
+                    .collect();
+                live_workspace.update(|state| {
+                    if state.metadata.is_none() {
+                        state.metadata = Some(serde_json::json!({
+                            "problem_name": problem_name,
+                            "stage_count": early_config.stages.len(),
+                            "stage_names": stage_names,
+                            "geometry_names": geometry_names,
+                            "early_preview": true,
+                        }));
+                    }
+                });
+                live_workspace.push_log(
+                    "info",
+                    format!(
+                        "Problem: {} · {} stage(s) · {} geometry object(s)",
+                        problem_name,
+                        early_config.stages.len().max(1),
+                        geometry_names.len()
+                    ),
+                );
+                (Some(early_config), None)
+            }
+            Err(err) => {
+                if project_authoritative_authored_preflight_failure(&live_workspace, &err)? {
+                    eprintln!(
+                        "[fullmag] authored capability preflight rejected the execution plan"
+                    );
+                    (None, Some(err))
+                } else {
+                    // A transport or helper failure remains non-fatal; Phase 2 owns the real result.
+                    eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
+                    let timestamp_unix_ms = preparation_unix_time_millis()?;
+                    transition_preparation(&live_workspace, |preparation| {
+                        push_preparation_log_once(
                         preparation,
                         timestamp_unix_ms,
                         PreparationLogLevel::Warning,
                         PreparationStageId::ScriptMaterialization,
                         "Lightweight script preflight was unavailable; using full materialization",
                     );
-                    Ok(())
-                })?;
-                (None, None)
+                        Ok(())
+                    })?;
+                    (None, None)
+                }
             }
-        }
+        },
     };
     let early_preflight_completed = if let Some(early_config) = early_config {
         let early_stages = run_active_preparation_operation(
@@ -7167,27 +7224,45 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         || materialize_script_stages(script_config),
     )?;
     if !early_preflight_completed {
-        run_script_preparation_preflight(
-            &live_workspace,
-            || {
-                if stages.is_empty() {
-                    bail!("script did not produce any executable stages");
-                }
-                for stage in &stages {
-                    validate_ir(&stage.ir)?;
-                }
-                Ok(())
-            },
-            || {
-                for stage in &stages {
-                    stage
-                        .ir
-                        .plan_for(args.backend.map(BackendTarget::from))
-                        .map_err(join_errors)?;
-                }
-                Ok(())
-            },
-        )?;
+        if args.headless {
+            // Headless runs perform the authoritative validation and planning
+            // inside `run_solver_initialization` after the complete script
+            // export has been materialized.  Keep the preparation state
+            // transitions for the live manifest without repeating those
+            // expensive passes here.
+            run_script_preparation_preflight(
+                &live_workspace,
+                || {
+                    if stages.is_empty() {
+                        bail!("script did not produce any executable stages");
+                    }
+                    Ok(())
+                },
+                || Ok(()),
+            )?;
+        } else {
+            run_script_preparation_preflight(
+                &live_workspace,
+                || {
+                    if stages.is_empty() {
+                        bail!("script did not produce any executable stages");
+                    }
+                    for stage in &stages {
+                        validate_ir(&stage.ir)?;
+                    }
+                    Ok(())
+                },
+                || {
+                    for stage in &stages {
+                        stage
+                            .ir
+                            .plan_for(args.backend.map(BackendTarget::from))
+                            .map_err(join_errors)?;
+                    }
+                    Ok(())
+                },
+            )?;
+        }
     }
     let detailed_mesh_workspace = live_workspace.snapshot().mesh_workspace;
     finish_mesh_preparation(&live_workspace, detailed_mesh_workspace.as_ref())?;
@@ -7327,6 +7402,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         .map(|stage| {
             session_runtime_selection_for_problem(
                 &stage.ir,
+                stage_execution_plans.last(),
                 field_every_n,
                 backend_target_name(final_requested_backend),
                 execution_mode_name(final_execution_mode),
@@ -7347,10 +7423,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let previous_workspace = live_workspace.snapshot();
     let initial_runtime = session_runtime_selection_for_problem(
         &stages[0].ir,
+        Some(&initial_execution_plan),
         field_every_n,
         backend_target_name(final_requested_backend),
         execution_mode_name(final_execution_mode),
         execution_precision_name(final_precision),
+    );
+    let initial_live_metadata =
+        current_live_metadata(&stages[0].ir, &initial_execution_plan, "running");
+    let initial_mesh_workspace = current_mesh_workspace(
+        &stages[0].ir,
+        &initial_execution_plan,
+        "running",
+        current_mesh_quality.as_ref(),
+        &current_mesh_history,
     );
     live_workspace.replace(LocalLiveWorkspaceState {
         session: build_session_manifest(
@@ -7369,19 +7455,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         run: build_run_manifest(&run_id, &session_id, "running", &artifact_dir),
         live_state: initial_live_state,
         fem_mesh: initial_fem_mesh,
-        metadata: Some(current_live_metadata(
-            &stages[0].ir,
-            &initial_execution_plan,
-            "running",
-        )),
+        metadata: Some(initial_live_metadata),
         mesh_workspace: merge_detailed_mesh_workspace(
-            current_mesh_workspace(
-                &stages[0].ir,
-                &initial_execution_plan,
-                "running",
-                current_mesh_quality.as_ref(),
-                &current_mesh_history,
-            ),
+            initial_mesh_workspace,
             previous_workspace.mesh_workspace.as_ref(),
         ),
         stage_execution: None,
@@ -8511,13 +8587,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
             }
         }
-        validate_ir(&stage.ir)?;
-
-        current_plan_summary = stage
-            .ir
-            .plan_for(args.backend.map(BackendTarget::from))
-            .map_err(join_errors)?;
-        let mut execution_plan = if stage.ir == materialized_stage_ir {
+        let stage_plan_reusable = stage.ir == materialized_stage_ir;
+        if !stage_plan_reusable {
+            validate_ir(&stage.ir)?;
+            current_plan_summary = stage
+                .ir
+                .plan_for(args.backend.map(BackendTarget::from))
+                .map_err(join_errors)?;
+        }
+        let mut execution_plan = if stage_plan_reusable {
             materialized_execution_plan
         } else {
             fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?
@@ -8599,6 +8677,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         live_workspace.update(|state| {
             let stage_runtime = session_runtime_selection_for_problem(
                 &stage.ir,
+                Some(&execution_plan),
                 field_every_n,
                 backend_target_name(stage.ir.backend_policy.requested_backend),
                 execution_mode_name(stage.ir.validation_profile.execution_mode),
@@ -8667,6 +8746,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let mut snapshot = live_workspace.snapshot();
                     let failed_runtime = session_runtime_selection_for_problem(
                         &stage.ir,
+                        Some(&execution_plan),
                         field_every_n,
                         backend_target_name(final_requested_backend),
                         execution_mode_name(final_execution_mode),
@@ -9020,6 +9100,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut snapshot = live_workspace.snapshot();
                 let failed_runtime = session_runtime_selection_for_problem(
                     &stage.ir,
+                    Some(&execution_plan),
                     field_every_n,
                     backend_target_name(final_requested_backend),
                     execution_mode_name(final_execution_mode),
@@ -9265,6 +9346,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     preview_config: None,
                     stages: None,
                     profile: None,
+                    frozen_spins_runtime_plan_binding: None,
                 };
                 paused_stage = build_resumable_interactive_command(&stage_command, &stage_result)
                     .map(|command| PausedInteractiveStage {
@@ -9464,6 +9546,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // When a `run_sequence` command is active, this holds the remaining stages.
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
         let mut active_sequence: Option<ActiveSequenceState> = None;
+        let mut frozen_spins_applied_scene_revision: Option<u64> = None;
         loop {
             if display_selection_handle.owner_session_lost() {
                 live_workspace.push_log(
@@ -9562,6 +9645,77 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     break;
                 }
                 continue;
+            };
+
+            let mut frozen_replan_resume_label = None;
+            let command = if command.kind == "apply_frozen_spins" {
+                if let Some(paused) = paused_stage.take() {
+                    let resumed = match bind_frozen_spins_replan_to_paused_command(
+                        paused.command,
+                        &command,
+                    ) {
+                        Ok(resumed) => resumed,
+                        Err(error) => {
+                            live_workspace.push_log(
+                                "error",
+                                format!(
+                                    "Frozen Spins hot-apply command {} was rejected: {}",
+                                    command.command_id, error
+                                ),
+                            );
+                            continue;
+                        }
+                    };
+                    frozen_replan_resume_label =
+                        Some(format!("Frozen Spins hot-apply ({})", paused.source_kind));
+                    live_workspace.push_log(
+                        "system",
+                        format!(
+                            "Applying Frozen Spins revision at accepted-step boundary and resuming {}",
+                            paused.source_kind
+                        ),
+                    );
+                    resumed
+                } else {
+                    match problem_with_frozen_spins_runtime_plan_binding(
+                        &interactive_template_ir,
+                        &command,
+                        frozen_spins_applied_scene_revision,
+                    ) {
+                        Ok(Some((candidate, source_scene_revision))) => {
+                            if let Err(error) = validate_ir(&candidate) {
+                                live_workspace.push_log(
+                                    "error",
+                                    format!(
+                                        "Frozen Spins revision {source_scene_revision} failed canonical IR validation: {error}"
+                                    ),
+                                );
+                                continue;
+                            }
+                            interactive_template_ir = candidate;
+                            frozen_spins_applied_scene_revision = Some(source_scene_revision);
+                            interactive_runtime_host
+                                .replace_base_problem(interactive_template_ir.clone());
+                            live_workspace.push_log(
+                                "system",
+                                format!(
+                                    "Applied Frozen Spins scene revision {source_scene_revision} to the idle runtime template"
+                                ),
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => live_workspace.push_log(
+                            "error",
+                            format!(
+                                "Frozen Spins idle runtime-plan binding rejected for command {}: {}",
+                                command.command_id, error
+                            ),
+                        ),
+                    }
+                    continue;
+                }
+            } else {
+                command
             };
 
             if interactive_runtime_host.handle_display_sync(&command, &live_workspace) {
@@ -9700,8 +9854,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         Some(format!("resume ({})", paused.source_kind)),
                     )
                 } else {
-                    (command, None)
+                    (command, frozen_replan_resume_label)
                 };
+            let frozen_spins_explicit_reactivation = resume_label_hint
+                .as_deref()
+                .is_some_and(|label| label.starts_with("Frozen Spins hot-apply"));
 
             if command.kind == "load_state" {
                 if paused_stage.is_some() {
@@ -9912,6 +10069,49 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let kind = resume_label_hint.unwrap_or_else(|| command.kind.clone());
                 (command, kind)
             };
+
+            match problem_with_frozen_spins_runtime_plan_binding(
+                &interactive_template_ir,
+                &command,
+                frozen_spins_applied_scene_revision,
+            ) {
+                Ok(Some((candidate, source_scene_revision))) => {
+                    if let Err(error) = validate_ir(&candidate) {
+                        live_workspace.push_log(
+                            "error",
+                            format!(
+                                "Frozen Spins revision {source_scene_revision} failed canonical IR validation: {error}"
+                            ),
+                        );
+                        continue;
+                    }
+                    interactive_template_ir = candidate;
+                    frozen_spins_applied_scene_revision = Some(source_scene_revision);
+                    interactive_runtime_host.replace_base_problem(interactive_template_ir.clone());
+                    live_workspace.push_log(
+                        "system",
+                        format!(
+                            "Applied Frozen Spins scene revision {source_scene_revision} at the next runtime-plan boundary for command {}",
+                            command.command_id
+                        ),
+                    );
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!(
+                        "[fullmag] frozen spins runtime plan binding rejected for command '{}': {}",
+                        command.command_id, error
+                    );
+                    live_workspace.push_log(
+                        "error",
+                        format!(
+                            "Frozen Spins runtime-plan binding rejected for command {}: {}",
+                            command.command_id, error
+                        ),
+                    );
+                    continue;
+                }
+            }
 
             let Some(mut stage) =
                 (match build_interactive_command_stage(&interactive_template_ir, &command) {
@@ -10211,6 +10411,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             stage_fem_mesh_asset.as_ref(),
                             field_every_n,
                             continuation_magnetization.as_deref(),
+                            frozen_spins_explicit_reactivation,
                             &live_workspace,
                         ) {
                             eprintln!("interactive preview runtime warning: {}", error);
@@ -11271,9 +11472,9 @@ mod tests {
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         preserve_terminal_stage_history, project_script_export_failure,
         requested_execution_device_for_overrides, resolve_adaptive_convergence_metric,
-        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
-        run_active_preparation_operation, run_owned_preparation_stage,
-        run_script_preparation_preflight, run_solver_initialization,
+        resolve_preview_field_every_n, resolve_rayon_cpu_threads,
+        resolved_shared_domain_object_region_markers, run_active_preparation_operation,
+        run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         scripted_stage_execution_state_with_completion, set_latest_scalar_row_if_due,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
@@ -11298,6 +11499,30 @@ mod tests {
         assert_eq!(
             requested_execution_device_for_overrides(&runtime, Some("cpu"), Some("gpu")),
             "gpu"
+        );
+    }
+
+    #[test]
+    fn auto_rayon_threads_are_bounded_before_native_mesh_resolution() {
+        assert_eq!(
+            resolve_rayon_cpu_threads(40, Some("auto"), None, None),
+            (16, true)
+        );
+        assert_eq!(
+            resolve_rayon_cpu_threads(8, Some("auto"), None, None),
+            (8, true)
+        );
+        assert_eq!(
+            resolve_rayon_cpu_threads(40, Some("auto"), None, Some("12")),
+            (12, true)
+        );
+        assert_eq!(
+            resolve_rayon_cpu_threads(40, Some("auto"), Some("4"), None),
+            (16, true)
+        );
+        assert_eq!(
+            resolve_rayon_cpu_threads(40, None, Some("12"), None),
+            (12, false)
         );
     }
 

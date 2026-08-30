@@ -23,10 +23,12 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
 };
 use crate::router_v2::handlers::sessions::status::fdm_grid_fingerprint;
 use crate::schemas::{
-    FrozenSpinsCollectionResource, FrozenSpinsDefinitionResource, FrozenSpinsDeleteRequest,
-    FrozenSpinsMutationRequest, FrozenSpinsPreviewActivationRequest,
-    FrozenSpinsPreviewActivationResponse, FrozenSpinsPreviewRequest, FrozenSpinsPreviewResponse,
-    FrozenSpinsRequestedIntent, FrozenSpinsResolvedPlanSummary, FrozenSpinsWarning,
+    FrozenSpinsActivationScope, FrozenSpinsCollectionResource, FrozenSpinsDefinitionResource,
+    FrozenSpinsDeleteRequest, FrozenSpinsMutationRequest, FrozenSpinsPreviewActivationRequest,
+    FrozenSpinsPreviewActivationResponse, FrozenSpinsPreviewAuthority, FrozenSpinsPreviewRequest,
+    FrozenSpinsPreviewResponse, FrozenSpinsRequestedIntent, FrozenSpinsResolvedPlanSummary,
+    FrozenSpinsRuntimeApplication, FrozenSpinsRuntimeApplicationState,
+    FrozenSpinsRuntimeApplyBoundary, FrozenSpinsSolverBinding, FrozenSpinsWarning,
 };
 use crate::session::FrozenSpinsPreviewRecord;
 use crate::types::AppState;
@@ -50,7 +52,7 @@ pub async fn list_frozen_spins(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<FrozenSpinsCollectionResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    Ok(Json(collection_resource(&scene)))
+    Ok(Json(collection_resource(&scene, None)))
 }
 
 #[utoipa::path(
@@ -88,7 +90,8 @@ pub async fn create_frozen_spins(
     let committed = crate::commit_current_live_scene_document(&state, scene)
         .await
         .map_err(map_authoring_error)?;
-    definition_resource(&committed, &definition_id).map(Json)
+    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    definition_resource(&committed, &definition_id, Some(runtime_application)).map(Json)
 }
 
 #[utoipa::path(
@@ -106,7 +109,7 @@ pub async fn get_frozen_spins(
     Path(constraint_id): Path<String>,
 ) -> Result<Json<FrozenSpinsDefinitionResource>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    definition_resource(&scene, &constraint_id).map(Json)
+    definition_resource(&scene, &constraint_id, None).map(Json)
 }
 
 #[utoipa::path(
@@ -148,7 +151,8 @@ pub async fn patch_frozen_spins(
     let committed = crate::commit_current_live_scene_document(&state, scene)
         .await
         .map_err(map_authoring_error)?;
-    definition_resource(&committed, &constraint_id).map(Json)
+    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    definition_resource(&committed, &constraint_id, Some(runtime_application)).map(Json)
 }
 
 #[utoipa::path(
@@ -184,7 +188,11 @@ pub async fn delete_frozen_spins(
     let committed = crate::commit_current_live_scene_document(&state, scene)
         .await
         .map_err(map_authoring_error)?;
-    Ok(Json(collection_resource(&committed)))
+    let runtime_application = pending_runtime_application(&state, committed.revision).await;
+    Ok(Json(collection_resource(
+        &committed,
+        Some(runtime_application),
+    )))
 }
 
 #[utoipa::path(
@@ -419,6 +427,8 @@ pub async fn create_frozen_spins_preview(
     let response = FrozenSpinsPreviewResponse {
         schema_version: PREVIEW_SCHEMA_VERSION.to_string(),
         preview_id: preview_id.clone(),
+        authority: FrozenSpinsPreviewAuthority::SpeculativeAuthoringPreview,
+        solver_binding: FrozenSpinsSolverBinding::Unbound,
         activation_candidate_token,
         revision: scene.revision,
         current: true,
@@ -583,10 +593,18 @@ pub async fn activate_frozen_spins_preview(
             "stale_activation_candidate: activation candidate was already consumed",
         ));
     }
+    let runtime_application = pending_runtime_application(&state, committed.revision).await;
     Ok(Json(FrozenSpinsPreviewActivationResponse {
         schema_version: "frozen_spins_activation.v1".to_string(),
         preview_id,
+        authority: FrozenSpinsPreviewAuthority::SpeculativeAuthoringPreview,
+        activation_scope: FrozenSpinsActivationScope::AuthoringCommit,
+        solver_binding: FrozenSpinsSolverBinding::PendingRuntimeActivation,
+        runtime_application,
         activation_candidate_token_consumed: true,
+        active_site_count: record.response.frozen_dof_count + record.response.free_dof_count,
+        frozen_site_count: record.response.frozen_dof_count,
+        free_site_count: record.response.free_dof_count,
         source_state_revision: record.source_state_revision,
         topology_fingerprint: record.topology_fingerprint,
         mask_sha256: record.response.mask_sha256,
@@ -1005,7 +1023,10 @@ fn memberships_from_fdm(
     Ok((active_mask, resolved))
 }
 
-fn collection_resource(scene: &fullmag_authoring::SceneDocument) -> FrozenSpinsCollectionResource {
+fn collection_resource(
+    scene: &fullmag_authoring::SceneDocument,
+    runtime_application: Option<FrozenSpinsRuntimeApplication>,
+) -> FrozenSpinsCollectionResource {
     let definitions = scene
         .magnetization_constraints
         .iter()
@@ -1015,12 +1036,14 @@ fn collection_resource(scene: &fullmag_authoring::SceneDocument) -> FrozenSpinsC
         revision: scene.revision,
         count: definitions.len(),
         definitions,
+        runtime_application,
     }
 }
 
 fn definition_resource(
     scene: &fullmag_authoring::SceneDocument,
     constraint_id: &str,
+    runtime_application: Option<FrozenSpinsRuntimeApplication>,
 ) -> Result<FrozenSpinsDefinitionResource, ApiError> {
     let definition = scene
         .magnetization_constraints
@@ -1036,7 +1059,30 @@ fn definition_resource(
     Ok(FrozenSpinsDefinitionResource {
         revision: scene.revision,
         definition,
+        runtime_application,
     })
+}
+
+async fn pending_runtime_application(
+    state: &Arc<AppState>,
+    revision: u64,
+) -> FrozenSpinsRuntimeApplication {
+    let application_command_id = crate::router_v2::handlers::simulation::commands::enqueue_frozen_spins_runtime_replan_if_running(
+        state,
+        revision,
+    )
+    .await;
+    FrozenSpinsRuntimeApplication {
+        state: FrozenSpinsRuntimeApplicationState::PendingRuntimePlan,
+        pending_revision: revision,
+        apply_boundary: if application_command_id.is_some() {
+            FrozenSpinsRuntimeApplyBoundary::AcceptedStep
+        } else {
+            FrozenSpinsRuntimeApplyBoundary::NextRuntimePlan
+        },
+        current_runtime_unchanged: true,
+        application_command_id,
+    }
 }
 
 fn check_revision(current: u64, expected: u64) -> Result<(), ApiError> {

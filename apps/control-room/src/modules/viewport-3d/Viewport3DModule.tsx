@@ -256,6 +256,24 @@ export function resolveViewport3DVisualizationAckDataIdentity({
   };
 }
 
+export function resolveViewport3DVisualizationFrameAck({
+  committedDataIdentity,
+  registeredChangeKind,
+}: {
+  committedDataIdentity: VisualizationDataAdoptionIdentity | null;
+  registeredChangeKind: "data" | "style" | null;
+}): {
+  changeKind: "data" | "style";
+  dataIdentity: VisualizationDataAdoptionIdentity | null;
+} {
+  const changeKind = registeredChangeKind ??
+    (committedDataIdentity ? "data" : "style");
+  return {
+    changeKind,
+    dataIdentity: changeKind === "data" ? committedDataIdentity : null,
+  };
+}
+
 type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type Viewport3DCanvasCreatedState = Parameters<
   NonNullable<ComponentProps<typeof Viewport3DCanvas>["onCreated"]>
@@ -1899,7 +1917,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const visualizationAckKindsRef = useRef(
     new Map<number, {
       changeKind: "data" | "style";
-      dataIdentity: VisualizationDataAdoptionIdentity | null;
       resourceKey: string;
     }>(),
   );
@@ -2188,14 +2205,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       }),
     );
     const ackKind = visualizationAckKindsRef.current.get(revision);
-    const committedDataIdentity = ackKind?.changeKind === "data"
-      ? ackKind.dataIdentity ?? resolveViewport3DVisualizationAckDataIdentity({
-          adoptionRegistry: visualizationDebugAdoptionRegistry,
-          sessionIdentity,
-          source: visualizationDebugSource,
-          visualizationRevision: revision,
-        })
-      : null;
+    const frameAck = resolveViewport3DVisualizationFrameAck({
+      committedDataIdentity: resolveViewport3DVisualizationAckDataIdentity({
+        adoptionRegistry: visualizationDebugAdoptionRegistry,
+        sessionIdentity,
+        source: visualizationDebugSource,
+        visualizationRevision: revision,
+      }),
+      registeredChangeKind: ackKind?.changeKind ?? null,
+    });
+    const committedDataIdentity = frameAck.dataIdentity;
     const resourceKey = committedDataIdentity?.resourceKey ??
       ackKind?.resourceKey ?? sceneProps.resourceFrameKey;
     const hasMatchingAdoption = !ackKind ||
@@ -2208,7 +2227,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           sessionId: committedDataIdentity.sessionId,
         }));
     if (hasMatchingAdoption) sendVisualizationAck({
-      changeKind: ackKind?.changeKind ?? "style",
+      changeKind: frameAck.changeKind,
       effectiveRenderMode: visualizationEffectiveRenderMode,
       enabled: clientReady && !visualizationError,
       dataIdentity: committedDataIdentity,
@@ -2263,7 +2282,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       resourceFrameKey: sceneProps.resourceFrameKey,
       revision,
     };
-    visualizationAckKindsRef.current.set(revision, { changeKind, dataIdentity, resourceKey });
+    visualizationAckKindsRef.current.set(revision, { changeKind, resourceKey });
     while (visualizationAckKindsRef.current.size > 64) {
       const oldest = visualizationAckKindsRef.current.keys().next().value;
       if (oldest === undefined) break;

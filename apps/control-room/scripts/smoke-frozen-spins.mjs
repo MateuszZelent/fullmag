@@ -43,6 +43,32 @@ async function apiJson(path, init) {
   return { response, value };
 }
 
+async function waitForFrozenSpinsField(page, attempts = 80) {
+  let lastCatalog = null;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const catalog = (await apiJson("/v2/sessions/current/data/fields")).value;
+      lastCatalog = catalog;
+      const field = catalog?.quantities?.find(
+        (entry) => entry.quantity_id === "frozen_spins" && entry.available === true,
+      );
+      if (field) {
+        const meta = (
+          await apiJson("/v2/sessions/current/data/fields/frozen_spins/meta?component=full")
+        ).value;
+        return { field, meta };
+      }
+    } catch (error) {
+      lastError = String(error);
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(
+    `Current session did not publish an available frozen_spins field: ${JSON.stringify({ lastCatalog, lastError })}`,
+  );
+}
+
 const playwright = await loadPlaywright();
 if (!playwright?.chromium) {
   console.error("Frozen spins smoke requires Playwright or @playwright/test.");
@@ -62,6 +88,7 @@ const consoleErrors = [];
 const consoleWarnings = [];
 const networkLog = [];
 let previousVisualizationState = null;
+let fieldMeta = null;
 
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -89,25 +116,6 @@ try {
   assert(quantity.unit === "1", "frozen_spins must be dimensionless");
   assert(quantity.location === "node", "frozen_spins must use canonical node location");
   assert(quantity.supports_preview_3d === true, "frozen_spins must support 3D preview");
-
-  const fieldCatalog = (await apiJson("/v2/sessions/current/data/fields")).value;
-  const field = fieldCatalog?.quantities?.find(
-    (entry) => entry.quantity_id === "frozen_spins" && entry.available === true,
-  );
-  assert(field, "Current session must publish an available frozen_spins field");
-
-  const fieldMeta = (
-    await apiJson("/v2/sessions/current/data/fields/frozen_spins/meta?component=full")
-  ).value;
-  assert(fieldMeta?.quantity_id === "frozen_spins", "Field meta must preserve quantity id");
-  assert(fieldMeta?.components === 1, "Frozen Spins field payload must have one component");
-  assert(
-    typeof fieldMeta?.publication_bundle?.field?.carrier_fingerprint === "string" ||
-      fieldMeta?.resolved_capability?.carriers?.some(
-        (carrier) => typeof carrier.carrier_fingerprint === "string",
-      ),
-    "Frozen Spins field meta must publish a carrier fingerprint",
-  );
 
   previousVisualizationState = (
     await apiJson("/v2/sessions/current/visualization/state")
@@ -164,27 +172,48 @@ try {
 
   console.log("WebGL context verified successfully:", webglStatus);
 
-  const visualizationState = (
+  const frozenVisualizationPatch = {
+    active_quantity_id: "frozen_spins",
+    overrides: objectQuantityOverrides,
+    quantity: { active_quantity_id: "frozen_spins" },
+    view_mode: "3d",
+  };
+  const materializationVisualizationState = (
     await apiJson("/v2/sessions/current/visualization/state", {
       body: JSON.stringify({
-        active_quantity_id: "frozen_spins",
-        overrides: objectQuantityOverrides,
-        quantity: { active_quantity_id: "frozen_spins" },
-        view_mode: "3d",
+        ...frozenVisualizationPatch,
       }),
       headers: { "content-type": "application/json" },
       method: "PATCH",
     })
   ).value;
   assert(
-    visualizationState?.active_quantity_id === "frozen_spins" &&
-      visualizationState?.quantity?.active_quantity_id === "frozen_spins",
+    materializationVisualizationState?.active_quantity_id === "frozen_spins" &&
+      materializationVisualizationState?.quantity?.active_quantity_id === "frozen_spins",
     "Visualization state must resolve frozen_spins as the active standard quantity",
   );
 
-  const renderRevision = visualizationState.revision;
+  const publishedField = await waitForFrozenSpinsField(page);
+  fieldMeta = publishedField.meta;
+  assert(fieldMeta?.quantity_id === "frozen_spins", "Field meta must preserve quantity id");
+  assert(fieldMeta?.components === 1, "Frozen Spins field payload must have one component");
+  assert(
+    typeof fieldMeta?.publication_bundle?.field?.carrier_fingerprint === "string" ||
+      fieldMeta?.resolved_capability?.carriers?.some(
+        (carrier) => typeof carrier.carrier_fingerprint === "string",
+      ),
+    "Frozen Spins field meta must publish a carrier fingerprint",
+  );
+
+  // The materialization revision is the authoritative data change: it moves
+  // the viewport from the previous quantity to frozen_spins and may complete
+  // only after the browser demand has materialized the FEM field.  Do not
+  // manufacture a second, semantically identical PATCH merely to obtain a new
+  // revision; clients intentionally coalesce such no-op registry updates.
+  const visualizationState = materializationVisualizationState;
+  const renderRevision = materializationVisualizationState.revision;
   let renderedAck = null;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
     const ackResource = (
       await apiJson("/v2/sessions/current/visualization/client-acks")
     ).value;

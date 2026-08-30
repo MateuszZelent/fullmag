@@ -142,7 +142,7 @@ void launch_exchange_field_fp32(Context &ctx, cudaStream_t stream) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    double MU0 = 4.0 * M_PI * 1e-7;
+    double MU0 = 4.0 * kFullmagPi * 1e-7;
     float prefactor = static_cast<float>(2.0 * ctx.A / (MU0 * ctx.Ms));
     float inv_mu0_ms = static_cast<float>(2.0 / (MU0 * ctx.Ms));
     float inv_dx2 = static_cast<float>(1.0 / (ctx.dx * ctx.dx));

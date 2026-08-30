@@ -991,6 +991,11 @@ class _TrustedTopologyFingerprintV3Context:
     mesh_without_certificate: "MeshData" = field(repr=False, compare=False)
     topology_fingerprint_v3: str
     _capability: object = field(repr=False, compare=False)
+    # The ordinary test/public private path binds this to ``None`` and keeps
+    # its historical Python fingerprint re-check.  The native fast path
+    # stores a compact content guard so the constructor can detect mutation
+    # without hashing the full canonical topology byte stream twice.
+    mesh_mutation_guard_sha256: str | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -1010,6 +1015,63 @@ _MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS: WeakSet[
 _MINTED_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_PROOFS: WeakSet[
     _TrustedNativePreflightReceiptProof
 ] = WeakSet()
+
+
+def _trusted_mesh_mutation_guard_sha256(mesh: "MeshData") -> str:
+    """Hash the exact native-wire arrays for a cheap post-preflight guard.
+
+    This is not the semantic topology fingerprint.  It only closes the small
+    in-process window between native preflight and trusted construction.  The
+    native preflight remains authoritative for structural validation and the
+    canonical v3 fingerprint; this guard avoids repeating the much slower
+    Python field-by-field v3 encoder on the same arrays.
+    """
+    digest = hashlib.sha256(b"fullmag:trusted-mesh-mutation-guard:v1")
+    fields_to_guard = (
+        ("nodes", mesh.nodes),
+        ("cell_types", mesh.cell_types),
+        ("cell_offsets", mesh.cell_offsets),
+        ("cell_nodes", mesh.cell_nodes),
+        ("element_markers", mesh.element_markers),
+        ("facet_types", mesh.facet_types),
+        ("facet_roles", mesh.facet_roles),
+        ("facet_offsets", mesh.facet_offsets),
+        ("facet_nodes", mesh.facet_nodes),
+        ("boundary_markers", mesh.boundary_markers),
+        ("cell_global_ordinals", mesh.cell_global_ordinals),
+        ("facet_global_ordinals", mesh.facet_global_ordinals),
+        ("cell_mesh_parts", mesh.cell_mesh_parts),
+    )
+    for name, value in fields_to_guard:
+        array = np.ascontiguousarray(np.asarray(value))
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(array.dtype.str.encode("ascii"))
+        digest.update(b"\0")
+        digest.update(
+            np.asarray(array.shape, dtype="<u8").tobytes(order="C")
+        )
+        digest.update(memoryview(array).cast("B"))
+    metadata = {
+        "periodic_boundary_pairs": list(mesh.periodic_boundary_pairs),
+        "periodic_node_pairs": list(mesh.periodic_node_pairs),
+        "periodic_mesh_certificate": mesh.periodic_mesh_certificate,
+        "realization_report": (
+            mesh.realization_report.to_dict()
+            if mesh.realization_report is not None
+            else None
+        ),
+    }
+    digest.update(
+        json.dumps(
+            metadata,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1241,9 +1303,20 @@ class MeshData:
         }
         if dict(proof.counts) != current_counts:
             raise ValueError("trusted native preflight proof counts are stale")
-        current_topology_fingerprint_v3 = (
-            mesh_without_certificate.topology_fingerprint_v3()
-        )
+        if context.mesh_mutation_guard_sha256 is None:
+            current_topology_fingerprint_v3 = (
+                mesh_without_certificate.topology_fingerprint_v3()
+            )
+        else:
+            current_guard = _trusted_mesh_mutation_guard_sha256(
+                mesh_without_certificate
+            )
+            if current_guard != context.mesh_mutation_guard_sha256:
+                raise ValueError("trusted native preflight proof topology is stale")
+            # The native preflight bound this identity and the mutation guard
+            # above confirms that the Python object still carries the exact
+            # arrays that were preflighted.
+            current_topology_fingerprint_v3 = context.topology_fingerprint_v3
         if (
             context.topology_fingerprint_v3 != current_topology_fingerprint_v3
             or certificate.topology_fingerprint_version != "v3"
@@ -2891,6 +2964,56 @@ def _bind_trusted_topology_fingerprint_v3(
         mesh_without_certificate=mesh_without_certificate,
         topology_fingerprint_v3=mesh_without_certificate.topology_fingerprint_v3(),
         _capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+    )
+    _MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS.add(context)
+    return context
+
+
+def _bind_trusted_topology_fingerprint_v3_from_native(
+    *,
+    mesh_without_certificate: MeshData,
+    native_preflight: object,
+    _receipt_capability: object,
+) -> _TrustedTopologyFingerprintV3Context:
+    """Bind a trusted topology context to an already completed native proof.
+
+    ``preflight_mixed_mesh_arrays`` computes the canonical v3 fingerprint in
+    Rust while validating the complete typed CSR payload.  The trusted loader
+    can therefore carry that identity forward instead of recomputing the
+    Python byte stream.  A compact content guard is retained for the narrow
+    in-process interval between preflight and signed ``MeshData`` creation;
+    it detects mutation without weakening the native structural proof.
+    """
+    from fullmag._core import NativeMixedPreflightResult
+
+    if _receipt_capability is not _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY:
+        raise ValueError("trusted receipt capability is invalid")
+    if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+        raise ValueError("trusted topology context requires an unsigned mesh")
+    if not isinstance(native_preflight, NativeMixedPreflightResult):
+        raise TypeError("native preflight result has an invalid type")
+    actual_counts = {
+        "nodes": mesh_without_certificate.n_nodes,
+        "cells": mesh_without_certificate.n_elements,
+        "facets": mesh_without_certificate.n_boundary_faces,
+    }
+    if native_preflight.counts != actual_counts:
+        raise ValueError("native preflight mesh counts do not match the mesh")
+    fingerprint = native_preflight.topology_fingerprint_v3
+    if (
+        not isinstance(fingerprint, str)
+        or not fingerprint.startswith("sha256:")
+        or len(fingerprint) != len("sha256:") + 64
+        or any(character not in "0123456789abcdef" for character in fingerprint[7:])
+    ):
+        raise ValueError("native preflight topology fingerprint is invalid")
+    context = _TrustedTopologyFingerprintV3Context(
+        mesh_without_certificate=mesh_without_certificate,
+        topology_fingerprint_v3=fingerprint,
+        _capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+        mesh_mutation_guard_sha256=_trusted_mesh_mutation_guard_sha256(
+            mesh_without_certificate
+        ),
     )
     _MINTED_TRUSTED_TOPOLOGY_FINGERPRINT_CONTEXTS.add(context)
     return context

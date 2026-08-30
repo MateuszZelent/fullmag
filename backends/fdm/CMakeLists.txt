@@ -166,6 +166,15 @@ target_include_directories(fullmag_fdm
 if(FULLMAG_ENABLE_CUDA)
     target_compile_definitions(fullmag_fdm PRIVATE FULLMAG_HAS_CUDA=1)
 
+    # CUDA 13's CCCL requires the conforming MSVC preprocessor.  NVCC passes
+    # host compiler options separately, so spell out both language paths.
+    if(MSVC)
+        target_compile_options(fullmag_fdm PRIVATE
+            $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+            $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>
+        )
+    endif()
+
     # Architecture targets: Ampere, Ada Lovelace, Hopper
     set_target_properties(fullmag_fdm PROPERTIES
         CUDA_ARCHITECTURES "80;86;89;90"

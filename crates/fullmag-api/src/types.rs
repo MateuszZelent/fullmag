@@ -1103,6 +1103,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     #[serde(default)]
     pub live_state: Option<LiveState>,
     #[serde(default)]
+    pub frozen_spins_runtime_status: Option<fullmag_runner::constraints::FrozenSpinsRuntimeStatus>,
+    #[serde(default)]
     pub coupled_checkpoint: Option<Value>,
     #[serde(default)]
     pub latest_scalar_row: Option<ScalarRow>,
@@ -1157,6 +1159,8 @@ pub(crate) struct CurrentLiveRuntimeFrameRequest {
     pub session_id: String,
     #[serde(default)]
     pub live_state: Option<LiveState>,
+    #[serde(default)]
+    pub frozen_spins_runtime_status: Option<fullmag_runner::constraints::FrozenSpinsRuntimeStatus>,
     #[serde(default)]
     pub engine_log: Option<Vec<EngineLogEntry>>,
     #[serde(default)]
@@ -1403,6 +1407,8 @@ pub(crate) struct SessionCommand {
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen_spins_runtime_plan_binding: Option<fullmag_ir::FrozenSpinsRuntimePlanBindingIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_materialization_requirements: Vec<FieldMaterializationRequirement>,
 }

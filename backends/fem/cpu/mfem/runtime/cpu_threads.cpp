@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
+#include <string>
 #include <thread>
 
 #ifdef _OPENMP
@@ -89,11 +90,12 @@ int auto_cpu_thread_cap_for_context(const Context &ctx, int requested_threads)
     if (requested_threads <= 1) {
         return std::max(1, requested_threads);
     }
-    if (ctx.demag.enabled) {
-        return std::max(1, requested_threads);
-    }
     const uint32_t node_count = ctx.mesh.n_nodes;
     const uint32_t element_count = ctx.mesh.n_elements;
+    // Hypre/AMG is especially sensitive to excessive OpenMP teams on the
+    // Windows Docker lane.  Keep small and medium demag contexts on the same
+    // size-aware limits as the other FEM kernels; large contexts retain the
+    // requested auto count because their operator work can still scale out.
     if (node_count <= 10000u || element_count <= 75000u) {
         return std::min(requested_threads, 8);
     }
@@ -109,9 +111,6 @@ int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_thr
         return FULLMAG_FEM_CPU_THREAD_CAP_GPU_DEFAULT_ONE;
     }
     if (requested_threads <= 1) {
-        return FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
-    }
-    if (ctx.demag.enabled) {
         return FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED;
     }
     const uint32_t node_count = ctx.mesh.n_nodes;
@@ -161,6 +160,20 @@ void configure_fem_host_runtime_threads(Context &ctx)
 #endif
     omp_set_num_threads(ctx.cpu_threads.effective_omp_threads);
 #endif
+    if (request.auto_requested && !mfem_device_requests_gpu(ctx)) {
+        // Hypre and the MPI/OpenMP runtime may snapshot OMP_NUM_THREADS before
+        // their first parallel region.  omp_set_num_threads() alone therefore
+        // leaves the auto path at the host-wide default on the Windows Docker
+        // lane.  Publish the already size-capped value before MFEM/Hypre setup
+        // so both OpenMP consumers observe the same process-level budget.
+        const std::string effective_threads =
+            std::to_string(ctx.cpu_threads.effective_omp_threads);
+#if defined(_WIN32)
+        _putenv_s("OMP_NUM_THREADS", effective_threads.c_str());
+#else
+        setenv("OMP_NUM_THREADS", effective_threads.c_str(), 1);
+#endif
+    }
 }
 
 void log_cpu_runtime_selection(const Context &ctx)

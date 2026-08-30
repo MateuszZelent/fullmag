@@ -224,8 +224,49 @@ pub struct SolverStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub converged: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub frozen_spins: Option<FrozenSpinsSolverRuntimeStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FrozenSpinsSolverRuntimeStatus {
+    pub schema: String,
+    pub constraint_activation_epochs: std::collections::BTreeMap<String, u64>,
+    pub active_constraint_ids: Vec<String>,
+    pub resolved_constraint_set_revision: u64,
+    pub topology_fingerprint: String,
+    pub source_state_revision: Option<u64>,
+    pub mask_sha256: String,
+    pub reference_sha256: String,
+    pub active_site_count: u64,
+    pub frozen_site_count: u64,
+    pub free_site_count: u64,
+    pub vector_dimension: u8,
+    pub scalar_component_dof_count: u64,
+}
+
+impl From<fullmag_runner::constraints::FrozenSpinsRuntimeStatus>
+    for FrozenSpinsSolverRuntimeStatus
+{
+    fn from(value: fullmag_runner::constraints::FrozenSpinsRuntimeStatus) -> Self {
+        Self {
+            schema: value.schema,
+            constraint_activation_epochs: value.constraint_activation_epochs,
+            active_constraint_ids: value.active_constraint_ids.into_iter().collect(),
+            resolved_constraint_set_revision: value.resolved_constraint_set_revision,
+            topology_fingerprint: value.topology_fingerprint,
+            source_state_revision: value.source_state_revision,
+            mask_sha256: value.mask_sha256,
+            reference_sha256: value.reference_sha256,
+            active_site_count: value.active_site_count,
+            frozen_site_count: value.frozen_site_count,
+            free_site_count: value.free_site_count,
+            vector_dimension: value.vector_dimension,
+            scalar_component_dof_count: value.scalar_component_dof_count,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

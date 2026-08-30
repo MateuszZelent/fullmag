@@ -144,13 +144,13 @@ bool allocate_bytes(void **pointer, uint64_t bytes) {
     return cudaMalloc(pointer, bytes) == cudaSuccess;
 }
 
-bool allocate_double(double **pointer, uint64_t values) {
+[[maybe_unused]] bool allocate_double(double **pointer, uint64_t values) {
     uint64_t bytes = 0;
     return checked_mul(values, sizeof(double), &bytes) &&
            allocate_bytes(reinterpret_cast<void **>(pointer), bytes);
 }
 
-void release_workspace(Workspace &workspace) {
+[[maybe_unused]] void release_workspace(Workspace &workspace) {
     void *pointers[] = {
         workspace.x, workspace.rhs, workspace.residual, workspace.work,
         workspace.unit, workspace.precondition_residual, workspace.coarse_rhs,
@@ -1059,8 +1059,8 @@ __device__ void precondition(const SolveInput &in, const double *source,
     }
 }
 
-__global__ void solve_kernel(SolveInput in, Workspace workspace,
-                             uint64_t unknowns, uint64_t restart) {
+[[maybe_unused]] __global__ void solve_kernel(SolveInput in, Workspace workspace,
+                                              uint64_t unknowns, uint64_t restart) {
     if (blockIdx.x != 0 || threadIdx.x != 0) return;
     DeviceDiagnostics diagnostics{};
     diagnostics.reason = FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;

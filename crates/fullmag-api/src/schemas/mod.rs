@@ -2,11 +2,13 @@ pub mod analysis_extensions;
 pub mod authoring;
 pub mod commands;
 pub mod common;
+#[allow(dead_code)]
 pub mod decimal_u64;
 pub mod diagnostics;
 pub mod display;
 pub mod domain;
 pub mod fields;
+#[allow(dead_code)]
 pub mod frozen_spins;
 pub mod hysteresis;
 pub mod logs;
@@ -19,6 +21,7 @@ pub mod realtime;
 pub mod relaxation;
 pub mod runtime;
 pub mod scalars;
+#[allow(dead_code)]
 pub mod sessions;
 pub mod status;
 pub mod tables;

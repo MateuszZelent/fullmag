@@ -119,6 +119,105 @@ mod tests {
         (problem, state)
     }
 
+    #[test]
+    fn explicit_frozen_spins_reactivation_advances_epoch_and_recaptures_reference() {
+        let mut problem = simple_problem(0.1, 1.0);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 3])
+            .expect("state should build");
+        let plan = resolved_frozen_spins(vec![true, false, false]);
+
+        problem
+            .capture_frozen_spins_at_activation(&plan, &mut state)
+            .expect("initial activation should succeed");
+        let first = problem
+            .frozen_spins()
+            .expect("initial frozen state")
+            .clone();
+        assert_eq!(first.activation_epoch(), 1);
+        assert_eq!(first.constraint_activation_epochs()["pinned"], 1);
+        assert_eq!(first.resolved_constraint_set_revision(), 1);
+
+        state.magnetization_mut()[0] = [0.0, 1.0, 0.0];
+        problem
+            .capture_frozen_spins_at_activation(&plan, &mut state)
+            .expect("explicit reactivation should succeed");
+        let second = problem.frozen_spins().expect("reactivated frozen state");
+        assert_eq!(second.activation_epoch(), 2);
+        assert_eq!(second.constraint_activation_epochs()["pinned"], 2);
+        assert_eq!(second.resolved_constraint_set_revision(), 2);
+        assert_eq!(second.reference()[0], [0.0, 1.0, 0.0]);
+
+        let continued =
+            FrozenSpinsState::transition_at_activation(second, &plan, None, state.magnetization())
+                .expect("continuous stage activation should remain valid");
+        assert_eq!(continued.constraint_activation_epochs()["pinned"], 2);
+        assert_eq!(continued.resolved_constraint_set_revision(), 3);
+        assert_eq!(continued.reference()[0], [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn frozen_spins_stage_gap_deactivates_constraint_and_reentry_advances_epoch() {
+        let mut problem = simple_problem(0.1, 1.0);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 3])
+            .expect("state should build");
+        let plan = resolved_frozen_spins(vec![true, false, false]);
+        problem
+            .capture_frozen_spins_at_activation(&plan, &mut state)
+            .expect("stage A activation should succeed");
+
+        problem
+            .transition_frozen_spins_at_stage_boundary(None, &mut state)
+            .expect("inactive stage should publish an empty resolved set");
+        let inactive = problem.frozen_spins().expect("inactive lifecycle state");
+        assert!(inactive.active_constraint_ids().is_empty());
+        assert_eq!(inactive.frozen_dof_count(), 0);
+        assert_eq!(inactive.resolved_constraint_set_revision(), 2);
+        let mut candidate = vec![[0.0, 1.0, 0.0]; 3];
+        inactive.restore_reference(&mut candidate);
+        assert_eq!(candidate[0], [0.0, 1.0, 0.0]);
+
+        state.magnetization_mut()[0] = [0.0, 1.0, 0.0];
+        problem
+            .transition_frozen_spins_at_stage_boundary(Some(&plan), &mut state)
+            .expect("stage C re-entry should succeed");
+        let reentered = problem.frozen_spins().expect("re-entered frozen state");
+        assert_eq!(reentered.constraint_activation_epochs()["pinned"], 2);
+        assert_eq!(reentered.resolved_constraint_set_revision(), 3);
+        assert_eq!(reentered.reference()[0], [0.0, 1.0, 0.0]);
+        assert_eq!(reentered.frozen_dof_count(), 1);
+    }
+
+    #[test]
+    fn failed_frozen_spins_reactivation_keeps_published_state_unchanged() {
+        let mut problem = simple_problem(0.1, 1.0);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]; 3])
+            .expect("state should build");
+        problem
+            .capture_frozen_spins_at_activation(
+                &resolved_frozen_spins(vec![true, false, false]),
+                &mut state,
+            )
+            .expect("initial activation should succeed");
+        let published = problem
+            .frozen_spins()
+            .expect("published frozen state")
+            .clone();
+
+        let error = problem
+            .capture_frozen_spins_at_activation(
+                &resolved_frozen_spins(vec![true, false]),
+                &mut state,
+            )
+            .expect_err("malformed reactivation must fail");
+        assert!(error
+            .to_string()
+            .contains("frozen_spins_mask_size_mismatch"));
+        assert_eq!(problem.frozen_spins(), Some(&published));
+    }
+
     fn frozen_coupled_terms() -> ExternalStageTerms {
         ExternalStageTerms {
             additional_field_apm: vec![[0.0, 0.0, 1.0], [0.0; 3], [0.0; 3]],

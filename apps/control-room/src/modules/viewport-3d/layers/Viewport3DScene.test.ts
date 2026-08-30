@@ -118,7 +118,7 @@ describe("Viewport3DScene scale helpers", () => {
       source.indexOf("export function Viewport3DScene"),
     );
 
-    expect(adoptionFrameHook).toContain("adoptionRegistry.subscribe");
+    expect(adoptionFrameHook).toContain("adoptionRegistry.subscribeActive");
     expect(adoptionFrameHook).toContain('tracker.recordDirtyFrame("render-adoption")');
     const subscriberStart = adoptionFrameHook.indexOf(
       "adoptionRegistry.subscribe",

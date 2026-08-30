@@ -4,6 +4,22 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const FROZEN_SPINS_SCHEMA_VERSION: &str = "frozen_spins.v1";
+pub const FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION: &str =
+    "frozen_spins.runtime_plan_binding.v1";
+
+/// Command-bound authoring projection consumed when the next solver plan is
+/// materialized. The payload deliberately carries canonical IR constraints,
+/// not a UI mask or a backend-specific resolved plan: selection resolution and
+/// topology certification remain owned by `fullmag-plan`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenSpinsRuntimePlanBindingIR {
+    pub schema_version: String,
+    pub launch_command_id: String,
+    pub source_scene_revision: u64,
+    pub selection_definitions: Vec<SelectionDefinitionIR>,
+    pub magnetization_constraints: Vec<MagnetizationConstraintIR>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

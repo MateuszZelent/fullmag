@@ -196,25 +196,65 @@ impl ExchangeLlgProblem {
         state: &mut ExchangeLlgState,
     ) -> Result<()> {
         self.ensure_state_matches_grid(state)?;
-        let frozen_spins = FrozenSpinsState::capture_at_activation(
-            plan,
-            self.active_mask.as_deref(),
-            state.magnetization(),
-        )?;
-        if self
-            .frozen_spins
-            .as_ref()
-            .is_none_or(|current| !current.same_mask(&frozen_spins))
-        {
-            state.invalidate_fsal();
-            state.reset_abm_history();
-        }
+        let frozen_spins = match self.frozen_spins.as_ref() {
+            Some(previous) => FrozenSpinsState::reactivate_at_activation(
+                previous,
+                plan,
+                self.active_mask.as_deref(),
+                state.magnetization(),
+            )?,
+            None => FrozenSpinsState::capture_at_activation(
+                plan,
+                self.active_mask.as_deref(),
+                state.magnetization(),
+            )?,
+        };
+        // An explicit activation captures a new reference even when the mask
+        // is unchanged. Every cached history was derived from the previous
+        // constrained state and must therefore be discarded atomically.
+        state.invalidate_fsal();
+        state.reset_abm_history();
         self.frozen_spins = Some(frozen_spins);
         Ok(())
     }
 
     pub fn frozen_spins(&self) -> Option<&FrozenSpinsState> {
         self.frozen_spins.as_ref()
+    }
+
+    /// Apply the stage-scoped active constraint set without recapturing the
+    /// reference of constraints that remain continuously active.
+    pub fn transition_frozen_spins_at_stage_boundary(
+        &mut self,
+        plan: Option<&fullmag_ir::ResolvedFrozenSpinsPlanIR>,
+        state: &mut ExchangeLlgState,
+    ) -> Result<()> {
+        self.ensure_state_matches_grid(state)?;
+        let next = match (self.frozen_spins.as_ref(), plan) {
+            (None, None) => return Ok(()),
+            (None, Some(plan)) => FrozenSpinsState::capture_at_activation(
+                plan,
+                self.active_mask.as_deref(),
+                state.magnetization(),
+            )?,
+            (Some(previous), Some(plan)) => FrozenSpinsState::transition_at_activation(
+                previous,
+                plan,
+                self.active_mask.as_deref(),
+                state.magnetization(),
+            )?,
+            (Some(previous), None) => FrozenSpinsState::deactivate_at_stage_boundary(previous)?,
+        };
+        if self
+            .frozen_spins
+            .as_ref()
+            .is_none_or(|current| !current.same_constraint_values(&next))
+        {
+            state.invalidate_fsal();
+            state.reset_abm_history();
+        }
+        self.frozen_spins = Some(next);
+        Ok(())
     }
 
     /// Install a constraint restored from a durable checkpoint without

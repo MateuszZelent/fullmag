@@ -307,14 +307,23 @@ impl CurrentLiveDisplaySelectionHandle {
         self.running_interrupt_requested
             .store(false, Ordering::Relaxed);
         loop {
-            // Pop any command that parses as a LiveControlCommand
-            let Some(command) = self.pop_front_matching(|command| {
-                crate::command_bridge::classify_command(command).is_some()
-            }) else {
+            // Only commands that are safe to consume inside the current step
+            // may leave the queue here. Run/relax/resume are planning commands;
+            // they must remain queued for the orchestrator after this stage.
+            let Some(command) = self.pop_front_matching(is_running_step_control_command) else {
                 return None;
             };
 
             let typed = crate::command_bridge::classify_command(&command);
+
+            if command.kind == "apply_frozen_spins" {
+                self.push_command_front(command);
+                self.set_running_interrupt(InteractiveStageInterrupt::Pause);
+                eprintln!(
+                    "interactive: Frozen Spins replan requested — pausing after accepted step"
+                );
+                return Some(fullmag_runner::StepAction::Pause);
+            }
 
             match typed {
                 Some(fullmag_runner::LiveControlCommand::SetDisplaySelection(_)) => {
@@ -354,6 +363,20 @@ impl CurrentLiveDisplaySelectionHandle {
             }
         }
     }
+}
+
+fn is_running_step_control_command(command: &SessionCommand) -> bool {
+    command.kind == "apply_frozen_spins"
+        || matches!(
+            crate::command_bridge::classify_command(command),
+            Some(
+                fullmag_runner::LiveControlCommand::SetDisplaySelection(_)
+                    | fullmag_runner::LiveControlCommand::Pause
+                    | fullmag_runner::LiveControlCommand::Break
+                    | fullmag_runner::LiveControlCommand::Close
+                    | fullmag_runner::LiveControlCommand::SkipStage
+            )
+        )
 }
 
 fn is_display_sync_kind(kind: &str) -> bool {
@@ -425,6 +448,7 @@ fn synthetic_display_sync_command(selection: CurrentDisplaySelection) -> Session
         preview_config: Some(selection.preview_request()),
         stages: None,
         profile: None,
+        frozen_spins_runtime_plan_binding: None,
     }
 }
 
@@ -715,6 +739,7 @@ impl InteractiveRuntimeHost {
         stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
         field_every_n: u64,
         continuation_magnetization: Option<&[[f64; 3]]>,
+        frozen_spins_explicit_reactivation: bool,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
         if !self.runtime_capable {
@@ -727,10 +752,34 @@ impl InteractiveRuntimeHost {
             stage_fem_mesh_asset,
             field_every_n,
             continuation_magnetization,
+            frozen_spins_explicit_reactivation,
         )?;
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.set_solver_profile_config(&live_workspace.solver_profile_config())?;
         }
+        let frozen_spins_runtime_status = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.frozen_spins_runtime_status());
+        live_workspace.update(|state| {
+            let Some(metadata) = state
+                .metadata
+                .as_mut()
+                .and_then(serde_json::Value::as_object_mut)
+            else {
+                return;
+            };
+            match frozen_spins_runtime_status {
+                Some(status) => {
+                    if let Ok(value) = serde_json::to_value(status) {
+                        metadata.insert("frozen_spins_runtime_status".to_string(), value);
+                    }
+                }
+                None => {
+                    metadata.remove("frozen_spins_runtime_status");
+                }
+            }
+        });
         self.publish_runtime_engine_metadata(live_workspace);
         Ok(())
     }
@@ -986,13 +1035,19 @@ fn create_interactive_preview_runtime(
     stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
     field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
+    previous_frozen_spins_activation_set: Option<
+        fullmag_runner::constraints::FrozenSpinsActivationSet,
+    >,
+    frozen_spins_explicit_reactivation: bool,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
-    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_cadence(
+    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset_preview_cadence_and_frozen_spins_lifecycle(
         base_problem,
         plan,
         stage_fem_mesh_asset,
         field_every_n,
         continuation_magnetization,
+        previous_frozen_spins_activation_set,
+        frozen_spins_explicit_reactivation,
     )
     .map_err(|error| anyhow!(error.to_string()))
 }
@@ -1012,18 +1067,36 @@ fn ensure_interactive_preview_runtime(
     stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
     field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
+    frozen_spins_explicit_reactivation: bool,
 ) -> Result<()> {
     let needs_rebuild = runtime.as_ref().map_or(true, |current| {
         !current.can_continue_with_plan(plan).unwrap_or(true)
+            || (frozen_spins_explicit_reactivation
+                && !current.supports_frozen_spins_reactivation_in_place())
     });
     if needs_rebuild {
+        let previous_frozen_spins_activation_set = runtime
+            .as_ref()
+            .map(|current| current.frozen_spins_activation_set().clone());
         *runtime = Some(create_interactive_preview_runtime(
             problem,
             plan,
             stage_fem_mesh_asset,
             field_every_n,
             continuation_magnetization,
+            previous_frozen_spins_activation_set,
+            frozen_spins_explicit_reactivation,
         )?);
+    } else if let Some(current) = runtime.as_mut() {
+        if frozen_spins_explicit_reactivation {
+            current
+                .apply_frozen_spins_reactivation_plan(plan)
+                .map_err(|error| anyhow!(error.to_string()))?;
+        } else {
+            current
+                .apply_stage_plan(plan)
+                .map_err(|error| anyhow!(error.to_string()))?;
+        }
     }
 
     Ok(())
@@ -1098,6 +1171,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
 
     fn workspace_state_for_energy_refresh() -> LocalLiveWorkspaceState {
         let mut live_state = bootstrap_live_state("awaiting_command");
@@ -1204,6 +1278,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            frozen_spins_runtime_plan_binding: None,
         }
     }
 
@@ -1323,8 +1398,9 @@ mod tests {
                     display_selection: Default::default(),
                     queue: VecDeque::from([
                         queued_command(1, "compute_fields"),
-                        queued_command(2, "compute_energies"),
-                        queued_command(3, "pause"),
+                        queued_command(2, "run"),
+                        queued_command(3, "compute_energies"),
+                        queued_command(4, "pause"),
                     ]),
                 }),
                 Condvar::new(),
@@ -1346,6 +1422,44 @@ mod tests {
             handle.take_running_interrupt(),
             Some(super::InteractiveStageInterrupt::Pause)
         );
+        let queued_kinds = handle
+            .shared
+            .0
+            .lock()
+            .expect("control queue")
+            .queue
+            .iter()
+            .map(|command| command.kind.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            queued_kinds,
+            vec![
+                "compute_fields".to_string(),
+                "run".to_string(),
+                "compute_energies".to_string()
+            ],
+            "planning commands received during a running stage must survive until the orchestrator can materialize the next plan"
+        );
+    }
+
+    #[test]
+    fn frozen_spins_replan_pauses_after_step_and_preserves_application_command() {
+        let handle = test_control_handle();
+        handle.push_command_front(queued_command(7, "apply_frozen_spins"));
+
+        assert_eq!(
+            handle.process_running_control(),
+            Some(fullmag_runner::StepAction::Pause)
+        );
+        assert_eq!(
+            handle.take_running_interrupt(),
+            Some(super::InteractiveStageInterrupt::Pause)
+        );
+        let command = handle
+            .wait_next_command(Duration::from_millis(0))
+            .expect("application command must return to the orchestrator queue");
+        assert_eq!(command.kind, "apply_frozen_spins");
+        assert_eq!(command.command_id, "cmd-7-apply_frozen_spins");
     }
 
     #[test]
@@ -1496,6 +1610,9 @@ mod tests {
             .expect("interactive runtime ensure function");
 
         assert!(ensure.contains("can_continue_with_plan(plan)"));
+        assert!(ensure.contains("apply_stage_plan(plan)"));
+        assert!(ensure.contains("supports_frozen_spins_reactivation_in_place()"));
+        assert!(ensure.contains("apply_frozen_spins_reactivation_plan(plan)"));
         assert!(!ensure.contains("current.matches_plan(plan)"));
     }
 }

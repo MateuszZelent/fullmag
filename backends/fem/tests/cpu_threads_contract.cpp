@@ -197,12 +197,22 @@ void auto_thread_cap_scales_by_context_size() {
     ctx.mesh.n_elements = 1000;
     ctx.demag.enabled = true;
     check(
-        fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 32,
-        "FEM demag contexts keep requested auto CPU threads");
+        fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 8,
+        "small FEM demag contexts cap auto CPU threads at 8");
     check(
         fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
-            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_AUTO_UNCAPPED,
-        "FEM demag contexts report uncapped auto CPU threads");
+            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_SMALL_MESH,
+        "small FEM demag contexts report small-mesh auto CPU thread cap");
+
+    ctx.mesh.n_nodes = 20000;
+    ctx.mesh.n_elements = 100000;
+    check(
+        fullmag::fem::auto_cpu_thread_cap_for_context(ctx, 32) == 16,
+        "medium FEM demag contexts cap auto CPU threads at 16");
+    check(
+        fullmag::fem::auto_cpu_thread_cap_reason_for_context(ctx, 32) ==
+            fullmag::fem::FULLMAG_FEM_CPU_THREAD_CAP_MEDIUM_MESH,
+        "medium FEM demag contexts report medium-mesh auto CPU thread cap");
 }
 
 void configure_host_runtime_writes_cpu_context_fields() {

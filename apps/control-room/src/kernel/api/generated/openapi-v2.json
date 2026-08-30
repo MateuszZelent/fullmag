@@ -7870,6 +7870,12 @@
           }
         ]
       },
+      "FrozenSpinsActivationScope": {
+        "enum": [
+          "authoring_commit"
+        ],
+        "type": "string"
+      },
       "FrozenSpinsCollectionResource": {
         "properties": {
           "count": {
@@ -7886,6 +7892,16 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "runtime_application": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrozenSpinsRuntimeApplication"
+              }
+            ]
           }
         },
         "required": [
@@ -7904,6 +7920,16 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "runtime_application": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrozenSpinsRuntimeApplication"
+              }
+            ]
           }
         },
         "required": [
@@ -7968,8 +7994,29 @@
           "activation_candidate_token_consumed": {
             "type": "boolean"
           },
+          "activation_scope": {
+            "$ref": "#/components/schemas/FrozenSpinsActivationScope"
+          },
+          "active_site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/FrozenSpinsPreviewAuthority"
+          },
           "definition": {
             "$ref": "#/components/schemas/FrozenSpinsSchema"
+          },
+          "free_site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frozen_site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           },
           "mask_resource": {
             "type": "string"
@@ -7985,8 +8032,14 @@
             "minimum": 0,
             "type": "integer"
           },
+          "runtime_application": {
+            "$ref": "#/components/schemas/FrozenSpinsRuntimeApplication"
+          },
           "schema_version": {
             "type": "string"
+          },
+          "solver_binding": {
+            "$ref": "#/components/schemas/FrozenSpinsSolverBinding"
           },
           "source_state_revision": {
             "format": "int64",
@@ -8000,7 +8053,14 @@
         "required": [
           "schema_version",
           "preview_id",
+          "authority",
+          "activation_scope",
+          "solver_binding",
+          "runtime_application",
           "activation_candidate_token_consumed",
+          "active_site_count",
+          "frozen_site_count",
+          "free_site_count",
           "source_state_revision",
           "topology_fingerprint",
           "mask_sha256",
@@ -8009,6 +8069,12 @@
           "definition"
         ],
         "type": "object"
+      },
+      "FrozenSpinsPreviewAuthority": {
+        "enum": [
+          "speculative_authoring_preview"
+        ],
+        "type": "string"
       },
       "FrozenSpinsPreviewRequest": {
         "properties": {
@@ -8051,6 +8117,9 @@
         "properties": {
           "activation_candidate_token": {
             "type": "string"
+          },
+          "authority": {
+            "$ref": "#/components/schemas/FrozenSpinsPreviewAuthority"
           },
           "bounds_m": {
             "items": {
@@ -8105,6 +8174,9 @@
           "schema_version": {
             "type": "string"
           },
+          "solver_binding": {
+            "$ref": "#/components/schemas/FrozenSpinsSolverBinding"
+          },
           "warnings": {
             "items": {
               "$ref": "#/components/schemas/FrozenSpinsWarning"
@@ -8115,6 +8187,8 @@
         "required": [
           "schema_version",
           "preview_id",
+          "authority",
+          "solver_binding",
           "activation_candidate_token",
           "revision",
           "current",
@@ -8200,6 +8274,50 @@
         ],
         "type": "object"
       },
+      "FrozenSpinsRuntimeApplication": {
+        "properties": {
+          "application_command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "apply_boundary": {
+            "$ref": "#/components/schemas/FrozenSpinsRuntimeApplyBoundary"
+          },
+          "current_runtime_unchanged": {
+            "type": "boolean"
+          },
+          "pending_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/FrozenSpinsRuntimeApplicationState"
+          }
+        },
+        "required": [
+          "state",
+          "pending_revision",
+          "apply_boundary",
+          "current_runtime_unchanged"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsRuntimeApplicationState": {
+        "enum": [
+          "pending_runtime_plan"
+        ],
+        "type": "string"
+      },
+      "FrozenSpinsRuntimeApplyBoundary": {
+        "enum": [
+          "next_runtime_plan",
+          "accepted_step"
+        ],
+        "type": "string"
+      },
       "FrozenSpinsSchema": {
         "properties": {
           "activation": {
@@ -8245,6 +8363,99 @@
           "id",
           "name",
           "selector"
+        ],
+        "type": "object"
+      },
+      "FrozenSpinsSolverBinding": {
+        "enum": [
+          "unbound",
+          "pending_runtime_activation"
+        ],
+        "type": "string"
+      },
+      "FrozenSpinsSolverRuntimeStatus": {
+        "properties": {
+          "active_constraint_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "active_site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "constraint_activation_epochs": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "free_site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frozen_site_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mask_sha256": {
+            "type": "string"
+          },
+          "reference_sha256": {
+            "type": "string"
+          },
+          "resolved_constraint_set_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scalar_component_dof_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "source_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "topology_fingerprint": {
+            "type": "string"
+          },
+          "vector_dimension": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema",
+          "constraint_activation_epochs",
+          "active_constraint_ids",
+          "resolved_constraint_set_revision",
+          "topology_fingerprint",
+          "mask_sha256",
+          "reference_sha256",
+          "active_site_count",
+          "frozen_site_count",
+          "free_site_count",
+          "vector_dimension",
+          "scalar_component_dof_count"
         ],
         "type": "object"
       },
@@ -25845,6 +26056,16 @@
             "type": [
               "number",
               "null"
+            ]
+          },
+          "frozen_spins": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FrozenSpinsSolverRuntimeStatus"
+              }
             ]
           },
           "integrator": {

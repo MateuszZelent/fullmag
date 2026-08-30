@@ -2937,7 +2937,6 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         terminal_field_snapshot: false,
         finished: true,
     });
-
     Ok(executed.result)
 }
 
@@ -3308,7 +3307,6 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             message: format!("Failed to write artifacts: {}", e),
         });
     }
-
     let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
         step: 0,
         time: 0.0,
@@ -3386,7 +3384,6 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         terminal_field_snapshot: false,
         finished: true,
     });
-
     Ok(executed.result)
 }
 
@@ -3788,27 +3785,84 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_and_preview_
     field_every_n: u64,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset_preview_cadence_and_frozen_spins_lifecycle(
+        problem,
+        plan,
+        stage_fem_mesh_asset,
+        field_every_n,
+        continuation_magnetization,
+        None,
+        false,
+    )
+}
+
+/// Create a persistent runtime while carrying solver-owned Frozen Spins epoch
+/// history across a physical CUDA/FEM backend rebuild.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset_preview_cadence_and_frozen_spins_lifecycle(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    field_every_n: u64,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+    previous_frozen_spins_activation_set: Option<crate::constraints::FrozenSpinsActivationSet>,
+    frozen_spins_explicit_reactivation: bool,
+) -> Result<InteractiveRuntime, RunError> {
     require_supported_fem_topology(problem, plan)?;
     require_physics_graph_runtime_provenance(problem, plan)?;
-    let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
-        BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
-            problem, fdm,
-        )?),
-        BackendPlanIR::Fem(fem) => Box::new(InteractiveFemPreviewRuntime::create_from_plan(
-            problem,
-            fem,
-            stage_fem_mesh_asset,
-            field_every_n != u64::MAX,
-        )?),
-        _ => {
-            return Err(RunError {
-                message: "interactive runtime requires FDM or FEM execution plan".to_string(),
-            });
+    let (backend, requires_continuation_upload): (Box<dyn InteractiveBackend>, bool) =
+        match &plan.backend_plan {
+            BackendPlanIR::Fdm(fdm) => {
+                // Frozen-spin CaptureCurrentAtActivation must observe the actual
+                // continuation state. Materialize that state before constructing
+                // the engine problem, which performs the initial atomic capture.
+                let mut activation_plan = fdm.clone();
+                if let Some(magnetization) = continuation_magnetization {
+                    activation_plan.initial_magnetization = magnetization.to_vec();
+                }
+                (
+                    Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
+                        problem,
+                        &activation_plan,
+                    )?),
+                    false,
+                )
+            }
+            BackendPlanIR::Fem(fem) => {
+                // Native FEM captures CaptureCurrentAtActivation while the
+                // backend descriptor is constructed. Uploading continuation
+                // magnetization afterwards would update m but leave the
+                // frozen reference bound to the authored initial state.
+                // Materialize continuation into the activation plan first,
+                // exactly as the FDM path does above.
+                let mut activation_plan = fem.clone();
+                if let Some(magnetization) = continuation_magnetization {
+                    activation_plan.initial_magnetization = magnetization.to_vec();
+                }
+                (
+                    Box::new(InteractiveFemPreviewRuntime::create_from_plan(
+                        problem,
+                        &activation_plan,
+                        stage_fem_mesh_asset,
+                        field_every_n != u64::MAX,
+                    )?),
+                    false,
+                )
+            }
+            _ => {
+                return Err(RunError {
+                    message: "interactive runtime requires FDM or FEM execution plan".to_string(),
+                });
+            }
+        };
+    let mut runtime = InteractiveRuntime::new_with_frozen_spins_activation_set(
+        backend,
+        previous_frozen_spins_activation_set,
+        frozen_spins_explicit_reactivation,
+    )?;
+    if requires_continuation_upload {
+        if let Some(magnetization) = continuation_magnetization {
+            runtime.upload_magnetization(magnetization)?;
         }
-    };
-    let mut runtime = InteractiveRuntime::new(backend);
-    if let Some(magnetization) = continuation_magnetization {
-        runtime.upload_magnetization(magnetization)?;
     }
     Ok(runtime)
 }
@@ -4352,6 +4406,38 @@ pub fn resolve_session_runtime_with_registry_and_preview(
     preview_enabled: bool,
 ) -> Result<ResolvedSessionRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
+    resolve_session_runtime_with_plan_and_registry_and_preview(
+        problem,
+        &plan,
+        registry,
+        preview_enabled,
+    )
+}
+
+/// Resolve session runtime metadata against an already materialized plan.
+///
+/// The script-mode orchestrator commonly has a canonical `ExecutionPlanIR`
+/// in hand.  Replanning a large mixed-P1 FEM mesh just to render the runtime
+/// selection is both redundant and expensive on the Windows bind mount.
+pub fn resolve_session_runtime_for_plan_and_preview(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    field_every_n: u64,
+) -> Result<ResolvedSessionRuntime, RunError> {
+    resolve_session_runtime_with_plan_and_registry_and_preview(
+        problem,
+        plan,
+        None,
+        field_every_n != u64::MAX,
+    )
+}
+
+fn resolve_session_runtime_with_plan_and_registry_and_preview(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    registry: Option<&RuntimeRegistry>,
+    preview_enabled: bool,
+) -> Result<ResolvedSessionRuntime, RunError> {
     let resolved_cpu_threads = configured_cpu_threads(problem);
     let requested_cpu_threads = requested_cpu_threads(problem).map(|threads| threads as usize);
     let effective_requested_device = match &plan.backend_plan {
@@ -4365,8 +4451,9 @@ pub fn resolve_session_runtime_with_registry_and_preview(
         fullmag_ir::ExecutionMode::Extended => "extended".to_string(),
         fullmag_ir::ExecutionMode::Hybrid => "hybrid".to_string(),
     };
-    let dispatch_resolution = dispatch::resolve_with_registry(
+    let dispatch_resolution = dispatch::resolve_with_registry_for_plan(
         problem,
+        plan,
         registry,
         explicit_selection_from_problem(problem),
         preview_enabled,
@@ -4552,10 +4639,37 @@ pub(crate) fn configured_cpu_threads(problem: &ProblemIR) -> usize {
     default_cpu_threads()
 }
 
+const DEFAULT_AUTO_CPU_THREAD_CAP: usize = 16;
+
+fn resolve_auto_cpu_threads(host_threads: usize, external_resolved: Option<usize>) -> usize {
+    external_resolved
+        .unwrap_or(DEFAULT_AUTO_CPU_THREAD_CAP)
+        .min(host_threads.max(1))
+}
+
 /// Read thread count from `FULLMAG_CPU_THREADS` (or `RAYON_NUM_THREADS` as fallback).
+///
+/// The Windows Docker FEM lane exposes `FULLMAG_CPU_THREADS=auto` by default.
+/// Treating the literal value as an invalid integer would silently fall back to
+/// all host cores and oversubscribe the Rust control-plane pool before native
+/// FEM can apply its mesh-aware OpenMP cap. Keep the early pool conservative;
+/// the native backend still resolves its final OpenMP count from mesh size.
 fn env_cpu_threads() -> Option<usize> {
-    std::env::var("FULLMAG_CPU_THREADS")
-        .ok()
+    let fullmag_value = std::env::var("FULLMAG_CPU_THREADS").ok();
+    if fullmag_value
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("auto"))
+    {
+        let external_resolved = std::env::var("FULLMAG_CPU_THREADS_AUTO_RESOLVED")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|&threads| threads >= 1);
+        return Some(resolve_auto_cpu_threads(
+            default_cpu_threads(),
+            external_resolved,
+        ));
+    }
+    fullmag_value
         .or_else(|| std::env::var("RAYON_NUM_THREADS").ok())
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|&threads| threads >= 1)
@@ -7706,6 +7820,14 @@ mod tests {
             .map(|parallelism| parallelism.get())
             .unwrap_or(1);
         assert_eq!(default_cpu_threads(), expected);
+    }
+
+    #[test]
+    fn auto_cpu_threads_use_a_conservative_control_plane_cap() {
+        assert_eq!(resolve_auto_cpu_threads(40, None), 16);
+        assert_eq!(resolve_auto_cpu_threads(8, None), 8);
+        assert_eq!(resolve_auto_cpu_threads(40, Some(12)), 12);
+        assert_eq!(resolve_auto_cpu_threads(40, Some(64)), 40);
     }
 
     #[test]

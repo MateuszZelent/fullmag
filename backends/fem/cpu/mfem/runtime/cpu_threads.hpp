@@ -75,7 +75,10 @@ int auto_cpu_thread_cap_reason_for_context(const Context &ctx, int requested_thr
  *
  * The context fields become the source of truth for telemetry and downstream
  * demag recovery loops; when OpenMP is compiled in, the runtime thread count is
- * also pushed into `omp_set_num_threads`.
+ * also pushed into `omp_set_num_threads`. Auto mode additionally exports the
+ * capped CPU count as `OMP_NUM_THREADS` before MFEM/Hypre initialization so
+ * libraries that snapshot their process-level OpenMP budget observe the same
+ * limit.
  *
  * It does not choose MFEM devices, manage contexts, execute steps, or publish
  * solver metrics.

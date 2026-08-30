@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO
@@ -40,6 +40,7 @@ from ._gmsh_types import (
     MixedLayerTopologyCertificate,
     _TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
     _bind_trusted_topology_fingerprint_v3,
+    _bind_trusted_topology_fingerprint_v3_from_native,
     _certificate_payload_sha256,
     _mint_trusted_native_preflight_receipt_proof,
 )
@@ -300,6 +301,35 @@ def _deserialize_mesh(payload: bytes) -> MeshData:
         raise MeshArtifactCorruptionError(
             f"invalid mixed certificate in topology.npz: {exc}"
         ) from exc
+
+
+def _attach_native_certificate_without_revalidation(
+    mesh_without_certificate: MeshData,
+    certificate: MixedLayerTopologyCertificate,
+) -> MeshData:
+    """Attach a certificate after the native engine already audited the mesh.
+
+    ``MeshData.__post_init__`` intentionally certifies mixed meshes when a
+    certificate is present.  Persistence has just performed that exact native
+    audit and checked its fingerprint/payload result, so calling ``replace``
+    here would walk every CSR array a second time.  The helper is private and
+    is only used at those checked native seams; realization-report validation
+    remains explicit below.
+    """
+    if mesh_without_certificate.mixed_layer_topology_certificate is not None:
+        raise ValueError("native certificate attachment requires an unsigned mesh")
+    if not isinstance(certificate, MixedLayerTopologyCertificate):
+        raise TypeError("native certificate attachment requires a mixed certificate")
+    result = object.__new__(MeshData)
+    for descriptor in fields(MeshData):
+        value = (
+            certificate
+            if descriptor.name == "mixed_layer_topology_certificate"
+            else getattr(mesh_without_certificate, descriptor.name)
+        )
+        object.__setattr__(result, descriptor.name, value)
+    result._validate_realization_report()
+    return result
 
 
 def _normalize_markers(markers: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
@@ -595,6 +625,7 @@ def save_mesh_artifact(
     build_report: Mapping[str, object] | None = None,
     provenance: Mapping[str, object] | None = None,
     certification_bindings: CertificationReceiptBindingsV1 | None = None,
+    _native_certificate_result: object | None = None,
 ) -> Path:
     target = Path(path)
     if target.suffix != ".fullmag-mesh":
@@ -606,15 +637,21 @@ def save_mesh_artifact(
     # Python over every cell and turns a large SP4 save into a multi-minute
     # operation.  Reuse the native certificate result when available; retain
     # the Python validator for source-only runtimes and un-certified meshes.
-    native_certificate = None
+    # The internal shared-domain cache may already have run the native
+    # certifier to discover its Rayon thread count before constructing the
+    # receipt bindings.  Reuse that exact result instead of certifying the
+    # same large CSR mesh a second time.  The argument is private on purpose:
+    # public callers continue to get the normal fail-closed validation path.
+    native_certificate = _native_certificate_result
     certificate = mesh.mixed_layer_topology_certificate
     if certificate is not None:
-        native_certificate = certify_mixed_mesh_arrays(
-            mesh=mesh,
-            metadata={"mesh_name": mesh_name},
-            certificate=certificate.to_dict(),
-            require_native=certification_bindings is not None,
-        )
+        if native_certificate is None:
+            native_certificate = certify_mixed_mesh_arrays(
+                mesh=mesh,
+                metadata={"mesh_name": mesh_name},
+                certificate=certificate.to_dict(),
+                require_native=certification_bindings is not None,
+            )
         if native_certificate is not None:
             # The native certifier computes and validates the v3 fingerprint
             # over the exact CSR arrays.  Recomputing that byte stream in
@@ -825,7 +862,11 @@ def _load_mesh_artifact_full_audit(
                 )
             native_backend = "rust_rayon"
         try:
-            mesh = replace(unsigned, mixed_layer_topology_certificate=certificate)
+            mesh = (
+                _attach_native_certificate_without_revalidation(unsigned, certificate)
+                if native is not None
+                else replace(unsigned, mixed_layer_topology_certificate=certificate)
+            )
         except Exception as exc:
             raise MeshArtifactCorruptionError(
                 f"full mixed certificate audit failed: {exc}"
@@ -863,7 +904,9 @@ def _load_mesh_artifact_full_audit(
                 native_backend = "rust_rayon"
                 topology_fingerprint = native.topology_fingerprint_v3
                 try:
-                    mesh = replace(mesh, mixed_layer_topology_certificate=certificate)
+                    mesh = _attach_native_certificate_without_revalidation(
+                        mesh, certificate
+                    )
                 except Exception as exc:
                     raise MeshArtifactCorruptionError(
                         f"full mixed certificate audit failed: {exc}"
@@ -958,6 +1001,7 @@ def _load_trusted_cached_mesh_artifact(
     expected_gmsh_version: str,
     expected_repair_algorithm_id: str,
     expected_certifier_algorithm_id: str,
+    use_native_fingerprint: bool = False,
 ) -> MeshArtifact:
     source = Path(path)
     if source.suffix != ".fullmag-mesh":
@@ -972,10 +1016,50 @@ def _load_trusted_cached_mesh_artifact(
     )
     if certificate is None:
         raise MeshArtifactCorruptionError("v2 artifact is missing mixed certificate")
-    topology_context = _bind_trusted_topology_fingerprint_v3(
-        mesh_without_certificate=unsigned,
-        _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
-    )
+    native = None
+    if use_native_fingerprint:
+        # Parse the receipt before native preflight so its bounded counts can
+        # be used as the expected structural contract.  The manifest
+        # fingerprint is deliberately supplied as an expectation; Rust then
+        # computes the canonical value and rejects any mismatch before the
+        # trusted constructor receives the mesh.
+        receipt_hint = _receipt_from_members(members)
+        if not isinstance(receipt_hint, CertificationReceiptV2):
+            raise MeshArtifactVersionError(
+                "receipt v1 is never eligible for trusted fast loading"
+            )
+        manifest_fingerprint = manifest.get("topology_fingerprint")
+        if (
+            not isinstance(manifest_fingerprint, str)
+            or not manifest_fingerprint.startswith("sha256:")
+            or len(manifest_fingerprint) != len("sha256:") + 64
+        ):
+            raise MeshArtifactCorruptionError(
+                "trusted cache manifest topology fingerprint is invalid"
+            )
+        native = preflight_mixed_mesh_arrays(
+            mesh=unsigned,
+            expected={
+                "counts": receipt_hint.mesh_counts.to_dict(),
+                "topology_fingerprint_v3": manifest_fingerprint,
+            },
+            require_native=False,
+        )
+        if native is None:
+            audited = load_mesh_artifact(source)
+            provenance = dict(audited.provenance or {})
+            provenance["artifact_trust"] = "bypassed_native_unavailable"
+            return replace(audited, provenance=provenance)
+        topology_context = _bind_trusted_topology_fingerprint_v3_from_native(
+            mesh_without_certificate=unsigned,
+            native_preflight=native,
+            _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+        )
+    else:
+        topology_context = _bind_trusted_topology_fingerprint_v3(
+            mesh_without_certificate=unsigned,
+            _receipt_capability=_TRUSTED_NATIVE_PREFLIGHT_RECEIPT_CAPABILITY,
+        )
     topology_fingerprint = topology_context.topology_fingerprint_v3
     receipt, _ = _validate_v2_receipt(
         manifest=manifest,
@@ -1020,11 +1104,12 @@ def _load_trusted_cached_mesh_artifact(
         "counts": receipt.mesh_counts.to_dict(),
         "topology_fingerprint_v3": f"sha256:{receipt.topology_fingerprint_v3}",
     }
-    native = preflight_mixed_mesh_arrays(
-        mesh=unsigned,
-        expected=expected_preflight,
-        require_native=False,
-    )
+    if native is None:
+        native = preflight_mixed_mesh_arrays(
+            mesh=unsigned,
+            expected=expected_preflight,
+            require_native=False,
+        )
     if native is None:
         audited = load_mesh_artifact(source)
         provenance = dict(audited.provenance or {})

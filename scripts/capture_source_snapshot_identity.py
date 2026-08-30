@@ -23,6 +23,13 @@ SCHEMA = "fullmag.source-snapshot.v2"
 # inputs, so the runtime snapshot deliberately leaves them at their committed
 # contents.
 NON_RUNTIME_PREFIXES = (
+    # Windows Docker mounts these generated roots below /workspace.  They are
+    # build/cache state rather than source inputs and may contain symlinks to
+    # package stores outside the repository.
+    ".fullmag-build/",
+    ".fullmag-cache/",
+    ".fullmag-cargo/",
+    ".fullmag-rustup/",
     ".agents/",
     ".claude/",
     ".codex/",
@@ -41,6 +48,10 @@ NON_RUNTIME_PREFIXES = (
 )
 NON_RUNTIME_FILES = {"AGENTS.md", "CHANGELOG.md", "README.md"}
 NON_RUNTIME_EXACT_PATHS = {
+    ".fullmag-build",
+    ".fullmag-cache",
+    ".fullmag-cargo",
+    ".fullmag-rustup",
     "Codex-Usage",
     ".impl-racetrack",
     # The repository tracks this as an absolute worktree-administration link.
@@ -57,10 +68,12 @@ NON_RUNTIME_EXACT_PATHS = {
 }
 NON_RUNTIME_SUFFIXES = (".md", ".rst", ".source-map.json")
 
-# Worktree administration is intentionally excluded from the immutable source
-# snapshot even when Git records it in the committed tree.  In this repository
-# it is an absolute symlink, which is valid metadata but unsafe to materialize.
-EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset({".worktrees"})
+# Worktree administration and local agent metadata are intentionally excluded
+# from the immutable source snapshot even when Git records them in the
+# committed tree.  These paths are not runtime inputs; in particular, the
+# checked-in `.claude/skills/*` entries are empty symlinks on the Windows
+# checkout, and GNU tar cannot materialize a symlink with an empty target.
+EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset({".worktrees", ".claude"})
 
 
 class SourceIdentityError(RuntimeError):
@@ -384,6 +397,14 @@ def _runtime_status_pathspecs(repo_root: Path) -> tuple[str, ...]:
     # Keep positive roots broad enough to catch new runtime files while pruning
     # known non-runtime subtrees from mixed roots.
     exclusions = (
+        ":(exclude).fullmag-build/**",
+        ":(exclude).fullmag-cache/**",
+        ":(exclude).fullmag-cargo/**",
+        ":(exclude).fullmag-rustup/**",
+        # The committed external solver tree is gitlink-only.  Git status
+        # otherwise descends into each nested checkout on the Windows bind
+        # mount even though _capture_once drops those records afterward.
+        ":(exclude)external_solvers/**",
         ":(exclude).agents/**",
         ":(exclude).codex/**",
         ":(exclude).github/**",
@@ -446,6 +467,11 @@ def _status_records(
             "status",
             "--porcelain=v1",
             "-z",
+            # The identity records every affected path and its exact bytes;
+            # rename similarity is not part of the contract.  Disable Git's
+            # expensive rename detection on Windows bind mounts and represent
+            # a rename as the equivalent delete/add pair.
+            "--no-renames",
             "--untracked-files=no",
             "--",
             *_runtime_status_pathspecs(repo_root),

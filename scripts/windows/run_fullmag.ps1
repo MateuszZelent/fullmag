@@ -221,9 +221,26 @@ function Get-SourceIdentity {
     throw "Fullmag Python environment is missing at $PythonExe; source identity cannot be captured"
   }
   $identityScript = Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py"
-  $identityOutput = (& $PythonExe $identityScript --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
-  if ($LASTEXITCODE -ne 0) {
-    throw "Fullmag source identity capture failed with exit code ${LASTEXITCODE}: $identityOutput"
+  $previousGitOptionalLocks = $env:GIT_OPTIONAL_LOCKS
+  $identityOutput = $null
+  $identityExitCode = 0
+  try {
+    # The identity probe reads Git's index/worktree but does not need an
+    # optional index refresh.  Avoid competing with a VS Code commit over
+    # .git/index.lock while preserving all mandatory Git locking semantics.
+    $env:GIT_OPTIONAL_LOCKS = "0"
+    $identityOutput = (& $PythonExe $identityScript --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
+    $identityExitCode = $LASTEXITCODE
+  }
+  finally {
+    if ($null -eq $previousGitOptionalLocks) {
+      Remove-Item Env:GIT_OPTIONAL_LOCKS -ErrorAction SilentlyContinue
+    } else {
+      $env:GIT_OPTIONAL_LOCKS = $previousGitOptionalLocks
+    }
+  }
+  if ($identityExitCode -ne 0) {
+    throw "Fullmag source identity capture failed with exit code ${identityExitCode}: $identityOutput"
   }
   try {
     $identity = $identityOutput | ConvertFrom-Json
@@ -310,21 +327,14 @@ function Get-GitCommit {
 }
 
 function Stage-NativeFdmDll {
-  # Cargo places build-script output below the target triple directory.  Only
-  # accept the canonical fullmag-fdm-sys output; selecting an arbitrary newest
-  # DLL from the whole target tree can silently stage a stale feature build.
-  $searchRoot = Join-Path $TargetRoot "$TargetTriple\release\build"
-  $dllCandidates = @(Get-ChildItem -LiteralPath $searchRoot -Directory -Filter "fullmag-fdm-sys-*" -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      $candidate = Join-Path $_.FullName "out\native-build\backends\fdm\fullmag_fdm.dll"
-      if (Test-Path -LiteralPath $candidate -PathType Leaf) { Get-Item -LiteralPath $candidate }
-    })
-  if ($dllCandidates.Count -ne 1) {
-    throw "CUDA build must produce exactly one canonical fullmag_fdm.dll below $searchRoot; found $($dllCandidates.Count)"
+  # Keep CMake output outside Cargo's deeply nested OUT_DIR to avoid Windows
+  # MAX_PATH failures during CUDA compiler detection.
+  $nativeDll = Join-Path $nativeFdmBuildRoot "backends\fdm\Release\fullmag_fdm.dll"
+  if (-not (Test-Path -LiteralPath $nativeDll -PathType Leaf)) {
+    throw "CUDA build did not produce canonical fullmag_fdm.dll at $nativeDll"
   }
-  $dll = $dllCandidates[0]
   $destination = Join-Path (Split-Path -Parent $FullmagExe) "fullmag_fdm.dll"
-  Copy-Item -LiteralPath $dll.FullName -Destination $destination -Force
+  Copy-Item -LiteralPath $nativeDll -Destination $destination -Force
   return (Resolve-AbsolutePath $destination)
 }
 
@@ -417,6 +427,16 @@ if ($useCuda -and $Backend -notin @("auto", "fdm")) {
   throw "device=gpu is only supported for the native Windows FDM lane"
 }
 
+$nativeFdmBuildRootName = if ($useCuda) { "native-fdm-cuda" } else { "native-fdm-cpu" }
+$nativeFdmBuildRoot = if ($env:FULLMAG_FDM_NATIVE_BUILD_ROOT) {
+  Resolve-AbsolutePath $env:FULLMAG_FDM_NATIVE_BUILD_ROOT
+} else {
+  Join-Path $BuildRoot $nativeFdmBuildRootName
+}
+Require-ExternalBuildPath $nativeFdmBuildRoot "FULLMAG_FDM_NATIVE_BUILD_ROOT"
+Ensure-Directory $nativeFdmBuildRoot
+$env:FULLMAG_FDM_NATIVE_BUILD_ROOT = $nativeFdmBuildRoot
+
 $cudaCompiler = $null
 $cudaBin = $null
 Require-Command "git"
@@ -491,6 +511,13 @@ if ($BuildMode -eq "true") {
   $nativeFdmDll = $null
   if ($useCuda) {
     $nativeFdmDll = Stage-NativeFdmDll
+  }
+  # Do not publish a manifest for a binary built from a different checkout
+  # snapshot when another process edits the shared worktree during the build.
+  $finalSourceIdentity = Get-SourceIdentity
+  if ([string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
+      [string]$finalSourceIdentity.source_snapshot_sha256 -ne $sourceSnapshotSha256) {
+    throw "Fullmag source changed while the native runtime was building; rerun with build=True after the checkout is stable"
   }
   $manifest = [ordered]@{
     schema_version = 1

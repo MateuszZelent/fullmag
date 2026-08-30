@@ -12,6 +12,22 @@ extern void set_cuda_error(Context &ctx, const char *operation, cudaError_t err)
 
 namespace {
 
+static cudaError_t add_graph_node_compat(
+    cudaGraphNode_t *graph_node,
+    cudaGraph_t graph,
+    const cudaGraphNode_t *dependencies,
+    size_t dependency_count,
+    cudaGraphNodeParams *params)
+{
+#if CUDART_VERSION >= 13000
+    return cudaGraphAddNode(
+        graph_node, graph, dependencies, nullptr, dependency_count, params);
+#else
+    return cudaGraphAddNode(
+        graph_node, graph, dependencies, dependency_count, params);
+#endif
+}
+
 __global__ void reset_adaptive_loop_condition_kernel(
     cudaGraphConditionalHandle loop_handle,
     AdaptiveDeviceControl *control,
@@ -171,7 +187,7 @@ bool context_begin_adaptive_step_graph_build(
     if (!graph_ok(
             ctx,
             "cudaGraphAddNode(adaptive_while)",
-            cudaGraphAddNode(
+            add_graph_node_compat(
                 &conditional_node,
                 ctx.adaptive_step_graph,
                 &reset_node,
