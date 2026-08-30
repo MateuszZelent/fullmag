@@ -7,10 +7,11 @@ use fullmag_ir::{
     AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, ConstraintActivationIR,
     DiscretizationHintsIR, EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR,
     ExecutionPlanIR, ExecutionPrecision, FdmFftPlanIR, FdmGridCertificateIR, FdmLayerPlanIR,
-    FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FrozenReferencePolicyIR,
-    GeometryEntryIR, GridDimensions, InitialMagnetizationIR, IntegratorChoice, OutputPlanIR,
-    ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR, RelaxationAlgorithmIR, SeedPolicy,
-    SelectionMembershipPolicyIR, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
+    FdmMaterialIR, FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, FdmPrecisionPolicyIR,
+    FrozenReferencePolicyIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
+    IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
+    RelaxationAlgorithmIR, SeedPolicy, SelectionMembershipPolicyIR, ThermalSeedConfig,
+    TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -42,10 +43,29 @@ use crate::util::{
     active_stage_id, generate_random_unit_vectors, runtime_device_request, runtime_requests_cuda,
     GRID_TOLERANCE, MU0,
 };
+
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
 use crate::{AffineTransform3, BoundaryMembership, GeometryPredicate};
+
+fn resolve_precision_policy(problem: &ProblemIR) -> Result<FdmPrecisionPolicyIR, PlanError> {
+    let policy = problem
+        .backend_policy
+        .fdm_precision_policy
+        .clone()
+        .unwrap_or_else(|| {
+            FdmPrecisionPolicyIR::resolve(problem.backend_policy.execution_precision)
+        });
+    policy
+        .validate_for(problem.backend_policy.execution_precision)
+        .map_err(|reason| PlanError {
+            reasons: vec![format!(
+                "FDM precision policy is not a qualified realization: {reason}"
+            )],
+        })?;
+    Ok(policy)
+}
 
 fn plan_fdm_fft(
     problem: &ProblemIR,
@@ -3122,6 +3142,7 @@ pub(crate) fn plan_fdm(
         inter_region_exchange,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
+        precision_policy: resolve_precision_policy(problem)?,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
         resolved_periodic_images,
@@ -4866,6 +4887,7 @@ pub(crate) fn plan_fdm_multilayer(
         bulk_dmi,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
+        precision_policy: resolve_precision_policy(problem)?,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
         resolved_periodic_images,

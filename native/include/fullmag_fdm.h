@@ -897,6 +897,32 @@ static_assert(sizeof(fullmag_fdm_adaptive_execution_telemetry_v1) == 64,
               "adaptive execution telemetry v1 ABI size changed");
 #endif
 
+#define FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE = 1,
+    FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION = 2,
+} fullmag_fdm_precision_policy_realization_v1;
+
+#define FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY (UINT64_C(1) << 0)
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t accounting_valid;
+    fullmag_fdm_precision storage_precision;
+    fullmag_fdm_precision compute_precision;
+    fullmag_fdm_precision fft_precision;
+    fullmag_fdm_precision reduction_precision;
+    fullmag_fdm_precision_policy_realization_v1 realization;
+    uint64_t metric_valid_mask;
+} fullmag_fdm_precision_policy_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_precision_policy_telemetry_v1) == 40,
+              "precision policy telemetry v1 ABI size changed");
+#endif
+
 #define FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1 1u
 
 typedef enum {
@@ -1300,6 +1326,10 @@ int fullmag_fdm_backend_get_endpoint_cache_telemetry_v1(
 int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_adaptive_execution_telemetry_v1 *out_telemetry);
+
+int fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_precision_policy_telemetry_v1 *out_telemetry);
 
 int fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
     fullmag_fdm_backend *handle,

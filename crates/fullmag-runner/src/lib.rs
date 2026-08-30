@@ -467,14 +467,14 @@ pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
     AuxiliaryArtifact, ExecutionProvenance, FdmGpuExecutionReceipt, FdmGpuOperatorResidency,
-    FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
-    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
-    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
-    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
-    StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
-    TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
+    FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt, FdmGpuTransferCounts,
+    FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload,
+    FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LiveFieldMaterializationState,
+    LiveFieldMaterializationStatus, LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot,
+    LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback,
+    ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord,
+    StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend,
+    TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{

@@ -576,6 +576,7 @@ pub(crate) struct NativeFdmBackend {
     active_mask: Option<Vec<bool>>,
     frozen_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
+    precision_policy: fullmag_ir::FdmPrecisionPolicyIR,
     damping: f64,
     precession_enabled: bool,
     gpu_transport_bound: bool,
@@ -1063,6 +1064,7 @@ impl NativeFdmBackend {
             active_mask,
             frozen_mask: None,
             precision: plan.precision,
+            precision_policy: plan.precision_policy.clone(),
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
@@ -1749,6 +1751,7 @@ impl NativeFdmBackend {
                 .as_ref()
                 .map(|frozen_spins| frozen_spins.frozen_mask.clone()),
             precision: plan.precision,
+            precision_policy: plan.precision_policy.clone(),
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
@@ -3634,6 +3637,7 @@ mod tests {
             active_mask: None,
             frozen_mask: Some(vec![true, false, false, true]),
             precision: ExecutionPrecision::Double,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
             damping: 0.01,
             precession_enabled: true,
             gpu_transport_bound: false,
@@ -4481,7 +4485,7 @@ mod tests {
         let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
             .expect("dynamics")
             .with_precession_enabled(!llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()));
-        ExchangeLlgProblem::with_terms_and_mask(
+        let mut problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
             material,
@@ -4526,7 +4530,33 @@ mod tests {
             },
             plan.active_mask.clone(),
         )
-        .expect("problem")
+        .expect("problem");
+        if let Some(periodicity) = plan.periodicity.as_ref() {
+            let map_axis = |axis: &fullmag_ir::AxisBoundary| match axis {
+                fullmag_ir::AxisBoundary::Periodic => fullmag_engine::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open => fullmag_engine::AxisBoundary::Open,
+            };
+            problem.boundary_policy = fullmag_engine::FdmBoundaryPolicy {
+                x: map_axis(&periodicity.axes[0]),
+                y: map_axis(&periodicity.axes[1]),
+                z: map_axis(&periodicity.axes[2]),
+            };
+            if let Some(image_counts) = periodicity.image_counts {
+                problem.demag_image_counts = image_counts;
+            }
+        }
+        problem.set_demag_boundary(
+            crate::fdm::resolve_fdm_demag_boundary(plan).expect("resolved demag boundary"),
+        );
+        problem.set_resolved_periodic_workspace(plan.resolved_periodic_images.as_ref().map(
+            |resolved| fullmag_engine::ResolvedFdmPeriodicWorkspace {
+                image_counts: resolved.resolved_image_counts,
+                padded_counts: resolved.padded_counts,
+                image_terms: resolved.image_terms,
+                estimated_bytes: resolved.estimated_bytes,
+            },
+        ));
+        problem
     }
 
     fn cpu_reference_single_step(
@@ -5963,6 +5993,12 @@ mod tests {
             demag: FdmDemagPeriodicityIR::TruncatedImages,
             image_counts: Some([2, 2, 0]),
         });
+        plan.resolved_periodic_images = plan
+            .periodicity
+            .as_ref()
+            .expect("periodic request")
+            .resolve_periodic_images(plan.grid.cells, plan.precision)
+            .expect("valid periodic image request");
         let cell_count = plan.initial_magnetization.len();
         let (
             expected_m,

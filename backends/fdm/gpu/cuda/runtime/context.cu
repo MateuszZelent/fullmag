@@ -2103,6 +2103,10 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_energy_density(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
+    // Every public step captures accepted magnetization before entering the
+    // trial. This transaction buffer is therefore part of the setup-owned
+    // workspace, never a first-step allocation.
+    if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
 
     // DP45 / RK23 / RK4: allocate extra stage buffers as needed.
@@ -2133,6 +2137,15 @@ bool context_alloc_device(Context &ctx) {
         if (!alloc_vector_field(ctx, ctx.abm_f_n))  return false;
         if (!alloc_vector_field(ctx, ctx.abm_f_n1)) return false;
         if (!alloc_vector_field(ctx, ctx.abm_f_n2)) return false;
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+            return false;
+        }
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) {
+            return false;
+        }
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2)) {
+            return false;
+        }
         ctx.abm_startup = 0;
         ctx.abm_last_dt = 0.0;
     }

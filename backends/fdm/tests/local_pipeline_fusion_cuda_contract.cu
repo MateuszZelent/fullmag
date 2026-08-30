@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <type_traits>
 #include <vector>
 
@@ -19,6 +20,8 @@ using fullmag::fdm::DeviceVectorField;
 
 enum class PhysicsCase {
     Base,
+    Dmi,
+    DemagDmi,
     DynamicOersted,
     PrescribedSot,
 };
@@ -28,6 +31,50 @@ void require(bool condition, const char *message) {
         std::fprintf(stderr, "FAIL: %s\n", message);
         std::exit(1);
     }
+}
+
+void require_precision_policy(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_precision requested_precision)
+{
+    fullmag_fdm_precision_policy_telemetry_v1 telemetry{};
+    telemetry.abi_version = FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1;
+    telemetry.struct_size = sizeof(telemetry);
+    require(fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+                handle, &telemetry) == FULLMAG_FDM_OK,
+            "precision-policy telemetry query failed");
+    require(telemetry.accounting_valid == 1,
+            "precision-policy accounting is invalid");
+    require(telemetry.metric_valid_mask ==
+                FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY,
+            "precision-policy metric identity is incomplete or unknown");
+    require(telemetry.storage_precision == requested_precision &&
+                telemetry.compute_precision == requested_precision &&
+                telemetry.fft_precision == requested_precision,
+            "storage/compute/FFT precision differs from the requested policy");
+    require(telemetry.reduction_precision == FULLMAG_FDM_PRECISION_DOUBLE,
+            "qualified CUDA reductions must execute in FP64");
+    const auto expected_realization =
+        requested_precision == FULLMAG_FDM_PRECISION_SINGLE
+        ? FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION
+        : FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE;
+    require(telemetry.realization == expected_realization,
+            "precision-policy realization differs from executed components");
+}
+
+void require_precision_policy_abi_rejects_invalid_header(
+    fullmag_fdm_backend *handle)
+{
+    fullmag_fdm_precision_policy_telemetry_v1 telemetry{};
+    telemetry.abi_version = UINT32_MAX;
+    telemetry.struct_size = sizeof(telemetry);
+    telemetry.metric_valid_mask = UINT64_MAX;
+    const auto before = telemetry;
+    require(fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+                handle, &telemetry) == FULLMAG_FDM_ERR_ABI,
+            "precision-policy ABI accepted an unknown version");
+    require(std::memcmp(&telemetry, &before, sizeof(telemetry)) == 0,
+            "precision-policy ABI mutated output after header rejection");
 }
 
 const char *integrator_name(fullmag_fdm_integrator integrator) {
@@ -44,6 +91,8 @@ const char *integrator_name(fullmag_fdm_integrator integrator) {
 const char *physics_case_name(PhysicsCase physics_case) {
     switch (physics_case) {
     case PhysicsCase::Base: return "base";
+    case PhysicsCase::Dmi: return "dmi";
+    case PhysicsCase::DemagDmi: return "demag-dmi";
     case PhysicsCase::DynamicOersted: return "dynamic-oersted";
     case PhysicsCase::PrescribedSot: return "prescribed-sot";
     default: return "unknown";
@@ -101,6 +150,21 @@ double max_difference(
     return result;
 }
 
+double max_scaled_difference(
+    const std::vector<double> &reference,
+    const std::vector<double> &candidate)
+{
+    require(reference.size() == candidate.size(), "comparison shape mismatch");
+    double result = 0.0;
+    for (size_t index = 0; index < reference.size(); ++index) {
+        const double scale = std::max(
+            {1.0, std::abs(reference[index]), std::abs(candidate[index])});
+        result = std::max(
+            result, std::abs(reference[index] - candidate[index]) / scale);
+    }
+    return result;
+}
+
 struct RunResult {
     std::vector<double> field;
     std::vector<double> rhs;
@@ -130,6 +194,24 @@ struct RunResult {
     fullmag_fdm_local_pipeline_realization_v1 executed_realization =
         FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE;
     uint32_t accounting_valid = 0;
+    uint32_t workspace_accounting_valid = 0;
+    uint32_t workspace_setup_complete = 0;
+    uint64_t workspace_metric_valid_mask = 0;
+    uint64_t setup_device_allocation_count = 0;
+    uint64_t setup_device_allocation_bytes = 0;
+    uint64_t total_device_allocation_count = 0;
+    uint64_t total_device_allocation_bytes = 0;
+    uint64_t step_device_allocation_count = 0;
+    uint64_t step_device_allocation_bytes = 0;
+    uint64_t setup_fft_plan_creation_count = 0;
+    uint64_t total_fft_plan_creation_count = 0;
+    uint64_t step_fft_plan_creation_count = 0;
+    uint64_t workspace_bytes = 0;
+    uint64_t peak_vram_bytes = 0;
+    uint64_t observed_step_count = 0;
+    uint64_t demag_evaluations = 0;
+    uint64_t demag_forward_ffts = 0;
+    uint64_t demag_inverse_ffts = 0;
 };
 
 RunResult run_once(
@@ -161,6 +243,23 @@ RunResult run_once(
         -0.5e3, 1.5e3, 0.75e3,
         9.0e3, 9.0e3, 9.0e3,
     };
+    constexpr uint32_t fft_nx = 2 * nx;
+    constexpr uint32_t fft_ny = 2;
+    constexpr uint32_t fft_nz = 2;
+    constexpr uint64_t fft_cell_count =
+        static_cast<uint64_t>(fft_nx) * fft_ny * fft_nz;
+    std::array<std::vector<double>, 6> demag_kernel;
+    for (auto &component : demag_kernel) {
+        component.assign(fft_cell_count * 2, 0.0);
+    }
+    for (uint64_t frequency = 0; frequency < fft_cell_count; ++frequency) {
+        demag_kernel[0][2 * frequency] = 0.31;
+        demag_kernel[1][2 * frequency] = 0.29;
+        demag_kernel[2][2 * frequency] = 0.40;
+        demag_kernel[3][2 * frequency] = 0.015;
+        demag_kernel[4][2 * frequency] = -0.010;
+        demag_kernel[5][2 * frequency] = 0.0075;
+    }
 
     fullmag_fdm_plan_desc plan{};
     plan.grid = {nx, ny, nz, 2e-9, 2e-9, 2e-9};
@@ -204,6 +303,26 @@ RunResult run_once(
         plan.sot_thickness = 1.0e-9;
         plan.sot_active_mask = active_mask.data();
         plan.sot_active_mask_len = active_mask.size();
+    }
+    if (physics_case == PhysicsCase::Dmi ||
+        physics_case == PhysicsCase::DemagDmi) {
+        plan.has_interfacial_dmi = 1;
+        plan.dmi_D_interfacial = 2.5e-3;
+        plan.has_bulk_dmi = 1;
+        plan.dmi_D_bulk = -1.25e-3;
+    }
+    if (physics_case == PhysicsCase::DemagDmi) {
+        plan.enable_demag = 1;
+        plan.demag_kernel_xx_spectrum = demag_kernel[0].data();
+        plan.demag_kernel_yy_spectrum = demag_kernel[1].data();
+        plan.demag_kernel_zz_spectrum = demag_kernel[2].data();
+        plan.demag_kernel_xy_spectrum = demag_kernel[3].data();
+        plan.demag_kernel_xz_spectrum = demag_kernel[4].data();
+        plan.demag_kernel_yz_spectrum = demag_kernel[5].data();
+        plan.demag_kernel_spectrum_len = fft_cell_count * 2;
+        plan.demag_fft_nx = fft_nx;
+        plan.demag_fft_ny = fft_ny;
+        plan.demag_fft_nz = fft_nz;
     }
     plan.initial_magnetization_xyz = magnetization.data();
     plan.initial_magnetization_len = magnetization.size();
@@ -265,6 +384,8 @@ RunResult run_once(
     require(fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
                 handle, &telemetry) == FULLMAG_FDM_OK,
             "local-pipeline telemetry query failed");
+    require_precision_policy(handle, precision);
+    require_precision_policy_abi_rejects_invalid_header(handle);
     result.fused_launches = telemetry.direct_fused_field_rhs_launch_count;
     result.unfused_field_launches =
         telemetry.direct_unfused_effective_field_launch_count;
@@ -299,6 +420,48 @@ RunResult run_once(
                 telemetry.profiled_launch_time_ns == 0 &&
                 telemetry.profiled_achieved_occupancy_permyriad == 0,
             "unmeasured profiler metrics must remain zero");
+
+    fullmag_fdm_gpu_workspace_telemetry_v1 workspace{};
+    workspace.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    workspace.struct_size = sizeof(workspace);
+    require(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+                handle, &workspace) == FULLMAG_FDM_OK,
+            "GPU workspace telemetry query failed");
+    require(workspace.precision == precision &&
+                workspace.integrator == integrator,
+            "GPU workspace identity differs from the executed plan");
+    result.workspace_accounting_valid = workspace.accounting_valid;
+    result.workspace_setup_complete = workspace.setup_complete;
+    result.workspace_metric_valid_mask = workspace.metric_valid_mask;
+    result.setup_device_allocation_count =
+        workspace.setup_device_allocation_count;
+    result.setup_device_allocation_bytes =
+        workspace.setup_device_allocation_bytes;
+    result.total_device_allocation_count =
+        workspace.total_device_allocation_count;
+    result.total_device_allocation_bytes =
+        workspace.total_device_allocation_bytes;
+    result.step_device_allocation_count =
+        workspace.step_device_allocation_count;
+    result.step_device_allocation_bytes = workspace.step_device_allocation_bytes;
+    result.setup_fft_plan_creation_count =
+        workspace.setup_fft_plan_creation_count;
+    result.total_fft_plan_creation_count =
+        workspace.total_fft_plan_creation_count;
+    result.step_fft_plan_creation_count =
+        workspace.step_fft_plan_creation_count;
+    result.workspace_bytes = workspace.workspace_bytes;
+    result.peak_vram_bytes = workspace.peak_vram_bytes;
+    result.observed_step_count = workspace.observed_step_count;
+    fullmag_fdm_endpoint_cache_telemetry_v1 endpoint{};
+    endpoint.abi_version = FULLMAG_FDM_ENDPOINT_CACHE_TELEMETRY_ABI_V1;
+    endpoint.struct_size = sizeof(endpoint);
+    require(fullmag_fdm_backend_get_endpoint_cache_telemetry_v1(
+                handle, &endpoint) == FULLMAG_FDM_OK,
+            "endpoint-cache telemetry query failed");
+    result.demag_evaluations = endpoint.demag_evaluation_count;
+    result.demag_forward_ffts = endpoint.demag_forward_fft_count;
+    result.demag_inverse_ffts = endpoint.demag_inverse_fft_count;
     fullmag_fdm_backend_destroy(handle);
     return result;
 }
@@ -332,6 +495,50 @@ void qualify_case(
     require(stages != 0, "missing expected stage count");
     require(fused.accounting_valid == 1 && unfused.accounting_valid == 1,
             "local-pipeline accounting is invalid");
+    const uint64_t required_workspace_metrics =
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY |
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS |
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS |
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT |
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS;
+    require(fused.workspace_accounting_valid == 1 &&
+                fused.workspace_setup_complete == 1 &&
+                (fused.workspace_metric_valid_mask &
+                    required_workspace_metrics) == required_workspace_metrics,
+            "GPU workspace accounting is incomplete");
+    std::printf(
+        "TRACE workspace %s %s setup=(%llu,%llu) total=(%llu,%llu) "
+        "step=(%llu,%llu) fft=(%llu,%llu,%llu) live=%llu peak=%llu\n",
+        integrator_name(integrator),
+        precision == FULLMAG_FDM_PRECISION_DOUBLE ? "fp64" : "fp32",
+        static_cast<unsigned long long>(fused.setup_device_allocation_count),
+        static_cast<unsigned long long>(fused.setup_device_allocation_bytes),
+        static_cast<unsigned long long>(fused.total_device_allocation_count),
+        static_cast<unsigned long long>(fused.total_device_allocation_bytes),
+        static_cast<unsigned long long>(fused.step_device_allocation_count),
+        static_cast<unsigned long long>(fused.step_device_allocation_bytes),
+        static_cast<unsigned long long>(fused.setup_fft_plan_creation_count),
+        static_cast<unsigned long long>(fused.total_fft_plan_creation_count),
+        static_cast<unsigned long long>(fused.step_fft_plan_creation_count),
+        static_cast<unsigned long long>(fused.workspace_bytes),
+        static_cast<unsigned long long>(fused.peak_vram_bytes));
+    require(fused.setup_device_allocation_count > 0 &&
+                fused.setup_device_allocation_bytes > 0 &&
+                fused.total_device_allocation_count >=
+                    fused.setup_device_allocation_count &&
+                fused.total_device_allocation_bytes >=
+                    fused.setup_device_allocation_bytes &&
+                fused.step_device_allocation_count == 0 &&
+                fused.step_device_allocation_bytes == 0,
+            "steady-state step performed an unplanned device allocation");
+    require(fused.total_fft_plan_creation_count ==
+                fused.setup_fft_plan_creation_count &&
+                fused.step_fft_plan_creation_count == 0,
+            "steady-state step created an FFT plan");
+    require(fused.workspace_bytes > 0 &&
+                fused.peak_vram_bytes >= fused.workspace_bytes &&
+                fused.observed_step_count == step_count,
+            "workspace footprint or observed-step telemetry is inconsistent");
     require(fused.requested_policy ==
                 FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE &&
                 unfused.requested_policy ==
@@ -385,6 +592,21 @@ void qualify_case(
                         FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_OERSTED) != 0,
                 "dynamic Oersted feature is absent from pipeline identity");
     }
+    if (physics_case == PhysicsCase::Dmi ||
+        physics_case == PhysicsCase::DemagDmi) {
+        require((fused.required_operator_mask & FULLMAG_FDM_OPERATOR_DMI) != 0 &&
+                    (unfused.required_operator_mask &
+                        FULLMAG_FDM_OPERATOR_DMI) != 0,
+                "DMI operator is absent from pipeline identity");
+    }
+    if (physics_case == PhysicsCase::DemagDmi) {
+        require((fused.required_operator_mask & FULLMAG_FDM_OPERATOR_DEMAG) != 0 &&
+                    fused.setup_fft_plan_creation_count > 0 &&
+                    fused.demag_evaluations > 0 &&
+                    fused.demag_evaluations == fused.demag_forward_ffts &&
+                    fused.demag_evaluations == fused.demag_inverse_ffts,
+                "demag FFT execution is absent from pipeline evidence");
+    }
 
     const double tolerance = precision == FULLMAG_FDM_PRECISION_DOUBLE
         ? 1.0e-10 : 2.0e-2;
@@ -402,6 +624,39 @@ void qualify_case(
                 precision == FULLMAG_FDM_PRECISION_DOUBLE ? "fp64" : "fp32",
                 static_cast<unsigned long long>(fused.fused_launches),
                 static_cast<unsigned long long>(stages));
+}
+
+void qualify_precision_pair(
+    fullmag_fdm_integrator integrator,
+    PhysicsCase physics_case = PhysicsCase::Base)
+{
+    const uint32_t step_count =
+        integrator == FULLMAG_FDM_INTEGRATOR_ABM3 ? 4U : 1U;
+    const auto fp64 = run_once(
+        integrator, FULLMAG_FDM_PRECISION_DOUBLE, false, false, step_count,
+        physics_case);
+    const auto fp32 = run_once(
+        integrator, FULLMAG_FDM_PRECISION_SINGLE, false, false, step_count,
+        physics_case);
+    const double field_error = max_scaled_difference(fp64.field, fp32.field);
+    const double rhs_error = max_scaled_difference(fp64.rhs, fp32.rhs);
+    const double step_error =
+        max_scaled_difference(fp64.magnetization, fp32.magnetization);
+    require(field_error <= 2.0e-5,
+            "FP32/FP64 effective-field parity budget exceeded");
+    require(rhs_error <= 2.0e-5,
+            "FP32/FP64 RHS parity budget exceeded");
+    require(step_error <= 2.0e-5,
+            "FP32/FP64 accepted-step parity budget exceeded");
+    require(fp32.peak_vram_bytes < fp64.peak_vram_bytes,
+            "FP32 policy did not reduce peak VRAM for the same workload");
+    std::printf(
+        "PASS precision-pair %s %s field=%.6e rhs=%.6e step=%.6e "
+        "vram=(%llu,%llu)\n",
+        physics_case_name(physics_case), integrator_name(integrator),
+        field_error, rhs_error, step_error,
+        static_cast<unsigned long long>(fp64.peak_vram_bytes),
+        static_cast<unsigned long long>(fp32.peak_vram_bytes));
 }
 
 void qualify_torque_fallback_case(
@@ -659,10 +914,29 @@ int main() {
             integrator,
             FULLMAG_FDM_PRECISION_SINGLE,
             PhysicsCase::DynamicOersted);
+        qualify_case(
+            integrator,
+            FULLMAG_FDM_PRECISION_DOUBLE,
+            PhysicsCase::Dmi);
+        qualify_case(
+            integrator,
+            FULLMAG_FDM_PRECISION_SINGLE,
+            PhysicsCase::Dmi);
+        qualify_case(
+            integrator,
+            FULLMAG_FDM_PRECISION_DOUBLE,
+            PhysicsCase::DemagDmi);
+        qualify_case(
+            integrator,
+            FULLMAG_FDM_PRECISION_SINGLE,
+            PhysicsCase::DemagDmi);
         qualify_torque_fallback_case(
             integrator, FULLMAG_FDM_PRECISION_DOUBLE);
         qualify_torque_fallback_case(
             integrator, FULLMAG_FDM_PRECISION_SINGLE);
+        qualify_precision_pair(integrator);
+        qualify_precision_pair(integrator, PhysicsCase::Dmi);
+        qualify_precision_pair(integrator, PhysicsCase::DemagDmi);
     }
     // Full statistics performs an additional effective-field observation after
     // the accepted step. It must not be reported as an unfused solver stage.

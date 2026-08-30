@@ -2892,6 +2892,24 @@ pub struct FdmGpuOperatorResidency {
     pub location: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuPrecisionComponents {
+    pub storage: String,
+    pub compute: String,
+    pub fft: String,
+    pub reduction: String,
+    pub realization_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuPrecisionPolicyReceipt {
+    pub schema_version: String,
+    pub requested: String,
+    pub resolved: FdmGpuPrecisionComponents,
+    pub executed: FdmGpuPrecisionComponents,
+    pub accounting_valid: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FdmGpuExecutionReceipt {
     pub requested: String,
@@ -2917,6 +2935,8 @@ pub struct FdmGpuExecutionReceipt {
     pub local_pipeline: Option<FdmGpuLocalPipelineTelemetry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_workspace: Option<FdmGpuWorkspaceTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precision_policy: Option<FdmGpuPrecisionPolicyReceipt>,
     pub validation_state: String,
     pub accounting_valid: bool,
 }
@@ -3100,6 +3120,7 @@ impl FdmGpuExecutionReceipt {
             adaptive_numerics: None,
             local_pipeline: None,
             gpu_workspace: None,
+            precision_policy: None,
             validation_state: "unvalidated".to_string(),
             accounting_valid: false,
         }
@@ -3322,6 +3343,25 @@ mod fdm_gpu_execution_receipt_contract_tests {
                 peak_vram_bytes: 1_200,
                 observed_step_count: 7,
             }),
+            precision_policy: Some(FdmGpuPrecisionPolicyReceipt {
+                schema_version: "fullmag.fdm.cuda.precision-policy.v1".into(),
+                requested: "double".into(),
+                resolved: FdmGpuPrecisionComponents {
+                    storage: "double".into(),
+                    compute: "double".into(),
+                    fft: "double".into(),
+                    reduction: "double".into(),
+                    realization_id: "fullmag.fdm.cuda.precision.full_double.v1".into(),
+                },
+                executed: FdmGpuPrecisionComponents {
+                    storage: "double".into(),
+                    compute: "double".into(),
+                    fft: "double".into(),
+                    reduction: "double".into(),
+                    realization_id: "fullmag.fdm.cuda.precision.full_double.v1".into(),
+                },
+                accounting_valid: true,
+            }),
             validation_state: "unvalidated".into(),
             accounting_valid: true,
         });
@@ -3362,6 +3402,14 @@ mod fdm_gpu_execution_receipt_contract_tests {
         );
         assert_eq!(receipt["gpu_workspace"]["step_device_allocation_count"], 0);
         assert_eq!(receipt["gpu_workspace"]["prepared_fft_workspace_count"], 2);
+        assert_eq!(
+            receipt["precision_policy"]["executed"]["reduction"],
+            "double"
+        );
+        assert_eq!(
+            receipt["precision_policy"]["executed"]["realization_id"],
+            "fullmag.fdm.cuda.precision.full_double.v1"
+        );
     }
 }
 

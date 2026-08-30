@@ -34,6 +34,62 @@ pub enum ExecutionPrecision {
     Double,
 }
 
+/// Fully resolved numeric policy for the production CUDA FDM lane.
+///
+/// The public execution precision selects one of the two supported policies;
+/// arbitrary mixed-precision combinations are intentionally not representable
+/// until they have an independent qualification contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmPrecisionPolicyIR {
+    pub storage: ExecutionPrecision,
+    pub compute: ExecutionPrecision,
+    pub fft: ExecutionPrecision,
+    pub reduction: ExecutionPrecision,
+    pub realization_id: String,
+}
+
+impl FdmPrecisionPolicyIR {
+    pub const FULL_DOUBLE_REALIZATION_ID: &'static str =
+        "fullmag.fdm.cuda.precision.full_double.v1";
+    pub const SINGLE_STORAGE_FP64_REDUCTION_REALIZATION_ID: &'static str =
+        "fullmag.fdm.cuda.precision.single_storage_fp64_reduction.v1";
+
+    pub fn resolve(requested: ExecutionPrecision) -> Self {
+        match requested {
+            ExecutionPrecision::Single => Self {
+                storage: ExecutionPrecision::Single,
+                compute: ExecutionPrecision::Single,
+                fft: ExecutionPrecision::Single,
+                reduction: ExecutionPrecision::Double,
+                realization_id: Self::SINGLE_STORAGE_FP64_REDUCTION_REALIZATION_ID.to_string(),
+            },
+            ExecutionPrecision::Double => Self::default(),
+        }
+    }
+
+    pub fn validate_for(&self, requested: ExecutionPrecision) -> Result<(), String> {
+        let expected = Self::resolve(requested);
+        if self != &expected {
+            return Err(format!(
+                "fdm_precision_policy_mismatch: requested={requested:?} resolved={self:?} expected={expected:?}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for FdmPrecisionPolicyIR {
+    fn default() -> Self {
+        Self {
+            storage: ExecutionPrecision::Double,
+            compute: ExecutionPrecision::Double,
+            fft: ExecutionPrecision::Double,
+            reduction: ExecutionPrecision::Double,
+            realization_id: Self::FULL_DOUBLE_REALIZATION_ID.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionDevice {

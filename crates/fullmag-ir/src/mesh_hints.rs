@@ -258,6 +258,8 @@ pub struct FdmMultilayerPlanIR {
     pub bulk_dmi: Option<f64>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
+    /// Planner-resolved storage/compute/FFT/reduction precision contract.
+    pub precision_policy: crate::execution::FdmPrecisionPolicyIR,
     pub exchange_bc: ExchangeBoundaryCondition,
     /// Periodic boundary conditions configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -578,6 +580,8 @@ struct FdmMultilayerPlanWireIR {
     bulk_dmi: Option<f64>,
     gyromagnetic_ratio: f64,
     precision: ExecutionPrecision,
+    #[serde(default)]
+    precision_policy: Option<crate::execution::FdmPrecisionPolicyIR>,
     exchange_bc: ExchangeBoundaryCondition,
     #[serde(default)]
     periodicity: Option<FdmPeriodicityIR>,
@@ -794,6 +798,9 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
             bulk_dmi: wire.bulk_dmi,
             gyromagnetic_ratio: wire.gyromagnetic_ratio,
             precision: wire.precision,
+            precision_policy: wire
+                .precision_policy
+                .unwrap_or_else(|| crate::execution::FdmPrecisionPolicyIR::resolve(wire.precision)),
             exchange_bc: wire.exchange_bc,
             periodicity: wire.periodicity,
             resolved_periodic_images: wire.resolved_periodic_images,
@@ -829,6 +836,9 @@ impl FdmMultilayerPlanIR {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         self.validate_requested_common_cell_size(&mut errors);
+        if let Err(error) = self.precision_policy.validate_for(self.precision) {
+            errors.push(error);
+        }
         if let Some(frozen) = self.frozen_spins.as_ref() {
             if let Err(error) = frozen.validate_intrinsic() {
                 errors.push(error);
@@ -1143,6 +1153,7 @@ mod multilayer_contract_tests {
             bulk_dmi: None,
             gyromagnetic_ratio: 1.0,
             precision: ExecutionPrecision::Double,
+            precision_policy: crate::FdmPrecisionPolicyIR::default(),
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             periodicity: None,
             resolved_periodic_images: None,

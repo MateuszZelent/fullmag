@@ -1711,6 +1711,8 @@ impl OutputIR {
 pub struct BackendPolicyIR {
     pub requested_backend: BackendTarget,
     pub execution_precision: ExecutionPrecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_precision_policy: Option<crate::FdmPrecisionPolicyIR>,
     pub discretization_hints: Option<DiscretizationHintsIR>,
 }
 

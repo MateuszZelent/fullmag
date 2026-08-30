@@ -14478,6 +14478,7 @@ mod tests {
             backend_policy: BackendPolicyIR {
                 requested_backend: BackendTarget::Fem,
                 execution_precision: ExecutionPrecision::Double,
+                fdm_precision_policy: None,
                 discretization_hints: Some(DiscretizationHintsIR {
                     fdm: None,
                     fem: None,

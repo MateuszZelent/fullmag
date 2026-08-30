@@ -637,7 +637,30 @@ Dopracowania natywnego FDM CUDA są dozwolone, ale powinny być wąskie:
 - utrzymywać stabilne artefakty i preview,
 - unikać równoległych implementacji hot-loop behavior CUDA w Rust.
 
-### 8.1 Własność transportu FDM GPU M1
+### 8.1 Własność polityki precyzji FDM CUDA
+
+Kanoniczna semantyka polityki precyzji żyje w Python DSL, `ProblemIR` i
+plannerze, lecz wykonawcza własność storage, compute, FFT, redukcji i
+rezydentnych workspace'ów pozostaje w `backends/fdm`. Runner mapuje pełną
+politykę do wersjonowanego ABI, porównuje requested/resolved/executed i
+publikuje receipt; nie wybiera drugiej polityki ani nie konwertuje hot loop.
+
+Wersja v1 ma dokładnie dwie realizacje single-grid CUDA:
+`fullmag.fdm.cuda.precision.full_double.v1` oraz
+`fullmag.fdm.cuda.precision.single_storage_fp64_reduction.v1`. Druga oznacza
+FP32 storage/compute/FFT i FP64 reductions. Każda inna kombinacja wymaga nowego
+realization ID oraz osobnej kwalifikacji. Wymuszony GPU, nieznana polityka lub
+różnica resolved/executed kończy się błędem bez fallbacku.
+
+Kwalifikacja jest tuple-specific. Source/unit proof nie promuje physics status;
+actual-device receipt musi obejmować parity pola/RHS/stage/step, niezależny
+oracle, długą trajektorię, energie, normę, hot-loop telemetry, VRAM i
+time-to-accuracy. Single-grid nie promuje periodic exchange, subcell boundary
+correction, termiki, heterogenicznych pól materiałowych ani multilayer FP32.
+Decyzję kontraktową utrwala ADR 0028, a dokładne równania, SI, API i dowody nota
+`docs/physics/0300-gpu-fdm-precision-and-calibration.md`.
+
+### 8.2 Własność transportu FDM GPU M1
 
 Pierwszy milestone charge + steady spin/direct-SHE FP64 ma jednego przyszłego
 właściciela: `backends/fdm/gpu/cuda/transport/**`. Osobny opaque

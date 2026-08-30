@@ -892,6 +892,27 @@ pub struct fullmag_fdm_adaptive_execution_telemetry_v1 {
     pub stats_none_host_sync_count: u64,
 }
 
+pub const FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1: u32 = 1;
+pub type fullmag_fdm_precision_policy_realization_v1 = u32;
+pub const FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE: fullmag_fdm_precision_policy_realization_v1 = 1;
+pub const FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION:
+    fullmag_fdm_precision_policy_realization_v1 = 2;
+pub const FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY: u64 = 1 << 0;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_precision_policy_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub accounting_valid: u32,
+    pub storage_precision: u32,
+    pub compute_precision: u32,
+    pub fft_precision: u32,
+    pub reduction_precision: u32,
+    pub realization: fullmag_fdm_precision_policy_realization_v1,
+    pub metric_valid_mask: u64,
+}
+
 pub const FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1: u32 = 1;
 pub type fullmag_fdm_local_pipeline_policy_v1 = u32;
 pub const FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE: fullmag_fdm_local_pipeline_policy_v1 = 1;
@@ -2071,6 +2092,11 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_adaptive_execution_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_precision_policy_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
         handle: *mut fullmag_fdm_backend,
         out_telemetry: *mut fullmag_fdm_local_pipeline_telemetry_v1,
@@ -2135,6 +2161,24 @@ mod tests {
     fn adaptive_execution_telemetry_v1_has_stable_layout() {
         assert_eq!(size_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 64);
         assert_eq!(align_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 8);
+    }
+
+    #[test]
+    fn precision_policy_telemetry_v1_has_stable_layout_and_ffi_symbol() {
+        assert_eq!(size_of::<fullmag_fdm_precision_policy_telemetry_v1>(), 40);
+        assert_eq!(align_of::<fullmag_fdm_precision_policy_telemetry_v1>(), 8);
+        assert_eq!(
+            offset_of!(fullmag_fdm_precision_policy_telemetry_v1, storage_precision),
+            12
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_precision_policy_telemetry_v1, metric_valid_mask),
+            32
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_precision_policy_telemetry_v1,
+        ) -> i32 = fullmag_fdm_backend_get_precision_policy_telemetry_v1;
     }
 
     #[test]

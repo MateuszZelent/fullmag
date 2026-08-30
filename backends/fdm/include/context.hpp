@@ -2194,6 +2194,34 @@ context_local_pipeline_executed_realization(const Context &ctx) {
         : realization;
 }
 
+inline bool context_get_precision_policy_telemetry_v1(
+    const Context &ctx,
+    fullmag_fdm_precision_policy_telemetry_v1 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version !=
+            FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size !=
+            sizeof(fullmag_fdm_precision_policy_telemetry_v1)) {
+        return false;
+    }
+
+    fullmag_fdm_precision_policy_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    result.accounting_valid = 1U;
+    result.storage_precision = ctx.precision;
+    result.compute_precision = ctx.precision;
+    result.fft_precision = ctx.precision;
+    result.reduction_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    result.realization = ctx.precision == FULLMAG_FDM_PRECISION_SINGLE
+        ? FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION
+        : FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE;
+    result.metric_valid_mask = FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY;
+    *out_telemetry = result;
+    return true;
+}
+
 inline bool context_get_local_pipeline_telemetry_v1(
     const Context &ctx,
     fullmag_fdm_local_pipeline_telemetry_v1 *out_telemetry)

@@ -2786,6 +2786,20 @@ int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
 #endif
 }
 
+int fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_precision_policy_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    const auto *ctx = reinterpret_cast<const Context *>(handle);
+    return context_get_precision_policy_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_local_pipeline_telemetry_v1 *out_telemetry)

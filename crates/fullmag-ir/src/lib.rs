@@ -658,6 +658,7 @@ impl ProblemIR {
             backend_policy: BackendPolicyIR {
                 requested_backend: BackendTarget::Fdm,
                 execution_precision: ExecutionPrecision::Double,
+                fdm_precision_policy: None,
                 discretization_hints: Some(DiscretizationHintsIR {
                     fdm: Some(FdmHintsIR {
                         cell: [2e-9, 2e-9, 2e-9],

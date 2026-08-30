@@ -1,0 +1,80 @@
+{
+  "document": {
+    "path": "docs/physics/0300-gpu-fdm-precision-and-calibration.md"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "GPU", "status": "documented"},
+    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "Ta nota nie zmienia istniejącego kontraktu FEM double-only."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "Ta nota nie promuje ani nie definiuje FEM FP32."}
+  ],
+  "equations": [
+    {
+      "id": "eq-fdm-gpu-precision-effective-field",
+      "symbols": ["m", "h_eff", "h_ex", "h_demag", "h_ext", "h_dmi"],
+      "sources": ["cpu-effective-field", "cuda-step"]
+    },
+    {
+      "id": "eq-fdm-gpu-precision-llg",
+      "symbols": ["m", "time", "h_eff", "gamma", "alpha"],
+      "sources": ["cpu-llg-rhs", "cuda-step"]
+    },
+    {
+      "id": "eq-fdm-gpu-precision-reduction",
+      "symbols": ["reduction-value", "reduction-term", "reduction-count"],
+      "sources": ["precision-ir", "native-policy-projection", "qualification-fixture"]
+    }
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf{m}", "meaning": "zredukowana magnetyzacja", "si_unit": "1"},
+    {"id": "time", "latex": "t", "meaning": "czas fizyczny", "si_unit": "\\mathrm{s}"},
+    {"id": "h_eff", "latex": "\\mathbf{H}_{\\mathrm{eff}}", "meaning": "pole efektywne", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "h_ex", "latex": "\\mathbf{H}_{\\mathrm{ex}}", "meaning": "pole wymiany", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "h_demag", "latex": "\\mathbf{H}_{\\mathrm{demag}}", "meaning": "pole demagnetyzacji", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "h_ext", "latex": "\\mathbf{H}_{\\mathrm{ext}}", "meaning": "pole zewnętrzne", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "h_dmi", "latex": "\\mathbf{H}_{\\mathrm{DMI}}", "meaning": "pole DMI międzyfazowego lub objętościowego", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "gamma", "latex": "\\gamma", "meaning": "współczynnik żyromagnetyczny w postaci Gilberta", "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "tłumienie Gilberta", "si_unit": "1"},
+    {"id": "reduction-term", "latex": "q_i", "meaning": "lokalny składnik sumowanej wielkości skalarnej", "si_unit": "zależna od obserwabli"},
+    {"id": "reduction-value", "latex": "S", "meaning": "wynik redukcji skalarnej", "si_unit": "taka jak `q_i`"},
+    {"id": "reduction-count", "latex": "N", "meaning": "liczba składników redukcji", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "python-policy", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "class FdmPrecisionPolicy", "responsibility": "Definiuje dwie publiczne, wersjonowane polityki FDM."},
+    {"id": "python-selector", "path": "packages/fullmag-py/src/fullmag/model/problem.py", "symbol": "precision_policy", "responsibility": "Transportuje jawny wybór polityki do runtime metadata i ProblemIR."},
+    {"id": "precision-ir", "path": "crates/fullmag-ir/src/execution.rs", "symbol": "FdmPrecisionPolicyIR", "responsibility": "Jest kanonicznym typem storage/compute/FFT/reduction/realization."},
+    {"id": "precision-planner", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "resolve_precision_policy", "responsibility": "Rozwiązuje domyślną politykę i odrzuca konflikty fail-closed."},
+    {"id": "native-policy-abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_backend_get_precision_policy_telemetry_v1", "responsibility": "Udostępnia wersjonowaną telemetrię wykonanej polityki."},
+    {"id": "native-policy-projection", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native/residency.rs", "symbol": "precision_policy_from_native", "responsibility": "Porównuje requested/resolved/executed i odrzuca nieznane realizacje."},
+    {"id": "qualification-fixture", "path": "backends/fdm/tests/tier_b_compare.cu", "symbol": "run_interaction_fixture", "responsibility": "Mierzy trajektorię, energie, normę, VRAM, liczniki operatorów i time-to-accuracy FP64/FP32."},
+    {"id": "cpu-effective-field", "path": "crates/fullmag-engine/src/fdm/shared/problem.rs", "symbol": "effective_field", "responsibility": "Oblicza referencyjne FDM CPU pole efektywne."},
+    {"id": "cpu-llg-rhs", "path": "crates/fullmag-engine/src/fdm/shared/problem.rs", "symbol": "llg_rhs", "responsibility": "Oblicza referencyjny FDM CPU prawy bok LLG."},
+    {"id": "cuda-step", "path": "backends/fdm/api/c_api.cpp", "symbol": "fullmag_fdm_backend_step", "responsibility": "Wykonuje produkcyjny krok natywnego FDM CUDA."},
+    {"id": "newell-thin-film", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_thin_film_demag_matches_cpu_reference_when_cuda_is_available", "responsibility": "Porównuje fizyczny tensor Newella thin-film CPU i CUDA."},
+    {"id": "newell-periodic", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_periodic_truncated_demag_matches_cpu_reference_when_cuda_is_available", "responsibility": "Porównuje periodyczny tensor Newella truncated-images CPU i CUDA."}
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "StudyBuilder.device(..., precision)",
+        "type": "str | None",
+        "default": "None (dziedziczy double)",
+        "si_unit": "$1$",
+        "validation": "single | double",
+        "meaning": "publiczny wybór precyzji wykonania",
+        "backend_support": "FDM CUDA; CPU tylko double; FEM poza zakresem tej strony",
+        "problem_ir": "backend_policy.execution_precision"
+      },
+      {
+        "python": "RuntimeSelection.precision_policy(policy)",
+        "type": "FdmPrecisionPolicy | str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "full_double | single_storage_fp64_reduction",
+        "meaning": "jawna kompletna polityka FDM",
+        "backend_support": "FDM CUDA single-grid",
+        "problem_ir": "backend_policy.fdm_precision_policy"
+      }
+    ]
+  }
+}
