@@ -90,6 +90,39 @@ cudaError_t context_gpu_workspace_cuda_malloc_raw(
     void **destination,
     size_t bytes)
 {
+    size_t free_device_bytes = 0;
+    size_t total_device_bytes = 0;
+    const cudaError_t query_status =
+        ::cudaMemGetInfo(&free_device_bytes, &total_device_bytes);
+    if (query_status != cudaSuccess) {
+        ctx.last_error =
+            "fdm_gpu_workspace_memory_query_failed: cuda_error=" +
+            std::to_string(static_cast<int>(query_status));
+        return query_status;
+    }
+    // Match the production transport solvers: keep either 256 MiB or 5% of
+    // device capacity outside this workspace allocation, whichever is larger.
+    constexpr uint64_t minimum_safety_reserve =
+        uint64_t{256} * 1024 * 1024;
+    const uint64_t proportional_reserve =
+        static_cast<uint64_t>(total_device_bytes) / 20;
+    const uint64_t safety_reserve =
+        std::max(minimum_safety_reserve, proportional_reserve);
+    const uint64_t free_bytes = static_cast<uint64_t>(free_device_bytes);
+    const uint64_t usable_device_bytes =
+        free_bytes > safety_reserve ? free_bytes - safety_reserve : 0;
+    const uint64_t required_new_bytes = static_cast<uint64_t>(bytes);
+    if (required_new_bytes > usable_device_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: required_new_bytes=" +
+            std::to_string(required_new_bytes) +
+            " usable_device_bytes=" + std::to_string(usable_device_bytes) +
+            " free_device_bytes=" + std::to_string(free_bytes) +
+            " total_device_bytes=" +
+            std::to_string(static_cast<uint64_t>(total_device_bytes)) +
+            " safety_reserve_bytes=" + std::to_string(safety_reserve);
+        return cudaErrorMemoryAllocation;
+    }
     const cudaError_t status = ::cudaMalloc(destination, bytes);
     if (status == cudaSuccess) {
         context_note_gpu_workspace_allocation(ctx, *destination, bytes);

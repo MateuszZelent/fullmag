@@ -205,6 +205,68 @@ void overflowed_grid_is_rejected_before_workspace_setup() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+uint32_t oversized_fp64_cell_count() {
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    check(cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess,
+          "cudaMemGetInfo failed before device-memory preflight check");
+    check(total_bytes > 0 && free_bytes <= total_bytes,
+          "cudaMemGetInfo returned an invalid device-memory range");
+    const uint64_t oversized_cells =
+        static_cast<uint64_t>(free_bytes / sizeof(double)) + 1;
+    check(oversized_cells > 0 && oversized_cells <= UINT32_MAX,
+          "test device capacity cannot be represented by a one-dimensional FDM grid");
+    return static_cast<uint32_t>(oversized_cells);
+}
+
+void oversized_single_grid_allocation_is_rejected_by_memory_preflight() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("device-memory preflight check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const uint32_t oversized_cells = oversized_fp64_cell_count();
+
+    const double dummy_m[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(dummy_m);
+    plan.grid.nx = oversized_cells;
+    plan.initial_magnetization_len = static_cast<uint64_t>(oversized_cells) * 3;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr,
+          "oversized setup allocation should return an error handle");
+    check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
+    check_error_contains(handle, "required_new_bytes=");
+    check_error_contains(handle, "usable_device_bytes=");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void oversized_multilayer_allocation_is_rejected_by_memory_preflight() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("multilayer device-memory preflight check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const uint32_t oversized_cells = oversized_fp64_cell_count();
+    const double dummy_m[3] = {1.0, 0.0, 0.0};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, dummy_m);
+    layer.native_grid.nx = oversized_cells;
+    layer.convolution_grid.nx = oversized_cells;
+    layer.initial_magnetization_len =
+        static_cast<uint64_t>(oversized_cells) * 3;
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "oversized multilayer setup allocation should return an error handle");
+    check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
+    check_error_contains(handle, "required_new_bytes=");
+    check_error_contains(handle, "usable_device_bytes=");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void valid_plan_runs_heun_step_with_demag_and_exchange() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("valid create_v2 upload check skipped: CUDA backend unavailable\n");
@@ -611,6 +673,8 @@ int main() {
     overflowed_single_grid_is_rejected_before_workspace_setup();
     overflowed_fft_spectrum_is_rejected_before_workspace_setup();
     overflowed_grid_is_rejected_before_workspace_setup();
+    oversized_single_grid_allocation_is_rejected_by_memory_preflight();
+    oversized_multilayer_allocation_is_rejected_by_memory_preflight();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();
