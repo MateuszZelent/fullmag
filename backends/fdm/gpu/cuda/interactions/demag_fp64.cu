@@ -9,10 +9,12 @@
 
 #include "context.hpp"
 #include "dmi_boundary.cuh"
+#include "kernels.hpp"
 
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <curand_kernel.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -925,6 +927,57 @@ bool launch_effective_field_and_base_llg_rhs_fp64(
 
 void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
     launch_effective_field_fp64(ctx, evaluation_time, nullptr);
+}
+
+cudaError_t query_local_pipeline_kernel_resources_fp64(
+    LocalPipelineKernelResources *out_resources) {
+    if (out_resources == nullptr) return cudaErrorInvalidValue;
+    cudaFuncAttributes attributes{};
+    cudaError_t status = cudaFuncGetAttributes(
+        &attributes, combine_effective_field_fp64_kernel);
+    if (status != cudaSuccess) return status;
+    int device = 0;
+    status = cudaGetDevice(&device);
+    if (status != cudaSuccess) return status;
+    int max_threads_per_sm = 0;
+    status = cudaDeviceGetAttribute(
+        &max_threads_per_sm, cudaDevAttrMaxThreadsPerMultiProcessor, device);
+    if (status != cudaSuccess) return status;
+    int multiprocessor_count = 0;
+    status = cudaDeviceGetAttribute(
+        &multiprocessor_count, cudaDevAttrMultiProcessorCount, device);
+    if (status != cudaSuccess) return status;
+    int max_active_blocks_per_sm = 0;
+    status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_active_blocks_per_sm,
+        combine_effective_field_fp64_kernel,
+        BLOCK_SIZE,
+        0);
+    if (status != cudaSuccess) return status;
+    if (max_threads_per_sm <= 0 || max_active_blocks_per_sm <= 0 ||
+        attributes.numRegs < 0) {
+        return cudaErrorInvalidConfiguration;
+    }
+    LocalPipelineKernelResources resources{};
+    resources.block_threads = BLOCK_SIZE;
+    resources.registers_per_thread =
+        static_cast<uint32_t>(attributes.numRegs);
+    resources.static_shared_bytes = attributes.sharedSizeBytes;
+    resources.local_bytes_per_thread = attributes.localSizeBytes;
+    resources.max_active_blocks_per_sm =
+        static_cast<uint32_t>(max_active_blocks_per_sm);
+    resources.max_threads_per_sm = static_cast<uint32_t>(max_threads_per_sm);
+    resources.multiprocessor_count =
+        static_cast<uint32_t>(multiprocessor_count);
+    const uint64_t resident_threads =
+        static_cast<uint64_t>(max_active_blocks_per_sm) * BLOCK_SIZE;
+    resources.theoretical_occupancy_permyriad = static_cast<uint32_t>(
+        std::min<uint64_t>(
+            10000,
+            resident_threads * 10000 /
+                static_cast<uint64_t>(max_threads_per_sm)));
+    *out_resources = resources;
+    return cudaSuccess;
 }
 
 void launch_anisotropy_field_fp64(Context &ctx) {

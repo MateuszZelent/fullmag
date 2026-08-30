@@ -1,5 +1,5 @@
 #include "fullmag_fdm.h"
-#include "context.hpp"
+#include "kernels.hpp"
 
 #include <cuda_runtime.h>
 #include <cuda_profiler_api.h>
@@ -15,6 +15,7 @@
 namespace {
 
 using fullmag::fdm::Context;
+using fullmag::fdm::LocalPipelineKernelResources;
 
 [[noreturn]] void fail(const char *message) {
     std::fprintf(stderr, "FAIL: %s\n", message);
@@ -190,6 +191,14 @@ int main(int argc, char **argv) {
     fullmag_fdm_device_info device{};
     require(fullmag_fdm_backend_get_device_info(handle, &device) == FULLMAG_FDM_OK,
             "benchmark device identity query failed");
+    LocalPipelineKernelResources kernel_resources{};
+    const cudaError_t resource_status = precision == FULLMAG_FDM_PRECISION_DOUBLE
+        ? fullmag::fdm::query_local_pipeline_kernel_resources_fp64(
+              &kernel_resources)
+        : fullmag::fdm::query_local_pipeline_kernel_resources_fp32(
+              &kernel_resources);
+    require(resource_status == cudaSuccess,
+            "benchmark fused-kernel resource query failed");
 
     const double ns_per_step =
         static_cast<double>(elapsed_ms) * 1.0e6 / measured_steps;
@@ -201,7 +210,17 @@ int main(int argc, char **argv) {
         "\"fused_launches\":%llu,\"unfused_field_launches\":%llu,"
         "\"unfused_rhs_launches\":%llu,\"elapsed_ms\":%.9g,"
         "\"ns_per_step\":%.17g,\"checksum\":%.17g,"
-        "\"device\":\"%s\",\"compute_capability\":\"%d.%d\"}\n",
+        "\"device\":\"%s\",\"compute_capability\":\"%d.%d\","
+        "\"kernel_resources_schema\":"
+        "\"fullmag.fdm_gpu.local_pipeline_kernel_resources.v1\","
+        "\"kernel_block_threads\":%u,"
+        "\"kernel_registers_per_thread\":%u,"
+        "\"kernel_static_shared_bytes\":%llu,"
+        "\"kernel_local_bytes_per_thread\":%llu,"
+        "\"kernel_max_active_blocks_per_sm\":%u,"
+        "\"kernel_max_threads_per_sm\":%u,"
+        "\"kernel_multiprocessor_count\":%u,"
+        "\"kernel_theoretical_occupancy_permyriad\":%u}\n",
         static_cast<unsigned long long>(cell_count),
         warmup_steps,
         measured_steps,
@@ -218,7 +237,15 @@ int main(int argc, char **argv) {
         checksum,
         device.name,
         device.compute_capability_major,
-        device.compute_capability_minor);
+        device.compute_capability_minor,
+        kernel_resources.block_threads,
+        kernel_resources.registers_per_thread,
+        static_cast<unsigned long long>(kernel_resources.static_shared_bytes),
+        static_cast<unsigned long long>(kernel_resources.local_bytes_per_thread),
+        kernel_resources.max_active_blocks_per_sm,
+        kernel_resources.max_threads_per_sm,
+        kernel_resources.multiprocessor_count,
+        kernel_resources.theoretical_occupancy_permyriad);
     fullmag_fdm_backend_destroy(handle);
     return 0;
 }

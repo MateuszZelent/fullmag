@@ -32,6 +32,17 @@ def records(repetitions: int = 3):
                             "checksum": checksum,
                             "device": "test gpu",
                             "compute_capability": "8.6",
+                            "kernel_resources_schema":
+                                "fullmag.fdm_gpu.local_pipeline_kernel_resources.v1",
+                            "kernel_block_threads": 256,
+                            "kernel_registers_per_thread":
+                                96 if precision == "fp64" else 80,
+                            "kernel_static_shared_bytes": 0,
+                            "kernel_local_bytes_per_thread": 0,
+                            "kernel_max_active_blocks_per_sm": 2,
+                            "kernel_max_threads_per_sm": 1536,
+                            "kernel_multiprocessor_count": 46,
+                            "kernel_theoretical_occupancy_permyriad": 3333,
                         }
                     )
     return result
@@ -57,6 +68,28 @@ class BenchmarkGateTests(unittest.TestCase):
         fixture = records()
         fixture[0]["checksum"] += 1.0
         with self.assertRaisesRegex(ValueError, "checksum parity failed"):
+            gate.evaluate(fixture, 3, "a" * 40, "b" * 64)
+
+    def test_kernel_local_memory_spill_fails(self):
+        fixture = records()
+        for record in fixture:
+            record["kernel_local_bytes_per_thread"] = 8
+        with self.assertRaisesRegex(ValueError, "local-memory spill budget"):
+            gate.evaluate(fixture, 3, "a" * 40, "b" * 64)
+
+    def test_kernel_register_pressure_fails(self):
+        fixture = records()
+        for record in fixture:
+            record["kernel_registers_per_thread"] = 129
+        with self.assertRaisesRegex(ValueError, "register budget"):
+            gate.evaluate(fixture, 3, "a" * 40, "b" * 64)
+
+    def test_kernel_theoretical_occupancy_fails(self):
+        fixture = records()
+        for record in fixture:
+            record["kernel_max_active_blocks_per_sm"] = 1
+            record["kernel_theoretical_occupancy_permyriad"] = 1666
+        with self.assertRaisesRegex(ValueError, "theoretical occupancy budget"):
             gate.evaluate(fixture, 3, "a" * 40, "b" * 64)
 
     def test_output_inside_repository_is_rejected(self):

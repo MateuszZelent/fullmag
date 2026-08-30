@@ -20,6 +20,22 @@
 namespace fullmag {
 namespace fdm {
 
+struct LocalPipelineKernelResources {
+    uint32_t block_threads = 0;
+    uint32_t registers_per_thread = 0;
+    uint64_t static_shared_bytes = 0;
+    uint64_t local_bytes_per_thread = 0;
+    uint32_t max_active_blocks_per_sm = 0;
+    uint32_t max_threads_per_sm = 0;
+    uint32_t multiprocessor_count = 0;
+    uint32_t theoretical_occupancy_permyriad = 0;
+};
+
+cudaError_t query_local_pipeline_kernel_resources_fp64(
+    LocalPipelineKernelResources *out_resources);
+cudaError_t query_local_pipeline_kernel_resources_fp32(
+    LocalPipelineKernelResources *out_resources);
+
 // WP5: exchange field
 // void launch_exchange_field_fp64(const Context &ctx);
 // double launch_exchange_energy_fp64(const Context &ctx);

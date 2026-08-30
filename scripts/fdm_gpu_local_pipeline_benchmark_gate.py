@@ -19,6 +19,10 @@ RECORD_SCHEMA = "fullmag.fdm_gpu.local_pipeline_benchmark.v1"
 EXPECTED_CELLS = (1024, 65536, 1048576)
 EXPECTED_PRECISIONS = ("fp64", "fp32")
 EXPECTED_REALIZATIONS = ("direct_fused", "direct_unfused")
+KERNEL_RESOURCES_SCHEMA = "fullmag.fdm_gpu.local_pipeline_kernel_resources.v1"
+MAX_REGISTERS_PER_THREAD = 128
+MAX_LOCAL_BYTES_PER_THREAD = 0
+MIN_THEORETICAL_OCCUPANCY_PERMYRIAD = 2500
 
 
 def _require(condition: bool, message: str) -> None:
@@ -60,6 +64,9 @@ def evaluate(
     _require(repetitions >= 3, "performance gate requires at least three repetitions")
     grouped: dict[tuple[str, int, str], list[dict[str, object]]] = {}
     devices: set[tuple[str, str]] = set()
+    kernel_resources: dict[str, set[tuple[int, ...]]] = {
+        precision: set() for precision in EXPECTED_PRECISIONS
+    }
     for record in records:
         _require(record.get("schema") == RECORD_SCHEMA, "unknown benchmark schema")
         precision = str(record.get("precision"))
@@ -77,6 +84,62 @@ def evaluate(
         checksum = float(record.get("checksum", math.nan))
         _require(math.isfinite(elapsed) and elapsed > 0.0, "invalid step latency")
         _require(math.isfinite(checksum), "invalid trajectory checksum")
+        _require(
+            record.get("kernel_resources_schema") == KERNEL_RESOURCES_SCHEMA,
+            "unknown kernel-resources schema",
+        )
+        block_threads = int(record.get("kernel_block_threads", 0))
+        registers_per_thread = int(record.get("kernel_registers_per_thread", -1))
+        static_shared_bytes = int(record.get("kernel_static_shared_bytes", -1))
+        local_bytes_per_thread = int(record.get("kernel_local_bytes_per_thread", -1))
+        max_active_blocks_per_sm = int(
+            record.get("kernel_max_active_blocks_per_sm", 0)
+        )
+        max_threads_per_sm = int(record.get("kernel_max_threads_per_sm", 0))
+        multiprocessor_count = int(record.get("kernel_multiprocessor_count", 0))
+        theoretical_occupancy = int(
+            record.get("kernel_theoretical_occupancy_permyriad", -1)
+        )
+        _require(block_threads == 256, "unexpected fused-kernel block size")
+        _require(
+            0 <= registers_per_thread <= MAX_REGISTERS_PER_THREAD,
+            "fused-kernel register budget exceeded",
+        )
+        _require(static_shared_bytes >= 0, "invalid static shared-memory accounting")
+        _require(
+            0 <= local_bytes_per_thread <= MAX_LOCAL_BYTES_PER_THREAD,
+            "fused-kernel local-memory spill budget exceeded",
+        )
+        _require(
+            max_active_blocks_per_sm > 0
+            and max_threads_per_sm > 0
+            and multiprocessor_count > 0,
+            "invalid occupancy inputs",
+        )
+        expected_occupancy = min(
+            10_000,
+            max_active_blocks_per_sm * block_threads * 10_000 // max_threads_per_sm,
+        )
+        _require(
+            theoretical_occupancy == expected_occupancy,
+            "fused-kernel theoretical occupancy is inconsistent",
+        )
+        _require(
+            theoretical_occupancy >= MIN_THEORETICAL_OCCUPANCY_PERMYRIAD,
+            "fused-kernel theoretical occupancy budget not met",
+        )
+        kernel_resources[precision].add(
+            (
+                block_threads,
+                registers_per_thread,
+                static_shared_bytes,
+                local_bytes_per_thread,
+                max_active_blocks_per_sm,
+                max_threads_per_sm,
+                multiprocessor_count,
+                theoretical_occupancy,
+            )
+        )
         total_steps = int(record.get("warmup_steps", 0)) + int(
             record.get("measured_steps", 0)
         )
@@ -104,6 +167,10 @@ def evaluate(
     )
     _require(len(records) == expected_record_count, "benchmark matrix is incomplete")
     _require(len(devices) == 1, "benchmark records mix device identities")
+    _require(
+        all(len(resources) == 1 for resources in kernel_resources.values()),
+        "fused-kernel resources changed within one precision matrix",
+    )
 
     cases: list[dict[str, object]] = []
     for precision in EXPECTED_PRECISIONS:
@@ -151,6 +218,31 @@ def evaluate(
             )
 
     device, compute_capability = next(iter(devices))
+    resource_receipts = []
+    for precision in EXPECTED_PRECISIONS:
+        (
+            block_threads,
+            registers_per_thread,
+            static_shared_bytes,
+            local_bytes_per_thread,
+            max_active_blocks_per_sm,
+            max_threads_per_sm,
+            multiprocessor_count,
+            theoretical_occupancy,
+        ) = next(iter(kernel_resources[precision]))
+        resource_receipts.append(
+            {
+                "precision": precision,
+                "block_threads": block_threads,
+                "registers_per_thread": registers_per_thread,
+                "static_shared_bytes": static_shared_bytes,
+                "local_bytes_per_thread": local_bytes_per_thread,
+                "max_active_blocks_per_sm": max_active_blocks_per_sm,
+                "max_threads_per_sm": max_threads_per_sm,
+                "multiprocessor_count": multiprocessor_count,
+                "theoretical_occupancy_permyriad": theoretical_occupancy,
+            }
+        )
     return {
         "schema": SCHEMA,
         "status": "pass",
@@ -168,7 +260,12 @@ def evaluate(
             "tested_realizations": list(EXPECTED_REALIZATIONS),
             "small_medium_maximum_ratio": 1.0,
             "large_maximum_regression": 0.02,
+            "maximum_registers_per_thread": MAX_REGISTERS_PER_THREAD,
+            "maximum_local_bytes_per_thread": MAX_LOCAL_BYTES_PER_THREAD,
+            "minimum_theoretical_occupancy_permyriad":
+                MIN_THEORETICAL_OCCUPANCY_PERMYRIAD,
         },
+        "kernel_resources": resource_receipts,
         "cases": cases,
     }
 
