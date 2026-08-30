@@ -701,8 +701,8 @@ pub(crate) use device::DeviceInfo;
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub(crate) struct NativeLlgCheckpointV3 {
-    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v3,
+pub(crate) struct NativeLlgCheckpointV4 {
+    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v4,
     pub payload_sha256: [u8; 32],
     pub payload: Vec<u8>,
 }
@@ -2201,10 +2201,10 @@ impl NativeFdmBackend {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV3, RunError> {
+    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV4, RunError> {
         let mut required_bytes = 0u64;
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v3(self.handle, &mut required_bytes)
+            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v4(self.handle, &mut required_bytes)
         };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint size query failed"));
@@ -2219,9 +2219,9 @@ impl NativeFdmBackend {
                 message: format!("failed to allocate {required_bytes} bytes for LLG checkpoint"),
             })?;
         payload.resize(payload_len, 0);
-        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v3::default();
+        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v4::default();
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_export_v3(
+            ffi::fullmag_fdm_backend_llg_checkpoint_export_v4(
                 self.handle,
                 payload.as_mut_ptr().cast(),
                 required_bytes,
@@ -2231,7 +2231,7 @@ impl NativeFdmBackend {
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint export failed"));
         }
-        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3
+        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4
             || info.payload_bytes != required_bytes
             || info.cell_count != self.cell_count as u64
         {
@@ -2239,7 +2239,7 @@ impl NativeFdmBackend {
                 message: "native LLG checkpoint metadata does not match the backend".to_string(),
             });
         }
-        Ok(NativeLlgCheckpointV3 {
+        Ok(NativeLlgCheckpointV4 {
             info,
             payload_sha256: Sha256::digest(&payload).into(),
             payload,
@@ -2249,13 +2249,13 @@ impl NativeFdmBackend {
     #[allow(dead_code)]
     pub(crate) fn restore_llg_checkpoint(
         &mut self,
-        checkpoint: &NativeLlgCheckpointV3,
+        checkpoint: &NativeLlgCheckpointV4,
     ) -> Result<(), RunError> {
         let payload_bytes = u64::try_from(checkpoint.payload.len()).map_err(|_| RunError {
             message: "LLG checkpoint payload exceeds u64".to_string(),
         })?;
         let payload_sha256: [u8; 32] = Sha256::digest(&checkpoint.payload).into();
-        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3
+        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4
             || checkpoint.info.payload_bytes != payload_bytes
             || checkpoint.info.cell_count != self.cell_count as u64
             || checkpoint.payload_sha256 != payload_sha256
@@ -2265,7 +2265,7 @@ impl NativeFdmBackend {
             });
         }
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_import_v3(
+            ffi::fullmag_fdm_backend_llg_checkpoint_import_v4(
                 self.handle,
                 checkpoint.payload.as_ptr().cast(),
                 payload_bytes,

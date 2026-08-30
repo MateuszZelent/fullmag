@@ -187,7 +187,9 @@ static_assert(sizeof(fullmag_fdm_stats_policy_v1) == 24,
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1 UINT32_C(1)
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2 UINT32_C(2)
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3 UINT32_C(3)
+#define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4 UINT32_C(4)
 #define FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3 UINT32_C(3)
+#define FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_CHECKPOINT_BACKEND_FDM UINT32_C(1)
 #define FULLMAG_FDM_CHECKPOINT_BACKEND_AUTO UINT32_C(2)
 #define FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED UINT32_C(1)
@@ -290,6 +292,28 @@ typedef struct {
 } fullmag_fdm_checkpoint_execution_identity_v3;
 
 typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t grid_nx;
+    uint32_t grid_ny;
+    uint32_t grid_nz;
+    uint32_t fft_nx;
+    uint32_t fft_ny;
+    uint32_t fft_nz;
+    uint32_t precision;
+    uint32_t integrator;
+    uint32_t periodic_axis_mask;
+    uint32_t reserved0;
+    double grid_dx;
+    double grid_dy;
+    double grid_dz;
+    uint8_t mask_topology_sha256[32];
+    uint8_t material_layout_sha256[32];
+    uint8_t spectra_sha256[32];
+    uint8_t dependency_sha256[32];
+} fullmag_fdm_workspace_dependency_identity_v1;
+
+typedef struct {
     uint32_t schema_version;
     uint32_t struct_size;
     fullmag_fdm_checkpoint_execution_identity_v3 execution_identity;
@@ -327,6 +351,46 @@ typedef struct {
     uint32_t fsal_integrator_identity;
     uint32_t fsal_precision_identity;
 } fullmag_fdm_llg_checkpoint_info_v3;
+
+typedef struct {
+    uint32_t schema_version;
+    uint32_t struct_size;
+    fullmag_fdm_checkpoint_execution_identity_v3 execution_identity;
+    fullmag_fdm_workspace_dependency_identity_v1 workspace_dependency_identity;
+    uint32_t array_mask;
+    uint32_t reserved0;
+    uint64_t cell_count;
+    uint64_t payload_bytes;
+    uint64_t step_count;
+    uint64_t accepted_step_index;
+    uint64_t accepted_state_revision;
+    double current_time;
+    double current_dt;
+    uint64_t thermal_seed;
+    uint32_t rng_algorithm;
+    uint32_t rng_realization;
+    uint64_t transport_attempt_generation;
+    uint64_t rhs_source_revision;
+    uint64_t rhs_field_revision;
+    uint64_t rhs_transport_revision;
+    uint64_t projection_policy_identity;
+    uint32_t fsal_valid;
+    uint32_t abm_startup;
+    double abm_last_dt;
+    uint32_t adaptive_enabled;
+    uint32_t adaptive_has_previous_error;
+    double adaptive_previous_error;
+    uint64_t fsal_accepted_state_revision;
+    uint64_t fsal_accepted_time_bits;
+    uint64_t fsal_accepted_dt_bits;
+    uint64_t fsal_source_revision;
+    uint64_t fsal_field_revision;
+    uint64_t fsal_transport_revision;
+    uint64_t fsal_transport_state_identity;
+    uint64_t fsal_projection_policy_identity;
+    uint32_t fsal_integrator_identity;
+    uint32_t fsal_precision_identity;
+} fullmag_fdm_llg_checkpoint_info_v4;
 
 typedef int (*fullmag_fdm_interrupt_poll_fn)(void *user_data);
 
@@ -1599,6 +1663,10 @@ int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_checkpoint_execution_identity_v3 *identity);
 
+int fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_workspace_dependency_identity_v1 *out_identity);
+
 int fullmag_fdm_backend_llg_checkpoint_query_size_v3(
     fullmag_fdm_backend *handle,
     uint64_t *out_required_bytes);
@@ -1614,6 +1682,22 @@ int fullmag_fdm_backend_llg_checkpoint_import_v3(
     const void *source,
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v3 *expected_info);
+
+int fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes);
+
+int fullmag_fdm_backend_llg_checkpoint_export_v4(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v4 *out_info);
+
+int fullmag_fdm_backend_llg_checkpoint_import_v4(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v4 *expected_info);
 
 /**
  * Replace one v2 multilayer layer magnetization from host-side f64 AoS storage.

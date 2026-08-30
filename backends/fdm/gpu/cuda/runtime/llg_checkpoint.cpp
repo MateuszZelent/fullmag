@@ -35,10 +35,10 @@ struct HeaderV2 {
     uint64_t payload_checksum;
 };
 
-struct HeaderV3 {
+struct HeaderV4 {
     uint64_t magic0;
     uint64_t magic1;
-    fullmag_fdm_llg_checkpoint_info_v3 info;
+    fullmag_fdm_llg_checkpoint_info_v4 info;
     uint64_t payload_checksum;
 };
 
@@ -102,12 +102,13 @@ bool required_bytes_v2(
     return true;
 }
 
-bool required_bytes_v3(
+bool required_bytes_v4(
     const Context &ctx, uint64_t &required, uint32_t &mask)
 {
     if (ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE ||
         ctx.has_multilayer_plan_v2 || ctx.cell_count == 0 ||
         !ctx.checkpoint_execution_identity_v3_valid ||
+        !ctx.workspace_dependency_identity_v1_valid ||
         !checkpoint_identity_v3_valid(
             ctx, ctx.checkpoint_execution_identity_v3)) {
         return false;
@@ -118,11 +119,11 @@ bool required_bytes_v3(
         ((mask & kArrayAbmFn) != 0 ? UINT64_C(3) : UINT64_C(0));
     constexpr uint64_t components = 3;
     if (ctx.cell_count >
-        (std::numeric_limits<uint64_t>::max() - sizeof(HeaderV3)) /
+        (std::numeric_limits<uint64_t>::max() - sizeof(HeaderV4)) /
             (arrays * components * sizeof(double))) {
         return false;
     }
-    required = sizeof(HeaderV3) +
+    required = sizeof(HeaderV4) +
         arrays * components * ctx.cell_count * sizeof(double);
     return true;
 }
@@ -295,9 +296,28 @@ bool checkpoint_execution_receipt_v3_exportable(const Context &ctx)
         (receipt.executed_device_operator_mask & required) == required;
 }
 
-bool info_equal_v3(
-    const fullmag_fdm_llg_checkpoint_info_v3 &left,
-    const fullmag_fdm_llg_checkpoint_info_v3 &right)
+fullmag_fdm_llg_checkpoint_info_v4 checkpoint_info_v4(
+    const Context &ctx, uint64_t payload_bytes, uint32_t mask)
+{
+    const auto legacy = checkpoint_info_v3(ctx, payload_bytes, mask);
+    fullmag_fdm_llg_checkpoint_info_v4 info{};
+    info.schema_version = FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4;
+    info.struct_size = sizeof(info);
+    info.execution_identity = legacy.execution_identity;
+    info.workspace_dependency_identity = ctx.workspace_dependency_identity_v1;
+    static_assert(
+        sizeof(info) - offsetof(fullmag_fdm_llg_checkpoint_info_v4, array_mask) ==
+        sizeof(legacy) - offsetof(fullmag_fdm_llg_checkpoint_info_v3, array_mask));
+    std::memcpy(
+        &info.array_mask, &legacy.array_mask,
+        sizeof(legacy) -
+            offsetof(fullmag_fdm_llg_checkpoint_info_v3, array_mask));
+    return info;
+}
+
+bool info_equal_v4(
+    const fullmag_fdm_llg_checkpoint_info_v4 &left,
+    const fullmag_fdm_llg_checkpoint_info_v4 &right)
 {
     return std::memcmp(&left, &right, sizeof(left)) == 0;
 }
@@ -552,14 +572,10 @@ bool context_set_checkpoint_execution_identity_v3(
 int context_llg_checkpoint_query_size_v3(
     Context &ctx, uint64_t &out_required_bytes)
 {
-    uint32_t mask = 0;
-    if (!required_bytes_v3(ctx, out_required_bytes, mask) ||
-        !checkpoint_execution_receipt_v3_exportable(ctx)) {
-        ctx.last_error =
-            "LLG checkpoint v3 export requires exact executed CUDA receipt without fallback";
-        return FULLMAG_FDM_ERR_ABI;
-    }
-    return FULLMAG_FDM_OK;
+    (void)out_required_bytes;
+    ctx.last_error =
+        "legacy LLG checkpoint v3 export is unsupported: workspace dependency identity is unavailable; export and restore schema v4";
+    return FULLMAG_FDM_ERR_ABI;
 }
 
 int context_llg_checkpoint_export_v3(
@@ -568,25 +584,66 @@ int context_llg_checkpoint_export_v3(
     uint64_t exact_capacity,
     fullmag_fdm_llg_checkpoint_info_v3 &out_info)
 {
+    (void)destination;
+    (void)exact_capacity;
+    (void)out_info;
+    ctx.last_error =
+        "legacy LLG checkpoint v3 export is unsupported: workspace dependency identity is unavailable; export and restore schema v4";
+    return FULLMAG_FDM_ERR_ABI;
+}
+
+int context_llg_checkpoint_import_v3(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v3 &expected_info)
+{
+    (void)source;
+    (void)exact_bytes;
+    (void)expected_info;
+    ctx.last_error =
+        "legacy LLG checkpoint v3 import is unsupported: workspace dependency identity is unavailable; export and restore schema v4";
+    return FULLMAG_FDM_ERR_ABI;
+}
+
+int context_llg_checkpoint_query_size_v4(
+    Context &ctx, uint64_t &out_required_bytes)
+{
+    uint32_t mask = 0;
+    if (!required_bytes_v4(ctx, out_required_bytes, mask) ||
+        !checkpoint_execution_receipt_v3_exportable(ctx)) {
+        ctx.last_error =
+            "LLG checkpoint v4 export requires exact executed CUDA receipt and workspace dependency identity without fallback";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    return FULLMAG_FDM_OK;
+}
+
+int context_llg_checkpoint_export_v4(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v4 &out_info)
+{
     uint64_t required = 0;
     uint32_t mask = 0;
-    if (!destination || !required_bytes_v3(ctx, required, mask) ||
+    if (!destination || !required_bytes_v4(ctx, required, mask) ||
         !checkpoint_execution_receipt_v3_exportable(ctx) ||
         exact_capacity != required) {
         ctx.last_error =
-            "LLG checkpoint v3 export requires exact executed CUDA receipt and queried capacity";
+            "LLG checkpoint v4 export requires exact executed CUDA receipt, workspace identity, and queried capacity";
         return FULLMAG_FDM_ERR_INVALID;
     }
     if (ctx.gpu_transport_active_attempt_id != 0 ||
         ctx.gpu_transport_pre_step_m_valid || ctx.accepted_step_pending) {
-        ctx.last_error = "LLG checkpoint v3 export requires an accepted step boundary";
+        ctx.last_error = "LLG checkpoint v4 export requires an accepted step boundary";
         return FULLMAG_FDM_ERR_INVALID;
     }
     std::vector<std::byte> payload(static_cast<size_t>(required), std::byte{0});
-    HeaderV3 header{};
+    HeaderV4 header{};
     header.magic0 = kMagic0;
     header.magic1 = kMagic1;
-    header.info = checkpoint_info_v3(ctx, required, mask);
+    header.info = checkpoint_info_v4(ctx, required, mask);
     std::memcpy(payload.data(), &header, sizeof(header));
     uint64_t offset = sizeof(header);
     if (!copy_device_to_host(ctx, ctx.m, payload.data(), offset) ||
@@ -599,7 +656,7 @@ int context_llg_checkpoint_export_v3(
         return FULLMAG_FDM_ERR_CUDA;
     }
     if (offset != required) {
-        ctx.last_error = "LLG checkpoint v3 export internal size mismatch";
+        ctx.last_error = "LLG checkpoint v4 export internal size mismatch";
         return FULLMAG_FDM_ERR_INTERNAL;
     }
     header.payload_checksum = checksum(payload.data(), required);
@@ -609,17 +666,17 @@ int context_llg_checkpoint_export_v3(
     return FULLMAG_FDM_OK;
 }
 
-int context_llg_checkpoint_import_v3(
+int context_llg_checkpoint_import_v4(
     Context &ctx,
     const void *source,
     uint64_t exact_bytes,
-    const fullmag_fdm_llg_checkpoint_info_v3 &expected_info)
+    const fullmag_fdm_llg_checkpoint_info_v4 &expected_info)
 {
     uint64_t required = 0;
     uint32_t expected_mask = 0;
-    if (!source || !required_bytes_v3(ctx, required, expected_mask) ||
-        exact_bytes != required || exact_bytes < sizeof(HeaderV3)) {
-        ctx.last_error = "LLG checkpoint v3 size, identity, or context mismatch";
+    if (!source || !required_bytes_v4(ctx, required, expected_mask) ||
+        exact_bytes != required || exact_bytes < sizeof(HeaderV4)) {
+        ctx.last_error = "LLG checkpoint v4 size, identity, or context mismatch";
         return FULLMAG_FDM_ERR_ABI;
     }
     if (ctx.step_count != 0 || ctx.current_time != 0.0 ||
@@ -627,33 +684,45 @@ int context_llg_checkpoint_import_v3(
         ctx.gpu_transport_active_attempt_id != 0 ||
         ctx.gpu_transport_rhs.active || ctx.gpu_transport_pre_step_m_valid ||
         ctx.gpu_transport_pre_step_abm_valid) {
-        ctx.last_error = "LLG checkpoint v3 import requires a fresh unbound context";
+        ctx.last_error = "LLG checkpoint v4 import requires a fresh unbound context";
         return FULLMAG_FDM_ERR_INVALID;
     }
 
-    HeaderV3 raw_header{};
+    HeaderV4 raw_header{};
     std::memcpy(&raw_header, source, sizeof(raw_header));
-    const auto local_identity = checkpoint_info_v3(ctx, exact_bytes, expected_mask);
+    const auto local_identity =
+        checkpoint_info_v4(ctx, exact_bytes, expected_mask);
     if (raw_header.magic0 != kMagic0 || raw_header.magic1 != kMagic1 ||
-        raw_header.info.schema_version != FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3 ||
-        raw_header.info.struct_size != sizeof(raw_header.info) ||
-        std::memcmp(&raw_header.info.execution_identity,
-                    &local_identity.execution_identity,
-                    sizeof(raw_header.info.execution_identity)) != 0 ||
+        raw_header.info.schema_version != FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4 ||
+        raw_header.info.struct_size != sizeof(raw_header.info)) {
+        ctx.last_error = "LLG checkpoint v4 header identity mismatch";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    if (std::memcmp(
+            &raw_header.info.workspace_dependency_identity,
+            &local_identity.workspace_dependency_identity,
+            sizeof(raw_header.info.workspace_dependency_identity)) != 0) {
+        ctx.last_error = "LLG checkpoint v4 workspace dependency identity mismatch";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    if (std::memcmp(
+            &raw_header.info.execution_identity,
+            &local_identity.execution_identity,
+            sizeof(raw_header.info.execution_identity)) != 0 ||
         raw_header.info.array_mask != expected_mask ||
         raw_header.info.cell_count != ctx.cell_count ||
         raw_header.info.payload_bytes != exact_bytes ||
         raw_header.info.thermal_seed != ctx.thermal_seed ||
         raw_header.info.rng_algorithm != local_identity.rng_algorithm ||
         raw_header.info.rng_realization != local_identity.rng_realization ||
-        !info_equal_v3(raw_header.info, expected_info)) {
-        ctx.last_error = "LLG checkpoint v3 execution or RNG identity mismatch";
+        !info_equal_v4(raw_header.info, expected_info)) {
+        ctx.last_error = "LLG checkpoint v4 execution or RNG identity mismatch";
         return FULLMAG_FDM_ERR_ABI;
     }
 
     std::vector<std::byte> payload(static_cast<size_t>(exact_bytes));
     std::memcpy(payload.data(), source, static_cast<size_t>(exact_bytes));
-    HeaderV3 header{};
+    HeaderV4 header{};
     std::memcpy(&header, payload.data(), sizeof(header));
     const uint64_t stored_checksum = header.payload_checksum;
     header.payload_checksum = 0;
@@ -684,7 +753,7 @@ int context_llg_checkpoint_import_v3(
           header.info.fsal_projection_policy_identity == 0 ||
           header.info.fsal_integrator_identity == 0 ||
           header.info.fsal_precision_identity == 0))) {
-        ctx.last_error = "LLG checkpoint v3 integrity or state identity mismatch";
+        ctx.last_error = "LLG checkpoint v4 integrity or state identity mismatch";
         return FULLMAG_FDM_ERR_ABI;
     }
 
@@ -713,7 +782,7 @@ int context_llg_checkpoint_import_v3(
         return FULLMAG_FDM_ERR_CUDA;
     }
     if (offset != exact_bytes) {
-        ctx.last_error = "LLG checkpoint v3 import internal size mismatch";
+        ctx.last_error = "LLG checkpoint v4 import internal size mismatch";
         return FULLMAG_FDM_ERR_INTERNAL;
     }
     context_commit_checkpoint_import_staging(

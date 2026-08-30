@@ -1371,6 +1371,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
+        ctx->exchange_lut_host = std::move(lut_host);
     }
     if (plan->demag_kernel_spectrum_len != 0 &&
         !context_upload_demag_kernel_spectra(
@@ -1466,6 +1467,9 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
     if (!context_refresh_observables(*ctx)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (!context_build_workspace_dependency_identity_v1(*ctx, *plan)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 
@@ -2767,6 +2771,28 @@ int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
 #endif
 }
 
+int fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_workspace_dependency_identity_v1 *out_identity)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_identity) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (out_identity->abi_version !=
+            FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1 ||
+        out_identity->struct_size != sizeof(*out_identity) ||
+        !ctx->workspace_dependency_identity_v1_valid) {
+        ctx->last_error = "workspace dependency identity v1 is unavailable or ABI-incompatible";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    *out_identity = ctx->workspace_dependency_identity_v1;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)out_identity;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_llg_checkpoint_query_size_v3(
     fullmag_fdm_backend *handle,
     uint64_t *out_required_bytes)
@@ -2811,6 +2837,57 @@ int fullmag_fdm_backend_llg_checkpoint_import_v3(
         return FULLMAG_FDM_ERR_INVALID;
     }
     return context_llg_checkpoint_import_v3(
+        *ctx, source, exact_bytes, *expected_info);
+#else
+    (void)handle; (void)source; (void)exact_bytes; (void)expected_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_required_bytes) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_query_size_v4(*ctx, *out_required_bytes);
+#else
+    (void)handle; (void)out_required_bytes;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_export_v4(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v4 *out_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !destination || !out_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_export_v4(
+        *ctx, destination, exact_capacity, *out_info);
+#else
+    (void)handle; (void)destination; (void)exact_capacity; (void)out_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_import_v4(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v4 *expected_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    return context_llg_checkpoint_import_v4(
         *ctx, source, exact_bytes, *expected_info);
 #else
     (void)handle; (void)source; (void)exact_bytes; (void)expected_info;

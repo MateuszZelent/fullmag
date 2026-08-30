@@ -499,6 +499,8 @@ struct Context {
         std::make_shared<ExecutionReceiptState>();
     fullmag_fdm_checkpoint_execution_identity_v3 checkpoint_execution_identity_v3{};
     bool checkpoint_execution_identity_v3_valid = false;
+    fullmag_fdm_workspace_dependency_identity_v1 workspace_dependency_identity_v1{};
+    bool workspace_dependency_identity_v1_valid = false;
 
 
     // Step counter
@@ -733,6 +735,7 @@ struct Context {
     uint64_t preview_download_scratch_len_bytes = 0;
     std::vector<uint8_t> active_mask_host;
     std::vector<uint32_t> region_mask_host;
+    std::vector<double> exchange_lut_host;
 
     // Demag FFT resources
     uint32_t fft_nx = 0;
@@ -1589,6 +1592,20 @@ int context_llg_checkpoint_import_v3(
     const void *source,
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v3 &expected_info);
+bool context_build_workspace_dependency_identity_v1(
+    Context &ctx, const fullmag_fdm_plan_desc &plan);
+int context_llg_checkpoint_query_size_v4(
+    Context &ctx, uint64_t &out_required_bytes);
+int context_llg_checkpoint_export_v4(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v4 &out_info);
+int context_llg_checkpoint_import_v4(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v4 &expected_info);
 
 bool context_bind_gpu_transport_rhs(
     Context &ctx,

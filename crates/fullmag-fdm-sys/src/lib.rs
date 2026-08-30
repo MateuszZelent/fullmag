@@ -553,7 +553,9 @@ pub struct fullmag_fdm_llg_checkpoint_info_v2 {
 }
 
 pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3: u32 = 3;
+pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4: u32 = 4;
 pub const FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3: u32 = 3;
+pub const FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1: u32 = 1;
 pub const FULLMAG_FDM_CHECKPOINT_BACKEND_AUTO: u32 = 2;
 pub const FULLMAG_FDM_CHECKPOINT_POLICY_STRICT: u32 = 1;
 pub const FULLMAG_FDM_CHECKPOINT_POLICY_EXTENDED: u32 = 2;
@@ -594,10 +596,76 @@ pub struct fullmag_fdm_checkpoint_execution_identity_v3 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fdm_workspace_dependency_identity_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub grid_nx: u32,
+    pub grid_ny: u32,
+    pub grid_nz: u32,
+    pub fft_nx: u32,
+    pub fft_ny: u32,
+    pub fft_nz: u32,
+    pub precision: u32,
+    pub integrator: u32,
+    pub periodic_axis_mask: u32,
+    pub reserved0: u32,
+    pub grid_dx: f64,
+    pub grid_dy: f64,
+    pub grid_dz: f64,
+    pub mask_topology_sha256: [u8; 32],
+    pub material_layout_sha256: [u8; 32],
+    pub spectra_sha256: [u8; 32],
+    pub dependency_sha256: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fdm_llg_checkpoint_info_v3 {
     pub schema_version: u32,
     pub struct_size: u32,
     pub execution_identity: fullmag_fdm_checkpoint_execution_identity_v3,
+    pub array_mask: u32,
+    pub reserved0: u32,
+    pub cell_count: u64,
+    pub payload_bytes: u64,
+    pub step_count: u64,
+    pub accepted_step_index: u64,
+    pub accepted_state_revision: u64,
+    pub current_time: f64,
+    pub current_dt: f64,
+    pub thermal_seed: u64,
+    pub rng_algorithm: u32,
+    pub rng_realization: u32,
+    pub transport_attempt_generation: u64,
+    pub rhs_source_revision: u64,
+    pub rhs_field_revision: u64,
+    pub rhs_transport_revision: u64,
+    pub projection_policy_identity: u64,
+    pub fsal_valid: u32,
+    pub abm_startup: u32,
+    pub abm_last_dt: f64,
+    pub adaptive_enabled: u32,
+    pub adaptive_has_previous_error: u32,
+    pub adaptive_previous_error: f64,
+    pub fsal_accepted_state_revision: u64,
+    pub fsal_accepted_time_bits: u64,
+    pub fsal_accepted_dt_bits: u64,
+    pub fsal_source_revision: u64,
+    pub fsal_field_revision: u64,
+    pub fsal_transport_revision: u64,
+    pub fsal_transport_state_identity: u64,
+    pub fsal_projection_policy_identity: u64,
+    pub fsal_integrator_identity: u32,
+    pub fsal_precision_identity: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fdm_llg_checkpoint_info_v4 {
+    pub schema_version: u32,
+    pub struct_size: u32,
+    pub execution_identity: fullmag_fdm_checkpoint_execution_identity_v3,
+    pub workspace_dependency_identity: fullmag_fdm_workspace_dependency_identity_v1,
     pub array_mask: u32,
     pub reserved0: u32,
     pub cell_count: u64,
@@ -2058,6 +2126,11 @@ extern "C" {
         identity: *const fullmag_fdm_checkpoint_execution_identity_v3,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_identity: *mut fullmag_fdm_workspace_dependency_identity_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_llg_checkpoint_query_size_v3(
         handle: *mut fullmag_fdm_backend,
         out_required_bytes: *mut u64,
@@ -2075,6 +2148,25 @@ extern "C" {
         source: *const c_void,
         exact_bytes: u64,
         expected_info: *const fullmag_fdm_llg_checkpoint_info_v3,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+        handle: *mut fullmag_fdm_backend,
+        out_required_bytes: *mut u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_export_v4(
+        handle: *mut fullmag_fdm_backend,
+        destination: *mut c_void,
+        exact_capacity: u64,
+        out_info: *mut fullmag_fdm_llg_checkpoint_info_v4,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_import_v4(
+        handle: *mut fullmag_fdm_backend,
+        source: *const c_void,
+        exact_bytes: u64,
+        expected_info: *const fullmag_fdm_llg_checkpoint_info_v4,
     ) -> i32;
 
     pub fn fullmag_fdm_backend_execution_receipt_v1(
@@ -3163,6 +3255,61 @@ mod tests {
             offset_of!(fullmag_fdm_llg_checkpoint_info_v3, fsal_integrator_identity),
             312
         );
+    }
+
+    #[test]
+    fn llg_checkpoint_info_v4_binds_the_workspace_dependency_layout() {
+        assert_eq!(FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4, 4);
+        assert_eq!(FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1, 1);
+        assert_eq!(
+            size_of::<fullmag_fdm_workspace_dependency_identity_v1>(),
+            200
+        );
+        assert_eq!(
+            align_of::<fullmag_fdm_workspace_dependency_identity_v1>(),
+            8
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_workspace_dependency_identity_v1,
+                mask_topology_sha256
+            ),
+            72
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_workspace_dependency_identity_v1,
+                dependency_sha256
+            ),
+            168
+        );
+        assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v4>(), 520);
+        assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v4>(), 8);
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_llg_checkpoint_info_v4,
+                workspace_dependency_identity
+            ),
+            96
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v4, array_mask),
+            296
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v4, cell_count),
+            304
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v4, fsal_integrator_identity),
+            512
+        );
+        let _: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_workspace_dependency_identity_v1,
+        ) -> i32 = fullmag_fdm_backend_get_workspace_dependency_identity_v1;
+        let _: unsafe extern "C" fn(*mut fullmag_fdm_backend, *mut u64) -> i32 =
+            fullmag_fdm_backend_llg_checkpoint_query_size_v4;
     }
 
     #[test]

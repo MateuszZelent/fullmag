@@ -759,9 +759,10 @@ int main() {
         "RK4 full-stats metadata describes the staged accepted endpoint",
         failures);
     report(
-        contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3") &&
+        contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4") &&
             contains(header, "fullmag_fdm_checkpoint_execution_identity_v3") &&
-            contains(header, "fullmag_fdm_llg_checkpoint_info_v3") &&
+            contains(header, "fullmag_fdm_workspace_dependency_identity_v1") &&
+            contains(header, "fullmag_fdm_llg_checkpoint_info_v4") &&
             contains(header, "thermal_seed") &&
             contains(header, "rng_algorithm") &&
             contains(header, "rng_realization") &&
@@ -771,16 +772,18 @@ int main() {
             contains(checkpoint,
                 "fullmag_fdm_executed_unknown_operator_mask_locked(receipt) == 0") &&
             contains(checkpoint, "receipt.fallback_count == 0") &&
-            contains(checkpoint, "context_llg_checkpoint_import_v3") &&
+            contains(checkpoint, "legacy LLG checkpoint v3 import is unsupported") &&
+            contains(checkpoint, "context_llg_checkpoint_import_v4") &&
+            contains(checkpoint, "workspace dependency identity mismatch") &&
             contains(checkpoint, "context_prepare_checkpoint_import_staging") &&
             contains(checkpoint, "context_commit_checkpoint_import_staging") &&
             contains(checkpoint, "ctx.gpu_transport_pre_step_m") &&
-            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v3") &&
-            contains(runner, "NativeLlgCheckpointV3") &&
-            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v3") &&
+            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v4") &&
+            contains(runner, "NativeLlgCheckpointV4") &&
+            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v4") &&
             !contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v2"),
         "FDM-GPU-TRX-001-I2-RED",
-        "checkpoint v3 binds committed plan/receipt execution and RNG identity",
+        "checkpoint v4 binds workspace, committed plan/receipt execution and RNG identity",
         failures);
     report(
         contains(transaction_controller, "StepTransactionController") &&
@@ -873,21 +876,22 @@ int main() {
         failures);
     report(
         wrong_identity_rejects_without_mutation &&
-            contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3") &&
-            contains(header, "fullmag_fdm_llg_checkpoint_info_v3") &&
+            contains(header, "FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4") &&
+            contains(header, "fullmag_fdm_llg_checkpoint_info_v4") &&
             contains(header, "device_ordinal") &&
             contains(header, "requested_backend") &&
             contains(header, "resolved_backend") &&
             contains(header, "executed_backend") &&
             contains(header, "accepted_step_index") &&
             contains(checkpoint, "legacy LLG checkpoint v1 import is unsupported") &&
-            contains(checkpoint, "context_llg_checkpoint_import_v3") &&
-            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v3") &&
-            contains(runner, "NativeLlgCheckpointV3") &&
-            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v3") &&
+            contains(checkpoint, "context_llg_checkpoint_import_v4") &&
+            contains(checkpoint, "legacy LLG checkpoint v3 import is unsupported") &&
+            contains(rust, "pub struct fullmag_fdm_llg_checkpoint_info_v4") &&
+            contains(runner, "NativeLlgCheckpointV4") &&
+            contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v4") &&
             !contains(runner, "fullmag_fdm_backend_llg_checkpoint_import_v1"),
         "FDM-GPU-TRX-001-F",
-        "checkpoint v3 binds exact execution and accepted stochastic identity while legacy imports fail closed",
+        "checkpoint v4 binds exact workspace/execution/stochastic identity while legacy imports fail closed",
         failures);
     report(
         !unknown_decision.allowed &&
@@ -960,14 +964,14 @@ int main() {
         failures);
     report(
         contains(checkpoint, "legacy LLG checkpoint v1 import is unsupported") &&
-            contains(checkpoint, "context_llg_checkpoint_import_v3") &&
+            contains(checkpoint, "context_llg_checkpoint_import_v4") &&
             contains(checkpoint, "ctx.accepted_step_index = header.info.accepted_step_index") &&
             !contains(checkpoint, "ctx.fsal_valid = header.info.fsal_valid != 0") &&
             contains(checkpoint,
                 "FULLMAG_FDM_FSAL_INVALIDATION_CHECKPOINT_RESTORE") &&
             contains(checkpoint, "checkpoint_identity_v3_valid"),
         "FDM-GPU-NUM-003-D",
-        "checkpoint v3 restores exact RNG identity, invalidates FSAL, and legacy imports fail closed",
+        "checkpoint v4 restores exact RNG identity, invalidates FSAL, and legacy imports fail closed",
         failures);
     report(
         contains(header, "fullmag_fdm_fsal_invalidation_reason") &&
@@ -1137,6 +1141,19 @@ int main() {
                   "checkpoint v3 thermal seed offset changed");
     static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v3, fsal_integrator_identity) == 312,
                   "checkpoint v3 FSAL realization offset changed");
+    static_assert(sizeof(fullmag_fdm_workspace_dependency_identity_v1) == 200,
+                  "workspace dependency identity v1 layout changed");
+    static_assert(offsetof(fullmag_fdm_workspace_dependency_identity_v1,
+                           dependency_sha256) == 168,
+                  "workspace dependency digest offset changed");
+    static_assert(sizeof(fullmag_fdm_llg_checkpoint_info_v4) == 520,
+                  "checkpoint v4 exact-workspace layout changed");
+    static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v4,
+                           workspace_dependency_identity) == 96,
+                  "checkpoint v4 workspace identity offset changed");
+    static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v4,
+                           fsal_integrator_identity) == 512,
+                  "checkpoint v4 FSAL realization offset changed");
 
     if (failures != 0) {
         std::fprintf(stderr, "FDM FSAL/retry transaction contract: %d RED checks\n", failures);
