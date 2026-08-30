@@ -1269,7 +1269,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         }
     }
 
-    if (!context_preflight_single_grid_workspace(*ctx)) {
+    if (!context_preflight_single_grid_workspace(*ctx, *plan)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 

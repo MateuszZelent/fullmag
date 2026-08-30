@@ -130,16 +130,34 @@ cudaError_t context_gpu_workspace_cuda_malloc_raw(
     return status;
 }
 
-bool context_preflight_single_grid_workspace(Context &ctx)
+bool context_preflight_single_grid_workspace(
+    Context &ctx, const fullmag_fdm_plan_desc &plan)
 {
+    constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    uint64_t required_aggregate_workspace_bytes = 0;
+    auto overflow = [&]() -> bool {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: aggregate workspace byte count overflows uint64_t";
+        return false;
+    };
+    auto add_bytes = [&](uint64_t bytes) -> bool {
+        if (required_aggregate_workspace_bytes > maximum - bytes) {
+            return overflow();
+        }
+        required_aggregate_workspace_bytes += bytes;
+        return true;
+    };
+    auto add_product = [&](uint64_t count, uint64_t element_bytes) -> bool {
+        if (count != 0 && element_bytes > maximum / count) {
+            return overflow();
+        }
+        return add_bytes(count * element_bytes);
+    };
+
     const uint64_t scalar_bytes =
         ctx.precision == FULLMAG_FDM_PRECISION_SINGLE
             ? sizeof(float) : sizeof(double);
-    if (ctx.cell_count > std::numeric_limits<uint64_t>::max() / scalar_bytes) {
-        ctx.last_error =
-            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
-        return false;
-    }
+    if (ctx.cell_count > maximum / scalar_bytes) return overflow();
     const uint64_t component_bytes = ctx.cell_count * scalar_bytes;
 
     uint64_t vector_field_count = 10;
@@ -163,40 +181,172 @@ bool context_preflight_single_grid_workspace(Context &ctx)
     if (ctx.has_oersted_field) ++vector_field_count;
 
     // Base solver fields, scalar energy density, and both four-slot snapshot
-    // pools are mandatory setup-owned device storage.  cuFFT work areas,
-    // spectra, masks, material fields, and fixed-size control records only add
-    // to this lower bound.
+    // pools are mandatory setup-owned device storage.
     constexpr uint64_t snapshot_vector_fields =
         kFdmAsyncFieldSnapshotPoolCapacity +
         kFdmAsyncPreviewSnapshotPoolCapacity;
     const uint64_t scalar_component_count =
         3 * (vector_field_count + snapshot_vector_fields) + 1;
-    if (component_bytes != 0 &&
-        scalar_component_count >
-            std::numeric_limits<uint64_t>::max() / component_bytes) {
-        ctx.last_error =
-            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
-        return false;
-    }
-    uint64_t required_minimum_workspace_bytes =
-        scalar_component_count * component_bytes;
+    if (!add_product(scalar_component_count, component_bytes)) return false;
 
-    // The two reduction arrays are always FP64, including FP32 execution.
-    if (ctx.cell_count >
-        std::numeric_limits<uint64_t>::max() / (2 * sizeof(double))) {
-        ctx.last_error =
-            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
+    // Reduction arrays are always FP64. Fixed control, accepted-batch, and
+    // attempt-trace records are allocated in the same setup transaction.
+    if (ctx.cell_count > maximum - 255ULL) return overflow();
+    const uint64_t adaptive_metric_blocks = (ctx.cell_count + 255ULL) / 256ULL;
+    if (adaptive_metric_blocks > maximum / 3) return overflow();
+    const uint64_t scratch_len = std::max<uint64_t>(
+        ctx.cell_count, uint64_t{3} * adaptive_metric_blocks);
+    if (!add_product(scratch_len, uint64_t{2} * sizeof(double)) ||
+        !add_bytes(sizeof(AdaptiveDeviceControl)) ||
+        !add_bytes(sizeof(AdaptiveDeviceBatchState)) ||
+        !add_product(
+            ADAPTIVE_ACCEPTED_BATCH_CAPACITY,
+            sizeof(AdaptiveDeviceControl)) ||
+        !add_product(
+            FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+            sizeof(fullmag_fdm_adaptive_attempt_v1))) {
         return false;
     }
-    const uint64_t reduction_bytes =
-        ctx.cell_count * 2 * sizeof(double);
-    if (required_minimum_workspace_bytes >
-        std::numeric_limits<uint64_t>::max() - reduction_bytes) {
-        ctx.last_error =
-            "fdm_gpu_workspace_oom_preflight: minimum workspace byte count overflows uint64_t";
+
+    uint64_t mask_bytes_per_cell = 0;
+    if (ctx.has_active_mask) ++mask_bytes_per_cell;
+    if (ctx.has_frozen_mask) ++mask_bytes_per_cell;
+    if (ctx.has_sot_active_mask) ++mask_bytes_per_cell;
+    if (ctx.has_slonczewski_active_mask) ++mask_bytes_per_cell;
+    if (!add_product(ctx.cell_count, mask_bytes_per_cell)) return false;
+    if (ctx.has_region_mask &&
+        !add_product(ctx.cell_count, sizeof(uint32_t))) {
         return false;
     }
-    required_minimum_workspace_bytes += reduction_bytes;
+    if (ctx.has_exchange_lut &&
+        !add_product(
+            uint64_t{FULLMAG_FDM_MAX_EXCHANGE_REGIONS} *
+                FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            sizeof(double))) {
+        return false;
+    }
+
+    if (ctx.enable_demag) {
+        uint64_t fft_nx = ctx.fft_nx;
+        uint64_t fft_ny = ctx.fft_ny;
+        uint64_t fft_nz = ctx.fft_nz;
+        if (fft_nx == 0 || fft_ny == 0 || fft_nz == 0) {
+            fft_nx = uint64_t{2} * ctx.nx;
+            fft_ny = uint64_t{2} * ctx.ny;
+            fft_nz = ctx.thin_film_2d_demag ? 1 : uint64_t{2} * ctx.nz;
+        }
+        if (fft_nx > UINT32_MAX || fft_ny > UINT32_MAX ||
+            fft_nz > UINT32_MAX || fft_nx == 0 || fft_ny == 0 ||
+            fft_nz == 0 || fft_nx > maximum / fft_ny ||
+            fft_nx * fft_ny > maximum / fft_nz) {
+            return overflow();
+        }
+        const uint64_t fft_cell_count = fft_nx * fft_ny * fft_nz;
+        if (fft_cell_count >
+            static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+            ctx.last_error =
+                "demag FFT component stride exceeds cuFFT PlanMany limit";
+            return false;
+        }
+        ctx.fft_nx = static_cast<uint32_t>(fft_nx);
+        ctx.fft_ny = static_cast<uint32_t>(fft_ny);
+        ctx.fft_nz = static_cast<uint32_t>(fft_nz);
+
+        const uint64_t complex_bytes =
+            ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? sizeof(cufftDoubleComplex) : sizeof(cufftComplex);
+        if (fft_cell_count > maximum / 6 ||
+            !add_product(uint64_t{3} * fft_cell_count, complex_bytes) ||
+            !add_product(uint64_t{6} * fft_cell_count, complex_bytes)) {
+            return false;
+        }
+
+        const int rank = ctx.thin_film_2d_demag ? 2 : 3;
+        int dims[3] = {};
+        if (ctx.thin_film_2d_demag) {
+            dims[0] = static_cast<int>(fft_ny);
+            dims[1] = static_cast<int>(fft_nx);
+        } else {
+            dims[0] = static_cast<int>(fft_nz);
+            dims[1] = static_cast<int>(fft_ny);
+            dims[2] = static_cast<int>(fft_nx);
+        }
+        int inembed[3] = {dims[0], dims[1], dims[2]};
+        int onembed[3] = {dims[0], dims[1], dims[2]};
+        const int component_stride = static_cast<int>(fft_cell_count);
+        size_t estimated_work_area_bytes = 0;
+        const cufftResult estimate_status = cufftEstimateMany(
+            rank,
+            dims,
+            inembed,
+            1,
+            component_stride,
+            onembed,
+            1,
+            component_stride,
+            ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? CUFFT_Z2Z : CUFFT_C2C,
+            3,
+            &estimated_work_area_bytes);
+        if (estimate_status != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftEstimateMany(demag, batch=3)", estimate_status);
+            return false;
+        }
+        if (!add_bytes(static_cast<uint64_t>(estimated_work_area_bytes))) {
+            return false;
+        }
+    }
+
+    uint64_t optional_f64_fields = 0;
+    if (ctx.has_uniaxial_anisotropy) {
+        if (plan.ku1_field != nullptr) ++optional_f64_fields;
+        if (plan.ku2_field != nullptr) ++optional_f64_fields;
+    }
+    if (ctx.has_cubic_anisotropy) {
+        if (plan.kc1_field != nullptr) ++optional_f64_fields;
+        if (plan.kc2_field != nullptr) ++optional_f64_fields;
+        if (plan.kc3_field != nullptr) ++optional_f64_fields;
+    }
+    const bool uploads_boundary =
+        plan.boundary_correction != FULLMAG_FDM_BOUNDARY_NONE &&
+        plan.volume_fraction != nullptr &&
+        plan.volume_fraction_len == ctx.cell_count;
+    if (uploads_boundary) {
+        ++optional_f64_fields;
+        if (plan.face_link_xp && plan.face_link_xm &&
+            plan.face_link_yp && plan.face_link_ym &&
+            plan.face_link_zp && plan.face_link_zm) {
+            optional_f64_fields += 6;
+        }
+        if (plan.boundary_correction == FULLMAG_FDM_BOUNDARY_FULL &&
+            plan.delta_xp && plan.delta_xm &&
+            plan.delta_yp && plan.delta_ym &&
+            plan.delta_zp && plan.delta_zm) {
+            optional_f64_fields += 6;
+        }
+    }
+    if (optional_f64_fields != 0) {
+        if (ctx.cell_count > maximum / optional_f64_fields) return overflow();
+        const uint64_t optional_f64_values =
+            optional_f64_fields * ctx.cell_count;
+        if (!add_product(optional_f64_values, sizeof(double))) return false;
+    }
+
+    if (uploads_boundary && plan.has_demag_boundary_corr &&
+        plan.demag_corr_target_idx && plan.demag_corr_source_idx &&
+        plan.demag_corr_tensor && plan.demag_corr_target_count != 0 &&
+        plan.demag_corr_stencil_size != 0) {
+        const uint64_t targets = plan.demag_corr_target_count;
+        const uint64_t stencil = plan.demag_corr_stencil_size;
+        if (targets > maximum / stencil) return overflow();
+        const uint64_t pairs = targets * stencil;
+        if (!add_product(targets, sizeof(int32_t)) ||
+            !add_product(pairs, sizeof(int32_t)) ||
+            pairs > maximum / 6 ||
+            !add_product(6 * pairs, sizeof(double))) {
+            return false;
+        }
+    }
 
     size_t free_device_bytes = 0;
     size_t total_device_bytes = 0;
@@ -217,10 +367,10 @@ bool context_preflight_single_grid_workspace(Context &ctx)
     const uint64_t free_bytes = static_cast<uint64_t>(free_device_bytes);
     const uint64_t usable_device_bytes =
         free_bytes > safety_reserve ? free_bytes - safety_reserve : 0;
-    if (required_minimum_workspace_bytes > usable_device_bytes) {
+    if (required_aggregate_workspace_bytes > usable_device_bytes) {
         ctx.last_error =
-            "fdm_gpu_workspace_oom_preflight: required_minimum_workspace_bytes=" +
-            std::to_string(required_minimum_workspace_bytes) +
+            "fdm_gpu_workspace_oom_preflight: required_aggregate_workspace_bytes=" +
+            std::to_string(required_aggregate_workspace_bytes) +
             " usable_device_bytes=" + std::to_string(usable_device_bytes) +
             " free_device_bytes=" + std::to_string(free_bytes) +
             " total_device_bytes=" +

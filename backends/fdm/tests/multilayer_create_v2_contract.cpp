@@ -9,10 +9,12 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <vector>
 
 namespace {
 
@@ -249,6 +251,93 @@ uint32_t aggregate_oversized_fp64_cell_count() {
     return static_cast<uint32_t>(oversized_cells);
 }
 
+class DeviceMemoryReserve {
+public:
+    ~DeviceMemoryReserve() {
+        for (void *allocation : allocations_) {
+            cudaFree(allocation);
+        }
+    }
+
+    uint64_t reserve_until_usable_bytes(uint64_t target_usable_bytes) {
+        constexpr uint64_t chunk_bytes = uint64_t{256} * 1024 * 1024;
+        for (;;) {
+            size_t free_bytes = 0;
+            size_t total_bytes = 0;
+            check(cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess,
+                  "cudaMemGetInfo failed while reserving optional-preflight budget");
+            const uint64_t safety_reserve = std::max(
+                uint64_t{256} * 1024 * 1024,
+                static_cast<uint64_t>(total_bytes) / 20);
+            const uint64_t usable_bytes =
+                static_cast<uint64_t>(free_bytes) > safety_reserve
+                    ? static_cast<uint64_t>(free_bytes) - safety_reserve
+                    : 0;
+            if (usable_bytes <= target_usable_bytes) {
+                return usable_bytes;
+            }
+            const uint64_t request = std::min(
+                chunk_bytes, usable_bytes - target_usable_bytes);
+            void *allocation = nullptr;
+            check(cudaMalloc(&allocation, static_cast<size_t>(request)) == cudaSuccess,
+                  "failed to reserve device memory for optional-preflight RED");
+            allocations_.push_back(allocation);
+        }
+    }
+
+private:
+    std::vector<void *> allocations_;
+};
+
+void optional_demag_workspace_is_rejected_before_any_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("optional demag preflight check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    DeviceMemoryReserve reserve;
+    const uint64_t usable_bytes = reserve.reserve_until_usable_bytes(
+        uint64_t{512} * 1024 * 1024);
+    check(usable_bytes > uint64_t{128} * 1024 * 1024,
+          "test device has too little usable memory for optional-preflight RED");
+
+    // The current mandatory Heun lower bound uses 456 bytes/cell in FP64.
+    // Choosing one cell per 550 usable bytes leaves that lower bound below the
+    // budget, while the mandatory demag FFT buffers and six spectra raise the
+    // setup above it.  A complete aggregate preflight must reject before any
+    // backend allocation or cuFFT plan is created.
+    const uint64_t cell_count = usable_bytes / 550;
+    check(cell_count > 0 && cell_count <= UINT32_MAX,
+          "optional-preflight grid is not representable by the public ABI");
+    std::vector<double> initial_m(static_cast<size_t>(3 * cell_count), 0.0);
+    for (uint64_t index = 0; index < cell_count; ++index) {
+        initial_m[static_cast<size_t>(3 * index)] = 1.0;
+    }
+    std::vector<double> spectrum(static_cast<size_t>(2 * cell_count), 0.0);
+
+    fullmag_fdm_plan_desc plan = make_single_grid_plan(initial_m.data());
+    plan.grid.nx = static_cast<uint32_t>(cell_count);
+    plan.initial_magnetization_len = 3 * cell_count;
+    plan.enable_demag = 1;
+    plan.demag_fft_nx = static_cast<uint32_t>(cell_count);
+    plan.demag_fft_ny = 1;
+    plan.demag_fft_nz = 1;
+    plan.demag_kernel_spectrum_len = 2 * cell_count;
+    plan.demag_kernel_xx_spectrum = spectrum.data();
+    plan.demag_kernel_yy_spectrum = spectrum.data();
+    plan.demag_kernel_zz_spectrum = spectrum.data();
+    plan.demag_kernel_xy_spectrum = spectrum.data();
+    plan.demag_kernel_xz_spectrum = spectrum.data();
+    plan.demag_kernel_yz_spectrum = spectrum.data();
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr,
+          "optional demag oversized setup should return an error handle");
+    check_error_contains(handle, "required_aggregate_workspace_bytes=");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void oversized_single_grid_allocation_is_rejected_by_memory_preflight() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("device-memory preflight check skipped: CUDA backend unavailable\n");
@@ -266,7 +355,7 @@ void oversized_single_grid_allocation_is_rejected_by_memory_preflight() {
     check(handle != nullptr,
           "oversized setup allocation should return an error handle");
     check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
-    check_error_contains(handle, "required_minimum_workspace_bytes=");
+    check_error_contains(handle, "required_aggregate_workspace_bytes=");
     check_error_contains(handle, "usable_device_bytes=");
     check_failed_before_workspace_setup(handle);
     fullmag_fdm_backend_destroy(handle);
@@ -314,7 +403,7 @@ void aggregate_single_grid_workspace_is_rejected_before_any_allocation() {
     check(handle != nullptr,
           "aggregate oversized setup should return an error handle");
     check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
-    check_error_contains(handle, "required_minimum_workspace_bytes=");
+    check_error_contains(handle, "required_aggregate_workspace_bytes=");
     check_failed_before_workspace_setup(handle);
     fullmag_fdm_backend_destroy(handle);
 }
@@ -728,6 +817,7 @@ int main() {
     oversized_single_grid_allocation_is_rejected_by_memory_preflight();
     oversized_multilayer_allocation_is_rejected_by_memory_preflight();
     aggregate_single_grid_workspace_is_rejected_before_any_allocation();
+    optional_demag_workspace_is_rejected_before_any_allocation();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();
     valid_plan_runs_fixed_step_rk23_without_demag();
