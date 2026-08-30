@@ -32,6 +32,9 @@ extern void launch_exchange_field_fp32(Context &ctx);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
+extern bool launch_effective_field_and_base_llg_rhs_fp32(
+    Context &ctx, double evaluation_time, DeviceVectorField &rhs_out,
+    cudaStream_t stream);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
@@ -426,17 +429,26 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx, step_start_time);
-    if (abort_step_from_tmp(ctx, false)) return;
-
     // Step 2: k1 = RHS(m, H_eff)
-    llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
-        (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
-        (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
-        (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
-        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Heun fp32 LLG RHS launch");
+    const bool fuse_local_pipeline =
+        !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt && !ctx.has_slonczewski_stt && !ctx.has_sot;
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp32(
+                ctx, step_start_time, ctx.k1, nullptr)) return;
+    } else {
+        launch_effective_field_fp32(ctx, step_start_time);
+        if (abort_step_from_tmp(ctx, false)) return;
+        llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+            (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
+            (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
+            (float*)ctx.k1.x, (float*)ctx.k1.y, (float*)ctx.k1.z,
+            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "Heun fp32 LLG RHS launch");
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 3: predictor → m
@@ -463,17 +475,23 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx, step_start_time + dt);
-    if (abort_step_from_tmp(ctx, false)) return;
-
     // Step 5: k2 = RHS(m_pred, H_eff_pred) → store in h_ex
-    llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
-        (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
-        (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
-        (float*)ctx.h_ex.x, (float*)ctx.h_ex.y, (float*)ctx.h_ex.z,
-        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "minimize fp32 LLG RHS launch");
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp32(
+                ctx, step_start_time + dt, ctx.h_ex, nullptr)) return;
+    } else {
+        launch_effective_field_fp32(ctx, step_start_time + dt);
+        if (abort_step_from_tmp(ctx, false)) return;
+        llg_rhs_fp32_kernel<<<grid, BLOCK_SIZE>>>(
+            (const float*)ctx.m.x, (const float*)ctx.m.y, (const float*)ctx.m.z,
+            (const float*)ctx.work.x, (const float*)ctx.work.y, (const float*)ctx.work.z,
+            (float*)ctx.h_ex.x, (float*)ctx.h_ex.y, (float*)ctx.h_ex.z,
+            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "minimize fp32 LLG RHS launch");
+    }
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 6: corrector → m

@@ -2913,6 +2913,10 @@ pub struct FdmGpuExecutionReceipt {
     pub adaptive_execution: Option<FdmGpuAdaptiveExecutionTelemetry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_numerics: Option<FdmGpuAdaptiveNumericsTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_pipeline: Option<FdmGpuLocalPipelineTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_workspace: Option<FdmGpuWorkspaceTelemetry>,
     pub validation_state: String,
     pub accounting_valid: bool,
 }
@@ -2927,6 +2931,63 @@ pub struct FdmGpuAdaptiveExecutionTelemetry {
     pub terminal_control_host_sync_count: u64,
     pub step_completion_host_sync_count: u64,
     pub stats_none_host_sync_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuLocalPipelineTelemetry {
+    pub requested_policy: String,
+    pub resolved_realization: String,
+    pub executed_realization: String,
+    pub accounting_valid: bool,
+    pub precision: String,
+    pub integrator: String,
+    pub metric_valid_mask: u64,
+    pub required_operator_mask: u64,
+    pub active_feature_mask: u64,
+    pub source_revision: u64,
+    pub field_revision: u64,
+    pub direct_fused_field_rhs_launch_count: u64,
+    pub direct_unfused_effective_field_launch_count: u64,
+    pub direct_unfused_rhs_launch_count: u64,
+    pub captured_fused_field_rhs_node_count: u64,
+    pub captured_unfused_effective_field_node_count: u64,
+    pub captured_unfused_rhs_node_count: u64,
+    pub graph_build_count: u64,
+    pub graph_replay_count: u64,
+    pub graph_recapture_count: u64,
+    pub graph_attempt_execution_count: u64,
+    pub graph_fused_field_rhs_execution_count: u64,
+    pub graph_unfused_effective_field_execution_count: u64,
+    pub graph_unfused_rhs_execution_count: u64,
+    pub profiled_dram_read_bytes: u64,
+    pub profiled_dram_write_bytes: u64,
+    pub profiled_launch_time_ns: u64,
+    pub profiled_achieved_occupancy_permyriad: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmGpuWorkspaceTelemetry {
+    pub accounting_valid: bool,
+    pub setup_complete: bool,
+    pub precision: String,
+    pub integrator: String,
+    pub metric_valid_mask: u64,
+    pub workspace_revision: u64,
+    pub source_revision: u64,
+    pub field_revision: u64,
+    pub setup_device_allocation_count: u64,
+    pub setup_device_allocation_bytes: u64,
+    pub total_device_allocation_count: u64,
+    pub total_device_allocation_bytes: u64,
+    pub step_device_allocation_count: u64,
+    pub step_device_allocation_bytes: u64,
+    pub setup_fft_plan_creation_count: u64,
+    pub total_fft_plan_creation_count: u64,
+    pub step_fft_plan_creation_count: u64,
+    pub prepared_fft_workspace_count: u64,
+    pub workspace_bytes: u64,
+    pub peak_vram_bytes: u64,
+    pub observed_step_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3037,6 +3098,8 @@ impl FdmGpuExecutionReceipt {
             transfer_counts: FdmGpuTransferCounts::default(),
             adaptive_execution: None,
             adaptive_numerics: None,
+            local_pipeline: None,
+            gpu_workspace: None,
             validation_state: "unvalidated".to_string(),
             accounting_valid: false,
         }
@@ -3235,6 +3298,30 @@ mod fdm_gpu_execution_receipt_contract_tests {
                 max_attempt_norm_defect: 2.0e-15,
                 max_attempt_spin_rotation_radians: 0.5,
             }),
+            local_pipeline: None,
+            gpu_workspace: Some(FdmGpuWorkspaceTelemetry {
+                accounting_valid: true,
+                setup_complete: true,
+                precision: "double".into(),
+                integrator: "heun".into(),
+                metric_valid_mask: 0x1f,
+                workspace_revision: 3,
+                source_revision: 4,
+                field_revision: 5,
+                setup_device_allocation_count: 10,
+                setup_device_allocation_bytes: 1_000,
+                total_device_allocation_count: 10,
+                total_device_allocation_bytes: 1_000,
+                step_device_allocation_count: 0,
+                step_device_allocation_bytes: 0,
+                setup_fft_plan_creation_count: 2,
+                total_fft_plan_creation_count: 2,
+                step_fft_plan_creation_count: 0,
+                prepared_fft_workspace_count: 2,
+                workspace_bytes: 800,
+                peak_vram_bytes: 1_200,
+                observed_step_count: 7,
+            }),
             validation_state: "unvalidated".into(),
             accounting_valid: true,
         });
@@ -3273,6 +3360,8 @@ mod fdm_gpu_execution_receipt_contract_tests {
             receipt["adaptive_numerics"]["max_attempt_normalized_error"],
             1.5
         );
+        assert_eq!(receipt["gpu_workspace"]["step_device_allocation_count"], 0);
+        assert_eq!(receipt["gpu_workspace"]["prepared_fft_workspace_count"], 2);
     }
 }
 

@@ -85,6 +85,41 @@ cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
     return status;
 }
 
+cudaError_t context_gpu_workspace_cuda_malloc_raw(
+    Context &ctx,
+    void **destination,
+    size_t bytes)
+{
+    const cudaError_t status = ::cudaMalloc(destination, bytes);
+    if (status == cudaSuccess) {
+        context_note_gpu_workspace_allocation(ctx, *destination, bytes);
+    }
+    return status;
+}
+
+cudaError_t context_gpu_workspace_cuda_free(Context &ctx, void *pointer) {
+    const cudaError_t status = ::cudaFree(pointer);
+    if (status == cudaSuccess) {
+        context_note_gpu_workspace_free(ctx, pointer);
+    }
+    return status;
+}
+
+cufftResult context_gpu_workspace_cufft_create(
+    Context &ctx,
+    cufftHandle *plan)
+{
+    const cufftResult status = ::cufftCreate(plan);
+    if (status == CUFFT_SUCCESS) {
+        context_note_gpu_workspace_fft_plan_creation(ctx);
+    }
+    return status;
+}
+
+static cudaError_t fullmag_fdm_untracked_cuda_free(void *pointer) {
+    return ::cudaFree(pointer);
+}
+
 // Every host-boundary copy in this translation unit is routed through the
 // allocation-free receipt hook. Device-internal copies are intentionally not
 // classified as host transfers.
@@ -94,6 +129,13 @@ cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
 #define cudaMemcpyAsync(destination, source, bytes, kind, stream) \
     fullmag_fdm_receipt_cuda_memcpy_async( \
         const_cast<Context &>(ctx), destination, source, bytes, kind, stream)
+#define cudaMalloc(destination, bytes) \
+    context_gpu_workspace_cuda_malloc( \
+        const_cast<Context &>(ctx), destination, bytes)
+#define cudaFree(pointer) \
+    context_gpu_workspace_cuda_free(const_cast<Context &>(ctx), pointer)
+#define cufftCreate(plan) \
+    context_gpu_workspace_cufft_create(const_cast<Context &>(ctx), plan)
 
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
@@ -227,9 +269,9 @@ static void free_energy_density(Context &ctx) {
 }
 
 static void free_vector_field(DeviceVectorField &field) {
-    if (field.x) { cudaFree(field.x); field.x = nullptr; }
-    if (field.y) { cudaFree(field.y); field.y = nullptr; }
-    if (field.z) { cudaFree(field.z); field.z = nullptr; }
+    if (field.x) { fullmag_fdm_untracked_cuda_free(field.x); field.x = nullptr; }
+    if (field.y) { fullmag_fdm_untracked_cuda_free(field.y); field.y = nullptr; }
+    if (field.z) { fullmag_fdm_untracked_cuda_free(field.z); field.z = nullptr; }
 }
 
 static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &pool)
@@ -421,7 +463,7 @@ static void destroy_async_preview_snapshot_pool_resources(AsyncPreviewSnapshotPo
             slot.host_xyz = nullptr;
         }
         if (slot.device_xyz) {
-            cudaFree(slot.device_xyz);
+            fullmag_fdm_untracked_cuda_free(slot.device_xyz);
             slot.device_xyz = nullptr;
         }
     }
@@ -764,7 +806,7 @@ static bool alloc_tensor_kernel_cells(
         alloc_component(&kernel.yz, "yz");
 }
 
-static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
+static void free_device_demag_kernel(Context &ctx, DeviceDemagKernel &kernel) {
     if (kernel.xx) { cudaFree(kernel.xx); kernel.xx = nullptr; }
     if (kernel.yy) { cudaFree(kernel.yy); kernel.yy = nullptr; }
     if (kernel.zz) { cudaFree(kernel.zz); kernel.zz = nullptr; }
@@ -773,7 +815,7 @@ static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
     if (kernel.yz) { cudaFree(kernel.yz); kernel.yz = nullptr; }
 }
 
-static void free_device_push_map(DeviceMultilayerPushMap &map) {
+static void free_device_push_map(Context &ctx, DeviceMultilayerPushMap &map) {
     if (map.offsets) {
         cudaFree(map.offsets);
         map.offsets = nullptr;
@@ -790,7 +832,7 @@ static void free_device_push_map(DeviceMultilayerPushMap &map) {
     map.entry_count = 0;
 }
 
-static void free_device_pull_map(DeviceMultilayerPullMap &map) {
+static void free_device_pull_map(Context &ctx, DeviceMultilayerPullMap &map) {
     if (map.indices) {
         cudaFree(map.indices);
         map.indices = nullptr;
@@ -822,7 +864,10 @@ static void unbind_multilayer_fft_workspace(Context &ctx) {
     ctx.fft_workspace_bound_to_multilayer_cache = false;
 }
 
-static void free_multilayer_fft_workspace(DeviceMultilayerFftWorkspace &workspace) {
+static void free_multilayer_fft_workspace(
+    Context &ctx,
+    DeviceMultilayerFftWorkspace &workspace)
+{
     if (workspace.plan_valid) {
         cufftDestroy(workspace.plan);
         workspace.plan = 0;
@@ -880,7 +925,7 @@ static void free_multilayer_fft_workspaces(Context &ctx) {
     unbind_multilayer_fft_workspace(ctx);
     free_multilayer_batch_fft_buffers(ctx);
     for (DeviceMultilayerFftWorkspace &workspace : ctx.multilayer_fft_workspaces) {
-        free_multilayer_fft_workspace(workspace);
+        free_multilayer_fft_workspace(ctx, workspace);
     }
     ctx.multilayer_fft_workspaces.clear();
 }
@@ -1178,15 +1223,15 @@ static void free_multilayer_plan_v2(Context &ctx) {
         free_vector_field(layer.k2);
         free_vector_field(layer.k3);
         free_vector_field(layer.k4);
-        free_device_push_map(layer.push_map);
+        free_device_push_map(ctx, layer.push_map);
         if (layer.active_mask) {
             cudaFree(layer.active_mask);
             layer.active_mask = nullptr;
         }
     }
     for (DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
-        free_device_demag_kernel(kernel.tensor);
-        free_device_pull_map(kernel.dst_pull_map);
+        free_device_demag_kernel(ctx, kernel.tensor);
+        free_device_pull_map(ctx, kernel.dst_pull_map);
     }
     ctx.multilayer_layers.clear();
     ctx.multilayer_kernels.clear();
@@ -1559,7 +1604,7 @@ static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
             cudaFreeHost(snapshot.host_xyz);
         }
         if (snapshot.device_xyz) {
-            cudaFree(snapshot.device_xyz);
+            fullmag_fdm_untracked_cuda_free(snapshot.device_xyz);
         }
     }
     snapshot.pool.reset();
@@ -2030,7 +2075,7 @@ static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
     ctx.multilayer_fft_workspaces.emplace_back();
     DeviceMultilayerFftWorkspace &workspace = ctx.multilayer_fft_workspaces.back();
     if (!alloc_multilayer_fft_workspace(ctx, workspace, grid)) {
-        free_multilayer_fft_workspace(workspace);
+        free_multilayer_fft_workspace(ctx, workspace);
         ctx.multilayer_fft_workspaces.pop_back();
         return nullptr;
     }
@@ -2947,6 +2992,12 @@ bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {
         return false;
     }
 
+    for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+        if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, kernel)) {
+            return false;
+        }
+    }
+
     const DeviceMultilayerTensorKernel &first = ctx.multilayer_kernels.front();
     if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, first)) {
         return false;
@@ -3150,7 +3201,7 @@ bool context_prepare_multilayer_fft_workspace_for_kernel(
 /* ── Boundary correction upload ── */
 
 static void free_anisotropy_fields(Context &ctx) {
-    auto free_f64 = [](double *&ptr) {
+    auto free_f64 = [&ctx](double *&ptr) {
         if (ptr) { cudaFree(ptr); ptr = nullptr; }
     };
     free_f64(ctx.ku1_field);
@@ -3171,7 +3222,7 @@ bool context_upload_anisotropy_fields(Context &ctx, const double *ku1, const dou
 }
 
 static void free_cubic_anisotropy_fields(Context &ctx) {
-    auto free_f64 = [](double *&ptr) {
+    auto free_f64 = [&ctx](double *&ptr) {
         if (ptr) { cudaFree(ptr); ptr = nullptr; }
     };
     free_f64(ctx.kc1_field);
@@ -3196,7 +3247,7 @@ bool context_upload_cubic_anisotropy_fields(Context &ctx, const double *kc1, con
 }
 
 static void free_boundary_correction(Context &ctx) {
-    auto free_f64 = [](double *&ptr) {
+    auto free_f64 = [&ctx](double *&ptr) {
         if (ptr) { cudaFree(ptr); ptr = nullptr; }
     };
     free_f64(ctx.volume_fraction);

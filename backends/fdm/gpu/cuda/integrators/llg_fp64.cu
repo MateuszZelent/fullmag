@@ -40,6 +40,9 @@ extern void launch_exchange_field_fp64(Context &ctx);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
+extern bool launch_effective_field_and_base_llg_rhs_fp64(
+    Context &ctx, double evaluation_time, DeviceVectorField &rhs_out,
+    cudaStream_t stream);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp64(Context &ctx);
@@ -470,26 +473,35 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp64(ctx);
     }
-    launch_effective_field_fp64(ctx, step_start_time);
-    if (abort_step_from_tmp(ctx, false)) return;
-
     // --- Step 2: Compute k1 = RHS(m, H_eff) ---
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time,
             ctx.gpu_transport_active_attempt_id, 1)) return;
-    llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(ctx.k1.x),
-        static_cast<double*>(ctx.k1.y),
-        static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "Heun fp64 LLG RHS launch");
+    const bool fuse_local_pipeline =
+        !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt && !ctx.has_slonczewski_stt && !ctx.has_sot;
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp64(
+                ctx, step_start_time, ctx.k1, nullptr)) return;
+    } else {
+        launch_effective_field_fp64(ctx, step_start_time);
+        if (abort_step_from_tmp(ctx, false)) return;
+        llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<const double*>(ctx.m.x),
+            static_cast<const double*>(ctx.m.y),
+            static_cast<const double*>(ctx.m.z),
+            static_cast<const double*>(ctx.work.x),
+            static_cast<const double*>(ctx.work.y),
+            static_cast<const double*>(ctx.work.z),
+            static_cast<double*>(ctx.k1.x),
+            static_cast<double*>(ctx.k1.y),
+            static_cast<double*>(ctx.k1.z),
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "Heun fp64 LLG RHS launch");
+    }
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     if (ctx.has_frozen_mask) {
         zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
@@ -533,27 +545,33 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp64(ctx);
     }
-    launch_effective_field_fp64(ctx, step_start_time + dt);
-    if (abort_step_from_tmp(ctx, false)) return;
-
     // --- Step 5: Compute k2 = RHS(m_pred, H_eff_pred) ---
     // Store k2 in h_ex (reuse buffer after H_eff has been formed in work)
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, step_start_time + dt,
             ctx.gpu_transport_active_attempt_id, 2)) return;
-    llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(ctx.h_ex.x),  // reuse as k2 storage
-        static_cast<double*>(ctx.h_ex.y),
-        static_cast<double*>(ctx.h_ex.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "minimize fp64 LLG RHS launch");
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp64(
+                ctx, step_start_time + dt, ctx.h_ex, nullptr)) return;
+    } else {
+        launch_effective_field_fp64(ctx, step_start_time + dt);
+        if (abort_step_from_tmp(ctx, false)) return;
+        llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<const double*>(ctx.m.x),
+            static_cast<const double*>(ctx.m.y),
+            static_cast<const double*>(ctx.m.z),
+            static_cast<const double*>(ctx.work.x),
+            static_cast<const double*>(ctx.work.y),
+            static_cast<const double*>(ctx.work.z),
+            static_cast<double*>(ctx.h_ex.x),  // reuse as k2 storage
+            static_cast<double*>(ctx.h_ex.y),
+            static_cast<double*>(ctx.h_ex.z),
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "minimize fp64 LLG RHS launch");
+    }
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
     if (ctx.has_frozen_mask) {
         zero_frozen_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(

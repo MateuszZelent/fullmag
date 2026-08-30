@@ -160,8 +160,10 @@ class ReceiptSolverPhaseGuard {
 public:
     explicit ReceiptSolverPhaseGuard(Context &context)
         : context_(context), previous_(fullmag_fdm_set_solver_phase_active(
-              *context.execution_receipt, true))
+              *context.execution_receipt, true)),
+          previous_local_pipeline_phase_(context.local_pipeline_solver_phase_active)
     {
+        context_.local_pipeline_solver_phase_active = true;
         fullmag_fdm_begin_operator_execution_attempt(*context.execution_receipt);
     }
 
@@ -171,6 +173,8 @@ public:
                 *context_.execution_receipt);
         }
         fullmag_fdm_accumulate_execution_receipt_audit(context_);
+        context_.local_pipeline_solver_phase_active =
+            previous_local_pipeline_phase_;
         fullmag_fdm_set_solver_phase_active(*context_.execution_receipt, previous_);
     }
 
@@ -185,6 +189,7 @@ public:
 private:
     Context &context_;
     bool previous_;
+    bool previous_local_pipeline_phase_;
     bool committed_ = false;
 };
 
@@ -1366,6 +1371,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     // Query device info
     context_query_device_info(*ctx);
+    context_mark_gpu_workspace_setup_complete(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
 
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
@@ -1544,7 +1550,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->last_error =
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
-        + " tensor kernels; prepared initial FFT workspace; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
+        + " tensor kernels; prepared all FFT workspaces; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
+    context_mark_gpu_workspace_setup_complete(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
@@ -1649,6 +1656,7 @@ int fullmag_fdm_backend_step(
         ctx->last_error = "FDM step requires dt_seconds > 0";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    GpuWorkspaceStepAccountingGuard workspace_step_accounting(*ctx);
     fullmag_fdm_step_stats trial_stats{};
     // A rejected or failed attempt is retryable. Its diagnostic remains
     // observable until the next explicit public step begins, but must not
@@ -1720,6 +1728,7 @@ int fullmag_fdm_backend_step_adaptive_batch_v1(
     }
     if (poll_interrupt(*ctx)) return FULLMAG_FDM_ERR_INTERRUPTED;
 
+    GpuWorkspaceStepAccountingGuard workspace_step_accounting(*ctx);
     ctx->last_error.clear();
     context_record_adaptive_execution_counter(
         *ctx, ctx->adaptive_public_batch_call_count);
@@ -2771,6 +2780,34 @@ int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
 #if FULLMAG_HAS_CUDA
     auto *ctx = reinterpret_cast<Context *>(handle);
     return context_get_adaptive_execution_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_local_pipeline_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_get_local_pipeline_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_gpu_workspace_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    const auto *ctx = reinterpret_cast<const Context *>(handle);
+    return context_get_gpu_workspace_telemetry_v1(*ctx, out_telemetry)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 #else
     return FULLMAG_FDM_ERR_CUDA;

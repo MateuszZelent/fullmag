@@ -18,7 +18,10 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if FULLMAG_HAS_CUDA
@@ -440,6 +443,56 @@ struct Context {
     uint64_t hot_loop_control_scalar_d2h_bytes = 0;
     uint64_t hot_loop_control_scalar_host_sync_count = 0;
 
+    // FDM-GPU-PERF-003 local field/RHS pipeline accounting. These counters
+    // record actual CUDA launch boundaries and never synchronize the device.
+    uint64_t local_pipeline_fused_field_rhs_launch_count = 0;
+    uint64_t local_pipeline_unfused_effective_field_launch_count = 0;
+    uint64_t local_pipeline_unfused_rhs_launch_count = 0;
+    uint64_t local_pipeline_captured_fused_field_rhs_node_count = 0;
+    uint64_t local_pipeline_captured_unfused_effective_field_node_count = 0;
+    uint64_t local_pipeline_captured_unfused_rhs_node_count = 0;
+    uint64_t local_pipeline_graph_attempt_execution_count = 0;
+    uint64_t local_pipeline_graph_fused_field_rhs_execution_count = 0;
+    uint64_t local_pipeline_graph_unfused_effective_field_execution_count = 0;
+    uint64_t local_pipeline_graph_unfused_rhs_execution_count = 0;
+    uint64_t local_pipeline_graph_capture_fused_baseline = 0;
+    uint64_t local_pipeline_graph_capture_unfused_field_baseline = 0;
+    uint64_t local_pipeline_graph_capture_unfused_rhs_baseline = 0;
+    uint64_t local_pipeline_pending_graph_fused_nodes = 0;
+    uint64_t local_pipeline_pending_graph_unfused_field_nodes = 0;
+    uint64_t local_pipeline_pending_graph_unfused_rhs_nodes = 0;
+    uint64_t local_pipeline_current_graph_fused_nodes = 0;
+    uint64_t local_pipeline_current_graph_unfused_field_nodes = 0;
+    uint64_t local_pipeline_current_graph_unfused_rhs_nodes = 0;
+    bool local_pipeline_accounting_valid = true;
+    // Cheap mirror of the receipt phase boundary. CUDA launch sites use this
+    // instead of taking the execution-receipt lock for every submission.
+    bool local_pipeline_solver_phase_active = false;
+    // Native parity contracts use this to retain the historical two-launch
+    // realization as an oracle. Production callers never mutate this flag.
+    bool local_pipeline_force_unfused_for_testing = false;
+
+    // FDM-GPU-PERF-004 allocation/plan accounting. The live allocation map is
+    // populated during setup. Any device allocation after setup is itself a
+    // contract violation and makes the receipt fail closed.
+    std::unordered_map<void *, uint64_t> gpu_workspace_live_allocations;
+    uint64_t gpu_workspace_revision = 1;
+    uint64_t gpu_workspace_current_device_bytes = 0;
+    uint64_t gpu_workspace_peak_device_bytes = 0;
+    uint64_t gpu_workspace_total_device_allocation_count = 0;
+    uint64_t gpu_workspace_total_device_allocation_bytes = 0;
+    uint64_t gpu_workspace_setup_device_allocation_count = 0;
+    uint64_t gpu_workspace_setup_device_allocation_bytes = 0;
+    uint64_t gpu_workspace_step_device_allocation_count = 0;
+    uint64_t gpu_workspace_step_device_allocation_bytes = 0;
+    uint64_t gpu_workspace_total_fft_plan_creation_count = 0;
+    uint64_t gpu_workspace_setup_fft_plan_creation_count = 0;
+    uint64_t gpu_workspace_step_fft_plan_creation_count = 0;
+    uint64_t gpu_workspace_observed_step_count = 0;
+    bool gpu_workspace_accounting_valid = true;
+    bool gpu_workspace_setup_complete = false;
+    bool gpu_workspace_step_active = false;
+
     // Measured host-boundary and operator realization receipt. Accounting is
     // allocation-free and never invokes CUDA APIs or synchronization.
     std::shared_ptr<ExecutionReceiptState> execution_receipt =
@@ -603,6 +656,8 @@ struct Context {
     uint64_t adaptive_graph_projection_policy_identity = 0;
     uint64_t adaptive_graph_build_count = 0;
     uint64_t adaptive_graph_launch_count = 0;
+    uint64_t adaptive_graph_recapture_count = 0;
+    bool adaptive_graph_build_is_recapture = false;
     uint64_t adaptive_terminal_control_d2h_bytes = 0;
     uint64_t adaptive_terminal_control_host_sync_count = 0;
     uint64_t adaptive_step_completion_host_sync_count = 0;
@@ -740,6 +795,303 @@ struct Context {
     void *interrupt_poll_user_data = nullptr;
     bool step_interrupted = false;
 };
+
+inline bool context_gpu_workspace_checked_add(
+    Context &ctx,
+    uint64_t &value,
+    uint64_t increment)
+{
+    if (increment > std::numeric_limits<uint64_t>::max() - value) {
+        ctx.gpu_workspace_accounting_valid = false;
+        return false;
+    }
+    value += increment;
+    return true;
+}
+
+inline void context_note_gpu_workspace_allocation(
+    Context &ctx,
+    void *pointer,
+    uint64_t bytes)
+{
+    if (pointer == nullptr) {
+        ctx.gpu_workspace_accounting_valid = false;
+        return;
+    }
+    try {
+        const auto inserted =
+            ctx.gpu_workspace_live_allocations.emplace(pointer, bytes).second;
+        if (!inserted) {
+            ctx.gpu_workspace_accounting_valid = false;
+            return;
+        }
+    } catch (const std::bad_alloc &) {
+        ctx.gpu_workspace_accounting_valid = false;
+        return;
+    }
+    context_gpu_workspace_checked_add(
+        ctx, ctx.gpu_workspace_total_device_allocation_count, 1);
+    context_gpu_workspace_checked_add(
+        ctx, ctx.gpu_workspace_total_device_allocation_bytes, bytes);
+    context_gpu_workspace_checked_add(
+        ctx, ctx.gpu_workspace_current_device_bytes, bytes);
+    if (ctx.gpu_workspace_step_active) {
+        context_gpu_workspace_checked_add(
+            ctx, ctx.gpu_workspace_step_device_allocation_count, 1);
+        context_gpu_workspace_checked_add(
+            ctx, ctx.gpu_workspace_step_device_allocation_bytes, bytes);
+    }
+    if (ctx.gpu_workspace_current_device_bytes >
+        ctx.gpu_workspace_peak_device_bytes) {
+        ctx.gpu_workspace_peak_device_bytes =
+            ctx.gpu_workspace_current_device_bytes;
+    }
+    context_gpu_workspace_checked_add(ctx, ctx.gpu_workspace_revision, 1);
+}
+
+inline void context_note_gpu_workspace_free(Context &ctx, void *pointer) {
+    if (pointer == nullptr) return;
+    const auto allocation = ctx.gpu_workspace_live_allocations.find(pointer);
+    if (allocation == ctx.gpu_workspace_live_allocations.end()) {
+        ctx.gpu_workspace_accounting_valid = false;
+        return;
+    }
+    if (allocation->second > ctx.gpu_workspace_current_device_bytes) {
+        ctx.gpu_workspace_accounting_valid = false;
+        return;
+    }
+    ctx.gpu_workspace_current_device_bytes -= allocation->second;
+    ctx.gpu_workspace_live_allocations.erase(allocation);
+    context_gpu_workspace_checked_add(ctx, ctx.gpu_workspace_revision, 1);
+}
+
+inline void context_note_gpu_workspace_fft_plan_creation(Context &ctx) {
+    context_gpu_workspace_checked_add(
+        ctx, ctx.gpu_workspace_total_fft_plan_creation_count, 1);
+    if (ctx.gpu_workspace_step_active) {
+        context_gpu_workspace_checked_add(
+            ctx, ctx.gpu_workspace_step_fft_plan_creation_count, 1);
+    }
+    context_gpu_workspace_checked_add(ctx, ctx.gpu_workspace_revision, 1);
+}
+
+inline void context_mark_gpu_workspace_setup_complete(Context &ctx) {
+    ctx.gpu_workspace_setup_device_allocation_count =
+        ctx.gpu_workspace_total_device_allocation_count;
+    ctx.gpu_workspace_setup_device_allocation_bytes =
+        ctx.gpu_workspace_total_device_allocation_bytes;
+    ctx.gpu_workspace_setup_fft_plan_creation_count =
+        ctx.gpu_workspace_total_fft_plan_creation_count;
+    ctx.gpu_workspace_setup_complete = true;
+}
+
+class GpuWorkspaceStepAccountingGuard {
+public:
+    explicit GpuWorkspaceStepAccountingGuard(Context &ctx) : ctx_(ctx) {
+        if (ctx_.gpu_workspace_step_active) {
+            ctx_.gpu_workspace_accounting_valid = false;
+            return;
+        }
+        ctx_.gpu_workspace_step_active = true;
+        owns_boundary_ = true;
+    }
+
+    ~GpuWorkspaceStepAccountingGuard() {
+        if (!owns_boundary_) return;
+        ctx_.gpu_workspace_step_active = false;
+        context_gpu_workspace_checked_add(
+            ctx_, ctx_.gpu_workspace_observed_step_count, 1);
+    }
+
+    GpuWorkspaceStepAccountingGuard(
+        const GpuWorkspaceStepAccountingGuard &) = delete;
+    GpuWorkspaceStepAccountingGuard &operator=(
+        const GpuWorkspaceStepAccountingGuard &) = delete;
+
+private:
+    Context &ctx_;
+    bool owns_boundary_ = false;
+};
+
+#if FULLMAG_HAS_CUDA
+cudaError_t context_gpu_workspace_cuda_malloc_raw(
+    Context &ctx,
+    void **destination,
+    size_t bytes);
+
+template <typename T>
+inline cudaError_t context_gpu_workspace_cuda_malloc(
+    Context &ctx,
+    T **destination,
+    size_t bytes)
+{
+    return context_gpu_workspace_cuda_malloc_raw(
+        ctx, reinterpret_cast<void **>(destination), bytes);
+}
+
+cudaError_t context_gpu_workspace_cuda_free(Context &ctx, void *pointer);
+cufftResult context_gpu_workspace_cufft_create(
+    Context &ctx,
+    cufftHandle *plan);
+#endif
+
+inline void context_record_local_pipeline_submission(
+    Context &ctx,
+    uint64_t &direct_counter,
+    uint64_t &captured_node_counter)
+{
+    uint64_t *counter = nullptr;
+    if (ctx.adaptive_graph_capture_active) {
+        counter = &captured_node_counter;
+    } else if (ctx.local_pipeline_solver_phase_active) {
+        counter = &direct_counter;
+    } else {
+        return;
+    }
+    if (*counter == UINT64_MAX) {
+        ctx.local_pipeline_accounting_valid = false;
+        return;
+    }
+    ++(*counter);
+}
+
+inline bool context_local_pipeline_checked_add(
+    Context &ctx,
+    uint64_t &counter,
+    uint64_t increment)
+{
+    if (counter > UINT64_MAX - increment) {
+        ctx.local_pipeline_accounting_valid = false;
+        return false;
+    }
+    counter += increment;
+    return true;
+}
+
+inline bool context_local_pipeline_checked_product(
+    Context &ctx,
+    uint64_t left,
+    uint64_t right,
+    uint64_t &result)
+{
+    if (left != 0 && right > UINT64_MAX / left) {
+        ctx.local_pipeline_accounting_valid = false;
+        return false;
+    }
+    result = left * right;
+    return true;
+}
+
+inline void context_begin_local_pipeline_graph_capture(Context &ctx) {
+    ctx.local_pipeline_graph_capture_fused_baseline =
+        ctx.local_pipeline_captured_fused_field_rhs_node_count;
+    ctx.local_pipeline_graph_capture_unfused_field_baseline =
+        ctx.local_pipeline_captured_unfused_effective_field_node_count;
+    ctx.local_pipeline_graph_capture_unfused_rhs_baseline =
+        ctx.local_pipeline_captured_unfused_rhs_node_count;
+    ctx.local_pipeline_pending_graph_fused_nodes = 0;
+    ctx.local_pipeline_pending_graph_unfused_field_nodes = 0;
+    ctx.local_pipeline_pending_graph_unfused_rhs_nodes = 0;
+}
+
+inline bool context_finish_local_pipeline_graph_capture(Context &ctx) {
+    if (ctx.local_pipeline_captured_fused_field_rhs_node_count <
+            ctx.local_pipeline_graph_capture_fused_baseline ||
+        ctx.local_pipeline_captured_unfused_effective_field_node_count <
+            ctx.local_pipeline_graph_capture_unfused_field_baseline ||
+        ctx.local_pipeline_captured_unfused_rhs_node_count <
+            ctx.local_pipeline_graph_capture_unfused_rhs_baseline) {
+        ctx.local_pipeline_accounting_valid = false;
+        return false;
+    }
+    ctx.local_pipeline_pending_graph_fused_nodes =
+        ctx.local_pipeline_captured_fused_field_rhs_node_count -
+        ctx.local_pipeline_graph_capture_fused_baseline;
+    ctx.local_pipeline_pending_graph_unfused_field_nodes =
+        ctx.local_pipeline_captured_unfused_effective_field_node_count -
+        ctx.local_pipeline_graph_capture_unfused_field_baseline;
+    ctx.local_pipeline_pending_graph_unfused_rhs_nodes =
+        ctx.local_pipeline_captured_unfused_rhs_node_count -
+        ctx.local_pipeline_graph_capture_unfused_rhs_baseline;
+    return true;
+}
+
+inline void context_commit_local_pipeline_graph_template(Context &ctx) {
+    ctx.local_pipeline_current_graph_fused_nodes =
+        ctx.local_pipeline_pending_graph_fused_nodes;
+    ctx.local_pipeline_current_graph_unfused_field_nodes =
+        ctx.local_pipeline_pending_graph_unfused_field_nodes;
+    ctx.local_pipeline_current_graph_unfused_rhs_nodes =
+        ctx.local_pipeline_pending_graph_unfused_rhs_nodes;
+}
+
+inline void context_clear_local_pipeline_graph_template(Context &ctx) {
+    ctx.local_pipeline_current_graph_fused_nodes = 0;
+    ctx.local_pipeline_current_graph_unfused_field_nodes = 0;
+    ctx.local_pipeline_current_graph_unfused_rhs_nodes = 0;
+    ctx.local_pipeline_pending_graph_fused_nodes = 0;
+    ctx.local_pipeline_pending_graph_unfused_field_nodes = 0;
+    ctx.local_pipeline_pending_graph_unfused_rhs_nodes = 0;
+}
+
+inline void context_record_local_pipeline_graph_attempts(
+    Context &ctx,
+    uint64_t attempts)
+{
+    uint64_t fused_executions = 0;
+    uint64_t unfused_field_executions = 0;
+    uint64_t unfused_rhs_executions = 0;
+    if (!context_local_pipeline_checked_product(
+            ctx, ctx.local_pipeline_current_graph_fused_nodes,
+            attempts, fused_executions) ||
+        !context_local_pipeline_checked_product(
+            ctx, ctx.local_pipeline_current_graph_unfused_field_nodes,
+            attempts, unfused_field_executions) ||
+        !context_local_pipeline_checked_product(
+            ctx, ctx.local_pipeline_current_graph_unfused_rhs_nodes,
+            attempts, unfused_rhs_executions)) {
+        return;
+    }
+    context_local_pipeline_checked_add(
+        ctx, ctx.local_pipeline_graph_attempt_execution_count, attempts);
+    context_local_pipeline_checked_add(
+        ctx, ctx.local_pipeline_graph_fused_field_rhs_execution_count,
+        fused_executions);
+    context_local_pipeline_checked_add(
+        ctx, ctx.local_pipeline_graph_unfused_effective_field_execution_count,
+        unfused_field_executions);
+    context_local_pipeline_checked_add(
+        ctx, ctx.local_pipeline_graph_unfused_rhs_execution_count,
+        unfused_rhs_executions);
+}
+
+inline void context_note_local_pipeline_fused_field_rhs(Context &ctx) {
+    context_record_local_pipeline_submission(
+        ctx,
+        ctx.local_pipeline_fused_field_rhs_launch_count,
+        ctx.local_pipeline_captured_fused_field_rhs_node_count);
+}
+
+inline void context_note_local_pipeline_unfused_effective_field(Context &ctx) {
+    context_record_local_pipeline_submission(
+        ctx,
+        ctx.local_pipeline_unfused_effective_field_launch_count,
+        ctx.local_pipeline_captured_unfused_effective_field_node_count);
+}
+
+inline void context_note_local_pipeline_unfused_rhs(Context &ctx) {
+    // An unfused local pipeline is complete only when the field kernel is
+    // followed by its matching RHS kernel.  Count the pair here so field-only
+    // observable/diagnostic evaluations cannot contaminate solver telemetry.
+    context_record_local_pipeline_submission(
+        ctx,
+        ctx.local_pipeline_unfused_effective_field_launch_count,
+        ctx.local_pipeline_captured_unfused_effective_field_node_count);
+    context_record_local_pipeline_submission(
+        ctx,
+        ctx.local_pipeline_unfused_rhs_launch_count,
+        ctx.local_pipeline_captured_unfused_rhs_node_count);
+}
 
 inline uint64_t endpoint_cache_double_bits(double value) {
     uint64_t bits = 0;
@@ -1742,6 +2094,228 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
     }
     if (ctx.gpu_transport_rhs.active) required_operator_mask |= FULLMAG_FDM_OPERATOR_GPU_TRANSPORT;
     return required_operator_mask;
+}
+
+inline uint64_t context_local_pipeline_active_feature_mask(const Context &ctx) {
+    uint64_t mask = 0;
+    if (ctx.enable_exchange) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_EXCHANGE_INPUT;
+    }
+    if (ctx.enable_demag) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_DEMAG_INPUT;
+    }
+    if (ctx.has_external_field) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_UNIFORM_ZEEMAN;
+    }
+    if (ctx.has_static_external_field_profile) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_STATIC_FIELD_PROFILE;
+    }
+    if (ctx.has_oersted_field) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_OERSTED;
+    }
+    if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_ANISOTROPY;
+    }
+    if (ctx.has_magnetoelastic) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_MAGNETOELASTIC;
+    }
+    if (ctx.temperature > 0.0) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_THERMAL;
+    }
+    if (ctx.has_zhang_li_stt) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_ZHANG_LI_STT;
+    }
+    if (ctx.has_slonczewski_stt) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SLONCZEWSKI_STT;
+    }
+    if (ctx.has_sot) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SOT;
+    }
+    return mask;
+}
+
+inline bool context_local_pipeline_graph_is_resolved(const Context &ctx) {
+    return ctx.adaptive_enabled &&
+        ctx.stats_mode == FULLMAG_FDM_STATS_NONE &&
+        (ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
+         ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45) &&
+        ctx.temperature <= 0.0 &&
+        !(ctx.has_oersted_field && ctx.oersted_time_dep_kind != 0) &&
+        !ctx.gpu_transport_rhs.active &&
+        !ctx.gpu_transport_test_force_adaptive_retry;
+}
+
+inline bool context_local_pipeline_fusion_is_resolved(const Context &ctx) {
+    return !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt &&
+        !ctx.has_slonczewski_stt &&
+        !ctx.has_sot;
+}
+
+inline fullmag_fdm_local_pipeline_realization_v1
+context_local_pipeline_resolved_realization(const Context &ctx) {
+    if (ctx.has_multilayer_plan_v2) {
+        return FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE;
+    }
+    const bool fused = context_local_pipeline_fusion_is_resolved(ctx);
+    if (context_local_pipeline_graph_is_resolved(ctx)) {
+        return fused
+            ? FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_FUSED
+            : FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_UNFUSED;
+    }
+    return fused
+        ? FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED
+        : FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED;
+}
+
+inline fullmag_fdm_local_pipeline_realization_v1
+context_local_pipeline_executed_realization(const Context &ctx) {
+    fullmag_fdm_local_pipeline_realization_v1 realization =
+        FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE;
+    uint32_t realization_count = 0;
+    const auto note = [&](bool executed,
+                          fullmag_fdm_local_pipeline_realization_v1 candidate) {
+        if (!executed) return;
+        realization = candidate;
+        ++realization_count;
+    };
+    note(ctx.local_pipeline_fused_field_rhs_launch_count != 0,
+         FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED);
+    note(ctx.local_pipeline_unfused_effective_field_launch_count != 0 ||
+             ctx.local_pipeline_unfused_rhs_launch_count != 0,
+         FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED);
+    note(ctx.local_pipeline_graph_fused_field_rhs_execution_count != 0,
+         FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_FUSED);
+    note(ctx.local_pipeline_graph_unfused_effective_field_execution_count != 0 ||
+             ctx.local_pipeline_graph_unfused_rhs_execution_count != 0,
+         FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_UNFUSED);
+    return realization_count > 1
+        ? FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED
+        : realization;
+}
+
+inline bool context_get_local_pipeline_telemetry_v1(
+    const Context &ctx,
+    fullmag_fdm_local_pipeline_telemetry_v1 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version !=
+            FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size !=
+            sizeof(fullmag_fdm_local_pipeline_telemetry_v1)) {
+        return false;
+    }
+    fullmag_fdm_local_pipeline_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    result.requested_policy = FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE;
+    result.resolved_realization =
+        context_local_pipeline_resolved_realization(ctx);
+    result.executed_realization =
+        context_local_pipeline_executed_realization(ctx);
+    result.accounting_valid = ctx.local_pipeline_accounting_valid &&
+            ctx.adaptive_execution_accounting_valid
+        ? 1U : 0U;
+    result.precision = ctx.precision;
+    result.integrator = ctx.integrator;
+    result.metric_valid_mask =
+        FULLMAG_FDM_LOCAL_PIPELINE_METRIC_IDENTITY |
+        FULLMAG_FDM_LOCAL_PIPELINE_METRIC_DIRECT_SUBMISSIONS |
+        FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES |
+        FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE |
+        FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS;
+    result.required_operator_mask = fullmag_fdm_required_operator_mask(ctx);
+    result.active_feature_mask =
+        context_local_pipeline_active_feature_mask(ctx);
+    result.source_revision = ctx.rhs_source_revision;
+    result.field_revision = ctx.rhs_field_revision;
+    result.direct_fused_field_rhs_launch_count =
+        ctx.local_pipeline_fused_field_rhs_launch_count;
+    result.direct_unfused_effective_field_launch_count =
+        ctx.local_pipeline_unfused_effective_field_launch_count;
+    result.direct_unfused_rhs_launch_count =
+        ctx.local_pipeline_unfused_rhs_launch_count;
+    result.captured_fused_field_rhs_node_count =
+        ctx.local_pipeline_captured_fused_field_rhs_node_count;
+    result.captured_unfused_effective_field_node_count =
+        ctx.local_pipeline_captured_unfused_effective_field_node_count;
+    result.captured_unfused_rhs_node_count =
+        ctx.local_pipeline_captured_unfused_rhs_node_count;
+    result.graph_build_count = ctx.adaptive_graph_build_count;
+    result.graph_replay_count = ctx.adaptive_graph_launch_count;
+    result.graph_recapture_count = ctx.adaptive_graph_recapture_count;
+    result.graph_attempt_execution_count =
+        ctx.local_pipeline_graph_attempt_execution_count;
+    result.graph_fused_field_rhs_execution_count =
+        ctx.local_pipeline_graph_fused_field_rhs_execution_count;
+    result.graph_unfused_effective_field_execution_count =
+        ctx.local_pipeline_graph_unfused_effective_field_execution_count;
+    result.graph_unfused_rhs_execution_count =
+        ctx.local_pipeline_graph_unfused_rhs_execution_count;
+    *out_telemetry = result;
+    return true;
+}
+
+inline bool context_get_gpu_workspace_telemetry_v1(
+    const Context &ctx,
+    fullmag_fdm_gpu_workspace_telemetry_v1 *out_telemetry)
+{
+    if (out_telemetry == nullptr ||
+        out_telemetry->abi_version !=
+            FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1 ||
+        out_telemetry->struct_size !=
+            sizeof(fullmag_fdm_gpu_workspace_telemetry_v1)) {
+        return false;
+    }
+    const bool accounting_valid =
+        ctx.gpu_workspace_accounting_valid &&
+        !ctx.gpu_workspace_step_active &&
+        !ctx.gpu_transport_rhs.active;
+    fullmag_fdm_gpu_workspace_telemetry_v1 result{};
+    result.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    result.struct_size = sizeof(result);
+    result.accounting_valid = accounting_valid ? 1U : 0U;
+    result.setup_complete = ctx.gpu_workspace_setup_complete ? 1U : 0U;
+    result.precision = ctx.precision;
+    result.integrator = ctx.integrator;
+    result.metric_valid_mask =
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY |
+        FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS;
+    if (accounting_valid) {
+        result.metric_valid_mask |=
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS |
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS |
+            FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT;
+    }
+    result.workspace_revision = ctx.gpu_workspace_revision;
+    result.source_revision = ctx.rhs_source_revision;
+    result.field_revision = ctx.rhs_field_revision;
+    result.setup_device_allocation_count =
+        ctx.gpu_workspace_setup_device_allocation_count;
+    result.setup_device_allocation_bytes =
+        ctx.gpu_workspace_setup_device_allocation_bytes;
+    result.total_device_allocation_count =
+        ctx.gpu_workspace_total_device_allocation_count;
+    result.total_device_allocation_bytes =
+        ctx.gpu_workspace_total_device_allocation_bytes;
+    result.step_device_allocation_count =
+        ctx.gpu_workspace_step_device_allocation_count;
+    result.step_device_allocation_bytes =
+        ctx.gpu_workspace_step_device_allocation_bytes;
+    result.setup_fft_plan_creation_count =
+        ctx.gpu_workspace_setup_fft_plan_creation_count;
+    result.total_fft_plan_creation_count =
+        ctx.gpu_workspace_total_fft_plan_creation_count;
+    result.step_fft_plan_creation_count =
+        ctx.gpu_workspace_step_fft_plan_creation_count;
+    result.prepared_fft_workspace_count = ctx.has_multilayer_plan_v2
+        ? static_cast<uint64_t>(ctx.multilayer_fft_workspaces.size())
+        : ctx.fft_plan_valid ? 1U : 0U;
+    result.workspace_bytes = ctx.gpu_workspace_current_device_bytes;
+    result.peak_vram_bytes = ctx.gpu_workspace_peak_device_bytes;
+    result.observed_step_count = ctx.gpu_workspace_observed_step_count;
+    *out_telemetry = result;
+    return true;
 }
 
 inline void fullmag_fdm_commit_operator_residency(Context &ctx) {

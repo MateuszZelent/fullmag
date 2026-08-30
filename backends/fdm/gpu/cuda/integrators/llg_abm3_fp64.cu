@@ -20,6 +20,9 @@ namespace fdm {
 extern void launch_exchange_field_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
+extern bool launch_effective_field_and_base_llg_rhs_fp64(
+    Context &ctx, double evaluation_time, DeviceVectorField &rhs_out,
+    cudaStream_t stream);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
@@ -125,6 +128,52 @@ static void abm3_rotate_history(Context &ctx, uint64_t n) {
     cudaMemcpy(ctx.abm_f_n1.z, ctx.abm_f_n.z,  bytes, cudaMemcpyDeviceToDevice);
 }
 
+static bool compute_abm3_rhs_fp64(
+    Context &ctx,
+    DeviceVectorField &rhs_out,
+    int n,
+    int grid,
+    double gamma_bar,
+    double alpha,
+    double evaluation_time,
+    uint64_t stage_id)
+{
+    if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
+    if (ctx.enable_demag) launch_demag_field_fp64(ctx);
+    const bool fuse_local_pipeline =
+        !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt && !ctx.has_slonczewski_stt && !ctx.has_sot;
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp64(
+                ctx, evaluation_time, rhs_out, nullptr)) return false;
+    } else {
+        launch_effective_field_fp64(ctx, evaluation_time);
+        if (abort_step_from_tmp(ctx, false)) return false;
+        llg_rhs_fp64_kernel<<<grid, 256>>>(
+            static_cast<const double*>(ctx.m.x),
+            static_cast<const double*>(ctx.m.y),
+            static_cast<const double*>(ctx.m.z),
+            static_cast<const double*>(ctx.work.x),
+            static_cast<const double*>(ctx.work.y),
+            static_cast<const double*>(ctx.work.z),
+            static_cast<double*>(rhs_out.x),
+            static_cast<double*>(rhs_out.y),
+            static_cast<double*>(rhs_out.z),
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "ABM3 fp64 LLG RHS launch");
+    }
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, evaluation_time,
+            ctx.gpu_transport_active_attempt_id, stage_id) ||
+        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) {
+        return false;
+    }
+    return !abort_step_from_tmp(ctx, false);
+}
+
 /* ── Helper: compute diagnostics and fill stats ── */
 
 static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
@@ -199,29 +248,9 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         cudaMemcpy(ctx.tmp.z, ctx.m.z, bytes, cudaMemcpyDeviceToDevice);
 
         // k1 = RHS(m)
-        if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
-        if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx, step_start_time);
-        if (abort_step_from_tmp(ctx, false)) return;
-
-        llg_rhs_fp64_kernel<<<grid, 256>>>(
-            static_cast<const double*>(ctx.m.x),
-            static_cast<const double*>(ctx.m.y),
-            static_cast<const double*>(ctx.m.z),
-            static_cast<const double*>(ctx.work.x),
-            static_cast<const double*>(ctx.work.y),
-            static_cast<const double*>(ctx.work.z),
-            static_cast<double*>(ctx.k1.x),
-            static_cast<double*>(ctx.k1.y),
-            static_cast<double*>(ctx.k1.z),
-            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
-        if (!context_evaluate_gpu_transport_rhs(
-                ctx, ctx.m, step_start_time,
-                ctx.gpu_transport_active_attempt_id, 1) ||
-            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
-        if (abort_step_from_tmp(ctx, false)) return;
+        if (!compute_abm3_rhs_fp64(
+                ctx, ctx.k1, n, grid, gamma_bar, alpha,
+                step_start_time, 1)) return;
 
         // Predictor: m_pred = normalize(m + dt·k1)
         heun_predictor_fp64_kernel<<<grid, 256>>>(
@@ -239,29 +268,9 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (abort_step_from_tmp(ctx, false)) return;
 
         // k2 = RHS(m_pred)
-        if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
-        if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx, step_start_time + dt);
-        if (abort_step_from_tmp(ctx, false)) return;
-
-        llg_rhs_fp64_kernel<<<grid, 256>>>(
-            static_cast<const double*>(ctx.m.x),
-            static_cast<const double*>(ctx.m.y),
-            static_cast<const double*>(ctx.m.z),
-            static_cast<const double*>(ctx.work.x),
-            static_cast<const double*>(ctx.work.y),
-            static_cast<const double*>(ctx.work.z),
-            static_cast<double*>(ctx.h_ex.x),  // reuse as k2 storage
-            static_cast<double*>(ctx.h_ex.y),
-            static_cast<double*>(ctx.h_ex.z),
-            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
-        if (!context_evaluate_gpu_transport_rhs(
-                ctx, ctx.m, step_start_time + dt,
-                ctx.gpu_transport_active_attempt_id, 2) ||
-            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
-        if (abort_step_from_tmp(ctx, false)) return;
+        if (!compute_abm3_rhs_fp64(
+                ctx, ctx.h_ex, n, grid, gamma_bar, alpha,
+                step_start_time + dt, 2)) return;
 
         // Corrector: m_new = normalize(m_orig + 0.5·dt·(k1 + k2))
         heun_corrector_fp64_kernel<<<grid, 256>>>(
@@ -282,28 +291,9 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (abort_step_from_tmp(ctx, false)) return;
 
         // Compute RHS at accepted point and store in history
-        if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
-        if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx, step_start_time + dt);
-
-        llg_rhs_fp64_kernel<<<grid, 256>>>(
-            static_cast<const double*>(ctx.m.x),
-            static_cast<const double*>(ctx.m.y),
-            static_cast<const double*>(ctx.m.z),
-            static_cast<const double*>(ctx.work.x),
-            static_cast<const double*>(ctx.work.y),
-            static_cast<const double*>(ctx.work.z),
-            static_cast<double*>(ctx.h_ex.x),
-            static_cast<double*>(ctx.h_ex.y),
-            static_cast<double*>(ctx.h_ex.z),
-            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
-        if (!context_evaluate_gpu_transport_rhs(
-                ctx, ctx.m, step_start_time + dt,
-                ctx.gpu_transport_active_attempt_id, 3) ||
-            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
-        if (abort_step_from_tmp(ctx, false)) return;
+        if (!compute_abm3_rhs_fp64(
+                ctx, ctx.h_ex, n, grid, gamma_bar, alpha,
+                step_start_time + dt, 3)) return;
 
         context_stage_accepted_step(ctx, dt);
         abm3_rotate_history(ctx, ctx.cell_count);
@@ -349,29 +339,9 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Evaluate RHS at predicted point (the ONLY new RHS eval)
-    if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
-    if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx, step_start_time + dt);
-    if (abort_step_from_tmp(ctx, false)) return;
-
-    llg_rhs_fp64_kernel<<<grid, 256>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(ctx.k1.x),          // f* stored in k1
-        static_cast<double*>(ctx.k1.y),
-        static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
-    if (!context_evaluate_gpu_transport_rhs(
-            ctx, ctx.m, step_start_time + dt,
-            ctx.gpu_transport_active_attempt_id, 1) ||
-        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
-    if (abort_step_from_tmp(ctx, false)) return;
+    if (!compute_abm3_rhs_fp64(
+            ctx, ctx.k1, n, grid, gamma_bar, alpha,
+            step_start_time + dt, 1)) return;
 
     // AM3 corrector: m = normalize(m_orig + dt·(5/12·f* + 8/12·f_n - 1/12·f_{n-1}))
     abm3_corrector_kernel<<<grid, 256>>>(
@@ -396,27 +366,9 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     // Re-evaluate at the corrected accepted endpoint.  The predictor
     // derivative must not become the accepted spin/ABM state.
-    if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
-    if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-    launch_effective_field_fp64(ctx, step_start_time + dt);
-    llg_rhs_fp64_kernel<<<grid, 256>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(ctx.h_ex.x),
-        static_cast<double*>(ctx.h_ex.y),
-        static_cast<double*>(ctx.h_ex.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp64 LLG RHS launch");
-    if (!context_evaluate_gpu_transport_rhs(
-            ctx, ctx.m, step_start_time + dt,
-            ctx.gpu_transport_active_attempt_id, 2) ||
-        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
-    if (abort_step_from_tmp(ctx, false)) return;
+    if (!compute_abm3_rhs_fp64(
+            ctx, ctx.h_ex, n, grid, gamma_bar, alpha,
+            step_start_time + dt, 2)) return;
 
     context_stage_accepted_step(ctx, dt);
     abm3_rotate_history(ctx, ctx.cell_count);

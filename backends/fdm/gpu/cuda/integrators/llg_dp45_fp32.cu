@@ -24,6 +24,9 @@ extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern void launch_effective_field_fp32(
     Context &ctx, double evaluation_time, cudaStream_t stream);
+extern bool launch_effective_field_and_base_llg_rhs_fp32(
+    Context &ctx, double evaluation_time, DeviceVectorField &rhs_out,
+    cudaStream_t stream);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
@@ -242,18 +245,28 @@ static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
             return false;
         }
     }
-    launch_effective_field_fp32(ctx, evaluation_time, stream);
-    if (allow_host_boundaries && poll_interrupt(ctx)) {
-        abort_step_after_interrupt(ctx);
-        return false;
+    const bool fuse_local_pipeline =
+        !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt && !ctx.has_slonczewski_stt && !ctx.has_sot;
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp32(
+                ctx, evaluation_time, rhs_out, stream)) return false;
+    } else {
+        launch_effective_field_fp32(ctx, evaluation_time, stream);
+        if (allow_host_boundaries && poll_interrupt(ctx)) {
+            abort_step_after_interrupt(ctx);
+            return false;
+        }
+        llg_rhs_fp32_kernel<<<grid, 256, 0, stream>>>(
+            static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
+            static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
+            static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "DP45 fp32 LLG RHS launch");
     }
-    llg_rhs_fp32_kernel<<<grid, 256, 0, stream>>>(
-        static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-        static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
-        static_cast<float*>(rhs_out.x), static_cast<float*>(rhs_out.y), static_cast<float*>(rhs_out.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "DP45 fp32 LLG RHS launch");
     if (allow_host_boundaries && poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;

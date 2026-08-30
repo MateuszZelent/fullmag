@@ -892,6 +892,102 @@ pub struct fullmag_fdm_adaptive_execution_telemetry_v1 {
     pub stats_none_host_sync_count: u64,
 }
 
+pub const FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1: u32 = 1;
+pub type fullmag_fdm_local_pipeline_policy_v1 = u32;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE: fullmag_fdm_local_pipeline_policy_v1 = 1;
+pub type fullmag_fdm_local_pipeline_realization_v1 = u32;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE: fullmag_fdm_local_pipeline_realization_v1 =
+    0;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED:
+    fullmag_fdm_local_pipeline_realization_v1 = 1;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED:
+    fullmag_fdm_local_pipeline_realization_v1 = 2;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_FUSED:
+    fullmag_fdm_local_pipeline_realization_v1 = 3;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_UNFUSED:
+    fullmag_fdm_local_pipeline_realization_v1 = 4;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED: fullmag_fdm_local_pipeline_realization_v1 =
+    5;
+
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_IDENTITY: u64 = 1 << 0;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_DIRECT_SUBMISSIONS: u64 = 1 << 1;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES: u64 = 1 << 2;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE: u64 = 1 << 3;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS: u64 = 1 << 4;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_DRAM_BYTES: u64 = 1 << 5;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_LAUNCH_TIME: u64 = 1 << 6;
+pub const FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_OCCUPANCY: u64 = 1 << 7;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_local_pipeline_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub requested_policy: fullmag_fdm_local_pipeline_policy_v1,
+    pub resolved_realization: fullmag_fdm_local_pipeline_realization_v1,
+    pub executed_realization: fullmag_fdm_local_pipeline_realization_v1,
+    pub accounting_valid: u32,
+    pub precision: fullmag_fdm_precision,
+    pub integrator: fullmag_fdm_integrator,
+    pub metric_valid_mask: u64,
+    pub required_operator_mask: u64,
+    pub active_feature_mask: u64,
+    pub source_revision: u64,
+    pub field_revision: u64,
+    pub direct_fused_field_rhs_launch_count: u64,
+    pub direct_unfused_effective_field_launch_count: u64,
+    pub direct_unfused_rhs_launch_count: u64,
+    pub captured_fused_field_rhs_node_count: u64,
+    pub captured_unfused_effective_field_node_count: u64,
+    pub captured_unfused_rhs_node_count: u64,
+    pub graph_build_count: u64,
+    pub graph_replay_count: u64,
+    pub graph_recapture_count: u64,
+    pub graph_attempt_execution_count: u64,
+    pub graph_fused_field_rhs_execution_count: u64,
+    pub graph_unfused_effective_field_execution_count: u64,
+    pub graph_unfused_rhs_execution_count: u64,
+    pub profiled_dram_read_bytes: u64,
+    pub profiled_dram_write_bytes: u64,
+    pub profiled_launch_time_ns: u64,
+    pub profiled_achieved_occupancy_permyriad: u64,
+}
+
+pub const FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1: u32 = 1;
+pub const FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY: u64 = 1 << 0;
+pub const FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS: u64 = 1 << 1;
+pub const FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS: u64 = 1 << 2;
+pub const FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT: u64 = 1 << 3;
+pub const FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS: u64 = 1 << 4;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_gpu_workspace_telemetry_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub accounting_valid: u32,
+    pub setup_complete: u32,
+    pub precision: fullmag_fdm_precision,
+    pub integrator: fullmag_fdm_integrator,
+    pub metric_valid_mask: u64,
+    pub workspace_revision: u64,
+    pub source_revision: u64,
+    pub field_revision: u64,
+    pub setup_device_allocation_count: u64,
+    pub setup_device_allocation_bytes: u64,
+    pub total_device_allocation_count: u64,
+    pub total_device_allocation_bytes: u64,
+    pub step_device_allocation_count: u64,
+    pub step_device_allocation_bytes: u64,
+    pub setup_fft_plan_creation_count: u64,
+    pub total_fft_plan_creation_count: u64,
+    pub step_fft_plan_creation_count: u64,
+    pub prepared_fft_workspace_count: u64,
+    pub workspace_bytes: u64,
+    pub peak_vram_bytes: u64,
+    pub observed_step_count: u64,
+}
+
 pub const FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1: u32 = 1;
 pub type fullmag_fdm_embedded_error_semantics_v1 = u32;
 pub const FULLMAG_FDM_EMBEDDED_ERROR_PRE_PROJECTION_DIFFERENCE:
@@ -1975,6 +2071,16 @@ extern "C" {
         out_telemetry: *mut fullmag_fdm_adaptive_execution_telemetry_v1,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_local_pipeline_telemetry_v1,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_telemetry: *mut fullmag_fdm_gpu_workspace_telemetry_v1,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
         handle: *mut fullmag_fdm_backend,
         out_telemetry: *mut fullmag_fdm_adaptive_numerics_telemetry_v1,
@@ -2029,6 +2135,52 @@ mod tests {
     fn adaptive_execution_telemetry_v1_has_stable_layout() {
         assert_eq!(size_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 64);
         assert_eq!(align_of::<fullmag_fdm_adaptive_execution_telemetry_v1>(), 8);
+    }
+
+    #[test]
+    fn local_pipeline_telemetry_v1_has_stable_layout_and_ffi_symbol() {
+        assert_eq!(size_of::<fullmag_fdm_local_pipeline_telemetry_v1>(), 208);
+        assert_eq!(align_of::<fullmag_fdm_local_pipeline_telemetry_v1>(), 8);
+        assert_eq!(
+            offset_of!(fullmag_fdm_local_pipeline_telemetry_v1, metric_valid_mask),
+            32
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_local_pipeline_telemetry_v1,
+                graph_attempt_execution_count
+            ),
+            144
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_local_pipeline_telemetry_v1,
+        ) -> i32 = fullmag_fdm_backend_get_local_pipeline_telemetry_v1;
+    }
+
+    #[test]
+    fn gpu_workspace_telemetry_v1_has_stable_layout_and_ffi_symbol() {
+        assert_eq!(size_of::<fullmag_fdm_gpu_workspace_telemetry_v1>(), 160);
+        assert_eq!(align_of::<fullmag_fdm_gpu_workspace_telemetry_v1>(), 8);
+        assert_eq!(
+            offset_of!(fullmag_fdm_gpu_workspace_telemetry_v1, metric_valid_mask),
+            24
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_gpu_workspace_telemetry_v1,
+                setup_device_allocation_count
+            ),
+            56
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_gpu_workspace_telemetry_v1, observed_step_count),
+            152
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *mut fullmag_fdm_gpu_workspace_telemetry_v1,
+        ) -> i32 = fullmag_fdm_backend_get_gpu_workspace_telemetry_v1;
     }
 
     #[test]

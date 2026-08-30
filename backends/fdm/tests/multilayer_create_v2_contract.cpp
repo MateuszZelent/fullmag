@@ -118,6 +118,9 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
         make_layer(0, m0),
         make_layer(1, m1),
     };
+    // Force the assisted push/pull realization so distinct FFT grids remain
+    // legal and every cached workspace is exercised in one public step.
+    layers[0].transfer_kind = FULLMAG_FDM_TRANSFER_PUSH_PULL;
     layers[0].has_uniaxial_anisotropy = 1;
     layers[0].uniaxial_anisotropy_constant = 4.0e4;
     layers[0].anisotropy_axis[0] = 1.0;
@@ -127,12 +130,16 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
         {1.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
         {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0}, {0.0, 0.0},
     };
-    const fullmag_fdm_tensor_kernel_desc_v2 kernels[4] = {
+    fullmag_fdm_complex64 large_kernel_component[27] = {};
+    large_kernel_component[0] = {1.0, 0.0};
+    fullmag_fdm_tensor_kernel_desc_v2 kernels[4] = {
         make_kernel(0, 0, kernel_component),
         make_kernel(0, 1, kernel_component),
         make_kernel(1, 0, kernel_component),
-        make_kernel(1, 1, kernel_component),
+        make_kernel(1, 1, large_kernel_component),
     };
+    kernels[3].fft_grid = {3, 3, 3, 1.0e-9, 1.0e-9, 1.0e-9};
+    kernels[3].kernel_len = 27;
     fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(layers, 2);
     plan.enable_exchange = 1;
     plan.enable_demag = 1;
@@ -149,6 +156,32 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
     check(handle != nullptr, "valid create_v2 plan should return a staged v2 handle");
     check_error_contains(handle, "uploaded 2 layers and 4 tensor kernels");
     check_error_contains(handle, "native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available");
+
+    fullmag_fdm_gpu_workspace_telemetry_v1 setup_telemetry{};
+    setup_telemetry.abi_version =
+        FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    setup_telemetry.struct_size = sizeof(setup_telemetry);
+    check(
+        fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+            handle, &setup_telemetry) == FULLMAG_FDM_OK,
+        "GPU workspace telemetry should be available after create_v2");
+    check(setup_telemetry.accounting_valid == 1,
+          "GPU workspace accounting should be valid after create_v2");
+    check(setup_telemetry.setup_complete == 1,
+          "GPU workspace setup should be complete before the first stage");
+    check(setup_telemetry.prepared_fft_workspace_count >= 2,
+          "heterogeneous FFT grids should prepare at least two workspaces");
+    check(setup_telemetry.setup_fft_plan_creation_count >= 2,
+          "heterogeneous FFT grids should create every plan during setup");
+    check(setup_telemetry.total_fft_plan_creation_count ==
+              setup_telemetry.setup_fft_plan_creation_count,
+          "all FFT plans should be setup-time plans after create_v2");
+    check(setup_telemetry.step_device_allocation_count == 0 &&
+              setup_telemetry.step_fft_plan_creation_count == 0,
+          "no step-time allocation or plan should exist before stepping");
+    check(setup_telemetry.workspace_bytes > 0 &&
+              setup_telemetry.peak_vram_bytes >= setup_telemetry.workspace_bytes,
+          "workspace footprint telemetry should report live and peak bytes");
 
     double h_ani[3] = {};
     const int h_ani_status = fullmag_fdm_backend_copy_layer_field_f64(
@@ -195,11 +228,50 @@ void valid_plan_runs_heun_step_with_demag_and_exchange() {
         refresh_status == FULLMAG_FDM_OK,
         "explicit v2 multilayer demag refresh should succeed for staged handles");
 
+    fullmag_fdm_gpu_workspace_telemetry_v1 refresh_telemetry{};
+    refresh_telemetry.abi_version =
+        FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    refresh_telemetry.struct_size = sizeof(refresh_telemetry);
+    check(
+        fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+            handle, &refresh_telemetry) == FULLMAG_FDM_OK,
+        "GPU workspace telemetry should remain available after demag refresh");
+    check(refresh_telemetry.total_device_allocation_count ==
+              setup_telemetry.total_device_allocation_count &&
+              refresh_telemetry.total_fft_plan_creation_count ==
+                  setup_telemetry.total_fft_plan_creation_count,
+          "demag refresh must reuse setup-time allocations and FFT plans");
+
     fullmag_fdm_step_stats stats{};
     const int step_status = fullmag_fdm_backend_step(handle, 1.0e-13, &stats);
     check(step_status == FULLMAG_FDM_OK, "v2 multilayer Heun step with exchange should succeed");
     check(stats.step == 1, "v2 multilayer Heun step should advance step metadata");
     check(stats.time_seconds > 0.0, "v2 multilayer Heun step should advance time metadata");
+
+    fullmag_fdm_gpu_workspace_telemetry_v1 step_telemetry{};
+    step_telemetry.abi_version =
+        FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    step_telemetry.struct_size = sizeof(step_telemetry);
+    check(
+        fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+            handle, &step_telemetry) == FULLMAG_FDM_OK,
+        "GPU workspace telemetry should remain available after a step");
+    check(step_telemetry.accounting_valid == 1,
+          "GPU workspace accounting should remain valid after a step");
+    check(step_telemetry.total_device_allocation_count ==
+              setup_telemetry.total_device_allocation_count &&
+              step_telemetry.total_device_allocation_bytes ==
+                  setup_telemetry.total_device_allocation_bytes,
+          "the public step must not allocate device memory");
+    check(step_telemetry.total_fft_plan_creation_count ==
+              setup_telemetry.total_fft_plan_creation_count,
+          "the public step must not create FFT plans");
+    check(step_telemetry.step_device_allocation_count == 0 &&
+              step_telemetry.step_device_allocation_bytes == 0 &&
+              step_telemetry.step_fft_plan_creation_count == 0,
+          "step-local allocation and plan counters must stay zero");
+    check(step_telemetry.observed_step_count == 1,
+          "workspace telemetry should observe exactly one public step");
 
     double h_demag[3] = {};
     const int h_status = fullmag_fdm_backend_copy_layer_field_f64(

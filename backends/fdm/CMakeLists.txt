@@ -783,6 +783,24 @@ if(FULLMAG_ENABLE_CUDA)
     add_test(NAME fdm_endpoint_cache_cuda_runtime
         COMMAND endpoint_cache_cuda_runtime)
 
+    add_executable(local_pipeline_fusion_cuda_contract
+        tests/local_pipeline_fusion_cuda_contract.cu)
+    target_include_directories(local_pipeline_fusion_cuda_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(local_pipeline_fusion_cuda_contract PRIVATE fullmag_fdm)
+    target_compile_definitions(local_pipeline_fusion_cuda_contract PRIVATE
+        FULLMAG_HAS_CUDA=1)
+    add_test(NAME fdm_local_pipeline_fusion_cuda_contract
+        COMMAND local_pipeline_fusion_cuda_contract)
+
+    add_executable(local_pipeline_fusion_cuda_benchmark
+        tests/local_pipeline_fusion_cuda_benchmark.cu)
+    target_include_directories(local_pipeline_fusion_cuda_benchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(local_pipeline_fusion_cuda_benchmark PRIVATE fullmag_fdm)
+    target_compile_definitions(local_pipeline_fusion_cuda_benchmark PRIVATE
+        FULLMAG_HAS_CUDA=1)
+
     add_executable(exchange_fp64_parity tests/exchange_fp64_parity.cu)
     target_link_libraries(exchange_fp64_parity PRIVATE fullmag_fdm)
     add_test(NAME fdm_exchange_fp64_parity COMMAND exchange_fp64_parity)

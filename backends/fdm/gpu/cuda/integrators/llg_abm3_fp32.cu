@@ -17,6 +17,9 @@ namespace fdm {
 extern void launch_exchange_field_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
+extern bool launch_effective_field_and_base_llg_rhs_fp32(
+    Context &ctx, double evaluation_time, DeviceVectorField &rhs_out,
+    cudaStream_t stream);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
@@ -96,16 +99,50 @@ static void abm3_rotate_history_fp32(Context &ctx, uint64_t n) {
     cudaMemcpy(ctx.abm_f_n1.z, ctx.abm_f_n.z,  bytes, cudaMemcpyDeviceToDevice);
 }
 
+static bool compute_abm3_rhs_fp32(
+    Context &ctx,
+    DeviceVectorField &rhs_out,
+    int n,
+    int grid,
+    float gamma_bar,
+    float alpha,
+    double evaluation_time)
+{
+    if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
+    if (ctx.enable_demag) launch_demag_field_fp32(ctx);
+    const bool fuse_local_pipeline =
+        !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt && !ctx.has_slonczewski_stt && !ctx.has_sot;
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp32(
+                ctx, evaluation_time, rhs_out, nullptr)) return false;
+    } else {
+        launch_effective_field_fp32(ctx, evaluation_time);
+        if (abort_step_from_tmp(ctx, false)) return false;
+        llg_rhs_fp32_kernel<<<grid, 256>>>(
+            static_cast<const float*>(ctx.m.x),
+            static_cast<const float*>(ctx.m.y),
+            static_cast<const float*>(ctx.m.z),
+            static_cast<const float*>(ctx.work.x),
+            static_cast<const float*>(ctx.work.y),
+            static_cast<const float*>(ctx.work.z),
+            static_cast<float*>(rhs_out.x),
+            static_cast<float*>(rhs_out.y),
+            static_cast<float*>(rhs_out.z),
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "ABM3 fp32 LLG RHS launch");
+    }
+    return !abort_step_from_tmp(ctx, false);
+}
+
 static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
         return;
     }
-
-    int n = static_cast<int>(ctx.cell_count);
-    int grid = (n + 255) / 256;
-    float alpha_f = static_cast<float>(ctx.alpha);
-    float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
 
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
@@ -127,14 +164,8 @@ static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step
         ctx.m.x, ctx.m.y, ctx.m.z,
         ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
 
-    llg_rhs_fp32_kernel<<<grid, 256>>>(
-        static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-        static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
-        static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
-        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
-    double max_dm_dt = reduce_max_norm_fp32(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+    double max_dm_dt = reduce_max_norm_fp32(
+        ctx, ctx.abm_f_n.x, ctx.abm_f_n.y, ctx.abm_f_n.z, ctx.cell_count);
     stats->step = ctx.pending_step_count;
     stats->time_seconds = ctx.pending_time;
     stats->dt_seconds = dt;
@@ -170,19 +201,9 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         cudaMemcpy(ctx.tmp.y, ctx.m.y, bytes, cudaMemcpyDeviceToDevice);
         cudaMemcpy(ctx.tmp.z, ctx.m.z, bytes, cudaMemcpyDeviceToDevice);
 
-        if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
-        if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx, step_start_time);
-        if (abort_step_from_tmp(ctx, false)) return;
-
-        llg_rhs_fp32_kernel<<<grid, 256>>>(
-            static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-            static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
-            static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
-            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
-        if (abort_step_from_tmp(ctx, false)) return;
+        if (!compute_abm3_rhs_fp32(
+                ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
+                step_start_time)) return;
 
         heun_predictor_fp32_kernel<<<grid, 256>>>(
             static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
@@ -192,19 +213,9 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         launch_project_frozen_fp32(ctx, nullptr);
         if (abort_step_from_tmp(ctx, false)) return;
 
-        if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
-        if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx, step_start_time + dt);
-        if (abort_step_from_tmp(ctx, false)) return;
-
-        llg_rhs_fp32_kernel<<<grid, 256>>>(
-            static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-            static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
-            static_cast<float*>(ctx.h_ex.x), static_cast<float*>(ctx.h_ex.y), static_cast<float*>(ctx.h_ex.z),
-            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
-        if (abort_step_from_tmp(ctx, false)) return;
+        if (!compute_abm3_rhs_fp32(
+                ctx, ctx.h_ex, n, grid, gamma_bar_f, alpha_f,
+                step_start_time + dt)) return;
 
         heun_corrector_fp32_kernel<<<grid, 256>>>(
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
@@ -217,19 +228,13 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         context_stage_accepted_step(ctx, dt);
 
-        if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
-        if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx, ctx.pending_time);
-
+        if (!compute_abm3_rhs_fp32(
+                ctx, ctx.h_ex, n, grid, gamma_bar_f, alpha_f,
+                ctx.pending_time)) return;
         abm3_rotate_history_fp32(ctx, ctx.cell_count);
-
-        llg_rhs_fp32_kernel<<<grid, 256>>>(
-            static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-            static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
-            static_cast<float*>(ctx.abm_f_n.x), static_cast<float*>(ctx.abm_f_n.y), static_cast<float*>(ctx.abm_f_n.z),
-            n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-        fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
+        cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(ctx.abm_f_n.z, ctx.h_ex.z, bytes, cudaMemcpyDeviceToDevice);
 
         ctx.abm_startup++;
         ctx.abm_last_dt = dt;
@@ -252,19 +257,9 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     launch_project_frozen_fp32(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
-    if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
-    if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-    launch_effective_field_fp32(ctx, step_start_time + dt);
-    if (abort_step_from_tmp(ctx, false)) return;
-
-    llg_rhs_fp32_kernel<<<grid, 256>>>(
-        static_cast<const float*>(ctx.m.x), static_cast<const float*>(ctx.m.y), static_cast<const float*>(ctx.m.z),
-        static_cast<const float*>(ctx.work.x), static_cast<const float*>(ctx.work.y), static_cast<const float*>(ctx.work.z),
-        static_cast<float*>(ctx.k1.x), static_cast<float*>(ctx.k1.y), static_cast<float*>(ctx.k1.z),
-        n, gamma_bar_f, alpha_f, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "ABM3 fp32 LLG RHS launch");
-    if (abort_step_from_tmp(ctx, false)) return;
+    if (!compute_abm3_rhs_fp32(
+            ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
+            step_start_time + dt)) return;
 
     abm3_corrector_fp32_kernel<<<grid, 256>>>(
         static_cast<const float*>(ctx.tmp.x), static_cast<const float*>(ctx.tmp.y), static_cast<const float*>(ctx.tmp.z),
@@ -276,12 +271,14 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     launch_project_frozen_fp32(ctx, nullptr);
     if (abort_step_from_tmp(ctx, false)) return;
 
+    if (!compute_abm3_rhs_fp32(
+            ctx, ctx.h_ex, n, grid, gamma_bar_f, alpha_f,
+            step_start_time + dt)) return;
     context_stage_accepted_step(ctx, dt);
-
     abm3_rotate_history_fp32(ctx, ctx.cell_count);
-    cudaMemcpy(ctx.abm_f_n.x, ctx.k1.x, bytes, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(ctx.abm_f_n.y, ctx.k1.y, bytes, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(ctx.abm_f_n.z, ctx.k1.z, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ctx.abm_f_n.z, ctx.h_ex.z, bytes, cudaMemcpyDeviceToDevice);
     ctx.abm_last_dt = dt;
 
     abm3_fill_diagnostics_fp32(ctx, dt, stats);
