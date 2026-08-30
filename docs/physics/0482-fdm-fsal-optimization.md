@@ -121,6 +121,12 @@ $\boldsymbol\xi_{n+1}$, więc dla $T>0$ warunek FSAL jest zawsze fałszywy.
   widm FFT, precision, PBC, topologią masek, rozwiązanym układem materiałowym
   oraz integratorem. Niezgodność kończy import przed uploadem i commit; schema
   v3 jest odrzucana jawnie, ponieważ nie zawiera tej tożsamości.
+- Konstrukcja single-grid CUDA wykonuje agregatowy preflight przed pierwszą
+  alokacją setupu. Budżet obejmuje pola solvera i integratora, dwie pule
+  snapshotów, redukcje i rekordy sterujące, maski, pola materiałowe, FFT,
+  sześć widm tensora demag, work area cuFFT oraz opcjonalne dane korekty
+  brzegowej. Przekroczenie budżetu kończy setup atomowo, bez częściowego
+  workspace ani planu FFT.
 - Bounded test natywnego ABI nie promuje całego publicznego adaptive FDM GPU do
   statusu zwalidowanego produkcyjnie.
 
@@ -239,6 +245,11 @@ runtime, a faktyczne wykonanie musi być widoczne w receipt/proweniencji.
 - Checkpoint schema v4 jest jedyną eksportowaną wersją natywnego LLG CUDA.
   Import i eksport schema v3 kończą się fail-closed z komunikatem migracji do
   v4; nie istnieje adapter, który mógłby odtworzyć brakujący dependency key.
+- Plan single-grid, którego pełny setup przekracza użyteczną pamięć urządzenia
+  po zachowaniu rezerwy, kończy się
+  `fdm_gpu_workspace_oom_preflight` z wymaganym agregatem, dostępnym budżetem,
+  pamięcią wolną i całkowitą oraz rezerwą bezpieczeństwa. Ten błąd występuje
+  przed pierwszą alokacją backendu i utworzeniem planu cuFFT.
 
 W terminologii kontraktu są to: **requested intent** (integrator, temperatura,
 device i precision zapisane przez autora), **resolved execution** (jeden plan
@@ -276,6 +287,7 @@ indeks zaakceptowanego kroku i licznik każdego stabilnego powodu invalidation.
 | kanoniczny dependency key workspace | `backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp` + `context_build_workspace_dependency_identity_v1` |
 | checkpoint LLG schema v4 | `backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp` + `context_llg_checkpoint_export_v4`, `context_llg_checkpoint_import_v4` |
 | publiczne ABI tożsamości workspace | `native/include/fullmag_fdm.h` + `fullmag_fdm_workspace_dependency_identity_v1`, `fullmag_fdm_llg_checkpoint_info_v4` |
+| agregatowy preflight setupu single-grid | `backends/fdm/gpu/cuda/runtime/context.cu` + `context_preflight_single_grid_workspace` |
 | termiczna realizacja FP64 / FP32 | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` + `compute_demag_field_fp64`; `demag_fp32.cu` + `compute_demag_field_fp32` |
 | Python i IR | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `LLG`; `model/energy.py` + `ThermalNoise`; `crates/fullmag-ir/src/execution.rs` + `IntegratorChoice`; `crates/fullmag-ir/src/study.rs` + `EnergyTermIR` |
 | planner fail-closed | `crates/fullmag-plan/src/fdm.rs` + `plan_fdm` |
@@ -300,6 +312,9 @@ Wymagane bramki dla bounded FDM CUDA obejmują:
    workspace odtwarza stan bitowo bez nowych alokacji, natomiast zmiana każdej
    z kategorii grid/FFT/precision/PBC/mask/material/integrator zmienia digest;
    różny kształt siatki o tej samej liczbie komórek musi zostać odrzucony.
+7. Kontrolowany actual-device OOM, w którym dotychczasowa dolna granica mieści
+   się w budżecie, lecz opcjonalny demag/FFT już nie: konstrukcja musi zakończyć
+   się przed pierwszą alokacją backendu, planem FFT i krokiem.
 
 Wszystkie powyższe bramki przeszły 2026-08-28 w zarządzanym kontenerze CUDA
 12.4 na `NVIDIA GeForce RTX 3070 Laptop GPU` (compute capability 8.6). Dla
@@ -324,6 +339,18 @@ integratorów **1/1**. `just verify-fdm-gpu-workspace-contract` wykonał CTest
 `cargo check --features cuda`. Receipt wskazał `cuda_fdm`, RTX 3070 Laptop,
 compute capability 8.6 i brak fallbacku.
 
+Agregatowy preflight pełnego setupu single-grid przeszedł 2026-08-30 dla
+commitu `396545c4ea67259ab93f1def284c11a41a2d862b`. Kontrolowany RED na
+poprzedniej realizacji przeszedł przez minimalny preflight, rozpoczął setup i
+zakończył się dopiero późnym OOM przy kolejnej alokacji. GREEN z demag i jawnym
+paddingiem FFT wymaga `required_aggregate_workspace_bytes` oraz zerowych
+alokacji backendu, planów FFT i kroków. Zarządzany
+`just verify-fdm-gpu-workspace-contract` przeszedł CTest **4/4**, oba testy
+layoutu FFI, mapowanie telemetrii, provenance, `rustfmt` i `cargo check`.
+Sąsiedni `just verify-fdm-gpu-transaction-contract` przeszedł CTest **3/3**,
+bitowy restore i odrzucenie korupcji **1/1** oraz rollback wszystkich pięciu
+integratorów **1/1** na RTX 3070 Laptop (compute capability 8.6), bez fallbacku.
+
 (limitations)=
 ## Ograniczenia
 
@@ -338,6 +365,11 @@ compute capability 8.6 i brak fallbacku.
 - Dependency key i checkpoint v4 są obecnie kwalifikowane tylko dla single-grid
   FDM CUDA; schema v3 nie ma bezpiecznej migracji, a pełne publiczne
   Python--IR--runner checkpoint E2E pozostaje otwarte.
+- Agregatowy preflight obejmuje zasoby tworzone podczas setupu single-grid.
+  Nie obejmuje osobnego bufora pobierania preview tworzonego na żądanie ani
+  agregatu wielu warstw; te ścieżki wymagają oddzielnych kontraktów. Nie jest
+  też dowodem repeated-session Compute Sanitizer, zgodności graph capture ani
+  steady-state time-to-accuracy.
 
 (scientific-bibliography)=
 ## Bibliografia naukowa
@@ -368,6 +400,7 @@ compute capability 8.6 i brak fallbacku.
 | append-only ABI v2 | `native/include/fullmag_fdm.h` + `fullmag_fdm_backend_get_fsal_telemetry_v2`; `crates/fullmag-fdm-sys/src/lib.rs` + `fullmag_fdm_fsal_telemetry_v2` | C/Rust ABI | layout tests |
 | dependency key workspace | `backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp` + `context_build_workspace_dependency_identity_v1` | FDM GPU | actual-device matrix grid/FFT/precision/PBC/mask/material/integrator PASS |
 | checkpoint LLG schema v4 | `backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp` + `context_llg_checkpoint_export_v4`, `context_llg_checkpoint_import_v4` | FDM GPU | bitowy restore, odrzucenie korupcji i kolizji cell-count PASS |
+| kontrolowany budżet testu agregatowego preflightu | `backends/fdm/tests/multilayer_create_v2_contract.cpp` + `class DeviceMemoryReserve` | FDM GPU | `optional_demag_workspace_is_rejected_before_any_allocation`; managed actual-device CUDA PASS |
 | ABI checkpointu v4 | `native/include/fullmag_fdm.h` + `fullmag_fdm_backend_llg_checkpoint_import_v4`; `crates/fullmag-fdm-sys/src/lib.rs` + `fullmag_fdm_llg_checkpoint_info_v4` | C/Rust ABI | dokładny layout 200/520 B i symbole FFI PASS |
 | publiczne mapowanie LLG | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `class LLG` | Python/IR | Python round-trip i planner tests |
 | publiczne mapowanie termiki | `packages/fullmag-py/src/fullmag/model/energy.py` + `class ThermalNoise` | Python/IR | Python round-trip i planner tests |

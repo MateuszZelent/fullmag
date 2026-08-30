@@ -2,7 +2,7 @@
   "document": {"path": "docs/physics/0482-fdm-fsal-optimization.md"},
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "separate-contract", "scope": "reference RK23/RK45", "qualification": "not promoted by this note", "evidence": "fullmag-engine tests"},
-    {"solver": "FDM", "device": "GPU", "status": "implemented", "scope": "single-grid RK23/DP45 FP32 and FP64 FSAL invalidation plus workspace-bound checkpoint v4", "qualification": "bounded managed-CUDA runtime contract passed; public adaptive lane remains unvalidated", "evidence": "fdm_fsal_retry_transaction_contract, fdm_fsal_thermal_cuda_runtime_contract, checkpoint restore and workspace identity matrix"},
+    {"solver": "FDM", "device": "GPU", "status": "implemented", "scope": "single-grid RK23/DP45 FP32 and FP64 FSAL invalidation, workspace-bound checkpoint v4, and aggregate setup-memory preflight", "qualification": "bounded managed-CUDA runtime contract passed; on-demand preview scratch, multilayer aggregate preflight and public adaptive lane remain unvalidated", "evidence": "fdm_fsal_retry_transaction_contract, fdm_fsal_thermal_cuda_runtime_contract, checkpoint restore, workspace identity matrix, and optional-demag fail-before-allocation contract"},
     {"solver": "FEM", "device": "CPU", "status": "separate-contract", "scope": "MFEM/hypre time integration", "qualification": "not promoted by this note", "evidence": "none claimed"},
     {"solver": "FEM", "device": "GPU", "status": "separate-contract", "scope": "MFEM/hypre/libCEED/CUDA time integration", "qualification": "not promoted by this note", "evidence": "none claimed"}
   ],
@@ -61,7 +61,9 @@
     {"id": "workspace_identity", "path": "backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp", "symbol": "context_build_workspace_dependency_identity_v1", "responsibility": "Build the canonical workspace dependency digest from grid, FFT, precision, PBC, mask, resolved material layout and integrator."},
     {"id": "checkpoint_v4", "path": "backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp", "symbol": "context_llg_checkpoint_import_v4", "responsibility": "Reject incompatible workspace identity before checkpoint upload and commit."},
     {"id": "checkpoint_v4_abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_backend_llg_checkpoint_import_v4", "responsibility": "Define the append-only workspace-bound LLG checkpoint import ABI."},
-    {"id": "runtime_checkpoint_identity", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "verify_workspace_dependency_identity_matrix", "responsibility": "Prove deterministic dependency identity, fail-closed ABI handling and category-by-category invalidation on an actual CUDA device."}
+    {"id": "runtime_checkpoint_identity", "path": "backends/fdm/tests/fsal_thermal_cuda_runtime.cpp", "symbol": "verify_workspace_dependency_identity_matrix", "responsibility": "Prove deterministic dependency identity, fail-closed ABI handling and category-by-category invalidation on an actual CUDA device."},
+    {"id": "workspace_preflight", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_preflight_single_grid_workspace", "responsibility": "Compute the checked aggregate byte requirement for all setup-owned single-grid CUDA resources before the first backend allocation."},
+    {"id": "workspace_preflight_test", "path": "backends/fdm/tests/multilayer_create_v2_contract.cpp", "symbol": "class DeviceMemoryReserve", "responsibility": "Provide the bounded actual-device memory budget used to prove that optional demag and cuFFT resources are rejected before any backend allocation, FFT plan, or step."}
   ],
   "public_api": {
     "parameters": [
