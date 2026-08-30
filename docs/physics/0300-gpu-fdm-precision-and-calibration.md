@@ -1,6 +1,6 @@
 # Polityka precyzji i kalibracja GPU FDM
 
-- Status: qualification candidate; niepromowany globalnie
+- Status: physics-validated dla dokładnych workloadów NUM-002; szersze lane'y niepromowane
 - Owners: Fullmag core
 - Last updated: 2026-08-30
 - Related ADRs: `docs/adr/0001-physics-first-python-api.md`, `docs/adr/0028-fdm-cuda-precision-policy.md`
@@ -387,8 +387,8 @@ precision mode, not an equivalent `fp64` implementation.
 Powtarzalna bramka to
 `just verify-fdm-gpu-precision-policy-native-qualification`. Receipt jest
 zapisywany poza checkoutem jako
-`/mnt/fullmag-zfn2-native/fdm-gpu-precision-policy-contract/precision-policy-qualification-v1.json`.
-Zawiera pełny commit bazowy, SHA-256 roboczego diffu, requested/resolved/executed
+`/mnt/fullmag-zfn2-native-num002/fdm-gpu-precision-policy-contract/precision-policy-qualification-v1.json`.
+Zawiera pełny commit źródłowy, SHA-256 diffu względem tego commitu, requested/resolved/executed
 policy, urządzenie, sterownik, runtime, interakcje, liczniki operatorów,
 accepted/rejected, błędy, VRAM i stop reason.
 
@@ -424,7 +424,7 @@ siedem natywnych testów zarządzanej bramki przeszło.
 Widmo tensora użyte do porównania precyzji FFT jest jawnie oznaczone jako
 syntetyczny fixture numeryczny. Nie zastępuje oracla fizycznego Newella.
 Pełny kontrakt `just verify-fdm-gpu-precision-policy-contract` wykonał na tym
-samym aktualnym diffie niezależne porównania CPU↔GPU dla fizycznego tensora
+samym czystym commicie niezależne porównania CPU↔GPU dla fizycznego tensora
 Newella: thin-film oraz periodic truncated-images. Oba testy przeszły bez
 poluzowania tolerancji.
 
@@ -434,9 +434,11 @@ przenosił warunków periodycznych i porównywał GPU periodic z CPU open. Helpe
 został wyrównany z produkcyjnym `materialize_reference_problem`; dopiero po tej
 naprawie wynik jest dowodem tej samej fizyki po obu stronach.
 
-Receipt natywny jest obecnie związany z bazowym commitem i SHA-256 roboczego
-diffu. Promocja rejestru pozostaje wstrzymana do ponownego wykonania tej samej
-bramki na czystym commicie źródłowym.
+Finalny receipt jest związany z czystym commitem
+`a8ced10bc56ad35d65c7549ef6574488def2fc8e` oraz SHA-256 pustego diffu
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+Rejestr promuje wyłącznie wymienione workloady NUM-002 do
+`physics_validated`; nie zmienia statusu szerszych fixed/adaptive lane'ów.
 
 ## 6. Completeness checklist
 
@@ -455,9 +457,9 @@ bramki na czystym commicie źródłowym.
 ## 7. Known limits and deferred work
 
 - The current CPU reference runner remains `double` only.
-- Single-grid CUDA ma sprzętowy receipt i zielone orakle Newella dla dwóch
-  kompletnych polityk, lecz promocja rejestru wymaga jeszcze receipt z czystego
-  commita źródłowego.
+- Single-grid CUDA ma czysty sprzętowy receipt i zielone orakle Newella dla
+  dwóch kompletnych polityk, ale kwalifikacja jest tuple-specific i nie
+  obejmuje automatycznie innych siatek, integratorów ani interakcji.
 - Multilayer FP32 ma odrębne ograniczenia, nie dziedziczy tej kwalifikacji
   single-grid, a bounded device-resident lane obecnie odrzuca tę kombinację.
 - Public `mixed` precision is intentionally deferred.
