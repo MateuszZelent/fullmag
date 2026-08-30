@@ -125,8 +125,10 @@ $\boldsymbol\xi_{n+1}$, więc dla $T>0$ warunek FSAL jest zawsze fałszywy.
   alokacją setupu. Budżet obejmuje pola solvera i integratora, dwie pule
   snapshotów, redukcje i rekordy sterujące, maski, pola materiałowe, FFT,
   sześć widm tensora demag, work area cuFFT oraz opcjonalne dane korekty
-  brzegowej. Przekroczenie budżetu kończy setup atomowo, bez częściowego
-  workspace ani planu FFT.
+  brzegowej i maksymalny bufor synchronicznego preview FP64. Przekroczenie
+  budżetu kończy setup atomowo, bez częściowego workspace ani planu FFT.
+  Preview mniejsze od siatki wykorzystuje ten bufor bez alokacji po setupie;
+  żądanie przekraczające jego pojemność kończy się fail-closed.
 - Bounded test natywnego ABI nie promuje całego publicznego adaptive FDM GPU do
   statusu zwalidowanego produkcyjnie.
 
@@ -288,6 +290,7 @@ indeks zaakceptowanego kroku i licznik każdego stabilnego powodu invalidation.
 | checkpoint LLG schema v4 | `backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp` + `context_llg_checkpoint_export_v4`, `context_llg_checkpoint_import_v4` |
 | publiczne ABI tożsamości workspace | `native/include/fullmag_fdm.h` + `fullmag_fdm_workspace_dependency_identity_v1`, `fullmag_fdm_llg_checkpoint_info_v4` |
 | agregatowy preflight setupu single-grid | `backends/fdm/gpu/cuda/runtime/context.cu` + `context_preflight_single_grid_workspace` |
+| setup-owned synchronous preview | `backends/fdm/gpu/cuda/runtime/context.cu` + `ensure_preview_download_scratch`, `context_download_field_preview_impl` |
 | termiczna realizacja FP64 / FP32 | `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` + `compute_demag_field_fp64`; `demag_fp32.cu` + `compute_demag_field_fp32` |
 | Python i IR | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `LLG`; `model/energy.py` + `ThermalNoise`; `crates/fullmag-ir/src/execution.rs` + `IntegratorChoice`; `crates/fullmag-ir/src/study.rs` + `EnergyTermIR` |
 | planner fail-closed | `crates/fullmag-plan/src/fdm.rs` + `plan_fdm` |
@@ -315,6 +318,9 @@ Wymagane bramki dla bounded FDM CUDA obejmują:
 7. Kontrolowany actual-device OOM, w którym dotychczasowa dolna granica mieści
    się w budżecie, lecz opcjonalny demag/FFT już nie: konstrukcja musi zakończyć
    się przed pierwszą alokacją backendu, planem FFT i krokiem.
+8. Publiczny downsampling FP64 z kontekstu FP32 zachowuje wartości pola i nie
+   zmienia liczby ani bajtów alokacji po setupie; żądanie większe od
+   setup-owned capacity jest odrzucane bez realokacji.
 
 Wszystkie powyższe bramki przeszły 2026-08-28 w zarządzanym kontenerze CUDA
 12.4 na `NVIDIA GeForce RTX 3070 Laptop GPU` (compute capability 8.6). Dla
@@ -351,6 +357,19 @@ Sąsiedni `just verify-fdm-gpu-transaction-contract` przeszedł CTest **3/3**,
 bitowy restore i odrzucenie korupcji **1/1** oraz rollback wszystkich pięciu
 integratorów **1/1** na RTX 3070 Laptop (compute capability 8.6), bez fallbacku.
 
+Synchroniczny preview został domknięty 2026-08-30 w commicie
+`0ef81429f1d35fcc7feb99b11867f175968632d2`. RED na poprzedniej realizacji
+wykonał publiczny downsampling `4×1×1 → 2×1×1` w FP64 z kontekstu FP32 i
+wykazał alokację `preview_download_scratch` po zamknięciu setupu. GREEN
+przeniósł maksymalny bufor `3 × cell_count × sizeof(double)` do setupu,
+uwzględnił go w agregatowym preflight i zachował niezmienione liczniki oraz
+bajty workspace przed i po preview. Bezpośrednie żądanie `5×1×1` dla siatki
+`4×1×1` zostało odrzucone fail-closed bez realokacji. Zarządzany
+`just verify-fdm-gpu-workspace-contract` przeszedł CTest **4/4**, testy FFI,
+mapowanie telemetrii, provenance, `rustfmt` i `cargo check`; sąsiedni kontrakt
+transakcji ponownie przeszedł CTest **3/3**, checkpoint **1/1** i rollback
+pięciu integratorów **1/1** na rzeczywistym CUDA.
+
 (limitations)=
 ## Ograniczenia
 
@@ -365,11 +384,11 @@ integratorów **1/1** na RTX 3070 Laptop (compute capability 8.6), bez fallbacku
 - Dependency key i checkpoint v4 są obecnie kwalifikowane tylko dla single-grid
   FDM CUDA; schema v3 nie ma bezpiecznej migracji, a pełne publiczne
   Python--IR--runner checkpoint E2E pozostaje otwarte.
-- Agregatowy preflight obejmuje zasoby tworzone podczas setupu single-grid.
-  Nie obejmuje osobnego bufora pobierania preview tworzonego na żądanie ani
-  agregatu wielu warstw; te ścieżki wymagają oddzielnych kontraktów. Nie jest
-  też dowodem repeated-session Compute Sanitizer, zgodności graph capture ani
-  steady-state time-to-accuracy.
+- Agregatowy preflight obejmuje zasoby tworzone podczas setupu single-grid,
+  w tym synchroniczny bufor preview o pojemności pełnej siatki w FP64. Nie
+  obejmuje agregatu wielu warstw; ta ścieżka wymaga oddzielnego kontraktu. Nie
+  jest też dowodem repeated-session Compute Sanitizer, zgodności graph capture
+  ani steady-state time-to-accuracy.
 
 (scientific-bibliography)=
 ## Bibliografia naukowa
@@ -401,6 +420,7 @@ integratorów **1/1** na RTX 3070 Laptop (compute capability 8.6), bez fallbacku
 | dependency key workspace | `backends/fdm/gpu/cuda/runtime/workspace_dependency_identity.cpp` + `context_build_workspace_dependency_identity_v1` | FDM GPU | actual-device matrix grid/FFT/precision/PBC/mask/material/integrator PASS |
 | checkpoint LLG schema v4 | `backends/fdm/gpu/cuda/runtime/llg_checkpoint.cpp` + `context_llg_checkpoint_export_v4`, `context_llg_checkpoint_import_v4` | FDM GPU | bitowy restore, odrzucenie korupcji i kolizji cell-count PASS |
 | kontrolowany budżet testu agregatowego preflightu | `backends/fdm/tests/multilayer_create_v2_contract.cpp` + `class DeviceMemoryReserve` | FDM GPU | `optional_demag_workspace_is_rejected_before_any_allocation`; managed actual-device CUDA PASS |
+| synchroniczny preview bez alokacji po setupie | `backends/fdm/tests/multilayer_create_v2_contract.cpp` + `void synchronous_preview_reuses_setup_owned_workspace` | FDM GPU | FP32 context → FP64 downsampling, invariant workspace i oversized fail-closed; managed actual-device CUDA PASS |
 | ABI checkpointu v4 | `native/include/fullmag_fdm.h` + `fullmag_fdm_backend_llg_checkpoint_import_v4`; `crates/fullmag-fdm-sys/src/lib.rs` + `fullmag_fdm_llg_checkpoint_info_v4` | C/Rust ABI | dokładny layout 200/520 B i symbole FFI PASS |
 | publiczne mapowanie LLG | `packages/fullmag-py/src/fullmag/model/dynamics.py` + `class LLG` | Python/IR | Python round-trip i planner tests |
 | publiczne mapowanie termiki | `packages/fullmag-py/src/fullmag/model/energy.py` + `class ThermalNoise` | Python/IR | Python round-trip i planner tests |
