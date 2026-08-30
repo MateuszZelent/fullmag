@@ -54,6 +54,7 @@ class BenchmarkGateTests(unittest.TestCase):
         self.assertEqual(payload["status"], "pass")
         self.assertEqual(len(payload["cases"]), 6)
         self.assertEqual(payload["policy"]["small_medium_maximum_ratio"], 1.01)
+        self.assertEqual(payload["policy"]["large_maximum_regression"], 0.02)
 
     def test_small_medium_measurement_noise_within_budget_passes(self):
         fixture = records()

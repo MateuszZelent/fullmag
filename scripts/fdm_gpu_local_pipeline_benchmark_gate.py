@@ -24,6 +24,7 @@ MAX_REGISTERS_PER_THREAD = 128
 MAX_LOCAL_BYTES_PER_THREAD = 0
 MIN_THEORETICAL_OCCUPANCY_PERMYRIAD = 2500
 SMALL_MEDIUM_MAXIMUM_RATIO = 1.01
+LARGE_MAXIMUM_REGRESSION = 0.02
 LARGE_MAXIMUM_RATIO = 1.02
 
 
@@ -265,7 +266,7 @@ def evaluate(
             "requested": "auto_safe",
             "tested_realizations": list(EXPECTED_REALIZATIONS),
             "small_medium_maximum_ratio": SMALL_MEDIUM_MAXIMUM_RATIO,
-            "large_maximum_regression": LARGE_MAXIMUM_RATIO - 1.0,
+            "large_maximum_regression": LARGE_MAXIMUM_REGRESSION,
             "maximum_registers_per_thread": MAX_REGISTERS_PER_THREAD,
             "maximum_local_bytes_per_thread": MAX_LOCAL_BYTES_PER_THREAD,
             "minimum_theoretical_occupancy_permyriad":
