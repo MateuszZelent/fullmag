@@ -66,59 +66,147 @@ Let $\mathbf m$ be the unit magnetization, $\hat{\boldsymbol\sigma}$ the unit sp
 polarization, and $J_{\mathrm{signed}}$ the conventional signed charge-current
 density. A thin-film reduction converts an effective spin angular-momentum flux
 $(\hbar/2e)\,\xi J_{\mathrm{signed}}$ into a volume source by dividing by the
-free-layer thickness $t_F$. Fullmag writes the resulting frequency scale as
+free-layer thickness $t_F$.
+
+The reduction is written below as separate equations. This is intentional: the
+base current-to-frequency conversion, the two efficiencies, and the two torque
+directions are different modelling choices and should not be read as one fitted
+constant.
+
+### Base current-to-frequency conversion
 
 ```{math}
-:label: eq-prescribed-sot-prefactor
+:label: eq-prescribed-sot-base-rate
 \Omega_0 =
 \frac{\gamma_e\hbar J_{\mathrm{signed}}}
-     {2eM_s t_F},
-\qquad
-\Omega_{\mathrm{DL}}=\xi_{\mathrm{DL}}\Omega_0,
-\qquad
-\Omega_{\mathrm{FL}}=\xi_{\mathrm{FL}}\Omega_0.
+     {2eM_s t_F}.
 ```
 
-Here $e>0$ is the elementary charge and $\gamma_e>0$ is the magnitude of the
-electron gyromagnetic ratio. The canonical Gilbert-form source is
+This equation answers only: "how large is the torque frequency before DL/FL
+efficiencies are applied?" Its sign comes from $J_{\mathrm{signed}}$. Increasing
+$M_s$ or $t_F$ reduces the same injected angular momentum per magnetic volume.
+The constants $e$, $\hbar$, and $\gamma_e$ are supplied by the backend and are
+not Python inputs.
+
+### Damping-like rate
 
 ```{math}
-:label: eq-prescribed-sot-gilbert
-\mathbf T_{\mathrm{SOT}}^{G} =
-\Omega_{\mathrm{DL}}\,
-\mathbf m\times(\hat{\boldsymbol\sigma}\times\mathbf m)
-+
-\Omega_{\mathrm{FL}}\,
+:label: eq-prescribed-sot-dl-rate
+\Omega_{\mathrm{DL}}
+=
+\xi_{\mathrm{DL}}\Omega_0.
+```
+
+`xi_dl` is an effective dimensionless damping-like efficiency. In a reduced
+model it absorbs bulk conversion, interface transmission, spin backflow, and
+other stack-specific losses. It is usually inferred from harmonic Hall,
+spin-torque ferromagnetic resonance, switching, or another calibrated torque
+measurement. It is not automatically equal to the bulk spin Hall angle.
+
+### Field-like rate
+
+```{math}
+:label: eq-prescribed-sot-fl-rate
+\Omega_{\mathrm{FL}}
+=
+\xi_{\mathrm{FL}}\Omega_0.
+```
+
+`xi_fl` is the signed effective field-like efficiency. Its sign and magnitude
+can depend strongly on interfaces, stack order, annealing, and the convention
+used for current and interface normal. Do not infer it from `xi_dl` unless the
+chosen physical model or measurement explicitly supplies that relation.
+
+### Damping-like Gilbert torque
+
+```{math}
+:label: eq-prescribed-sot-dl-gilbert
+\mathbf T_{\mathrm{DL}}^{G}
+=
+\Omega_{\mathrm{DL}}
+\mathbf m\times
+(\hat{\boldsymbol\sigma}\times\mathbf m).
+```
+
+The vector $\mathbf m\times(\hat{\boldsymbol\sigma}\times\mathbf m)$ is the
+component of $\hat{\boldsymbol\sigma}$ transverse to $\mathbf m$. The DL term
+therefore pushes $\mathbf m$ toward or away from that transverse polarization,
+depending on the total sign of $J_{\mathrm{signed}}\xi_{\mathrm{DL}}$.
+
+### Field-like Gilbert torque
+
+```{math}
+:label: eq-prescribed-sot-fl-gilbert
+\mathbf T_{\mathrm{FL}}^{G}
+=
+\Omega_{\mathrm{FL}}
 \mathbf m\times\hat{\boldsymbol\sigma}.
 ```
 
-The first basis vector points toward the component of
-$\hat{\boldsymbol\sigma}$ transverse to $\mathbf m$; the second is orthogonal to
-both. Reversing the signed current, reversing `sigma`, or reversing either one
-of the signed efficiencies reverses the corresponding source. Reversing both
-the current and `sigma` leaves the torque unchanged.
+The vector $\mathbf m\times\hat{\boldsymbol\sigma}$ has the same geometry as
+precession about a field parallel to $\hat{\boldsymbol\sigma}$. This explains
+the name "field-like"; `xi_fl` remains a torque efficiency, not a magnetic-field
+input in tesla.
+
+### Total Gilbert source
+
+```{math}
+:label: eq-prescribed-sot-gilbert-total
+\mathbf T_{\mathrm{SOT}}^{G}
+=
+\mathbf T_{\mathrm{DL}}^{G}
++
+\mathbf T_{\mathrm{FL}}^{G}.
+```
+
+The source has units $\mathrm{s^{-1}}$ and is added to the magnetization time
+derivative. Reversing the signed current, reversing `sigma`, or reversing one
+efficiency reverses the corresponding term. Reversing both current and `sigma`
+leaves the torque unchanged.
 
 ### Gilbert-to-explicit conversion
 
 Backends add an explicit right-hand-side contribution after solving the Gilbert
-form once. For damping $\alpha$, the implemented coefficient convention is
+form once. Define the explicit damping-like coefficient separately:
 
 ```{math}
-:label: eq-prescribed-sot-explicit
-\mathbf T_{\mathrm{SOT}} =
-\frac{\Omega_0}{1+\alpha^2}
-\left[
-(\xi_{\mathrm{DL}}-\alpha\xi_{\mathrm{FL}})
-\mathbf m\times(\hat{\boldsymbol\sigma}\times\mathbf m)
-+
-(\xi_{\mathrm{FL}}+\alpha\xi_{\mathrm{DL}})
-\mathbf m\times\hat{\boldsymbol\sigma}
-\right].
+:label: eq-prescribed-sot-explicit-dl
+C_{\mathrm{DL}}
+=
+\Omega_0
+\frac{\xi_{\mathrm{DL}}-\alpha\xi_{\mathrm{FL}}}
+     {1+\alpha^2}.
 ```
 
-This mixing is why MuMax-style code often contains an apparent compensation
-between DL and FL coefficients. Author physical `xi_dl` and `xi_fl`; do not
-pre-apply the $1/(1+\alpha^2)$ transform in Python.
+Define the explicit field-like coefficient independently:
+
+```{math}
+:label: eq-prescribed-sot-explicit-fl
+C_{\mathrm{FL}}
+=
+\Omega_0
+\frac{\xi_{\mathrm{FL}}+\alpha\xi_{\mathrm{DL}}}
+     {1+\alpha^2}.
+```
+
+The actual explicit source is then
+
+```{math}
+:label: eq-prescribed-sot-explicit-total
+\mathbf T_{\mathrm{SOT}}
+=
+C_{\mathrm{DL}}
+\mathbf m\times
+(\hat{\boldsymbol\sigma}\times\mathbf m)
++
+C_{\mathrm{FL}}
+\mathbf m\times\hat{\boldsymbol\sigma}.
+```
+
+The cross-coupling by $\alpha$ is an algebraic consequence of converting the
+Gilbert equation to an explicit time derivative. It is why MuMax-style code may
+contain apparent DL/FL compensation. Author the physical `xi_dl` and `xi_fl`;
+do not pre-apply these formulas in Python.
 
 (physics-spin-orbit-torque-drives)=
 ## Drive definitions
@@ -128,14 +216,23 @@ pre-apply the $1/(1+\alpha^2)$ transform in Python.
 `SignedScalarDrive` is the direct reduced-model input:
 
 ```{math}
-:label: eq-prescribed-sot-scalar-drive
-J_{\mathrm{signed}}(t)=J_0 f(t),
-\qquad
+:label: eq-prescribed-sot-scalar-current
+J_{\mathrm{signed}}(t)
+=
+J_0 f(t).
+```
+
+`J_0` is the signed current-density amplitude controlled by the script or
+experiment. $f(t)$ is the dimensionless envelope evaluated at stage time.
+
+```{math}
+:label: eq-prescribed-sot-sigma-normalization
 \hat{\boldsymbol\sigma}=
 \frac{\boldsymbol\sigma}{\lVert\boldsymbol\sigma\rVert}.
 ```
 
-`J_0` may be positive, negative, or zero. `sigma` is normalized during
+The authored vector $\boldsymbol\sigma$ states the spin-polarization direction;
+only its direction is retained. `J_0` may be positive, negative, or zero. `sigma` is normalized during
 authoring. The optional envelope must be one of the canonical Fullmag envelope
 objects: `ConstantEnvelope`, `SinusoidalEnvelope`, `PulseEnvelope`,
 `PiecewiseLinearEnvelope`, `SincEnvelope`, or `TabulatedEnvelope`.
@@ -146,9 +243,17 @@ objects: `ConstantEnvelope`, `SinusoidalEnvelope`, `PulseEnvelope`,
 making the geometric convention explicit:
 
 ```{math}
-:label: eq-prescribed-sot-vector-drive
-J_{\mathrm{signed}} = \mathbf J_c\cdot\hat{\mathbf t},
-\qquad
+:label: eq-prescribed-sot-vector-current
+J_{\mathrm{signed}}
+=
+\mathbf J_c\cdot\hat{\mathbf t}.
+```
+
+Only the component of the named current source along `drive_direction`
+contributes to this reduced torque.
+
+```{math}
+:label: eq-prescribed-sot-vector-polarization
 \hat{\boldsymbol\sigma} =
 \frac{\hat{\mathbf n}_{NF}\times\hat{\mathbf t}}
      {\lVert\hat{\mathbf n}_{NF}\times\hat{\mathbf t}\rVert}.
@@ -168,7 +273,9 @@ source current reverses.
 | --- | --- | --- |
 | $m$ | unit magnetization | $1$ |
 | $\hat{\boldsymbol\sigma}$ | unit spin-polarization axis | $1$ |
+| $\boldsymbol\sigma$ | authored nonzero spin-polarization vector | $1$ |
 | $J_{\mathrm{signed}}$ | signed conventional charge-current density driving the local source | $\mathrm{A\,m^{-2}}$ (`A/m^2`) |
+| $J_0$ | prescribed signed current-density amplitude | $\mathrm{A\,m^{-2}}$ (`A/m^2`) |
 | $\mathbf J_c$ | named vector charge-current density | $\mathrm{A\,m^{-2}}$ (`A/m^2`) |
 | $\hat{\mathbf t}$ | normalized current-projection direction | $1$ |
 | $\hat{\mathbf n}_{NF}$ | normalized oriented nonmagnet-to-ferromagnet interface normal | $1$ |
@@ -181,6 +288,13 @@ source current reverses.
 | $e$ | positive elementary charge | $\mathrm{C}$ (`C`) |
 | $\alpha$ | Gilbert damping | $1$ |
 | $\Omega_0$ | signed base torque frequency | $\mathrm{s^{-1}}$ (`1/s`) |
+| $\Omega_{\mathrm{DL}}$ | signed damping-like Gilbert rate | $\mathrm{s^{-1}}$ (`1/s`) |
+| $\Omega_{\mathrm{FL}}$ | signed field-like Gilbert rate | $\mathrm{s^{-1}}$ (`1/s`) |
+| $C_{\mathrm{DL}}$ | damping-like coefficient after Gilbert-to-explicit conversion | $\mathrm{s^{-1}}$ (`1/s`) |
+| $C_{\mathrm{FL}}$ | field-like coefficient after Gilbert-to-explicit conversion | $\mathrm{s^{-1}}$ (`1/s`) |
+| $\mathbf T_{\mathrm{DL}}^{G}$ | damping-like source in Gilbert form | $\mathrm{s^{-1}}$ (`1/s`) |
+| $\mathbf T_{\mathrm{FL}}^{G}$ | field-like source in Gilbert form | $\mathrm{s^{-1}}$ (`1/s`) |
+| $\mathbf T_{\mathrm{SOT}}^{G}$ | total prescribed source in Gilbert form | $\mathrm{s^{-1}}$ (`1/s`) |
 | $\mathbf T_{\mathrm{SOT}}$ | prescribed spin-orbit torque contribution | $\mathrm{s^{-1}}$ (`1/s`) |
 | $f(t)$ | canonical scalar time-envelope multiplier | $1$ |
 
@@ -193,6 +307,56 @@ source current reverses.
 - The free-layer thickness is an authored physical parameter and is not inferred from mesh cells.
 - `VectorCurrentDrive` uses fixed authored axes and one signed projection of a named current source.
 - The source is local to the resolved target mask; it does not generate an Oersted field.
+
+### Which values come from where?
+
+The following classification is the practical minimum for preparing a script.
+"Literature" means a starting point for a comparable stack, not a universal
+material constant.
+
+| Script value | Category | Where to obtain it | Example used below | Required action |
+| --- | --- | --- | --- | --- |
+| `name` | model identity | chosen by the author | `"hm_sot"` | choose a unique ID |
+| `target` | geometry/model identity | Fullmag object and region names | `RegionRef("film")` | point to the magnetic free layer |
+| `body.Ms` | measured material parameter | magnetometry or a validated material dataset | $8.0\times10^5\,\mathrm{A\,m^{-1}}$ | replace with the sample value |
+| `body.Aex` | material/model parameter | spin-wave, domain-wall, or literature calibration | $13\,\mathrm{pJ\,m^{-1}}$ | replace or justify |
+| `body.alpha` | measured effective material parameter | FMR linewidth or calibrated dynamics | $0.02$ | replace with the stack value |
+| `free_layer_thickness_m` | fabricated geometry | magnetic-layer thickness, not HM thickness | $1.5\,\mathrm{nm}$ | enter the physical magnetic thickness |
+| `current_density_Apm2` | controlled drive | applied current divided by the conducting cross-section, with declared sign | $-4.0\times10^{11}\,\mathrm{A\,m^{-2}}$ | choose the sweep or pulse value |
+| `sigma` | controlled geometry and sign convention | current direction, interface normal, and SHE convention | $(0,1,0)$ | verify using a current-reversal test |
+| `xi_dl` | effective fitted SOT parameter | harmonic Hall, ST-FMR, switching fit, or literature seed | $0.12$ | calibrate for the actual stack |
+| `xi_fl` | effective fitted SOT parameter | harmonic Hall, ST-FMR, or dedicated fit | $-0.03$ | calibrate independently |
+| `envelope` | controlled waveform | experiment or numerical protocol | `None`, meaning constant | define pulse/ramp if needed |
+| `until` | controlled simulation window | physical timescale and convergence study | $1\,\mathrm{ps}$ | choose long enough for the observable |
+| cell size | numerical parameter | convergence study and exchange length | $(2,2,2)\,\mathrm{nm}$ | demonstrate mesh convergence |
+| engine/device/precision | numerical execution policy | desired qualified backend lane | FDM CPU double strict | choose explicitly |
+
+Fullmag supplies $e$, $\hbar$, and $\gamma_e$. Fullmag derives $\Omega_0$,
+$\Omega_{\mathrm{DL}}$, $\Omega_{\mathrm{FL}}$, $C_{\mathrm{DL}}$, and
+$C_{\mathrm{FL}}$. None of those constants or derived rates belongs in the
+Python constructor.
+
+### How to use literature values safely
+
+Nguyen, Ralph, and Buhrman reported a peak damping-like efficiency per current
+density of $\xi_{\mathrm{DL}}^j=0.12$ for their Pt/Co samples at Pt thickness
+$2.8$-$3.9\,\mathrm{nm}$. This supports `xi_dl=0.12` as a realistic literature
+seed for a related Pt/FM stack, but it does not determine the Co thickness,
+$M_s$, $\alpha$, `xi_fl`, or the sign convention of a different sample. Their
+measured efficiency also changes with Pt thickness and resistivity.
+
+Garello and co-workers measured both DL-like and FL-like components and found
+strong dependence on stack composition, magnetization angle, and annealing.
+Consequently, the example `xi_fl=-0.03` is explicitly illustrative; it is not
+presented as a transferable Pt/Co constant.
+
+Use this order when building a real case:
+
+1. Enter measured geometry, $M_s$, $A_{\mathrm{ex}}$, and $\alpha$ for the same sample.
+2. Fix and test the current, interface-normal, and spin-polarization sign convention.
+3. Use literature `xi_dl` and `xi_fl` only as initial estimates from a comparable stack.
+4. Fit or measure both effective efficiencies for the actual stack.
+5. Sweep their uncertainty separately from mesh, timestep, and current uncertainty.
 
 (physics-spin-orbit-torque-python-api)=
 ## Python authoring
@@ -237,6 +401,25 @@ study.stages.add_run(stage_id="drive", until=1.0e-12)
 
 The sign in `current_density_Apm2` is retained in ProblemIR. The authored
 `sigma=(0, 1, 0)` is normalized and serialized as `sigma_hat`.
+
+### What the example numbers produce
+
+Using the constants embedded by Fullmag, the example inputs produce the
+following signed rates. These values check units and sign propagation; they do
+not predict a switching time by themselves.
+
+| Derived quantity | Example value | Interpretation |
+| --- | --- | --- |
+| $\Omega_0$ | $-1.932\times10^{10}\,\mathrm{s^{-1}}$ | base rate set by current, $M_s$, and $t_F$ |
+| $\Omega_{\mathrm{DL}}$ | $-2.318\times10^9\,\mathrm{s^{-1}}$ | Gilbert DL rate before damping conversion |
+| $\Omega_{\mathrm{FL}}$ | $+5.795\times10^8\,\mathrm{s^{-1}}$ | Gilbert FL rate; positive because both $J$ and `xi_fl` are negative |
+| $C_{\mathrm{DL}}$ | $-2.329\times10^9\,\mathrm{s^{-1}}$ | explicit DL coefficient for $\alpha=0.02$ |
+| $C_{\mathrm{FL}}$ | $+5.329\times10^8\,\mathrm{s^{-1}}$ | explicit FL coefficient after DL/FL mixing |
+
+The $1\,\mathrm{ps}$ stage in the example is deliberately short. A switching,
+oscillation, or relaxation study must choose the stage duration from the actual
+field, anisotropy, damping, geometry, and observable, then demonstrate temporal
+and spatial convergence.
 
 ### Binding to an existing vector-current source
 
@@ -408,6 +591,9 @@ backend and device:
 ## Scientific bibliography
 
 - L. Liu et al., "Current-Induced Switching of Perpendicularly Magnetized Magnetic Layers Using Spin Torque from the Spin Hall Effect," *Physical Review Letters* **109**, 096602 (2012), [doi:10.1103/PhysRevLett.109.096602](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.109.096602).
+- K. Garello et al., "Symmetry and magnitude of spin-orbit torques in ferromagnetic heterostructures," *Nature Nanotechnology* **8**, 587-593 (2013), [doi:10.1038/nnano.2013.145](https://www.nature.com/articles/nnano.2013.145). Experimental basis for treating DL-like and FL-like torques as separately measured, stack-dependent quantities.
+- P. M. Haney et al., "Current induced torques and interfacial spin-orbit coupling: Semiclassical modeling," *Physical Review B* **87**, 174411 (2013), [doi:10.1103/PhysRevB.87.174411](https://journals.aps.org/prb/abstract/10.1103/PhysRevB.87.174411). Theoretical context for bulk, interfacial, Boltzmann, and drift-diffusion interpretations.
+- M.-H. Nguyen, D. C. Ralph, and R. A. Buhrman, "Spin Torque Study of the Spin Hall Conductivity and Spin Diffusion Length in Platinum Thin Films with Varying Resistivity," *Physical Review Letters* **116**, 126601 (2016), [doi:10.1103/PhysRevLett.116.126601](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.116.126601). Reports $\xi_{\mathrm{DL}}^j=0.12$ at the stated Pt thickness range and demonstrates thickness/resistivity dependence.
 - A. Manchon et al., "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**, 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://journals.aps.org/rmp/abstract/10.1103/RevModPhys.91.035004).
 
 (physics-spin-orbit-torque-source-code-index)=

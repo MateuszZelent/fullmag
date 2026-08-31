@@ -30,7 +30,9 @@
   "symbols": [
     {"id": "m", "latex": "m", "meaning": "unit magnetization", "si_unit": "1"},
     {"id": "sigma", "latex": "\\hat{\\boldsymbol\\sigma}", "meaning": "unit spin-polarization axis", "si_unit": "1"},
+    {"id": "sigma_authored", "latex": "\\boldsymbol\\sigma", "meaning": "authored nonzero spin-polarization vector", "si_unit": "1"},
     {"id": "J_signed", "latex": "J_{\\mathrm{signed}}", "meaning": "signed conventional charge-current density driving the local source", "si_unit": "A/m^2"},
+    {"id": "J_0", "latex": "J_0", "meaning": "prescribed signed current-density amplitude", "si_unit": "A/m^2"},
     {"id": "J_c", "latex": "\\mathbf J_c", "meaning": "named vector charge-current density", "si_unit": "A/m^2"},
     {"id": "t_hat", "latex": "\\hat{\\mathbf t}", "meaning": "normalized current-projection direction", "si_unit": "1"},
     {"id": "n_hat", "latex": "\\hat{\\mathbf n}_{NF}", "meaning": "normalized oriented nonmagnet-to-ferromagnet interface normal", "si_unit": "1"},
@@ -43,15 +45,30 @@
     {"id": "e", "latex": "e", "meaning": "positive elementary charge", "si_unit": "C"},
     {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "1"},
     {"id": "Omega_0", "latex": "\\Omega_0", "meaning": "signed base torque frequency", "si_unit": "1/s"},
+    {"id": "Omega_dl", "latex": "\\Omega_{\\mathrm{DL}}", "meaning": "signed damping-like Gilbert rate", "si_unit": "1/s"},
+    {"id": "Omega_fl", "latex": "\\Omega_{\\mathrm{FL}}", "meaning": "signed field-like Gilbert rate", "si_unit": "1/s"},
+    {"id": "C_dl", "latex": "C_{\\mathrm{DL}}", "meaning": "damping-like coefficient after Gilbert-to-explicit conversion", "si_unit": "1/s"},
+    {"id": "C_fl", "latex": "C_{\\mathrm{FL}}", "meaning": "field-like coefficient after Gilbert-to-explicit conversion", "si_unit": "1/s"},
+    {"id": "T_dl_g", "latex": "\\mathbf T_{\\mathrm{DL}}^{G}", "meaning": "damping-like source in Gilbert form", "si_unit": "1/s"},
+    {"id": "T_fl_g", "latex": "\\mathbf T_{\\mathrm{FL}}^{G}", "meaning": "field-like source in Gilbert form", "si_unit": "1/s"},
+    {"id": "T_sot_g", "latex": "\\mathbf T_{\\mathrm{SOT}}^{G}", "meaning": "total prescribed source in Gilbert form", "si_unit": "1/s"},
     {"id": "T_sot", "latex": "\\mathbf T_{\\mathrm{SOT}}", "meaning": "prescribed spin-orbit torque contribution", "si_unit": "1/s"},
     {"id": "envelope", "latex": "f(t)", "meaning": "canonical scalar time-envelope multiplier", "si_unit": "1"}
   ],
   "equations": [
-    {"id": "eq-prescribed-sot-prefactor", "symbols": ["Omega_0", "gamma_e", "hbar", "J_signed", "e", "M_s", "t_F", "xi_dl", "xi_fl"], "sources": ["fem-cpu", "fem-gpu-test"]},
-    {"id": "eq-prescribed-sot-gilbert", "symbols": ["T_sot", "m", "sigma", "Omega_0", "xi_dl", "xi_fl"], "sources": ["problem-ir", "planner", "fem-cpu"]},
-    {"id": "eq-prescribed-sot-explicit", "symbols": ["T_sot", "m", "sigma", "Omega_0", "xi_dl", "xi_fl", "alpha"], "sources": ["fem-cpu", "fem-gpu", "fem-gpu-test"]},
-    {"id": "eq-prescribed-sot-scalar-drive", "symbols": ["J_signed", "sigma", "envelope"], "sources": ["python-scalar-drive", "problem-ir", "planner"]},
-    {"id": "eq-prescribed-sot-vector-drive", "symbols": ["J_signed", "J_c", "t_hat", "n_hat", "sigma"], "sources": ["python-vector-drive", "planner", "planner-vector-test"]}
+    {"id": "eq-prescribed-sot-base-rate", "symbols": ["Omega_0", "gamma_e", "hbar", "J_signed", "e", "M_s", "t_F"], "sources": ["fem-cpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-dl-rate", "symbols": ["Omega_dl", "xi_dl", "Omega_0"], "sources": ["fem-cpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-fl-rate", "symbols": ["Omega_fl", "xi_fl", "Omega_0"], "sources": ["fem-cpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-dl-gilbert", "symbols": ["T_dl_g", "Omega_dl", "m", "sigma"], "sources": ["problem-ir", "planner", "fem-cpu"]},
+    {"id": "eq-prescribed-sot-fl-gilbert", "symbols": ["T_fl_g", "Omega_fl", "m", "sigma"], "sources": ["problem-ir", "planner", "fem-cpu"]},
+    {"id": "eq-prescribed-sot-gilbert-total", "symbols": ["T_sot_g", "T_dl_g", "T_fl_g"], "sources": ["problem-ir", "planner", "fem-cpu"]},
+    {"id": "eq-prescribed-sot-explicit-dl", "symbols": ["C_dl", "Omega_0", "xi_dl", "xi_fl", "alpha"], "sources": ["fem-cpu", "fem-gpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-explicit-fl", "symbols": ["C_fl", "Omega_0", "xi_dl", "xi_fl", "alpha"], "sources": ["fem-cpu", "fem-gpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-explicit-total", "symbols": ["T_sot", "C_dl", "C_fl", "m", "sigma"], "sources": ["fem-cpu", "fem-gpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-scalar-current", "symbols": ["J_signed", "J_0", "envelope"], "sources": ["python-scalar-drive", "problem-ir", "planner"]},
+    {"id": "eq-prescribed-sot-sigma-normalization", "symbols": ["sigma", "sigma_authored"], "sources": ["python-scalar-drive", "problem-ir"]},
+    {"id": "eq-prescribed-sot-vector-current", "symbols": ["J_signed", "J_c", "t_hat"], "sources": ["python-vector-drive", "planner", "planner-vector-test"]},
+    {"id": "eq-prescribed-sot-vector-polarization", "symbols": ["n_hat", "t_hat", "sigma"], "sources": ["python-vector-drive", "planner", "planner-vector-test"]}
   ],
   "public_api": {
     "parameters": [
