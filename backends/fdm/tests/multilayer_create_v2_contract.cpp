@@ -338,6 +338,288 @@ void optional_demag_workspace_is_rejected_before_any_allocation() {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void aggregate_multilayer_workspace_is_rejected_before_any_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("aggregate multilayer preflight check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    for (const fullmag_fdm_precision precision : {
+             FULLMAG_FDM_PRECISION_SINGLE,
+             FULLMAG_FDM_PRECISION_DOUBLE})
+    {
+        DeviceMemoryReserve reserve;
+        const uint64_t usable_bytes = reserve.reserve_until_usable_bytes(
+            uint64_t{512} * 1024 * 1024);
+        check(usable_bytes > uint64_t{128} * 1024 * 1024,
+              "test device has too little usable memory for multilayer aggregate RED");
+
+        // One layer owns 33 scalar arrays. The denominator is between one and
+        // two layers for either precision, so every individual allocation and
+        // one complete layer fit while the two-layer aggregate does not.
+        const uint64_t scalar_bytes =
+            precision == FULLMAG_FDM_PRECISION_DOUBLE ? 8 : 4;
+        const uint64_t cell_count = usable_bytes / (50 * scalar_bytes);
+        check(cell_count > 0 && cell_count <= UINT32_MAX,
+              "aggregate multilayer grid is not representable by the public ABI");
+        std::vector<double> initial_m(
+            static_cast<size_t>(3 * cell_count), 0.0);
+        for (uint64_t index = 0; index < cell_count; ++index) {
+            initial_m[static_cast<size_t>(3 * index)] = 1.0;
+        }
+
+        fullmag_fdm_layer_desc_v2 layers[2] = {
+            make_layer(0, initial_m.data()),
+            make_layer(1, initial_m.data()),
+        };
+        for (auto &layer : layers) {
+            layer.native_grid.nx = static_cast<uint32_t>(cell_count);
+            layer.convolution_grid.nx = static_cast<uint32_t>(cell_count);
+            layer.initial_magnetization_len = 3 * cell_count;
+        }
+        fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(layers, 2);
+        plan.precision = precision;
+
+        fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+        check(handle != nullptr,
+              "aggregate multilayer oversized setup should return an error handle");
+        check_error_contains(
+            handle,
+            "required_aggregate_multilayer_workspace_bytes=");
+        check_failed_before_workspace_setup(handle);
+        fullmag_fdm_backend_destroy(handle);
+    }
+}
+
+void disabled_demag_rejects_kernel_payload_before_any_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("disabled-demag kernel check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    const fullmag_fdm_complex64 spectrum[8] = {};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization);
+    fullmag_fdm_tensor_kernel_desc_v2 kernel =
+        make_kernel(0, 0, spectrum);
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.enable_demag = 0;
+    plan.kernels = &kernel;
+    plan.kernel_count = 1;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "disabled-demag kernel payload should return an error handle");
+    check_error_contains(
+        handle,
+        "kernel_count must be zero when demag is disabled");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void maximum_convolution_cell_count_reports_overflow_before_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("maximum convolution grid check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    const fullmag_fdm_complex64 spectrum[8] = {};
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization);
+    layer.transfer_kind = FULLMAG_FDM_TRANSFER_PUSH_PULL;
+    // UINT32_MAX * 641 * 6700417 == UINT64_MAX exactly. The push-map
+    // offsets require one additional entry and must fail with a stable error.
+    layer.convolution_grid = {
+        UINT32_MAX, 641, 6700417, 1.0e-9, 1.0e-9, 1.0e-9};
+    fullmag_fdm_tensor_kernel_desc_v2 kernel =
+        make_kernel(0, 0, spectrum);
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.enable_demag = 1;
+    plan.kernels = &kernel;
+    plan.kernel_count = 1;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "maximum convolution grid should return an error handle");
+    check_error_contains(handle, "aggregate workspace byte count overflows uint64_t");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void excessive_multilayer_allocation_count_is_rejected_before_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("multilayer allocation-count check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    constexpr uint32_t layer_count = 2000;
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    std::vector<fullmag_fdm_layer_desc_v2> layers(layer_count);
+    for (uint32_t index = 0; index < layer_count; ++index) {
+        layers[index] = make_layer(index, magnetization);
+    }
+    fullmag_fdm_multilayer_plan_desc_v2 plan =
+        make_plan(layers.data(), layer_count);
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "excessive allocation-count plan should return an error handle");
+    check_error_contains(handle, "fdm_gpu_workspace_allocation_count_preflight");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void cufft_upper_bound_is_rejected_before_any_allocation() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("cuFFT upper-bound check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    DeviceMemoryReserve reserve;
+    const uint64_t usable_bytes = reserve.reserve_until_usable_bytes(
+        uint64_t{512} * 1024 * 1024);
+    check(usable_bytes > uint64_t{128} * 1024 * 1024,
+          "test device has too little usable memory for cuFFT upper-bound RED");
+    const uint64_t fft_cell_count = usable_bytes / 500;
+    check(fft_cell_count > 0 && fft_cell_count <= UINT32_MAX,
+          "cuFFT upper-bound grid is not representable by the public ABI");
+
+    const double magnetization[3] = {1.0, 0.0, 0.0};
+    std::vector<fullmag_fdm_complex64> spectrum(
+        static_cast<size_t>(fft_cell_count));
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization);
+    fullmag_fdm_tensor_kernel_desc_v2 kernel =
+        make_kernel(0, 0, spectrum.data());
+    kernel.fft_grid.nx = static_cast<uint32_t>(fft_cell_count);
+    kernel.fft_grid.ny = 1;
+    kernel.fft_grid.nz = 1;
+    kernel.kernel_len = fft_cell_count;
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.enable_demag = 1;
+    plan.kernels = &kernel;
+    plan.kernel_count = 1;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "cuFFT upper-bound oversized setup should return an error handle");
+    check_error_contains(handle, "fft_work_area_upper_bound_bytes=");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void push_pull_maps_are_rejected_as_part_of_the_aggregate() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("push/pull aggregate check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    DeviceMemoryReserve reserve;
+    const uint64_t usable_bytes = reserve.reserve_until_usable_bytes(
+        uint64_t{512} * 1024 * 1024);
+    check(usable_bytes > uint64_t{128} * 1024 * 1024,
+          "test device has too little usable memory for push/pull aggregate RED");
+    // The fixed fields, kernel, pull map, FFT buffers and conservative cuFFT
+    // work area fit below 935 bytes/cell. Exact push entries raise the complete
+    // setup above that budget.
+    const uint64_t cell_count = usable_bytes / 935;
+    check(cell_count > 0 && cell_count <= UINT32_MAX,
+          "push/pull aggregate grid is not representable by the public ABI");
+
+    std::vector<double> magnetization(
+        static_cast<size_t>(3 * cell_count), 0.0);
+    for (uint64_t index = 0; index < cell_count; ++index) {
+        magnetization[static_cast<size_t>(3 * index)] = 1.0;
+    }
+    std::vector<fullmag_fdm_complex64> spectrum(
+        static_cast<size_t>(cell_count));
+    fullmag_fdm_layer_desc_v2 layer = make_layer(0, magnetization.data());
+    layer.native_grid.nx = static_cast<uint32_t>(cell_count);
+    layer.convolution_grid.nx = static_cast<uint32_t>(cell_count);
+    layer.initial_magnetization_len = 3 * cell_count;
+    layer.transfer_kind = FULLMAG_FDM_TRANSFER_PUSH_PULL;
+    fullmag_fdm_tensor_kernel_desc_v2 kernel =
+        make_kernel(0, 0, spectrum.data());
+    kernel.fft_grid.nx = static_cast<uint32_t>(cell_count);
+    kernel.fft_grid.ny = 1;
+    kernel.fft_grid.nz = 1;
+    kernel.kernel_len = cell_count;
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(&layer, 1);
+    plan.enable_demag = 1;
+    plan.kernels = &kernel;
+    plan.kernel_count = 1;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "push/pull aggregate oversized setup should return an error handle");
+    check_error_contains(handle, "push_map_bytes=");
+    check_error_contains(handle, "pull_map_bytes=");
+    const char *error = fullmag_fdm_backend_last_error(handle);
+    check(std::strstr(error, "push_map_bytes=0") == nullptr &&
+              std::strstr(error, "pull_map_bytes=0") == nullptr,
+          "push/pull aggregate error should contain non-zero map bytes");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
+void d07_batch_workspace_is_rejected_as_part_of_the_aggregate() {
+    if (fullmag_fdm_is_available() == 0) {
+        std::printf("D-07 batch aggregate check skipped: CUDA backend unavailable\n");
+        return;
+    }
+
+    DeviceMemoryReserve reserve;
+    const uint64_t usable_bytes = reserve.reserve_until_usable_bytes(
+        uint64_t{512} * 1024 * 1024);
+    check(usable_bytes > uint64_t{128} * 1024 * 1024,
+          "test device has too little usable memory for D-07 aggregate RED");
+    const uint64_t cell_count = usable_bytes / 1450;
+    check(cell_count > 0 && cell_count <= UINT32_MAX,
+          "D-07 aggregate grid is not representable by the public ABI");
+
+    std::vector<double> magnetization(
+        static_cast<size_t>(3 * cell_count), 0.0);
+    for (uint64_t index = 0; index < cell_count; ++index) {
+        magnetization[static_cast<size_t>(3 * index)] = 1.0;
+    }
+    std::vector<fullmag_fdm_complex64> spectrum(
+        static_cast<size_t>(cell_count));
+    fullmag_fdm_layer_desc_v2 layers[2] = {
+        make_layer(0, magnetization.data()),
+        make_layer(1, magnetization.data()),
+    };
+    for (auto &layer : layers) {
+        layer.native_grid.nx = static_cast<uint32_t>(cell_count);
+        layer.convolution_grid.nx = static_cast<uint32_t>(cell_count);
+        layer.initial_magnetization_len = 3 * cell_count;
+    }
+    fullmag_fdm_tensor_kernel_desc_v2 kernels[4] = {
+        make_kernel(0, 0, spectrum.data()),
+        make_kernel(0, 1, spectrum.data()),
+        make_kernel(1, 0, spectrum.data()),
+        make_kernel(1, 1, spectrum.data()),
+    };
+    for (auto &kernel : kernels) {
+        kernel.fft_grid.nx = static_cast<uint32_t>(cell_count);
+        kernel.fft_grid.ny = 1;
+        kernel.fft_grid.nz = 1;
+        kernel.kernel_len = cell_count;
+    }
+    fullmag_fdm_multilayer_plan_desc_v2 plan = make_plan(layers, 2);
+    plan.enable_demag = 1;
+    plan.kernels = kernels;
+    plan.kernel_count = 4;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create_v2(&plan);
+    check(handle != nullptr,
+          "D-07 aggregate oversized setup should return an error handle");
+    check_error_contains(handle, "batch_fft_bytes=");
+    const char *error = fullmag_fdm_backend_last_error(handle);
+    check(std::strstr(error, "batch_fft_bytes=0") == nullptr,
+          "D-07 aggregate error should contain non-zero batch bytes");
+    check_failed_before_workspace_setup(handle);
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void synchronous_preview_reuses_setup_owned_workspace() {
     if (fullmag_fdm_is_available() == 0) {
         std::printf("synchronous preview workspace check skipped: CUDA backend unavailable\n");
@@ -470,7 +752,9 @@ void oversized_multilayer_allocation_is_rejected_by_memory_preflight() {
     check(handle != nullptr,
           "oversized multilayer setup allocation should return an error handle");
     check_error_contains(handle, "fdm_gpu_workspace_oom_preflight");
-    check_error_contains(handle, "required_new_bytes=");
+    check_error_contains(
+        handle,
+        "required_aggregate_multilayer_workspace_bytes=");
     check_error_contains(handle, "usable_device_bytes=");
     check_failed_before_workspace_setup(handle);
     fullmag_fdm_backend_destroy(handle);
@@ -908,6 +1192,13 @@ int main() {
     oversized_multilayer_allocation_is_rejected_by_memory_preflight();
     aggregate_single_grid_workspace_is_rejected_before_any_allocation();
     optional_demag_workspace_is_rejected_before_any_allocation();
+    aggregate_multilayer_workspace_is_rejected_before_any_allocation();
+    disabled_demag_rejects_kernel_payload_before_any_allocation();
+    maximum_convolution_cell_count_reports_overflow_before_allocation();
+    excessive_multilayer_allocation_count_is_rejected_before_allocation();
+    cufft_upper_bound_is_rejected_before_any_allocation();
+    push_pull_maps_are_rejected_as_part_of_the_aggregate();
+    d07_batch_workspace_is_rejected_as_part_of_the_aggregate();
     synchronous_preview_reuses_setup_owned_workspace();
     valid_plan_runs_heun_step_with_demag_and_exchange();
     valid_plan_runs_heun_step_without_demag();

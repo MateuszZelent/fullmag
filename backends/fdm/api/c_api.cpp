@@ -692,6 +692,11 @@ bool validate_multilayer_plan_v2(
         }
     }
 
+    if (!plan.enable_demag && plan.kernel_count != 0) {
+        error = "kernel_count must be zero when demag is disabled";
+        return false;
+    }
+
     if (plan.enable_demag) {
         if (plan.kernels == nullptr) {
             error = "kernels pointer must be present when demag is enabled";
@@ -1641,6 +1646,9 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->D_interfacial = plan->dmi_D_interfacial;
     ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
     ctx->D_bulk = plan->dmi_D_bulk;
+    if (!context_preflight_multilayer_workspace_v2(*ctx, *plan)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     if (!context_upload_multilayer_plan_v2(*ctx, *plan)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }

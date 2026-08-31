@@ -2674,6 +2674,12 @@ bool context_alloc_device(Context &ctx);
 bool context_preflight_single_grid_workspace(
     Context &ctx, const fullmag_fdm_plan_desc &plan);
 
+/// Reject a v2 multilayer plan whose complete setup-owned CUDA workspace does
+/// not fit before the first device allocation or cuFFT plan creation.
+bool context_preflight_multilayer_workspace_v2(
+    Context &ctx,
+    const fullmag_fdm_multilayer_plan_desc_v2 &plan);
+
 /// Free all device buffers.
 void context_free_device(Context &ctx);
 

@@ -268,38 +268,19 @@ bool context_preflight_single_grid_workspace(
             return false;
         }
 
-        const int rank = ctx.thin_film_2d_demag ? 2 : 3;
-        int dims[3] = {};
-        if (ctx.thin_film_2d_demag) {
-            dims[0] = static_cast<int>(fft_ny);
-            dims[1] = static_cast<int>(fft_nx);
-        } else {
-            dims[0] = static_cast<int>(fft_nz);
-            dims[1] = static_cast<int>(fft_ny);
-            dims[2] = static_cast<int>(fft_nx);
-        }
-        int inembed[3] = {dims[0], dims[1], dims[2]};
-        int onembed[3] = {dims[0], dims[1], dims[2]};
-        const int component_stride = static_cast<int>(fft_cell_count);
-        size_t estimated_work_area_bytes = 0;
-        const cufftResult estimate_status = cufftEstimateMany(
-            rank,
-            dims,
-            inembed,
-            1,
-            component_stride,
-            onembed,
-            1,
-            component_stride,
-            ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
-                ? CUFFT_Z2Z : CUFFT_C2C,
-            3,
-            &estimated_work_area_bytes);
-        if (estimate_status != CUFFT_SUCCESS) {
-            set_cufft_error(ctx, "cufftEstimateMany(demag, batch=3)", estimate_status);
-            return false;
-        }
-        if (!add_bytes(static_cast<uint64_t>(estimated_work_area_bytes))) {
+        // NVIDIA documents 8 * batch * N complex elements as the cuFFT
+        // worst-case temporary storage. cufftEstimateMany may be smaller than
+        // the eventual plan requirement, so it is not an atomic OOM gate.
+        constexpr uint64_t cufft_batch = 3;
+        constexpr uint64_t cufft_worst_case_elements_per_transform = 8;
+        if (fft_cell_count >
+                maximum /
+                    (cufft_batch * cufft_worst_case_elements_per_transform) ||
+            !add_product(
+                cufft_batch * cufft_worst_case_elements_per_transform *
+                    fft_cell_count,
+                complex_bytes))
+        {
             return false;
         }
     }
@@ -1276,6 +1257,21 @@ static bool upload_f64_vector(
     return true;
 }
 
+static double push_map_axis_overlap(
+    double convolution_lo,
+    double convolution_hi,
+    int64_t native_index,
+    double native_spacing)
+{
+    const double native_lo =
+        static_cast<double>(native_index) * native_spacing;
+    const double native_hi = native_lo + native_spacing;
+    return std::max(
+        0.0,
+        std::min(convolution_hi, native_hi) -
+            std::max(convolution_lo, native_lo));
+}
+
 static void build_push_map_host(
     const fullmag_fdm_grid_desc &native_grid,
     const fullmag_fdm_grid_desc &convolution_grid,
@@ -1310,21 +1306,18 @@ static void build_push_map_host(
 
                 for (int64_t nz = nz_lo; nz < nz_hi; ++nz) {
                     if (nz < 0 || nz >= static_cast<int64_t>(native_grid.nz)) continue;
-                    const double n_lo_z = static_cast<double>(nz) * native_grid.dz;
-                    const double n_hi_z = n_lo_z + native_grid.dz;
-                    const double oz = std::max(0.0, std::min(c_hi_z, n_hi_z) - std::max(c_lo_z, n_lo_z));
+                    const double oz = push_map_axis_overlap(
+                        c_lo_z, c_hi_z, nz, native_grid.dz);
                     if (oz <= 0.0) continue;
                     for (int64_t ny = ny_lo; ny < ny_hi; ++ny) {
                         if (ny < 0 || ny >= static_cast<int64_t>(native_grid.ny)) continue;
-                        const double n_lo_y = static_cast<double>(ny) * native_grid.dy;
-                        const double n_hi_y = n_lo_y + native_grid.dy;
-                        const double oy = std::max(0.0, std::min(c_hi_y, n_hi_y) - std::max(c_lo_y, n_lo_y));
+                        const double oy = push_map_axis_overlap(
+                            c_lo_y, c_hi_y, ny, native_grid.dy);
                         if (oy <= 0.0) continue;
                         for (int64_t nx = nx_lo; nx < nx_hi; ++nx) {
                             if (nx < 0 || nx >= static_cast<int64_t>(native_grid.nx)) continue;
-                            const double n_lo_x = static_cast<double>(nx) * native_grid.dx;
-                            const double n_hi_x = n_lo_x + native_grid.dx;
-                            const double ox = std::max(0.0, std::min(c_hi_x, n_hi_x) - std::max(c_lo_x, n_lo_x));
+                            const double ox = push_map_axis_overlap(
+                                c_lo_x, c_hi_x, nx, native_grid.dx);
                             if (ox <= 0.0) continue;
 
                             indices.push_back(flatten_grid_index(
@@ -1391,6 +1384,592 @@ static void build_pull_map_host(
             }
         }
     }
+}
+
+static bool count_push_axis_overlaps(
+    Context &ctx,
+    uint32_t convolution_count,
+    double convolution_spacing,
+    uint32_t native_count,
+    double native_spacing,
+    uint64_t &overlap_count)
+{
+    overlap_count = 0;
+    constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    const long double int64_max =
+        static_cast<long double>(std::numeric_limits<int64_t>::max());
+
+    for (uint32_t convolution_index = 0;
+         convolution_index < convolution_count;
+         ++convolution_index)
+    {
+        const double convolution_lo =
+            static_cast<double>(convolution_index) * convolution_spacing;
+        const double convolution_hi = convolution_lo + convolution_spacing;
+        const double native_lo = std::floor(convolution_lo / native_spacing);
+        const double native_hi = std::ceil(convolution_hi / native_spacing);
+        if (!std::isfinite(native_lo) || !std::isfinite(native_hi) ||
+            static_cast<long double>(native_lo) > int64_max ||
+            static_cast<long double>(native_hi) > int64_max)
+        {
+            ctx.last_error =
+                "multilayer push-map overlap range exceeds int64";
+            return false;
+        }
+
+        const int64_t native_lo_index = static_cast<int64_t>(native_lo);
+        const int64_t native_hi_index = static_cast<int64_t>(native_hi);
+        for (int64_t native_index = native_lo_index;
+             native_index < native_hi_index;
+             ++native_index)
+        {
+            if (native_index < 0 ||
+                native_index >= static_cast<int64_t>(native_count) ||
+                push_map_axis_overlap(
+                    convolution_lo,
+                    convolution_hi,
+                    native_index,
+                    native_spacing) <= 0.0)
+            {
+                continue;
+            }
+            if (overlap_count == maximum) {
+                ctx.last_error =
+                    "fdm_gpu_workspace_oom_preflight: aggregate workspace byte count overflows uint64_t";
+                return false;
+            }
+            ++overlap_count;
+        }
+    }
+    return true;
+}
+
+static bool count_push_map_entries(
+    Context &ctx,
+    const fullmag_fdm_grid_desc &native_grid,
+    const fullmag_fdm_grid_desc &convolution_grid,
+    uint64_t &entry_count)
+{
+    uint64_t overlap_x = 0;
+    uint64_t overlap_y = 0;
+    uint64_t overlap_z = 0;
+    if (!count_push_axis_overlaps(
+            ctx,
+            convolution_grid.nx,
+            convolution_grid.dx,
+            native_grid.nx,
+            native_grid.dx,
+            overlap_x) ||
+        !count_push_axis_overlaps(
+            ctx,
+            convolution_grid.ny,
+            convolution_grid.dy,
+            native_grid.ny,
+            native_grid.dy,
+            overlap_y) ||
+        !count_push_axis_overlaps(
+            ctx,
+            convolution_grid.nz,
+            convolution_grid.dz,
+            native_grid.nz,
+            native_grid.dz,
+            overlap_z))
+    {
+        return false;
+    }
+
+    constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    if (overlap_x != 0 && overlap_y > maximum / overlap_x) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: aggregate workspace byte count overflows uint64_t";
+        return false;
+    }
+    const uint64_t overlap_xy = overlap_x * overlap_y;
+    if (overlap_xy != 0 && overlap_z > maximum / overlap_xy) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: aggregate workspace byte count overflows uint64_t";
+        return false;
+    }
+    entry_count = overlap_xy * overlap_z;
+    return true;
+}
+
+struct MultilayerWorkspaceEstimate {
+    uint64_t layer_bytes = 0;
+    uint64_t kernel_bytes = 0;
+    uint64_t push_map_bytes = 0;
+    uint64_t pull_map_bytes = 0;
+    uint64_t fft_buffer_bytes = 0;
+    uint64_t fft_work_area_upper_bound_bytes = 0;
+    uint64_t batch_fft_bytes = 0;
+    uint64_t total_bytes = 0;
+    uint64_t allocation_count = 0;
+};
+
+struct GpuWorkspaceBudget {
+    uint64_t usable_device_bytes = 0;
+    uint64_t free_device_bytes = 0;
+    uint64_t total_device_bytes = 0;
+    uint64_t safety_reserve_bytes = 0;
+};
+
+static bool multilayer_workspace_overflow(Context &ctx) {
+    ctx.last_error =
+        "fdm_gpu_workspace_oom_preflight: aggregate workspace byte count overflows uint64_t";
+    return false;
+}
+
+static bool add_multilayer_workspace_allocations(
+    Context &ctx,
+    MultilayerWorkspaceEstimate &estimate,
+    uint64_t &component_bytes,
+    uint64_t allocation_count,
+    uint64_t bytes_per_allocation)
+{
+    if (allocation_count == 0 || bytes_per_allocation == 0) {
+        return true;
+    }
+    constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    constexpr uint64_t maximum_device_allocation_count = 65536;
+    if (estimate.allocation_count > maximum - allocation_count) {
+        return multilayer_workspace_overflow(ctx);
+    }
+    const uint64_t new_allocation_count =
+        estimate.allocation_count + allocation_count;
+    if (new_allocation_count > maximum_device_allocation_count) {
+        ctx.last_error =
+            "fdm_gpu_workspace_allocation_count_preflight: required_device_allocations=" +
+            std::to_string(new_allocation_count) +
+            " maximum_device_allocations=" +
+            std::to_string(maximum_device_allocation_count);
+        return false;
+    }
+    if (bytes_per_allocation > maximum / allocation_count) {
+        return multilayer_workspace_overflow(ctx);
+    }
+    const uint64_t requested_bytes =
+        allocation_count * bytes_per_allocation;
+    if (component_bytes > maximum - requested_bytes ||
+        estimate.total_bytes > maximum - requested_bytes)
+    {
+        return multilayer_workspace_overflow(ctx);
+    }
+    component_bytes += requested_bytes;
+    estimate.total_bytes += requested_bytes;
+    estimate.allocation_count = new_allocation_count;
+    return true;
+}
+
+static bool query_gpu_workspace_budget(
+    Context &ctx,
+    GpuWorkspaceBudget &budget)
+{
+    size_t free_device_bytes = 0;
+    size_t total_device_bytes = 0;
+    const cudaError_t query_status =
+        ::cudaMemGetInfo(&free_device_bytes, &total_device_bytes);
+    if (query_status != cudaSuccess) {
+        ctx.last_error =
+            "fdm_gpu_workspace_memory_query_failed: cuda_error=" +
+            std::to_string(static_cast<int>(query_status));
+        return false;
+    }
+    constexpr uint64_t minimum_safety_reserve =
+        uint64_t{256} * 1024 * 1024;
+    budget.total_device_bytes =
+        static_cast<uint64_t>(total_device_bytes);
+    budget.free_device_bytes =
+        static_cast<uint64_t>(free_device_bytes);
+    budget.safety_reserve_bytes = std::max(
+        minimum_safety_reserve,
+        budget.total_device_bytes / 20);
+    budget.usable_device_bytes =
+        budget.free_device_bytes > budget.safety_reserve_bytes
+            ? budget.free_device_bytes - budget.safety_reserve_bytes
+            : 0;
+    return true;
+}
+
+static bool multilayer_workspace_fits_budget(
+    Context &ctx,
+    const MultilayerWorkspaceEstimate &estimate,
+    const GpuWorkspaceBudget &budget)
+{
+    if (estimate.total_bytes <= budget.usable_device_bytes) {
+        return true;
+    }
+    ctx.last_error =
+        "fdm_gpu_workspace_oom_preflight: required_aggregate_multilayer_workspace_bytes=" +
+        std::to_string(estimate.total_bytes) +
+        " layer_bytes=" + std::to_string(estimate.layer_bytes) +
+        " kernel_bytes=" + std::to_string(estimate.kernel_bytes) +
+        " push_map_bytes=" + std::to_string(estimate.push_map_bytes) +
+        " pull_map_bytes=" + std::to_string(estimate.pull_map_bytes) +
+        " fft_buffer_bytes=" + std::to_string(estimate.fft_buffer_bytes) +
+        " fft_work_area_upper_bound_bytes=" +
+        std::to_string(estimate.fft_work_area_upper_bound_bytes) +
+        " batch_fft_bytes=" + std::to_string(estimate.batch_fft_bytes) +
+        " required_device_allocations=" +
+        std::to_string(estimate.allocation_count) +
+        " usable_device_bytes=" +
+        std::to_string(budget.usable_device_bytes) +
+        " free_device_bytes=" + std::to_string(budget.free_device_bytes) +
+        " total_device_bytes=" + std::to_string(budget.total_device_bytes) +
+        " safety_reserve_bytes=" +
+        std::to_string(budget.safety_reserve_bytes);
+    return false;
+}
+
+bool context_preflight_multilayer_workspace_v2(
+    Context &ctx,
+    const fullmag_fdm_multilayer_plan_desc_v2 &plan)
+{
+    constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    GpuWorkspaceBudget budget;
+    if (!query_gpu_workspace_budget(ctx, budget)) {
+        return false;
+    }
+    MultilayerWorkspaceEstimate estimate;
+    auto overflow = [&]() -> bool {
+        return multilayer_workspace_overflow(ctx);
+    };
+    auto multiply = [&](uint64_t lhs, uint64_t rhs, uint64_t &product) -> bool {
+        if (lhs != 0 && rhs > maximum / lhs) return overflow();
+        product = lhs * rhs;
+        return true;
+    };
+
+    const uint64_t scalar_bytes = scalar_size(ctx.precision);
+    const uint64_t complex_bytes = complex_size(ctx.precision);
+    constexpr uint64_t layer_vector_component_count = 11 * 3;
+    for (uint32_t layer_index = 0;
+         layer_index < plan.layer_count;
+         ++layer_index)
+    {
+        const fullmag_fdm_layer_desc_v2 &layer = plan.layers[layer_index];
+        const uint64_t native_cells = grid_cell_count(layer.native_grid);
+        uint64_t layer_component_bytes = 0;
+        if (!multiply(
+                native_cells,
+                scalar_bytes,
+                layer_component_bytes) ||
+            !add_multilayer_workspace_allocations(
+                ctx,
+                estimate,
+                estimate.layer_bytes,
+                layer_vector_component_count,
+                layer_component_bytes))
+        {
+            return false;
+        }
+        if (layer.active_mask != nullptr &&
+            !add_multilayer_workspace_allocations(
+                ctx,
+                estimate,
+                estimate.layer_bytes,
+                1,
+                native_cells * sizeof(uint8_t)))
+        {
+            return false;
+        }
+    }
+
+    if (plan.kernel_count != 0 && plan.kernels == nullptr) {
+        ctx.last_error =
+            "kernels pointer must be present when kernel_count is non-zero";
+        return false;
+    }
+    for (uint32_t kernel_index = 0;
+         kernel_index < plan.kernel_count;
+         ++kernel_index)
+    {
+        uint64_t kernel_component_bytes = 0;
+        if (!multiply(
+                plan.kernels[kernel_index].kernel_len,
+                complex_bytes,
+                kernel_component_bytes) ||
+            !add_multilayer_workspace_allocations(
+                ctx,
+                estimate,
+                estimate.kernel_bytes,
+                6,
+                kernel_component_bytes))
+        {
+            return false;
+        }
+    }
+
+    if (ctx.enable_demag) {
+        for (uint32_t layer_index = 0;
+             layer_index < plan.layer_count;
+             ++layer_index)
+        {
+            const fullmag_fdm_layer_desc_v2 &layer = plan.layers[layer_index];
+            if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+                continue;
+            }
+            const uint64_t convolution_cells =
+                grid_cell_count(layer.convolution_grid);
+            if (convolution_cells == maximum) {
+                return overflow();
+            }
+            uint64_t push_offset_bytes = 0;
+            if (!multiply(
+                    convolution_cells + 1,
+                    sizeof(uint64_t),
+                    push_offset_bytes) ||
+                !add_multilayer_workspace_allocations(
+                    ctx,
+                    estimate,
+                    estimate.push_map_bytes,
+                    1,
+                    push_offset_bytes))
+            {
+                return false;
+            }
+        }
+
+        for (uint32_t kernel_index = 0;
+             kernel_index < plan.kernel_count;
+             ++kernel_index)
+        {
+            const fullmag_fdm_tensor_kernel_desc_v2 &kernel =
+                plan.kernels[kernel_index];
+            const fullmag_fdm_layer_desc_v2 &destination =
+                plan.layers[kernel.dst_layer];
+            if (destination.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+                continue;
+            }
+            uint64_t pull_entry_count = 0;
+            uint64_t pull_component_bytes = 0;
+            if (!multiply(
+                    grid_cell_count(destination.native_grid),
+                    uint64_t{8},
+                    pull_entry_count) ||
+                !multiply(
+                    pull_entry_count,
+                    sizeof(uint64_t),
+                    pull_component_bytes) ||
+                !add_multilayer_workspace_allocations(
+                    ctx,
+                    estimate,
+                    estimate.pull_map_bytes,
+                    2,
+                    pull_component_bytes))
+            {
+                return false;
+            }
+        }
+
+        std::vector<fullmag_fdm_grid_desc> unique_fft_grids;
+        unique_fft_grids.reserve(plan.kernel_count);
+        for (uint32_t kernel_index = 0;
+             kernel_index < plan.kernel_count;
+             ++kernel_index)
+        {
+            const fullmag_fdm_grid_desc &grid =
+                plan.kernels[kernel_index].fft_grid;
+            const auto existing = std::find_if(
+                unique_fft_grids.begin(),
+                unique_fft_grids.end(),
+                [&](const fullmag_fdm_grid_desc &candidate) {
+                    return candidate.nx == grid.nx &&
+                        candidate.ny == grid.ny &&
+                        candidate.nz == grid.nz;
+                });
+            if (existing == unique_fft_grids.end()) {
+                unique_fft_grids.push_back(grid);
+            }
+        }
+
+        for (const fullmag_fdm_grid_desc &grid : unique_fft_grids) {
+            const uint64_t fft_cell_count = grid_cell_count(grid);
+            if (fft_cell_count >
+                static_cast<uint64_t>(std::numeric_limits<int>::max()))
+            {
+                ctx.last_error =
+                    "multilayer demag FFT component stride exceeds cuFFT PlanMany limit";
+                return false;
+            }
+            uint64_t fft_buffer_element_count = 0;
+            uint64_t fft_buffer_allocation_bytes = 0;
+            if (!multiply(
+                    fft_cell_count,
+                    uint64_t{3},
+                    fft_buffer_element_count) ||
+                !multiply(
+                    fft_buffer_element_count,
+                    complex_bytes,
+                    fft_buffer_allocation_bytes) ||
+                !add_multilayer_workspace_allocations(
+                    ctx,
+                    estimate,
+                    estimate.fft_buffer_bytes,
+                    1,
+                    fft_buffer_allocation_bytes))
+            {
+                return false;
+            }
+
+            // NVIDIA documents 8 * batch * N complex elements as the cuFFT
+            // worst case. cufftEstimateMany may understate the eventual
+            // cufftMakePlanMany requirement for non-smooth dimensions.
+            constexpr uint64_t cufft_work_elements_per_fft_cell = 8 * 3;
+            uint64_t fft_work_element_count = 0;
+            uint64_t fft_work_area_upper_bound_bytes = 0;
+            if (!multiply(
+                    fft_cell_count,
+                    cufft_work_elements_per_fft_cell,
+                    fft_work_element_count) ||
+                !multiply(
+                    fft_work_element_count,
+                    complex_bytes,
+                    fft_work_area_upper_bound_bytes) ||
+                !add_multilayer_workspace_allocations(
+                    ctx,
+                    estimate,
+                    estimate.fft_work_area_upper_bound_bytes,
+                    1,
+                    fft_work_area_upper_bound_bytes))
+            {
+                return false;
+            }
+        }
+
+        const bool all_identity = std::all_of(
+            plan.layers,
+            plan.layers + plan.layer_count,
+            [](const fullmag_fdm_layer_desc_v2 &layer) {
+                return layer.transfer_kind == FULLMAG_FDM_TRANSFER_IDENTITY;
+            });
+        if (all_identity) {
+            const fullmag_fdm_layer_desc_v2 &first_layer = plan.layers[0];
+            auto same_grid = [](
+                const fullmag_fdm_grid_desc &lhs,
+                const fullmag_fdm_grid_desc &rhs) {
+                return lhs.nx == rhs.nx && lhs.ny == rhs.ny &&
+                    lhs.nz == rhs.nz && lhs.dx == rhs.dx &&
+                    lhs.dy == rhs.dy && lhs.dz == rhs.dz;
+            };
+            if (!same_grid(
+                    first_layer.native_grid,
+                    first_layer.convolution_grid))
+            {
+                ctx.last_error =
+                    "D-07 batched multilayer workspace requires identity native/convolution grids";
+                return false;
+            }
+            for (uint32_t layer_index = 0;
+                 layer_index < plan.layer_count;
+                 ++layer_index)
+            {
+                const fullmag_fdm_layer_desc_v2 &layer =
+                    plan.layers[layer_index];
+                if (!same_grid(layer.native_grid, first_layer.native_grid) ||
+                    !same_grid(
+                        layer.convolution_grid,
+                        first_layer.convolution_grid))
+                {
+                    ctx.last_error =
+                        "D-07 batched multilayer workspace requires one common identity layer grid";
+                    return false;
+                }
+            }
+
+            const fullmag_fdm_grid_desc &fft_grid = plan.kernels[0].fft_grid;
+            const uint64_t fft_cell_count = grid_cell_count(fft_grid);
+            const bool native_grid_fits_fft =
+                first_layer.native_grid.nx <= fft_grid.nx &&
+                first_layer.native_grid.ny <= fft_grid.ny &&
+                first_layer.native_grid.nz <= fft_grid.nz &&
+                first_layer.native_grid.dx == fft_grid.dx &&
+                first_layer.native_grid.dy == fft_grid.dy &&
+                first_layer.native_grid.dz == fft_grid.dz;
+            if (fft_cell_count == 0 || !native_grid_fits_fft) {
+                ctx.last_error =
+                    "D-07 batched multilayer workspace requires a common padded FFT grid";
+                return false;
+            }
+            for (uint32_t kernel_index = 0;
+                 kernel_index < plan.kernel_count;
+                 ++kernel_index)
+            {
+                const fullmag_fdm_tensor_kernel_desc_v2 &kernel =
+                    plan.kernels[kernel_index];
+                if (kernel.kernel_len != fft_cell_count ||
+                    !same_grid(kernel.fft_grid, fft_grid) ||
+                    kernel.src_layer >= plan.layer_count ||
+                    kernel.dst_layer >= plan.layer_count)
+                {
+                    ctx.last_error =
+                        "D-07 batched multilayer workspace requires one common FFT grid and valid layer pairs";
+                    return false;
+                }
+            }
+
+            uint64_t batch_element_count = 0;
+            if (!multiply(
+                    static_cast<uint64_t>(plan.layer_count),
+                    uint64_t{3},
+                    batch_element_count) ||
+                !multiply(
+                    batch_element_count,
+                    fft_cell_count,
+                    batch_element_count) ||
+                !multiply(
+                    batch_element_count,
+                    complex_bytes,
+                    batch_element_count) ||
+                !add_multilayer_workspace_allocations(
+                    ctx,
+                    estimate,
+                    estimate.batch_fft_bytes,
+                    2,
+                    batch_element_count))
+            {
+                return false;
+            }
+        }
+
+        // Reject obviously oversized plans before the exact push-map walk,
+        // which can be proportional to the number of map entries.
+        if (!multilayer_workspace_fits_budget(ctx, estimate, budget)) {
+            return false;
+        }
+        for (uint32_t layer_index = 0;
+             layer_index < plan.layer_count;
+             ++layer_index)
+        {
+            const fullmag_fdm_layer_desc_v2 &layer = plan.layers[layer_index];
+            if (layer.transfer_kind != FULLMAG_FDM_TRANSFER_PUSH_PULL) {
+                continue;
+            }
+            uint64_t push_entry_count = 0;
+            uint64_t push_component_bytes = 0;
+            if (!count_push_map_entries(
+                    ctx,
+                    layer.native_grid,
+                    layer.convolution_grid,
+                    push_entry_count) ||
+                !multiply(
+                    push_entry_count,
+                    sizeof(uint64_t),
+                    push_component_bytes) ||
+                !add_multilayer_workspace_allocations(
+                    ctx,
+                    estimate,
+                    estimate.push_map_bytes,
+                    push_entry_count == 0 ? 0 : 2,
+                    push_component_bytes))
+            {
+                return false;
+            }
+        }
+    }
+
+    GpuWorkspaceBudget final_budget;
+    return query_gpu_workspace_budget(ctx, final_budget) &&
+        multilayer_workspace_fits_budget(ctx, estimate, final_budget);
 }
 
 static bool build_and_upload_push_map(
