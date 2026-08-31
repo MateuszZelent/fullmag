@@ -16,7 +16,7 @@ This public page and the accompanying Sphinx version-change index were added to 
 ```
 
 ```{versionchanged} development
-The version-change report is published at the directory entry point and retains the full generated report at `changes.html`.
+The changelog now exposes separate Documentation and GitHub / code tabs, each with its own latest-change timestamp and history. The version-change report is published at the directory entry point and retains the full generated report at `changes.html`.
 ```
 
 FullMag exposes two complementary change records:
@@ -32,14 +32,16 @@ The Git-backed list answers “what changed in the documentation and when?”. T
 release notes for solver binaries or scientific qualification receipts.
 
 <div class="fm-changelog-page-links">
-  <a class="fm-changelog-page-link" href="../version-changes/changes.html">Open Sphinx version-change index</a>
-  <a class="fm-changelog-page-link" href="https://github.com/MateuszZelent/fullmag/commits/master/public_docs/site">Open complete documentation history on GitHub</a>
+  <a class="fm-changelog-page-link" href="../version-changes/index.html">Open Sphinx version-change report</a>
 </div>
 
-## Recent documentation changes
+## Two change histories
 
-```{documentation-changelog}
-:limit: 80
+The tabs use separate Git scopes. **Documentation** covers commits that change the public Sphinx source and its documentation contract. **GitHub / code** covers the remaining repository code history and links every entry to its commit on GitHub.
+
+```{documentation-changelog-tabs}
+:documentation-limit: 80
+:code-limit: 40
 :show-paths:
 ```
 

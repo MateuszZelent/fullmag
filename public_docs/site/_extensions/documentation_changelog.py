@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+from html import escape
 from pathlib import Path
 import re
 import subprocess
@@ -217,6 +218,174 @@ def _path_reference(
     )
 
 
+def _render_history_summary(
+    app: Sphinx,
+    commit: DocumentationCommit,
+    *,
+    summary_label: str,
+    history_url: str,
+    repository_url: str,
+    local_timezone,
+) -> nodes.container:
+    localized = commit.changed_at.astimezone(local_timezone)
+    summary = nodes.container(classes=["fm-changelog-summary"])
+    line = nodes.paragraph(classes=["fm-changelog-summary__line"])
+    line += nodes.strong("", summary_label)
+    line += nodes.raw(
+        "",
+        (
+            f' <time class="fm-changelog-summary__time" '
+            f'datetime="{escape(commit.changed_at.isoformat(), quote=True)}">'
+            f"{escape(localized.strftime('%H:%M %d.%m.%Y %Z'))}</time>"
+        ),
+        format="html",
+    )
+    line += nodes.Text(" · ")
+    line += nodes.reference(
+        "",
+        commit.sha[:10],
+        refuri=f"{repository_url}/commit/{commit.sha}",
+        classes=["fm-changelog-summary__commit"],
+    )
+    line += nodes.Text(" · ")
+    line += nodes.reference(
+        "",
+        "Full history on GitHub",
+        refuri=history_url,
+        classes=["fm-changelog-summary__history"],
+    )
+    summary += line
+    return summary
+
+
+def _render_commit_history(
+    app: Sphinx,
+    commits: tuple[DocumentationCommit, ...],
+    *,
+    root_class: str,
+    summary_label: str,
+    history_url: str,
+    empty_text: str,
+    show_paths: bool,
+) -> nodes.container:
+    root = nodes.container(classes=[root_class])
+    if not commits:
+        root += nodes.paragraph("", empty_text, classes=["fm-changelog-unavailable"])
+        return root
+
+    repository_url = app.config.documentation_changelog_repository_url.rstrip("/")
+    local_timezone = _timezone(app.config.documentation_changelog_timezone)
+    root += _render_history_summary(
+        app,
+        commits[0],
+        summary_label=summary_label,
+        history_url=history_url,
+        repository_url=repository_url,
+        local_timezone=local_timezone,
+    )
+
+    grouped: dict[str, list[DocumentationCommit]] = defaultdict(list)
+    for commit in commits:
+        date_label = commit.changed_at.astimezone(local_timezone).strftime("%d.%m.%Y")
+        grouped[date_label].append(commit)
+
+    for date_label, day_commits in grouped.items():
+        root += nodes.rubric("", date_label, classes=["fm-changelog-date"])
+        day = nodes.container(classes=["fm-changelog-day"])
+        for commit in day_commits:
+            category, category_slug, scope, breaking = _subject_metadata(commit.subject)
+            entry_classes = [ENTRY_CLASS, f"fm-changelog-entry--{category_slug}"]
+            if breaking:
+                entry_classes.append("fm-changelog-entry--breaking")
+            entry = nodes.container(classes=entry_classes)
+
+            heading = nodes.paragraph(classes=["fm-changelog-heading"])
+            heading += nodes.inline(
+                "",
+                category,
+                classes=["fm-changelog-badge", f"fm-changelog-badge--{category_slug}"],
+            )
+            if scope:
+                heading += nodes.inline(
+                    "",
+                    scope,
+                    classes=["fm-changelog-scope"],
+                )
+            heading += nodes.reference(
+                "",
+                commit.subject,
+                refuri=f"{repository_url}/commit/{commit.sha}",
+                classes=["fm-changelog-subject"],
+            )
+            entry += heading
+
+            localized = commit.changed_at.astimezone(local_timezone)
+            metadata = nodes.paragraph(classes=["fm-changelog-meta"])
+            metadata += nodes.inline(
+                "",
+                localized.strftime("%H:%M %Z"),
+                classes=["fm-changelog-time"],
+            )
+            metadata += nodes.literal("", commit.sha[:10])
+            if breaking:
+                metadata += nodes.strong("", "breaking change")
+            entry += metadata
+
+            if show_paths:
+                visible_paths = commit.paths[:6]
+                path_line = nodes.paragraph(classes=["fm-changelog-paths"])
+                path_line += nodes.strong("", "Changed: ")
+                for index, path in enumerate(visible_paths):
+                    if index:
+                        path_line += nodes.Text(" · ")
+                    path_line += _path_reference(repository_url, commit, path)
+                hidden_count = len(commit.paths) - len(visible_paths)
+                if hidden_count > 0:
+                    path_line += nodes.Text(f" · +{hidden_count} more")
+                entry += path_line
+
+            day += entry
+        root += day
+    return root
+
+
+def _history_container(
+    app: Sphinx,
+    *,
+    pathspecs: tuple[str, ...],
+    limit: int,
+    root_class: str,
+    summary_label: str,
+    history_url: str,
+    empty_text: str,
+    show_paths: bool,
+) -> nodes.container:
+    repository_root = _repository_root(str(Path(app.srcdir).resolve()))
+    if repository_root is None:
+        return _render_commit_history(
+            app,
+            (),
+            root_class=root_class,
+            summary_label=summary_label,
+            history_url=history_url,
+            empty_text=(
+                "Git history is unavailable in this documentation build. "
+                "Use the repository history for the authoritative change record."
+            ),
+            show_paths=show_paths,
+        )
+    commits = _documentation_commits(str(repository_root), limit, pathspecs)
+    return _render_commit_history(
+        app,
+        commits,
+        root_class=root_class,
+        summary_label=summary_label,
+        history_url=history_url,
+        empty_text=empty_text,
+        show_paths=show_paths,
+    )
+
+
 class DocumentationChangelogDirective(SphinxDirective):
     """Insert recent first-parent commits that changed public documentation."""
 
@@ -228,93 +397,94 @@ class DocumentationChangelogDirective(SphinxDirective):
 
     def run(self) -> list[nodes.Node]:
         app = self.env.app
-        repository_root = _repository_root(str(Path(app.srcdir).resolve()))
-        root = nodes.container(classes=[ROOT_CLASS])
-        if repository_root is None:
-            root += nodes.paragraph(
-                "",
-                "Git history is unavailable in this documentation build. "
-                "Use the repository history for the authoritative change record.",
-                classes=["fm-changelog-unavailable"],
-            )
-            return [root]
-
-        limit = int(self.options.get("limit", app.config.documentation_changelog_limit))
-        pathspecs = tuple(app.config.documentation_changelog_pathspecs)
-        commits = _documentation_commits(str(repository_root), limit, pathspecs)
-        if not commits:
-            root += nodes.paragraph(
-                "",
-                "No documentation commits were found for the configured paths.",
-                classes=["fm-changelog-unavailable"],
-            )
-            return [root]
-
+        branch = str(app.config.documentation_changelog_branch)
         repository_url = app.config.documentation_changelog_repository_url.rstrip("/")
-        local_timezone = _timezone(app.config.documentation_changelog_timezone)
-        grouped: dict[str, list[DocumentationCommit]] = defaultdict(list)
-        for commit in commits:
-            date_label = commit.changed_at.astimezone(local_timezone).strftime("%d.%m.%Y")
-            grouped[date_label].append(commit)
+        limit = int(self.options.get("limit", app.config.documentation_changelog_limit))
+        return [
+            _history_container(
+                app,
+                pathspecs=tuple(app.config.documentation_changelog_pathspecs),
+                limit=limit,
+                root_class=ROOT_CLASS,
+                summary_label="Latest documentation change",
+                history_url=f"{repository_url}/commits/{branch}/public_docs/site",
+                empty_text="No documentation commits were found for the configured paths.",
+                show_paths="show-paths" in self.options,
+            )
+        ]
 
+
+class DocumentationChangelogTabsDirective(SphinxDirective):
+    """Render separate documentation and GitHub/code change histories."""
+
+    has_content = False
+    option_spec = {
+        "documentation-limit": directives.nonnegative_int,
+        "code-limit": directives.nonnegative_int,
+        "show-paths": directives.flag,
+    }
+
+    def run(self) -> list[nodes.Node]:
+        app = self.env.app
+        branch = str(app.config.documentation_changelog_branch)
+        repository_url = app.config.documentation_changelog_repository_url.rstrip("/")
         show_paths = "show-paths" in self.options
-        for date_label, day_commits in grouped.items():
-            root += nodes.rubric("", date_label, classes=["fm-changelog-date"])
-            day = nodes.container(classes=["fm-changelog-day"])
-            for commit in day_commits:
-                category, category_slug, scope, breaking = _subject_metadata(commit.subject)
-                entry_classes = [ENTRY_CLASS, f"fm-changelog-entry--{category_slug}"]
-                if breaking:
-                    entry_classes.append("fm-changelog-entry--breaking")
-                entry = nodes.container(classes=entry_classes)
+        root = nodes.container(classes=["fm-changelog-tabs"])
+        root += nodes.raw(
+            "",
+            (
+                '<input class="fm-changelog-tab-input" type="radio" '
+                'name="fm-changelog-tab" id="fm-changelog-tab-documentation" checked="checked">'
+                '<label class="fm-changelog-tab-label fm-changelog-tab-label--documentation" '
+                'for="fm-changelog-tab-documentation">Documentation</label>'
+                '<input class="fm-changelog-tab-input" type="radio" '
+                'name="fm-changelog-tab" id="fm-changelog-tab-code">'
+                '<label class="fm-changelog-tab-label fm-changelog-tab-label--code" '
+                'for="fm-changelog-tab-code">GitHub / code</label>'
+            ),
+            format="html",
+        )
 
-                heading = nodes.paragraph(classes=["fm-changelog-heading"])
-                heading += nodes.inline(
-                    "",
-                    category,
-                    classes=["fm-changelog-badge", f"fm-changelog-badge--{category_slug}"],
+        documentation_panel = nodes.container(
+            classes=[
+                "fm-changelog-tab-panel",
+                "fm-changelog-tab-panel--documentation",
+            ],
+            ids=["fm-changelog-panel-documentation"],
+        )
+        documentation_panel += _history_container(
+            app,
+            pathspecs=tuple(app.config.documentation_changelog_pathspecs),
+            limit=int(
+                self.options.get(
+                    "documentation-limit", app.config.documentation_changelog_limit
                 )
-                if scope:
-                    heading += nodes.inline(
-                        "",
-                        scope,
-                        classes=["fm-changelog-scope"],
-                    )
-                heading += nodes.reference(
-                    "",
-                    commit.subject,
-                    refuri=f"{repository_url}/commit/{commit.sha}",
-                    classes=["fm-changelog-subject"],
-                )
-                entry += heading
+            ),
+            root_class=ROOT_CLASS,
+            summary_label="Latest documentation change",
+            history_url=f"{repository_url}/commits/{branch}/public_docs/site",
+            empty_text="No documentation commits were found for the configured paths.",
+            show_paths=show_paths,
+        )
+        root += documentation_panel
 
-                localized = commit.changed_at.astimezone(local_timezone)
-                metadata = nodes.paragraph(classes=["fm-changelog-meta"])
-                metadata += nodes.inline(
-                    "",
-                    localized.strftime("%H:%M %Z"),
-                    classes=["fm-changelog-time"],
-                )
-                metadata += nodes.literal("", commit.sha[:10])
-                if breaking:
-                    metadata += nodes.strong("", "breaking change")
-                entry += metadata
-
-                if show_paths:
-                    visible_paths = commit.paths[:6]
-                    path_line = nodes.paragraph(classes=["fm-changelog-paths"])
-                    path_line += nodes.strong("", "Changed: ")
-                    for index, path in enumerate(visible_paths):
-                        if index:
-                            path_line += nodes.Text(" · ")
-                        path_line += _path_reference(repository_url, commit, path)
-                    hidden_count = len(commit.paths) - len(visible_paths)
-                    if hidden_count > 0:
-                        path_line += nodes.Text(f" · +{hidden_count} more")
-                    entry += path_line
-
-                day += entry
-            root += day
+        code_panel = nodes.container(
+            classes=["fm-changelog-tab-panel", "fm-changelog-tab-panel--code"],
+            ids=["fm-changelog-panel-code"],
+        )
+        code_panel += _history_container(
+            app,
+            pathspecs=tuple(app.config.documentation_code_changelog_pathspecs),
+            limit=int(
+                self.options.get("code-limit", app.config.documentation_code_changelog_limit)
+            ),
+            root_class="fm-code-changelog",
+            summary_label="Latest code change",
+            history_url=f"{repository_url}/commits/{branch}/",
+            empty_text="No code commits were found for the configured paths.",
+            show_paths=show_paths,
+        )
+        root += code_panel
         return [root]
 
 
@@ -357,7 +527,9 @@ def setup(app: Sphinx) -> dict[str, object]:
         "https://github.com/MateuszZelent/fullmag",
         "html",
     )
+    app.add_config_value("documentation_changelog_branch", "master", "html")
     app.add_config_value("documentation_changelog_limit", 80, "html")
+    app.add_config_value("documentation_code_changelog_limit", 40, "html")
     app.add_config_value("documentation_changelog_timezone", "Europe/Warsaw", "html")
     app.add_config_value(
         "documentation_changelog_pathspecs",
@@ -374,7 +546,27 @@ def setup(app: Sphinx) -> dict[str, object]:
         ),
         "html",
     )
+    app.add_config_value(
+        "documentation_code_changelog_pathspecs",
+        (
+            ".",
+            ":(exclude)public_docs/site",
+            ":(exclude)docs",
+            ":(exclude)**/*.md",
+            ":(exclude)**/*.rst",
+            ":(exclude).github/workflows/documentation.yml",
+            ":(exclude).agents/skills/scientific-documentation-contract",
+            ":(exclude)packages/fullmag-py/tests/test_public_python_api_documentation.py",
+            ":(exclude)packages/fullmag-py/tests/test_public_exchange_documentation.py",
+            ":(exclude)packages/fullmag-py/tests/test_material_dmi_units.py",
+            ":(exclude)scripts/public_docs_information_architecture.py",
+            ":(exclude)scripts/check_public_docs_information_architecture.py",
+            ":(exclude)scripts/check_public_doc_examples.py",
+        ),
+        "html",
+    )
     app.add_directive("documentation-changelog", DocumentationChangelogDirective)
+    app.add_directive("documentation-changelog-tabs", DocumentationChangelogTabsDirective)
     app.connect("env-get-outdated", _mark_changelog_outdated)
     app.connect("build-finished", _validate_rendered_changelog)
     return {

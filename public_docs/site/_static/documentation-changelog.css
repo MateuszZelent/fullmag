@@ -1,12 +1,14 @@
 /* Git-backed public documentation history. */
-.fm-documentation-changelog {
+.fm-documentation-changelog,
+.fm-code-changelog {
   display: grid;
   gap: 0.65rem;
   max-width: 100%;
   margin-top: 1rem;
 }
 
-.fm-documentation-changelog .fm-changelog-date {
+.fm-documentation-changelog .fm-changelog-date,
+.fm-code-changelog .fm-changelog-date {
   margin: 1.65rem 0 0.15rem;
   padding-bottom: 0.38rem;
   border-bottom: 1px solid color-mix(in srgb, currentColor 18%, transparent);
@@ -110,6 +112,104 @@
   overflow-wrap: anywhere;
 }
 
+.fm-changelog-summary {
+  padding: 0.8rem 0.9rem;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+
+.fm-changelog-summary__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.42rem;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.fm-changelog-summary__time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.fm-changelog-summary__commit {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.fm-changelog-summary__history {
+  font-weight: 650;
+}
+
+.fm-changelog-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 1.2rem 0 1.8rem;
+}
+
+.fm-changelog-tab-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.fm-changelog-tab-label {
+  grid-row: 1;
+  padding: 0.72rem 0.85rem;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-weight: 750;
+  text-align: center;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.fm-changelog-tab-label:hover {
+  transform: translateY(-1px);
+}
+
+.fm-changelog-tab-label--documentation {
+  border-color: color-mix(in srgb, #0f766e 42%, currentColor);
+}
+
+.fm-changelog-tab-label--code {
+  border-color: color-mix(in srgb, #b45309 42%, currentColor);
+}
+
+.fm-changelog-tab-input:focus-visible + .fm-changelog-tab-label {
+  outline: 3px solid color-mix(in srgb, #0f766e 58%, transparent);
+  outline-offset: 2px;
+}
+
+.fm-changelog-tab-input:checked + .fm-changelog-tab-label {
+  color: #fff;
+}
+
+#fm-changelog-tab-documentation:checked + .fm-changelog-tab-label--documentation {
+  border-color: #0f766e;
+  background: #0f766e;
+}
+
+#fm-changelog-tab-code:checked + .fm-changelog-tab-label--code {
+  border-color: #b45309;
+  background: #b45309;
+}
+
+.fm-changelog-tab-panel {
+  display: none;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+#fm-changelog-tab-documentation:checked ~ .fm-changelog-tab-panel--documentation,
+#fm-changelog-tab-code:checked ~ .fm-changelog-tab-panel--code {
+  display: block;
+}
+
 .fm-changelog-page-links {
   display: flex;
   flex-wrap: wrap;
@@ -126,6 +226,14 @@
 }
 
 @media (max-width: 36rem) {
+  .fm-changelog-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .fm-changelog-tab-label {
+    grid-row: auto;
+  }
+
   .fm-changelog-entry {
     padding: 0.65rem 0.72rem;
   }

@@ -78,6 +78,7 @@ jobs:
         run: |
           python -m unittest scripts/test_check_public_doc_examples.py -v
           python scripts/check_public_doc_examples.py --root public_docs/site
+          python -m unittest scripts/test_documentation_changelog_tabs.py -v
 
       - name: Resolve scientific documentation diff base
         id: docs-diff
@@ -218,7 +219,7 @@ jobs:
         env:
           DMI_URL: https://fullmag.mzelent.pl/physics/interactions/dmi/index.html
           CHANGELOG_URL: https://fullmag.mzelent.pl/changelog/index.html
-          VERSION_CHANGES_URL: https://fullmag.mzelent.pl/version-changes/changes.html
+          VERSION_CHANGES_URL: https://fullmag.mzelent.pl/version-changes/index.html
         run: |
           set -euo pipefail
           dmi_page="$(mktemp)"
@@ -244,7 +245,12 @@ jobs:
               --connect-timeout 10 --max-time 30 \
               "$CHANGELOG_URL" --output "$changelog_page" \
               && grep --fixed-strings --quiet "Documentation changelog" "$changelog_page" \
-              && grep --fixed-strings --quiet "Recent documentation changes" "$changelog_page" \
+              && grep --fixed-strings --quiet "Two change histories" "$changelog_page" \
+              && grep --fixed-strings --quiet "fm-changelog-tab-panel--documentation" "$changelog_page" \
+              && grep --fixed-strings --quiet "fm-changelog-tab-panel--code" "$changelog_page" \
+              && grep --fixed-strings --quiet "Latest documentation change" "$changelog_page" \
+              && grep --fixed-strings --quiet "Latest code change" "$changelog_page" \
+              && test "$(grep --count --fixed-strings "fm-changelog-summary__time" "$changelog_page")" -ge 2 \
               && grep --fixed-strings --quiet "/commit/${GITHUB_SHA}" "$changelog_page"; then
               changelog_ok=true
             fi
@@ -252,7 +258,8 @@ jobs:
             if curl --fail --silent --show-error --location \
               --connect-timeout 10 --max-time 30 \
               "$VERSION_CHANGES_URL" --output "$version_page" \
-              && grep --fixed-strings --quiet "development" "$version_page"; then
+              && grep --fixed-strings --quiet "development" "$version_page" \
+              && grep --fixed-strings --quiet "Automatically generated list of changes" "$version_page"; then
               version_ok=true
             fi
 
