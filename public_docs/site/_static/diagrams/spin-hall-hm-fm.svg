@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 650" role="img" aria-labelledby="title desc">
+  <title id="title">Spin Hall drift-diffusion in a heavy-metal ferromagnet stack</title>
+  <desc id="desc">Charge current in the heavy metal creates transverse spin current into the ferromagnet.</desc>
+  <defs>
+    <linearGradient id="hm" x1="0" x2="1"><stop stop-color="#173b57"/><stop offset="1" stop-color="#216f87"/></linearGradient>
+    <linearGradient id="fm" x1="0" x2="1"><stop stop-color="#b54324"/><stop offset="1" stop-color="#e19336"/></linearGradient>
+    <marker id="cyan" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0v6l9-3z" fill="#71d8e8"/></marker>
+    <marker id="amber" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0v6l9-3z" fill="#ffd36a"/></marker>
+    <marker id="red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0v6l9-3z" fill="#ff765c"/></marker>
+    <style>text{font-family:Segoe UI,Arial,sans-serif;fill:#edf7fa}.h{font-size:28px;font-weight:650}.s{font-size:21px}.m{font-family:Cambria Math,serif;font-size:25px}.l{fill:none;stroke-width:7;stroke-linecap:round}</style>
+  </defs>
+  <rect width="1200" height="650" rx="28" fill="#0b1720"/>
+  <rect x="115" y="330" width="970" height="210" rx="16" fill="url(#hm)"/>
+  <rect x="115" y="135" width="970" height="185" rx="16" fill="url(#fm)"/>
+  <line x1="115" y1="325" x2="1085" y2="325" stroke="#f5fbff" stroke-width="5" stroke-dasharray="15 10"/>
+  <text x="150" y="185" class="h">FM: ferromagnet</text><text x="150" y="375" class="h">HM: heavy metal</text>
+  <text x="765" y="306" class="s">oriented HM to FM interface</text>
+  <line x1="220" y1="455" x2="565" y2="455" class="l" stroke="#71d8e8" marker-end="url(#cyan)"/>
+  <text x="285" y="430" class="m">Jc , E = -grad V</text>
+  <line x1="620" y1="455" x2="620" y2="245" class="l" stroke="#ffd36a" marker-end="url(#amber)"/>
+  <text x="650" y="425" class="m">Qia, flow +z</text>
+  <line x1="620" y1="400" x2="760" y2="400" stroke="#ff765c" stroke-width="5" marker-end="url(#red)"/>
+  <text x="780" y="407" class="m">spin polarization ~ thetaSH (n x E)</text>
+  <circle cx="620" cy="325" r="22" fill="#ffd36a"/><text x="150" y="295" class="m">mu_s diffuses and accumulates</text>
+  <line x1="620" y1="325" x2="620" y2="210" stroke="#f5fbff" stroke-width="5" marker-end="url(#amber)"/>
+  <text x="640" y="265" class="m">n HM to FM</text>
+  <line x1="750" y1="225" x2="970" y2="175" class="l" stroke="#ff765c" marker-end="url(#red)"/>
+  <text x="820" y="150" class="m">m</text>
+  <path d="M705 255C800 205 875 260 825 305" fill="none" stroke="#ffd36a" stroke-width="5" marker-end="url(#amber)"/>
+  <text x="845" y="285" class="s">absorbed transverse spin</text><text x="845" y="315" class="m">to Ttr,G</text>
+  <text x="150" y="590" class="s">Qia: i = flow, a = spin polarization. e &gt; 0 and Jc is conventional current.</text>
+</svg>
