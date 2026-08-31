@@ -59,6 +59,242 @@ unless the two sources intentionally represent different physics.
 | Spatial variation | target mask, material fields, and current-source projection | transport solution and interface absorption |
 | Best use | calibrated reduced model, switching scans, MuMax comparison | stack design and spatial spin-transport studies |
 
+(physics-spin-orbit-torque-prescribed-comparison)=
+## Prescribed SOT comparison: local SOT, M1, and M2
+
+`PrescribedSpinOrbitTorque`, M1, and M2 can all add a spin torque to the same
+magnetization equation, but they do **not** represent the same physical problem.
+The distinction is the location at which the model starts:
+
+```text
+Prescribed SOT: authored J, sigma, xi_DL, xi_FL, t_F -> local LLG source
+
+M1: electrodes/materials -> charge solve -> spin solve -> interface absorption -> LLG source
+
+M2: electrodes/materials <-> reciprocal charge-spin block
+                              -> interface absorption -> LLG source
+```
+
+The prescribed model starts at the final, reduced torque law. M1 starts at
+charge transport and computes the spin distribution without feeding spin back
+into the charge solution. M2 solves a reciprocal charge-spin problem in which
+the spin state can modify the charge response. Therefore `xi_dl=theta_sh` does
+not, by itself, make a prescribed-SOT simulation equivalent to M1 or M2.
+
+### Meaning of M1 and M2 in Fullmag
+
+These names describe coupling levels of the drift-diffusion model, not two
+formula variants of `PrescribedSpinOrbitTorque`.
+
+**M1: one-way solved transport.** `CurrentTransport(coupling="one_way")`
+produces the charge-current field first. `SpinDriftDiffusion` then consumes that
+named current source, evaluates direct spin Hall injection, diffusion and active
+spin reactions, and supplies absorbed interface spin flux to
+`DriftDiffusionSpinTorque`. The spin solution does not alter the already solved
+charge field.
+
+**M2: reciprocal solved transport.**
+`CurrentTransport(coupling="bidirectional")` selects the reciprocal
+constitutive contract. Charge and spin belong to one coupled steady problem;
+the charge block includes the authored magnetoresistive conductivities and the
+spin block can return an inverse-spin-Hall contribution. In the public Python
+contract, bidirectional current transport requires `model="ohmic_poisson"`,
+complete anisotropic conductivity data, and a `block_gmres` charge policy.
+`SpinDriftDiffusion.to_ir()` records
+`transport_constitutive.reciprocal.fullmag.v1` instead of the M1
+`transport_constitutive.one_way.fullmag.v1` contract.
+
+**Prescribed SOT: no transport solve.** The module directly evaluates a local
+DL/FL source from a signed current, a polarization axis, two effective
+efficiencies and the physical FM thickness. It does not create charge
+potential, spin potential, spin current, interface backflow, or inverse-SHE
+observables.
+
+### Side-by-side physical comparison
+
+| Property | Prescribed SOT | M1: one-way transport | M2: reciprocal transport |
+| --- | --- | --- | --- |
+| Model entry point | effective local torque law | charge boundary-value problem | coupled charge-spin boundary-value problem |
+| Charge potential and current | not solved by `SignedScalarDrive`; optional named current projection with `VectorCurrentDrive` | solved before spin | solved inside the reciprocal block |
+| Spin accumulation | not a state variable | solved in the transport domain | solved and coupled back to charge |
+| Direct SHE | absorbed into fitted `xi_dl`/`xi_fl` | generated from local `theta_sh` and charge current | generated from local `theta_sh` and coupled charge current |
+| Inverse SHE | absent | absent from charge feedback | included by the reciprocal constitutive contract |
+| AMR/PHE/AHE charge response | absent from the torque module | not part of one-way spin feedback | authored through parallel, perpendicular and AHE conductivities |
+| Spin diffusion and relaxation | absent | resolved from `sigma_s_Spm`, `lambda_sf_m`, and enabled magnetic lengths | resolved in the reciprocal block |
+| HM/FM interface | not required by the module | explicit transparent or mixing-conductance interface | explicit interface in the coupled transport graph |
+| Interface transparency and backflow | folded into effective efficiencies | computed from interface and bulk transport data | computed while charge and spin are mutually coupled |
+| Torque source | local DL/FL formula | absorbed transverse interface spin flux | absorbed transverse interface spin flux |
+| Spatial nonuniformity | target mask, local magnetic fields, envelope, and optional current projection | charge crowding, diffusion, reactions, boundaries, geometry, and interface absorption | all M1 mechanisms plus reciprocal charge-spin redistribution |
+| Required nonmagnetic mesh | none for the torque itself | yes, for every active transport region | yes, for every active transport region |
+| Main fitted quantities | effective `xi_dl`, `xi_fl` | bulk and interface transport parameters | bulk, interface, magnetoresistive, and reciprocal transport parameters |
+| Typical computational cost | local per magnetic degree of freedom | charge solve plus spin solve | coupled nonlinear/block solve; normally the most expensive of the three |
+| Natural observables | magnetization and prescribed torque | potential, charge current, spin state, absorbed flux, and torque | M1 observables plus reciprocal charge response |
+| Appropriate use | calibrated reduced switching/dynamics model | spatial SHE transport without feedback to charge | reciprocal device transport where spin modifies charge |
+
+The table compares physics only. Executable discretization, device, precision,
+solver, and interface support are lane-specific and fail closed. Consult the
+{doc}`drift-diffusion transport page </physics/interactions/drift-diffusion-spin-torque/index>`
+before selecting an M1 or M2 backend.
+
+### What prescribed SOT removes
+
+The reduction replaces the solved transport chain with effective coefficients:
+
+```text
+bulk charge conversion
++ spin diffusion and relaxation
++ interface transmission and backflow
++ unresolved stack losses
+                         -> xi_DL and xi_FL
+```
+
+This replacement is useful only when those coefficients are known for the
+stack, temperature, thickness range and sign convention being simulated. It
+also changes what can be predicted. Prescribed SOT can answer how a magnetic
+body responds to an assumed torque efficiency. It cannot predict how changing
+HM conductivity, HM thickness, spin-diffusion length, interface mixing
+conductance or electrode geometry changes that efficiency. M1 or M2 is needed
+for those questions.
+
+There is generally no unique parameter-by-parameter conversion from M1/M2 to
+prescribed SOT. An effective `xi_dl` may be extracted by matching an integrated
+or averaged damping-like torque for one operating point. An effective `xi_fl`
+may be fitted in the same way. The resulting pair need not reproduce local
+hotspots, edge accumulation, thickness dependence, current crowding, backflow,
+or a different magnetic state.
+
+### When the models may agree
+
+Prescribed SOT can approximate M1 or M2 when all of the following are justified:
+
+- the FM is thin enough that a volume-averaged torque is meaningful;
+- the in-plane current and injected spin polarization are approximately uniform;
+- transport relaxes much faster than the magnetic dynamics of interest;
+- interface and bulk losses can be represented by fixed effective efficiencies;
+- reciprocal modification of the charge path is negligible, or already folded
+  into a calibration performed at the same operating point;
+- the observable depends on the integrated torque rather than its local profile.
+
+Agreement should be demonstrated against a declared observable, not assumed
+from similar-looking trajectories. Useful calibration targets include the
+volume-integrated DL/FL torque, initial angular acceleration, switching
+threshold, or a selected harmonic response. A coefficient fitted to one target
+is not automatically validated for the others.
+
+### When M1 or M2 is required
+
+Choose **M1** when spatial charge and spin transport matters but one-way
+charge-to-spin coupling is an acceptable approximation. Typical reasons are
+current crowding, finite spin-diffusion length, multilayer spin absorption,
+mixing-conductance interfaces, nonuniform torque, or a geometry in which a
+single authored `sigma` is insufficient.
+
+Choose **M2** when the reciprocal charge response is itself part of the physics
+or observable. Examples include inverse-SHE voltage/current, simultaneous
+AMR/PHE/AHE transport, or a device state in which magnetization-dependent charge
+redistribution materially changes spin injection. M2 is not automatically
+"more accurate": it is a larger constitutive model requiring additional
+parameters, boundary data, solver policy, and validation.
+
+Choose **prescribed SOT** when the scientific input is already an effective
+torque efficiency, when reproducing a MuMax-style local SOT experiment, or when
+large parameter scans would make a solved transport domain unnecessary. Do not
+use it merely to avoid supplying unknown transport data while still claiming
+predictions about that missing transport physics.
+
+### Python authoring: the decisive differences
+
+The following fragments show the model-selection fields. They are deliberately
+short; complete M1 and M2 examples, including materials, interfaces, electrodes
+and solver restrictions, are maintained on the drift-diffusion page.
+
+::::{tab-set}
+:::{tab-item} Prescribed SOT
+
+```python
+study.spin_torque(fm.PrescribedSpinOrbitTorque(
+    name="local_sot",
+    target=fm.RegionRef("fm"),
+    drive=fm.SignedScalarDrive(
+        current_density_Apm2=1.0e11,
+        sigma=(0.0, 1.0, 0.0),
+    ),
+    xi_dl=0.12,
+    xi_fl=0.01,
+    free_layer_thickness_m=1.0e-9,
+))
+```
+
+No `CurrentTransport`, `SpinDriftDiffusion`, transport material, interface, or
+spin boundary is consumed by this module.
+
+:::
+:::{tab-item} M1 one-way
+
+```python
+charge = study.current_transport(
+    name="charge",
+    model="ohmic_poisson",
+    coupling="one_way",
+    # domain, materials, boundaries, gauge, solver
+)
+spin = study.spin_transport(fm.SpinDriftDiffusion(
+    id="spin",
+    current_source_id=charge.name,
+    # domain, materials, interfaces, boundaries, solver
+))
+study.spin_torque(fm.DriftDiffusionSpinTorque(
+    id="transport_torque",
+    solve_id=spin.id,
+    target=fm.RegionRef("fm"),
+))
+```
+
+The dependency direction is `charge -> spin -> torque`; no spin-to-charge edge
+is authored.
+
+:::
+:::{tab-item} M2 reciprocal
+
+```python
+charge = study.current_transport(
+    name="charge",
+    model="ohmic_poisson",
+    coupling="bidirectional",
+    # complete anisotropic materials and block_gmres policy
+)
+spin = study.spin_transport(fm.SpinDriftDiffusion(
+    id="spin",
+    current_source_id=charge.name,
+    mode="steady",
+    # reciprocal operator and lane-specific solver policy
+))
+study.spin_torque(fm.DriftDiffusionSpinTorque(
+    id="transport_torque",
+    solve_id=spin.id,
+    target=fm.RegionRef("fm"),
+))
+```
+
+The problem validator binds charge and spin to the reciprocal constitutive
+contract. This is not obtained by adding `PrescribedSpinOrbitTorque` to M1.
+
+:::
+::::
+
+### Do not double count the torque
+
+`DriftDiffusionSpinTorque` consumes the absorbed spin flux from a named M1/M2
+solve. `PrescribedSpinOrbitTorque` creates an independent local source. Adding
+both to the same target sums both terms in the magnetization equation; Fullmag
+does not infer that one replaces the other. Such a combination is valid only
+when the user can identify two distinct physical sources, for example a solved
+HM torque plus a separately calibrated torque from another unmeshed layer.
+
+For a comparison study, run separate problems or stages with one torque model
+active at a time, preserve the current and normal sign convention, and compare
+the same torque or magnetization observable.
+
 (physics-spin-orbit-torque-governing-equations)=
 ## Governing equations and sign convention
 
