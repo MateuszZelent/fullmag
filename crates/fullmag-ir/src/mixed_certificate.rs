@@ -417,6 +417,141 @@ fn unique_marker(mesh: &MeshIR, role: FemFacetRoleIR, message: &str) -> Result<u
     Ok(*markers.first().unwrap())
 }
 
+/// Validate the semantic owner/marker/interface contract without computing
+/// the full geometric quality evidence.
+///
+/// Trusted cache reloads use this bounded native pass in addition to the
+/// topology fingerprint preflight.  Keeping it separate from the expensive
+/// certificate evidence means a warm reload still avoids the per-cell quality
+/// reductions while rejecting a mesh that is structurally valid but assigns a
+/// material-interface facet to the wrong owners or markers.
+pub fn validate_mixed_mesh_semantics(mesh: &MeshIR) -> Result<(), MeshValidationError> {
+    structural_preflight(mesh).map_err(|error| vec![error])?;
+    let mut errors = Vec::new();
+    let mut adjacency = HashMap::<FaceKey, Vec<(usize, u32)>>::new();
+
+    for ordinal in 0..mesh.cells.types.len() {
+        let cell_type = mesh.cells.types[ordinal];
+        let mesh_part = mesh.cells.mesh_parts[ordinal];
+        let marker = mesh.element_markers[ordinal];
+        let legal = matches!(
+            (mesh_part, cell_type, marker),
+            (FemCellMeshPartIR::Magnetic, FemCellTypeIR::Prism6, 1)
+                | (
+                    FemCellMeshPartIR::TransitionAir,
+                    FemCellTypeIR::Pyramid5 | FemCellTypeIR::Tet4,
+                    0,
+                )
+                | (FemCellMeshPartIR::FarAir, FemCellTypeIR::Tet4, 0)
+        );
+        if !legal {
+            errors.push(format!(
+                "mixed semantic cell {ordinal} has invalid mesh part/family/marker"
+            ));
+        }
+        let Some(node_ids) = mesh.cells.item_nodes(ordinal) else {
+            errors.push(format!("mixed semantic cell {ordinal} has invalid CSR"));
+            continue;
+        };
+        for local_face in mixed_local_facets(cell_type) {
+            let mut key = local_face
+                .iter()
+                .map(|index| node_ids[*index])
+                .collect::<FaceKey>();
+            key.sort_unstable();
+            adjacency.entry(key).or_default().push((ordinal, marker));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    let interface_marker = unique_marker(
+        mesh,
+        FemFacetRoleIR::MaterialInterface,
+        "mixed semantic contract requires one material-interface marker",
+    )
+    .map_err(|error| vec![error])?;
+    let outer_marker = unique_marker(
+        mesh,
+        FemFacetRoleIR::Exterior,
+        "mixed semantic contract requires one outer-boundary marker",
+    )
+    .map_err(|error| vec![error])?;
+
+    let mut explicit_roles = HashMap::<FaceKey, (usize, usize)>::new();
+    for ordinal in 0..mesh.facets.types.len() {
+        let mut key = mesh
+            .facets
+            .item_nodes(ordinal)
+            .ok_or_else(|| vec![format!("mixed semantic facet {ordinal} has invalid CSR")])?
+            .iter()
+            .copied()
+            .collect::<FaceKey>();
+        key.sort_unstable();
+        let entry = explicit_roles.entry(key.clone()).or_default();
+        match mesh.facets.roles[ordinal] {
+            FemFacetRoleIR::Exterior => entry.0 += 1,
+            FemFacetRoleIR::MaterialInterface => entry.1 += 1,
+            FemFacetRoleIR::PeriodicSeam => {}
+        }
+        let owners = adjacency.get(&key).map(Vec::as_slice).unwrap_or_default();
+        match mesh.facets.roles[ordinal] {
+            FemFacetRoleIR::Exterior => {
+                if owners.len() != 1 || mesh.boundary_markers[ordinal] != outer_marker {
+                    errors.push(format!(
+                        "mixed semantic exterior facet {ordinal} has invalid owner/marker"
+                    ));
+                }
+            }
+            FemFacetRoleIR::MaterialInterface => {
+                let owner_markers = owners
+                    .iter()
+                    .map(|(_, marker)| *marker)
+                    .collect::<BTreeSet<_>>();
+                if owners.len() != 2
+                    || owner_markers != BTreeSet::from([0, 1])
+                    || mesh.boundary_markers[ordinal] != interface_marker
+                {
+                    errors.push(format!(
+                        "mixed semantic interface facet {ordinal} has invalid owner/marker"
+                    ));
+                }
+            }
+            FemFacetRoleIR::PeriodicSeam => {}
+        }
+    }
+
+    for (key, owners) in &adjacency {
+        if owners.len() > 2 {
+            errors.push(format!(
+                "mixed semantic face {:?} has more than two owners",
+                key.as_slice()
+            ));
+            continue;
+        }
+        let (exterior_count, interface_count) =
+            explicit_roles.get(key).copied().unwrap_or_default();
+        match owners.len() {
+            1 if exterior_count != 1 => {
+                errors.push("mixed semantic exterior owner is missing or duplicated".to_string())
+            }
+            2 if owners[0].1 != owners[1].1 && interface_count != 1 => errors.push(
+                "mixed semantic material-interface owner is missing or duplicated".to_string(),
+            ),
+            _ => {}
+        }
+        if exterior_count > 1 {
+            errors.push("mixed semantic exterior facet is duplicated".to_string());
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 fn inferred_sweep_axis(mesh: &MeshIR) -> Result<usize, String> {
     let prism = mesh
         .cells

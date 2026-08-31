@@ -1,5 +1,10 @@
 # FEM Meshing Production Readiness Implementation Plan
 
+> **Historical / superseded plan.** The checklist below describes the
+> 2026-05-30 implementation baseline and must not be read as evidence that
+> the current mesher is production-qualified. The active status and remaining
+> gates are maintained in [the 2026-08-31 production closure masterplan](../../superpowers/plans/2026-08-31-fem-meshing-production-closure-masterplan.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Fullmag FEM shared-domain meshing robust enough that the repository can honestly label it production-ready for supported thin-film, box, cylinder, arch-waveguide, imported-surface, and multi-object workflows.

@@ -270,9 +270,11 @@ RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 
-ENV FULLMAG_NSIGHT_SYSTEMS_ROOT=/opt/nvidia/nsight-compute/2024.1.1/host/target-linux-x64
-ENV PATH=${FULLMAG_NSIGHT_SYSTEMS_ROOT}:${PATH}
-RUN nsys --version && ncu --version
+# Nsight Systems/Compute are capture-time capabilities, not build prerequisites.
+# The managed runtime must remain buildable when the optional profiler packages
+# are absent; the capture harness performs its own bounded preflight instead.
+RUN if command -v nsys >/dev/null 2>&1; then nsys --version; else echo "profiler tools are optional: nsys unavailable"; fi && \
+    if command -v ncu >/dev/null 2>&1; then ncu --version; else echo "profiler tools are optional: ncu unavailable"; fi
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

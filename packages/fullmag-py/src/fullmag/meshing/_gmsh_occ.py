@@ -1005,6 +1005,9 @@ def generate_shared_domain_mesh_via_occ(
             selector_resolution=report.selector_resolution,
             boundary_layer_result=report.boundary_layer_result,
             orphan_entities=orphan_entities,
+            algorithm_3d_requested=report.algorithm_3d_requested,
+            algorithm_3d_effective=report.algorithm_3d_effective,
+            algorithm_3d_fallback_reason=report.algorithm_3d_fallback_reason,
         )
     finally:
         gmsh.finalize()

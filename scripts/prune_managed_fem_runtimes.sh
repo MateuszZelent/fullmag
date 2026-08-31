@@ -6,7 +6,11 @@ RUNTIME_PARENT="${FULLMAG_RUNTIME_PARENT:-${REPO_ROOT}/.fullmag/runtimes}"
 PROC_ROOT="${FULLMAG_RUNTIME_PROC_ROOT:-/proc}"
 KEEP_PER_FAMILY="${FULLMAG_RUNTIME_KEEP_PER_FAMILY:-2}"
 KEEP_LEGACY="${FULLMAG_RUNTIME_KEEP_LEGACY:-0}"
-DRY_RUN="${FULLMAG_RUNTIME_DRY_RUN:-0}"
+# Destructive cleanup must always be opt-in.  The just recipe performs a
+# review-only pass first and sets FULLMAG_RUNTIME_DRY_RUN=0 only for an
+# explicit apply=1 invocation.  Keeping the script itself dry-run by default
+# protects callers that invoke it directly (including CI maintenance jobs).
+DRY_RUN="${FULLMAG_RUNTIME_DRY_RUN:-1}"
 
 case "${KEEP_PER_FAMILY}" in
   ''|*[!0-9]*) echo "FULLMAG_RUNTIME_KEEP_PER_FAMILY must be a non-negative integer" >&2; exit 2 ;;

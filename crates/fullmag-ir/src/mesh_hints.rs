@@ -1733,6 +1733,25 @@ pub struct MeshIR {
     pub per_domain_quality: HashMap<u32, MeshQualityIR>,
 }
 
+/// Empty mesh scaffold used by programmatic plan builders before a concrete
+/// topology is installed.  It is intentionally not a valid executable mesh;
+/// runtime validators still require non-empty, positively oriented cells.
+impl Default for MeshIR {
+    fn default() -> Self {
+        Self {
+            mesh_name: String::new(),
+            nodes: Vec::new(),
+            cells: FemConnectivityIR::empty(),
+            element_markers: Vec::new(),
+            facets: FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct MeshIRWire {
     mesh_name: String,

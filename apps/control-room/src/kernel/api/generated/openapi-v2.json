@@ -8027,6 +8027,9 @@
           "preview_id": {
             "type": "string"
           },
+          "reference_sha256": {
+            "type": "string"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -8064,6 +8067,7 @@
           "source_state_revision",
           "topology_fingerprint",
           "mask_sha256",
+          "reference_sha256",
           "mask_resource",
           "revision",
           "definition"

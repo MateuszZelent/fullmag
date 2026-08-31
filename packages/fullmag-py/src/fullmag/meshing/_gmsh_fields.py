@@ -8,6 +8,7 @@ import math
 import numpy as np
 
 from fullmag._progress import emit_progress
+from fullmag._validation import TypedValidationError, parse_finite_float
 
 from ._airbox_grading import _geometric_size_profile_expression
 from ._gmsh_types import (
@@ -24,11 +25,21 @@ _NO_OP_FIELD_SIZE = 1.0e22
 
 
 def _coerce_growth_rate(value: object) -> float | None:
-    try:
-        growth_rate = float(value)
-    except (TypeError, ValueError):
+    if value is None:
         return None
-    return growth_rate if growth_rate > 1.0 else None
+    growth_rate = parse_finite_float(
+        value,
+        "/mesh_options/growth_rate",
+        allow_numeric_string=True,
+    )
+    if growth_rate <= 1.0:
+        raise TypedValidationError(
+            code="numeric_range_error",
+            pointer="/mesh_options/growth_rate",
+            message="growth_rate must be greater than 1.0; use null to disable grading",
+            value=growth_rate,
+        )
+    return float(growth_rate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +60,13 @@ class BoundaryLayerResult:
 class MeshOptionsApplicationReport:
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     boundary_layer_result: dict[str, object] | None = None
+    # Keep the requested/effective pair beside the low-level Gmsh application
+    # report.  A generator fallback must be observable by every consumer; a
+    # later build-report reconstruction is not sufficient because pre-existing
+    # airbox fields are only known at application time.
+    algorithm_3d_requested: int | None = None
+    algorithm_3d_effective: int | None = None
+    algorithm_3d_fallback_reason: str | None = None
 
 
 FIELD_SCHEMAS: dict[str, set[str]] = {
@@ -89,12 +107,49 @@ def validate_size_field_config(config: dict[str, Any]) -> None:
         )
 
 
-def resolve_effective_algorithm_3d(opts: MeshOptions) -> tuple[int, str | None]:
-    """Return the actual Gmsh 3D algorithm and a fallback reason, if any."""
-    if opts.size_fields and opts.algorithm_3d == ALGO_3D_MMG3D:
+def resolve_effective_algorithm_3d(
+    opts: MeshOptions,
+    *,
+    preexisting_field_ids: Sequence[int] | None = None,
+) -> tuple[int, str | None]:
+    """Return the actual Gmsh 3D algorithm and a fallback reason, if any.
+
+    MMG3D cannot consume the background-field stack used by the shared-domain
+    route.  The stack may be authored explicitly (``size_fields``), generated
+    from typed controls (curvature/narrow-region presets), or created before
+    this function is called (the airbox field).  Resolve all three cases here
+    so the value reported by the build is the value actually sent to Gmsh.
+    """
+    active_sources: list[str] = []
+    if opts.size_fields:
+        active_sources.append("authored size fields")
+    resolved_controls = resolve_mesh_size_controls(opts)
+    if int(resolved_controls["resolved_size_from_curvature"]) > 0:
+        active_sources.append("curvature refinement")
+    if int(resolved_controls["resolved_narrow_regions"]) > 0:
+        active_sources.append("narrow-region refinement")
+    boundary_layer_valid = (
+        opts.boundary_layer_count is not None
+        and opts.boundary_layer_count > 0
+        and opts.boundary_layer_thickness is not None
+        and opts.boundary_layer_thickness > 0.0
+        and (
+            bool(opts.boundary_layer_target_surface_tags)
+            or bool(opts.boundary_layer_target_curve_tags)
+            or bool(opts.boundary_layer_target_surface_selectors)
+            or bool(opts.boundary_layer_target_curve_selectors)
+        )
+    )
+    if boundary_layer_valid:
+        active_sources.append("boundary-layer field")
+    if preexisting_field_ids:
+        active_sources.append("pre-existing background fields")
+    if active_sources and opts.algorithm_3d == ALGO_3D_MMG3D:
+        source_text = ", ".join(active_sources)
         return (
             ALGO_3D_HXT,
-            "MMG3D is incompatible with active background size fields; using HXT",
+            "MMG3D is incompatible with active background size fields "
+            f"({source_text}); using HXT",
         )
     return opts.algorithm_3d, None
 
@@ -115,7 +170,10 @@ def _apply_mesh_options(
     emit_progress("Gmsh: applying mesh options")
     selector_resolution: list[dict[str, object]] = []
     resolved_size_controls = resolve_mesh_size_controls(opts)
-    algorithm_3d, algorithm_3d_fallback_reason = resolve_effective_algorithm_3d(opts)
+    algorithm_3d, algorithm_3d_fallback_reason = resolve_effective_algorithm_3d(
+        opts,
+        preexisting_field_ids=preexisting_field_ids,
+    )
     if algorithm_3d_fallback_reason is not None:
         # MMG3D has proven unstable for imported/shared-domain workflows when a
         # background size field is active; it can abort with "unable to set mesh
@@ -274,6 +332,9 @@ def _apply_mesh_options(
     return MeshOptionsApplicationReport(
         selector_resolution=selector_resolution,
         boundary_layer_result=boundary_layer_result,
+        algorithm_3d_requested=int(opts.algorithm_3d),
+        algorithm_3d_effective=int(algorithm_3d),
+        algorithm_3d_fallback_reason=algorithm_3d_fallback_reason,
     )
 
 
@@ -703,14 +764,19 @@ def _match_surfaces_within_bounds(
 ) -> list[int]:
     target_min = np.asarray(bounds_min, dtype=np.float64) - float(padding)
     target_max = np.asarray(bounds_max, dtype=np.float64) + float(padding)
-    matched: list[int] = []
+    matched: list[tuple[tuple[float, ...], int]] = []
     for _dim, surf_tag in gmsh.model.getEntities(2):
         bb = np.asarray(gmsh.model.getBoundingBox(2, surf_tag), dtype=np.float64)
         surf_min = bb[:3]
         surf_max = bb[3:]
         if np.all(surf_min >= target_min) and np.all(surf_max <= target_max):
-            matched.append(int(surf_tag))
-    return matched
+            # Gmsh entity iteration order is not a stable API contract.  Keep
+            # all matching surfaces (the field is a min-envelope), but sort
+            # by the complete bounding box and tag so equal-distance/tie
+            # surfaces produce the same field input on every run.
+            matched.append((tuple(float(value) for value in bb.tolist()), int(surf_tag)))
+    matched.sort(key=lambda item: (item[0], item[1]))
+    return [tag for _bbox, tag in matched]
 
 
 def _resolve_tags_from_aliases(
@@ -790,7 +856,8 @@ def _add_entity_distance_threshold_field(
     growth_rate: object = None,
 ) -> int:
     f_dist = gmsh.model.mesh.field.add("Distance")
-    gmsh.model.mesh.field.setNumbers(f_dist, distance_list_key, [int(tag) for tag in entity_tags])
+    normalized_entity_tags = sorted({int(tag) for tag in entity_tags})
+    gmsh.model.mesh.field.setNumbers(f_dist, distance_list_key, normalized_entity_tags)
     gmsh.model.mesh.field.setNumber(f_dist, "Sampling", int(max(2, sampling)))
 
     size_min_scaled = float(size_min) * hscale

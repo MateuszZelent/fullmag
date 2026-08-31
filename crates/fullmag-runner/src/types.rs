@@ -2150,7 +2150,7 @@ impl FemStageExecutionContext {
 }
 
 pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
-    fullmag_ir::fem_mesh_topology_fingerprint_v2(
+    fullmag_ir::fem_mesh_topology_fingerprint_v3(
         &mesh.nodes,
         &mesh.cells,
         &mesh.element_markers,
@@ -2159,6 +2159,7 @@ pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
         &mesh.periodic_boundary_pairs,
         &mesh.periodic_node_pairs,
     )
+    .expect("published FEM mesh topology must contain finite node coordinates")
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -4677,6 +4678,19 @@ mod tests {
         assert_ne!(
             fem_mesh_topology_fingerprint(&base),
             fem_mesh_topology_fingerprint(&reordered)
+        );
+    }
+
+    #[test]
+    fn published_fem_topology_fingerprint_matches_planner_mixed_v3_identity() {
+        let plan = tiny_fem_plan();
+        let payload = FemMeshPayload::from(&plan);
+
+        assert_eq!(
+            fem_mesh_topology_fingerprint(&payload),
+            plan.mesh
+                .mixed_topology_fingerprint_v3()
+                .expect("finite test mesh")
         );
     }
 

@@ -608,6 +608,7 @@ pub async fn activate_frozen_spins_preview(
         source_state_revision: record.source_state_revision,
         topology_fingerprint: record.topology_fingerprint,
         mask_sha256: record.response.mask_sha256,
+        reference_sha256: record.response.resolved.resolved_reference_sha256,
         mask_resource: record.response.mask_resource,
         revision: committed.revision,
         definition,
@@ -957,7 +958,7 @@ fn fdm_preview_domain(
         )));
     }
     let (active_mask, memberships) = match membership {
-        Some(membership) => memberships_from_fdm(membership, point_count)?,
+        Some(membership) => memberships_from_fdm(membership, point_count, sole_magnetic_object_id)?,
         None => {
             let object_id = sole_magnetic_object_id.ok_or_else(|| {
                 ApiError::conflict(
@@ -981,13 +982,16 @@ fn fdm_preview_domain(
 fn memberships_from_fdm(
     membership: &FdmCellMembership,
     point_count: usize,
+    sole_magnetic_object_id: Option<&str>,
 ) -> Result<(Vec<bool>, Vec<SelectionDofMembership>), ApiError> {
     if membership.cell_membership.len() != point_count {
         return Err(ApiError::conflict(
             "selection_domain_size_mismatch: FDM membership length differs from magnetization",
         ));
     }
-    let sole_object = (membership.object_ids.len() == 1).then(|| membership.object_ids[0].clone());
+    let sole_object = (membership.object_ids.len() == 1)
+        .then(|| membership.object_ids[0].clone())
+        .or_else(|| sole_magnetic_object_id.map(str::to_string));
     let legend = membership
         .region_legend
         .iter()
@@ -1331,4 +1335,37 @@ fn canonical_sha256(value: &str) -> String {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schemas::mesh::FdmRegionLegendEntryResource;
+
+    #[test]
+    fn single_object_fdm_membership_assigns_default_region_cells_to_scene_owner() {
+        let membership = FdmCellMembership {
+            object_ids: Vec::new(),
+            region_legend: vec![FdmRegionLegendEntryResource {
+                numeric_id: 1,
+                object_id: "film".to_string(),
+                region_id: "pinned_edge".to_string(),
+                priority: 0,
+            }],
+            cell_membership: vec![0, 1, u32::MAX],
+        };
+
+        let (active, resolved) =
+            memberships_from_fdm(&membership, 3, Some("film")).expect("membership");
+
+        assert_eq!(active, vec![true, true, false]);
+        assert_eq!(resolved[0].object_ids, vec!["film"]);
+        assert_eq!(resolved[1].object_ids, vec!["film"]);
+        assert_eq!(
+            resolved[1].region_ids,
+            vec![("film".to_string(), "pinned_edge".to_string())]
+        );
+        assert!(resolved[2].object_ids.is_empty());
+        assert!(resolved[2].region_ids.is_empty());
+    }
 }

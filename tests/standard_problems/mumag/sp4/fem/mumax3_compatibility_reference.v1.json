@@ -1,0 +1,39 @@
+{
+  "schema_version": "fullmag.mumag.sp4.mumax3-compatibility-reference.v1",
+  "profile": "mumax3_sp4_v1",
+  "provenance": {
+    "fdm_artifact": ".fullmag/reports/2026-08-30-sp4-rerun/fdm-mumax-parity/main.autosave.json",
+    "fdm_artifact_sha256": "e2c3bffe63a677b2ac86497c667d6826c0558ede1738e83a1d4d19c277dcf1c5",
+    "mumax3_table": ".fullmag/reports/mumax-fullmag-validation-smoke/mumax-build/mumax-sp4-energy/table.txt",
+    "mumax3_table_sha256": "37b79ec9fb5ef8d410c67bd9bf7f5586f551ea2e6f4dd1926596363bbf3c44b4"
+  },
+  "required_configuration": {
+    "airbox_dimensions_m": [7e-7, 2.5e-7, 2.5e-7],
+    "maximum_magnetic_hmax_m": 3e-9,
+    "potential_order": 2,
+    "topology": "all_tet"
+  },
+  "fdm_reference": {
+    "initial_uniform_demag_energy_j": 7.137838407337884e-19,
+    "final_average_m": [
+      0.9669589943512007,
+      0.1252939793677222,
+      -2.8e-17
+    ],
+    "final_exchange_energy_j": 8.925128237079652e-20,
+    "final_demag_energy_j": 5.405199805362659e-19,
+    "final_total_energy_j": 6.297712629070624e-19
+  },
+  "mumax3_reference": {
+    "final_average_m": [0.9669665, 0.12527856, 0.0],
+    "final_total_energy_j": 6.261341e-19
+  },
+  "acceptance_limits": {
+    "initial_demag_relative": 0.03,
+    "final_average_vector_rms": 0.005,
+    "final_average_component_absolute": 0.01,
+    "final_exchange_relative": 0.10,
+    "final_demag_relative": 0.03,
+    "final_total_relative": 0.03
+  }
+}

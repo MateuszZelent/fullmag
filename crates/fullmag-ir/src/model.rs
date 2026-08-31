@@ -453,6 +453,41 @@ pub struct MaterialIR {
     pub dbulk_field: Option<Vec<f64>>,
 }
 
+/// Non-physical zero/default material scaffold for programmatic plan builders.
+/// A resolved execution plan must overwrite the scalar material parameters;
+/// this implementation only makes `FemPlanIR::default()` ergonomic for tests
+/// and runtime probe construction.
+impl Default for MaterialIR {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            saturation_magnetisation: 0.0,
+            exchange_stiffness: 0.0,
+            damping: 0.0,
+            uniaxial_anisotropy: None,
+            uniaxial_anisotropy_k2: None,
+            anisotropy_axis: None,
+            cubic_anisotropy_kc1: None,
+            cubic_anisotropy_kc2: None,
+            cubic_anisotropy_kc3: None,
+            cubic_anisotropy_axis1: None,
+            cubic_anisotropy_axis2: None,
+            ms_field: None,
+            a_field: None,
+            alpha_field: None,
+            ku_field: None,
+            ku2_field: None,
+            kc1_field: None,
+            kc2_field: None,
+            kc3_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            dind_field: None,
+            dbulk_field: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MagnetIR {
     #[serde(default)]

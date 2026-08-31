@@ -12,10 +12,10 @@ import struct
 from types import MappingProxyType
 from typing import Any, Mapping
 from weakref import WeakSet
-
 import numpy as np
 from numpy.typing import NDArray
 
+from fullmag._validation import parse_bool, parse_finite_float, parse_integer
 from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
 
 
@@ -39,6 +39,45 @@ VTK_CELL_TYPES = {"tet4": 10, "hex8": 12, "prism6": 13, "pyramid5": 14}
 
 class MeshValidationError(RuntimeError):
     """Fail-closed rejection of an invalid realized mesh."""
+
+
+class MixedPeriodicTopologyError(ValueError):
+    """Typed early rejection for a mixed/non-tetrahedral periodic request."""
+
+    code = "mixed_periodic_topology_unsupported"
+    pointer = "/mesh_options/periodic_pair_ids"
+
+    def __init__(self, *, strategy: str | None, context: str) -> None:
+        self.strategy = strategy
+        self.context = context
+        rendered = strategy if strategy is not None else "auto"
+        super().__init__(
+            f"{self.code} at {self.pointer}: {context} requests "
+            f"mesh_strategy={rendered!r} with periodic pairs, but the mixed/non-tet "
+            "periodic certificate is not implemented; use free_tetrahedral or "
+            "remove periodic_pair_ids"
+        )
+
+
+def validate_periodic_mesh_options(options: "MeshOptions", *, context: str) -> None:
+    """Reject periodic requests before a swept mixed mesh reaches Gmsh.
+
+    The native and typed validators intentionally support periodic topology
+    only for tet4/tri3.  Swept prism/hex routes (including ``auto`` with an
+    explicit layer count) produce a non-tet topology, so accepting the request
+    and failing only during extraction would leave the DSL/UI contract split
+    from the generator contract.
+    """
+    if not options.periodic_pair_ids:
+        return
+    strategy = options.mesh_strategy
+    swept = strategy in {"swept_prism", "swept_hex"} or (
+        strategy in {None, "auto"}
+        and options.through_thickness_elements is not None
+        and options.through_thickness_elements > 0
+    )
+    if swept:
+        raise MixedPeriodicTopologyError(strategy=strategy, context=context)
 
 
 def _mixed_deterministic_inputs() -> dict[str, object]:
@@ -269,26 +308,186 @@ class MeshOptions:
     through_thickness_element_ratio: float | None = None  # grading ratio for non-uniform distribution
     through_thickness_symmetric: bool = False  # mirror distribution about mid-plane
     sweep_face_meshing: str | None = None  # "triangular" → prisms, "quadrilateral" → hexes
+    # Requested extrusion axis. ``auto`` is resolved from the geometry by the
+    # swept generator; an explicit axis is carried through the typed options
+    # boundary instead of being silently reconstructed from dimensions.
+    sweep_direction: str | None = None  # "auto" | "x" | "y" | "z"
     sweep_source: str | None = None  # "auto" | face selector hint
     sweep_destination: str | None = None  # "auto" | face selector hint
     periodic_pair_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        # ``MeshOptions`` is the typed boundary between authoring metadata and
+        # Gmsh.  Normalize only values accepted by the contract; in
+        # particular, do not let ``int(3.9)`` or ``bool`` silently select a
+        # different mesh recipe.
+        object.__setattr__(
+            self,
+            "algorithm_2d",
+            int(parse_integer(self.algorithm_2d, "/mesh_options/algorithm_2d", minimum=1)),
+        )
+        object.__setattr__(
+            self,
+            "algorithm_3d",
+            int(parse_integer(self.algorithm_3d, "/mesh_options/algorithm_3d", minimum=1)),
+        )
+
+        def optional_positive(name: str, value: object) -> float | None:
+            return parse_finite_float(
+                value,
+                f"/mesh_options/{name}",
+                positive=True,
+                allow_none=True,
+            )
+
+        def optional_integer(name: str, value: object, minimum: int) -> int | None:
+            return parse_integer(
+                value,
+                f"/mesh_options/{name}",
+                minimum=minimum,
+                allow_none=True,
+            )
+
+        def required_positive(name: str, value: object) -> float:
+            parsed = parse_finite_float(
+                value,
+                f"/mesh_options/{name}",
+                positive=True,
+            )
+            return float(parsed)
+
+        object.__setattr__(self, "hmin", optional_positive("hmin", self.hmin))
+        object.__setattr__(self, "size_factor", required_positive("size_factor", self.size_factor))
+        object.__setattr__(
+            self,
+            "size_from_curvature",
+            int(parse_integer(self.size_from_curvature, "/mesh_options/size_from_curvature", minimum=0)),
+        )
+        object.__setattr__(
+            self,
+            "curvature_factor",
+            optional_positive("curvature_factor", self.curvature_factor),
+        )
+        normalized_growth_rate = optional_positive("growth_rate", self.growth_rate)
+        if normalized_growth_rate is not None and normalized_growth_rate <= 1.0:
+            raise TypedValidationError(
+                code="numeric_range_error",
+                pointer="/mesh_options/growth_rate",
+                message="growth_rate must be greater than 1.0; use null to disable grading",
+                value=normalized_growth_rate,
+            )
+        object.__setattr__(self, "growth_rate", normalized_growth_rate)
+        object.__setattr__(
+            self,
+            "narrow_regions",
+            int(parse_integer(self.narrow_regions, "/mesh_options/narrow_regions", minimum=0)),
+        )
+        object.__setattr__(
+            self,
+            "narrow_region_resolution",
+            optional_positive("narrow_region_resolution", self.narrow_region_resolution),
+        )
+        object.__setattr__(
+            self,
+            "smoothing_steps",
+            int(parse_integer(self.smoothing_steps, "/mesh_options/smoothing_steps", minimum=0)),
+        )
+        object.__setattr__(
+            self,
+            "optimize_iters",
+            int(parse_integer(self.optimize_iters, "/mesh_options/optimize_iters", minimum=1)),
+        )
+        for name in (
+            "boundary_layer_count",
+            "through_thickness_elements",
+        ):
+            object.__setattr__(
+                self,
+                name,
+                optional_integer(name, getattr(self, name), 1),
+            )
+        for name in (
+            "boundary_layer_thickness",
+            "boundary_layer_stretching",
+            "through_thickness_element_ratio",
+        ):
+            object.__setattr__(self, name, optional_positive(name, getattr(self, name)))
+        object.__setattr__(
+            self,
+            "through_thickness_symmetric",
+            bool(parse_bool(
+                self.through_thickness_symmetric,
+                "/mesh_options/through_thickness_symmetric",
+            )),
+        )
+        for name in ("compute_quality", "per_element_quality"):
+            object.__setattr__(
+                self,
+                name,
+                bool(parse_bool(getattr(self, name), f"/mesh_options/{name}")),
+            )
+
+        for name in (
+            "boundary_layer_target_surface_tags",
+            "boundary_layer_target_curve_tags",
+        ):
+            raw_tags = getattr(self, name)
+            if raw_tags is None:
+                continue
+            if not isinstance(raw_tags, (list, tuple)):
+                raise TypeError(f"/mesh_options/{name} must be a list of integers")
+            object.__setattr__(
+                self,
+                name,
+                [
+                    int(parse_integer(tag, f"/mesh_options/{name}/{index}", minimum=1))
+                    for index, tag in enumerate(raw_tags)
+                ],
+            )
+        for name in (
+            "boundary_layer_target_surface_selectors",
+            "boundary_layer_target_curve_selectors",
+        ):
+            raw_selectors = getattr(self, name)
+            if raw_selectors is None:
+                continue
+            if not isinstance(raw_selectors, (list, tuple)):
+                raise TypeError(f"/mesh_options/{name} must be a list of mappings")
+            if not all(isinstance(item, Mapping) for item in raw_selectors):
+                raise TypeError(f"/mesh_options/{name} entries must be mappings")
+            object.__setattr__(self, name, [dict(item) for item in raw_selectors])
+
+        if self.optimize is not None:
+            if not isinstance(self.optimize, str) or not self.optimize.strip():
+                raise ValueError("/mesh_options/optimize must be a non-empty string or None")
+            object.__setattr__(self, "optimize", self.optimize.strip())
+        for name, choices in (
+            (
+                "mesh_strategy",
+                {None, "auto", "free_tetrahedral", "thin_film_tetrahedral", "swept_prism", "swept_hex"},
+            ),
+            ("through_thickness_distribution", {None, "fixed", "linear", "exponential"}),
+            ("sweep_face_meshing", {None, "triangular", "quadrilateral"}),
+            ("sweep_direction", {None, "auto", "x", "y", "z"}),
+        ):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or value not in choices):
+                raise ValueError(f"/mesh_options/{name} has unsupported value {value!r}")
+        for name in ("sweep_source", "sweep_destination"):
+            value = getattr(self, name)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"/mesh_options/{name} must be a non-empty string or None")
+                object.__setattr__(self, name, value.strip())
+        if not isinstance(self.periodic_pair_ids, (list, tuple)):
+            raise TypeError("/mesh_options/periodic_pair_ids must be a list of strings")
+
         calibration = _normalize_mesh_size_calibration(self.calibrate_for)
         preset = _normalize_mesh_size_preset(self.size_preset)
         if self.calibrate_for is not None:
             object.__setattr__(self, "calibrate_for", calibration)
         if self.size_preset is not None:
             object.__setattr__(self, "size_preset", preset)
-        if self.curvature_factor is not None:
-            if not math.isfinite(self.curvature_factor) or self.curvature_factor <= 0.0:
-                raise ValueError("curvature_factor must be a positive finite float")
-        if self.narrow_region_resolution is not None:
-            if (
-                not math.isfinite(self.narrow_region_resolution)
-                or self.narrow_region_resolution <= 0.0
-            ):
-                raise ValueError("narrow_region_resolution must be a positive finite float")
         normalized_pair_ids: list[str] = []
         for pair_id in self.periodic_pair_ids:
             if not isinstance(pair_id, str) or not pair_id.strip():
@@ -478,6 +677,24 @@ class AirboxOptions:
     maximum_element_size: float | None = None
     minimum_element_size: float | None = None
 
+    def __post_init__(self) -> None:
+        # ``grading_ratio`` is a multiplicative layer-to-layer growth law for
+        # the typed FEM airbox.  Values at or below one used to be accepted and
+        # then silently disabled the field in the Gmsh builder, producing a
+        # result different from the requested policy.
+        ratio = parse_finite_float(
+            self.grading_ratio,
+            "/study_universe/airbox_growth_rate",
+            positive=True,
+            allow_numeric_string=True,
+        )
+        if ratio <= 1.0:
+            raise ValueError(
+                "study_universe.airbox_growth_rate must be greater than 1.0; "
+                "use the default or provide a larger ratio"
+            )
+        object.__setattr__(self, "grading_ratio", float(ratio))
+
 
 @dataclass(frozen=True, slots=True)
 class SizeFieldData:
@@ -539,6 +756,10 @@ class MeshRealizationReport:
     requested_order: int
     resolved_order: int
     fallbacks_triggered: tuple[str, ...] = ()
+    # ``requested_axis`` is retained as the concrete axis used by historical
+    # consumers.  This optional field preserves the authored intent when the
+    # caller requested classifier-driven ``auto`` resolution.
+    requested_direction: str | None = None
     schema_version: str = "mesh_realization_report.v1"
 
     def __post_init__(self) -> None:
@@ -562,6 +783,10 @@ class MeshRealizationReport:
             raise ValueError("mesh realization report has invalid requested axis")
         if self.resolved_axis not in {"x", "y", "z"}:
             raise ValueError("mesh realization report has invalid resolved axis")
+        requested_direction = self.requested_direction or self.requested_axis
+        if requested_direction not in {"auto", "x", "y", "z"}:
+            raise ValueError("mesh realization report has invalid requested direction")
+        object.__setattr__(self, "requested_direction", requested_direction)
         normalized_fallbacks: list[str] = []
         for item in self.fallbacks_triggered:
             if not isinstance(item, str) or not item.strip():
@@ -580,7 +805,11 @@ class MeshRealizationReport:
             self.resolved_axis,
             self.resolved_order,
         )
-        if not normalized_fallbacks and requested != resolved:
+        if (
+            not normalized_fallbacks
+            and requested_direction != "auto"
+            and requested != resolved
+        ):
             raise ValueError(
                 "mesh realization report requested/resolved fields must match "
                 "when no fallback was triggered"
@@ -597,6 +826,7 @@ class MeshRealizationReport:
             "resolved_axis": self.resolved_axis,
             "requested_order": self.requested_order,
             "resolved_order": self.resolved_order,
+            "requested_direction": self.requested_direction,
             "fallbacks_triggered": list(self.fallbacks_triggered),
         }
 
@@ -616,6 +846,11 @@ class MeshRealizationReport:
             requested_order=payload.get("requested_order", 0),  # type: ignore[arg-type]
             resolved_order=payload.get("resolved_order", 0),  # type: ignore[arg-type]
             fallbacks_triggered=tuple(raw_fallbacks),  # type: ignore[arg-type]
+            requested_direction=(
+                str(payload["requested_direction"])
+                if payload.get("requested_direction") is not None
+                else None
+            ),
         )
 
 
@@ -676,11 +911,13 @@ class MixedLayerTopologyCertificate:
             )
         if self.certificate_status != "accepted":
             raise ValueError("mixed layer topology certificate must be accepted")
-        if self.requested_sweep_direction not in {"x", "y", "z"} or (
+        if self.requested_sweep_direction not in {"auto", "x", "y", "z"} or (
             self.resolved_sweep_direction not in {"x", "y", "z"}
         ):
             raise ValueError("mixed layer topology certificate has an invalid sweep direction")
-        if self.requested_sweep_direction != self.resolved_sweep_direction:
+        if self.requested_sweep_direction != "auto" and (
+            self.requested_sweep_direction != self.resolved_sweep_direction
+        ):
             raise ValueError("strict mixed layer topology cannot change sweep direction")
         for name, value in (
             ("requested_layer_count", self.requested_layer_count),
@@ -2623,6 +2860,22 @@ _MIXED_CELL_LOCAL_FACETS: dict[str, tuple[tuple[int, ...], ...]] = {
         (2, 3, 7, 6),
         (3, 0, 4, 7),
     ),
+}
+
+# Canonical physical edges derived from the oriented local faces.  Do not use
+# all node pairs for prism/pyramid/hex quality: diagonals are not mesh edges
+# and would inflate ``cell.max_edge`` and aspect-ratio diagnostics.
+_MIXED_CELL_LOCAL_EDGES: dict[str, tuple[tuple[int, int], ...]] = {
+    family: tuple(
+        sorted(
+            {
+                tuple(sorted((face[index], face[(index + 1) % len(face)])))
+                for face in facets
+                for index in range(len(face))
+            }
+        )
+    )
+    for family, facets in _MIXED_CELL_LOCAL_FACETS.items()
 }
 
 
@@ -4645,3 +4898,8 @@ class SharedDomainMeshResult:
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     boundary_layer_result: dict[str, object] | None = None
     orphan_entities: list[dict[str, object]] = field(default_factory=list)
+    # Truth from the final Gmsh application, including fallbacks caused by
+    # fields installed before ``MeshOptions`` is applied.
+    algorithm_3d_requested: int | None = None
+    algorithm_3d_effective: int | None = None
+    algorithm_3d_fallback_reason: str | None = None

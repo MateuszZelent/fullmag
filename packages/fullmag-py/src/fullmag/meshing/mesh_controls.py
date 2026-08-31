@@ -3,28 +3,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Literal
 
+from fullmag._validation import parse_finite_float, parse_integer, parse_vector3
+
 Number = int | float
 
 
 def _positive_float(name: str, value: Number) -> float:
-    candidate = float(value)
-    if candidate <= 0.0:
-        raise ValueError(f"{name} must be positive, got {value!r}")
-    return candidate
+    return float(parse_finite_float(value, name, positive=True))
 
 
 def _positive_int(name: str, value: int) -> int:
-    candidate = int(value)
-    if candidate < 2:
-        raise ValueError(f"{name} must be >= 2, got {value!r}")
-    return candidate
+    return int(parse_integer(value, name, minimum=2))
 
 
 def _at_least_one_int(name: str, value: int) -> int:
-    candidate = int(value)
-    if candidate < 1:
-        raise ValueError(f"{name} must be >= 1, got {value!r}")
-    return candidate
+    return int(parse_integer(value, name, minimum=1))
 
 
 def _geometry_name(value: str) -> str:
@@ -35,17 +28,11 @@ def _geometry_name(value: str) -> str:
 
 
 def _point3(name: str, value: Sequence[Number]) -> list[float]:
-    values = [float(component) for component in value]
-    if len(values) != 3:
-        raise ValueError(f"{name} must be a 3-vector")
-    return values
+    return list(parse_vector3(value, name))
 
 
 def _selector_count(value: int) -> int:
-    count = int(value)
-    if count < 1:
-        raise ValueError(f"count must be >= 1, got {value!r}")
-    return count
+    return int(parse_integer(value, "count", minimum=1))
 
 
 def nearest_surface_to_point(
@@ -169,8 +156,10 @@ def edge_distance_threshold(
         "DistMax": _positive_float("distance", distance),
         "Sampling": _positive_int("sampling", sampling),
     }
-    if curve_tags:
-        params["CurveTags"] = [int(tag) for tag in curve_tags]
+    if curve_tags is not None:
+        params["CurveTags"] = [
+            int(parse_integer(tag, "curve_tags[]", minimum=1)) for tag in curve_tags
+        ]
     return {"kind": "EdgeDistanceThreshold", "params": params}
 
 
@@ -211,8 +200,14 @@ def boundary_layers(
     target_curves: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return explicit boundary-layer mesh controls for tagged surfaces/curves."""
-    surface_tags = [int(tag) for tag in target_surface_tags or ()]
-    curve_tags = [int(tag) for tag in target_curve_tags or ()]
+    surface_tags = [
+        int(parse_integer(tag, "target_surface_tags[]", minimum=1))
+        for tag in target_surface_tags or ()
+    ]
+    curve_tags = [
+        int(parse_integer(tag, "target_curve_tags[]", minimum=1))
+        for tag in target_curve_tags or ()
+    ]
     surface_selectors = [dict(selector) for selector in target_surfaces or ()]
     curve_selectors = [dict(selector) for selector in target_curves or ()]
     if not surface_tags and not curve_tags and not surface_selectors and not curve_selectors:

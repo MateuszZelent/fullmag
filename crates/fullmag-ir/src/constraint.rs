@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const FROZEN_SPINS_SCHEMA_VERSION: &str = "frozen_spins.v1";
 pub const FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION: &str =
     "frozen_spins.runtime_plan_binding.v1";
+pub const FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY: &str =
+    "frozen_spins_source_state_revision";
 
 /// Command-bound authoring projection consumed when the next solver plan is
 /// materialized. The payload deliberately carries canonical IR constraints,
@@ -17,6 +19,8 @@ pub struct FrozenSpinsRuntimePlanBindingIR {
     pub schema_version: String,
     pub launch_command_id: String,
     pub source_scene_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_state_revision: Option<u64>,
     pub selection_definitions: Vec<SelectionDefinitionIR>,
     pub magnetization_constraints: Vec<MagnetizationConstraintIR>,
 }

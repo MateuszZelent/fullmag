@@ -16,7 +16,7 @@ use crate::error::ApiError;
 use crate::fem_cross_section::{
     cross_section_quality_from_fmmq, cross_section_quality_from_parent_tets,
     per_element_quality_metric_from_fmmq, serialize_cross_section_fmcs,
-    serialize_cross_section_quality_fmqs, CrossSectionQualityMetric,
+    serialize_cross_section_quality_fmqs, validate_fmmq_v2_payload, CrossSectionQualityMetric,
 };
 use crate::fem_cross_section_image::{
     render_cross_section_png, validate_cross_section_image_query, CrossSectionImageColorScale,
@@ -944,10 +944,13 @@ pub async fn get_mesh_shared_domain_cross_section_image(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let elements = require_tet4_cross_section_topology(mesh, "cross-section image")?;
+    let expected_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
-        .map(read_mesh_quality_data_artifact)
+        .map(|workspace| {
+            read_mesh_quality_data_artifact(workspace, Some(expected_topology_fingerprint.as_str()))
+        })
         .transpose()?
         .flatten();
     let cut_norm = query.position_percent / 100.0;
@@ -1091,10 +1094,13 @@ pub async fn get_mesh_shared_domain_cross_section_quality(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let elements = require_tet4_cross_section_topology(mesh, "cross-section quality")?;
+    let expected_topology_fingerprint = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
     let artifact = snapshot
         .mesh_workspace
         .as_ref()
-        .map(read_mesh_quality_data_artifact)
+        .map(|workspace| {
+            read_mesh_quality_data_artifact(workspace, Some(expected_topology_fingerprint.as_str()))
+        })
         .transpose()?
         .flatten();
     let cut_norm = query.position_percent / 100.0;
@@ -1179,7 +1185,13 @@ pub async fn get_mesh_shared_domain_quality_data(
 ) -> Result<axum::response::Response, ApiError> {
     let snapshot = current_snapshot(&state).await?;
     let mesh_workspace = current_mesh_workspace(&snapshot)?;
-    let Some(artifact) = read_mesh_quality_data_artifact(mesh_workspace)? else {
+    let expected_topology_fingerprint = snapshot
+        .fem_mesh
+        .as_ref()
+        .map(fullmag_runner::fem_mesh_topology_fingerprint);
+    let Some(artifact) =
+        read_mesh_quality_data_artifact(mesh_workspace, expected_topology_fingerprint.as_deref())?
+    else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -1204,10 +1216,12 @@ struct MeshQualityDataArtifact {
 
 fn read_mesh_quality_data_artifact(
     mesh_workspace: &Value,
+    expected_topology_fingerprint: Option<&str>,
 ) -> Result<Option<MeshQualityDataArtifact>, ApiError> {
     let Some(artifact) = first_workspace_value(
         mesh_workspace,
         &[
+            &["quality_data_artifact_v2"],
             &["quality_data_artifact"],
             &["mesh_quality_data_artifact"],
             &["last_build_summary", "quality_data_artifact"],
@@ -1228,10 +1242,94 @@ fn read_mesh_quality_data_artifact(
             "mesh quality data artifact {path} is not an FMMQ payload"
         )));
     }
+    let manifest_kind = artifact.get("kind").and_then(Value::as_str);
+    if bytes.get(4) == Some(&2) {
+        if artifact.get("kind").and_then(Value::as_str) != Some("fmmq.v2")
+            || artifact.get("schema_version").and_then(Value::as_u64) != Some(2)
+        {
+            return Err(ApiError::internal(format!(
+                "mesh quality data artifact {path} has v2 bytes but not a v2 manifest"
+            )));
+        }
+        for (field, prefix) in [
+            ("topology_fingerprint", "sha256:"),
+            ("policy_fingerprint", ""),
+            ("digest", "sha256:"),
+        ] {
+            let value = artifact
+                .get(field)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if value.is_empty() || (!prefix.is_empty() && !value.starts_with(prefix)) {
+                return Err(ApiError::internal(format!(
+                    "mesh quality data artifact {path} has incomplete v2 identity field {field}"
+                )));
+            }
+        }
+        let validation = validate_fmmq_v2_payload(&bytes, expected_topology_fingerprint)?;
+        let manifest_digest = artifact
+            .get("digest")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "mesh quality data artifact {path} has no v2 payload digest"
+                ))
+            })?;
+        if manifest_digest != validation.digest {
+            return Err(ApiError::conflict(format!(
+                "mesh quality data artifact {path} digest mismatch: manifest {manifest_digest}, payload {}",
+                validation.digest
+            )));
+        }
+        if artifact.get("topology_fingerprint").and_then(Value::as_str)
+            != Some(validation.topology_fingerprint.as_str())
+        {
+            return Err(ApiError::conflict(format!(
+                "mesh quality data artifact {path} topology identity does not match payload"
+            )));
+        }
+        if artifact.get("policy_fingerprint").and_then(Value::as_str)
+            != Some(validation.policy_fingerprint.as_str())
+        {
+            return Err(ApiError::conflict(format!(
+                "mesh quality data artifact {path} policy identity does not match payload"
+            )));
+        }
+        if artifact.get("mesh_revision").and_then(Value::as_str)
+            != Some(validation.mesh_revision.as_str())
+        {
+            return Err(ApiError::conflict(format!(
+                "mesh quality data artifact {path} mesh revision does not match payload"
+            )));
+        }
+        if let Some(manifest_count) = artifact.get("element_count").and_then(Value::as_u64) {
+            if manifest_count != validation.element_count as u64 {
+                return Err(ApiError::conflict(format!(
+                    "mesh quality data artifact {path} element count does not match payload"
+                )));
+            }
+        }
+    } else {
+        if manifest_kind == Some("fmmq.v2") {
+            return Err(ApiError::internal(format!(
+                "mesh quality data artifact {path} declares v2 but payload version is not v2"
+            )));
+        }
+        if bytes.get(4) != Some(&1) {
+            return Err(ApiError::internal(format!(
+                "mesh quality data artifact {path} uses unsupported FMMQ version"
+            )));
+        }
+    }
     let byte_size = artifact
         .get("byte_size")
         .and_then(Value::as_u64)
         .unwrap_or(bytes.len() as u64);
+    if byte_size != bytes.len() as u64 {
+        return Err(ApiError::conflict(format!(
+            "mesh quality data artifact {path} byte size does not match payload"
+        )));
+    }
     let element_count = artifact
         .get("element_count")
         .and_then(Value::as_u64)
@@ -2499,7 +2597,13 @@ pub async fn get_mesh_histogram_bin_elements(
     let metric = MeshHistogramMetric::from_path_segment(&metric)?;
     let quality_values = if let Some(quality_metric) = metric.quality_metric() {
         let mesh_workspace = current_mesh_workspace(&snapshot)?;
-        let Some(artifact) = read_mesh_quality_data_artifact(mesh_workspace)? else {
+        let expected_topology_fingerprint =
+            Some(fullmag_runner::fem_mesh_topology_fingerprint(mesh));
+        let Some(artifact) = read_mesh_quality_data_artifact(
+            mesh_workspace,
+            expected_topology_fingerprint.as_deref(),
+        )?
+        else {
             return Err(ApiError::bad_request(format!(
                 "histogram metric {} requires per-element mesh quality data",
                 metric.as_str()
@@ -3683,7 +3787,10 @@ fn region_quality(
         })));
     };
 
-    if let Some(artifact) = read_mesh_quality_data_artifact(mesh_workspace)? {
+    let expected_topology_fingerprint = Some(fullmag_runner::fem_mesh_topology_fingerprint(mesh));
+    if let Some(artifact) =
+        read_mesh_quality_data_artifact(mesh_workspace, expected_topology_fingerprint.as_deref())?
+    {
         if let Some(values) =
             per_element_quality_metric_from_fmmq(&artifact.bytes, CrossSectionQualityMetric::Sicn)?
         {

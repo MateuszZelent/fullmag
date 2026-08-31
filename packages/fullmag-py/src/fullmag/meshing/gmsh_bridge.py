@@ -26,12 +26,14 @@ from ._gmsh_types import (  # noqa: F401  — re-exports
     ComponentDescriptor,
     MeshData,
     MeshOptions,
+    MixedPeriodicTopologyError,
     MeshQualityReport,
     MeshStatisticsReport,
     MeshStatisticsScope,
     SharedDomainMeshResult,
     SizeFieldData,
     resolve_mesh_size_controls,
+    validate_periodic_mesh_options,
 )
 
 # ── Gmsh wrapper infrastructure ─────────────────────────────────────
@@ -56,6 +58,8 @@ from ._gmsh_extraction import (  # noqa: F401
     _extract_quality_metrics,
     _first_cell_block,
     _read_mesh_file,
+    GmshQualityExtractionError,
+    MeshPhysicalTagCoverageError,
     UnsupportedGmshElementError,
     extract_per_domain_quality,
 )

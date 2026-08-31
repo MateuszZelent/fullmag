@@ -1,6 +1,6 @@
 {
   "schema_version": "fullmag.frozen_spins.scope.v1",
-  "scope_revision": 1,
+  "scope_revision": 2,
   "product_version": "frozen_spins.v1",
   "policy": {
     "default_scope_status": "REQUIRED",
@@ -143,6 +143,25 @@
       "id": "visualization.fem_true_dof_render_carrier",
       "scope_status": "REQUIRED",
       "required_test_case_ids": ["FS-P13-FEM-CSR-CARRIER", "FS-P14-FEM-CSR-OVERLAY"]
+    },
+    {
+      "id": "qualification.scientific",
+      "scope_status": "REQUIRED",
+      "required_test_case_ids": [
+        "FS-P15-INVARIANT",
+        "FS-P15-MOBILITY",
+        "FS-P15-INFLUENCE",
+        "FS-P15-NO-MASK-PARITY",
+        "FS-P15-ENERGY-ACCOUNTING",
+        "FS-P15-FREE-ONLY-STOPPING",
+        "FS-P15-CHECKPOINT-CONTINUITY",
+        "FS-P15-CPU-GPU-PARITY",
+        "FS-P15-PREVIEW-SOLVER-PARITY",
+        "FS-P15-INDEPENDENT-ORACLE",
+        "FS-P15-MINIMIZER-ORACLE",
+        "FS-P15-CROSS-DISCRETIZATION",
+        "FS-P15-THERMAL"
+      ]
     },
     {
       "id": "qualification.performance",

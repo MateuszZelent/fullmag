@@ -25,7 +25,7 @@ windows-build backend="fdm" device="cpu" frontend="dev":
     case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
     case "$frontend" in frontend=*) frontend="${frontend#frontend=}" ;; --frontend=*) frontend="${frontend#--frontend=}" ;; esac; \
     if [ "$backend" = "fem" ]; then \
-      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device"; \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device"; \
     else \
       powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device"; \
     fi
@@ -1078,11 +1078,24 @@ verify-fdm-gpu-m1-layout-abi-contract:
 
 verify-frozen-spins-fdm-cuda:
     docker compose --profile fem-gpu run --rm --no-deps -T \
-      -v "${FULLMAG_MANAGED_NATIVE_DOCKER_SOURCE:-${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -v "${FULLMAG_MANAGED_NATIVE_DOCKER_SOURCE:-fullmag-frozen-spins-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -c 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-frozen-spins-contract"; evidence_dir="/workspace/artifacts/qualification/frozen-spins/fdm-cuda"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target" "$evidence_dir"; evidence="$evidence_dir/fdm-frozen-spins-cuda-runtime-evidence-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm frozen_spins_abi_contract fdm_frozen_spins_cuda_runtime_contract; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=nightly; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^(fdm_frozen_spins_abi_contract|fdm_frozen_spins_cuda_runtime_contract)$"; FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_frozen_spins_cuda_runtime_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; cargo test -p fullmag-fdm-sys frozen_spins_v1_is_an_append_only_nullable_plan_extension -- --nocapture; cargo test -p fullmag-runner --features cuda native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane -- --nocapture; cargo test -p fullmag-runner --features cuda interactive_cuda_rebuild_reactivation_preserves_continuation_epoch_and_quantity -- --nocapture; cargo test -p fullmag-runner constraints::checkpoint -- --nocapture; cargo test -p fullmag-runner fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture -- --nocapture; python3 -m unittest scripts.test_finalize_frozen_spins_fdm_cuda_evidence -v; python3 scripts/finalize_frozen_spins_fdm_cuda_evidence.py --input "$evidence.tmp" --output "$evidence"; rm -f "$evidence.tmp"; python3 -m json.tool "$evidence"'
+      fem-gpu bash -c 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-frozen-spins-contract"; exec 9>"${build_dir}.qualification.lock"; flock -n 9 || { echo "Frozen Spins CUDA qualification build is already active" >&2; exit 75; }; run_id="$(python3 -c "import uuid; print(uuid.uuid4())")"; run_dir="/workspace/artifacts/qualification/frozen-spins/fdm-cuda/runs/$run_id"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target" "$run_dir"; source_identity="$run_dir/source-snapshot.v2.json"; source_identity_post="$run_dir/source-snapshot-post.v2.json"; native_raw="$run_dir/native-runtime.raw.v1.json"; parity_raw="$run_dir/cpu-gpu-parity.raw.v1.json"; evidence="$run_dir/fdm-frozen-spins-cuda-runtime-evidence-v1.json"; python3 scripts/capture_source_snapshot_identity.py --repo-root /workspace --ignore-non-runtime-dirty --output "$source_identity"; source_snapshot_sha256="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1], encoding=\"utf-8\"))[\"source_snapshot_sha256\"])" "$source_identity")"; cmake -S native -B "$build_dir" -DCMAKE_MAKE_PROGRAM="${FULLMAG_CMAKE_MAKE_PROGRAM:-/usr/bin/make}" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm frozen_spins_abi_contract fdm_frozen_spins_cuda_runtime_contract; native_library="$build_dir/backends/fdm/libfullmag_fdm.so"; test -s "$native_library"; native_build_sha256="$(sha256sum "$native_library" | cut -d " " -f 1)"; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=nightly FULLMAG_FDM_GPU_INDEX=0 FULLMAG_FROZEN_SPINS_RUN_ID="$run_id" FULLMAG_FROZEN_SPINS_SOURCE_SNAPSHOT_SHA256="$source_snapshot_sha256" FULLMAG_FROZEN_SPINS_NATIVE_BUILD_SHA256="$native_build_sha256"; require_tests() { expected="$1"; log="$2"; shift 2; "$@" 2>&1 | tee "$log"; grep -Eq "test result: ok\\. ${expected} passed; 0 failed" "$log"; }; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure --no-tests=error -R "^(fdm_frozen_spins_abi_contract|fdm_frozen_spins_cuda_runtime_contract)$"; require_tests 1 "$run_dir/rust-ffi-plan-extension.log" cargo test -p fullmag-fdm-sys --lib "tests::frozen_spins_v1_is_an_append_only_nullable_plan_extension" -- --exact --nocapture; require_tests 1 "$run_dir/runner-capability.log" cargo test -p fullmag-runner --features cuda --lib "fdm::gpu::cuda::native::tests::native_fdm_frozen_spins_capability_gate_accepts_advertised_single_grid_lane" -- --exact --nocapture; require_tests 3 "$run_dir/native-boundary-rejection.log" cargo test -p fullmag-runner --features cuda --lib "fdm::gpu::cuda::native::frozen_spins_native_boundary_tests::" -- --nocapture; export FULLMAG_FDM_FROZEN_SPINS_CPU_GPU_PARITY_PATH="$parity_raw"; require_tests 1 "$run_dir/cpu-gpu-parity.log" cargo test -p fullmag-runner --features cuda --lib "fdm::gpu::cuda::native::tests::native_fdm_frozen_spins_cpu_gpu_parity_when_cuda_is_available" -- --exact --nocapture; test -s "$parity_raw"; python3 -m json.tool "$parity_raw" >/dev/null; export FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH="$native_raw"; "$build_dir/backends/fdm/fdm_frozen_spins_cuda_runtime_contract" 2>&1 | tee "$run_dir/native-runtime.log"; test -s "$native_raw"; python3 -m json.tool "$native_raw" >/dev/null; require_tests 1 "$run_dir/interactive-hot-rebuild.log" cargo test -p fullmag-runner --features cuda --lib "interactive_runtime::tests::interactive_cuda_rebuild_reactivation_preserves_continuation_epoch_and_quantity" -- --exact --nocapture; require_tests 5 "$run_dir/checkpoint-suite.log" cargo test -p fullmag-runner --lib "constraints::checkpoint::tests::" -- --nocapture; require_tests 1 "$run_dir/checkpoint-reference-restore.log" cargo test -p fullmag-runner --features cuda --lib "fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture" -- --exact --nocapture; python3 -c "import unittest; from scripts import test_finalize_frozen_spins_fdm_cuda_evidence as module; count=unittest.defaultTestLoader.loadTestsFromModule(module).countTestCases(); assert count > 0, count"; python3 -m unittest scripts.test_finalize_frozen_spins_fdm_cuda_evidence -v; python3 scripts/capture_source_snapshot_identity.py --repo-root /workspace --ignore-non-runtime-dirty --compare "$source_identity" --output "$source_identity_post"; python3 scripts/finalize_frozen_spins_fdm_cuda_evidence.py --input "$native_raw" --parity "$parity_raw" --source-identity "$source_identity" --native-library "$native_library" --run-id "$run_id" --gpu-ordinal 0 --output "$evidence"; test -s "$evidence"; python3 -m json.tool "$evidence"; printf "FROZEN_SPINS_FDM_CUDA_RUN_DIR=%s\n" "$run_dir"'
+
+verify-frozen-spins-fdm-cpu:
+    docker compose run --rm --no-deps -T \
+      fem-cpu bash -c 'set -euo pipefail; cd /workspace; build_root="${FULLMAG_FROZEN_SPINS_FDM_CPU_BUILD_ROOT:-/workspace/target/frozen-spins-fdm-cpu-managed}"; evidence_dir="/workspace/artifacts/qualification/frozen-spins/fdm-cpu"; log="$evidence_dir/fdm-frozen-spins-cpu-scientific-v1.log"; evidence="$evidence_dir/fdm-frozen-spins-cpu-scientific-v1.json"; mkdir -p "$build_root/cargo-home" "$build_root/cargo-target" "$evidence_dir"; rm -f "$log" "$log.tmp" "$evidence" "$evidence.tmp"; export CARGO_HOME="$build_root/cargo-home" CARGO_TARGET_DIR="$build_root/cargo-target" CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=nightly; python3 -m unittest scripts.test_build_frozen_spins_fdm_cpu_scientific_evidence -v; cargo test -p fullmag-runner --test physics_validation "fdm_relaxation::frozen_spins_" -- --nocapture 2>&1 | tee "$log.tmp"; cargo test -p fullmag-runner --lib "fdm::cpu::reference::tests::frozen_spins_checkpoint_round_trip_restores_reference_without_selector_recapture" -- --exact --nocapture 2>&1 | tee -a "$log.tmp"; cargo test -p fullmag-runner --lib "fdm::cpu::reference::tests::abm3_frozen_spins_checkpoint_resume_is_bitwise_identical" -- --exact --nocapture 2>&1 | tee -a "$log.tmp"; mv "$log.tmp" "$log"; python3 scripts/build_frozen_spins_fdm_cpu_scientific_evidence.py --log "$log" --output "$evidence.tmp"; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"'
+
+verify-frozen-spins-fdm-multilayer:
+    docker compose run --rm --no-deps -T \
+      fem-cpu bash -c 'set -euo pipefail; cd /workspace; build_root="${FULLMAG_FROZEN_SPINS_FDM_MULTILAYER_BUILD_ROOT:-/workspace/target/frozen-spins-fdm-multilayer-managed}"; evidence_dir="/workspace/artifacts/qualification/frozen-spins/fdm-multilayer"; log="$evidence_dir/fdm-frozen-spins-multilayer-v1.log"; evidence="$evidence_dir/fdm-frozen-spins-multilayer-v1.json"; mkdir -p "$build_root/cargo-home" "$build_root/cargo-target" "$evidence_dir"; rm -f "$log" "$log.tmp" "$evidence" "$evidence.tmp"; export CARGO_HOME="$build_root/cargo-home" CARGO_TARGET_DIR="$build_root/cargo-target" CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=nightly; cargo test -p fullmag-runner --lib "fdm::cpu::multilayer_reference::tests::multilayer_" -- --nocapture 2>&1 | tee "$log.tmp"; cargo test -p fullmag-plan --lib "tests::staged_cpu_multilayer_selects_stateful_abm3" -- --exact --nocapture 2>&1 | tee -a "$log.tmp"; mv "$log.tmp" "$log"; python3 scripts/build_frozen_spins_fdm_multilayer_evidence.py --log "$log" --output "$evidence.tmp"; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"'
+
+verify-frozen-spins-cross-discretization-runtime:
+    cargo run -p fullmag-runner --example frozen_spins_cross_discretization_runtime -- --output artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-v1.json
+    if command -v python3 >/dev/null 2>&1; then python3 scripts/build_frozen_spins_cross_discretization_runtime_evidence.py --input artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-v1.json --output artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-evidence-v1.json; else python scripts/build_frozen_spins_cross_discretization_runtime_evidence.py --input artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-v1.json --output artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-evidence-v1.json; fi
+    if command -v python3 >/dev/null 2>&1; then python3 -m unittest scripts.test_build_frozen_spins_cross_discretization_runtime_evidence scripts.test_build_frozen_spins_cross_discretization_evidence; else python -m unittest scripts.test_build_frozen_spins_cross_discretization_runtime_evidence scripts.test_build_frozen_spins_cross_discretization_evidence; fi
 
 verify-frozen-spins-fem-gpu:
     docker compose --profile fem-gpu run --rm --no-deps -T \
@@ -1093,25 +1106,22 @@ verify-frozen-spins-fem-gpu:
       fem-gpu bash -c 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fem-frozen-spins-gpu-contract"; evidence_dir="/workspace/artifacts/qualification/frozen-spins/fem-gpu"; evidence="$evidence_dir/fem-frozen-spins-gpu-runtime-evidence-v1.json"; log="$evidence_dir/fem-frozen-spins-gpu-contract.log"; source_identity="$evidence_dir/source-identity.json"; mkdir -p "$build_dir" "$evidence_dir" /workspace/target/frozen-spins-fem-gpu; rm -f "$evidence" "$evidence.tmp" "$log" "$log.tmp" "$source_identity" "$source_identity.tmp"; python3 scripts/capture_source_snapshot_identity.py --repo-root /workspace --ignore-non-runtime-dirty --output "$source_identity.tmp"; mv "$source_identity.tmp" "$source_identity"; python3 scripts/test_build_frozen_spins_fem_gpu_evidence.py; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fem_frozen_spins_contract; export FULLMAG_FEM_LIB_DIR="$build_dir/backends/fem" LD_LIBRARY_PATH="$build_dir/backends/fem:/opt/fullmag-deps/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR=/workspace/target/frozen-spins-fem-gpu CARGO_INCREMENTAL=0 RUSTUP_TOOLCHAIN=nightly; "$build_dir/backends/fem/fem_frozen_spins_contract" 2>&1 | tee "$log.tmp"; mv "$log.tmp" "$log"; python3 scripts/build_frozen_spins_fem_gpu_evidence.py --test-log "$log" --source-identity "$source_identity" --output "$evidence.tmp"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; cargo test -p fullmag-runner --features fem-gpu capabilities::tests::frozen_spins_execution_capability_is_lane_and_precision_specific -- --exact --nocapture; cargo test -p fullmag-runner --features fem-gpu interactive_fem_gpu_rebuild_reactivation_preserves_continuation_epoch_and_quantity -- --nocapture; python3 -m unittest scripts.test_finalize_frozen_spins_fem_gpu_evidence -v; python3 scripts/finalize_frozen_spins_fem_gpu_evidence.py --input "$evidence.tmp" --output "$evidence"; rm -f "$evidence.tmp"; python3 -m json.tool "$evidence"'
 
 verify-frozen-spins-v1-scope:
-    python3 scripts/validate_frozen_spins_v1_scope.py
-    python3 -m unittest scripts.test_validate_frozen_spins_v1_scope -v
+    if command -v python3 >/dev/null 2>&1; then python3 scripts/validate_frozen_spins_v1_scope.py && python3 -m unittest scripts.test_validate_frozen_spins_v1_scope -v; else python scripts/validate_frozen_spins_v1_scope.py && python -m unittest scripts.test_validate_frozen_spins_v1_scope -v; fi
 
 capture-frozen-spins-source-identity output="artifacts/qualification/frozen-spins/source-baseline.json":
-    python3 scripts/capture_frozen_spins_source_identity.py --repo-root . --output "{{output}}"
+    if command -v python3 >/dev/null 2>&1; then python3 scripts/capture_frozen_spins_source_identity.py --repo-root . --output "{{output}}"; else python scripts/capture_frozen_spins_source_identity.py --repo-root . --output "{{output}}"; fi
 
 verify-frozen-spins-clean-source:
-    python3 scripts/capture_frozen_spins_source_identity.py --repo-root . --output artifacts/qualification/frozen-spins/source-baseline.json --require-clean
-    python3 -m unittest scripts.test_capture_frozen_spins_source_identity -v
+    if command -v python3 >/dev/null 2>&1; then python3 scripts/capture_frozen_spins_source_identity.py --repo-root . --output artifacts/qualification/frozen-spins/source-baseline.json --require-clean && python3 -m unittest scripts.test_capture_frozen_spins_source_identity -v; else python scripts/capture_frozen_spins_source_identity.py --repo-root . --output artifacts/qualification/frozen-spins/source-baseline.json --require-clean && python -m unittest scripts.test_capture_frozen_spins_source_identity -v; fi
 
 verify-frozen-spins-authoring:
-    python3 scripts/verify_frozen_spins_authoring.py
+    if command -v python3 >/dev/null 2>&1; then python3 scripts/verify_frozen_spins_authoring.py; else python scripts/verify_frozen_spins_authoring.py; fi
 
 verify-frozen-spins-qualification:
     just verify-frozen-spins-v1-scope
     just verify-frozen-spins-clean-source
     just verify-frozen-spins-authoring
-    python3 -m unittest scripts.test_verify_frozen_spins_qualification -v
-    python3 scripts/verify_frozen_spins_qualification.py
+    if command -v python3 >/dev/null 2>&1; then python3 -m unittest scripts.test_verify_frozen_spins_qualification -v && python3 scripts/verify_frozen_spins_qualification.py; else python -m unittest scripts.test_verify_frozen_spins_qualification -v && python scripts/verify_frozen_spins_qualification.py; fi
 
 verify-fdm-gpu-m1-charge-native-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
@@ -1167,7 +1177,7 @@ verify-fdm-gpu-m1-spin-observables-contract:
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-spin-observables; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_spin_operator_parity_v1_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
 
 verify-fdm-gpu-m1-transport-llg-native-contract:
-    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm --no-deps \
       -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
@@ -1175,13 +1185,13 @@ verify-fdm-gpu-m1-transport-llg-native-contract:
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-transport-llg"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_transport_llg_stage_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract; LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys -- --nocapture'
 
 verify-fdm-gpu-m1-transport-llg-lifecycle-contract: verify-fdm-gpu-m1-transport-llg-native-contract
-    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm --no-deps \
       -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-transport-llg"; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; cargo test -p fullmag-runner --features cuda checkpoint_ -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_charge_snapshot_materializes_the_exact_public_llg_binding -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_bound_llg_step_enables_readback_without_a_second_spin_solve -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_face_fields_are_reconstructed_at_cells_with_canonical_component_order -- --nocapture; cargo test -p fullmag-runner --features cuda public_gpu_m1_dispatch_ -- --nocapture; cargo test -p fullmag-runner --features cuda fdm::gpu::cuda::route::tests -- --nocapture; cargo test -p fullmag-runner --features cuda artifact_pipeline::tests::zarr_writer_preserves_regular_transport_snapshot_shape_and_soa_order -- --exact --nocapture; cargo test -p fullmag-runner --features cuda telemetry_tests -- --nocapture'
 
 verify-fdm-gpu-m1-transport-llg-compute-sanitizer: verify-fdm-gpu-m1-transport-llg-lifecycle-contract
-    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm --no-deps \
       -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       fem-gpu bash -lc 'set -euo pipefail; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-transport-llg"; command -v compute-sanitizer >/dev/null; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
@@ -3226,7 +3236,7 @@ verify-fem-preview-json-roundtrip-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api terminal_preview_json_transport_preserves_f64_bits -- --nocapture'
 
 verify-fem-mixed-wire-cli-contract:
-    docker compose --project-name fullmag --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli --features "cuda fem-gpu" python_bridge::tests::mixed_wire_ -- --nocapture'
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'cd /workspace && FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli --features "cuda fem-gpu" python_bridge::tests::mixed_wire_ -- --nocapture'
 
 verify-fem-preparation-clock-contract:
     docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli simulation_preparation::tests::backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering -- --exact --nocapture'
@@ -3951,8 +3961,8 @@ calibrate-fem-relaxation-torque-default-v2:
         cp /workspace/.fullmag/runtime/manifest.json "$report_dir/runtime-manifest.json"'
 
 generate-fem-gpu-performance-fixtures:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_GMSH_THREADS=1 \
@@ -3970,11 +3980,11 @@ generate-fem-gpu-performance-fixtures:
 # The recipe is intentionally separate from the historical v1 generator until
 # the managed runtime can be regenerated and the strict builder gate passes.
 generate-fem-performance-fixture-v2:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
     runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
       test -x "$runtime_root/bin/fullmag-fem-gpu"; \
       test -f "$runtime_root/manifest.json"; \
-      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
       -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
@@ -3993,7 +4003,7 @@ generate-fem-performance-fixture-v2:
         --write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v2.json'
 
 verify-fem-performance-fixture-v2:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
     test -f examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json
     test -f examples/assets/fem_performance/amg_qualification_suite_v2.json
     runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
@@ -4002,7 +4012,7 @@ verify-fem-performance-fixture-v2:
       target_digest="$(printf '%s' "$PWD" | sha256sum | cut -c1-64)"; \
       target_dir="/mnt/fullmag-zfn2-native/managed-fem-runtime/${target_slug}-${target_digest}"; \
       test -d "$target_dir" && test -w "$target_dir"; \
-      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
         -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
         -v "$target_dir:/workspace/target" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
@@ -4027,8 +4037,8 @@ verify-fem-performance-fixture-v2:
           done < <(python3 scripts/analysis/fem_gpu_benchmark.py --list-amg-qualification-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v2.json)'
 
 verify-fem-gpu-performance-regression:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
@@ -4064,9 +4074,9 @@ verify-fem-gpu-performance-regression:
           --cpu-gpu-summary-output .fullmag/reports/fem_gpu_performance_regression_summary.json'
 
 verify-fem-gpu-relaxation-preconditioner-qualification:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FEM_STEP_PROFILE=1 \
@@ -4139,9 +4149,9 @@ verify-fem-gpu-relaxation-preconditioner-qualification:
           --relaxation-preconditioner-qualification-output .fullmag/reports/task-11-relaxation-preconditioner-qualification.json'
 
 verify-fem-gpu-host-thread-policy-qualification:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports/task-12-host-thread-policy/mesh-cache
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FEM_ASSERT_NO_HOT_LOOP_COMPUTE_SYNC=1 \
@@ -4216,9 +4226,9 @@ verify-fem-gpu-host-thread-policy-qualification:
             .fullmag/reports/task-12-host-thread-policy/qualification.json'
 
 capture-fem-gpu-pre-remediation-performance-baseline:
-    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports
-    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
@@ -4250,7 +4260,7 @@ verify-fem-gpu-pre-remediation-runtime-restore:
       python3 scripts/verify_fem_gpu_runtime_restore.py capture \
         --environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
         --state "$state_file"; \
-      COMPOSE_PROJECT_NAME=fullmag just rebuild-fem-runtime; \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just rebuild-fem-runtime; \
       python3 scripts/verify_fem_gpu_runtime_restore.py compare \
         --environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
         --state "$state_file"
@@ -4365,7 +4375,7 @@ verify-fem-hypre-device-timing:
     runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
       test -x "$runtime_root/bin/fullmag-fem-gpu"; \
       test -f "$runtime_root/manifest.json"; \
-      COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
@@ -4640,7 +4650,7 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
       backend="{{backend}}"; device="{{device}}"; \
       case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend" >&2; exit 2 ;; esac; \
       case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device" >&2; exit 2 ;; esac; \
-      case "{{frontend_mode}}" in static) frontend_arg=""; test -s "{{local_web_root}}/workspace/index.html" || { echo "static Control Room is missing; run just build-static-control-room first" >&2; exit 2; } ;; dev) frontend_arg="--dev" ;; *) echo "unsupported frontend mode: {{frontend_mode}} (expected static or dev)" >&2; exit 2 ;; esac; \
+      case "{{frontend_mode}}" in static) frontend_arg=""; static_stamp="{{local_web_root}}/.build-stamp"; test -s "{{local_web_root}}/workspace/index.html" && test -f "$static_stamp" || { echo "static Control Room is missing; run just build-static-control-room first" >&2; exit 2; }; stale_path="$(find apps/control-room \( -path apps/control-room/node_modules -o -path apps/control-room/.next -o -path apps/control-room/out \) -prune -o -type f -newer "$static_stamp" -print -quit)"; test -z "$stale_path" || { echo "static Control Room is stale relative to $stale_path; run just build-static-control-room first" >&2; exit 2; } ;; dev) frontend_arg="--dev" ;; *) echo "unsupported frontend mode: {{frontend_mode}} (expected static or dev)" >&2; exit 2 ;; esac; \
       case "{{smoke_command}}" in smoke:viewport-3d|smoke:frozen-spins) ;; *) echo "unsupported smoke command: {{smoke_command}}" >&2; exit 2 ;; esac; \
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
@@ -4684,6 +4694,12 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
       CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN="$token" \
       CONTROL_ROOM_FROZEN_SPINS_REPORT_DIR="${CONTROL_ROOM_FROZEN_SPINS_REPORT_DIR:-$(pwd)/artifacts/qualification/frozen-spins/browser}" \
       $PNPM_CMD --dir apps/control-room "{{smoke_command}}"'
+
+run-frozen-spins-authoring-fdm-browser-smoke web_port="3198" api_port="8198":
+    CONTROL_ROOM_FROZEN_SPINS_AUTHORING_E2E=1 CONTROL_ROOM_FROZEN_SPINS_OBJECT_ID=frozen_smoke_box just run-viewport-3d-smoke-disposable examples/frozen_spins/fdm_cpu_browser_smoke.py fdm cpu {{web_port}} {{api_port}} smoke:frozen-spins 1 static
+
+run-frozen-spins-authoring-fem-browser-smoke web_port="3199" api_port="8199":
+    CONTROL_ROOM_FROZEN_SPINS_AUTHORING_E2E=1 CONTROL_ROOM_FROZEN_SPINS_OBJECT_ID=frozen_fem_smoke_box just run-viewport-3d-smoke-disposable examples/frozen_spins/fem_cpu_browser_smoke.py fem cpu {{web_port}} {{api_port}} smoke:frozen-spins 1 static
 
 # Final single-grid FDM field gate: completed terminal fields only. The browser
 # smoke never submits compute_fields; the disposable fixture owns its session.
@@ -4920,7 +4936,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       host_windows="false"; \
       case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
       if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_wsl.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
         exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
@@ -5312,7 +5328,7 @@ run-arch-waveguide-interactive-v2 fem_execution="script":
       cpu_threads="${physical_cores:-auto}"; \
       if [ -z "$cpu_threads" ] || [ "$cpu_threads" = "0" ]; then cpu_threads="auto"; fi; \
       if [ "$cpu_threads" != "auto" ] && [ "$cpu_threads" -gt 8 ]; then cpu_threads=8; fi; \
-      echo "cpu_threads=$cpu_threads (capped at 8 for WSL memory stability)" >&2; \
+      echo "cpu_threads=$cpu_threads (capped at 8 for managed-container memory stability)" >&2; \
       FULLMAG_DISABLE_STATIC_CONTROL_ROOM=1 just run-arch-waveguide-interactive-managed "$mode" "$cpu_threads" "$web_port"'
 
 
@@ -5458,15 +5474,27 @@ ensure-managed-fem-runtime:
         exit 2; \
       fi; \
       python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --compare "$identity_file" --allow-source-drift; \
-      if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then \
+      if [ "${FULLMAG_RUNTIME_PRUNE:-0}" = "1" ]; then \
         bash scripts/prune_managed_fem_runtimes.sh; \
       fi; \
       if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
           --runtime-root .fullmag/runtimes/fem-gpu-host; \
-      else \
-        validate_current; \
-      fi'
+       else \
+         validate_current; \
+       fi'
+
+# Cleanup is deliberately separate from ensure/build.  The default invocation
+# only prints candidates; pass apply=1 after reviewing that dry-run to remove
+# old generations.  Active and in-use variants remain protected by the pruner.
+prune-managed-fem-runtimes apply="0" keep_per_family="2":
+    case "{{apply}}" in 0|1) ;; *) echo "apply must be 0 or 1" >&2; exit 2 ;; esac; \
+    FULLMAG_RUNTIME_KEEP_PER_FAMILY="{{keep_per_family}}" FULLMAG_RUNTIME_DRY_RUN=1 \
+      bash scripts/prune_managed_fem_runtimes.sh; \
+    if [ "{{apply}}" = "1" ]; then \
+      FULLMAG_RUNTIME_KEEP_PER_FAMILY="{{keep_per_family}}" FULLMAG_RUNTIME_DRY_RUN=0 \
+        bash scripts/prune_managed_fem_runtimes.sh; \
+    fi
 
 verify-managed-fem-runtime-source-provenance:
     tmp_provenance="$(mktemp "${TMPDIR:-/tmp}/fullmag-fem-runtime-source-provenance.XXXXXXXXXX.json")"; trap 'rm -f -- "$tmp_provenance"' EXIT; \
@@ -6296,7 +6324,7 @@ verify-fdm-gpu-solved-current-racetrack-production:
       FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-transport-llg-compute-sanitizer; \
       FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-spin-sparse-performance-contract; \
       build_dir="$managed_native_root/fdm-gpu-racetrack-qualification"; \
-      docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm --no-deps \
         -v "$managed_native_root:$managed_native_root" \
         -v "$evidence_root:$evidence_root" \
         -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \

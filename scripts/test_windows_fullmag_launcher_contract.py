@@ -5,7 +5,8 @@ ROOT = Path(__file__).resolve().parents[1]
 JUSTFILE = ROOT / "justfile"
 LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag.ps1"
 CONTROL_ROOM = ROOT / "crates" / "fullmag-cli" / "src" / "control_room.rs"
-WSL_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
+LEGACY_FEM_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
+FEM_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_fem.ps1"
 WINDOWS_COMPOSE = ROOT / "compose.windows.yaml"
 FEM_GPU_DOCKERFILE = ROOT / "docker" / "fem-gpu" / "Dockerfile"
 FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
@@ -151,20 +152,44 @@ def test_windows_launcher_recognizes_pnpm_windows_swc_store_entry() -> None:
     assert "$env:FULLMAG_PNPM_CLI = $PinnedPnpmCli" in launcher
 
 
-def test_windows_fem_gpu_routes_to_wsl_before_posix_host_setup() -> None:
+def test_root_workspace_and_windows_setup_use_one_pnpm_lock_contract() -> None:
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+    setup = SETUP.read_text(encoding="utf-8")
+
+    assert '"packageManager": "pnpm@10.8.1"' in package_json
+    assert (ROOT / "pnpm-lock.yaml").is_file()
+    assert not (ROOT / "package-lock.json").exists()
+    assert "/package-lock.json" in (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert '$PinnedPnpmVersion = "10.8.1"' in setup
+    assert '$env:COREPACK_HOME = $CorepackHome' in setup
+    assert '"install", "--global", "pnpm@$PinnedPnpmVersion"' in setup
+    assert "Pinned pnpm validation failed" in setup
+
+
+def test_windows_fem_gpu_routes_to_docker_before_posix_host_setup() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
-    assert "scripts/windows/run_fullmag_wsl.ps1" in justfile
+    assert "scripts/windows/run_fullmag_fem.ps1" in justfile
+    assert "scripts/windows/run_fullmag_wsl.ps1" not in justfile
     assert '[ "$backend" = "fem" ]' in justfile
     assert '[ "$device" = "gpu" ]' in justfile
     fullmag_start = justfile.index("fullmag opt_1")
-    assert justfile.index("run_fullmag_wsl.ps1", fullmag_start) < justfile.index(
+    assert justfile.index("run_fullmag_fem.ps1", fullmag_start) < justfile.index(
         "just ensure-python", fullmag_start
     )
 
 
+def test_windows_fem_entrypoint_is_windows_powerShell_to_docker_and_wsl_free() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
+
+    assert "Canonical Windows FEM entry point" in launcher
+    assert "run_fullmag_wsl.ps1" in launcher
+    assert 'Invoke-External "wsl.exe"' not in launcher
+    assert "@args" in launcher
+
+
 def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     for required in (
         "GetPathRoot($RepoRoot)",
@@ -193,6 +218,11 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "docker info",
         "nvidia-smi",
         "compose.windows.yaml",
+        "Get-WorkspaceNamespace",
+        "$ComposeProjectName = \"fullmag-windows-fem-$WorkspaceNamespace-$Device\"",
+        '$env:COMPOSE_PROJECT_NAME = $ComposeProjectName',
+        '$DefaultFemCpuImage = "fullmag/fem-cpu:windows-local-$WorkspaceNamespace"',
+        '$DefaultFemGpuImage = "fullmag/fem-gpu:windows-local-$WorkspaceNamespace"',
         '$ServiceName = "fullmag-windows-fem-$Device"',
         "CudaBaseImage",
         "CudaCacheKey",
@@ -205,6 +235,7 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "FULLMAG_FEM_EXECUTION",
         "FULLMAG_RELAX_DEVICE",
         "FULLMAG_SP4_DEVICE",
+        "FULLMAG_SP4_COMPATIBILITY",
         "FULLMAG_SP4_TOPOLOGY_VARIANT",
         "FULLMAG_SP4_RELAX_MAX_STEPS",
         "GetEnvironmentVariable",
@@ -218,8 +249,36 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     assert "run_fullmag.ps1" not in launcher
 
 
+def test_windows_launchers_and_setup_namespace_default_storage_per_worktree() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+    fem_launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    setup = SETUP.read_text(encoding="utf-8")
+
+    for script in (launcher, fem_launcher, setup):
+        assert "function Get-WorkspaceNamespace" in script
+        assert "$WorkspaceNamespace = Get-WorkspaceNamespace $RepoRoot" in script
+        assert '"fullmag-cache\\$WorkspaceNamespace"' in script
+        assert '"fullmag-build\\$WorkspaceNamespace"' in script
+    assert '"fullmag-tmp\\$WorkspaceNamespace"' in fem_launcher
+    assert '"fullmag-tmp\\$WorkspaceNamespace"' in setup
+    assert '$env:COMPOSE_PROJECT_NAME = "fullmag-windows-fem"' not in fem_launcher
+
+
+def test_managed_compose_recipes_do_not_use_a_global_project_name() -> None:
+    justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+    helper = (ROOT / "scripts" / "resolve_fullmag_compose_project.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "COMPOSE_PROJECT_NAME=fullmag" not in justfile
+    assert 'resolve_fullmag_compose_project.sh' in justfile
+    assert "sha256sum" in helper
+    assert "FULLMAG_REPO_ROOT" in helper
+    assert "FULLMAG_COMPOSE_PROJECT_NAME" in helper
+
+
 def test_windows_fem_image_override_is_used_for_runtime_validation() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     runtime_image_block = launcher[launcher.index("$RuntimeImage ="):]
     assert "FULLMAG_WINDOWS_FEM_CPU_IMAGE" in runtime_image_block
@@ -255,7 +314,7 @@ def test_justfile_exposes_windows_setup_doctor_and_build_only_routes() -> None:
 
 
 def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert '[System.Text.Encoding]::UTF8.GetBytes($buildCommand)' in launcher
     assert '[Convert]::ToBase64String($buildCommandBytes)' in launcher
@@ -264,14 +323,14 @@ def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
 
 
 def test_windows_wsl_launcher_uses_windows_powershell_relative_path_api() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert "MakeRelativeUri" in launcher
     assert "Path.GetRelativePath" not in launcher
 
 
 def test_windows_fem_interactive_launch_omits_empty_compose_environment_entries() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert '$(if ($RunMode -eq "headless") { "FULLMAG_API_PORT=0" } else { $null })' in launcher
     assert "[string]::IsNullOrWhiteSpace([string]$entry)" in launcher
@@ -279,7 +338,7 @@ def test_windows_fem_interactive_launch_omits_empty_compose_environment_entries(
 
 
 def test_windows_fem_build_mutex_is_released_before_long_running_simulation() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     manifest_boundary = launcher.index('  if ($BuildOnly) {')
     release_boundary = launcher.index(
@@ -292,7 +351,7 @@ def test_windows_fem_build_mutex_is_released_before_long_running_simulation() ->
 
 
 def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
-    launcher = WSL_LAUNCHER.read_text(encoding="utf-8")
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 
     assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher

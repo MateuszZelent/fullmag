@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PRUNE = ROOT / "scripts/prune_managed_fem_runtimes.sh"
 
 
+def test_prune_defaults_to_dry_run_when_called_directly() -> None:
+    script = PRUNE.read_text(encoding="utf-8")
+    assert 'DRY_RUN="${FULLMAG_RUNTIME_DRY_RUN:-1}"' in script
+
+
 def make_variant(root: Path, name: str, mtime: int) -> Path:
     variant = root / "fem-gpu-variants" / name
     (variant / "bin").mkdir(parents=True)

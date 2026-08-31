@@ -18,13 +18,16 @@ use fullmag_engine::{
     dot, AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
     MU0,
 };
-use fullmag_ir::{ExecutionPrecision, FemObjectSegmentIR, FemPlanIR, IntegratorChoice, OutputIR};
+use fullmag_ir::{
+    ExecutionPrecision, FemObjectSegmentIR, FemPlanIR, IntegratorChoice, OutputIR,
+    StageCompletionIR,
+};
 
 use crate::antenna_fields::{
     combined_antenna_field_at_time, compute_per_unit_antenna_fields, has_time_varying_antenna,
 };
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
+use crate::derived_fields::compute_torque_field;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_mesh_preview_field_with_active_mask, build_mesh_scalar_preview_field_with_active_mask,
@@ -483,11 +486,18 @@ pub(crate) fn build_problem_and_state(
         .map_err(|e| RunError {
             message: format!("FEM reference semantics: {}", e),
         })?;
-    let state = problem
+    let mut state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
+    if let Some(frozen_spins) = plan.frozen_spins.as_ref() {
+        problem
+            .capture_frozen_spins_at_activation(frozen_spins, &mut state)
+            .map_err(|e| RunError {
+                message: format!("Frozen Spins activation: {}", e),
+            })?;
+    }
     Ok((problem, state))
 }
 
@@ -649,6 +659,7 @@ fn execute_reference_fem_impl(
         &plan.mesh_parts,
         &problem.topology.magnetic_node_volumes,
     );
+    apply_frozen_spin_step_telemetry(&mut current_stats, &problem, state.magnetization());
 
     let until_label = if until_seconds.is_finite() {
         format!("{until_seconds:.4e}")
@@ -673,8 +684,11 @@ fn execute_reference_fem_impl(
 
     let n_nodes = state.magnetization().len();
     let mut integrator_ws = FemIntegratorWorkspace::new(n_nodes);
+    let all_active_dofs_frozen = problem
+        .frozen_spins()
+        .is_some_and(fullmag_engine::FrozenSpinsState::all_active_dofs_frozen);
 
-    while state.time_seconds < until_seconds {
+    while state.time_seconds < until_seconds && !all_active_dofs_frozen {
         if let Some(live) = live.as_mut() {
             if let Some(display_selection) = live.display_selection.map(|get| get()) {
                 let preview_due = display_refresh_due(
@@ -756,9 +770,12 @@ fn execute_reference_fem_impl(
             e_ext: report.external_energy_joules,
             e_total: report.total_energy_joules,
             max_dm_dt: report.max_rhs_amplitude,
+            max_rhs_norm_per_s: report.max_rhs_amplitude,
+            max_rhs_all_norm_per_s: report.max_rhs_all_amplitude,
             max_h_eff: report.max_effective_field_amplitude,
             max_h_demag: report.max_demag_field_amplitude,
             max_torque_Apm: report.max_torque_Apm,
+            max_torque_all_Apm: report.max_torque_all_Apm,
             max_torque_T: report.max_torque_Apm * crate::MU0,
             wall_time_ns: wall_elapsed,
             ..StepStats::default()
@@ -770,6 +787,7 @@ fn execute_reference_fem_impl(
             &plan.mesh_parts,
             &problem.topology.magnetic_node_volumes,
         );
+        apply_frozen_spin_step_telemetry(&mut current_stats, &problem, state.magnetization());
         artifacts.record_solver_step(&current_stats);
 
         if !default_scalar_trace || !field_schedules.is_empty() {
@@ -1006,6 +1024,98 @@ fn execute_reference_fem_impl(
             break;
         }
     }
+    if all_active_dofs_frozen
+        && plan.relaxation.is_none()
+        && !paused
+        && !cancelled
+        && until_seconds.is_finite()
+    {
+        // A fully constrained time-evolution stage is an analytical
+        // constant-state advance.  Do not invoke any RHS/integrator kernels.
+        // Output schedules still have to be materialized at their requested
+        // simulated times, including time-dependent antenna fields.  The
+        // magnetization remains bitwise constant; only the observation clock
+        // and the time-dependent external terms move forward.
+        if !scalar_schedules.is_empty() || !field_schedules.is_empty() {
+            state.time_seconds = 0.0;
+            if has_time_varying {
+                problem.terms.per_node_field = Some(combined_antenna_field_at_time(
+                    plan,
+                    &per_unit_antenna_fields,
+                    state.time_seconds,
+                ));
+            }
+            // The initial scalar row may already have been emitted above.
+            // Calling the common scheduler here is idempotent for scalar
+            // schedules and additionally emits field/snapshot outputs at t=0
+            // when no scalar schedule was requested.
+            let ant = antenna_field_at(&problem, state.magnetization().len());
+            record_due_outputs(
+                &problem,
+                &state,
+                &ant,
+                &plan.object_segments,
+                &plan.mesh_parts,
+                0,
+                0.0,
+                0,
+                &mut scalar_schedules,
+                &mut field_schedules,
+                &mut steps,
+                &mut artifacts,
+                None,
+                None,
+            )?;
+
+            loop {
+                let next_time = scalar_schedules
+                    .iter()
+                    .chain(field_schedules.iter())
+                    .map(|schedule| schedule.next_time)
+                    .filter(|time| time.is_finite() && *time > state.time_seconds)
+                    .min_by(f64::total_cmp);
+                let Some(next_time) = next_time else {
+                    break;
+                };
+                if next_time > until_seconds && !same_time(next_time, until_seconds) {
+                    break;
+                }
+                state.time_seconds = next_time.min(until_seconds);
+                if has_time_varying {
+                    problem.terms.per_node_field = Some(combined_antenna_field_at_time(
+                        plan,
+                        &per_unit_antenna_fields,
+                        state.time_seconds,
+                    ));
+                }
+                let ant = antenna_field_at(&problem, state.magnetization().len());
+                record_due_outputs(
+                    &problem,
+                    &state,
+                    &ant,
+                    &plan.object_segments,
+                    &plan.mesh_parts,
+                    0,
+                    0.0,
+                    0,
+                    &mut scalar_schedules,
+                    &mut field_schedules,
+                    &mut steps,
+                    &mut artifacts,
+                    None,
+                    None,
+                )?;
+            }
+        }
+        state.time_seconds = until_seconds;
+        if has_time_varying {
+            problem.terms.per_node_field = Some(combined_antenna_field_at_time(
+                plan,
+                &per_unit_antenna_fields,
+                state.time_seconds,
+            ));
+        }
+    }
     if !cancelled {
         let until_label = if until_seconds.is_finite() {
             format!("{until_seconds:.4e}")
@@ -1045,18 +1155,37 @@ fn execute_reference_fem_impl(
     } else {
         RunStatus::Completed
     };
-    let completion = crate::relaxation::resolve_stage_completion(
-        status,
-        plan.relaxation.as_ref(),
-        crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: Some(current_stats.max_torque_Apm),
-            torque_confirmed: torque_confirmation.confirmed(),
-            accepted_energy_plateau_range_j: energy_plateau.range(),
-            steps: step_count,
-            relaxation_time_s: Some(state.time_seconds),
-            numerical_stagnation: false,
-        },
-    );
+    let completion = if all_active_dofs_frozen {
+        StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: None,
+            metric: None,
+            metric_name: Some(
+                if plan.relaxation.is_some() {
+                    "all_active_dofs_frozen_relaxation"
+                } else {
+                    "all_active_dofs_frozen_time_advance"
+                }
+                .to_string(),
+            ),
+            metric_value: Some(0.0),
+            threshold: None,
+        }
+    } else {
+        crate::relaxation::resolve_stage_completion(
+            status,
+            plan.relaxation.as_ref(),
+            crate::relaxation::RelaxationCompletionMetrics {
+                max_torque_apm: Some(current_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
+                accepted_energy_plateau_range_j: energy_plateau.range(),
+                steps: step_count,
+                relaxation_time_s: Some(state.time_seconds),
+                numerical_stagnation: false,
+            },
+        )
+    };
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1122,7 +1251,7 @@ fn record_due_outputs(
     };
 
     if scalar_due {
-        let stats = make_step_stats(
+        let mut stats = make_step_stats(
             step,
             state.time_seconds,
             solver_dt,
@@ -1132,6 +1261,7 @@ fn record_due_outputs(
             mesh_parts,
             &problem.topology.magnetic_node_volumes,
         );
+        apply_frozen_spin_step_telemetry(&mut stats, problem, state.magnetization());
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
         advance_due_schedules(scalar_schedules, state.time_seconds);
@@ -1171,7 +1301,7 @@ fn record_scalar_snapshot(
     artifacts: &mut ArtifactRecorder,
 ) -> Result<(), RunError> {
     let observables = observe_state(problem, state, antenna_field)?;
-    let stats = make_step_stats(
+    let mut stats = make_step_stats(
         step,
         state.time_seconds,
         solver_dt,
@@ -1181,6 +1311,7 @@ fn record_scalar_snapshot(
         mesh_parts,
         &problem.topology.magnetic_node_volumes,
     );
+    apply_frozen_spin_step_telemetry(&mut stats, problem, state.magnetization());
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
     Ok(())
@@ -1223,7 +1354,13 @@ fn record_final_outputs(
     }
 
     if need_scalar && missing_field_names.is_empty() {
-        if let Some(stats) = fallback_scalar_stats {
+        // A fallback is valid only when it describes the same physical time.
+        // In particular, all-frozen dynamics analytically advances the clock
+        // without an integrator step, so the initial t=0 row must not be
+        // replayed as the final t=end scalar sample.
+        if let Some(stats) =
+            fallback_scalar_stats.filter(|stats| same_time(stats.time, state.time_seconds))
+        {
             artifacts.record_scalar(stats)?;
             steps.push(stats.clone());
             return Ok(());
@@ -1232,7 +1369,7 @@ fn record_final_outputs(
 
     let observables = observe_state(problem, state, antenna_field)?;
     if need_scalar {
-        let stats = make_step_stats(
+        let mut stats = make_step_stats(
             step,
             state.time_seconds,
             solver_dt,
@@ -1242,6 +1379,7 @@ fn record_final_outputs(
             mesh_parts,
             &problem.topology.magnetic_node_volumes,
         );
+        apply_frozen_spin_step_telemetry(&mut stats, problem, state.magnetization());
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
     }
@@ -1281,6 +1419,29 @@ fn enrich_step_stats_from_magnetization(
     stats
 }
 
+fn apply_frozen_spin_step_telemetry(
+    stats: &mut StepStats,
+    problem: &FemLlgProblem,
+    magnetization: &[[f64; 3]],
+) {
+    let active_dof_count = problem
+        .topology
+        .magnetic_node_volumes
+        .iter()
+        .filter(|volume| **volume > 0.0)
+        .count();
+    stats.active_dof_count = active_dof_count as u64;
+    if let Some(frozen) = problem.frozen_spins() {
+        stats.frozen_dof_count = frozen.frozen_dof_count() as u64;
+        stats.free_dof_count = frozen.free_dof_count() as u64;
+        stats.frozen_reference_max_drift = frozen.max_reference_drift(magnetization);
+    } else {
+        stats.free_dof_count = active_dof_count as u64;
+        stats.max_rhs_all_norm_per_s = stats.max_rhs_norm_per_s;
+        stats.max_torque_all_Apm = stats.max_torque_Apm;
+    }
+}
+
 pub(crate) fn observe_state(
     problem: &FemLlgProblem,
     state: &FemLlgState,
@@ -1295,11 +1456,6 @@ pub(crate) fn observe_state(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let max_torque_apm = max_torque_residual_apm_from_field(
-        &observables.magnetization,
-        &observables.effective_field,
-    );
-
     Ok(StateObservables {
         magnetization: observables.magnetization,
         torque_field,
@@ -1327,7 +1483,10 @@ pub(crate) fn observe_state(
         max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
-        max_torque_Apm: max_torque_apm,
+        // `FemLlgProblem::observe` already separates free and all-node
+        // metrics when Frozen Spins are active.  Recomputing torque here
+        // would reintroduce frozen nodes into the public free metric.
+        max_torque_Apm: observables.max_torque_Apm,
         max_torque_all_Apm: observables.max_torque_all_Apm,
         per_object_scalars: std::collections::HashMap::new(),
     })
@@ -1354,9 +1513,12 @@ fn make_step_stats(
         e_dmi: observables.dmi_energy,
         e_total: observables.total_energy,
         max_dm_dt: observables.max_dm_dt,
+        max_rhs_norm_per_s: observables.max_dm_dt,
+        max_rhs_all_norm_per_s: observables.max_rhs_all_norm_per_s,
         max_h_eff: observables.max_h_eff,
         max_h_demag: observables.max_h_demag,
         max_torque_Apm: observables.max_torque_Apm,
+        max_torque_all_Apm: observables.max_torque_all_Apm,
         max_torque_T: observables.max_torque_Apm * crate::MU0,
         wall_time_ns,
         ..StepStats::default()
@@ -1602,10 +1764,14 @@ fn select_base_field(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AirBoxConfigIR, ExchangeBoundaryCondition, ExecutionPrecision, FemMeshPartIR,
-        FemMeshPartRole, FemMeshPartSelector, FemObjectSegmentIR, FemPlanIR, IntegratorChoice,
-        MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, AirBoxConfigIR, ExchangeBoundaryCondition,
+        ExecutionPrecision, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
+        FemObjectSegmentIR, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR,
+        RelaxationControlIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
+        SelectionCertificateIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
+    use sha2::{Digest, Sha256};
 
     fn make_test_plan(enable_demag: bool) -> FemPlanIR {
         FemPlanIR {
@@ -1720,6 +1886,216 @@ mod tests {
             mfem_device_string: None,
             dmi_interface_normal: None,
             use_consistent_mass: None,
+        }
+    }
+
+    fn resolved_frozen_spins(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+        let active_dof_count = mask.len() as u64;
+        let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let mut hash = Sha256::new();
+        hash.update((mask.len() as u64).to_le_bytes());
+        hash.update(
+            mask.iter()
+                .map(|frozen| u8::from(*frozen))
+                .collect::<Vec<_>>(),
+        );
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["reference-test-pin".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256: mask_sha256.clone(),
+            grid_or_mesh_fingerprint: "sha256:reference-test-mesh".to_string(),
+            source_state_revision: Some(1),
+            all_active_dofs_frozen: free_dof_count == 0,
+            certificate: SelectionCertificateIR {
+                schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+                evaluator_id: "selection.fem_true_dof.v1".to_string(),
+                constraint_ids: vec!["reference-test-pin".to_string()],
+                authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                    constraint_id: "reference-test-pin".to_string(),
+                    selector_sha256: "a".repeat(64),
+                }],
+                raw_candidate_dof_count: frozen_dof_count,
+                inactive_candidate_dof_count: 0,
+                active_dof_count,
+                frozen_dof_count,
+                free_dof_count,
+                bounds_m: None,
+                grid_or_mesh_fingerprint: "sha256:reference-test-mesh".to_string(),
+                source_state_revision: Some(1),
+                mask_sha256,
+                resolved_reference_sha256: "b".repeat(64),
+                warnings: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn reference_runner_enforces_frozen_spins_across_fem_integrator_step() {
+        let mut plan = make_test_plan(false);
+        plan.external_field = Some([0.0, 0.0, 1.0e6]);
+        plan.initial_magnetization = vec![
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+        plan.frozen_spins = Some(resolved_frozen_spins(vec![true, false, false, false]));
+
+        let (problem, initial_state) =
+            build_problem_and_state(&plan).expect("FEM reference Frozen Spins activation");
+        let frozen_reference = initial_state.magnetization()[0];
+        assert_eq!(
+            problem
+                .frozen_spins()
+                .expect("activated Frozen Spins state")
+                .frozen_dof_count(),
+            1
+        );
+
+        let result = execute_reference_fem(&plan, 1.0e-13, &[], None, None)
+            .expect("FEM reference Frozen Spins run");
+        assert_eq!(result.result.final_magnetization[0], frozen_reference);
+        assert_ne!(
+            result.result.final_magnetization[1], plan.initial_magnetization[1],
+            "free FEM DOF should still respond to the external field"
+        );
+        let step = result
+            .result
+            .steps
+            .last()
+            .expect("reference run emits a step");
+        assert_eq!(step.frozen_dof_count, 1);
+        assert_eq!(step.frozen_reference_max_drift, 0.0);
+    }
+
+    #[test]
+    fn reference_runner_all_frozen_dynamics_advances_clock_and_emits_final_time() {
+        let mut plan = make_test_plan(false);
+        plan.external_field = Some([0.0, 0.0, 1.0e6]);
+        let initial = plan.initial_magnetization.clone();
+        plan.frozen_spins = Some(resolved_frozen_spins(vec![true; 4]));
+
+        let result = execute_reference_fem(&plan, 2.0e-13, &[], None, None)
+            .expect("all-frozen FEM reference run");
+        assert_eq!(result.result.final_magnetization, initial);
+        assert_eq!(result.result.status, RunStatus::Completed);
+        assert_eq!(
+            result
+                .result
+                .completion
+                .as_ref()
+                .and_then(|c| c.metric_name.as_deref()),
+            Some("all_active_dofs_frozen_time_advance")
+        );
+        let final_step = result
+            .result
+            .steps
+            .last()
+            .expect("all-frozen run emits final scalar row");
+        assert_eq!(final_step.time, 2.0e-13);
+        assert_eq!(final_step.step, 0);
+        assert_eq!(final_step.active_dof_count, 4);
+        assert_eq!(final_step.frozen_dof_count, 4);
+        assert_eq!(final_step.free_dof_count, 0);
+        assert_eq!(final_step.frozen_reference_max_drift, 0.0);
+    }
+
+    #[test]
+    fn all_frozen_time_advance_materializes_intermediate_output_schedules() {
+        let mut plan = make_test_plan(false);
+        plan.external_field = Some([0.0, 0.0, 1.0e6]);
+        let initial = plan.initial_magnetization.clone();
+        plan.frozen_spins = Some(resolved_frozen_spins(vec![true; 4]));
+        let outputs = vec![
+            OutputIR::Scalar {
+                name: "time".to_string(),
+                every_seconds: 1.0e-13,
+            },
+            OutputIR::Field {
+                name: "m".to_string(),
+                every_seconds: 1.0e-13,
+            },
+        ];
+
+        let result = execute_reference_fem(&plan, 3.0e-13, &outputs, None, None)
+            .expect("all-frozen scheduled FEM run");
+        let expected_times = [0.0, 1.0e-13, 2.0e-13, 3.0e-13];
+        assert_eq!(result.result.steps.len(), expected_times.len());
+        for (step, expected) in result.result.steps.iter().zip(expected_times) {
+            assert!((step.time - expected).abs() <= 1.0e-24, "{step:?}");
+            assert_eq!(
+                step.step, 0,
+                "analytical advance must not invent solver steps"
+            );
+            assert_eq!(step.frozen_reference_max_drift, 0.0);
+        }
+        let snapshots = result
+            .field_snapshots
+            .iter()
+            .filter(|snapshot| snapshot.name == "m")
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots.len(), expected_times.len());
+        for (snapshot, expected) in snapshots.iter().zip(expected_times) {
+            assert!((snapshot.time - expected).abs() <= 1.0e-24);
+            assert_eq!(snapshot.step, 0);
+            assert_eq!(snapshot.values.len(), initial.len() * 3);
+        }
+        assert_eq!(result.result.final_magnetization, initial);
+    }
+
+    #[test]
+    fn fem_frozen_spins_hard_restore_covers_all_reference_integrators() {
+        for integrator in [
+            IntegratorChoice::Heun,
+            IntegratorChoice::Rk4,
+            IntegratorChoice::Rk23,
+            IntegratorChoice::Rk45,
+            IntegratorChoice::Abm3,
+        ] {
+            let mut plan = make_test_plan(false);
+            plan.external_field = Some([0.0, 0.0, 1.0e6]);
+            plan.initial_magnetization = vec![
+                [0.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ];
+            plan.integrator = Some(integrator);
+            if matches!(integrator, IntegratorChoice::Rk23 | IntegratorChoice::Rk45) {
+                plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+                    tolerance_mode: AdaptiveToleranceModeIR::Advanced,
+                    atol: 1.0e12,
+                    rtol: 0.0,
+                    dt_initial: Some(1.0e-13),
+                    dt_min: 1.0e-15,
+                    dt_max: Some(1.0e-12),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            plan.frozen_spins = Some(resolved_frozen_spins(vec![true, false, false, false]));
+            let (problem, mut state) =
+                build_problem_and_state(&plan).expect("integrator Frozen Spins activation");
+            let frozen_reference = state.magnetization()[0];
+            let mut workspace = FemIntegratorWorkspace::new(state.magnetization().len());
+            problem
+                .step_with_workspace(&mut state, 1.0e-13, &mut workspace)
+                .unwrap_or_else(|error| panic!("{integrator:?} step failed: {error}"));
+            assert_eq!(state.magnetization()[0], frozen_reference, "{integrator:?}");
+            assert_ne!(
+                state.magnetization()[1],
+                plan.initial_magnetization[1],
+                "{integrator:?}"
+            );
         }
     }
 

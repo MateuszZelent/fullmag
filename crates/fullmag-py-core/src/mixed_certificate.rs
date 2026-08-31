@@ -1,9 +1,9 @@
 use fullmag_ir::{
     compute_mixed_certificate_evidence,
-    validate_mixed_layer_topology_certificate_and_compute_evidence, FemCellMeshPartIR,
-    FemCellTypeIR, FemConnectivityIR, FemFacetConnectivityIR, FemFacetRoleIR, FemFacetTypeIR,
-    MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR, MixedCertificateEvidenceV1,
-    MixedLayerTopologyCertificateV1IR,
+    validate_mixed_layer_topology_certificate_and_compute_evidence, validate_mixed_mesh_semantics,
+    FemCellMeshPartIR, FemCellTypeIR, FemConnectivityIR, FemFacetConnectivityIR, FemFacetRoleIR,
+    FemFacetTypeIR, MeshIR, MeshPeriodicBoundaryPairIR, MeshPeriodicNodePairIR,
+    MixedCertificateEvidenceV1, MixedLayerTopologyCertificateV1IR,
 };
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -97,6 +97,10 @@ struct NativeMeshCounts {
 struct PreflightExpected {
     counts: NativeMeshCounts,
     topology_fingerprint_v3: String,
+    #[serde(default)]
+    interface_marker: Option<u32>,
+    #[serde(default)]
+    outer_marker: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -527,6 +531,32 @@ fn run_preflight(
 ) -> Result<NativePreflightResult, String> {
     let started = Instant::now();
     mesh.validate().map_err(|errors| errors.join("; "))?;
+    validate_mixed_mesh_semantics(&mesh).map_err(|errors| errors.join("; "))?;
+    for (role, expected_marker) in [
+        (FemFacetRoleIR::MaterialInterface, expected.interface_marker),
+        (FemFacetRoleIR::Exterior, expected.outer_marker),
+    ] {
+        let Some(expected_marker) = expected_marker else {
+            continue;
+        };
+        let markers = mesh
+            .facets
+            .roles
+            .iter()
+            .zip(&mesh.boundary_markers)
+            .filter_map(|(actual_role, marker)| (*actual_role == role).then_some(*marker))
+            .collect::<BTreeSet<_>>();
+        if markers.len() != 1 || markers.first().copied() != Some(expected_marker) {
+            let role_name = match role {
+                FemFacetRoleIR::MaterialInterface => "material-interface",
+                FemFacetRoleIR::Exterior => "exterior",
+                FemFacetRoleIR::PeriodicSeam => "periodic-seam",
+            };
+            return Err(format!(
+                "mixed mesh preflight {role_name} marker is stale or inconsistent"
+            ));
+        }
+    }
     let counts = NativeMeshCounts {
         nodes: mesh.nodes.len(),
         cells: mesh.cells.len(),

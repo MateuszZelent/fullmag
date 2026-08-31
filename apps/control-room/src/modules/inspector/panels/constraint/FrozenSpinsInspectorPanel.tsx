@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type {
+  FieldMetaResource,
   FrozenSpinsActivation,
   FrozenSpinsDefinition,
   FrozenSpinsMembershipPolicy,
@@ -165,8 +166,8 @@ export function FrozenSpinsEditor({
       });
       return;
     }
-    const sourceStateRevision = fieldMeta.data?.source_revision;
-    const topologyFingerprint = fieldMeta.data?.publication_bundle?.topology_hash;
+    const sourceStateRevision = fieldMeta.data?.field_revision;
+    const topologyFingerprint = frozenSpinsPreviewTopologyFingerprint(fieldMeta.data);
     if (sourceStateRevision === undefined || !topologyFingerprint) {
       setFeedback({
         kind: "warning",
@@ -203,7 +204,16 @@ export function FrozenSpinsEditor({
           : "Preview was created but is stale against the current model state.",
       });
     } catch (error) {
-      setFeedback({ kind: "error", message: errorMessage(error) });
+      const message = errorMessage(error);
+      if (message.includes("selection_stale_revision")) {
+        await fieldMeta.refetch();
+        setFeedback({
+          kind: "warning",
+          message: `${message} Current field identity was refreshed; retry Preview mask.`,
+        });
+      } else {
+        setFeedback({ kind: "error", message });
+      }
     } finally {
       setPendingField(null);
     }
@@ -281,7 +291,11 @@ export function FrozenSpinsEditor({
     try {
       kernel.visualizationSync.queuePatch({
         active_quantity_id: "frozen_spins",
-        quantity: { active_quantity_id: "frozen_spins" },
+        field_component: null,
+        quantity: {
+          active_quantity_id: "frozen_spins",
+          field_component: null,
+        },
       });
       await kernel.visualizationSync.flushNow();
       kernel.layout.setActiveViewportMainModule("viewport-3d");
@@ -541,6 +555,27 @@ export function FrozenSpinsEditor({
   );
 }
 
+export function frozenSpinsPreviewTopologyFingerprint(
+  fieldMeta: FieldMetaResource | null | undefined,
+): string | null {
+  const publicationFingerprint = fieldMeta?.publication_bundle?.topology_hash?.trim();
+  if (publicationFingerprint) return publicationFingerprint;
+
+  const currentCarriers = (fieldMeta?.resolved_capability?.carriers ?? []).filter(
+    (carrier) =>
+      carrier.payload_state === "current" && carrier.carrier_fingerprint.trim().length > 0,
+  );
+  const fullCarrier = currentCarriers.find(
+    (carrier) => carrier.scope_kind === "full" && carrier.scope_id == null,
+  );
+  if (fullCarrier) return fullCarrier.carrier_fingerprint;
+
+  const fingerprints = [...new Set(
+    currentCarriers.map((carrier) => carrier.carrier_fingerprint),
+  )];
+  return fingerprints.length === 1 ? fingerprints[0] : null;
+}
+
 export function FrozenSpinsPreviewDetails({
   activationCandidateReady,
   preview,
@@ -606,8 +641,10 @@ export function resolveFrozenSpinsSolverBinding(
   const matches =
     runtime.constraint_activation_epochs[constraintId] !== undefined &&
     runtime.topology_fingerprint === receipt.topology_fingerprint &&
-    runtime.source_state_revision === receipt.source_state_revision &&
+    (runtime.source_state_revision === null ||
+      runtime.source_state_revision === receipt.source_state_revision) &&
     sameSha256Identity(runtime.mask_sha256, receipt.mask_sha256) &&
+    sameSha256Identity(runtime.reference_sha256, receipt.reference_sha256) &&
     runtime.active_site_count === receipt.active_site_count &&
     runtime.frozen_site_count === receipt.frozen_site_count &&
     runtime.free_site_count === receipt.free_site_count;

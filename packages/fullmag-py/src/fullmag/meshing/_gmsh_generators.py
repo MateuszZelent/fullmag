@@ -33,6 +33,7 @@ from ._gmsh_types import (
     ComponentDescriptor,
     MeshData,
     MeshOptions,
+    validate_periodic_mesh_options,
     SharedDomainMeshResult,
     SizeFieldData,
 )
@@ -293,6 +294,7 @@ def generate_mesh(
         options or MeshOptions(),
         context="volume mesh dispatch",
     )
+    validate_periodic_mesh_options(opts, context="volume mesh dispatch")
 
     # ── Swept mesh dispatch ──
     if should_use_swept(geometry, opts):
@@ -1379,6 +1381,9 @@ def generate_shared_domain_mesh_from_components(
             selector_resolution=application_report.selector_resolution,
             boundary_layer_result=application_report.boundary_layer_result,
             orphan_entities=orphan_entities,
+            algorithm_3d_requested=application_report.algorithm_3d_requested,
+            algorithm_3d_effective=application_report.algorithm_3d_effective,
+            algorithm_3d_fallback_reason=application_report.algorithm_3d_fallback_reason,
         )
     finally:
         gmsh.finalize()

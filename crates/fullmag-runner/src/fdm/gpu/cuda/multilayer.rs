@@ -19,9 +19,11 @@ use fullmag_fdm_demag::{
     compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
 };
 use fullmag_ir::{
-    ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
-    FdmMultilayerPlanIR, FdmPlanIR, GridDimensions, IntegratorChoice, OutputIR,
+    ExchangeBoundaryCondition, ExecutionPrecision, FdmGridCertificateIR, FdmLayerPlanIR,
+    FdmMaterialIR, FdmMultilayerPlanIR, FdmPlanIR, FdmRegionLegendEntryIR, GridDimensions,
+    IntegratorChoice, OutputIR, ResolvedFrozenSpinsPlanIR,
 };
+use sha2::{Digest, Sha256};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
@@ -249,6 +251,65 @@ struct LayerStateSingle {
     time_seconds: f64,
 }
 
+/// Host-side Frozen Spins carrier for the CUDA-assisted FP32 multilayer lane.
+///
+/// The native single-grid backend owns an exact f64 reference.  The assisted
+/// lane keeps its own f32 reference so a frozen value is restored to the exact
+/// representation used by the FP32 staged tableau, including after every
+/// normalization and at the final state boundary.
+#[derive(Debug, Clone)]
+struct FrozenSpinsStateSingle {
+    mask: Vec<bool>,
+    reference: Vec<[f32; 3]>,
+}
+
+impl FrozenSpinsStateSingle {
+    fn restore_reference(&self, layers: &mut [Vec<[f32; 3]>]) -> Result<(), RunError> {
+        let total_len = layers.iter().map(Vec::len).sum::<usize>();
+        if total_len != self.reference.len() || total_len != self.mask.len() {
+            return Err(RunError {
+                message: format!(
+                    "frozen_spins_multilayer_fp32_state_size_mismatch: flattened layer length {total_len} differs from reference/mask length {}/{}",
+                    self.reference.len(),
+                    self.mask.len()
+                ),
+            });
+        }
+        let mut offset = 0usize;
+        for layer in layers {
+            for value in layer {
+                if self.mask[offset] {
+                    *value = self.reference[offset];
+                }
+                offset += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn zero_rhs(&self, layers: &mut [Vec<[f32; 3]>]) -> Result<(), RunError> {
+        let total_len = layers.iter().map(Vec::len).sum::<usize>();
+        if total_len != self.mask.len() {
+            return Err(RunError {
+                message: format!(
+                    "frozen_spins_multilayer_fp32_rhs_size_mismatch: flattened layer length {total_len} differs from mask length {}",
+                    self.mask.len()
+                ),
+            });
+        }
+        let mut offset = 0usize;
+        for layer in layers {
+            for value in layer {
+                if self.mask[offset] {
+                    *value = [0.0; 3];
+                }
+                offset += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct NativeStackedLayer {
     magnet_name: String,
@@ -432,6 +493,15 @@ fn resolve_cuda_multilayer_execution_shape(
 fn validate_device_resident_cuda_multilayer_lane(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<(), RunError> {
+    // The v2 multilayer ABI has no frozen-mask/reference payload.  Keep the
+    // D-07 device-resident lane fail-closed and route constrained plans to the
+    // staged assisted lane (or the native single-grid plan, which carries the
+    // already-qualified Frozen Spins ABI).
+    if plan.frozen_spins.is_some() {
+        return Err(RunError {
+            message: "fdm_cuda_device_resident_multilayer_frozen_spins_unqualified: v2 multilayer ABI does not carry Frozen Spins mask/reference; use the staged or native single-grid lane".to_string(),
+        });
+    }
     if !plan.enable_demag {
         return Err(RunError {
             message: "fdm_cuda_device_resident_multilayer_requires_demag: bounded D-07 lane requires enable_demag=true".to_string(),
@@ -817,6 +887,21 @@ fn execute_cuda_assisted_multilayer_double(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
+    let active_mask = multilayer_active_mask(plan);
+    let frozen_spins = plan
+        .frozen_spins
+        .as_ref()
+        .map(|frozen_plan| {
+            fullmag_engine::FrozenSpinsState::capture_at_activation(
+                frozen_plan,
+                active_mask.as_deref(),
+                &initial_magnetization,
+            )
+            .map_err(|error| RunError {
+                message: format!("CUDA-assisted multilayer Frozen Spins activation: {error}"),
+            })
+        })
+        .transpose()?;
     let dt = plan.fixed_timestep.ok_or_else(|| RunError {
         message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
     })?;
@@ -876,6 +961,7 @@ fn execute_cuda_assisted_multilayer_double(
             native_demag.as_mut(),
             dt_step,
             plan.integrator,
+            frozen_spins.as_ref(),
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
@@ -1078,6 +1164,8 @@ fn execute_cuda_assisted_multilayer_single(
         .and_then(|gpu| gpu.backend.device_info().ok());
 
     let initial_magnetization = flatten_layers_single(&states);
+    let active_mask = multilayer_active_mask(plan);
+    let frozen_spins = capture_frozen_spins_single(plan, active_mask.as_deref(), &states)?;
     let dt = plan.fixed_timestep.ok_or_else(|| RunError {
         message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
     })?;
@@ -1137,6 +1225,7 @@ fn execute_cuda_assisted_multilayer_single(
             native_demag.as_mut(),
             dt_step,
             plan.integrator,
+            frozen_spins.as_ref(),
         )?;
         let wall_time_ns = wall_start.elapsed().as_nanos() as u64;
         step_count += 1;
@@ -2012,24 +2101,51 @@ fn build_native_stacked_cuda_plan(
         global_grid[1] as usize,
         global_grid[2] as usize,
     ];
-    let total_cells = fullmag_plan::checked_fdm_grid_cost(
+    let global_grid_cost = fullmag_plan::checked_fdm_grid_cost(
         global_grid,
         fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
     )
     .map_err(|error| RunError {
         message: format!("native stacked global grid budget rejected before allocation: {error}"),
-    })
-    .and_then(|cost| {
-        usize::try_from(cost.cells).map_err(|_| RunError {
-            message: format!(
-                "native stacked global grid cell count {} is not addressable",
-                cost.cells
-            ),
-        })
     })?;
+    let total_cells = usize::try_from(global_grid_cost.cells).map_err(|_| RunError {
+        message: format!(
+            "native stacked global grid cell count {} is not addressable",
+            global_grid_cost.cells
+        ),
+    })?;
+    let frozen_plan = if let Some(frozen) = plan.frozen_spins.as_ref() {
+        frozen.validate_intrinsic().map_err(|message| RunError {
+            message: format!(
+                "native stacked Frozen Spins plan is intrinsically invalid before materialization: {message}"
+            ),
+        })?;
+        let expected_len = plan
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.len())
+            .try_fold(0usize, usize::checked_add)
+            .ok_or_else(|| RunError {
+                message: "native stacked Frozen Spins local mask length overflows usize"
+                    .to_string(),
+            })?;
+        if frozen.frozen_mask.len() != expected_len {
+            return Err(RunError {
+                message: format!(
+                    "native stacked Frozen Spins mask has {} entries, expected {expected_len} in native-layer order",
+                    frozen.frozen_mask.len()
+                ),
+            });
+        }
+        Some(frozen)
+    } else {
+        None
+    };
     let mut active_mask = vec![false; total_cells];
     let mut region_mask = vec![0u32; total_cells];
     let mut initial_magnetization = vec![[0.0, 0.0, 0.0]; total_cells];
+    let mut global_frozen_mask = vec![false; total_cells];
+    let mut frozen_local_offset = 0usize;
     let mut layers = Vec::with_capacity(plan.layers.len());
 
     for (layer_index, layer) in plan.layers.iter().enumerate() {
@@ -2057,6 +2173,17 @@ fn build_native_stacked_cuda_plan(
                         .native_active_mask
                         .as_ref()
                         .map_or(true, |mask| mask[local_index]);
+                    let is_frozen = frozen_plan.is_some_and(|frozen| {
+                        frozen.frozen_mask[frozen_local_offset + local_index]
+                    });
+                    if is_frozen && !is_active {
+                        return Err(RunError {
+                            message: format!(
+                                "native stacked Frozen Spins mask selects inactive local cell {local_index} in layer '{}'",
+                                layer.layer_id
+                            ),
+                        });
+                    }
                     if !is_active {
                         continue;
                     }
@@ -2081,11 +2208,18 @@ fn build_native_stacked_cuda_plan(
                         });
                     }
                     active_mask[global_index] = true;
+                    global_frozen_mask[global_index] = is_frozen;
                     region_mask[global_index] = (layer_index + 1) as u32;
                     initial_magnetization[global_index] = layer.initial_magnetization[local_index];
                 }
             }
         }
+
+        frozen_local_offset = frozen_local_offset
+            .checked_add(layer.initial_magnetization.len())
+            .ok_or_else(|| RunError {
+                message: "native stacked Frozen Spins local offset overflows usize".to_string(),
+            })?;
 
         layers.push(NativeStackedLayer {
             magnet_name: layer.magnet_name.clone(),
@@ -2095,18 +2229,93 @@ fn build_native_stacked_cuda_plan(
         });
     }
 
+    if let Some(frozen) = frozen_plan {
+        if frozen_local_offset != frozen.frozen_mask.len() {
+            return Err(RunError {
+                message: format!(
+                    "native stacked Frozen Spins local offset {} differs from mask length {}",
+                    frozen_local_offset,
+                    frozen.frozen_mask.len()
+                ),
+            });
+        }
+    }
+
+    let active_cells = active_mask.iter().filter(|active| **active).count() as u64;
+    let global_region_legend = plan
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| FdmRegionLegendEntryIR {
+            numeric_id: (index + 1) as u32,
+            object_id: layer.object_id.clone(),
+            region_id: format!("native_stacked:{}", layer.layer_id),
+            priority: index as i32,
+        })
+        .collect::<Vec<_>>();
+    let global_grid_certificate = FdmGridCertificateIR::new_with_topology_tokens(
+        min_origin,
+        global_grid,
+        reference_cell_size,
+        active_cells,
+        global_grid_cost.estimated_bytes,
+        Some(&active_mask),
+        &region_mask,
+    )
+    .map_err(|message| RunError {
+        message: format!(
+            "native stacked global grid certificate construction failed before CUDA allocation: {message}"
+        ),
+    })?
+    .with_region_legend(global_region_legend);
+    let mapped_frozen_spins = frozen_plan.map(|frozen| {
+        let frozen_dof_count = global_frozen_mask
+            .iter()
+            .filter(|is_frozen| **is_frozen)
+            .count() as u64;
+        let free_dof_count = active_cells.saturating_sub(frozen_dof_count);
+        let mask_sha256 = frozen_mask_sha256(&global_frozen_mask);
+        let reference_sha256 = frozen_reference_sha256(&global_frozen_mask, &initial_magnetization);
+        let inactive_candidate_dof_count = (total_cells as u64).saturating_sub(active_cells);
+        let mut certificate = frozen.certificate.clone();
+        certificate.raw_candidate_dof_count = frozen_dof_count + inactive_candidate_dof_count;
+        certificate.inactive_candidate_dof_count = inactive_candidate_dof_count;
+        certificate.active_dof_count = active_cells;
+        certificate.frozen_dof_count = frozen_dof_count;
+        certificate.free_dof_count = free_dof_count;
+        certificate.grid_or_mesh_fingerprint = global_grid_certificate.grid_fingerprint.clone();
+        certificate.mask_sha256 = mask_sha256.clone();
+        certificate.resolved_reference_sha256 = reference_sha256;
+        certificate
+            .warnings
+            .push("mapped_to_native_stacked_global_grid".to_string());
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: frozen.schema_version.clone(),
+            constraint_ids: frozen.constraint_ids.clone(),
+            frozen_mask: global_frozen_mask.clone(),
+            active_dof_count: active_cells,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256,
+            grid_or_mesh_fingerprint: global_grid_certificate.grid_fingerprint.clone(),
+            source_state_revision: frozen.source_state_revision,
+            all_active_dofs_frozen: active_cells > 0 && free_dof_count == 0,
+            certificate,
+        }
+    });
+
     Ok(Some(NativeStackedCudaPlan {
         combined_plan: FdmPlanIR {
             origin_m: min_origin,
             grid: GridDimensions { cells: global_grid },
             cell_size: reference_cell_size,
-            grid_certificate: None,
+            grid_certificate: Some(global_grid_certificate),
             region_mask,
             active_mask: Some(active_mask),
             spin_transport_plans: Vec::new(),
             fdm_gpu_charge_transports: Vec::new(),
             initial_magnetization,
-            frozen_spins: None,
+            frozen_spins: mapped_frozen_spins,
             material: reference_material.clone(),
             enable_exchange: plan.enable_exchange,
             enable_demag: plan.enable_demag,
@@ -2883,22 +3092,37 @@ fn step_multilayer_cuda(
     mut native_demag: Option<&mut NativeMultilayerDemagOperator>,
     dt: f64,
     integrator: IntegratorChoice,
+    frozen_spins: Option<&fullmag_engine::FrozenSpinsState>,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization().to_vec())
         .collect::<Vec<_>>();
     let corrected = crate::fdm::multilayer::explicit_rk_step(&m0, dt, integrator, |m| {
-        llg_rhs_multilayer_cuda(
+        let mut constrained = m.to_vec();
+        if let Some(frozen) = frozen_spins {
+            restore_frozen_reference_by_layer_offsets(frozen, &mut constrained)
+                .map_err(|error| error.message)?;
+        }
+        let mut rhs = llg_rhs_multilayer_cuda(
             contexts,
             gpu_contexts,
-            m,
+            &constrained,
             demag_runtime,
             native_demag.as_mut().map(|operator| &mut **operator),
         )
-        .map_err(|error| error.message)
+        .map_err(|error| error.message)?;
+        if let Some(frozen) = frozen_spins {
+            zero_frozen_rhs_by_layer_offsets(frozen, &mut rhs).map_err(|error| error.message)?;
+        }
+        Ok(rhs)
     })
     .map_err(|message| RunError { message })?;
+
+    let mut corrected = corrected;
+    if let Some(frozen) = frozen_spins {
+        restore_frozen_reference_by_layer_offsets(frozen, &mut corrected)?;
+    }
 
     for (state, new_layer) in states.iter_mut().zip(corrected.into_iter()) {
         state
@@ -3214,20 +3438,34 @@ fn step_multilayer_cuda_single(
     mut native_demag: Option<&mut NativeMultilayerDemagOperator>,
     dt: f64,
     integrator: IntegratorChoice,
+    frozen_spins: Option<&FrozenSpinsStateSingle>,
 ) -> Result<(), RunError> {
     let m0 = states
         .iter()
         .map(|state| state.magnetization.clone())
         .collect::<Vec<_>>();
     let corrected = explicit_rk_step_single(&m0, dt as f32, integrator, |m| {
-        llg_rhs_multilayer_cuda_single(
+        let mut constrained = m.to_vec();
+        if let Some(frozen) = frozen_spins {
+            frozen.restore_reference(&mut constrained)?;
+        }
+        let mut rhs = llg_rhs_multilayer_cuda_single(
             contexts,
             gpu_contexts,
-            m,
+            &constrained,
             demag_runtime,
             native_demag.as_mut().map(|operator| &mut **operator),
-        )
+        )?;
+        if let Some(frozen) = frozen_spins {
+            frozen.zero_rhs(&mut rhs)?;
+        }
+        Ok(rhs)
     })?;
+
+    let mut corrected = corrected;
+    if let Some(frozen) = frozen_spins {
+        frozen.restore_reference(&mut corrected)?;
+    }
 
     for (state, new_layer) in states.iter_mut().zip(corrected.into_iter()) {
         state.magnetization = new_layer;
@@ -3818,11 +4056,147 @@ fn flatten_layers_single(states: &[LayerStateSingle]) -> Vec<[f64; 3]> {
         .collect()
 }
 
+fn flatten_layers_single_f32(states: &[LayerStateSingle]) -> Vec<[f32; 3]> {
+    states
+        .iter()
+        .flat_map(|state| state.magnetization.iter().copied())
+        .collect()
+}
+
+fn multilayer_active_mask(plan: &FdmMultilayerPlanIR) -> Option<Vec<bool>> {
+    if !plan
+        .layers
+        .iter()
+        .any(|layer| layer.native_active_mask.is_some())
+    {
+        return None;
+    }
+    Some(
+        plan.layers
+            .iter()
+            .flat_map(|layer| {
+                layer.native_active_mask.as_deref().map_or_else(
+                    || vec![true; layer.initial_magnetization.len()],
+                    ToOwned::to_owned,
+                )
+            })
+            .collect(),
+    )
+}
+
+fn capture_frozen_spins_single(
+    plan: &FdmMultilayerPlanIR,
+    active_mask: Option<&[bool]>,
+    states: &[LayerStateSingle],
+) -> Result<Option<FrozenSpinsStateSingle>, RunError> {
+    let Some(frozen) = plan.frozen_spins.as_ref() else {
+        return Ok(None);
+    };
+    frozen.validate_intrinsic().map_err(|message| RunError {
+        message: format!(
+            "CUDA-assisted FP32 multilayer Frozen Spins plan is intrinsically invalid: {message}"
+        ),
+    })?;
+    let reference = flatten_layers_single_f32(states);
+    if frozen.frozen_mask.len() != reference.len() {
+        return Err(RunError {
+            message: format!(
+                "CUDA-assisted FP32 multilayer Frozen Spins mask has {} entries, expected {}",
+                frozen.frozen_mask.len(),
+                reference.len()
+            ),
+        });
+    }
+    if let Some(active_mask) = active_mask {
+        frozen
+            .validate_against_active_mask(active_mask)
+            .map_err(|message| RunError {
+                message: format!(
+                    "CUDA-assisted FP32 multilayer Frozen Spins active-domain validation failed: {message}"
+                ),
+            })?;
+    }
+    Ok(Some(FrozenSpinsStateSingle {
+        mask: frozen.frozen_mask.clone(),
+        reference,
+    }))
+}
+
+fn restore_frozen_reference_by_layer_offsets(
+    frozen: &fullmag_engine::FrozenSpinsState,
+    layers: &mut [Vec<[f64; 3]>],
+) -> Result<(), RunError> {
+    let total_len = layers.iter().map(Vec::len).sum::<usize>();
+    if total_len != frozen.len() {
+        return Err(RunError {
+            message: format!(
+                "frozen_spins_multilayer_state_size_mismatch: flattened layer length {total_len} differs from frozen state length {}",
+                frozen.len()
+            ),
+        });
+    }
+    let mut flat = flatten_layers(layers);
+    frozen.restore_reference(&mut flat);
+    let mut offset = 0usize;
+    for layer in layers {
+        let end = offset + layer.len();
+        layer.copy_from_slice(&flat[offset..end]);
+        offset = end;
+    }
+    Ok(())
+}
+
+fn zero_frozen_rhs_by_layer_offsets(
+    frozen: &fullmag_engine::FrozenSpinsState,
+    layers: &mut [Vec<[f64; 3]>],
+) -> Result<(), RunError> {
+    let total_len = layers.iter().map(Vec::len).sum::<usize>();
+    if total_len != frozen.len() {
+        return Err(RunError {
+            message: format!(
+                "frozen_spins_multilayer_rhs_size_mismatch: flattened layer length {total_len} differs from frozen state length {}",
+                frozen.len()
+            ),
+        });
+    }
+    let mut offset = 0usize;
+    for layer in layers {
+        for value in layer {
+            if frozen.mask()[offset] {
+                *value = [0.0; 3];
+            }
+            offset += 1;
+        }
+    }
+    Ok(())
+}
+
 fn precision_name(value: ExecutionPrecision) -> &'static str {
     match value {
         ExecutionPrecision::Single => "single",
         ExecutionPrecision::Double => "double",
     }
+}
+
+fn frozen_mask_sha256(mask: &[bool]) -> String {
+    let mut hash = Sha256::new();
+    hash.update((mask.len() as u64).to_le_bytes());
+    hash.update(mask.iter().copied().map(u8::from).collect::<Vec<_>>());
+    format!("{:x}", hash.finalize())
+}
+
+fn frozen_reference_sha256(mask: &[bool], reference: &[[f64; 3]]) -> String {
+    let mut hash = Sha256::new();
+    hash.update((mask.len() as u64).to_le_bytes());
+    for (is_frozen, value) in mask.iter().zip(reference) {
+        hash.update([u8::from(*is_frozen)]);
+        if *is_frozen {
+            for component in value {
+                hash.update(component.to_bits().to_le_bytes());
+            }
+        }
+    }
+    format!("{:x}", hash.finalize())
 }
 
 fn zero_outside_active(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {
@@ -4068,7 +4442,51 @@ fn field_energy_from_vectors_f32(
 mod tests {
     use super::*;
     use crate::fdm::cpu::multilayer_reference;
-    use fullmag_ir::{FdmGridCertificateIR, RelaxationAlgorithmIR, RelaxationControlIR};
+    use fullmag_ir::{
+        FdmGridCertificateIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
+    };
+
+    fn frozen_plan_for_mask(mask: Vec<bool>, grid_fingerprint: &str) -> ResolvedFrozenSpinsPlanIR {
+        let frozen_dof_count = mask.iter().filter(|is_frozen| **is_frozen).count() as u64;
+        let active_dof_count = mask.len() as u64;
+        let free_dof_count = active_dof_count - frozen_dof_count;
+        let mask_sha256 = frozen_mask_sha256(&mask);
+        let certificate = SelectionCertificateIR {
+            schema_version: SELECTION_CERTIFICATE_SCHEMA_VERSION.to_string(),
+            evaluator_id: "test.multilayer.frozen_spins".to_string(),
+            constraint_ids: vec!["multilayer-test".to_string()],
+            authored_fingerprints: vec![SelectionAuthoredFingerprintIR {
+                constraint_id: "multilayer-test".to_string(),
+                selector_sha256: "a".repeat(64),
+            }],
+            raw_candidate_dof_count: frozen_dof_count,
+            inactive_candidate_dof_count: 0,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            bounds_m: None,
+            grid_or_mesh_fingerprint: grid_fingerprint.to_string(),
+            source_state_revision: Some(7),
+            mask_sha256: mask_sha256.clone(),
+            resolved_reference_sha256: "c".repeat(64),
+            warnings: Vec::new(),
+        };
+        ResolvedFrozenSpinsPlanIR {
+            schema_version: RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION.to_string(),
+            constraint_ids: vec!["multilayer-test".to_string()],
+            frozen_mask: mask,
+            active_dof_count,
+            frozen_dof_count,
+            free_dof_count,
+            mask_sha256,
+            grid_or_mesh_fingerprint: grid_fingerprint.to_string(),
+            source_state_revision: Some(7),
+            all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
+            certificate,
+        }
+    }
 
     #[test]
     fn assisted_multilayer_telemetry_counts_vector_roundtrips() {
@@ -4889,6 +5307,96 @@ mod tests {
             vec![(1, 2, 0.0)],
             "combined single-grid plan must preserve object-object free surfaces explicitly because the native FDM region default is harmonic mean"
         );
+    }
+
+    #[test]
+    fn native_stacked_cuda_plan_maps_frozen_mask_and_rebinds_global_certificate() {
+        let mut plan = make_auto_plan(false, ExecutionPrecision::Double);
+        let local_mask = (0..32).map(|index| index % 5 == 0).collect::<Vec<_>>();
+        plan.frozen_spins = Some(frozen_plan_for_mask(local_mask.clone(), "source-grid"));
+
+        let native = build_native_stacked_cuda_plan(&plan)
+            .expect("native stacked Frozen Spins plan should build")
+            .expect("auto identity plan should use native stacked lane");
+        let mapped = native
+            .combined_plan
+            .frozen_spins
+            .as_ref()
+            .expect("native stacked plan must retain Frozen Spins");
+
+        let mut expected = vec![false; 64];
+        for (local_index, is_frozen) in local_mask.iter().copied().enumerate() {
+            let layer_offset = if local_index < 16 { 0 } else { 48 };
+            let layer_local_index = local_index % 16;
+            expected[layer_offset + layer_local_index] = is_frozen;
+        }
+        assert_eq!(mapped.frozen_mask, expected);
+        assert_eq!(mapped.active_dof_count, 32);
+        assert_eq!(
+            mapped.frozen_dof_count,
+            local_mask.iter().filter(|v| **v).count() as u64
+        );
+        assert_eq!(mapped.free_dof_count, 32 - mapped.frozen_dof_count);
+        mapped
+            .validate_intrinsic()
+            .expect("mapped Frozen Spins certificate must remain intrinsically valid");
+
+        let grid_certificate = native
+            .combined_plan
+            .grid_certificate
+            .as_ref()
+            .expect("native stacked plan must expose its global grid certificate");
+        grid_certificate
+            .validate_against_masks(
+                native.combined_plan.active_mask.as_deref(),
+                &native.combined_plan.region_mask,
+            )
+            .expect("global grid certificate must validate against native masks");
+        assert_eq!(
+            mapped.grid_or_mesh_fingerprint,
+            grid_certificate.grid_fingerprint
+        );
+        assert_eq!(
+            mapped.certificate.grid_or_mesh_fingerprint,
+            grid_certificate.grid_fingerprint
+        );
+    }
+
+    #[test]
+    fn device_resident_multilayer_lane_rejects_frozen_spins_without_v2_payload() {
+        let mut plan = make_bounded_device_resident_plan();
+        plan.frozen_spins = Some(frozen_plan_for_mask(vec![true; 32], "device-resident"));
+        let error = validate_device_resident_cuda_multilayer_lane(&plan)
+            .expect_err("v2 device-resident lane must fail closed for Frozen Spins");
+        assert!(error
+            .message
+            .contains("fdm_cuda_device_resident_multilayer_frozen_spins_unqualified"));
+    }
+
+    #[test]
+    fn assisted_fp32_frozen_reference_and_rhs_are_hard_restored() {
+        let frozen = FrozenSpinsStateSingle {
+            mask: vec![true, false, true],
+            reference: vec![[0.25, 0.5, 0.75], [1.0, 0.0, 0.0], [0.0, -0.5, 0.5]],
+        };
+        let mut stage = vec![
+            vec![[9.0, 9.0, 9.0], [8.0, 8.0, 8.0]],
+            vec![[7.0, 7.0, 7.0]],
+        ];
+        frozen
+            .restore_reference(&mut stage)
+            .expect("FP32 Frozen Spins restore should accept matching layer sizes");
+        assert_eq!(stage[0][0], frozen.reference[0]);
+        assert_eq!(stage[0][1], [8.0, 8.0, 8.0]);
+        assert_eq!(stage[1][0], frozen.reference[2]);
+
+        let mut rhs = vec![vec![[1.0, 2.0, 3.0]; 2], vec![[4.0, 5.0, 6.0]]];
+        frozen
+            .zero_rhs(&mut rhs)
+            .expect("FP32 Frozen Spins RHS mask should accept matching layer sizes");
+        assert_eq!(rhs[0][0], [0.0, 0.0, 0.0]);
+        assert_eq!(rhs[0][1], [1.0, 2.0, 3.0]);
+        assert_eq!(rhs[1][0], [0.0, 0.0, 0.0]);
     }
 
     #[test]

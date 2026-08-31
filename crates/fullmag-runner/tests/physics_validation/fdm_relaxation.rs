@@ -66,6 +66,95 @@ fn frozen_two_cell_plan() -> FdmPlanIR {
     })
 }
 
+fn scientific_two_spin_problem(
+    frozen_reference: [f64; 3],
+) -> (
+    fullmag_engine::ExchangeLlgProblem,
+    fullmag_engine::ExchangeLlgState,
+) {
+    use fullmag_engine::{
+        CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig,
+        MaterialParameters, TimeIntegrator, MU0,
+    };
+
+    // With dx=1, Ms=1 and A=mu0/2 the open-boundary two-cell exchange
+    // coefficient 2A/(mu0*Ms*dx^2) is exactly one.  This keeps the oracle
+    // independent of the production stencil implementation and makes every
+    // expected field/RHS component analytically explicit.
+    let mut problem = ExchangeLlgProblem::with_terms(
+        GridShape::new(2, 1, 1).expect("valid two-spin grid"),
+        CellSize::new(1.0, 1.0, 1.0).expect("valid unit cell"),
+        MaterialParameters::new(1.0, 0.5 * MU0, 0.5).expect("valid oracle material"),
+        LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid oracle dynamics"),
+        EffectiveFieldTerms {
+            exchange: true,
+            demag: false,
+            external_field: None,
+            ..Default::default()
+        },
+    );
+    let mut state = problem
+        .new_state(vec![frozen_reference, [0.0, 1.0, 0.0]])
+        .expect("valid two-spin state");
+    problem
+        .capture_frozen_spins_at_activation(&resolved_frozen_spins(vec![true, false]), &mut state)
+        .expect("two-spin Frozen Spins activation");
+    (problem, state)
+}
+
+#[test]
+fn frozen_spins_two_spin_exchange_matches_independent_oracle_and_reference_influence() {
+    use fullmag_engine::MU0;
+
+    let (positive_problem, positive_state) = scientific_two_spin_problem([1.0, 0.0, 0.0]);
+    let positive_field = positive_problem
+        .exchange_field(&positive_state)
+        .expect("positive-reference exchange field");
+    let positive_rhs = positive_problem
+        .llg_rhs(&positive_state)
+        .expect("positive-reference LLG RHS");
+
+    // Analytic open-boundary two-spin oracle:
+    // H_1 = m_0 - m_1 = (1,-1,0).  For m_1=(0,1,0), alpha=0.5,
+    // gamma=1, LLG gives dm_1/dt=(0.4,0,0.8).  The frozen RHS is exactly zero.
+    assert_eq!(positive_field[1], [1.0, -1.0, 0.0]);
+    assert_eq!(
+        positive_rhs[0].map(f64::to_bits),
+        [0.0; 3].map(f64::to_bits)
+    );
+    assert_eq!(positive_rhs[1], [0.4, 0.0, 0.8]);
+
+    // Both spins remain in the exchange energy.  For two unit-volume cells
+    // with orthogonal spins the exact discrete energy is 2*A = mu0.
+    let positive_energy = positive_problem
+        .exchange_energy(&positive_state)
+        .expect("positive-reference exchange energy");
+    assert!(
+        (positive_energy - MU0).abs() <= 8.0 * f64::EPSILON * MU0,
+        "Frozen spin must remain in exchange energy: actual={positive_energy:e}, expected={MU0:e}"
+    );
+
+    let (negative_problem, negative_state) = scientific_two_spin_problem([-1.0, 0.0, 0.0]);
+    let negative_field = negative_problem
+        .exchange_field(&negative_state)
+        .expect("negative-reference exchange field");
+    let negative_rhs = negative_problem
+        .llg_rhs(&negative_state)
+        .expect("negative-reference LLG RHS");
+
+    assert_eq!(negative_field[1], [-1.0, -1.0, 0.0]);
+    assert_eq!(
+        negative_rhs[0].map(f64::to_bits),
+        [0.0; 3].map(f64::to_bits)
+    );
+    assert_eq!(negative_rhs[1], [-0.4, 0.0, -0.8]);
+    assert_ne!(
+        positive_rhs[1].map(f64::to_bits),
+        negative_rhs[1].map(f64::to_bits),
+        "Changing only the frozen reference must influence the free-spin dynamics"
+    );
+}
+
 #[test]
 fn frozen_spins_fdm_cpu_preserves_pinned_cell_and_evolves_free_exchange_neighbor() {
     let plan = frozen_two_cell_plan();
@@ -139,6 +228,46 @@ fn frozen_spins_fdm_cpu_masks_stt_sot_and_thermal_rhs() {
         result.final_magnetization[0].map(f64::to_bits),
         plan.initial_magnetization[0].map(f64::to_bits),
         "final RHS masking must suppress every torque source on a frozen cell"
+    );
+}
+
+#[test]
+fn frozen_spins_thermal_fixed_seed_is_bitwise_reproducible() {
+    let mut plan = frozen_two_cell_plan();
+    plan.enable_exchange = false;
+    plan.temperature = Some(300.0);
+    plan.thermal_seed_config = Some(fullmag_ir::ThermalSeedConfig {
+        policy: fullmag_ir::SeedPolicy::Fixed,
+        seed: Some(0x5eed),
+    });
+
+    let first = fullmag_runner::run_reference_fdm(&plan, 4e-14, &[])
+        .expect("first fixed-seed Frozen Spins thermal run");
+    let second = fullmag_runner::run_reference_fdm(&plan, 4e-14, &[])
+        .expect("second fixed-seed Frozen Spins thermal run");
+
+    assert_eq!(
+        first
+            .final_magnetization
+            .iter()
+            .map(|value| value.map(f64::to_bits))
+            .collect::<Vec<_>>(),
+        second
+            .final_magnetization
+            .iter()
+            .map(|value| value.map(f64::to_bits))
+            .collect::<Vec<_>>(),
+        "fixed thermal seed must reproduce the full constrained trajectory bitwise"
+    );
+    assert_eq!(
+        first.final_magnetization[0].map(f64::to_bits),
+        plan.initial_magnetization[0].map(f64::to_bits),
+        "thermal noise must not move the frozen reference"
+    );
+    assert_ne!(
+        first.final_magnetization[1].map(f64::to_bits),
+        plan.initial_magnetization[1].map(f64::to_bits),
+        "the free spin must still sample the thermal trajectory"
     );
 }
 
@@ -348,6 +477,15 @@ fn frozen_spins_direct_minimizer_preserves_reference_with_one_free_dof() {
         assert_eq!(final_step.frozen_reference_max_drift, 0.0);
         assert_eq!(final_step.frozen_dof_count, 1);
         assert_eq!(final_step.free_dof_count, 1);
+        for pair in result.steps.windows(2) {
+            let tolerance = 64.0 * f64::EPSILON * pair[0].e_total.abs().max(1.0e-30);
+            assert!(
+                pair[1].e_total <= pair[0].e_total + tolerance,
+                "{algorithm:?}: accepted minimizer energy must be monotonic: {} -> {}",
+                pair[0].e_total,
+                pair[1].e_total
+            );
+        }
     }
 }
 

@@ -148,3 +148,81 @@ def test_execution_scale_degenerate_occ_mesh_retries_before_rust_validation() ->
     assert calls == [ALGO_3D_HXT, ALGO_3D_DELAUNAY]
     assert mesh.n_elements == 2
     assert report.fallbacks_triggered == ["conformal_occ_hxt_degenerate_retry_delaunay"]
+
+
+def test_rust_engine_determinant_floor_retries_physical_scale_sliver() -> None:
+    calls: list[int] = []
+
+    def fake_occ(*_args: object, **kwargs: object) -> SharedDomainMeshResult:
+        options = kwargs["options"]
+        assert isinstance(options, MeshOptions)
+        calls.append(options.algorithm_3d)
+        if len(calls) == 1:
+            # This is nonzero and above the airbox-scaled Python epsilon, but
+            # the Rust legacy MeshTopology builder rejects |det| <= 1e-30.
+            mesh = MeshData.from_legacy_tet4(
+                nodes=np.asarray(
+                    [
+                        [0.0, 0.0, 0.0],
+                        [1.0e-8, 0.0, 0.0],
+                        [0.0, 1.0e-8, 0.0],
+                        [0.0, 0.0, 3.493965110228842e-15],
+                        [7.0e-7, 0.0, 0.0],
+                        [7.0e-7, 1.0e-6, 0.0],
+                        [7.0e-7, 0.0, 1.0e-6],
+                        [1.7e-6, 0.0, 0.0],
+                    ],
+                    dtype=np.float64,
+                ),
+                elements=np.asarray([[0, 1, 2, 3], [4, 5, 6, 7]], dtype=np.int32),
+                element_markers=np.asarray([7, 7], dtype=np.int32),
+                boundary_faces=np.empty((0, 3), dtype=np.int32),
+                boundary_markers=np.empty((0,), dtype=np.int32),
+            )
+        else:
+            mesh = _mesh_with_global_only_degenerate_tet(degraded=False)
+        return SharedDomainMeshResult(
+            mesh=mesh,
+            component_marker_tags={"left": 7, "right": 7},
+            component_volume_tags={"left": [7], "right": [7]},
+            component_surface_tags={"left": [1], "right": [1]},
+            interface_surface_tags=[1],
+            outer_boundary_surface_tags=[2],
+        )
+
+    with (
+        patch("fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ", side_effect=fake_occ),
+        patch(
+            "fullmag.meshing.asset_pipeline._drop_degenerate_tetrahedra",
+            side_effect=AssertionError("destructive cleanup must not run for conformal OCC"),
+        ),
+    ):
+        mesh, _regions, report = realize_fem_domain_mesh_asset_from_components_with_report(
+            geometries=[
+                fm.Box((20e-9, 20e-9, 10e-9), name="left"),
+                fm.Translate(
+                    fm.Box((20e-9, 20e-9, 10e-9), name="right_body"),
+                    offset=(50e-9, 0.0, 0.0),
+                    name="right",
+                ),
+            ],
+            hints=fm.FEM(order=1, hmax=80e-9),
+            study_universe={
+                "mode": "manual",
+                "size": [700e-9, 1000e-9, 1000e-9],
+                "center": [0.0, 0.0, 0.0],
+                "airbox_hmax": 120e-9,
+                "airbox_hmin": 20e-9,
+            },
+            mesh_workflow={
+                "mesh_options": {"algorithm_3d": ALGO_3D_DELAUNAY},
+                "per_geometry": [
+                    {"geometry": "left", "mode": "custom", "hmax": 20e-9},
+                    {"geometry": "right", "mode": "custom", "hmax": 20e-9},
+                ],
+            },
+        )
+
+    assert calls == [ALGO_3D_DELAUNAY, ALGO_3D_HXT]
+    assert mesh.n_elements == 2
+    assert report.fallbacks_triggered == ["conformal_occ_delaunay_degenerate_retry_hxt"]

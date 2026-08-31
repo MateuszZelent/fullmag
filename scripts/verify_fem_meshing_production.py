@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -74,8 +76,25 @@ def run_check(name: str, command: list[str]) -> CheckResult:
 def _resolve_manifest_artifact(manifest_path: Path, raw_path: object) -> Path | None:
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
+    root = manifest_path.resolve().parent
     path = Path(raw_path)
-    return path if path.is_absolute() else manifest_path.parent / path
+    candidate = path if path.is_absolute() else root / path
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        # Evidence paths are scoped to the manifest directory.  Reject both
+        # ``..`` traversal and symlinks/junctions that resolve outside it.
+        return None
+    return resolved
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _require_artifact(
@@ -85,11 +104,37 @@ def _require_artifact(
     field_name: str,
     stage: dict[str, object],
 ) -> None:
-    artifact = _resolve_manifest_artifact(manifest_path, stage.get(field_name))
+    raw_path = stage.get(field_name)
+    artifact = _resolve_manifest_artifact(manifest_path, raw_path)
     if artifact is None:
-        errors.append(f"{stage_name}.{field_name} is required")
-    elif not artifact.is_file():
+        if isinstance(raw_path, str) and raw_path.strip():
+            errors.append(
+                f"{stage_name}.{field_name} must resolve inside the evidence manifest directory"
+            )
+        else:
+            errors.append(f"{stage_name}.{field_name} is required")
+        return
+    if not artifact.is_file():
         errors.append(f"{stage_name}.{field_name} does not exist: {artifact}")
+        return
+
+    declared_digest = stage.get(f"{field_name}_sha256")
+    if declared_digest is None:
+        declared_digest = stage.get("artifact_sha256")
+    if declared_digest is None:
+        return
+    if not isinstance(declared_digest, str) or not re.fullmatch(
+        r"sha256:[0-9a-fA-F]{64}", declared_digest
+    ):
+        errors.append(
+            f"{stage_name}.{field_name}_sha256 must be a sha256:<64-hex> token"
+        )
+        return
+    observed = f"sha256:{_sha256_file(artifact)}"
+    if observed.lower() != declared_digest.lower():
+        errors.append(
+            f"{stage_name}.{field_name}_sha256 does not match artifact content"
+        )
 
 
 def validate_evidence_manifest(manifest_path: Path) -> list[str]:

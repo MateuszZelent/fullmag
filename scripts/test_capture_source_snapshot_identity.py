@@ -680,6 +680,55 @@ def test_qualification_input_is_bound_to_source_snapshot(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
+    "unsafe_path",
+    (
+        r"\foo",
+        "/foo",
+        "C:foo",
+        r"C:\foo",
+        r"\\server\share\file",
+        r"\\?\C:\file",
+        r"\\.\PhysicalDrive0",
+    ),
+)
+def test_safe_relative_path_rejects_windows_anchored_forms(
+    tmp_path: Path, unsafe_path: str
+) -> None:
+    repo = _repository(tmp_path)
+    spec = importlib.util.spec_from_file_location("source_identity_path_safety", CAPTURE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    with pytest.raises(module.SourceIdentityError, match="unsafe qualification input path"):
+        module._safe_relative_path(unsafe_path, "qualification input")
+
+
+def test_qualification_input_parent_link_cannot_escape_repository(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    fixture = outside / "fixture.v1.json"
+    fixture.write_text("outside\n", encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("source_identity_containment", CAPTURE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    with pytest.raises(module.SourceIdentityError, match="escapes snapshot root"):
+        module._resolve_contained_path(repo, fixture, "qualification input")
+    link = repo / "outside-parent"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        return
+    with pytest.raises(module.SourceIdentityError, match="escapes snapshot root"):
+        module.capture(repo, qualification_inputs=("outside-parent/fixture.v1.json",))
+
+
+@pytest.mark.parametrize(
     ("links", "expected_detail"),
     [
         ({"unsafe-link": "/tmp/fullmag-source-outside"}, "absolute"),

@@ -519,6 +519,63 @@ fn ensure_cuda_frozen_spins_supported(
     Ok(())
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn validate_native_frozen_spins_plan(plan: &fullmag_ir::FdmPlanIR) -> Result<(), RunError> {
+    let Some(frozen_spins) = plan.frozen_spins.as_ref() else {
+        return Ok(());
+    };
+    frozen_spins.validate_intrinsic().map_err(|message| RunError {
+        message: format!(
+            "frozen_spins_native_plan_invalid: rejected before CUDA device probe or allocation: {message}"
+        ),
+    })?;
+
+    let cell_count = plan.initial_magnetization.len();
+    let all_active;
+    let active_mask = if let Some(active_mask) = plan.active_mask.as_deref() {
+        if active_mask.len() != cell_count {
+            return Err(RunError {
+                message: format!(
+                    "frozen_spins_native_plan_invalid: active mask length {} differs from initial magnetization cell count {cell_count}",
+                    active_mask.len()
+                ),
+            });
+        }
+        active_mask
+    } else {
+        all_active = vec![true; cell_count];
+        &all_active
+    };
+    frozen_spins
+        .validate_against_active_mask(active_mask)
+        .map_err(|message| RunError {
+            message: format!(
+                "frozen_spins_native_plan_invalid: rejected before CUDA device probe or allocation: {message}"
+            ),
+        })?;
+
+    let Some(grid_certificate) = plan.grid_certificate.as_ref() else {
+        return Err(RunError {
+            message: "frozen_spins_native_plan_invalid: Frozen Spins requires an authoritative FDM grid certificate before CUDA device probe or allocation"
+                .to_string(),
+        });
+    };
+    grid_certificate
+        .validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+        .map_err(|message| RunError {
+            message: format!(
+                "frozen_spins_native_plan_invalid: grid certificate rejected before CUDA device probe or allocation: {message}"
+            ),
+        })?;
+    if frozen_spins.grid_or_mesh_fingerprint != grid_certificate.grid_fingerprint {
+        return Err(RunError {
+            message: "frozen_spins_native_plan_invalid: resolved Frozen Spins topology fingerprint differs from the FDM grid certificate"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(feature = "cuda")]
 fn ffi_prescribed_sot_formula(
     plan: &fullmag_ir::FdmPlanIR,
@@ -1101,6 +1158,10 @@ impl NativeFdmBackend {
         plan: &fullmag_ir::FdmPlanIR,
         stats_policy: NativeStatsPolicy,
     ) -> Result<Self, RunError> {
+        // This is the last typed boundary before the dense carrier is flattened
+        // into nullable ABI pointers. Never let malformed or stale selection
+        // evidence reach a device probe, allocation, or native repair path.
+        validate_native_frozen_spins_plan(plan)?;
         let integrator_choice = plan
             .integrator
             .unwrap_or(fullmag_ir::IntegratorChoice::Heun);
@@ -3571,6 +3632,210 @@ fn build_region_exchange_pairs(
     ))
 }
 
+#[cfg(test)]
+fn canonical_frozen_spins_cpu_gpu_parity_plan() -> fullmag_ir::FdmPlanIR {
+    use std::collections::BTreeMap;
+
+    use fullmag_ir::{
+        ConstraintActivationIR, EmptySelectionPolicyIR, ExchangeBoundaryCondition,
+        ExecutionPrecision, FdmGridCertificateIR, FdmMaterialIR, FrozenReferencePolicyIR,
+        FrozenSpinsIR, GridDimensions, InactiveSelectionPolicyIR, IntegratorChoice,
+        SelectionExprIR, SelectionMembershipPolicyIR, SelectionValidationContext,
+        FROZEN_SPINS_SCHEMA_VERSION,
+    };
+    use fullmag_plan::{
+        compile_fdm_frozen_spins, FdmFrozenSpinsDomain, FrozenSpinsCompileRequest,
+        ResolvedFrozenSpinsReference, SelectionDofMembership,
+    };
+
+    let origin_m = [0.0, 0.0, 0.0];
+    let grid_cells = [3, 3, 1];
+    let cell_size = [5e-9, 5e-9, 10e-9];
+    let active_mask = vec![true, true, true, true, false, true, true, true, false];
+    let frozen_mask = vec![true, false, false, true, false, false, true, false, false];
+    let region_mask = vec![0; 9];
+    let initial_magnetization = vec![
+        [1.0, 0.0, 0.0],
+        [0.9950041652780258, 0.09983341664682815, 0.0],
+        [0.9800665778412416, 0.19866933079506122, 0.0],
+        // Every canonical parity vector is exactly unit-length in binary64.
+        // The CPU reference normalizes at state construction; keeping the
+        // fixture on the unit sphere makes the native frozen reference and
+        // the captured CPU activation reference the same contract.
+        [0.8, 0.0, 0.6],
+        [0.6, 0.8, 0.0],
+        [0.48, 0.64, 0.6],
+        [0.8, -0.6, 0.0],
+        [0.28, 0.96, 0.0],
+        [0.36, 0.48, 0.8],
+    ];
+    let active_count = active_mask.iter().filter(|active| **active).count() as u64;
+    let grid_certificate = FdmGridCertificateIR::new_with_masks(
+        origin_m,
+        grid_cells,
+        cell_size,
+        active_count,
+        9 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+        Some(&active_mask),
+        &region_mask,
+    )
+    .expect("canonical parity FDM grid certificate");
+
+    let memberships = (0..initial_magnetization.len())
+        .map(|index| SelectionDofMembership {
+            object_ids: vec!["parity-magnet".to_string()],
+            region_ids: frozen_mask[index]
+                .then(|| ("parity-magnet".to_string(), "frozen-column".to_string()))
+                .into_iter()
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let constraints = [FrozenSpinsIR {
+        schema_version: FROZEN_SPINS_SCHEMA_VERSION.to_string(),
+        id: "cpu-gpu-parity".to_string(),
+        name: "CPU/GPU parity frozen column".to_string(),
+        enabled: true,
+        selector: SelectionExprIR::InRegion {
+            object_id: "parity-magnet".to_string(),
+            region_id: "frozen-column".to_string(),
+        },
+        reference: FrozenReferencePolicyIR::CaptureCurrentAtActivation {},
+        membership: SelectionMembershipPolicyIR::Static {},
+        activation: ConstraintActivationIR::AllStages {},
+        empty_selection: EmptySelectionPolicyIR::Error,
+        inactive_selection: InactiveSelectionPolicyIR::Error,
+    }];
+    let references = [ResolvedFrozenSpinsReference {
+        constraint_id: "cpu-gpu-parity",
+        values: &initial_magnetization,
+        source_state_revision: Some(1),
+        topology_fingerprint: &grid_certificate.grid_fingerprint,
+    }];
+    let object_transforms = BTreeMap::new();
+    let known_entities =
+        SelectionValidationContext::new(["parity-magnet"], [("parity-magnet", "frozen-column")]);
+    let resolved = compile_fdm_frozen_spins(
+        &FdmFrozenSpinsDomain {
+            origin_m,
+            counts: grid_cells,
+            cell_m: cell_size,
+            active_mask: &active_mask,
+            memberships: &memberships,
+            grid_fingerprint: &grid_certificate.grid_fingerprint,
+        },
+        &FrozenSpinsCompileRequest {
+            constraints: &constraints,
+            selections: &[],
+            activation_stage_id: None,
+            object_transforms: &object_transforms,
+            known_entities: &known_entities,
+            state_snapshot: None,
+            resolved_references: &references,
+            expected_source_state_revision: Some(1),
+            expected_grid_or_mesh_fingerprint: &grid_certificate.grid_fingerprint,
+        },
+    )
+    .expect("compile canonical Frozen Spins parity carrier through fullmag-plan");
+    assert_eq!(resolved.frozen_mask, frozen_mask);
+    resolved
+        .validate_intrinsic()
+        .expect("canonical Frozen Spins carrier intrinsic validation");
+    resolved
+        .validate_against_active_mask(&active_mask)
+        .expect("canonical Frozen Spins carrier active-domain validation");
+
+    let mut plan = fullmag_ir::FdmPlanIR::default();
+    plan.origin_m = origin_m;
+    plan.grid = GridDimensions { cells: grid_cells };
+    plan.cell_size = cell_size;
+    plan.grid_certificate = Some(grid_certificate);
+    plan.region_mask = region_mask;
+    plan.active_mask = Some(active_mask);
+    plan.initial_magnetization = initial_magnetization;
+    plan.material = FdmMaterialIR {
+        name: "Py".to_string(),
+        saturation_magnetisation: 800e3,
+        exchange_stiffness: 13e-12,
+        damping: 0.1,
+        ..Default::default()
+    };
+    plan.gyromagnetic_ratio = 2.211e5;
+    plan.precision = ExecutionPrecision::Double;
+    plan.precision_policy = fullmag_ir::FdmPrecisionPolicyIR::resolve(plan.precision);
+    plan.exchange_bc = ExchangeBoundaryCondition::Neumann;
+    plan.integrator = Some(IntegratorChoice::Heun);
+    plan.fixed_timestep = Some(2.5e-13);
+    plan.enable_exchange = true;
+    plan.enable_demag = false;
+    plan.external_field = Some([1.5e3, -2.0e3, 7.5e2]);
+    plan.frozen_spins = Some(resolved);
+    plan
+}
+
+#[cfg(test)]
+mod frozen_spins_native_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_frozen_spins_plan_is_rejected_before_cuda_ffi_boundary() {
+        let mut plan = canonical_frozen_spins_cpu_gpu_parity_plan();
+        plan.frozen_spins
+            .as_mut()
+            .expect("canonical carrier")
+            .mask_sha256 = "0".repeat(64);
+
+        let error = validate_native_frozen_spins_plan(&plan)
+            .expect_err("tampered dense mask must fail before CUDA FFI");
+        assert!(error.message.contains("rejected before CUDA device probe"));
+        assert!(error.message.contains("mask hash"));
+    }
+
+    #[test]
+    fn intrinsically_consistent_frozen_spin_outside_active_domain_is_rejected_before_cuda_ffi() {
+        use sha2::{Digest, Sha256};
+
+        let mut plan = canonical_frozen_spins_cpu_gpu_parity_plan();
+        let resolved = plan.frozen_spins.as_mut().expect("canonical carrier");
+        resolved.frozen_mask[4] = true;
+        let mut hash = Sha256::new();
+        hash.update((resolved.frozen_mask.len() as u64).to_le_bytes());
+        hash.update(
+            resolved
+                .frozen_mask
+                .iter()
+                .map(|value| u8::from(*value))
+                .collect::<Vec<_>>(),
+        );
+        let mask_sha256 = format!("{:x}", hash.finalize());
+        resolved.frozen_dof_count = 4;
+        resolved.free_dof_count = 3;
+        resolved.mask_sha256 = mask_sha256.clone();
+        resolved.certificate.raw_candidate_dof_count = 4;
+        resolved.certificate.frozen_dof_count = 4;
+        resolved.certificate.free_dof_count = 3;
+        resolved.certificate.mask_sha256 = mask_sha256;
+        resolved
+            .validate_intrinsic()
+            .expect("fixture must pass intrinsic validation before active-domain validation");
+
+        let error = validate_native_frozen_spins_plan(&plan)
+            .expect_err("frozen inactive DOF must fail before CUDA FFI");
+        assert!(error.message.contains("rejected before CUDA device probe"));
+        assert!(error.message.contains("outside_active_domain"));
+    }
+
+    #[test]
+    fn frozen_spins_plan_without_grid_certificate_is_rejected_before_cuda_ffi() {
+        let mut plan = canonical_frozen_spins_cpu_gpu_parity_plan();
+        plan.grid_certificate = None;
+
+        let error = validate_native_frozen_spins_plan(&plan)
+            .expect_err("native boundary must require a topology certificate in every build");
+        assert!(error.message.contains("authoritative FDM grid certificate"));
+        assert!(error.message.contains("before CUDA device probe"));
+    }
+}
+
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
@@ -4064,16 +4329,12 @@ mod tests {
                 [1.0, 0.0, 0.0],
                 [0.9950041652780258, 0.09983341664682815, 0.0],
                 [0.9800665778412416, 0.19866933079506122, 0.0],
-                [0.9992009587217894, 0.0, 0.03996803834887158],
-                [0.9937606691655043, 0.09970865087213879, 0.04972948160146045],
-                [0.9778332467629838, 0.19771314245924698, 0.06988589031642899],
-                [
-                    0.9968017063026194,
-                    -0.039904089712529575,
-                    0.06972124896577284,
-                ],
-                [0.9892364775387807, 0.05946310942269411, 0.1338082836649087],
-                [0.9711213242426827, 0.15730105252897553, 0.17902957342582418],
+                [0.8, 0.0, 0.6],
+                [0.6, 0.8, 0.0],
+                [0.48, 0.64, 0.6],
+                [0.8, -0.6, 0.0],
+                [0.28, 0.96, 0.0],
+                [0.36, 0.48, 0.8],
             ],
             material: FdmMaterialIR {
                 name: "Py".to_string(),
@@ -4396,6 +4657,86 @@ mod tests {
                 (0..3).map(move |component| (f64::from(a[component]) - e[component]).abs())
             })
             .fold(0.0, f64::max)
+    }
+
+    fn vector_field_sha256(values: &[[f64; 3]]) -> String {
+        let mut hasher = Sha256::new();
+        for value in values {
+            for component in value {
+                hasher.update(component.to_bits().to_le_bytes());
+            }
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn frozen_spins_parity_plan_binding_sha256(plan: &FdmPlanIR, active_mask: &[bool]) -> String {
+        const DOMAIN: &[u8] = b"fullmag:frozen-spins:fdm-cpu-gpu-plan-binding:v1\0";
+        let resolved = plan.frozen_spins.as_ref().expect("resolved Frozen Spins");
+        let mut hasher = Sha256::new();
+        hasher.update(DOMAIN);
+        hasher.update((resolved.constraint_ids.len() as u64).to_le_bytes());
+        for constraint_id in &resolved.constraint_ids {
+            hasher.update((constraint_id.len() as u64).to_le_bytes());
+            hasher.update(constraint_id.as_bytes());
+        }
+        hasher.update((resolved.grid_or_mesh_fingerprint.len() as u64).to_le_bytes());
+        hasher.update(resolved.grid_or_mesh_fingerprint.as_bytes());
+        hasher.update((resolved.mask_sha256.len() as u64).to_le_bytes());
+        hasher.update(resolved.mask_sha256.as_bytes());
+        let reference_sha256 = &resolved.certificate.resolved_reference_sha256;
+        hasher.update((reference_sha256.len() as u64).to_le_bytes());
+        hasher.update(reference_sha256.as_bytes());
+        hasher.update(
+            resolved
+                .source_state_revision
+                .expect("canonical parity source state revision")
+                .to_le_bytes(),
+        );
+        hasher.update((active_mask.len() as u64).to_le_bytes());
+        hasher.update(
+            active_mask
+                .iter()
+                .map(|value| u8::from(*value))
+                .collect::<Vec<_>>(),
+        );
+        hasher.update((resolved.frozen_mask.len() as u64).to_le_bytes());
+        hasher.update(
+            resolved
+                .frozen_mask
+                .iter()
+                .map(|value| u8::from(*value))
+                .collect::<Vec<_>>(),
+        );
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn required_frozen_spins_evidence_env(name: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| panic!("{name} must bind the parity evidence run"))
+    }
+
+    fn write_json_atomic(path: &std::path::Path, payload: &serde_json::Value) {
+        use std::io::Write as _;
+
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("parity evidence path must have a UTF-8 file name");
+        let temporary = parent.join(format!(".{file_name}.{}.write.tmp", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .expect("create unique parity evidence temporary file");
+        let mut bytes = serde_json::to_vec_pretty(payload).expect("serialize parity evidence");
+        bytes.push(b'\n');
+        file.write_all(&bytes).expect("write parity evidence bytes");
+        file.sync_all().expect("fsync parity evidence bytes");
+        drop(file);
+        std::fs::rename(&temporary, path).expect("atomically publish CPU/GPU parity evidence");
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .expect("fsync parity evidence directory");
     }
 
     fn masked_oersted_field(plan: &FdmPlanIR) -> Vec<[f64; 3]> {
@@ -4733,6 +5074,243 @@ mod tests {
             5e-5,
             1e-4,
         );
+    }
+
+    #[test]
+    fn native_fdm_frozen_spins_cpu_gpu_parity_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM Frozen Spins CPU/GPU parity: CUDA backend is not available"
+            );
+            return;
+        }
+
+        const REL_TOL: f64 = 5.0e-6;
+        const ABS_TOL: f64 = 1.0e-8;
+        const STEP_COUNT: u64 = 4;
+        let plan = canonical_frozen_spins_cpu_gpu_parity_plan();
+        validate_native_frozen_spins_plan(&plan)
+            .expect("canonical Frozen Spins carrier must pass the native boundary");
+        let resolved = plan.frozen_spins.as_ref().expect("resolved Frozen Spins");
+        let frozen_mask = &resolved.frozen_mask;
+        let active_mask = plan.active_mask.as_deref().expect("active mask");
+        let plan_binding_sha256 = frozen_spins_parity_plan_binding_sha256(&plan, active_mask);
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+        let until_seconds = dt * STEP_COUNT as f64;
+        let cpu = crate::fdm::cpu::reference::execute_reference_fdm(
+            &plan,
+            until_seconds,
+            &[],
+            None,
+            None,
+        )
+        .expect("CPU Frozen Spins parity execution");
+        let cpu_accepted_steps = cpu
+            .provenance
+            .fdm_cpu_step_transaction_telemetry
+            .as_ref()
+            .expect("CPU accepted-step telemetry")
+            .accepted_step_count;
+        let cpu_step_stats = cpu
+            .result
+            .steps
+            .last()
+            .cloned()
+            .expect("CPU final observed step stats");
+        assert_eq!(cpu_accepted_steps, STEP_COUNT);
+        assert_eq!(cpu_step_stats.step, STEP_COUNT);
+        // The CPU transaction computes the accepted step through the adaptive
+        // time-policy path, so the decimal product can differ from the
+        // literal fixture by one binary64 rounding ulp.  Keep this tolerance
+        // limited to the time scalar; state and Frozen Spins parity below
+        // retain the strict component tolerances.
+        assert_scalar_close("cpu final dt", cpu_step_stats.dt, dt, 1.0e-12, 1.0e-30);
+        assert_scalar_close(
+            "cpu final time",
+            cpu_step_stats.time,
+            until_seconds,
+            1.0e-12,
+            1.0e-30,
+        );
+        let cpu_m = cpu.result.final_magnetization;
+
+        let mut gpu = NativeFdmBackend::create(&plan).expect("native CUDA Frozen Spins create");
+        let mut gpu_step_stats = None;
+        for expected_step in 1..=STEP_COUNT {
+            let observed = gpu.step(dt).expect("native CUDA Frozen Spins parity step");
+            assert_eq!(observed.step, expected_step);
+            assert_scalar_close("gpu observed dt", observed.dt, dt, 1.0e-12, 1.0e-30);
+            assert_scalar_close(
+                "gpu observed time",
+                observed.time,
+                dt * expected_step as f64,
+                1.0e-12,
+                1.0e-30,
+            );
+            gpu_step_stats = Some(observed);
+        }
+        let gpu_step_stats = gpu_step_stats.expect("GPU final observed step stats");
+        assert_eq!(gpu_step_stats.step, cpu_accepted_steps);
+        assert_scalar_close(
+            "CPU/GPU final time",
+            gpu_step_stats.time,
+            cpu_step_stats.time,
+            1.0e-12,
+            1.0e-30,
+        );
+        let gpu_device = gpu.device_info().expect("native CUDA device identity");
+        let gpu_device_ordinal = residency::query_execution_device_ordinal(&gpu)
+            .expect("native CUDA execution device ordinal");
+        let gpu_m = gpu
+            .copy_m(plan.initial_magnetization.len())
+            .expect("copy CUDA parity magnetization");
+
+        assert_vector_field_close("frozen_spins.cpu_gpu.m", &gpu_m, &cpu_m, REL_TOL, ABS_TOL);
+
+        let mut max_abs_component_diff = 0.0_f64;
+        let mut max_normalized_error = 0.0_f64;
+        for (gpu_value, cpu_value) in gpu_m.iter().zip(cpu_m.iter()) {
+            for component in 0..3 {
+                let difference = (gpu_value[component] - cpu_value[component]).abs();
+                let scale = gpu_value[component]
+                    .abs()
+                    .max(cpu_value[component].abs())
+                    .max(1.0);
+                let allowed = ABS_TOL.max(REL_TOL * scale);
+                max_abs_component_diff = max_abs_component_diff.max(difference);
+                max_normalized_error = max_normalized_error.max(difference / allowed);
+            }
+        }
+        assert!(max_normalized_error <= 1.0);
+
+        let mut cpu_frozen_bitwise = true;
+        let mut gpu_frozen_bitwise = true;
+        let mut max_cpu_free_displacement = 0.0_f64;
+        let mut max_gpu_free_displacement = 0.0_f64;
+        for index in 0..plan.initial_magnetization.len() {
+            if frozen_mask[index] {
+                cpu_frozen_bitwise &= cpu_m[index].map(f64::to_bits)
+                    == plan.initial_magnetization[index].map(f64::to_bits);
+                gpu_frozen_bitwise &= gpu_m[index].map(f64::to_bits)
+                    == plan.initial_magnetization[index].map(f64::to_bits);
+            } else if active_mask[index] {
+                let displacement = |value: [f64; 3]| {
+                    ((value[0] - plan.initial_magnetization[index][0]).powi(2)
+                        + (value[1] - plan.initial_magnetization[index][1]).powi(2)
+                        + (value[2] - plan.initial_magnetization[index][2]).powi(2))
+                    .sqrt()
+                };
+                max_cpu_free_displacement =
+                    max_cpu_free_displacement.max(displacement(cpu_m[index]));
+                max_gpu_free_displacement =
+                    max_gpu_free_displacement.max(displacement(gpu_m[index]));
+            }
+        }
+        assert!(
+            cpu_frozen_bitwise,
+            "CPU frozen references must be bitwise exact"
+        );
+        assert!(
+            gpu_frozen_bitwise,
+            "GPU frozen references must be bitwise exact"
+        );
+        assert!(max_cpu_free_displacement > 0.0, "CPU free spins must move");
+        assert!(max_gpu_free_displacement > 0.0, "GPU free spins must move");
+
+        if let Some(path) = std::env::var_os("FULLMAG_FDM_FROZEN_SPINS_CPU_GPU_PARITY_PATH") {
+            let run_id = required_frozen_spins_evidence_env("FULLMAG_FROZEN_SPINS_RUN_ID");
+            let source_snapshot_sha256 =
+                required_frozen_spins_evidence_env("FULLMAG_FROZEN_SPINS_SOURCE_SNAPSHOT_SHA256");
+            let native_build_sha256 =
+                required_frozen_spins_evidence_env("FULLMAG_FROZEN_SPINS_NATIVE_BUILD_SHA256");
+            let requested_gpu_ordinal = required_frozen_spins_evidence_env("FULLMAG_FDM_GPU_INDEX")
+                .parse::<i32>()
+                .expect("FULLMAG_FDM_GPU_INDEX must be an i32");
+            assert_eq!(
+                gpu_device_ordinal, requested_gpu_ordinal,
+                "parity evidence must bind the actually executing CUDA ordinal"
+            );
+            // `SelectionCertificateIR::warnings` is intentionally omitted by
+            // serde when empty for the general IR/API contract.  The managed
+            // qualification receipt is stricter: it must state explicitly
+            // that canonical selection produced no warnings, so materialize
+            // the empty array in this evidence-only projection.
+            let mut resolved_evidence =
+                serde_json::to_value(resolved).expect("serialize resolved Frozen Spins plan");
+            resolved_evidence["certificate"]["warnings"] =
+                serde_json::json!(resolved.certificate.warnings);
+            let evidence = serde_json::json!({
+                "schema_version": "fullmag.frozen_spins.fdm_cpu_gpu_parity.evidence.v1",
+                "status": "PASS",
+                "run_binding": {
+                    "run_id": run_id,
+                    "source_snapshot_sha256": source_snapshot_sha256,
+                    "native_build_sha256": native_build_sha256,
+                    "requested_gpu_ordinal": requested_gpu_ordinal,
+                    "plan_binding_sha256": plan_binding_sha256,
+                },
+                "backend_pair": ["fdm_cpu_reference", "fdm_cuda"],
+                "precision": "fp64",
+                "integrator": "heun",
+                "scientific_scope": "fdm_single_grid_fp64_heun_exchange_external_field_four_fixed_steps_no_demag",
+                "known_limitations": ["no_demag", "single_integrator", "single_precision"],
+                "steps": gpu_step_stats.step,
+                "cell_count": plan.initial_magnetization.len(),
+                "active_cell_count": resolved.active_dof_count,
+                "frozen_cell_count": resolved.frozen_dof_count,
+                "free_cell_count": resolved.free_dof_count,
+                "mask_sha256": resolved.mask_sha256,
+                "plan_binding_sha256": plan_binding_sha256,
+                "active_mask": active_mask,
+                "resolved_plan": resolved_evidence,
+                "initial_magnetization_sha256": vector_field_sha256(&plan.initial_magnetization),
+                "workload": {
+                    "grid_cells": plan.grid.cells,
+                    "cell_size_m": plan.cell_size,
+                    "fixed_timestep_seconds": dt,
+                    "physics_terms": ["exchange", "external_field"],
+                    "demag_enabled": plan.enable_demag,
+                },
+                "gpu_device": {
+                    "ordinal": gpu_device_ordinal,
+                    "name": gpu_device.name,
+                    "driver_version": gpu_device.driver_version.to_string(),
+                    "runtime_version": gpu_device.runtime_version.to_string(),
+                    "compute_capability": gpu_device.compute_capability,
+                },
+                "observed_step_stats": {
+                    "cpu": {
+                        "accepted_step_count": cpu_accepted_steps,
+                        "step": cpu_step_stats.step,
+                        "time_seconds": cpu_step_stats.time,
+                        "dt_seconds": cpu_step_stats.dt,
+                    },
+                    "gpu": {
+                        "step": gpu_step_stats.step,
+                        "time_seconds": gpu_step_stats.time,
+                        "dt_seconds": gpu_step_stats.dt,
+                    },
+                },
+                "relative_tolerance": REL_TOL,
+                "absolute_tolerance": ABS_TOL,
+                "max_abs_component_diff": max_abs_component_diff,
+                "max_normalized_error": max_normalized_error,
+                "cpu_frozen_reference_bitwise": cpu_frozen_bitwise,
+                "gpu_frozen_reference_bitwise": gpu_frozen_bitwise,
+                "max_cpu_free_displacement": max_cpu_free_displacement,
+                "max_gpu_free_displacement": max_gpu_free_displacement,
+                "cpu_final_state_sha256": vector_field_sha256(&cpu_m),
+                "gpu_final_state_sha256": vector_field_sha256(&gpu_m),
+                "initial_magnetization": &plan.initial_magnetization,
+                "cpu_final_magnetization": &cpu_m,
+                "gpu_final_magnetization": &gpu_m,
+            });
+            write_json_atomic(std::path::Path::new(&path), &evidence);
+            println!(
+                "FROZEN_SPINS_CPU_GPU_PARITY_EVIDENCE={}",
+                std::path::Path::new(&path).display()
+            );
+        }
     }
 
     #[test]

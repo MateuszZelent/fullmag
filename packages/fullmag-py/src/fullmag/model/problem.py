@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import copy
 import json
+import math
 import os
 import re
+import tempfile
+import threading
+import time
+import uuid
 import warnings
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from fullmag._progress import (
     emit_progress,
@@ -150,6 +156,42 @@ def _fem_resolved_mesh_policy_sha256(
         allow_nan=False,
     ).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _fem_cache_contract_identity(
+    *,
+    resolved_policy_sha256: str | None = None,
+) -> dict[str, object]:
+    """Return producer compatibility fields shared by every FEM cache.
+
+    The per-object cache predates the v2 artifact manifest and has no
+    provenance document of its own. Keeping these fields in its canonical key
+    prevents a Gmsh/repair/certifier or source-compatibility change from
+    becoming a false warm hit. The launcher-provided snapshot is optional for
+    local source-only runs; trusted shared-domain reuse still requires it.
+    """
+    from fullmag.meshing._certification_receipt import (
+        ARTIFACT_SCHEMA_V2,
+        MIXED_CERTIFIER_ALGORITHM,
+        MIXED_REPAIR_ALGORITHM,
+    )
+    from fullmag.meshing._gmsh_types import MIXED_SHARED_GMSH_VERSION
+
+    identity: dict[str, object] = {
+        "source_snapshot_sha256": _fem_verified_source_snapshot_sha256(),
+        "source_compatibility_epoch": "fullmag.fem.meshing.production-closure.2026-08-31.v1",
+        "gmsh_version": MIXED_SHARED_GMSH_VERSION,
+        "gmsh_threads": 1,
+        "repair_algorithm_id": MIXED_REPAIR_ALGORITHM,
+        "repair_method": "Relocate3D",
+        "repair_iterations": 1,
+        "certifier_algorithm_id": MIXED_CERTIFIER_ALGORITHM,
+        "artifact_schema": ARTIFACT_SCHEMA_V2,
+        "topology_fingerprint_version": "v3",
+    }
+    if resolved_policy_sha256 is not None:
+        identity["resolved_policy_sha256"] = resolved_policy_sha256
+    return identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,6 +412,242 @@ def _fem_mesh_cache_dir() -> Path | None:
     return path
 
 
+def _fsync_cache_file(path: Path) -> None:
+    """Flush a cache file before it is made visible to another process.
+
+    NumPy writes the ``.npz`` archive directly.  Opening the completed file in
+    read/write mode is intentional: on Windows ``FlushFileBuffers`` (used by
+    ``os.fsync``) requires a writable handle, while POSIX accepts either mode.
+    """
+    with path.open("r+b") as stream:
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _fsync_cache_directory(path: Path) -> None:
+    """Best-effort directory barrier for a cache promotion."""
+    try:
+        descriptor = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _save_fem_mesh_cache_atomically(mesh: MeshData, target: Path) -> None:
+    """Publish a per-object FEM cache archive without exposing partial bytes.
+
+    A unique sibling directory prevents two writers from sharing a temporary
+    filename.  The final path is replaced only after ``MeshData.save`` and an
+    explicit file flush have completed; a failed/interrupted writer therefore
+    leaves an existing cache entry untouched.
+    """
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _fem_cache_write_lock(target):
+        temporary_dir = Path(
+            tempfile.mkdtemp(prefix=f".{target.name}.", dir=str(target.parent))
+        )
+        temporary_path = temporary_dir / target.name
+        try:
+            mesh.save(temporary_path)
+            _fsync_cache_file(temporary_path)
+            os.replace(temporary_path, target)
+            _fsync_cache_directory(target.parent)
+        finally:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+            try:
+                temporary_dir.rmdir()
+            except OSError:
+                # A failed cleanup is harmless and must not turn a valid
+                # promoted cache into a failed build; the unique directory is
+                # quarantinable by the next cache maintenance pass.
+                pass
+
+
+def _quarantine_fem_mesh_cache_entry(path: Path, *, reason: str) -> Path | None:
+    """Move a corrupt cache entry aside without deleting or overwriting it.
+
+    The stat check closes the common race where a concurrent atomic writer has
+    already replaced the path with a fresh archive while this reader is
+    handling an older failure.  A failed rename is intentionally non-fatal:
+    the caller can still rebuild into the canonical path.
+    """
+    path = Path(path)
+    try:
+        before = path.stat()
+    except OSError:
+        return None
+
+    quarantine_dir = path.parent / "quarantine"
+    try:
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            return None
+        current = path.stat()
+        if (
+            current.st_ino != before.st_ino
+            or current.st_size != before.st_size
+            or current.st_mtime_ns != before.st_mtime_ns
+        ):
+            return None
+        reason_digest = sha256(reason.encode("utf-8", errors="replace")).hexdigest()[:12]
+        destination = quarantine_dir / (
+            f"{path.name}.{time.time_ns()}-{uuid.uuid4().hex}-r{reason_digest}.corrupt"
+        )
+        os.replace(path, destination)
+        _fsync_cache_directory(quarantine_dir)
+        _fsync_cache_directory(path.parent)
+        return destination
+    except OSError:
+        return None
+
+
+def _write_fem_cache_lock_metadata(path: Path, payload: Mapping[str, object]) -> None:
+    """Atomically refresh a lock's owner/heartbeat metadata."""
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        temporary.write_text(
+            json.dumps(dict(payload), sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        _fsync_cache_file(temporary)
+        os.replace(temporary, path)
+        _fsync_cache_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def _fem_cache_write_lock(
+    target: Path,
+    *,
+    timeout_s: float | None = None,
+    stale_after_s: float = 300.0,
+) -> Iterator[None]:
+    """Serialize cache publication and expose an observable owner heartbeat."""
+    target = Path(target)
+    lock_path = target.with_name(f".{target.name}.lock")
+    if timeout_s is None:
+        raw_timeout = os.environ.get("FULLMAG_FEM_CACHE_LOCK_TIMEOUT_S", "120")
+        try:
+            timeout_s = float(raw_timeout)
+        except (TypeError, ValueError):
+            timeout_s = 120.0
+    if not math.isfinite(timeout_s) or timeout_s <= 0.0:
+        raise ValueError("FULLMAG_FEM_CACHE_LOCK_TIMEOUT_S must be finite and positive")
+    if not math.isfinite(stale_after_s) or stale_after_s <= 0.0:
+        raise ValueError("stale_after_s must be finite and positive")
+
+    token = uuid.uuid4().hex
+    started_ns = time.time_ns()
+    owner: dict[str, object] = {
+        "schema": "fullmag.fem.cache-lock.v1",
+        "token": token,
+        "pid": os.getpid(),
+        "thread": threading.get_ident(),
+        "host": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown",
+        "target": str(target),
+        "started_unix_ns": started_ns,
+        "heartbeat_unix_ns": started_ns,
+    }
+    deadline = time.monotonic() + timeout_s
+    acquired = False
+    while not acquired:
+        try:
+            descriptor = os.open(
+                str(lock_path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            try:
+                encoded = json.dumps(owner, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8"
+                )
+                written = 0
+                while written < len(encoded):
+                    written += os.write(descriptor, encoded[written:])
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            acquired = True
+        except FileExistsError:
+            stale = False
+            malformed = False
+            lock_mtime_ns = 0
+            try:
+                lock_mtime_ns = lock_path.stat().st_mtime_ns
+                payload = json.loads(lock_path.read_text(encoding="utf-8"))
+                heartbeat_ns = int(payload.get("heartbeat_unix_ns", 0))
+                stale = heartbeat_ns <= 0 or (
+                    time.time_ns() - heartbeat_ns > int(stale_after_s * 1.0e9)
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                malformed = True
+                # O_EXCL creates the lock before its owner can write the JSON.
+                # A contender must not quarantine that short publication window
+                # and let a second writer enter concurrently.  Treat malformed
+                # metadata as stale only after the same owner-age budget.
+                stale = lock_mtime_ns <= 0 or (
+                    time.time_ns() - lock_mtime_ns > int(stale_after_s * 1.0e9)
+                )
+            if stale:
+                _quarantine_fem_mesh_cache_entry(
+                    lock_path,
+                    reason=(
+                        "stale-or-malformed-cache-lock"
+                        if malformed
+                        else "stale-cache-lock"
+                    ),
+                )
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"timed out waiting for FEM cache writer lock '{lock_path}'"
+                )
+            time.sleep(0.05)
+
+    stop_heartbeat = threading.Event()
+
+    def heartbeat() -> None:
+        while not stop_heartbeat.wait(15.0):
+            owner["heartbeat_unix_ns"] = time.time_ns()
+            try:
+                _write_fem_cache_lock_metadata(lock_path, owner)
+            except OSError:
+                return
+
+    heartbeat_thread = threading.Thread(
+        target=heartbeat,
+        name="fullmag-fem-cache-heartbeat",
+        daemon=True,
+    )
+    heartbeat_thread.start()
+    try:
+        yield
+    finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=2.0)
+        try:
+            payload = json.loads(lock_path.read_text(encoding="utf-8"))
+            if payload.get("token") == token:
+                lock_path.unlink()
+                _fsync_cache_directory(lock_path.parent)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+
 def _geometry_cache_fingerprint(geometry: object) -> dict[str, object]:
     from fullmag.model.geometry import ImportedGeometry
 
@@ -385,6 +663,15 @@ def _geometry_cache_fingerprint(geometry: object) -> dict[str, object]:
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
             }
+            # Metadata alone can produce a false hit when an importer replaces
+            # a file in place while preserving size and timestamps. Include a
+            # content digest in the key; the chunked read keeps peak memory
+            # bounded for large STEP/STL/MSH inputs.
+            digest = sha256()
+            with source_path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            fingerprint["source_sha256"] = digest.hexdigest()
     return fingerprint
 
 
@@ -406,8 +693,17 @@ def _fem_mesh_cache_key(
             str(name): recipe.to_ir()
             for name, recipe in (per_object_recipes or {}).items()
         },
+        "cache_identity": _fem_cache_contract_identity(),
     }
-    return sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    return sha256(
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _fem_shared_domain_cache_document(
@@ -730,8 +1026,24 @@ def build_geometry_assets_for_request(
                         emit_progress(
                             f"Reusing cached FEM mesh for '{geometry.geometry_name}'"
                         )
-                        mesh = MeshData.load(cache_path)
-                    else:
+                        try:
+                            mesh = MeshData.load(cache_path)
+                        except Exception as exc:
+                            quarantined = _quarantine_fem_mesh_cache_entry(
+                                cache_path,
+                                reason=f"per-object-load:{type(exc).__name__}:{exc}",
+                            )
+                            emit_progress(
+                                "Ignoring invalid cached FEM mesh "
+                                f"'{cache_path}': {exc}"
+                                + (
+                                    f" (quarantined at '{quarantined}')"
+                                    if quarantined is not None
+                                    else ""
+                                )
+                            )
+                            mesh = None
+                    if mesh is None:
                         emit_progress(
                             f"Preparing FEM mesh asset for '{geometry.geometry_name}'"
                         )
@@ -748,7 +1060,7 @@ def build_geometry_assets_for_request(
                             fallbacks_triggered=[],
                         )
                         if cache_path is not None and not imported_surface_only:
-                            mesh.save(cache_path)
+                            _save_fem_mesh_cache_atomically(mesh, cache_path)
                             emit_progress(
                                 f"Cached FEM mesh for '{geometry.geometry_name}'"
                             )
@@ -870,18 +1182,9 @@ def build_geometry_assets_for_request(
             )
             if fem_mesh_cache_dir is not None:
                 cache_identity = (
-                    {
-                        "source_snapshot_sha256": verified_source_snapshot,
-                        "resolved_policy_sha256": resolved_policy_sha256,
-                        "gmsh_version": "4.15.2",
-                        "gmsh_threads": 1,
-                        "repair_algorithm_id": "fullmag.mixed-tet-repair.v1",
-                        "repair_method": "Relocate3D",
-                        "repair_iterations": 1,
-                        "certifier_algorithm_id": "fullmag.mixed-certificate.rust-rayon.v1",
-                        "artifact_schema": "fullmag.mesh-artifact.v2",
-                        "topology_fingerprint_version": "v3",
-                    }
+                    _fem_cache_contract_identity(
+                        resolved_policy_sha256=resolved_policy_sha256,
+                    )
                     if v2_cache_enabled
                     else None
                 )
@@ -963,9 +1266,18 @@ def build_geometry_assets_for_request(
                     TypeError,
                     KeyError,
                 ) as exc:
+                    quarantined = _quarantine_fem_mesh_cache_entry(
+                        shared_cache_path,
+                        reason=f"shared-domain-load:{type(exc).__name__}:{exc}",
+                    )
                     emit_progress(
                         "Ignoring invalid cached shared-domain FEM mesh "
                         f"'{shared_cache_path}': {exc}"
+                        + (
+                            f" (quarantined at '{quarantined}')"
+                            if quarantined is not None
+                            else ""
+                        )
                     )
                 else:
                     domain_mesh = cached_artifact.mesh
@@ -1044,23 +1356,24 @@ def build_geometry_assets_for_request(
                             certifier_backend="rust_rayon",
                             certifier_threads=native_certificate_result.rayon_threads,
                         )
-                    save_mesh_artifact(
-                        shared_cache_path,
-                        mesh=domain_mesh,
-                        mesh_name="study_domain",
-                        authoring_document=shared_cache_document or {},
-                        region_markers=region_markers,
-                        object_region_markers=object_region_markers,
-                        boundary_map=_mesh_boundary_semantic_map(domain_mesh),
-                        build_report=report_payload,
-                        provenance={
-                            "origin": "generated_shared_domain_cache",
-                            "cache_key": shared_cache_key,
-                            "cache_schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
-                        },
-                        certification_bindings=certification_bindings,
-                        _native_certificate_result=native_certificate_result,
-                    )
+                    with _fem_cache_write_lock(shared_cache_path):
+                        save_mesh_artifact(
+                            shared_cache_path,
+                            mesh=domain_mesh,
+                            mesh_name="study_domain",
+                            authoring_document=shared_cache_document or {},
+                            region_markers=region_markers,
+                            object_region_markers=object_region_markers,
+                            boundary_map=_mesh_boundary_semantic_map(domain_mesh),
+                            build_report=report_payload,
+                            provenance={
+                                "origin": "generated_shared_domain_cache",
+                                "cache_key": shared_cache_key,
+                                "cache_schema": _FEM_SHARED_DOMAIN_CACHE_SCHEMA,
+                            },
+                            certification_bindings=certification_bindings,
+                            _native_certificate_result=native_certificate_result,
+                        )
                     emit_progress(f"Cached shared-domain FEM mesh at '{shared_cache_path}'")
 
             assert domain_mesh is not None

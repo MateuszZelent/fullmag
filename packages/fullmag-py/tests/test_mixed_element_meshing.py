@@ -1598,6 +1598,10 @@ def test_existing_swept_cylinder_quality_path_remains_available() -> None:
     assert set(mesh.cell_types.tolist()) == {"tet4"}
     assert mesh.quality is not None
     assert mesh.quality.quality_source == "swept_topology_proxy"
+    assert mesh.realization_report is not None
+    assert mesh.realization_report.requested_topology == "prism6"
+    assert mesh.realization_report.resolved_topology == "tet4"
+    assert mesh.realization_report.fallbacks_triggered == ("swept_cylinder_to_tet4",)
 
 
 def test_mesh_data_rejects_realization_report_that_misstates_topology() -> None:

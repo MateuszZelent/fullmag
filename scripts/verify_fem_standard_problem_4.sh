@@ -20,9 +20,12 @@ export FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson
 
 run_phase() {
   local device="$1" phase="$2" case_id="$3" mesh="$4" airbox="$5" state="$6" phase_duration="$7" output="$8"
+  local compatibility_mode="native"
+  if [ "$airbox" = baseline ]; then compatibility_mode="mumax3"; fi
   mkdir -p "$output"
   FULLMAG_SP4_DEVICE="$device" FULLMAG_SP4_PHASE="$phase" FULLMAG_SP4_CASE="$case_id" \
     FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
+    FULLMAG_SP4_COMPATIBILITY="$compatibility_mode" \
     FULLMAG_SP4_INITIAL_STATE="$state" FULLMAG_SP4_DURATION_S="$phase_duration" \
     just fem-sp4-run "$device" "$output"
 }
@@ -30,6 +33,12 @@ run_phase() {
 for mesh in $meshes; do
   for airbox in $airboxes; do
     if [ "$airbox" = expanded ] && [ "$mesh" != medium ]; then continue; fi
+    compatibility_mode="native"
+    compatibility_args=()
+    if [ "$airbox" = baseline ]; then
+      compatibility_mode="mumax3"
+      compatibility_args=(--expected-compatibility-profile mumax3_sp4_v1)
+    fi
     state_root="$root/states/$mesh/$airbox"
     mkdir -p "$state_root"
     for device in $devices; do
@@ -39,7 +48,8 @@ for mesh in $meshes; do
         if [ "$resume" = 1 ]; then
           if [ "$qualifying" = 1 ]; then
             if python3 scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
-                 --expected-algorithm "$algorithm" --expected-device "$device"; then
+                 --expected-algorithm "$algorithm" --expected-device "$device" \
+                 "${compatibility_args[@]}"; then
               relaxation_ready=1
             fi
           elif [ -s "$relaxation_root/metadata.json" ] && \
@@ -52,11 +62,13 @@ for mesh in $meshes; do
           FULLMAG_SP4_DEVICE="$device" FULLMAG_SP4_PHASE=relax \
             FULLMAG_SP4_RELAX_ALGORITHM="$algorithm" FULLMAG_SP4_CASE=case-a \
             FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
+            FULLMAG_SP4_COMPATIBILITY="$compatibility_mode" \
             just fem-sp4-run "$device" "$relaxation_root"
         fi
         if [ "$qualifying" = 1 ] && \
            ! python3 scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
-             --expected-algorithm "$algorithm" --expected-device "$device"; then
+             --expected-algorithm "$algorithm" --expected-device "$device" \
+             "${compatibility_args[@]}"; then
           echo "fresh SP4 relaxation did not satisfy the qualification gate: $device/$mesh/$airbox/$algorithm" >&2
           exit 1
         fi

@@ -197,14 +197,20 @@ def _managed_problem_ir(
     algorithm: str,
     state=None,
     mesh: str = "coarse",
+    airbox: str = "baseline",
     topology_variant: str | None = None,
     layers: int | None = None,
+    compatibility_mode: str | None = None,
 ):
     monkeypatch.setenv("FULLMAG_SP4_PHASE", phase)
     monkeypatch.setenv("FULLMAG_SP4_RELAX_ALGORITHM", algorithm)
     monkeypatch.setenv("FULLMAG_SP4_DEVICE", "cpu")
     monkeypatch.setenv("FULLMAG_SP4_MESH", mesh)
-    monkeypatch.setenv("FULLMAG_SP4_AIRBOX", "baseline")
+    monkeypatch.setenv("FULLMAG_SP4_AIRBOX", airbox)
+    if compatibility_mode is None:
+        monkeypatch.delenv("FULLMAG_SP4_COMPATIBILITY", raising=False)
+    else:
+        monkeypatch.setenv("FULLMAG_SP4_COMPATIBILITY", compatibility_mode)
     monkeypatch.delenv("FULLMAG_SP4_RELAX_TOL_APM", raising=False)
     if topology_variant is None:
         monkeypatch.delenv("FULLMAG_SP4_TOPOLOGY_VARIANT", raising=False)
@@ -261,6 +267,7 @@ def test_managed_problem_scopes_stricter_torque_threshold_to_mixed_p1(
         algorithm="projected_gradient_bb",
         topology_variant="mixed_p1",
         layers=1,
+        compatibility_mode="native",
     )
     legacy = _managed_problem_ir(
         monkeypatch,
@@ -301,6 +308,100 @@ def test_managed_problem_defaults_to_all_tet_without_layer_controls(
     assert "through_thickness_elements" not in mesh
     assert "exact_layer_count" not in mesh
     assert "transition_policy" not in mesh
+    assert (
+        _managed_problem_ir(
+            monkeypatch,
+            phase="relax",
+            algorithm="projected_gradient_bb",
+        )["problem_meta"]["runtime_metadata"]["fem_demag_accuracy_contract"]
+        == {
+            "schema_version": "fullmag.fem.demag_accuracy.v1",
+            "profile": "mumax3_sp4_v1",
+            "required_potential_order": 2,
+            "required_topology": "all_tet",
+        }
+    )
+
+
+def test_mumax3_compatibility_selects_unrefined_all_tet_p2_lane(
+    monkeypatch,
+) -> None:
+    ir = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm="projected_gradient_bb",
+        compatibility_mode="mumax3",
+    )
+    [mesh] = ir["problem_meta"]["runtime_metadata"]["mesh_workflow"][
+        "per_geometry"
+    ]
+
+    assert mesh["hmax"] == pytest.approx(3e-9)
+    assert "hmin" not in mesh
+    assert "minimum_element_size" not in mesh
+    assert mesh["order"] == 1
+    assert mesh["optimize"] == "Netgen"
+    assert "optimize_iterations" not in mesh
+    assert "edge_hmax" not in mesh
+    assert "edge_thickness" not in mesh
+    assert "edge_transition_distance" not in mesh
+    assert "corner_hmax" not in mesh
+    assert "corner_extent" not in mesh
+    assert "corner_transition_distance" not in mesh
+    assert "topology" not in mesh
+    assert ir["problem_meta"]["runtime_metadata"][
+        "fem_demag_accuracy_contract"
+    ] == {
+        "schema_version": "fullmag.fem.demag_accuracy.v1",
+        "profile": "mumax3_sp4_v1",
+        "required_potential_order": 2,
+        "required_topology": "all_tet",
+    }
+    [stage] = ir["problem_meta"]["runtime_metadata"]["study_pipeline"]["nodes"]
+    assert stage["payload"]["table_autosave"]["quantities"] == [
+        "step",
+        "t",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_total",
+        "max_torque_T",
+    ]
+
+
+def test_mumax3_compatibility_rejects_mixed_p1_topology(
+    monkeypatch,
+) -> None:
+    with pytest.raises(ValueError, match="requires.*all_tet"):
+        _managed_mesh_entry(
+            monkeypatch,
+            topology_variant="mixed_p1",
+            layers=1,
+            compatibility_mode="mumax3",
+        )
+
+
+def test_mumax3_compatibility_rejects_unqualified_expanded_airbox(
+    monkeypatch,
+) -> None:
+    with pytest.raises(ValueError, match="requires.*AIRBOX=baseline"):
+        _managed_mesh_entry(
+            monkeypatch,
+            airbox="expanded",
+            topology_variant="all_tet",
+            compatibility_mode="mumax3",
+        )
+
+
+def test_empty_compatibility_mode_is_rejected(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="unsupported FULLMAG_SP4_COMPATIBILITY"):
+        _managed_mesh_entry(
+            monkeypatch,
+            topology_variant="all_tet",
+            compatibility_mode="",
+        )
 
 
 @pytest.mark.parametrize("layers", (1, 2, 3))
@@ -313,6 +414,7 @@ def test_managed_problem_mixed_p1_lowers_hmax_and_exact_layers_1_2_3(
         mesh="medium",
         topology_variant="mixed_p1",
         layers=layers,
+        compatibility_mode="native",
     )
 
     assert mesh["hmin"] == pytest.approx(2e-9)

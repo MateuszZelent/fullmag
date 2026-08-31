@@ -9,6 +9,28 @@ pub(crate) fn active_stage_id(problem: &ProblemIR) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+pub(crate) fn frozen_spins_source_state_revision(
+    problem: &ProblemIR,
+) -> Result<Option<u64>, String> {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get(fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY)
+    else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .filter(|revision| *revision > 0)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "runtime_metadata.{} must be a positive integer",
+                fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY
+            )
+        })
+}
+
 pub(crate) fn time_stage_context(problem: &ProblemIR) -> fullmag_ir::TimeStageContextIR {
     fullmag_ir::TimeStageContextIR {
         active_stage_id: active_stage_id(problem).map(str::to_owned),

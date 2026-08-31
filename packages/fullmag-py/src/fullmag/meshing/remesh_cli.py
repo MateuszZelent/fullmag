@@ -14,6 +14,7 @@ Protocol:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import struct
 import sys
@@ -24,6 +25,7 @@ from typing import Any
 import numpy as np
 
 from fullmag._progress import emit_progress
+from fullmag._validation import TypedValidationError, parse_bool, parse_finite_float, parse_integer
 from fullmag.meshing.asset_pipeline import (
     SharedDomainBuildReport,
     realize_fem_domain_mesh_asset_from_components_with_report,
@@ -34,6 +36,11 @@ from fullmag.meshing.gmsh_bridge import (
     generate_mesh,
     remesh_with_size_field,
 )
+from fullmag.meshing.quality import (
+    build_typed_quality_summary,
+    validate_adjacent_size_growth,
+)
+from fullmag.meshing.fmmq import _canonical_json, build_fmmq_v2_spec, write_fmmq_v2
 from fullmag.meshing._gmsh_types import (
     _build_mesh_statistics_report,
     _mesh_statistics_report_to_ir,
@@ -151,64 +158,157 @@ def _mesh_options_from_dict(opts: dict[str, Any]) -> MeshOptions:
     """Build MeshOptions from a dict (as sent by the GUI)."""
 
     def _nonempty_str(value: Any) -> str | None:
-        return value if isinstance(value, str) and value.strip() else None
-
-    def _positive_float(value: Any) -> float | None:
         if value is None:
             return None
-        parsed = float(value)
-        return parsed if parsed > 0.0 else None
+        if not isinstance(value, str) or not value.strip():
+            raise TypedValidationError(
+                code="string_value_error",
+                pointer="/mesh_options/string",
+                message="value must be a non-empty string",
+                value=type(value).__name__,
+            )
+        return value.strip()
 
-    def _positive_int(value: Any) -> int | None:
+    def _positive_float(value: Any, field: str) -> float | None:
+        return parse_finite_float(
+            value,
+            f"/mesh_options/{field}",
+            positive=True,
+            allow_none=True,
+            allow_numeric_string=True,
+        )
+
+    def _positive_int(value: Any, field: str) -> int | None:
+        return parse_integer(
+            value,
+            f"/mesh_options/{field}",
+            minimum=1,
+            allow_none=True,
+            allow_numeric_string=True,
+        )
+
+    def _non_negative_int(value: Any, field: str, default: int) -> int:
+        parsed = parse_integer(
+            default if value is None else value,
+            f"/mesh_options/{field}",
+            minimum=0,
+            allow_numeric_string=True,
+        )
+        return int(parsed)
+
+    def _int_list(value: Any, field: str) -> list[int] | None:
         if value is None:
             return None
-        parsed = int(value)
-        return parsed if parsed > 0 else None
-
-    def _int_list(value: Any) -> list[int] | None:
         if not isinstance(value, list):
-            return None
-        return [int(item) for item in value]
+            raise TypeError(f"/mesh_options/{field} must be a list of integers")
+        return [
+            int(parse_integer(
+                item,
+                f"/mesh_options/{field}/{index}",
+                minimum=1,
+                allow_numeric_string=True,
+            ))
+            for index, item in enumerate(value)
+        ]
+
+    def _bool(value: Any, field: str, default: bool) -> bool:
+        parsed = parse_bool(
+            default if value is None else value,
+            f"/mesh_options/{field}",
+        )
+        return bool(parsed)
+
+    def _string_list(value: Any, field: str) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError(f"/mesh_options/{field} must be a list of strings")
+        result: list[str] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"/mesh_options/{field}/{index} must be a non-empty string")
+            result.append(item.strip())
+        return result
+
+    algorithm_2d = parse_integer(
+        opts.get("algorithm_2d", 6),
+        "/mesh_options/algorithm_2d",
+        minimum=1,
+        allow_numeric_string=True,
+    )
+    algorithm_3d = parse_integer(
+        opts.get("algorithm_3d", 1),
+        "/mesh_options/algorithm_3d",
+        minimum=1,
+        allow_numeric_string=True,
+    )
+    size_from_curvature = _non_negative_int(
+        opts.get("size_from_curvature"), "size_from_curvature", 0
+    )
+    narrow_regions = _non_negative_int(opts.get("narrow_regions"), "narrow_regions", 0)
+    smoothing_steps = _non_negative_int(opts.get("smoothing_steps"), "smoothing_steps", 1)
+    optimize_iters = _positive_int(opts.get("optimize_iterations", 1), "optimize_iters")
 
     return MeshOptions(
-        algorithm_2d=opts.get("algorithm_2d", 6),
-        algorithm_3d=opts.get("algorithm_3d", 1),
-        hmin=opts.get("hmin"),
+        algorithm_2d=int(algorithm_2d),
+        algorithm_3d=int(algorithm_3d),
+        hmin=_positive_float(opts.get("hmin"), "hmin"),
         calibrate_for=opts.get("calibrate_for"),
         size_preset=opts.get("size_preset"),
-        size_factor=opts.get("size_factor", 1.0),
-        size_from_curvature=opts.get("size_from_curvature", 0),
-        curvature_factor=opts.get("curvature_factor"),
-        growth_rate=opts.get("growth_rate"),
-        narrow_regions=opts.get("narrow_regions", 0),
-        narrow_region_resolution=opts.get("narrow_region_resolution"),
-        smoothing_steps=opts.get("smoothing_steps", 1),
+        size_factor=_positive_float(opts.get("size_factor", 1.0), "size_factor") or 1.0,
+        size_from_curvature=size_from_curvature,
+        curvature_factor=_positive_float(opts.get("curvature_factor"), "curvature_factor"),
+        growth_rate=_positive_float(opts.get("growth_rate"), "growth_rate"),
+        narrow_regions=narrow_regions,
+        narrow_region_resolution=_positive_float(
+            opts.get("narrow_region_resolution"), "narrow_region_resolution"
+        ),
+        smoothing_steps=smoothing_steps,
         optimize=opts.get("optimize"),
-        optimize_iters=opts.get("optimize_iterations", 1),
+        optimize_iters=int(optimize_iters or 1),
         size_fields=opts.get("size_fields", []),
-        compute_quality=opts.get("compute_quality", True),
-        per_element_quality=opts.get("per_element_quality", True),
-        boundary_layer_count=_positive_int(opts.get("boundary_layer_count")),
-        boundary_layer_thickness=_positive_float(opts.get("boundary_layer_thickness")),
-        boundary_layer_stretching=_positive_float(opts.get("boundary_layer_stretching")),
+        compute_quality=_bool(opts.get("compute_quality"), "compute_quality", True),
+        per_element_quality=_bool(
+            opts.get("per_element_quality"), "per_element_quality", True
+        ),
+        boundary_layer_count=_positive_int(
+            opts.get("boundary_layer_count"), "boundary_layer_count"
+        ),
+        boundary_layer_thickness=_positive_float(
+            opts.get("boundary_layer_thickness"), "boundary_layer_thickness"
+        ),
+        boundary_layer_stretching=_positive_float(
+            opts.get("boundary_layer_stretching"), "boundary_layer_stretching"
+        ),
         boundary_layer_target_surface_tags=_int_list(
-            opts.get("boundary_layer_target_surface_tags")
+            opts.get("boundary_layer_target_surface_tags"),
+            "boundary_layer_target_surface_tags",
         ),
         boundary_layer_target_curve_tags=_int_list(
-            opts.get("boundary_layer_target_curve_tags")
+            opts.get("boundary_layer_target_curve_tags"),
+            "boundary_layer_target_curve_tags",
         ),
         mesh_strategy=_nonempty_str(opts.get("mesh_strategy")),
-        through_thickness_elements=_positive_int(opts.get("through_thickness_elements")),
+        through_thickness_elements=_positive_int(
+            opts.get("through_thickness_elements"), "through_thickness_elements"
+        ),
         through_thickness_distribution=_nonempty_str(
             opts.get("through_thickness_distribution")
         ),
         through_thickness_element_ratio=_positive_float(
-            opts.get("through_thickness_element_ratio")
+            opts.get("through_thickness_element_ratio"),
+            "through_thickness_element_ratio",
         ),
-        through_thickness_symmetric=bool(opts.get("through_thickness_symmetric", False)),
+        through_thickness_symmetric=_bool(
+            opts.get("through_thickness_symmetric"),
+            "through_thickness_symmetric",
+            False,
+        ),
         sweep_face_meshing=_nonempty_str(opts.get("sweep_face_meshing")),
+        sweep_direction=_nonempty_str(opts.get("sweep_direction")),
         sweep_source=_nonempty_str(opts.get("sweep_source")),
         sweep_destination=_nonempty_str(opts.get("sweep_destination")),
+        periodic_pair_ids=_string_list(opts.get("periodic_pair_ids"), "periodic_pair_ids"),
     )
 
 
@@ -294,12 +394,18 @@ def _write_topology_artifact_if_needed(
     target_dir = _resolve_topology_artifact_dir(topology_artifact_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     handle, path = tempfile.mkstemp(
-        prefix=f"{_safe_artifact_prefix(mesh_name)}-topology-",
-        suffix=".json",
+        prefix=f".{_safe_artifact_prefix(mesh_name)}-topology-",
+        suffix=".json.tmp",
         dir=target_dir,
         text=True,
     )
-    artifact_path = Path(path)
+    temporary_path = Path(path)
+    # Keep the final name hidden until the complete JSON document has been
+    # flushed and verified.  The random suffix supplied by ``mkstemp`` makes
+    # concurrent remesh writers independent while ``os.replace`` provides the
+    # reader-facing atomic publication point.
+    artifact_stem = temporary_path.name.removeprefix(".").removesuffix(".json.tmp")
+    artifact_path = target_dir / f"{artifact_stem}.json"
     payload = {
         "schema_version": 2,
         "mesh_name": mesh_name,
@@ -325,10 +431,16 @@ def _write_topology_artifact_if_needed(
             else None
         ),
     }
-    with os.fdopen(handle, "w", encoding="utf-8") as fp:
-        json.dump(payload, fp, separators=(",", ":"))
-        fp.flush()
-        os.fsync(fp.fileno())
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fp:
+            json.dump(payload, fp, separators=(",", ":"))
+            fp.flush()
+            os.fsync(fp.fileno())
+        if temporary_path.stat().st_size <= 0:
+            raise IOError("topology artifact is empty before publication")
+        os.replace(temporary_path, artifact_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
     return {
         "kind": "remesh_topology_json",
@@ -379,24 +491,41 @@ def _write_quality_data_artifact_if_available(
 
     target_dir = _resolve_quality_artifact_dir(quality_artifact_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
-    handle, path = tempfile.mkstemp(
-        prefix=f"{_safe_artifact_prefix(mesh_name)}-quality-",
-        suffix=".fmmq",
-        dir=target_dir,
+    # Keep the temporary payload in a private directory and promote it with a
+    # single replace.  Readers therefore observe either a complete generation
+    # or the previous one; an interrupted writer cannot leave a partially
+    # named ``.fmmq`` artifact in the publication directory.
+    temporary_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{_safe_artifact_prefix(mesh_name)}-quality-",
+            dir=target_dir,
+        )
     )
-    artifact_path = Path(path)
+    temporary_path = temporary_dir / "payload.fmmq"
+    artifact_path = target_dir / f"{temporary_dir.name[1:]}.fmmq"
     flags = 0
     for _metric, flag, _array in arrays:
         flags |= flag
 
-    with os.fdopen(handle, "wb") as fp:
-        fp.write(b"FMMQ")
-        fp.write(bytes([_QUALITY_DATA_VERSION, _QUALITY_DATA_KIND_F64]))
-        fp.write(struct.pack("<HIIQQ", 0, element_count, flags, 0, 0))
-        for _metric, _flag, array in arrays:
-            fp.write(array.tobytes(order="C"))
-        fp.flush()
-        os.fsync(fp.fileno())
+    try:
+        with temporary_path.open("wb") as fp:
+            fp.write(b"FMMQ")
+            fp.write(bytes([_QUALITY_DATA_VERSION, _QUALITY_DATA_KIND_F64]))
+            fp.write(struct.pack("<HIIQQ", 0, element_count, flags, 0, 0))
+            for _metric, _flag, array in arrays:
+                fp.write(array.tobytes(order="C"))
+            fp.flush()
+            os.fsync(fp.fileno())
+        expected_size = _QUALITY_DATA_HEADER_LEN + 8 * element_count * len(arrays)
+        if temporary_path.stat().st_size != expected_size:
+            raise IOError(
+                "FMMQ quality payload size mismatch before publication: "
+                f"expected {expected_size}, got {temporary_path.stat().st_size}"
+            )
+        os.replace(temporary_path, artifact_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+        temporary_dir.rmdir()
 
     return {
         "kind": "fmmq.v1",
@@ -406,6 +535,113 @@ def _write_quality_data_artifact_if_available(
         "element_count": element_count,
         "metrics": [metric for metric, _flag, _array in arrays],
     }
+
+
+def _fmmq_v2_identity(
+    mesh: Any,
+    *,
+    mesh_name: str,
+    mesh_provenance: dict[str, Any],
+) -> dict[str, Any]:
+    """Build explicit identity metadata for the typed FMMQ v2 carrier.
+
+    Remesh jobs do not always receive a persisted scene/policy revision.  Such
+    payloads are still structurally useful, but are marked ``unbound`` so a
+    production verifier cannot confuse them with a sealed runtime artifact.
+    """
+    topology_fingerprint = mesh.topology_fingerprint_v3()
+    options = mesh_provenance.get("mesh_options")
+    options = options if isinstance(options, dict) else {}
+    policy_fingerprint = mesh_provenance.get("policy_fingerprint") or options.get("policy_fingerprint")
+    if not isinstance(policy_fingerprint, str) or not policy_fingerprint.strip():
+        policy_bytes = json.dumps(
+            options,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        policy_fingerprint = f"unbound:sha256:{hashlib.sha256(policy_bytes).hexdigest()}"
+    mesh_revision = mesh_provenance.get("mesh_revision") or mesh_provenance.get("source_scene_revision")
+    if mesh_revision is None:
+        mesh_revision = "unbound"
+    artifact_id = mesh_provenance.get("artifact_id")
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
+        artifact_id = f"sha256:{hashlib.sha256(f'{mesh_name}|{topology_fingerprint}|{policy_fingerprint}|{mesh_revision}'.encode()).hexdigest()}"
+    identity_status = (
+        "bound"
+        if not str(policy_fingerprint).startswith("unbound:") and mesh_revision != "unbound"
+        else "unbound"
+    )
+    return {
+        "topology_fingerprint_version": "v3",
+        "topology_fingerprint": topology_fingerprint,
+        "policy_fingerprint": str(policy_fingerprint),
+        "mesh_revision": mesh_revision,
+        "artifact_id": artifact_id,
+        "mesh_name": mesh_name,
+        "certifier_build": {
+            "name": "fullmag-python-reference",
+            "version": "fmmq-v2",
+        },
+        "identity_status": identity_status,
+        "sidecar_identity": {
+            key: mesh_provenance[key]
+            for key in (
+                "source_scene_revision",
+                "geometry_realization_revision",
+                "generation_id",
+                "source_snapshot_sha256",
+            )
+            if key in mesh_provenance
+        },
+    }
+
+
+def _write_quality_data_artifact_v2_if_available(
+    mesh_data: Any,
+    *,
+    mesh_name: str,
+    mesh_provenance: dict[str, Any],
+    quality_artifact_dir: str | Path | None,
+    adjacent_growth_report: Any | None = None,
+) -> dict[str, Any] | None:
+    """Publish the typed FMMQ v2 carrier next to the legacy v1 artifact."""
+    try:
+        identity = _fmmq_v2_identity(
+            mesh_data,
+            mesh_name=mesh_name,
+            mesh_provenance=mesh_provenance,
+        )
+        element_count, identity, metrics = build_fmmq_v2_spec(
+            mesh_data,
+            identity=identity,
+            adjacent_growth_report=adjacent_growth_report,
+        )
+    except (TypeError, AttributeError):
+        # A mesh without the typed topology interface cannot produce a v2
+        # carrier.  Validation/identity failures are deliberately propagated
+        # so a malformed quality artifact cannot be silently downgraded to
+        # the legacy v1 path.
+        return None
+    target_dir = _resolve_quality_artifact_dir(quality_artifact_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # A fixed ``mesh_name`` path lets two concurrent remesh jobs replace each
+    # other's carrier even though the writer itself publishes atomically.  Use
+    # the complete canonical identity as the filename key so distinct
+    # topology/policy/revision combinations have independent publication
+    # points while repeated publication of the same identity remains
+    # deterministic and idempotent.
+    identity_token = hashlib.sha256(_canonical_json(identity)).hexdigest()
+    target = target_dir / (
+        f"{_safe_artifact_prefix(mesh_name)}-quality-v2-{identity_token}.fmmq"
+    )
+    return write_fmmq_v2(
+        target,
+        element_count=element_count,
+        identity=identity,
+        metrics=metrics,
+    )
 
 
 def _mesh_result_payload(
@@ -428,6 +664,35 @@ def _mesh_result_payload(
         if tet4_only
         else None
     )
+    raw_mesh_options = mesh_provenance.get("mesh_options")
+    raw_growth = (
+        raw_mesh_options.get("growth_rate")
+        if isinstance(raw_mesh_options, dict)
+        else None
+    )
+    growth_report = None
+    if raw_growth is not None:
+        growth_value = parse_finite_float(
+            raw_growth,
+            "/mesh_provenance/mesh_options/growth_rate",
+            positive=True,
+            allow_numeric_string=True,
+        )
+        growth_report = validate_adjacent_size_growth(
+            mesh,
+            resolved_growth_rate=float(growth_value),
+            tolerance=0.0,
+            # A declared post-mesh growth law is a qualification contract,
+            # not merely a Gmsh hint.  A mesh with no measurable face-neighbor
+            # pair must fail closed instead of publishing an ``unknown``
+            # quality result that looks valid to downstream consumers.
+            require_pairs=True,
+        )
+    # Do not publish topology or quality artifacts until every declared
+    # post-mesh gate has passed.  In particular, an invalid growth report must
+    # leave no partial artifact that downstream readers could mistake for a
+    # valid mesh result.
+    typed_quality_summary = build_typed_quality_summary(mesh).to_dict()
     topology_artifact = _write_topology_artifact_if_needed(
         mesh,
         mesh_name=mesh_name,
@@ -438,6 +703,13 @@ def _mesh_result_payload(
         mesh,
         mesh_name=mesh_name,
         quality_artifact_dir=topology_artifact_dir,
+    )
+    quality_data_artifact_v2 = _write_quality_data_artifact_v2_if_available(
+        mesh,
+        mesh_name=mesh_name,
+        mesh_provenance=mesh_provenance,
+        quality_artifact_dir=topology_artifact_dir,
+        adjacent_growth_report=growth_report,
     )
     inline_topology = topology_artifact is None
     result: dict[str, Any] = {
@@ -470,14 +742,27 @@ def _mesh_result_payload(
     if mesh_statistics is not None:
         result["mesh_statistics"] = mesh_statistics
 
+    result["typed_quality_summary"] = typed_quality_summary
+
     if topology_artifact is not None:
         result["topology_artifact"] = topology_artifact
 
     if quality_data_artifact is not None:
         result["quality_data_artifact"] = quality_data_artifact
 
+    if quality_data_artifact_v2 is not None:
+        result["quality_data_artifact_v2"] = quality_data_artifact_v2
+
     if size_field_stats is not None:
         result["size_field_stats"] = size_field_stats
+
+    # ``Mesh.SmoothRatio`` is only a generator hint.  When a resolved growth
+    # target is present, publish an independent post-mesh measurement so
+    # callers can distinguish the requested value from the realized face-
+    # neighbor ratios.  Invalid growth is rejected above before this payload
+    # is published; a successful report is therefore a hard post-mesh gate.
+    if growth_report is not None:
+        result["adjacent_size_growth"] = growth_report.to_dict()
 
     if region_markers is not None:
         result["region_markers"] = region_markers

@@ -781,11 +781,11 @@ pub(crate) fn capabilities_for_fdm_engine(
         (FdmEngine::CpuReference, FdmCapabilityProfile::Multilayer) => (
             FeatureCapabilityStatus::DevelopmentExecutable,
             "Frozen Spins source execution is available for CPU double-precision multilayer plans in canonical native-layer order; production qualification remains receipt-scoped.",
-            "multilayer_native_layer_order; device=cpu; precision=double; explicit_rk",
+            "multilayer_native_layer_order; device=cpu; precision=double; explicit_rk|abm3; checkpoint=history_resume",
         ),
         (FdmEngine::CudaFdm, FdmCapabilityProfile::Multilayer) => (
             FeatureCapabilityStatus::Unsupported,
-            "Frozen Spins multilayer CUDA execution is not implemented; the resolved carrier cannot enter the CUDA multilayer lane.",
+            "Frozen Spins multilayer CUDA execution is fail-closed because the device-resident v2 ABI carries no mask/reference payload; use CPU multilayer or the native single-grid CUDA lane.",
             "multilayer; device=cuda; reason_code=frozen_spins_fdm_multilayer_cuda_unqualified",
         ),
     };
@@ -858,6 +858,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             ],
             preview_quantities: quantity_names(&[
                 QuantityId::M,
+                QuantityId::FrozenSpins,
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
@@ -875,6 +876,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             ]),
             snapshot_quantities: quantity_names(&[
                 QuantityId::M,
+                QuantityId::FrozenSpins,
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
@@ -927,6 +929,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             ],
             preview_quantities: quantity_names(&[
                 QuantityId::M,
+                QuantityId::FrozenSpins,
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
@@ -944,6 +947,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
             ]),
             snapshot_quantities: quantity_names(&[
                 QuantityId::M,
+                QuantityId::FrozenSpins,
                 QuantityId::HEx,
                 QuantityId::HDemag,
                 QuantityId::HExt,
@@ -1508,6 +1512,31 @@ mod tests {
                     capabilities.engine_id.as_str()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn fem_capability_profiles_expose_frozen_spins_compatibility_quantity() {
+        for capabilities in [
+            capabilities_for_fem_engine(FemEngine::CpuNative),
+            capabilities_for_fem_engine(FemEngine::NativeGpu),
+        ] {
+            assert!(
+                capabilities
+                    .preview_quantities
+                    .iter()
+                    .any(|id| id == QuantityId::FrozenSpins.as_str()),
+                "{} must expose Frozen Spins in the FEM preview compatibility projection",
+                capabilities.engine_id.as_str()
+            );
+            assert!(
+                capabilities
+                    .snapshot_quantities
+                    .iter()
+                    .any(|id| id == QuantityId::FrozenSpins.as_str()),
+                "{} must expose Frozen Spins in the FEM snapshot compatibility projection",
+                capabilities.engine_id.as_str()
+            );
         }
     }
 

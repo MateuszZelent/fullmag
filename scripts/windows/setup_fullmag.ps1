@@ -11,14 +11,32 @@ $ProgressPreference = "SilentlyContinue"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
-$defaultCacheRoot = Join-Path $RepoDriveRoot "fullmag-cache"
-$defaultBuildRoot = Join-Path $RepoDriveRoot "fullmag-build"
-$defaultTempRoot = Join-Path $RepoDriveRoot "fullmag-tmp"
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
   return [System.IO.Path]::GetFullPath($Path)
 }
+
+function Get-WorkspaceNamespace {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $normalized = (Resolve-AbsolutePath $Path).TrimEnd("\").ToLowerInvariant()
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $digest = ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+  }
+  finally {
+    $hasher.Dispose()
+  }
+  $slug = [System.IO.Path]::GetFileName($normalized) -replace "[^a-z0-9._-]", "-"
+  if (-not $slug) { $slug = "repo" }
+  return "$slug-$($digest.Substring(0, 16))"
+}
+
+$WorkspaceNamespace = Get-WorkspaceNamespace $RepoRoot
+$defaultCacheRoot = Join-Path $RepoDriveRoot ("fullmag-cache\$WorkspaceNamespace")
+$defaultBuildRoot = Join-Path $RepoDriveRoot ("fullmag-build\$WorkspaceNamespace")
+$defaultTempRoot = Join-Path $RepoDriveRoot ("fullmag-tmp\$WorkspaceNamespace")
 
 function Require-ExternalBuildPath {
   param(
@@ -62,15 +80,41 @@ function Invoke-Checked {
   }
 }
 
+$PinnedPnpmVersion = "10.8.1"
+
 $cacheCandidate = if ($env:FULLMAG_WINDOWS_CACHE_ROOT) { $env:FULLMAG_WINDOWS_CACHE_ROOT } else { $defaultCacheRoot }
 $buildCandidate = if ($env:FULLMAG_WINDOWS_BUILD_ROOT) { $env:FULLMAG_WINDOWS_BUILD_ROOT } else { $defaultBuildRoot }
 $tempCandidate = if ($env:FULLMAG_WINDOWS_TEMP_ROOT) { $env:FULLMAG_WINDOWS_TEMP_ROOT } else { $defaultTempRoot }
 $CacheRoot = Require-ExternalBuildPath $cacheCandidate "FULLMAG_WINDOWS_CACHE_ROOT"
 $BuildRoot = Require-ExternalBuildPath $buildCandidate "FULLMAG_WINDOWS_BUILD_ROOT"
 $TempRoot = Require-ExternalBuildPath $tempCandidate "FULLMAG_WINDOWS_TEMP_ROOT"
+$CorepackHome = Join-Path $CacheRoot "corepack"
+$PinnedPnpmCli = Join-Path $CorepackHome "v1\pnpm\$PinnedPnpmVersion\bin\pnpm.cjs"
+$env:COREPACK_HOME = $CorepackHome
 
 foreach ($directory in @($CacheRoot, $BuildRoot, $TempRoot)) {
   Ensure-Directory $directory
+}
+
+function Ensure-PinnedPnpm {
+  Ensure-Directory $CorepackHome
+  if (-not (Test-Path -LiteralPath $PinnedPnpmCli -PathType Leaf)) {
+    if (-not $InstallMissing) {
+      throw "Pinned pnpm $PinnedPnpmVersion is missing at $PinnedPnpmCli; run this script again with -InstallMissing"
+    }
+    $corepack = Get-Command "corepack" -ErrorAction SilentlyContinue
+    if (-not $corepack) {
+      throw "Corepack is required to provision pinned pnpm $PinnedPnpmVersion at $PinnedPnpmCli"
+    }
+    Invoke-Checked $corepack.Source @("install", "--global", "pnpm@$PinnedPnpmVersion")
+  }
+  if (-not (Test-Path -LiteralPath $PinnedPnpmCli -PathType Leaf)) {
+    throw "Corepack did not provision pinned pnpm $PinnedPnpmVersion at $PinnedPnpmCli"
+  }
+  $resolvedVersion = (& node $PinnedPnpmCli --version 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $resolvedVersion -ne $PinnedPnpmVersion) {
+    throw "Pinned pnpm validation failed at $PinnedPnpmCli; expected $PinnedPnpmVersion, got $resolvedVersion"
+  }
 }
 
 $ToolsRoot = Join-Path $CacheRoot "tools"
@@ -96,11 +140,13 @@ if (-not $vcvars -or -not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
   throw "vcvars64.bat not found; install the Visual Studio C++ workload"
 }
 
-foreach ($command in @("git", "cargo", "rustup", "cmake", "node", "pnpm", "python")) {
+foreach ($command in @("git", "cargo", "rustup", "cmake", "node", "python")) {
   if (-not (Test-Command $command)) {
     throw "Missing required command: $command"
   }
 }
+
+Ensure-PinnedPnpm
 
 $managedJust = Join-Path $CargoToolsBin "just.exe"
 if (-not (Test-Path -LiteralPath $managedJust -PathType Leaf)) {

@@ -370,6 +370,7 @@ def collect_execution_cases(
 def _environment(spec: dict[str, object], max_steps: int) -> dict[str, str]:
     return {
         "FULLMAG_SP4_PHASE": str(spec["phase"]),
+        "FULLMAG_SP4_COMPATIBILITY": "native",
         "FULLMAG_SP4_TOPOLOGY_VARIANT": str(spec["topology_variant"]),
         "FULLMAG_SP4_LAYERS": str(spec["layers"]),
         "FULLMAG_SP4_MESH": str(spec["mesh_level"]),
@@ -1055,9 +1056,13 @@ def _validate_certificate(certificate: dict[str, object], layers: int) -> None:
     missing = required_fields - set(certificate)
     if missing:
         raise ExecutionError(f"mixed topology certificate is incomplete: {sorted(missing)}")
-    if certificate.get("requested_sweep_direction") != certificate.get("resolved_sweep_direction"):
+    requested_direction = certificate.get("requested_sweep_direction")
+    resolved_direction = certificate.get("resolved_sweep_direction")
+    if requested_direction != "auto" and requested_direction != resolved_direction:
         raise ExecutionError("mixed topology certificate changed sweep direction")
-    if certificate.get("requested_sweep_direction") not in {"x", "y", "z"}:
+    if requested_direction not in {"auto", "x", "y", "z"} or resolved_direction not in {
+        "x", "y", "z"
+    }:
         raise ExecutionError("mixed topology certificate sweep direction is invalid")
     if certificate.get("topology_fingerprint_version") != "v3":
         raise ExecutionError("mixed topology certificate fingerprint version must be v3")

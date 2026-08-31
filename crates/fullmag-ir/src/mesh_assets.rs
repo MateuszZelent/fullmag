@@ -1522,8 +1522,12 @@ impl MixedLayerTopologyCertificateV1IR {
         if self.certificate_status != "accepted" {
             errors.push("mixed layer topology certificate status must be accepted".to_string());
         }
-        if !matches!(self.requested_sweep_direction.as_str(), "x" | "y" | "z")
-            || self.requested_sweep_direction != self.resolved_sweep_direction
+        if !matches!(
+            self.requested_sweep_direction.as_str(),
+            "auto" | "x" | "y" | "z"
+        ) || !matches!(self.resolved_sweep_direction.as_str(), "x" | "y" | "z")
+            || (self.requested_sweep_direction != "auto"
+                && self.requested_sweep_direction != self.resolved_sweep_direction)
         {
             errors.push(
                 "mixed layer topology certificate sweep direction is invalid or changed"

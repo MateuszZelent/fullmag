@@ -405,6 +405,69 @@ void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_op
     }
 }
 
+MeshBuffers qualified_pure_prism_p2_mesh() {
+    MeshBuffers source;
+    source.nodes_xyz = {
+        0, 0, 0,  1, 0, 0,  0, 1, 0,
+        0, 0, 1,  1, 0, 1,  0, 1, 1,
+        2, 0, 0,  3, 0, 0,  2, 1, 0,
+        2, 0, 1,  3, 0, 1,  2, 1, 1,
+    };
+    source.cell_types = {FULLMAG_FEM_CELL_PRISM6, FULLMAG_FEM_CELL_PRISM6};
+    source.cell_offsets = {0u, 6u, 12u};
+    source.cell_nodes = {
+        0u, 1u, 2u, 3u, 4u, 5u,
+        6u, 7u, 8u, 9u, 10u, 11u,
+    };
+    source.cell_global_ordinals = {100u, 101u};
+    source.cell_markers = {1u, 0u};
+    source.facet_types = {FULLMAG_FEM_FACET_TRI3, FULLMAG_FEM_FACET_QUAD4};
+    source.facet_roles = {
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+        FULLMAG_FEM_FACET_ROLE_EXTERIOR,
+    };
+    source.facet_offsets = {0u, 3u, 7u};
+    source.facet_nodes = {0u, 2u, 1u, 6u, 7u, 10u, 9u};
+    source.facet_global_ordinals = {700u, 701u};
+    source.facet_markers = {99u, 99u};
+    source.periodic_node_pairs.clear();
+    source.periodic_boundary_pair_markers.clear();
+    return source;
+}
+
+void native_physics_gate_accepts_bounded_cpu_pure_prism_p2_shared_domain() {
+    MeshBuffers source = qualified_pure_prism_p2_mesh();
+    fullmag::fem::Context ctx;
+    std::string error;
+    check(fullmag::fem::initialize_mesh_plan_fields(ctx, source.desc(), error), error.c_str());
+    auto plan = qualified_mixed_operator_plan(source);
+    check(fullmag::fem::validate_supported_physics_topology(ctx, plan, error), error.c_str());
+
+    auto cuda = plan;
+    cuda.mfem_device_string = "cuda";
+    error.clear();
+    check(!fullmag::fem::validate_supported_physics_topology(ctx, cuda, error),
+          "pure prism P2 must remain CPU-only until CUDA is qualified");
+    check(error.find("pure_prism_p2_cpu_only") != std::string::npos, error.c_str());
+    check(error.find("fallback=none") != std::string::npos, error.c_str());
+
+    MeshBuffers missing_air = source;
+    missing_air.cell_markers = {1u, 1u};
+    fullmag::fem::Context missing_air_ctx;
+    error.clear();
+    check(fullmag::fem::initialize_mesh_plan_fields(
+              missing_air_ctx, missing_air.desc(), error),
+          error.c_str());
+    auto missing_air_plan = qualified_mixed_operator_plan(missing_air);
+    error.clear();
+    check(!fullmag::fem::validate_supported_physics_topology(
+              missing_air_ctx, missing_air_plan, error),
+          "pure prism shared domain without air markers must fail closed");
+    check(error.find("prism_shared_domain_magnetic_air_markers") !=
+              std::string::npos,
+          error.c_str());
+}
+
 void typed_mesh_import_accepts_empty_optional_buffers() {
     MeshBuffers source;
     source.facet_types.clear();
@@ -618,6 +681,7 @@ int main() {
     typed_mesh_import_copies_every_canonical_buffer();
     exported_mesh_abi_query_matches_compiled_layout();
     native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_operator_scope();
+    native_physics_gate_accepts_bounded_cpu_pure_prism_p2_shared_domain();
     typed_mesh_import_accepts_empty_optional_buffers();
     typed_mesh_import_rejects_bad_version_pointers_and_lengths();
     typed_mesh_import_rejects_invalid_csr_enums_indices_duplicates_and_jacobians();

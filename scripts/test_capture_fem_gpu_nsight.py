@@ -123,7 +123,7 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert "--cfg fullmag_enable_nvtx" in exporter
     assert '"nvtx_enabled"' in exporter
     clean = "cargo +nightly clean -p fullmag-build-info"
-    build = "cargo +nightly build"
+    build = "cargo +nightly -Z checksum-freshness build"
     assert clean in exporter
     assert exporter.index(clean) < exporter.index(build)
     assert "inherited RUSTFLAGS contains fullmag_enable_nvtx" in exporter
@@ -155,12 +155,11 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert "#endif" in guarded_wrappers
 
     dockerfile = sources["docker/fem-gpu/Dockerfile"]
-    assert (
-        "FULLMAG_NSIGHT_SYSTEMS_ROOT=/opt/nvidia/nsight-compute/2024.1.1/host/target-linux-x64"
-        in dockerfile
-    )
-    assert "PATH=${FULLMAG_NSIGHT_SYSTEMS_ROOT}:${PATH}" in dockerfile
-    assert "RUN nsys --version && ncu --version" in dockerfile
+    assert "2024.1.1" not in dockerfile
+    assert "command -v nsys" in dockerfile
+    assert "command -v ncu" in dockerfile
+    assert "profiler tools are optional" in dockerfile
+    assert "RUN nsys --version && ncu --version" not in dockerfile
 
     assert "mod nvtx_range;" in (REPO_ROOT / "crates/fullmag-cli/src/main.rs").read_text(
         encoding="utf-8"
@@ -325,11 +324,10 @@ def test_capture_uses_typed_v2_fixture_and_matching_environment() -> None:
     command = capture._fixture_command(Path("/tmp/compute"))
     fixture_index = command.index("--fixture-manifest")
     environment_index = command.index("--fixture-environment")
-    assert command[fixture_index + 1].endswith(
-        "examples/assets/fem_performance/box500_airbox_exchange_demag_v2.fixture.json"
-    )
-    assert command[environment_index + 1].endswith(
-        "benchmarks/fem-gpu/accepted/rtx4080-sm89/nsight-v2-environment.json"
+    assert Path(command[fixture_index + 1]).resolve() == capture.FIXTURE_MANIFEST.resolve()
+    assert (
+        Path(command[environment_index + 1]).resolve()
+        == capture.FIXTURE_ENVIRONMENT.resolve()
     )
 
 

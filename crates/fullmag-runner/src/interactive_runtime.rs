@@ -230,10 +230,11 @@ mod tests {
         ExecutedRun, ExecutionProvenance, LivePreviewRequest, RunResult, StepAction, StepStats,
     };
     use fullmag_ir::{
-        BackendPlanIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
-        GridDimensions, IntegratorChoice, ProblemIR, RelaxationAlgorithmIR, RelaxationControlIR,
-        ResolvedAntennaZeemanMaskIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
-        SelectionCertificateIR, TimeDependenceIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
+        BackendPlanIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmGridCertificateIR,
+        FdmMaterialIR, FdmPlanIR, GridDimensions, IntegratorChoice, ProblemIR,
+        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedAntennaZeemanMaskIR,
+        ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        TimeDependenceIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
         SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
@@ -291,6 +292,19 @@ mod tests {
         assert!(native_recorder < initial_fields);
     }
 
+    fn interactive_fdm_grid_certificate() -> FdmGridCertificateIR {
+        FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [4, 2, 1],
+            [2e-9; 3],
+            8,
+            8 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+            None,
+            &[0; 8],
+        )
+        .expect("interactive FDM fixture grid certificate")
+    }
+
     fn make_soa_fdm_plan() -> FdmPlanIR {
         FdmPlanIR {
             grid: GridDimensions { cells: [4, 2, 1] },
@@ -322,11 +336,13 @@ mod tests {
             adaptive_timestep: None,
             enable_exchange: true,
             enable_demag: true,
+            grid_certificate: Some(interactive_fdm_grid_certificate()),
             ..Default::default()
         }
     }
 
     fn resolved_frozen_spins(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
+        let grid_fingerprint = interactive_fdm_grid_certificate().grid_fingerprint;
         let active_dof_count = mask.len() as u64;
         let frozen_dof_count = mask.iter().filter(|frozen| **frozen).count() as u64;
         let free_dof_count = active_dof_count - frozen_dof_count;
@@ -346,7 +362,7 @@ mod tests {
             frozen_dof_count,
             free_dof_count,
             mask_sha256: mask_sha256.clone(),
-            grid_or_mesh_fingerprint: "interactive-stage-grid".to_string(),
+            grid_or_mesh_fingerprint: grid_fingerprint.clone(),
             source_state_revision: Some(1),
             all_active_dofs_frozen: active_dof_count > 0 && free_dof_count == 0,
             certificate: SelectionCertificateIR {
@@ -363,13 +379,43 @@ mod tests {
                 frozen_dof_count,
                 free_dof_count,
                 bounds_m: None,
-                grid_or_mesh_fingerprint: "interactive-stage-grid".to_string(),
+                grid_or_mesh_fingerprint: grid_fingerprint,
                 source_state_revision: Some(1),
                 mask_sha256,
                 resolved_reference_sha256: "b".repeat(64),
                 warnings: Vec::new(),
             },
         }
+    }
+
+    #[test]
+    fn interactive_fdm_frozen_spins_fixture_has_authoritative_topology_anchor() {
+        let mut plan = make_soa_fdm_plan();
+        plan.frozen_spins = Some(resolved_frozen_spins(vec![
+            true, false, false, false, false, false, false, false,
+        ]));
+
+        let grid_certificate = plan
+            .grid_certificate
+            .as_ref()
+            .expect("interactive Frozen Spins fixture must carry a grid certificate");
+        grid_certificate
+            .validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+            .expect("interactive grid certificate must match its realized masks");
+        let frozen_spins = plan
+            .frozen_spins
+            .as_ref()
+            .expect("interactive Frozen Spins fixture");
+        frozen_spins
+            .validate_intrinsic()
+            .expect("interactive Frozen Spins carrier must be intrinsically valid");
+        frozen_spins
+            .validate_against_active_mask(&vec![true; plan.initial_magnetization.len()])
+            .expect("interactive Frozen Spins carrier must match the active domain");
+        assert_eq!(
+            frozen_spins.grid_or_mesh_fingerprint,
+            grid_certificate.grid_fingerprint
+        );
     }
 
     #[test]

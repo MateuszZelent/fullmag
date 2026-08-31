@@ -283,8 +283,10 @@ def _validate_mesh_control_values(
             )
     if growth_rate is not None:
         rate = float(growth_rate)
-        if not math.isfinite(rate) or rate <= 0.0:
-            raise ValueError(f"{context}: maximum_element_growth_rate must be positive")
+        if not math.isfinite(rate) or rate <= 1.0:
+            raise ValueError(
+                f"{context}: maximum_element_growth_rate must be finite and greater than 1.0"
+            )
         if rate > 2.5:
             raise ValueError(
                 f"{context}: maximum_element_growth_rate={rate:g} is outside the "
@@ -2343,9 +2345,12 @@ class StudyUniverseConfig:
             object.__setattr__(self, "airbox_growth_rate", float(self.airbox_growth_rate))
             if (
                 not math.isfinite(self.airbox_growth_rate)
-                or self.airbox_growth_rate <= 0.0
+                or self.airbox_growth_rate <= 1.0
             ):
-                raise ValueError("airbox_growth_rate must be a positive finite float")
+                raise ValueError(
+                    "airbox_growth_rate must be finite and greater than 1.0; "
+                    "use None to disable geometric grading"
+                )
         if self.airbox_grading is not None:
             normalized_grading = str(self.airbox_grading).strip().lower()
             if normalized_grading not in {"auto", "geometric", "linear"}:
@@ -6517,6 +6522,21 @@ def build_domain_mesh() -> None:
     build_mesh()
 
 
+def _canonical_mesh_source_path(source: str | Path, *, label: str) -> str:
+    """Normalize authored mesh paths for portable IR and script round-trips.
+
+    Mesh-source strings are part of the cross-platform authoring contract.  A
+    native ``str(Path(...))`` leaks Windows backslashes into JSON and generated
+    scripts, making the same declaration differ between Windows and POSIX
+    hosts.  Keep the path relative/absolute as authored while using forward
+    separators, which are accepted by ``Path`` on both platforms.
+    """
+    raw = str(source)
+    if not raw.strip():
+        raise ValueError(f"{label} source must not be empty")
+    return str(Path(raw)).replace("\\", "/")
+
+
 def domain_mesh(
     source: str | Path,
     *,
@@ -6539,9 +6559,7 @@ def domain_mesh(
         splits. These markers must already exist in the mesh element marker
         array; Fullmag does not synthesize conformal region markers from shapes.
     """
-    rendered_source = str(Path(source))
-    if not rendered_source.strip():
-        raise ValueError("domain_mesh source must not be empty")
+    rendered_source = _canonical_mesh_source_path(source, label="domain_mesh")
     _state._domain_mesh_source = rendered_source
     _state._domain_region_markers = _normalize_domain_region_markers(region_markers)
     normalized_object_region_markers = (
@@ -6573,17 +6591,19 @@ def frozen_magnetic_submesh(
     air_mesh_source: str | Path | None = None,
 ) -> None:
     """Use a frozen magnetic submesh source when building the FEM airbox domain."""
-    rendered_source = str(Path(source))
-    if not rendered_source.strip():
-        raise ValueError("frozen_magnetic_submesh source must not be empty")
+    rendered_source = _canonical_mesh_source_path(
+        source,
+        label="frozen_magnetic_submesh",
+    )
     payload: dict[str, object] = {
         "mesh_source": rendered_source,
         "region_markers": _normalize_domain_region_markers(region_markers),
     }
     if air_mesh_source is not None:
-        rendered_air_source = str(Path(air_mesh_source))
-        if not rendered_air_source.strip():
-            raise ValueError("frozen_magnetic_submesh air_mesh_source must not be empty")
+        rendered_air_source = _canonical_mesh_source_path(
+            air_mesh_source,
+            label="frozen_magnetic_submesh air_mesh",
+        )
         payload["air_mesh_source"] = rendered_air_source
     _state._frozen_magnetic_submesh_source = payload
 
@@ -7273,6 +7293,8 @@ def _collect_mesh_workflow_metadata() -> dict[str, object] | None:
         mesh_options["through_thickness_symmetric"] = True
     if primary_spec.sweep_face_meshing is not None:
         mesh_options["sweep_face_meshing"] = primary_spec.sweep_face_meshing
+    if primary_spec.sweep_direction is not None:
+        mesh_options["sweep_direction"] = primary_spec.sweep_direction
     if primary_spec.periodic_pair_ids:
         mesh_options["periodic_pair_ids"] = list(primary_spec.periodic_pair_ids)
     if primary_spec.boundary_layer_count is not None:

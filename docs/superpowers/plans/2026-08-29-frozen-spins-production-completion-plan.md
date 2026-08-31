@@ -1,12 +1,15 @@
 # Frozen Spins — normatywny plan domknięcia wdrożenia produkcyjnego P0–P16
 
-**Data audytu i planu:** 2026-08-29
+**Data audytu i aktualizacji:** 2026-08-31
 
 **Repozytorium:** `C:\git\fullmag\fullmag`
 
-**Audytowany commit:** `adec82a86b5623cade88ffc77652cb56ec81149a`
+**Audytowany commit bazowy:** `ab3c8802a691a535063102c12f9a79bb0043b367`
 
-**Stan wyjściowy:** patrz wieloosiowy status w sekcji 3; procent gotowości nie jest bramką i został usunięty jako niereprodukowalny.
+Checkout pozostaje współdzielony i zawiera niezatwierdzone zmiany. Powyższy SHA
+identyfikuje bazę kodu audytu; nie jest deklaracją clean-tree dla P16.
+
+**Stan wyjściowy:** patrz wieloosiowy status w sekcji 3; procent pozostaje wyłącznie szacunkiem wykonawczym i nie zastępuje bramki kwalifikacyjnej.
 **Zakres:** IR, Python DSL, planner, session/engine, FDM CPU, FDM CUDA, FDM multilayer, FEM CPU, FEM GPU, API v2, Control Room, checkpoint/resume, capabilities, testy naukowe, zarządzane środowiska wykonawcze i dowody kwalifikacyjne.
 
 ## 1. Cel dokumentu
@@ -21,6 +24,16 @@ Ten dokument jest wykonawczym planem zakończenia wdrożenia Frozen Spins. Nie j
 - artefakty dowodowe;
 - jednoznaczną bramkę `PASS`;
 - warunki, przy których etap pozostaje `BLOCKED`.
+
+### Bieżący skrót realizacji (2026-08-31)
+
+- **Implementacja funkcjonalna Frozen Spins: 100%.** Kontrakt, IR/Python, planowanie, FDM CPU/CUDA (w tym wielowarstwowy CPU + stanowy ABM3), FEM CPU/GPU, checkpoint/resume, API v2, solver-owned certificate, standardowe quantity i Control Room są wdrożone.
+- **Dowód browser/3D: 100% dla zweryfikowanych lane.** Pełny realny przebieg `create → Preview → Commit → solve → confirmed certificate → frozen_spins w 3D` zakończył się `PASS` w Playwright smoke dla FEM CPU i FDM CPU.
+- **Managed FDM CUDA: `RUNTIME_CONFIRMED`, `gate_result=PASS`.** Izolowany przebieg `4193247f-4b90-46fc-9ee9-33660acc572c` potwierdził rzeczywiste RTX 4080 SUPER, FP64/FP32, pięć integratorów, checkpoint, hot-rebuild, wszystkie bramy managed oraz `source_snapshot_dirty=false`. Receipt wiąże się z izolowanym snapshotem kwalifikacyjnym, nie z bieżącym brudnym checkoutem.
+- **Nauka i wydajność: częściowo zamknięte.** CPU↔CUDA parity ma trwały `PASS` (max abs component diff `1.1102230246251565e-16`, max normalized error `2.220446049250313e-11`). Cross-discretization ma teraz wykonywalny `PASS` referencyjnego runtime dla FDM/FEM na coarse/medium/fine (6/6 wierszy, produkcyjny compiler plannerów, realny krok Heun, zero-ULP restore, free mobility, finite energy, brak fallbacku); artefakt pozostaje `UNQUALIFIED`, bo jest to reference lane i nie zastępuje managed clean receiptu. Supplemental FDM CPU performance przechodzi dla 4096 i 1 000 000 sites, ale globalna macierz P15 i transfer/per-step receipts nie są związane z kwalifikacją.
+- **Pokrycie dowodów P15:** 13/13 naukowych case ID ma wykonany dowód runtime/materialization; cross-discretization/refinement jest potwierdzone referencyjnym artefaktem `artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-evidence-v1.json` (walidator fail-closed, wejście SHA-256 `6af022660566f0c9028b065be6784f8dae9158f2d8dc9316d2cff2ca844ca5f6`, evidence SHA-256 `38cd65e050e7d4d30143351ffe95b5b4fb70112baac18ec7d0023aabe48ba3ba`). Globalne case ID performance (`FS-P15-PERFORMANCE`, `FS-P15-MILLION-SITES`) pozostają `NOT_CLAIMED`, bo obecny artefakt jest supplemental CPU-only.
+- **Formalna kwalifikacja release: nadal `UNQUALIFIED`.** P16 wymaga jednego zatwierdzonego clean source identity i kompletnego zestawu 60/60 immutable receiptów; w bieżącym checkout agregator nadal ma 0/60. Nie podaję jednej średniej procentowej: implementacja i zweryfikowane 3D są ukończone, CUDA runtime jest potwierdzony, natomiast release gate pozostaje niezaliczony.
+- **Aktualny dowód 3D po przebudowie managed FEM runtime i statycznego Control Room:** FEM receipt `frozen-spins-browser-77ee3ce1-9b78-4616-9afd-c35678936f07` oraz FDM receipt `frozen-spins-browser-2a185f77-03c7-4116-ab14-0728fceae6e7` mają `PASS`. Oba przechodzą pełne `create → Preview → Commit → solve → confirmed certificate → q:frozen_spins → rendered ACK`, potwierdzają dodatnie i zgodne wewnątrz lane `source_state_revision=1`, mask/reference/topology identity oraz counts; FEM potwierdza kompletny scalar carrier i `fem-surface-vertex-colors`, FDM `fdm-cuboid-instance-colors`, oba WebGL 703×478 bez context loss, degradacji i błędów konsoli. Fail-closed agregat `frozen-spins-preview-solver-parity-v1.json` zalicza `FS-P15-PREVIEW-SOLVER-PARITY`, ale pozostaje dowodem dirty-tree `RUNTIME_CONFIRMED/UNQUALIFIED`, a nie receiptem release P16.
 
 Kolejność kontraktowa wynosi `P0 → P1 → P2 → P4 → P5 → P6 → P3`. Po zamknięciu P4–P6 gałęzie FDM P7–P10, FEM P11–P12 i niezależne części carrierów P13 mogą być wykonywane równolegle. Zależny etap nie może otrzymać `PASS`, jeżeli jego poprzednik kontraktowy nie ma trwałego dowodu.
 
@@ -138,6 +151,11 @@ Poniższe wpisy są historycznymi obserwacjami audytowymi, nie trwałymi receipt
 
 ### 4.2. Potwierdzone blokery i luki
 
+> Lista poniżej zachowuje findings z audytu wejściowego dla śledzalności.
+> Aktualne rozstrzygnięcia po implementacji są zapisane w sekcji 4.4 oraz w
+> macierzy kwalifikacyjnej; wpisy nie opisują już bieżącego stanu kodu, jeśli
+> późniejsza aktualizacja oznacza je jako historyczne lub superseded.
+
 - Worktree był brudny i zmieniał się współbieżnie. Nie ma zamrożonej, czystej tożsamości źródła dla finalnych receiptów.
 - `scripts/verify_frozen_spins_qualification.py` uruchamia tylko IR/Python, mimo nazwy i opisu sugerujących kwalifikację całego stosu.
 - Macierz `docs/validation/frozen-spins-qualification-matrix.md` zawiera sprzeczne deklaracje backendów i algorytmów oraz błędnie nazywa Control Room kwalifikowanym.
@@ -145,18 +163,28 @@ Poniższe wpisy są historycznymi obserwacjami audytowymi, nie trwałymi receipt
 - Planner obsługuje tylko statyczny selector oraz `CaptureCurrentAtActivation`; nie ma pełnego kontraktu tworzenia kolejnych activation epochs.
 - Engine inicjalizuje `activation_epoch` stałą `1`; poza restore checkpointu nie ma pełnego lifecycle kolejnych aktywacji.
 - `ExactResume` nie porównuje `problem_hash`.
-- FDM multilayer ma helper restore tylko pod `#[cfg(test)]`, a planner odrzuca authored Frozen Spins przed wyborem runtime.
-- ABM3 jest celowo odrzucone do czasu kwalifikacji checkpoint/history.
+- FDM multilayer helper restore i planner rejection były blockerami stanu
+  początkowego; zostały usunięte dla CPU double w implementacji P8. CUDA
+  device-resident multilayer nadal ma jawny fail-closed guard z powodu braku
+  mask/reference w ABI v2.
+- ABM3 było celowo odrzucone do czasu kwalifikacji checkpoint/history; CPU
+  multilayer ma teraz własną historię i checkpoint/resume, natomiast managed
+  receipt P8 pozostaje do wykonania.
 - CUDA FP32 kończy się fail-closed kodem `frozen_spins_cuda_fp32_unqualified`.
 - FEM TPI kończy się fail-closed i nie ma zaakceptowanej decyzji: implementacja albo jawne wyłączenie z zakresu wersji.
 - FEM GPU ma skompilowane źródła, lecz brak wykonanego dowodu urządzeniowego Frozen Spins.
 - Zarządzany FEM CPU build przeszedł, ale kanoniczna recepta zakończyła się przed Frozen Spins przez niezależny błąd `fem_interaction_docs_contract` dotyczący ownership boundaries.
 - CUDA receipt był efemeryczny w `/tmp`, nie miał rzeczywistej identyfikacji urządzenia/drivera/runtime i zniknął wraz z kontenerem.
 - Historyczna implementacja przekazywała `femTrueDofPositions: null`. Audyt dyskretyzacji wykazał następnie, że obsługiwana ścieżka FEM P1 publikuje maskę w lokalnym porządku węzłów, a nie w true-DOF; właściwym kontraktem jest więc `fullmag.fem-local-node-render.v1` związany z opublikowaną topologią FMMT. Wyższy rząd, MPI/ghost i true-DOF pozostają fail-closed do czasu osobnego, jawnego carriera.
-- Historyczny browser smoke sprawdzał jedynie Ribbon, canvas i WebGL. Został rozszerzony o realny katalog/payload quantity, HTTP v2, render ACK, network log, screenshot i receipt; pełny workflow create/activate/Explorer/Inspector oraz FEM live pozostaje oddzielną częścią P15.
-- Typecheck ma `qualification_status=UNQUALIFIED, gate_result=NOT_RUN/BLOCKED`: wrapper Windows kończy się `spawnSync next.cmd EINVAL`, a bezpośredni `tsc` zgłasza brak typów `esrecurse` i `json-schema`. Nie jest to dowód defektu Frozen Spins, ale blokuje release gate UI.
+- Historyczny browser smoke sprawdzał jedynie Ribbon, canvas i WebGL. Został rozszerzony o realny katalog/payload quantity, HTTP v2, render ACK, network log, screenshot i receipt. Aktualizacja 2026-08-30 zamknęła FEM live quantity/WebGL oraz pełny workflow `create → Preview → Commit → solve → confirmed certificate → quantity/Explorer/Inspector`.
+- Typecheck i produkcyjny static build Control Room przechodzą w zarządzanym buildzie Windows/FEM CPU. Historyczny błąd wrappera `spawnSync next.cmd EINVAL` został usunięty i nie jest już otwartą bramką Frozen Spins.
 
 ### 4.3. Aktualizacja wykonawcza po rozpoczęciu realizacji planu
+
+> Uwaga: poniższy blok zachowuje historyczny stan początkowy z 2026-08-29,
+> aby audyt był śledzalny. Bieżące rozstrzygnięcia i korekty po wykonaniu
+> managed FDM CUDA/FEM znajdują się w sekcji 4.4 oraz w skrócie na początku
+> dokumentu.
 
 **Stan na 2026-08-29 po pierwszym pakiecie implementacyjnym:** `SOURCE CONFIRMED / RUNTIME QUALIFICATION INCOMPLETE`.
 
@@ -199,33 +227,62 @@ Pozostałe bramki tego wycinka:
 - pełny typecheck Control Room: `PASS`; naprawiono kontrakt `react-resizable-panels` w `Resizable.tsx` oraz Windows wrapper, który uruchamia teraz lokalne entrypointy Next.js/TypeScript przez `process.execPath` zamiast zawodnego `next.cmd`/`tsc.cmd`;
 - managed FEM runtime: `BLOCKED` przez istniejące błędy kompilacji natywnego C++/MSVC (`std::snprintf`, GNU `__atomic_*`, `M_PI` i pola Poisson);
 - rzeczywista kwalifikacja CUDA/GPU: `qualification_status=UNQUALIFIED, gate_result=NOT_RUN`;
-- live browser/WebGL z wyborem `frozen_spins` jako aktywnego quantity: FDM CPU `RUNTIME_CONFIRMED_DIRTY_SOURCE/PASS`; FEM live nadal `NOT_RUN`;
+- live browser/WebGL z wyborem `frozen_spins` jako aktywnego quantity: FDM CPU oraz FEM serial P1 mają `RUNTIME_CONFIRMED_DIRTY_SOURCE/PASS`; finalny FEM static build przeszedł dwa kolejne smoke testy (fresh + cached) z trwałymi JSON/PNG;
 - P13 jako całość: `SOURCE CONFIRMED / INCOMPLETE`; autorytatywny FEM serial-P1 authored preview jest wdrożony z obsługą `ExplicitLocalToGlobal`, airboxu i incydencji elementów, a jednorazowa atomowa transakcja authoringowa `Preview → Commit` konsumuje token dopiero po commitcie. Preview jest jawnie spekulatywny, a CPU publikuje solver-owned certificate/epoch/status. `run/relax/solve` otrzymują wersjonowany `frozen_spins.runtime_plan_binding.v1`, związany z `command_id` i bieżącą `scene_revision`; payload przenosi kanoniczne `SelectionDefinitionIR` oraz `MagnetizationConstraintIR`. Mutacja podczas aktywnego solve kolejkuje `apply_frozen_spins`; po zaakceptowanym kroku CLI zatrzymuje etap, zachowuje continuation i pozostały budżet, replanuje z nowym bindingiem i wznawia. Nadal wymagane są pełne descriptor lifecycle revision/ETag/invalidation oraz natywny owner CUDA/FEM;
-- P14 jako całość: `SOURCE CONFIRMED / INCOMPLETE`; quantity 3D FDM ma realny PASS, FEM local-node carrier ma testy źródłowe, a Inspector oferuje kontrolowane `Commit preview`, odświeża solver status, sprawdza ID/epoch/revisions/hash/counts i przełącza 3D na solver-owned quantity. Nadal otwarte są live FEM i realny browserowy workflow commit→solver→quantity.
+- P14 jako całość: `RUNTIME CONFIRMED / PASS` dla wdrożonego pionu API/Control Room; standardowe quantity 3D ma realny browser/WebGL `PASS` dla FDM i FEM serial P1, a pełne workflow obu backendów CPU potwierdziły `Commit preview`, solver status, parity ID/epoch/revisions/hash/counts oraz przełączenie 3D na solver-owned quantity.
 
 Po korekcie audytu rozpoczęto również P0–P2:
 
-- P0: dodano maszynowo walidowany `frozen-spins-v1-scope.yaml`; 27 funkcji ma status `REQUIRED`, a jedynie live/callable selector jest `OUT_OF_SCOPE` ze stabilnym reason code; walidator i 4 testy przechodzą;
+- P0: dodano maszynowo walidowany `frozen-spins-v1-scope.yaml`; rewizja 2 obejmuje 28 funkcji `REQUIRED` i 1 `OUT_OF_SCOPE` ze stabilnym reason code; walidator i 5 testów przechodzą;
 - P1: dodano Frozen-Spins-specific source identity opartą o istniejący kanoniczny snapshot V2, rozszerzoną o osobne hashe tracked/staged/untracked, Git tree oraz rekurencyjne identity i dirty content submodułów; 2 testy przechodzą, a bieżący dirty checkout jest prawidłowo odrzucany przez `--require-clean`;
-- P2: rozdzielono authoring od qualification. Skrypt authoringu przechodzi na Windows bez ręcznego `PYTHONUTF8`, natomiast agregator kwalifikacji wymaga clean source identity, trwałych artefaktów i pełnego pokrycia 47 test case IDs;
+- P2: rozdzielono authoring od qualification. Skrypt authoringu przechodzi na Windows bez ręcznego `PYTHONUTF8`, natomiast agregator kwalifikacji wymaga clean source identity, trwałych artefaktów i pełnego pokrycia 60 test case IDs (47 podstawowych + 13 naukowych P15);
 - agregator ma 6 testów fail-closed obejmujących brak receiptów, `SKIP`, dirty source, fallback, unknown driver, błędny hash artefaktu, mixed tree, duplicate evidence ID, niezgodność z przechwyconym source identity oraz append-only/idempotent evidence ledger;
-- przy braku katalogu trwałych receiptów agregator prawidłowo kończy się niezerowym kodem i raportuje `0/47`, zamiast drukować fałszywe `PASS`.
+- przy braku katalogu trwałych receiptów agregator prawidłowo kończy się niezerowym kodem i raportuje `0/60`, zamiast drukować fałszywe `PASS`; scope revision 2 wymaga dodatkowo kompletu 13 case ID walidacji naukowej P15.
 
 P0 ma `gate_result=PASS` na poziomie zamrożenia zakresu. P1 i P2 pozostają `INCOMPLETE`: P1 wymaga jeszcze klasyfikacji zmian oraz czystego qualification tree, a P2 osobnych recept lane i realnych receiptów generowanych przez runtime. Append-only evidence ledger jest zaimplementowany, lecz pozostaje pusty do pierwszego kompletnego zestawu ważnych receiptów.
 
 ### 4.4. Aktualizacja wykonawcza P9–P14 po wdrożeniu runtime
 
-**Stan na 2026-08-29 po wdrożeniu integratorów CUDA, FEM TPI, device-resident minimizerów FEM GPU i standardowego quantity:** nadal nie wolno użyć statusu zbiorczego `QUALIFIED`, ponieważ checkout jest brudny, a bramki P13 carrier, P15 i P16 pozostają otwarte.
+**Stan zaktualizowany 2026-08-31 po wdrożeniu integratorów CUDA, FEM TPI, device-resident minimizerów FEM GPU, standardowego quantity, pełnego browserowego workflow authoring/activation i managed FDM CUDA parity:** nadal nie wolno użyć statusu zbiorczego `QUALIFIED`, ponieważ checkout jest brudny, pozostałe dowody naukowe/wydajnościowe P15 nie są kompletne, a P16 wymaga jednego czystego qualification tree. Implementacja funkcjonalna oraz pion API/Control Room/FEM CPU/CUDA mają realny `PASS`.
 
 1. **P9 / FDM CUDA FP64 — `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** Heun, RK4, RK23, DP45 i ABM3 wykonują device-side hard restore przed pełnym RHS i po stanie kandydackim/zaakceptowanym. Zarządzany test na NVIDIA GeForce RTX 4080 SUPER (CC 8.9, UUID `fcb9fbf1828437c7af5b76bcbf2d2937`, PCI `0000:01:00.0`) potwierdził bitową niezmienność nieosiowej referencji oraz ruch swobodnego spinu. Recepta obejmuje również rzeczywisty interaktywny rebuild po accepted-step: zachowuje continuation `m`, zwiększa activation epoch i resolved-set revision, utrzymuje mask identity, przechwytuje nową reference identity oraz publikuje quantity `frozen_spins`. Recepta zapisuje te bramki w trwałym receipcie, lecz obecny dirty tree nie może dać finalnego dowodu release.
 2. **P10 / FDM CUDA FP32 — `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** publiczny C ABI dopuszcza lane po usunięciu przejściowego guardu. Kanoniczna recepta potwierdziła na RTX 4080 SUPER pełną macierz Heun/RK4/RK23/DP45/ABM3 dla FP32 i FP64, zero-ULP hard restore, ruch free spinu oraz zachowanie checkpointu. Trwały receipt znajduje się w `artifacts/qualification/frozen-spins/fdm-cuda/fdm-frozen-spins-cuda-runtime-evidence-v1.json`; nie jest receipt'em release, ponieważ nie wiąże jeszcze kompletnego clean-tree source identity P16.
 3. **P11 / FEM CPU — `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** explicit RK, PG-BB, NCG i TPI zachowują nieosiową referencję `(0.36, 0.48, 0.8)` bitowo, a swobodny węzeł pozostaje mobilny. TPI eliminuje zamrożone tangent DOF przez inactive/identity rows i korzysta ze wspólnego free-only gradient/restore. Capability CPU obejmuje `tangent_plane_implicit`; końcowy ABI `fullmag-fem-sys` przeszedł 42/42 z przypiętym `RUSTUP_TOOLCHAIN=nightly`.
 4. **P12 / FEM GPU — explicit RK, PG-BB i NCG `RUNTIME_CONFIRMED`, qualification `UNQUALIFIED`:** maska free-node i frozen reference są przesyłane raz podczas bootstrapu i pozostają na urządzeniu. PG-BB/NCG liczą gradienty, normy, iloczyny skalarne, krzywiznę, kierunki i retrakcję tylko po free nodes, po każdej projekcji okresowej wykonują exact restore i nie używają CPU fallbacku. Kanoniczne `just verify-frozen-spins-fem-gpu` wykonało prawdziwe binarium na RTX 4080 SUPER (MFEM 4.9, Hypre 3.1.0, CUDA CC 8.9), potwierdziło przypadki non-axis, free mobility, all-frozen, no-mask bitwise parity i `hot_loop_*_h2d/d2h_bytes=0`. Receipt: `artifacts/qualification/frozen-spins/fem-gpu/fem-frozen-spins-gpu-runtime-evidence-v1.json`, ze statusem `RUNTIME_CONFIRMED_DIRTY_SOURCE`. GPU TPI pozostaje fail-closed kodem `frozen_spins_fem_gpu_tpi_unqualified`; wymaganie `algorithm.fem_tpi` jest pokryte lane CPU P11, nie wolno reklamować TPI na GPU.
-5. **P13–P14 / quantity, spekulatywny Preview → Commit i Viewport 3D — FDM `RUNTIME_CONFIRMED_DIRTY_SOURCE`, FEM `SOURCE_CONFIRMED`:** `frozen_spins` jest kanonicznym `spatial_scalar`, unit `1`, location `node`, z aliasem `frozen_mask`. Jest publikowane tylko przy resolved mask i przechodzi przez ten sam HTTP v2/FMVP/colormap/topology-aware scalar pipeline co `mat_ms` i `mat_aex`. Naprawiono ogólny lifecycle render adoption: `Viewport3DFrame` przekazuje session provenance do WebGL scene, FDM rejestruje receipt ponownie po zmianie session/buffer identity, a replay używa rzeczywistego `target.id`. Ukierunkowane testy quantity po poprawce: 290/290 `PASS`; typecheck, ESLint i produkcyjny static build: `PASS`. FEM authored preview używa rzeczywistego `EntityMapping`: dla kompaktowego pola `m` mapuje local-node → global mesh node przez `ExplicitLocalToGlobal`, a incydencję magnet/air i region membership buduje z tej samej connectivity oraz `object_segments`. Brak segmentu, nakładające się segmenty, niejednoznaczny owner, błędna cardinality albo topology kończą się fail-closed. API generuje domenowo separowany jednorazowy `activation_candidate_token`; endpoint `POST /v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate` sprawdza session, source/topology/scene revision, token, selector, reference i stage, atomowo zatwierdza definicję, a token zapisuje jako skonsumowany dopiero po sukcesie. Kontrakt jawnie oznacza preview jako `speculative_authoring_preview`, commit jako `authoring_commit`, a solver binding jako `pending_runtime_activation`; nie przedstawia authoring commit jako aktywacji solvera. Każda mutacja create/patch/delete/commit zwraca typed `runtime_application={state:pending_runtime_plan,pending_revision,current_runtime_unchanged:true}`. Idle używa `apply_boundary:next_runtime_plan`; aktywny solve kolejkuje śledzone `apply_frozen_spins`, zwraca `apply_boundary:accepted_step` i `application_command_id`. Callback zatrzymuje etap po zaakceptowanym kroku, a orkiestrator zachowuje continuation magnetization, pozostały budżet i solver policy, stosuje command-bound binding i wznawia. Inspector pokazuje obie granice oraz ID komendy, odświeża `simulation/solver/status`, sprawdza constraint ID, epoch, topology/source revision, mask SHA-256 i site counts, rozróżnia `pending/confirmed/mismatch`, unieważnia overlay preview i pozwala przełączyć 3D na solver-owned quantity `frozen_spins`. Wygenerowany OpenAPI/TypeScript i ręczna fasada są aktualne. Testy bindingu i hot-apply API/callback/rebind są `PASS`; Inspector 14/14, celowany kontrakt OpenAPI, typecheck i kompilacja API+CLI również `PASS`. Pełna suite Control Room nadal ma niezależny błąd promocji ścieżki command-failure w bieżącym dirty tree, dlatego nie jest bramką `PASS` P16. Właściciel monotonicznych epok i resolved-set revision przez rebuild runtime CUDA/FEM jest `SOURCE_CONFIRMED`, a managed FDM CUDA hot-rebuild z quantity ma `PASS`; nadal otwarte są managed FEM hot-apply oraz live FEM browser.
+5. **P13–P14 / quantity, spekulatywny Preview → Commit i Viewport 3D — FDM/FEM `RUNTIME_CONFIRMED_DIRTY_SOURCE`:** `frozen_spins` jest kanonicznym `spatial_scalar`, unit `1`, location `node`, z aliasem `frozen_mask`. Jest publikowane tylko przy resolved mask i przechodzi przez ten sam HTTP v2/FMVP/colormap/topology-aware scalar pipeline co `mat_ms` i `mat_aex`. Naprawiono ogólny lifecycle render adoption: `Viewport3DFrame` przekazuje session provenance do WebGL scene, FDM rejestruje receipt ponownie po zmianie session/buffer identity, a replay używa rzeczywistego `target.id`. Ukierunkowane testy quantity po poprawce: 290/290 `PASS`; typecheck, ESLint i produkcyjny static build: `PASS`. FEM authored preview używa rzeczywistego `EntityMapping`: dla kompaktowego pola `m` mapuje local-node → global mesh node przez `ExplicitLocalToGlobal`, a incydencję magnet/air i region membership buduje z tej samej connectivity oraz `object_segments`. Brak segmentu, nakładające się segmenty, niejednoznaczny owner, błędna cardinality albo topology kończą się fail-closed. API generuje domenowo separowany jednorazowy `activation_candidate_token`; endpoint `POST /v2/sessions/current/model/frozen-spins/previews/{preview_id}/activate` sprawdza session, source/topology/scene revision, token, selector, reference i stage, atomowo zatwierdza definicję, a token zapisuje jako skonsumowany dopiero po sukcesie. Kontrakt jawnie oznacza preview jako `speculative_authoring_preview`, commit jako `authoring_commit`, a solver binding jako `pending_runtime_activation`; nie przedstawia authoring commit jako aktywacji solvera. Każda mutacja create/patch/delete/commit zwraca typed `runtime_application={state:pending_runtime_plan,pending_revision,current_runtime_unchanged:true}`. Idle używa `apply_boundary:next_runtime_plan`; aktywny solve kolejkuje śledzone `apply_frozen_spins`, zwraca `apply_boundary:accepted_step` i `application_command_id`. Callback zatrzymuje etap po zaakceptowanym kroku, a orkiestrator zachowuje continuation magnetization, pozostały budżet i solver policy, stosuje command-bound binding i wznawia. Inspector pokazuje obie granice oraz ID komendy, odświeża `simulation/solver/status`, sprawdza constraint ID, epoch, topology/source revision, mask SHA-256 i site counts, rozróżnia `pending/confirmed/mismatch`, unieważnia overlay preview i pozwala przełączyć 3D na solver-owned quantity `frozen_spins`. Wygenerowany OpenAPI/TypeScript i ręczna fasada są aktualne. Testy bindingu i hot-apply API/callback/rebind są `PASS`; Inspector 14/14, celowany kontrakt OpenAPI, typecheck i kompilacja API+CLI również `PASS`. Pełna suite Control Room nadal ma niezależny błąd promocji ścieżki command-failure w bieżącym dirty tree, dlatego nie jest bramką `PASS` P16. Właściciel monotonicznych epok i resolved-set revision przez rebuild runtime CUDA/FEM ma managed runtime proof: FDM CUDA oraz FEM GPU receipts raportują `interactive_hot_rebuild=PASS`, zachowanie continuation, wzrost epoch/revision, recapture reference i solver-owned quantity. Live browser FDM i FEM również mają aktualne `PASS`.
+   **Aktualizacja 2026-08-31 do punktu 5:** końcowe klauzule o otwartym live FEM browser, workflow authoring/activation i managed FEM hot-apply są nieaktualne. Finalny zarządzany build wykonał przez rzeczywisty UI definicję, autorytatywny Preview 124 frozen/0 free, atomowy Commit, solve oraz solver-owned certificate z epoch 1 i resolved-set revision 1. Przełączenie 3D dało `q:frozen_spins`, `surface:magnitude`, kompletny scalar carrier, `surface-vertex-colors:ready` i `degradation=none`. Naprawiono pierwsze związanie runtime przed konstrukcją backendu, publikację certyfikatu, wspólne kodowanie reference hash, topology fingerprint v3, fallback carriera w Inspectorze oraz normalizację scalar registry entry z `orientation` do `colormap`. Managed FEM GPU receipt potwierdza ponadto `interactive_hot_rebuild=PASS`. Otwarte pozostają brakujące bramki naukowe/wydajnościowe P15 i release qualification P16.
+   **Aktualizacja FDM CPU 2026-08-31:** automatyczny receipt `frozen-spins-browser-2a185f77-03c7-4116-ab14-0728fceae6e7` potwierdza Preview 384 frozen/0 free, Commit, solver certificate 384/0, epoch/set revision 1/1, dodatnie `source_state_revision=1`, zgodne mask/reference/topology identities, pole `complete` w lane `fdm_cpu_reference`, render path `fdm-cuboid-instance-colors`, target `colormap`, HTTP v2 `/samples/vector`, ACK `rendered`, WebGL bez context loss, brak degradacji i zero błędów konsoli. Naprawiono propagację `source_state_revision` przez IR/API/CLI/planner, użycie `field_revision` zamiast solverowego `source_revision` w preview, jednoobiektowy fallback FDM membership dla komórek regionu domyślnego oraz serwerową normalizację każdego `spatial_scalar` do `SurfaceColorSource::Colormap`.
 6. **Managed FEM regression:** natywna sekwencja wykonała Frozen 6/6, STT, strict GPU, termikę i macierz pochodnych energii. Kruchy LF-only kontrakt snapshotu zastąpiono granicą odporną na CRLF, a Rust ABI uniezależniono od synchronizacji kanału stable. Nadal wymagany jest jeden końcowy clean-tree run tworzący trwały receipt z pojedynczym exit code 0.
 7. **P14 / bezpieczna konsumpcja FEM carrier — `SOURCE_CONFIRMED`:** po weryfikacji pamięci backendu renderer wymaga `fullmag.fem-local-node-render.v1`, bo maska obsługiwanej ścieżki serial P1 jest local-node AoS. Carrier wiąże `mesh_fingerprint`, `topology_hash`, P1 FE order, `by_nodes`, cardinality i dokładne local-node → published render vertex. Wadliwy ordering, cardinality albo fingerprint kończy się fail-closed bez overlay. Test komponentowy 5/5 i pełny typecheck przechodzą. Higher-order, MPI/ghost i true-DOF są jawnie nieobsługiwane, a nie aproksymowane.
-8. **P15 / browser quantity gate — FDM CPU `RUNTIME_CONFIRMED_DIRTY_SOURCE/PASS`:** `smoke-frozen-spins.mjs` zweryfikował realny katalog i field `frozen_spins`, metadata i payload `0/1`, HTTP v2 `/samples/vector`, render ACK `rendered`, aktywny WebGL 703×478 bez context loss oraz brak krytycznych błędów konsoli. Trwałe artefakty: `artifacts/qualification/frozen-spins/browser/frozen-spins-browser-5061bc04-6edd-442d-bdef-09ad3d3e634a.json` i odpowiadający PNG. Receipt wskazuje lane `fdm_cpu_reference`, double, min `0`, max `1`, mean `0.09375`. Authoringowe `Preview → Commit → solver certificate → quantity` ma testy komponentowe i API, lecz P15 jako całość pozostaje `INCOMPLETE`, bo nie wykonano live FEM ani realnego browserowego workflow commit→solver→quantity/Explorer/Inspector.
+8. **P15 / browser quantity gate — FDM CPU i FEM serial P1 `RUNTIME_CONFIRMED_DIRTY_SOURCE/PASS`:** `smoke-frozen-spins.mjs` zweryfikował realny katalog i field `frozen_spins`, metadata i payload `0/1`, HTTP v2 `/samples/vector`, render ACK `rendered`, aktywny WebGL 703×478 bez context loss oraz brak krytycznych błędów konsoli. Najnowsze automatyczne workflow authoring mają receipts `frozen-spins-browser-77ee3ce1-9b78-4616-9afd-c35678936f07` dla FEM oraz `frozen-spins-browser-2a185f77-03c7-4116-ab14-0728fceae6e7` dla FDM. Receipt FEM potwierdza Preview/solver 124/0, kompletny local-node scalar carrier i `fem-surface-vertex-colors`; receipt FDM potwierdza Preview/solver 384/0 i `fdm-cuboid-instance-colors`. Oba potwierdzają epoch/set/source-state revision 1/1/1, zgodność mask/reference/topology identity wewnątrz lane, target colormap, ACK rewizji 1, zero błędów konsoli i WebGL 703×478. P15 pozostaje `INCOMPLETE` przez globalną macierz performance/transfer i trwały clean-tree receipt, nie przez workflow UI, Preview/Solver parity, browser/WebGL ani cross-discretization reference runtime.
+9. **P15 / managed scientific FDM CPU — `RUNTIME_CONFIRMED/PASS`, qualification `UNQUALIFIED`:** nowa recepta `just verify-frozen-spins-fdm-cpu` wykonała w zarządzanym kontenerze 14/14 testów produkcyjnego runnera i zapisała `artifacts/qualification/frozen-spins/fdm-cpu/fdm-frozen-spins-cpu-scientific-v1.json` oraz powiązany log. Evidence pokrywa `FS-P15-INVARIANT`, `MOBILITY`, `INFLUENCE`, `NO-MASK-PARITY`, `ENERGY-ACCOUNTING`, `FREE-ONLY-STOPPING`, `CHECKPOINT-CONTINUITY`, `INDEPENDENT-ORACLE`, `MINIMIZER-ORACLE` i `THERMAL`, a także P6 ExactResume, P7 CPU/all-frozen i P8 ABM3 history resume. Dwuspinowy oracle używa niezależnego ustawienia `dx=Ms=gamma=1`, `A=mu0/2`, `alpha=0.5`, przez co oczekiwane `H_free=(±1,-1,0)`, `dm_free/dt=(±0.4,0,±0.8)` i energia `E_ex=mu0` są analityczne. Thermal fixed-seed jest bitowo reprodukowalny, zaakceptowana energia PG-BB/NCG monotoniczna, a ABM3 + Frozen Spins po resume odpowiada biegowi nieprzerwanemu bitowo. CPU↔CUDA parity jest teraz potwierdzone osobnym managed receiptem; otwarte naukowe case ID dotyczą pełnego cross-discretization/refinement runtime.
+10. **P15 / Preview↔Solver parity — `RUNTIME_CONFIRMED/PASS`, qualification `UNQUALIFIED`:** fail-closed builder `scripts/build_frozen_spins_preview_solver_parity_evidence.py` waliduje aktualne FEM/FDM browser receipts, dokładny schema quantity, spekulatywną authority preview, solver-owned certificate, dodatnie activation/set/source-state revisions, mask/reference/topology identity i counts wewnątrz lane, standardowy scalar carrier, właściwy render path, `rendered` ACK oraz zdrowy niezerowy WebGL. Artefakt `artifacts/qualification/frozen-spins/preview-solver-parity/frozen-spins-preview-solver-parity-v1.json` ma `PASS` i case ID `FS-P15-PREVIEW-SOLVER-PARITY`; nie zastępuje finalnego receiptu P16, ponieważ nie jest związany z clean source snapshotem.
+11. **P15 / cross-discretization/refinement runtime — `RUNTIME_CONFIRMED_REFERENCE/PASS`, qualification `UNQUALIFIED`:** `crates/fullmag-runner/examples/frozen_spins_cross_discretization_runtime.rs` buduje sześć planów przez `compile_fdm_frozen_spins` i `compile_fem_frozen_spins` (coarse 8³, medium 13³, fine 23³), uruchamia jeden rzeczywisty krok Heun FP64 w każdej dyskretyzacji i zapisuje maskę, liczbę active/frozen/free DOF, energy, RHS/torque free/all, displacement, final-state hash oraz transfer/fallback counters. Referencyjny FEM ma dodatkowo regresję `fem_frozen_spins_hard_restore_covers_all_reference_integrators` dla Heun/RK4/RK23/RK45/ABM3, a all-frozen time evolution przesuwa zegar analitycznie, materializuje wszystkie pośrednie próbki `OutputIR` (w tym pola czasowo zależne) i publikuje końcowy sample w `t_end`; regresja `all_frozen_time_advance_materializes_intermediate_output_schedules` ma `PASS`. `scripts/build_frozen_spins_cross_discretization_runtime_evidence.py` niezależnie od Rust waliduje wszystkie sześć wierszy, zero-ULP hard restore, free mobility, finite energy, brak fallbacku i transferu per-step, monotoniczne refinements oraz parity obserwabli FDM↔FEM; artefakt `artifacts/qualification/frozen-spins/cross-discretization/frozen-spins-cross-discretization-runtime-evidence-v1.json` ma `PASS`. `resolved_mask_sha256` pozostaje dyskretyzacyjnie specyficzny i nie jest porównywany jako równość. To zamyka brakujący dowód wykonania naukowego case `FS-P15-CROSS-DISCRETIZATION`, ale nie nadaje `QUALIFIED`: wymagany jest jeszcze managed native runtime oraz clean-tree receipt P16.
 9. **P5 / lifecycle runtime — `RUNTIME_CONFIRMED_CPU_AND_CUDA/SOURCE_CONFIRMED_FEM/INCOMPLETE`:** runtime FDM nie zeruje już lifecycle do `activation_epoch=1` podczas jawnej reaktywacji. Pierwsza aktywacja tworzy epoch 1, jawna reaktywacja tej samej aktywnej definicji zwiększa per-constraint epoch oraz `resolved_constraint_set_revision`, ponownie przechwytuje referencję nawet przy niezmienionej masce i bezwarunkowo unieważnia FSAL oraz historię ABM. Ciągłe przejście stage zachowuje epoch i referencję aktywnego constraintu. Przejście A→inactive czyści fizyczną maskę bez utraty historii epoch, a ponowne wejście w C nadaje epoch 2 i przechwytuje nową referencję. Persistent CPU FDM runtime stosuje zmianę constraintu atomowo bez przebudowy solvera, zachowuje historię przez A→inactive→C oraz przechwytuje pierwszą referencję z faktycznego continuation state. Wrapper `InteractiveRuntime` jest właścicielem monotonicznego `FrozenSpinsActivationSet`: nie kopiuje backend-local epoch po rebuildzie, rozróżnia zmianę resolved identity od zwykłej zmiany sterowania stage i przenosi historię per-constraint do nowego runtime CUDA/FEM. Jawna reaktywacja natywnego backendu wymusza rebuild, zwiększa wszystkie aktywne epoki i resolved-set revision; testy reaktywacji, stage gap i rebuild carry przechodzą 3/3. Managed CUDA hot-rebuild na RTX 4080 SUPER dodatkowo potwierdza accepted-step continuation, mask/reference identity oraz solver-owned quantity i zapisuje wynik jako `managed_recipe_gates.interactive_hot_rebuild=PASS`. Lekki solver-owned certificate jest publikowany CLI→API jako `simulation/solver/status.frozen_spins`; zawiera per-constraint epochs, resolved-set revision, topology/source revision, mask/reference SHA-256 i jednoznaczne site counts. Authoring preview ma typed authority/binding: `speculative_authoring_preview → authoring_commit → pending_runtime_activation`; Inspector odświeża status solvera i potwierdza lub odrzuca parity po pełnej tożsamości oraz counts, po czym kieruje 3D do solver-owned quantity. Mutacja idle pozostaje `next_runtime_plan`; mutacja podczas aktywnego solve zwraca `accepted_step` i ID śledzonej komendy. Callback bezpiecznie pauzuje po zaakceptowanym kroku, a orkiestrator zachowuje stan kontynuacji i pozostały budżet przed replanem/wznowieniem. Native FEM materializuje teraz continuation magnetization w planie aktywacyjnym przed konstrukcją backendu; w przeciwnym razie późniejszy upload zmieniał `m`, ale pozostawiał frozen reference z authored initial state. Regresja kolejności 1/1 `PASS`. Pozostałe testy: pełny `fullmag-engine` `361 PASS / 1 ignored`, celowany runner lifecycle `PASS`, transport/status API `PASS`, CRUD/receipt API `PASS`, binding CLI 2/2 i API 1/1 `PASS`, kolejka 1/1 `PASS`, hot-apply API/callback/rebind 3/3 `PASS`, Inspector `14/14 PASS`, celowany kontrakt OpenAPI, kompilacja API+CLI, wygenerowany OpenAPI/TypeScript i typecheck `PASS`. Bieżący `cargo check` API+CLI+runner oraz osobny build runner+CLI z featurem `cuda` przechodzą. Pełny `fullmag-runner` wykonał wcześniej `1007 PASS / 17 FAIL`; wszystkie 17 błędów leżą poza zmienionym lifecycle i obejmują bieżące niezależne zmiany dirty tree, dlatego nie są promowane ani ukrywane. P5 nadal wymaga zarządzanego runtime proof hot-apply dla lane FEM oraz końcowego clean-tree proof CPU/CUDA/FEM.
+
+**Korekta statusu P5 z 2026-08-31:** wcześniejsza adnotacja o otwartym managed
+hot-apply dla FEM jest historyczna. Managed FDM CUDA i FEM GPU mają obecnie
+`interactive_hot_rebuild=PASS`, zachowaną continuation, monotoniczny
+`activation_epoch`/`resolved-set revision`, recapture referencji oraz
+solver-owned quantity. Do domknięcia P5/P16 pozostaje wyłącznie powtórzenie
+całej macierzy w jednym zatwierdzonym clean-tree qualification runie.
+
+**Bieżąca kontrola regresji 2026-08-31:** `cargo test -p fullmag-runner --lib`
+zakończył się wynikiem `1016 passed / 22 failed / 0 ignored` (1038 testów).
+Żaden z celowanych testów Frozen Spins FEM ani runtime cross-discretization nie
+zakończył się błędem; 22 porażki należą do istniejącego współdzielonego
+dirty-tree (m.in. artefakty, GPU M1, snapshoty natywnego FEM, capability
+matrix, transport i kaskada zatrutych mutexów) i nie są dowodem kwalifikacji
+release. Przed P16 trzeba powtórzyć pełną suite na jednym clean source tree i
+rozpatrzyć każdy wynik niezależnie, bez wyciszania asercji.
+
+**Kontrola Control Room 2026-08-31:** izolowany przebieg lokalnego `vitest`
+obejmujący model pola 3D, target buffer, registry adopcji renderu,
+`FrozenSpinsOverlay`, Inspector i kontroler wizualizacji zakończył się wynikiem
+`6 files / 228 tests PASS`. Pełny wybrany plik `Viewport3DModule.test.ts` ma
+jeszcze dwa niepowiązane z Frozen Spins asercje tekstowe zależne od formatowania
+CRLF (tymczasowy debug orbit oraz etykieta Airbox); nie zmieniono tych asercji
+ani nie obniżono ich wymagań.
 
 ### 4.5. Findings register
 
@@ -269,6 +326,24 @@ Finding może zostać zamknięty wyłącznie trwałym `evidence_id`; samo usuni�
 | P14 | Control Room — pełny workflow | authoring, Inspector i overlay zgodne z solverem |
 | P15 | E2E browser/WebGL i walidacja naukowa | realny smoke + parity/influence/no-mask |
 | P16 | Zbiorcza kwalifikacja, CI i release gate | jedna recepta końcowa i komplet receiptów |
+
+### Bieżący status etapów (audyt 2026-08-31)
+
+| Etap | Stan wykonania | Co pozostaje |
+|---|---|---|
+| P0 | `PASS` — scope revision 2, 28 `REQUIRED` + 1 `OUT_OF_SCOPE`, 5 testów | nic w zakresie; kwalifikacja zależy od P16 |
+| P1 | `INCOMPLETE` — generator identity i testy 2/2 | zatwierdzony, pojedynczy clean qualification tree |
+| P2 | `INCOMPLETE` — fail-closed aggregator i ledger | 60 trwałych receiptów związanych z tym samym source identity |
+| P3–P6 | `RUNTIME_CONFIRMED` — kontrakty, routing, lifecycle i resume mają testy/receipty | wspólne clean-tree evidence |
+| P7 | `RUNTIME_CONFIRMED` — FDM CPU scientific 14/14 | finalny receipt P16 |
+| P8 | `RUNTIME_CONFIRMED` — CPU multilayer Frozen Spins i stanowy ABM3 checkpoint/resume, managed `30/30 PASS` | związanie receiptu z clean source identity/P16; CUDA multilayer v2 pozostaje fail-closed bez payloadu mask/reference |
+| P9–P12 | `RUNTIME_CONFIRMED` — CUDA FP64/FP32 i FEM CPU/GPU | globalne związanie receiptów z clean tree |
+| P13–P14 | `RUNTIME_CONFIRMED` — API, quantity, carrier i Control Room | globalny receipt P16 |
+| P15 | `RUNTIME_CONFIRMED` — browser/WebGL, preview parity, CPU↔CUDA parity i cross-discretization reference runtime `PASS` | managed native cross-lane receipt, pełna performance/transfer matrix i wspólne clean-tree evidence |
+| P16 | `NOT_RUN` / `UNQUALIFIED` — agregator raportuje 0/60 w bieżącym checkoutcie | clean run, 60/60 receipts, reviewer i decyzja release |
+
+Statusy w tabeli opisują oś wykonania. `QUALIFIED` jest osobną osią i nie
+wynika z prostego uśrednienia procentów.
 
 ---
 
@@ -355,6 +430,15 @@ Test skryptu musi wykazać, że:
 ### Bramka P1
 
 `PASS` wyłącznie gdy istnieją odtwarzalne identity snapshotu audytowego i czystego qualification tree, zmiany użytkownika są sklasyfikowane, a każdy receipt wskazuje dokładny tree. Sam SHA brudnego HEAD nie spełnia bramki.
+
+**Implementacja wykonana 2026-08-31:** oba generatory source identity uruchamiają
+Git z `core.filemode=false` i `core.autocrlf=true`, więc prezentacyjne różnice
+Windows checkoutu w kontenerze Linux nie fałszują dirty state. Hashowanie nadal
+czyta rzeczywiste bajty i sprawdza stabilność inode/stat przed i po odczycie;
+retargetowalne symlinki są odrzucane, a niezmateriałizowany, przypięty gitlink
+(`status_prefix=-`) pozostaje jawnie reprodukowalny. Testy Frozen-Spins source
+identity przechodzą 2/2. P1 globalnie pozostaje niezamknięty, dopóki właściciel
+nie wskaże jednego zatwierdzonego clean qualification tree.
 
 ---
 
@@ -671,10 +755,46 @@ Testy runnera 10/10 już potwierdzają większość kontraktu na CPU single-grid
 
 Usunąć dwa świadome wyłączenia: produkcyjne Frozen Spins w multilayer oraz ABM3 z poprawnym checkpoint/history.
 
+### Stan wykonania 2026-08-31
+
+CPU multilayer jest teraz wykonywalny z Frozen Spins dla Heun/RK4/RK23 oraz z
+ABM3 po zdjęciu blokady planera dla lane CPU. `multilayer_reference.rs` utrzymuje
+stanową historię trzech zaakceptowanych RHS, wykonuje Heun bootstrap, predictor/
+corrector ABM3, restart historii po zmianie `dt`, twardy restore referencji po
+każdym kandydacie i publikuje checkpoint
+`solver/fdm_cpu_multilayer_abm3_checkpoint.v1.json`. Publiczne wznowienie jest
+dostępne przez
+`resume_reference_multilayer_fdm_from_abm3_checkpoint`; checkpoint wiąże pełny
+hash planu, grid/offset każdego layera, historię RHS, Frozen Spins mask/reference,
+activation epoch i resolved source-state/topology identity. Test
+`multilayer_abm3_frozen_spins_checkpoint_resume_matches_uninterrupted_run`
+potwierdza bitową zgodność finalnego stanu z biegiem nieprzerwanym. Planner test
+`staged_cpu_multilayer_selects_stateful_abm3` potwierdza wybór tego lane.
+
+Ta zmiana zamyka implementację/reference runtime P8. Managed recipe
+`just verify-frozen-spins-fdm-multilayer` została uruchomiona w obrazie `fem-cpu`:
+29 testów runnera i test planera (`30/30 PASS`), receipt
+`artifacts/qualification/frozen-spins/fdm-multilayer/fdm-frozen-spins-multilayer-v1.json`
+(SHA-256 `44d3c0834ecf2a93ee01cb990141e622e2e1b9a89f84b2cdbd62045ee3c25766`).
+Nie zamyka to jeszcze kwalifikacji release: wspólna clean-source identity P16
+oraz powtórzenie receiptu na tym samym zatwierdzonym drzewie pozostają wymagane.
+CUDA device-resident multilayer v2 pozostaje świadomie fail-closed, ponieważ
+jego ABI nie przenosi maski ani referencji. Walidator receiptu to
+`scripts/build_frozen_spins_fdm_multilayer_evidence.py`.
+Wymagane regresje są nazwane jawnie: `multilayer_frozen_spins_are_hard_restored_through_rk_stages`,
+`multilayer_frozen_layer_remains_in_demag_influence_on_free_layer`,
+`multilayer_all_frozen_mask_covers_every_layer_without_state_drift`,
+`multilayer_all_frozen_materializes_scalar_and_field_schedule_without_steps`,
+`multilayer_all_frozen_relaxation_completes_without_solver_steps`,
+`multilayer_no_mask_parity_matches_explicit_all_free_mask` oraz
+`multilayer_abm3_frozen_spins_checkpoint_resume_matches_uninterrupted_run`.
+
 ### Miejsca implementacji
 
-- `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs`, w tym helper obecnie dostępny tylko pod `#[cfg(test)]`;
-- planner FDM i test `multilayer_fdm_rejects_authored_frozen_spins_before_runtime_selection`;
+- `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs`, w tym produkcyjny
+  helper restore/zero po layer offsets (bez `#[cfg(test)]`);
+- planner FDM i test `staged_cpu_multilayer_selects_stateful_abm3`; negatywne
+  testy pozostają dla nieobsługiwanych layoutów/transferów i CUDA ABI v2;
 - implementacja ABM3, jego history buffers i checkpoint;
 - multilayer layout/offset mapping.
 
@@ -692,7 +812,9 @@ Usunąć dwa świadome wyłączenia: produkcyjne Frozen Spins w multilayer oraz 
 2. Przy aktywacji Frozen Spins w trakcie sesji zresetować albo przeliczyć historię ABM3 w sposób zdefiniowany przez solver; nie mieszać pochodnych sprzed aktywacji z nową maską.
 3. Zapisać historię ABM3 w checkpointcie wraz z mask fingerprint i activation epoch.
 4. Po resume potwierdzić ciągłość trajektorii free DOF względem biegu bez przerwy.
-5. Usunąć planner rejection ABM3 dopiero po przejściu testów historii, aktywacji i resume.
+5. Planner rejection ABM3 usunięto wyłącznie dla staged CPU po przejściu testów
+   historii i resume; staged CUDA bez native single-grid nadal odrzuca ABM3,
+   dopóki nie ma równoważnego device-resident history ABI.
 
 ### Testy
 
@@ -706,7 +828,12 @@ Usunąć dwa świadome wyłączenia: produkcyjne Frozen Spins w multilayer oraz 
 
 ### Bramka P8
 
-`PASS`, gdy planner wybiera produkcyjną ścieżkę multilayer i ABM3, helper restore nie jest test-only, a trwały managed receipt potwierdza invariant, influence, parity i resume. Do tego czasu oba przypadki muszą nadal fail-closed.
+`PASS`, gdy planner wybiera produkcyjną ścieżkę CPU multilayer i ABM3, helper
+restore nie jest test-only, test ciągły/wznowiony jest bitowo zgodny, a trwały
+managed receipt potwierdza invariant, influence, parity i resume. Aktualny
+managed receipt spełnia tę bramkę (`30/30 PASS`); do statusu `QUALIFIED` potrzebne
+jest jeszcze związanie go z clean source identity i kompletem P16. Staged CUDA
+multilayer bez native single-grid pozostaje osobną, jawnie fail-closed ścieżką.
 
 ---
 
@@ -1023,7 +1150,7 @@ Dla każdego required lane receipt zapisuje: no-mask overhead, partial-mask over
 
 ### Bramka P15
 
-`PASS`, gdy realny browser smoke przechodzi dla FDM i FEM, artefakty są trwałe, nie ma błędów konsoli/WebGL, a walidacja naukowa potwierdza invariant, influence, parity i resume. FDM quantity/WebGL ma trwały PASS; FEM live oraz pełny workflow authoring/activation pozostają wymagane.
+`PASS`, gdy realny browser smoke przechodzi dla FDM i FEM, artefakty są trwałe, nie ma błędów konsoli/WebGL, a walidacja naukowa potwierdza invariant, influence, parity i resume. FDM oraz FEM serial-P1 quantity/WebGL i Preview↔Solver parity mają trwały dirty-tree `PASS`, pełne workflow browserowe authoring/activation przeszły na obu backendach CPU, CPU↔CUDA parity ma managed `PASS` na rzeczywistym GPU, a cross-discretization reference runtime ma sześć zweryfikowanych wierszy coarse/medium/fine. P15 pozostaje niepromowane do `QUALIFIED`, dopóki nie powstanie managed native cross-lane receipt, pełna macierz performance/transfer oraz wspólne clean-tree receipt P15/P16.
 
 ---
 
@@ -1058,6 +1185,17 @@ Zamknąć wszystkie dowody w jednej odtwarzalnej ścieżce i uniemożliwić regr
    - runbook diagnostyczny i lokalizację receiptów.
 6. Przeprowadzić końcowy audit od czystego checkoutu bez używania starych artefaktów. Skopiować manifest zbiorczy, indywidualne receipty, logi i artefakty browsera do trwałego katalogu.
 7. Nie wykonywać commit/push/merge/release bez osobnej dyspozycji właściciela repo. P16 przygotowuje dowody gotowości; publikacja jest osobną operacją.
+
+Na Windowsie uruchamiać tę bramkę przez repozytoryjny WSL/Docker route (nie przez
+hostowy Git Bash, który może nie mieć aliasu `python3`):
+
+```powershell
+wsl.exe -d Ubuntu2 -- bash -lc "cd /mnt/c/git/fullmag/fullmag && just verify-frozen-spins-qualification"
+```
+
+Polecenie musi być wykonane z zatwierdzonego clean tree; w bieżącym współdzielonym
+checkoutu poprawnym wynikiem jest fail-closed z powodu braku `source-baseline.json`
+i niekompletnego katalogu receiptów, a nie sztuczne `PASS`.
 
 ### Końcowa macierz obowiązkowa
 
@@ -1129,4 +1267,4 @@ Po każdym batchu należy przygotować krótki raport zawierający: SHA, diff sc
 
 ## 8. Pierwszy konkretny krok wykonawczy
 
-Najpierw zatwierdzić P0 scope ledger, następnie wygenerować P1 source snapshot identity i P2 evidence ledger. Potem wdrożyć P4 typed snapshot selector `m_z > 0.5`, domknąć P5 natywny CUDA/FEM activation owner oraz zarządzany runtime proof zaimplementowanego hot-apply, a także P6 pełne resume semantics. Dopiero z zamkniętych semantyk P4–P6 należy wygenerować dodatnie wpisy P3 capability. Pion quantity/API/Viewport 3D ma już FDM live, źródłowo zweryfikowany FEM authored preview/local-node carrier, atomowy spekulatywny `Preview → Commit`, command-bound konsumpcję na następnym `run/relax/solve` i na granicy zaakceptowanego kroku aktywnego solve, CPU solver-owned epoch/status oraz Inspector parity/adoption; jego pełny status P13/P14 wymaga teraz live dowodu FEM carriera `fullmag.fem-local-node-render.v1` i browserowego workflow commit→solver→quantity.
+P0 scope ledger, P1 source snapshot identity i P2 evidence ledger są zaimplementowane. Scope revision 2 koduje 60 obowiązkowych case ID, w tym wszystkie 13 bramek naukowych P15; wcześniejsze 47 case ID nie wystarczało do dowodu Definition of Done. Pion quantity/API/Viewport 3D ma realny live browser/WebGL dla FDM i FEM serial P1, atomowy spekulatywny `Preview → Commit`, command-bound konsumpcję na następnym `run/relax/solve` i na granicy zaakceptowanego kroku aktywnego solve, solver-owned epoch/status oraz Inspector parity/adoption. Pełny realny workflow `create → Preview → Commit → solver certificate → quantity/Explorer/Inspector` przeszedł automatycznie na FDM CPU i FEM CPU, a osobny fail-closed agregat zaliczył `FS-P15-PREVIEW-SOLVER-PARITY`. Managed FDM CUDA i FEM GPU potwierdziły też hot-rebuild/hot-apply; FDM CUDA dodatkowo ma `cpu_gpu_parity=PASS` oraz clean source identity w izolowanym snapshotcie. Cross-discretization reference runtime został wykonany dla 6/6 wierszy i niezależnie zwalidowany. Następny konkretny krok to wykonać managed native cross-lane/performance receipts, a następnie uruchomić P16 od jednego czystego qualification tree i zebrać 60/60 receiptów związanych z tą samą tożsamością źródła.

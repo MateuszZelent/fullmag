@@ -30,7 +30,16 @@ class FrozenSpinsSourceIdentityError(RuntimeError):
 def _git(repo: Path, *arguments: str) -> bytes:
     try:
         return subprocess.check_output(
-            ("git", *arguments), cwd=repo, stderr=subprocess.PIPE
+            (
+                "git",
+                "-c",
+                "core.filemode=false",
+                "-c",
+                "core.autocrlf=true",
+                *arguments,
+            ),
+            cwd=repo,
+            stderr=subprocess.PIPE,
         )
     except (OSError, subprocess.CalledProcessError) as error:
         raise FrozenSpinsSourceIdentityError(
@@ -106,8 +115,13 @@ def capture(repo: Path) -> dict[str, Any]:
         entry for entry in base["dirty_path_content"] if entry["path"] in untracked_paths
     ]
     untracked_manifest_sha256 = _sha256(_canonical(untracked_entries))
+    # An uninitialized gitlink (status prefix ``-``) is still a clean,
+    # reproducible source reference: the superproject pins the exact commit
+    # and the identity records that the nested worktree is intentionally not
+    # materialized.  Only a moved gitlink, merge-conflicted gitlink, or dirty
+    # initialized submodule invalidates a clean-tree qualification snapshot.
     submodule_dirty = any(
-        identity["status_prefix"] != " "
+        identity["status_prefix"] not in {" ", "-"}
         or identity.get("source_snapshot_dirty", False)
         for identity in submodules.values()
     )

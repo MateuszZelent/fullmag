@@ -79,6 +79,61 @@ DISTRIBUTION_FIXED = "fixed"
 DISTRIBUTION_LINEAR = "linear"
 DISTRIBUTION_EXPONENTIAL = "exponential"
 
+_SWEEP_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+
+
+def _reject_unresolved_sweep_selectors(options: MeshOptions | None) -> None:
+    """Fail closed when authored face selectors have no typed consumer.
+
+    The public options model still accepts ``"auto"`` for compatibility with
+    the Script Builder.  Named selectors are intentionally rejected at the
+    generator boundary until geometry-identity-aware face selection is
+    implemented; silently ignoring them would produce a different mesh than
+    the authored policy.
+    """
+    if options is None:
+        return
+    for field_name in ("sweep_source", "sweep_destination"):
+        value = getattr(options, field_name)
+        if value is not None and value.strip().lower() != "auto":
+            raise ValueError(
+                f"{field_name}={value!r} is unsupported: named sweep face selectors "
+                "require a geometry-identity-aware consumer"
+            )
+
+
+def _resolve_sweep_axis(
+    geometry: Geometry,
+    *,
+    options: MeshOptions | None,
+    fallback_axis: int,
+) -> int:
+    """Resolve the typed requested sweep direction for a geometry.
+
+    ``MeshOptions.sweep_direction`` is the single runtime input for the
+    extrusion axis.  ``None``/``auto`` retain the classifier's shortest-axis
+    choice; explicit axes are applied only where the generator can realise
+    them and otherwise fail closed instead of silently changing direction.
+    """
+    requested = options.sweep_direction if options is not None else None
+    if requested in (None, "auto"):
+        return int(fallback_axis)
+    try:
+        axis = _SWEEP_AXIS_INDEX[requested]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "sweep_direction must be one of 'auto', 'x', 'y', or 'z'"
+        ) from exc
+    if isinstance(geometry, Cylinder) and axis != 2:
+        raise ValueError(
+            "swept cylinder meshing supports only sweep_direction='z'"
+        )
+    if isinstance(geometry, ArchWaveguide) and axis != 2:
+        raise ValueError(
+            "layered ArchWaveguide meshing supports only sweep_direction='z'"
+        )
+    return axis
+
 
 def _apply_mixed_source_face_mesh_options(
     gmsh: Any,
@@ -1841,6 +1896,42 @@ def generate_swept_cylinder_mesh(
                 pair for pair in all_node_pairs if pair.get("pair_id") in requested_pair_ids
             ]
 
+        # The historical cylinder generator keeps a tet4 compatibility view
+        # after Gmsh extrusion (prism6/hex8 cells are split into tetrahedra).
+        # Preserve that route for callers that still need it, but make the
+        # topology downgrade durable and machine-readable instead of silently
+        # presenting it as a native swept prism.
+        resolved_layers = _count_exact_layer_planes(nodes, 2) - 1
+        if resolved_layers < 1:
+            raise RuntimeError(
+                "swept cylinder realization produced no usable z layer planes"
+            )
+        realization_fallbacks = [
+            "swept_cylinder_recombined_to_tet4"
+            if recombine
+            else "swept_cylinder_to_tet4"
+        ]
+        if int(order) != 1:
+            realization_fallbacks.append("swept_order_to_linear")
+        if resolved_layers != int(n_layers):
+            realization_fallbacks.append("swept_layer_count_mismatch")
+        realization_report = MeshRealizationReport(
+            requested_topology="hex8" if recombine else "prism6",
+            resolved_topology="tet4",
+            requested_layers=int(n_layers),
+            resolved_layers=int(resolved_layers),
+            requested_axis="z",
+            resolved_axis="z",
+            requested_order=int(order),
+            resolved_order=1,
+            fallbacks_triggered=tuple(realization_fallbacks),
+            requested_direction=(
+                opts.sweep_direction
+                if opts.sweep_direction in {"auto", "x", "y", "z"}
+                else "z"
+            ),
+        )
+
         return MeshData.from_legacy_tet4(
             nodes=nodes,
             elements=elements,
@@ -1850,6 +1941,7 @@ def generate_swept_cylinder_mesh(
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
             quality=quality,
+            realization_report=realization_report,
         )
     finally:
         gmsh.finalize()
@@ -1868,6 +1960,7 @@ def generate_swept_box_mesh(
     recombine: bool = False,
     airbox: AirboxOptions | None = None,
     options: MeshOptions | None = None,
+    requested_direction: str | None = None,
 ) -> MeshData:
     """Generate a native ``prism6`` mesh for an axis-aligned box.
 
@@ -1878,6 +1971,14 @@ def generate_swept_box_mesh(
     recombines the source face into quadrilaterals.
     """
     opts = options or MeshOptions()
+    if requested_direction is None:
+        requested_direction = opts.sweep_direction
+    if requested_direction not in (None, "auto", "x", "y", "z"):
+        raise ValueError(
+            "requested sweep direction must be one of 'auto', 'x', 'y', or 'z'"
+        )
+    if requested_direction in _SWEEP_AXIS_INDEX:
+        thin_axis = _SWEEP_AXIS_INDEX[requested_direction]
     SCALE = 1e6
 
     for name, value in (
@@ -2294,12 +2395,14 @@ def generate_swept_box_mesh(
                 cell_mesh_parts=cell_mesh_parts,
                 outer_boundary_marker=int(airbox.boundary_marker),
                 effective_gmsh_thread_count=effective_gmsh_thread_count,
+                requested_direction=requested_direction,
             )
         return _extract_swept_mesh_data(
             gmsh,
             SCALE,
             requested_axis=thin_axis,
             requested_layers=n_layers,
+            requested_direction=requested_direction,
         )
     finally:
         gmsh.finalize()
@@ -2347,6 +2450,7 @@ def _extract_swept_mesh_data(
     *,
     requested_axis: int,
     requested_layers: int,
+    requested_direction: str | None = None,
 ) -> MeshData:
     """Extract one body-only prism mesh without a compatibility conversion."""
     mesh = _extract_mesh_data(gmsh)
@@ -2400,6 +2504,11 @@ def _extract_swept_mesh_data(
             requested_order=1,
             resolved_order=1,
             fallbacks_triggered=(),
+            requested_direction=(
+                requested_direction
+                if requested_direction in {"auto", "x", "y", "z"}
+                else "xyz"[requested_axis]
+            ),
         ),
     )
     mesh.validate_strict()
@@ -2525,6 +2634,7 @@ def generate_swept_mesh(
     options: MeshOptions | None = None,
 ) -> MeshData:
     """Dispatch swept mesh generation based on geometry type."""
+    _reject_unresolved_sweep_selectors(options)
     if options is not None and options.mesh_strategy == SWEEP_STRATEGY_HEX:
         raise ValueError(
             "explicit swept_hex realization is not implemented in the body-only prism path"
@@ -2538,6 +2648,7 @@ def generate_swept_mesh(
             "body-only swept prism meshing supports only axis-aligned Box geometry"
         )
     if isinstance(geometry, Cylinder):
+        _resolve_sweep_axis(geometry, options=options, fallback_axis=2)
         if geometry.axis != (0.0, 0.0, 1.0):
             raise ValueError(
                 "swept cylinder meshing supports only the canonical Z axis; use OCC free tetrahedral meshing for arbitrary axes"
@@ -2550,15 +2661,24 @@ def generate_swept_mesh(
         )
     if isinstance(geometry, Box):
         result = classify_sweepability(geometry)
-        thin_axis = result.thin_axis if result.thin_axis is not None else 2
+        fallback_axis = result.thin_axis if result.thin_axis is not None else 2
+        thin_axis = _resolve_sweep_axis(
+            geometry,
+            options=options,
+            fallback_axis=fallback_axis,
+        )
         return generate_swept_box_mesh(
             geometry.size, hmax, n_layers,
             thin_axis=thin_axis, order=order,
             distribution=distribution, element_ratio=element_ratio,
             symmetric=symmetric, recombine=recombine,
             airbox=airbox, options=options,
+            requested_direction=(
+                options.sweep_direction if options is not None else None
+            ),
         )
     if isinstance(geometry, ArchWaveguide):
+        _resolve_sweep_axis(geometry, options=options, fallback_axis=2)
         from ._gmsh_generators import generate_mesh_from_file
         from .surface_assets import _geometry_to_trimesh, _import_trimesh
 

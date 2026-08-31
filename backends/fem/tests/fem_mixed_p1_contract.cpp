@@ -1216,6 +1216,11 @@ void malformed_face_ownership_and_marker_inputs_fail_closed()
     }
     {
         auto source = typed_prism_pyramid_boundary();
+        source.cell_markers[1] = source.cell_markers[0];
+        expect_reject(source, "material-interface facet must separate distinct cell markers");
+    }
+    {
+        auto source = typed_prism_pyramid_boundary();
         source.facet_types.push_back(source.facet_types[0]);
         source.facet_roles.push_back(source.facet_roles[0]);
         source.facet_nodes.insert(source.facet_nodes.end(), {0,2,1});

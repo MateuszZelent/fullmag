@@ -50,6 +50,34 @@ class FrozenSpinsV1ScopeTests(unittest.TestCase):
         self.assertTrue(any("duplicate feature id" in error for error in errors))
         self.assertTrue(any("duplicate test case id" in error for error in errors))
 
+    def test_p15_scientific_contract_is_normative_and_complete(self) -> None:
+        document = scope_document()
+        self.assertGreaterEqual(document["scope_revision"], 2)
+        feature = next(
+            item
+            for item in document["features"]
+            if item["id"] == "qualification.scientific"
+        )
+        self.assertEqual(feature["scope_status"], "REQUIRED")
+        self.assertEqual(
+            set(feature["required_test_case_ids"]),
+            {
+                "FS-P15-INVARIANT",
+                "FS-P15-MOBILITY",
+                "FS-P15-INFLUENCE",
+                "FS-P15-NO-MASK-PARITY",
+                "FS-P15-ENERGY-ACCOUNTING",
+                "FS-P15-FREE-ONLY-STOPPING",
+                "FS-P15-CHECKPOINT-CONTINUITY",
+                "FS-P15-CPU-GPU-PARITY",
+                "FS-P15-PREVIEW-SOLVER-PARITY",
+                "FS-P15-INDEPENDENT-ORACLE",
+                "FS-P15-MINIMIZER-ORACLE",
+                "FS-P15-CROSS-DISCRETIZATION",
+                "FS-P15-THERMAL",
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

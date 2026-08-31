@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from numbers import Integral, Real
 from typing import Any, Literal, Sequence
 
-from fullmag._validation import as_vector3, require_finite, require_positive
+from fullmag._validation import (
+    as_vector3,
+    parse_finite_float,
+    require_finite,
+    require_positive,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +379,12 @@ class SweepDistribution:
             raise TypeError("num_layers must be an integer element-layer count")
         if self.num_layers < 1:
             raise ValueError(f"num_layers must be >= 1, got {self.num_layers}")
+        growth_rate = parse_finite_float(
+            self.growth_rate,
+            "/distribution/growth_rate",
+            positive=True,
+        )
+        object.__setattr__(self, "growth_rate", float(growth_rate))
         if self.kind != "uniform" and self.growth_rate <= 0.0:
             raise ValueError(
                 f"growth_rate must be > 0 for {self.kind!r} distribution, "
@@ -1019,16 +1030,19 @@ class PerObjectMeshRecipe:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class SharedMeshAssemblyPolicy:
-    """Preserved compatibility record for shared-domain assembly policy.
+    """Shared-domain assembly policy accepted by the public authoring API.
 
-    The current shared-domain builder accepts this object for API compatibility
-    but does not consume its fields. Use explicit object, interface, and airbox
-    targets for effective sizing.
+    The shared-domain generator currently has one canonical realization: the
+    default conforming policy.  Non-default values are rejected by the
+    realization entry point until their typed lowering is implemented.  This
+    is intentional fail-closed behaviour; a caller must never be told that a
+    policy was applied when the generator ignored one of its fields.
 
-    Attributes:
-        interface_hmax_factor: Validated, preserved compatibility value.
-        enforce_conforming: Preserved compatibility value.
-        airbox_hmax_factor: Validated, preserved compatibility value.
+    ``interface_hmax_factor`` and ``airbox_hmax_factor`` therefore describe
+    the reserved policy vocabulary, while ``enforce_conforming`` records the
+    only currently supported mode.  See
+    :func:`fullmag.meshing.asset_pipeline._validate_shared_mesh_assembly_policy`
+    for the realization guard.
     """
 
     interface_hmax_factor: float = 0.5

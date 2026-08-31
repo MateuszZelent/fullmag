@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>FDM · FEM · MuMax3 — live scalar monitor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11111b;
+      --surface: #181825;
+      --surface-raised: #1e1e2e;
+      --border: #313244;
+      --text: #cdd6f4;
+      --muted: #a6adc8;
+      --grid: #313244;
+      --fdm: #a6e3a1;
+      --fem: #89b4fa;
+      --mumax: #f9e2af;
+      --good: #a6e3a1;
+      --warn: #f9e2af;
+      --bad: #f38ba8;
+      --shadow: 0 18px 50px rgb(0 0 0 / 18%);
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #eff1f5;
+        --surface: #e6e9ef;
+        --surface-raised: #ffffff;
+        --border: #bcc0cc;
+        --text: #4c4f69;
+        --muted: #6c6f85;
+        --grid: #ccd0da;
+        --shadow: 0 18px 50px rgb(76 79 105 / 12%);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      min-width: 320px;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1320px, 100%); margin: 0 auto; padding: 28px clamp(16px, 4vw, 48px) 56px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { max-width: 760px; font-size: clamp(28px, 4vw, 48px); line-height: 1.02; letter-spacing: -0.04em; }
+    h2 { font-size: 18px; letter-spacing: -0.02em; }
+    h3 { font-size: 14px; }
+    .eyebrow { margin-bottom: 10px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
+    .lede { max-width: 760px; margin-top: 14px; color: var(--muted); }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 22px; }
+    .status-line { display: inline-flex; align-items: center; gap: 9px; min-height: 32px; }
+    .status-dot { width: 9px; height: 9px; border-radius: 999px; background: var(--warn); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 14%, transparent); }
+    .status-dot.good { background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 14%, transparent); }
+    .status-dot.bad { background: var(--bad); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 14%, transparent); }
+    .muted { color: var(--muted); }
+    button { border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; background: var(--surface-raised); color: var(--text); cursor: pointer; font: inherit; }
+    button:hover, button:focus-visible { border-color: var(--fem); outline: 2px solid color-mix(in srgb, var(--fem) 35%, transparent); outline-offset: 1px; }
+    section { margin-top: 38px; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .section-head span { color: var(--muted); font-size: 12px; }
+    .method-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .method { min-width: 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+    .method-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .method-name { font-weight: 700; }
+    .method-state { color: var(--muted); font-size: 12px; text-align: right; }
+    .method-detail { min-height: 20px; margin-top: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .chart-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .energy-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .chart-card { min-width: 0; padding: 12px 12px 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+    .chart-card-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .chart-card-title span { color: var(--muted); font-size: 11px; }
+    .chart { display: block; width: 100%; height: 204px; margin-top: 5px; overflow: visible; }
+    .chart text { fill: var(--muted); font-size: 10px; font-family: inherit; }
+    .chart .axis { stroke: var(--border); stroke-width: 1; }
+    .chart .grid-line { stroke: var(--grid); stroke-width: 1; stroke-dasharray: 2 4; }
+    .chart .series { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
+    .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; min-height: 18px; margin: 2px 2px 0; color: var(--muted); font-size: 11px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+    .legend-swatch { width: 15px; height: 3px; border-radius: 3px; }
+    .empty { display: grid; place-items: center; min-height: 204px; color: var(--muted); font-size: 12px; text-align: center; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .footer-note { margin-top: 16px; color: var(--muted); font-size: 12px; }
+    code { padding: 1px 4px; border-radius: 4px; background: var(--surface-raised); color: var(--text); }
+    @media (max-width: 900px) {
+      .chart-grid, .energy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .method-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      main { padding-top: 20px; }
+      .chart-grid, .energy-grid { grid-template-columns: 1fr; }
+      .chart { height: 220px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Fullmag · scalar comparison · no field snapshots</p>
+      <h1>FDM, FEM i MuMax3 — wyniki na żywo</h1>
+      <p class="lede">Monitor odczytuje wyłącznie średnie <code>mx</code>, <code>my</code>, <code>mz</code> i energie. Nowe próbki są pobierane automatycznie co sekundę, bez cache przeglądarki.</p>
+      <div class="toolbar">
+        <div class="status-line" role="status" aria-live="polite">
+          <span id="overall-dot" class="status-dot"></span>
+          <span id="overall-status">Oczekiwanie na artefakty…</span>
+        </div>
+        <span id="last-refresh" class="muted">Brak odczytu</span>
+        <button id="refresh-button" type="button">Odśwież teraz</button>
+      </div>
+    </header>
+
+    <section aria-labelledby="methods-title">
+      <div class="section-head"><h2 id="methods-title">Źródła</h2><span>status każdego backendu</span></div>
+      <div id="method-grid" class="method-grid"></div>
+    </section>
+
+    <section aria-labelledby="magnetization-title">
+      <div class="section-head"><h2 id="magnetization-title">Średnia magnetyzacja</h2><span>wartość bezwymiarowa · t [ns]</span></div>
+      <div id="magnetization-grid" class="chart-grid"></div>
+    </section>
+
+    <section aria-labelledby="energy-title">
+      <div class="section-head"><h2 id="energy-title">Energie</h2><span>J · każda składowa osobno</span></div>
+      <div id="energy-grid" class="chart-grid energy-grid"></div>
+    </section>
+
+    <section aria-labelledby="latest-title">
+      <div class="section-head"><h2 id="latest-title">Ostatnie wartości</h2><span>tabela scalar-only</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Metoda</th><th>t [ns]</th><th>mx</th><th>my</th><th>mz</th><th>E total [J]</th><th>Próbek</th></tr></thead>
+          <tbody id="latest-body"><tr><td colspan="7" class="muted">Brak danych.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="footer-note">Fullmag: strumieniowany <code>stages/*/table</code>, potem <code>artifacts/scalars.csv</code> i <code>artifacts/tables/default/table.csv</code>. MuMax3: <code>results/mumax3/table.txt</code>. Na wykresie „zewnętrzna / Zeeman” Fullmag ma mapowanie <code>E_ext + E_drive</code>, a MuMax3 <code>E_zeeman</code>. FDM używa osobnego <code>fdm_case.zarr</code>, aby nie mieszać go ze starym przebiegiem; FEM można wskazać przez <code>?fem=ścieżka/do/fullmag_case.zarr</code>.</p>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const BACKENDS = [
+        { id: "fdm", label: "FDM · CPU · double", color: "var(--fdm)", kind: "fullmag", roots: ["fdm_case.zarr", "fullmag_case.zarr", "results/fdm/fullmag_case.zarr"], liveCsv: ["fdm_case.zarr/artifacts/scalars.csv", "fullmag_case.zarr/artifacts/scalars.csv"], csv: ["fdm_case.zarr/artifacts/tables/default/table.csv", "fdm_case.zarr/tables/default/table.csv", "fullmag_case.zarr/artifacts/tables/default/table.csv", "fullmag_case.zarr/tables/default/table.csv", "results/fdm/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
+        { id: "fem", label: "FEM · GPU · double", color: "var(--fem)", kind: "fullmag", roots: ["fem_case.zarr", "results/fem/fullmag_case.zarr"], liveCsv: ["fem_case.zarr/artifacts/scalars.csv"], csv: ["fem_case.zarr/artifacts/tables/default/table.csv", "results/fem/fullmag_case.zarr/artifacts/tables/default/table.csv"], },
+        { id: "mumax3", label: "MuMax3 · GPU", color: "var(--mumax)", kind: "mumax", paths: ["results/mumax3_aligned_v2/table.txt", "results/mumax3/table.txt"] },
+      ];
+      const STAGE_CANDIDATES = Array.from({ length: 8 }, (_, index) => `stages/stage_${String(index).padStart(4, "0")}_dynamic`);
+      const MAGNETIZATION = ["mx", "my", "mz"];
+      const ENERGIES = [
+        { id: "e_ex", label: "E exchange" },
+        { id: "e_demag", label: "E demag" },
+        { id: "e_external_total", label: "E zewnętrzna / Zeeman" },
+        { id: "e_drive", label: "E drive" },
+        { id: "e_ani", label: "E anis" },
+        { id: "e_dmi", label: "E DMI" },
+        { id: "e_total", label: "E total" },
+      ];
+      const state = { backends: {}, refreshing: false, refreshNumber: 0 };
+      const query = new URLSearchParams(window.location.search);
+
+      function applyQueryOverride(definition) {
+        const override = query.get(definition.id);
+        if (!override) return definition;
+        const root = override.replace(/\/$/, "");
+        if (definition.kind === "mumax") return { ...definition, paths: [root] };
+        if (root.toLowerCase().endsWith(".csv")) return { ...definition, roots: [], csv: [root] };
+        return { ...definition, roots: [root], csv: [`${root}/artifacts/tables/default/table.csv`, `${root}/tables/default/table.csv`] };
+      }
+
+      function cacheBusted(url) {
+        return `${url}${url.includes("?") ? "&" : "?"}_live=${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      }
+
+      async function fetchResponse(url) {
+        const response = await fetch(cacheBusted(url), { cache: "no-store" });
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        return response;
+      }
+
+      async function fetchText(url) {
+        return (await fetchResponse(url)).text();
+      }
+
+      async function fetchJson(url) {
+        return (await fetchResponse(url)).json();
+      }
+
+      function canonicalHeader(raw) {
+        const token = raw.trim().replace(/^#/, "").trim().split(/\s+/)[0].toLowerCase();
+        const aliases = { t: "time_s", time: "time_s", step: "step", mx: "mx", my: "my", mz: "mz", e_ex: "e_ex", e_exch: "e_ex", e_demag: "e_demag", e_ext: "e_ext", e_drive: "e_drive", e_ani: "e_ani", e_anis: "e_ani", e_dmi: "e_dmi", e_zeeman: "e_zeeman", e_total: "e_total" };
+        return aliases[token] || token;
+      }
+
+      function finiteNumber(raw, label) {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) throw new Error(`Niepoprawna liczba w ${label}`);
+        return value;
+      }
+
+      function parseFullmagCsv(text) {
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (lines.length < 2) throw new Error("Tabela Fullmag nie ma jeszcze wierszy");
+        const headers = lines[0].split(",").map(canonicalHeader);
+        const required = ["time_s", ...MAGNETIZATION, ...ENERGIES];
+        const missing = required.filter((column) => !headers.includes(column));
+        if (missing.length) throw new Error(`Brak kolumn: ${missing.join(", ")}`);
+        const rows = [];
+        for (let index = 1; index < lines.length; index += 1) {
+          const values = lines[index].split(",");
+          if (values.length !== headers.length) continue;
+          const row = {};
+          headers.forEach((header, columnIndex) => { row[header] = finiteNumber(values[columnIndex], `${index + 1}:${header}`); });
+          rows.push(row);
+        }
+        if (!rows.length) throw new Error("Tabela Fullmag nie ma pełnego wiersza");
+        return normalizeRows(rows, "fullmag");
+      }
+
+      function parseFullmagLiveCsv(text) {
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        if (lines.length < 2) throw new Error("Strumień Fullmag nie ma jeszcze wierszy");
+        const headers = lines[0].split(",").map(canonicalHeader);
+        const required = ["time_s", ...MAGNETIZATION, "e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
+        const missing = required.filter((column) => !headers.includes(column));
+        if (missing.length) throw new Error(`Brak kolumn strumienia: ${missing.join(", ")}`);
+        const rows = [];
+        for (let index = 1; index < lines.length; index += 1) {
+          const values = lines[index].split(",");
+          if (values.length !== headers.length) continue;
+          try {
+            const row = {};
+            headers.forEach((header, columnIndex) => { row[header] = finiteNumber(values[columnIndex], `${index + 1}:${header}`); });
+            rows.push(row);
+          } catch (error) {
+            // The producer may still be flushing the last partial row.
+          }
+        }
+        if (!rows.length) throw new Error("Strumień Fullmag nie ma pełnego wiersza");
+        return normalizeRows(rows, "fullmag_live");
+      }
+
+      function parseMuMaxTable(text) {
+        let headers = null;
+        const rows = [];
+        for (const rawLine of text.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line) continue;
+          if (line.startsWith("#")) {
+            if (!headers) headers = (line.slice(1).trim().split("\t").length > 1 ? line.slice(1).trim().split("\t") : line.slice(1).trim().split(/\s+/)).map(canonicalHeader);
+            continue;
+          }
+          if (!headers) continue;
+          const values = line.includes("\t") ? line.split("\t") : line.split(/\s+/);
+          if (values.length !== headers.length) continue;
+          const row = {};
+          headers.forEach((header, columnIndex) => {
+            if (!(header in row)) row[header] = finiteNumber(values[columnIndex], `${rows.length + 1}:${header}`);
+          });
+          if (["time_s", ...MAGNETIZATION, "e_ex", "e_demag", "e_zeeman", "e_ani", "e_total"].every((column) => column in row)) rows.push(row);
+        }
+        if (!headers || !rows.length) throw new Error("Tabela MuMax3 nie ma jeszcze pełnego wiersza");
+        return normalizeRows(rows, "mumax3");
+      }
+
+      function normalizeRows(rows, kind) {
+        return rows.map((row) => {
+          const normalized = { ...row, time_s: row.time_s };
+          if (kind === "mumax3") {
+            normalized.e_ext = row.e_zeeman;
+            normalized.e_drive = null;
+            normalized.e_dmi = null;
+            normalized.e_external_total = row.e_zeeman;
+          } else if (kind === "fullmag_live") {
+            normalized.e_ext = row.e_ext;
+            normalized.e_drive = null;
+            normalized.e_external_total = row.e_ext;
+          } else {
+            normalized.e_ext = row.e_ext;
+            normalized.e_drive = row.e_drive;
+            normalized.e_external_total = row.e_ext + row.e_drive;
+          }
+          return normalized;
+        }).sort((left, right) => left.time_s - right.time_s);
+      }
+
+      async function readZarrTable(root) {
+        for (const stage of STAGE_CANDIDATES) {
+          const base = `${root}/${stage}/table`;
+          try {
+            const [attrs, array] = await Promise.all([fetchJson(`${base}/.zattrs`), fetchJson(`${base}/.zarray`)]);
+            const quantities = Array.isArray(attrs.quantities) ? attrs.quantities : [];
+            const shape = Array.isArray(array.shape) ? array.shape : [];
+            const width = Number(shape[1]);
+            const count = Number(shape[0]);
+            if (!quantities.length || !Number.isInteger(width) || width !== quantities.length || !Number.isInteger(count)) throw new Error("Niepoprawna tablica Zarr");
+            const rows = [];
+            for (let index = 0; index < count; index += 1) {
+              try {
+                const response = await fetchResponse(`${base}/${index}.0`);
+                const buffer = await response.arrayBuffer();
+                if (buffer.byteLength < width * 8) break;
+                const view = new DataView(buffer);
+                const row = {};
+                quantities.forEach((quantity, columnIndex) => { row[canonicalHeader(quantity)] = view.getFloat64(columnIndex * 8, true); });
+                rows.push(row);
+              } catch (error) {
+                break;
+              }
+            }
+            if (rows.length) return { rows: normalizeRows(rows, "fullmag"), source: `${base}/*`, live: true, complete: false };
+            throw new Error("strumieniowana tabela nie ma jeszcze wierszy");
+          } catch (error) {
+            // Try the next stage index; a missing stage is normal before a run starts.
+          }
+        }
+        throw new Error("brak strumieniowanej tabeli");
+      }
+
+      async function readFullmag(definition) {
+        for (const root of definition.roots || []) {
+          try {
+            return await readZarrTable(root);
+          } catch (error) {
+            // Fall through to the next root or the final CSV.
+          }
+        }
+        for (const path of definition.liveCsv || []) {
+          try {
+            return { rows: parseFullmagLiveCsv(await fetchText(path)), source: path, live: true, complete: false };
+          } catch (error) {
+            // Fall through while the producer is still preparing its artifact.
+          }
+        }
+        for (const path of definition.csv || []) {
+          try {
+            return { rows: parseFullmagCsv(await fetchText(path)), source: path, live: false, complete: true };
+          } catch (error) {
+            // Fall through while the producer is still preparing its artifact.
+          }
+        }
+        throw new Error("brak tabeli Fullmag");
+      }
+
+      async function readBackend(definition) {
+        if (definition.kind === "mumax") {
+          for (const path of definition.paths || []) {
+            try { return { rows: parseMuMaxTable(await fetchText(path)), source: path, live: false, complete: true }; } catch (error) { /* try next path */ }
+          }
+          throw new Error("brak tabeli MuMax3");
+        }
+        return readFullmag(definition);
+      }
+
+      function formatNumber(value, digits = 4) {
+        if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+        return value.toExponential(digits - 1).replace("e+", "e");
+      }
+
+      function formatTime(value) {
+        if (!Number.isFinite(value)) return "—";
+        return (value * 1e9).toFixed(value === 0 ? 2 : 4);
+      }
+
+      function setText(id, value) { document.getElementById(id).textContent = value; }
+
+      function renderMethodCards() {
+        const grid = document.getElementById("method-grid");
+        grid.replaceChildren(...BACKENDS.map((definition) => {
+          const card = document.createElement("article");
+          card.className = "method";
+          card.innerHTML = `<div class="method-top"><span class="method-name"></span><span class="method-state"></span></div><div class="method-detail"></div>`;
+          card.dataset.backend = definition.id;
+          card.querySelector(".method-name").textContent = definition.label;
+          return card;
+        }));
+      }
+
+      function renderMethodState(definition, result) {
+        const card = document.querySelector(`[data-backend="${definition.id}"]`);
+        if (!card) return;
+        const stateElement = card.querySelector(".method-state");
+        const detailElement = card.querySelector(".method-detail");
+        if (result.error) {
+          stateElement.textContent = "oczekuje";
+          detailElement.textContent = result.error;
+          return;
+        }
+        stateElement.textContent = result.complete ? "gotowe" : "na żywo";
+        detailElement.textContent = `${result.rows.length} próbek · ${result.source}`;
+      }
+
+      function pathFor(series, x, y, width, height, padding, xMin, xMax, yMin, yMax) {
+        return series.rows.map((row, index) => {
+          const px = padding.left + ((row.time_s - xMin) / (xMax - xMin || 1)) * (width - padding.left - padding.right);
+          const py = padding.top + (1 - ((row[y] - yMin) / (yMax - yMin || 1))) * (height - padding.top - padding.bottom);
+          return `${index ? "L" : "M"}${px.toFixed(2)},${py.toFixed(2)}`;
+        }).join(" ");
+      }
+
+      function chartCard(title, unit, seriesList) {
+        const card = document.createElement("article");
+        card.className = "chart-card";
+        const heading = document.createElement("div");
+        heading.className = "chart-card-title";
+        heading.innerHTML = `<h3></h3><span></span>`;
+        heading.querySelector("h3").textContent = title;
+        heading.querySelector("span").textContent = unit;
+        card.append(heading);
+        const allRows = seriesList.flatMap((series) => series.rows);
+        if (!allRows.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "Oczekiwanie na dane…";
+          card.append(empty);
+          return card;
+        }
+        const width = 640;
+        const height = 204;
+        const padding = { top: 12, right: 12, bottom: 25, left: 52 };
+        const xValues = allRows.map((row) => row.time_s);
+        const yValues = allRows.map((row) => row[seriesList[0].column]).filter(Number.isFinite);
+        seriesList.forEach((series) => series.rows.forEach((row) => { if (Number.isFinite(row[series.column])) yValues.push(row[series.column]); }));
+        let xMin = Math.min(...xValues), xMax = Math.max(...xValues);
+        let yMin = Math.min(...yValues), yMax = Math.max(...yValues);
+        if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) { yMin = -1; yMax = 1; }
+        if (xMin === xMax) { xMin -= 1e-12; xMax += 1e-12; }
+        if (yMin === yMax) { const delta = Math.max(Math.abs(yMin) * 0.1, 1e-12); yMin -= delta; yMax += delta; }
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.classList.add("chart");
+        svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+        svg.setAttribute("role", "img");
+        svg.setAttribute("aria-label", `${title}, wykres w czasie`);
+        const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        for (let tick = 0; tick <= 4; tick += 1) {
+          const ratio = tick / 4;
+          const y = padding.top + ratio * (height - padding.top - padding.bottom);
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          line.classList.add("grid-line"); line.setAttribute("x1", padding.left); line.setAttribute("x2", width - padding.right); line.setAttribute("y1", y); line.setAttribute("y2", y); group.append(line);
+          const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          label.setAttribute("x", padding.left - 7); label.setAttribute("y", y + 3); label.setAttribute("text-anchor", "end"); label.textContent = formatNumber(yMax - ratio * (yMax - yMin), 3); group.append(label);
+        }
+        const axis = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        axis.classList.add("axis"); axis.setAttribute("x1", padding.left); axis.setAttribute("x2", width - padding.right); axis.setAttribute("y1", height - padding.bottom); axis.setAttribute("y2", height - padding.bottom); group.append(axis);
+        for (let tick = 0; tick <= 2; tick += 1) {
+          const ratio = tick / 2;
+          const x = padding.left + ratio * (width - padding.left - padding.right);
+          const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          label.setAttribute("x", x); label.setAttribute("y", height - 7); label.setAttribute("text-anchor", tick === 0 ? "start" : tick === 2 ? "end" : "middle"); label.textContent = `${((xMin + ratio * (xMax - xMin)) * 1e9).toFixed(2)} ns`; group.append(label);
+        }
+        svg.append(group);
+        const lines = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        seriesList.forEach((series) => {
+          const visibleRows = series.rows.filter((row) => Number.isFinite(row[series.column]));
+          if (!visibleRows.length) return;
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.classList.add("series"); path.style.stroke = series.color; path.setAttribute("d", pathFor({ rows: visibleRows }, null, series.column, width, height, padding, xMin, xMax, yMin, yMax)); lines.append(path);
+        });
+        svg.append(lines);
+        card.append(svg);
+        const legend = document.createElement("div"); legend.className = "legend";
+        seriesList.forEach((series) => { const item = document.createElement("span"); item.className = "legend-item"; item.innerHTML = `<span class="legend-swatch"></span><span></span>`; item.querySelector(".legend-swatch").style.background = series.color; item.querySelector("span:last-child").textContent = series.label; legend.append(item); });
+        card.append(legend);
+        return card;
+      }
+
+      function methodSeries(column) {
+        return BACKENDS.map((definition) => {
+          const result = state.backends[definition.id];
+          if (!result || result.error || !result.rows.some((row) => Number.isFinite(row[column]))) return null;
+          return { label: definition.id, color: definition.color, column, rows: result.rows };
+        }).filter(Boolean);
+      }
+
+      function renderCharts() {
+        const magnetizationGrid = document.getElementById("magnetization-grid");
+        const energyGrid = document.getElementById("energy-grid");
+        magnetizationGrid.replaceChildren(...MAGNETIZATION.map((column) => chartCard(column, "m", methodSeries(column))));
+        energyGrid.replaceChildren(...ENERGIES.map((energy) => chartCard(energy.label, "J", methodSeries(energy.id))));
+      }
+
+      function renderLatest() {
+        const body = document.getElementById("latest-body");
+        const rows = BACKENDS.map((definition) => {
+          const result = state.backends[definition.id];
+          if (!result || result.error || !result.rows.length) return `<tr><td>${definition.label}</td><td colspan="6" class="muted">oczekiwanie</td></tr>`;
+          const last = result.rows[result.rows.length - 1];
+          return `<tr><td>${definition.label}</td><td>${formatTime(last.time_s)}</td><td>${formatNumber(last.mx)}</td><td>${formatNumber(last.my)}</td><td>${formatNumber(last.mz)}</td><td>${formatNumber(last.e_total)}</td><td>${result.rows.length}</td></tr>`;
+        });
+        body.innerHTML = rows.join("");
+      }
+
+      function renderOverall() {
+        const results = BACKENDS.map((definition) => state.backends[definition.id]).filter(Boolean);
+        const ready = results.filter((result) => !result.error && result.rows.length);
+        const errors = results.filter((result) => result.error);
+        const dot = document.getElementById("overall-dot");
+        dot.className = `status-dot ${errors.length === results.length ? "bad" : ready.length ? "good" : ""}`;
+        if (ready.length === results.length && results.every((result) => result.complete)) setText("overall-status", "Wszystkie źródła gotowe");
+        else if (ready.length) setText("overall-status", `Odczyt na żywo · ${ready.length}/${results.length} źródeł`);
+        else if (errors.length) setText("overall-status", "Oczekiwanie na uruchomienie symulacji");
+        else setText("overall-status", "Odczyt danych…");
+      }
+
+      async function refreshAll() {
+        if (state.refreshing) return;
+        state.refreshing = true;
+        const refreshNumber = ++state.refreshNumber;
+        const definitions = BACKENDS.map(applyQueryOverride);
+        const values = await Promise.all(definitions.map(async (definition) => {
+          try { return [definition.id, await readBackend(definition)]; }
+          catch (error) { return [definition.id, { error: error instanceof Error ? error.message : "błąd odczytu", rows: [] }]; }
+        }));
+        if (refreshNumber === state.refreshNumber) {
+          state.backends = Object.fromEntries(values);
+          definitions.forEach((definition) => renderMethodState(definition, state.backends[definition.id]));
+          renderOverall(); renderCharts(); renderLatest();
+          setText("last-refresh", `Ostatni odczyt: ${new Date().toLocaleTimeString("pl-PL")}`);
+        }
+        state.refreshing = false;
+      }
+
+      renderMethodCards();
+      document.getElementById("refresh-button").addEventListener("click", refreshAll);
+      refreshAll();
+      window.setInterval(refreshAll, 1000);
+    })();
+  </script>
+</body>
+</html>

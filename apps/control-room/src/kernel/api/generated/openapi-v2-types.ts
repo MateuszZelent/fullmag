@@ -5685,6 +5685,7 @@ export interface components {
             mask_resource: string;
             mask_sha256: string;
             preview_id: string;
+            reference_sha256: string;
             /** Format: int64 */
             revision: number;
             runtime_application: components["schemas"]["FrozenSpinsRuntimeApplication"];

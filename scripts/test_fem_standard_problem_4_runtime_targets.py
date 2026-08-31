@@ -19,6 +19,10 @@ def test_full_target_is_managed_strict_cpu_gpu_and_fail_closed():
     assert 'cases="${FULLMAG_SP4_CASES:-case-a case-b}"' in script
     assert "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson" in script
     assert "FULLMAG_GMSH_THREADS=1" in script
+    assert 'FULLMAG_SP4_COMPATIBILITY="$compatibility_mode"' in script
+    assert 'local compatibility_mode="native"' in script
+    assert 'compatibility_mode="native"' in script
+    assert "--expected-compatibility-profile mumax3_sp4_v1" in script
     assert "set -euo pipefail" in script
     assert "replay-before" in script and "replay-after" in script
     assert "tests.standard_problems.mumag.sp4.fem.verify" in script

@@ -51,3 +51,16 @@ copy_runtime_resolved_dependency_pair() {
     copy_runtime_entry_replace "$requested" "$dest_dir"
   fi
 }
+
+runtime_dependency_is_host_owned() {
+  local name
+  name="$(basename "$1")"
+  case "$name" in
+    ld-linux*.so*|ld64*.so*|libc.so*|libc-*.so*|libdl.so*|libdl-*.so*|libm.so*|libm-*.so*|libpthread.so*|libpthread-*.so*|libresolv.so*|libresolv-*.so*|librt.so*|librt-*.so*|libutil.so*|libutil-*.so*|libgcc_s.so*|libstdc++.so*|libcuda.so*|libnvidia-*.so*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}

@@ -755,6 +755,7 @@ def _attach_mixed_layer_topology_certificate(
     cell_mesh_parts: np.ndarray,
     outer_boundary_marker: int,
     effective_gmsh_thread_count: int,
+    requested_direction: str | None = None,
 ) -> MeshData:
     """Validate and bind ``mixed_layer_topology_certificate.v1``."""
     mesh = MeshData(
@@ -940,9 +941,25 @@ def _attach_mixed_layer_topology_certificate(
             f"{conformity}; diagnostics={diagnostics}"
         )
     topology_fingerprint_v3 = workspace.topology_fingerprint_v3
+    authored_direction = (
+        requested_direction
+        if requested_direction in {"auto", "x", "y", "z"}
+        else "xyz"[requested_axis]
+    )
+    if requested_direction is not None and requested_direction not in {
+        "auto", "x", "y", "z"
+    }:
+        raise ValueError(
+            "mixed layer topology requested direction must be one of "
+            "'auto', 'x', 'y', or 'z'"
+        )
+    if authored_direction != "auto" and authored_direction != "xyz"[requested_axis]:
+        raise ValueError(
+            "mixed layer topology requested direction disagrees with resolved axis"
+        )
     certificate = MixedLayerTopologyCertificate(
         certificate_status="accepted",
-        requested_sweep_direction="xyz"[requested_axis],
+        requested_sweep_direction=authored_direction,
         resolved_sweep_direction="xyz"[requested_axis],
         requested_layer_count=requested_layers,
         realized_layer_count=realized_layers,

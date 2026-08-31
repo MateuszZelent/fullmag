@@ -51,7 +51,7 @@ describe("Viewport3DScene scale helpers", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     const controlsStart = source.indexOf("<OrbitCameraControls");
     const controlsBlock = source.slice(
       controlsStart,
@@ -119,21 +119,20 @@ describe("Viewport3DScene scale helpers", () => {
     );
 
     expect(adoptionFrameHook).toContain("adoptionRegistry.subscribeActive");
-    expect(adoptionFrameHook).toContain('tracker.recordDirtyFrame("render-adoption")');
-    const subscriberStart = adoptionFrameHook.indexOf(
-      "adoptionRegistry.subscribe",
+    expect(adoptionFrameHook).toContain('scheduleFrame("render-adoption")');
+    expect(adoptionFrameHook).toContain("tracker.recordDirtyFrame(reason)");
+    expect(adoptionFrameHook).toContain("const frameIdRef = useRef<number | null>(null)");
+    expect(adoptionFrameHook).toContain("const commitLatestFrame = useEffectEvent");
+    const scheduleStart = adoptionFrameHook.indexOf("const scheduleFrame");
+    expect(adoptionFrameHook.indexOf("invalidate();", scheduleStart)).toBeLessThan(
+      adoptionFrameHook.indexOf("window.requestAnimationFrame", scheduleStart),
     );
-    expect(
-      adoptionFrameHook.indexOf("invalidate();", subscriberStart),
-    ).toBeLessThan(
-      adoptionFrameHook.indexOf(
-        "onVisualizationFrameCommitted(",
-        subscriberStart,
-      ),
+    expect(adoptionFrameHook).toContain("onVisualizationFrameCommitted(");
+    const resourceUpdateEffect = adoptionFrameHook.slice(
+      adoptionFrameHook.indexOf('scheduleFrame("resources-updated")') - 40,
+      adoptionFrameHook.indexOf('scheduleFrame("resources-updated")') + 160,
     );
-    expect(adoptionFrameHook).toContain(
-      "onVisualizationFrameCommitted(\n          visualizationRevision,\n          airboxFrameState,\n        )",
-    );
+    expect(resourceUpdateEffect).not.toContain("cancelAnimationFrame");
   });
 
   it("binds Airbox frame state to the staged multilayer render passes", () => {
@@ -284,23 +283,20 @@ describe("Viewport3DScene scale helpers", () => {
     });
   });
 
-  it("passes the frame-bound Airbox state from the resource-frame effect", () => {
+  it("passes the latest frame-bound Airbox state from the persistent frame scheduler", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
       "utf8",
     );
-    const resourceFrameEffect = source.slice(
-      source.indexOf("// Demand rendering needs an explicit frame"),
-      source.indexOf(
-        "\n\n  return (",
-        source.indexOf("// Demand rendering needs an explicit frame"),
-      ),
+    const adoptionFrameHook = source.slice(
+      source.indexOf("function useViewport3DRenderAdoptionFrame"),
+      source.indexOf("export function Viewport3DScene"),
     );
 
-    expect(resourceFrameEffect).toContain(
-      "onVisualizationFrameCommitted(visualizationRevision, airboxFrameState)",
-    );
-    expect(resourceFrameEffect).toContain("airboxFrameState,");
+    expect(adoptionFrameHook).toContain("const commitLatestFrame = useEffectEvent");
+    expect(adoptionFrameHook).toContain("onVisualizationFrameCommitted(");
+    expect(adoptionFrameHook).toContain("visualizationRevision,");
+    expect(adoptionFrameHook).toContain("airboxFrameState,");
   });
 
   it("places the shared glyph-cache provider above the model stack that mounts VectorFieldLayer consumers", () => {
@@ -672,7 +668,7 @@ describe("Viewport3DScene scale helpers", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     const modelStack = source.slice(
       source.indexOf("function Viewport3DModelLayerStack"),
       source.indexOf("function RegionOverlayNativePickingLayer"),

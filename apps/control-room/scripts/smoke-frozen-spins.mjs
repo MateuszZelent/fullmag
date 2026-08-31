@@ -11,6 +11,13 @@ const outputDir = resolve(
   process.env.CONTROL_ROOM_FROZEN_SPINS_REPORT_DIR ?? ".fullmag/reports/frozen-spins-browser",
 );
 const runId = `frozen-spins-browser-${randomUUID()}`;
+const runAuthoringWorkflow =
+  process.env.CONTROL_ROOM_FROZEN_SPINS_AUTHORING_E2E === "1";
+const authoringObjectId =
+  process.env.CONTROL_ROOM_FROZEN_SPINS_OBJECT_ID ?? null;
+const authoringConstraintId =
+  process.env.CONTROL_ROOM_FROZEN_SPINS_CONSTRAINT_ID ??
+  `browser-${runId.slice("frozen-spins-browser-".length)}`;
 
 async function loadPlaywright() {
   try {
@@ -26,6 +33,20 @@ async function loadPlaywright() {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function canonicalSha256Identity(value, label) {
+  const raw = String(value ?? '').toLowerCase();
+  const hex = raw.startsWith('sha256:') ? raw.slice('sha256:'.length) : raw;
+  assert(/^[0-9a-f]{64}$/.test(hex), `${label} must be a canonical SHA-256 identity`);
+  return `sha256:${hex}`;
+}
+
+function viewportHasCompleteFemScalarCarrier(viewportText) {
+  return (
+    viewportText.includes('scalar-complete') ||
+    viewportText.includes('state=derived-global')
+  );
 }
 
 async function apiJson(path, init) {
@@ -69,6 +90,424 @@ async function waitForFrozenSpinsField(page, attempts = 80) {
   );
 }
 
+async function waitForWorkspace(page) {
+  await page.waitForSelector('.fm-ribbon', { timeout: 30_000 });
+  await page.getByRole('tree', { name: 'Explorer tree' }).waitFor({
+    state: 'visible',
+    timeout: 30_000,
+  });
+}
+
+async function runFrozenSpinsAuthoringWorkflow(page) {
+  assert(
+    typeof authoringObjectId === 'string' && authoringObjectId.length > 0,
+    'CONTROL_ROOM_FROZEN_SPINS_OBJECT_ID is required for authoring E2E',
+  );
+
+  let collection = (
+    await apiJson('/v2/sessions/current/model/frozen-spins')
+  ).value;
+  for (const definition of collection.definitions ?? []) {
+    if (!definition.id?.startsWith('browser-')) continue;
+    collection = (
+      await apiJson(
+        `/v2/sessions/current/model/frozen-spins/${encodeURIComponent(definition.id)}`,
+        {
+          body: JSON.stringify({ expected_revision: collection.revision }),
+          headers: { 'content-type': 'application/json' },
+          method: 'DELETE',
+        },
+      )
+    ).value;
+  }
+  const created = (
+    await apiJson('/v2/sessions/current/model/frozen-spins', {
+      body: JSON.stringify({
+        expected_revision: collection.revision,
+        definition: {
+          activation: { kind: 'all_stages' },
+          empty_selection: 'error',
+          enabled: true,
+          id: authoringConstraintId,
+          inactive_selection: 'warn_and_intersect',
+          membership: { kind: 'static' },
+          name: `Browser E2E ${authoringConstraintId}`,
+          reference: { kind: 'capture_current_at_activation' },
+          schema_version: 'frozen_spins.v1',
+          selector: { kind: 'in_object', object_id: authoringObjectId },
+        },
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+  ).value;
+  assert(
+    created?.runtime_application?.state === 'pending_runtime_plan',
+    'Create must declare pending_runtime_plan',
+  );
+
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await waitForWorkspace(page);
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await page.waitForTimeout(2_000);
+  const filter = page.getByRole('searchbox', { name: 'Filter explorer' });
+  await filter.fill('pin');
+  await page
+    .getByRole('treeitem', { name: 'Frozen Spins', exact: true })
+    .last()
+    .click();
+  const inspector = page.getByRole('region', { name: 'Inspector' });
+
+  let previewResponse = null;
+  let previewFailureBody = '';
+  let previewRequestWallTimeNs = null;
+  const previewAttemptWallTimeNs = [];
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const previewAttemptStartedNs = process.hrtime.bigint();
+    const previewResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname ===
+          '/v2/sessions/current/model/frozen-spins/previews',
+      { timeout: 60_000 },
+    );
+    await page.getByRole('button', { name: 'Preview mask', exact: true }).click();
+    try {
+      previewResponse = await previewResponsePromise;
+    } catch (error) {
+      throw new Error(
+        `Frozen Spins preview request was not observed. Inspector state:\n${await inspector.innerText()}`,
+        { cause: error },
+      );
+    }
+    const previewAttemptElapsedNs = Number(
+      process.hrtime.bigint() - previewAttemptStartedNs,
+    );
+    assert(
+      Number.isSafeInteger(previewAttemptElapsedNs) && previewAttemptElapsedNs > 0,
+      'Preview request wall time must be a positive safe integer',
+    );
+    previewAttemptWallTimeNs.push(previewAttemptElapsedNs);
+    if (previewResponse.ok()) {
+      previewRequestWallTimeNs = previewAttemptElapsedNs;
+      break;
+    }
+    previewFailureBody = await previewResponse.text();
+    const transientRevisionRace =
+      previewResponse.status() === 409 &&
+      previewFailureBody.includes('selection_stale_revision');
+    if (!transientRevisionRace || attempt === 5) break;
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await page.waitForTimeout(1_000);
+  }
+  assert(
+    previewResponse?.ok(),
+    `Frozen Spins preview failed with HTTP ${previewResponse?.status() ?? 'unknown'}: ${previewFailureBody}`,
+  );
+  assert(
+    Number.isSafeInteger(previewRequestWallTimeNs) && previewRequestWallTimeNs > 0,
+    'Successful Preview must publish a positive end-to-end wall time',
+  );
+  const previewResponseBody = await previewResponse.json();
+  assert(
+    previewResponseBody?.authority === 'speculative_authoring_preview' &&
+      previewResponseBody?.solver_binding === 'unbound',
+    'Preview receipt must remain explicitly speculative and unbound',
+  );
+  assert(
+    typeof previewResponseBody?.mask_sha256 === 'string' &&
+      typeof previewResponseBody?.resolved?.resolved_reference_sha256 === 'string' &&
+      typeof previewResponseBody?.resolved?.topology_fingerprint === 'string',
+    'Preview receipt must publish mask, reference, and topology identities',
+  );
+  const commitPreviewButton = page.getByRole('button', {
+    name: 'Commit preview',
+    exact: true,
+  });
+  try {
+    await commitPreviewButton.waitFor({ state: 'visible', timeout: 30_000 });
+    await inspector.getByText('current', { exact: true }).waitFor({ timeout: 30_000 });
+  } catch (error) {
+    throw new Error(
+      `Frozen Spins preview did not expose a current activation candidate. Inspector state:\n${await inspector.innerText()}`,
+      { cause: error },
+    );
+  }
+  const previewSnapshot = await inspector.innerText();
+  const frozenCountMatch = previewSnapshot.match(/Frozen DOFs\s+(\d+)/);
+  const freeCountMatch = previewSnapshot.match(/Free DOFs\s+(\d+)/);
+  assert(frozenCountMatch, 'Preview must expose Frozen DOFs');
+  assert(freeCountMatch, 'Preview must expose Free DOFs');
+  assert(Number(frozenCountMatch[1]) > 0, 'Preview must resolve at least one frozen DOF');
+  assert(
+    previewResponseBody.frozen_dof_count === Number(frozenCountMatch[1]) &&
+      previewResponseBody.free_dof_count === Number(freeCountMatch[1]),
+    'Inspector preview counts must match the authoritative preview response',
+  );
+
+  const activationResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname.endsWith('/activate'),
+    { timeout: 60_000 },
+  );
+  await commitPreviewButton.click();
+  const activationResponse = await activationResponsePromise;
+  const activationResponseBody = await activationResponse.json();
+  assert(
+    activationResponse.ok(),
+    `Frozen Spins activation failed with HTTP ${activationResponse.status()}: ${JSON.stringify(activationResponseBody)}`,
+  );
+  await inspector.getByText('pending', { exact: true }).first().waitFor({ timeout: 30_000 });
+  const solveCommandResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      new URL(response.url()).pathname === '/v2/sessions/current/simulation/commands',
+    { timeout: 30_000 },
+  );
+  await page.getByRole('button', { name: 'Compute Study', exact: true }).click();
+  const solveCommandResponse = await solveCommandResponsePromise;
+  const solveCommandResponseBody = await solveCommandResponse.json();
+  assert(
+    solveCommandResponse.ok() && solveCommandResponseBody?.accepted === true,
+    `Compute Study command was not accepted: HTTP ${solveCommandResponse.status()} ${JSON.stringify(solveCommandResponseBody)}`,
+  );
+  assert(
+    typeof solveCommandResponseBody?.command_id === 'string' &&
+      solveCommandResponseBody.command_id.length > 0,
+    'Compute Study response must publish command_id',
+  );
+  const solveCommand = (
+    await apiJson(
+      `/v2/sessions/current/simulation/commands/${encodeURIComponent(solveCommandResponseBody.command_id)}`,
+    )
+  ).value;
+  assert(solveCommand?.kind === 'solve', 'Compute Study must enqueue a solve command');
+  assert(
+    solveCommand?.precondition?.scene_revision === activationResponseBody.revision,
+    `Solve command must bind the committed Frozen Spins scene revision: activation=${activationResponseBody.revision} command=${solveCommand?.precondition?.scene_revision}`,
+  );
+  try {
+    await inspector.getByText('confirmed', { exact: true }).waitFor({ timeout: 60_000 });
+  } catch (error) {
+    const [solverStatusAtTimeout, engineLogAtTimeout] = await Promise.all([
+      apiJson('/v2/sessions/current/simulation/solver/status').then((response) => response.value),
+      apiJson('/v2/sessions/current/diagnostics/engine-log').then((response) => response.value),
+    ]);
+    throw new Error(
+      `Frozen Spins solver certificate was not confirmed. Inspector state:\n${await inspector.innerText()}\nActivation receipt:\n${JSON.stringify(activationResponseBody, null, 2)}\nSolve command:\n${JSON.stringify(solveCommand, null, 2)}\nSolver status:\n${JSON.stringify(solverStatusAtTimeout, null, 2)}\nEngine log:\n${JSON.stringify(engineLogAtTimeout, null, 2)}`,
+      { cause: error },
+    );
+  }
+  await inspector
+    .getByText('Solver certificate matches the committed preview identity.', {
+      exact: true,
+    })
+    .waitFor({ timeout: 30_000 });
+
+  await page
+    .getByRole('button', { name: 'Show solver frozen_spins in 3D', exact: true })
+    .click();
+  const renderFieldMeta = (
+    await apiJson('/v2/sessions/current/data/fields/frozen_spins/meta?component=full')
+  ).value;
+  const fdmRenderPath = String(renderFieldMeta?.resolved_capability?.lane ?? '').startsWith(
+    'fdm_',
+  );
+  try {
+    await page.waitForFunction(
+      (fdmPath) => {
+        const text = document.querySelector('.fm-viewport-3d')?.textContent ?? '';
+        const femScalarCarrierAdopted =
+          (text.includes('scalar-complete') || text.includes('state=derived-global')) &&
+          !text.includes('surface-colors-unavailable');
+        return (
+          text.includes('q:frozen_spins') &&
+          (fdmPath
+            ? text.includes('field:"fmvp:frozen_spins') && text.includes('fdm-cuboid{')
+            : femScalarCarrierAdopted && text.includes('surface-vertex-colors:ready'))
+        );
+      },
+      fdmRenderPath,
+      { timeout: 30_000 },
+    );
+  } catch (error) {
+    const fieldAtTimeout = (
+      await apiJson('/v2/sessions/current/data/fields/frozen_spins/meta?component=full')
+    ).value;
+    const visualizationAtTimeout = (
+      await apiJson('/v2/sessions/current/visualization/state')
+    ).value;
+    throw new Error(
+      `Frozen Spins 3D quantity was not render-ready. Viewport state:\n${await page.locator('.fm-viewport-3d').innerText()}\nField meta:\n${JSON.stringify(fieldAtTimeout, null, 2)}\nVisualization state:\n${JSON.stringify(visualizationAtTimeout, null, 2)}\nFrozen Spins data-plane responses:\n${JSON.stringify(networkLog.filter((entry) => entry.url.includes('/data/fields/frozen_spins')), null, 2)}`,
+      { cause: error },
+    );
+  }
+
+  const solverStatus = (
+    await apiJson('/v2/sessions/current/simulation/solver/status')
+  ).value?.frozen_spins;
+  const field = (
+    await apiJson('/v2/sessions/current/data/fields/frozen_spins/meta?component=full')
+  ).value;
+  const viewportText = await page.locator('.fm-viewport-3d').innerText();
+  const visualizationState = (
+    await apiJson('/v2/sessions/current/visualization/state')
+  ).value;
+  let renderedAck = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const ackResource = (
+      await apiJson('/v2/sessions/current/visualization/client-acks')
+    ).value;
+    renderedAck = ackResource?.entries?.find(
+      (entry) =>
+        entry.revision >= visualizationState.revision && entry.status === 'rendered',
+    );
+    if (renderedAck) break;
+    await page.waitForTimeout(250);
+  }
+  assert(
+    solverStatus?.active_constraint_ids?.includes(authoringConstraintId),
+    'Solver certificate must include the committed constraint id',
+  );
+  assert(
+    solverStatus?.frozen_site_count === Number(frozenCountMatch[1]) &&
+      solverStatus?.free_site_count === Number(freeCountMatch[1]),
+    'Solver certificate counts must match the committed preview',
+  );
+  assert(
+    typeof solverStatus?.mask_sha256 === 'string' &&
+      typeof solverStatus?.reference_sha256 === 'string' &&
+      typeof solverStatus?.topology_fingerprint === 'string',
+    'Solver certificate must publish mask, reference, and topology identities',
+  );
+  const previewSourceStateRevision = previewResponseBody?.resolved?.source_state_revision;
+  const solverSourceStateRevision = solverStatus?.source_state_revision;
+  assert(
+    Number.isSafeInteger(previewSourceStateRevision) && previewSourceStateRevision > 0,
+    'Committed preview must publish a positive source_state_revision',
+  );
+  assert(
+    Number.isSafeInteger(solverSourceStateRevision) && solverSourceStateRevision > 0,
+    'Solver certificate must publish a positive source_state_revision',
+  );
+  assert(
+    solverSourceStateRevision === previewSourceStateRevision,
+    `Solver certificate source_state_revision must match the committed preview: preview=${previewSourceStateRevision} solver=${solverSourceStateRevision}`,
+  );
+  const previewMaskIdentity = canonicalSha256Identity(
+    previewResponseBody.mask_sha256,
+    'Preview mask identity',
+  );
+  const solverMaskIdentity = canonicalSha256Identity(
+    solverStatus.mask_sha256,
+    'Solver mask identity',
+  );
+  const previewReferenceIdentity = canonicalSha256Identity(
+    previewResponseBody.resolved.resolved_reference_sha256,
+    'Preview reference identity',
+  );
+  const solverReferenceIdentity = canonicalSha256Identity(
+    solverStatus.reference_sha256,
+    'Solver reference identity',
+  );
+  const previewTopologyIdentity = canonicalSha256Identity(
+    previewResponseBody.resolved.topology_fingerprint,
+    'Preview topology identity',
+  );
+  const solverTopologyIdentity = canonicalSha256Identity(
+    solverStatus.topology_fingerprint,
+    'Solver topology identity',
+  );
+  assert(
+    solverMaskIdentity === previewMaskIdentity,
+    `Solver certificate mask identity must match the committed preview: preview=${previewMaskIdentity} solver=${solverMaskIdentity}`,
+  );
+  assert(
+    solverReferenceIdentity === previewReferenceIdentity,
+    `Solver certificate reference identity must match the committed preview: preview=${previewReferenceIdentity} solver=${solverReferenceIdentity}`,
+  );
+  assert(
+    solverTopologyIdentity === previewTopologyIdentity,
+    `Solver certificate topology identity must match the committed preview: preview=${previewTopologyIdentity} solver=${solverTopologyIdentity}`,
+  );
+  assert(field?.state === 'complete', 'Solver-owned frozen_spins field must be complete');
+  assert(field?.kind === 'spatial_scalar', 'Solver-owned frozen_spins field must be scalar');
+  assert(renderedAck, 'Authoring workflow must end with a rendered visualization ACK');
+  const fdmObjectTarget = visualizationState?.targets?.objects?.find(
+    (target) => target.scope_id === authoringObjectId,
+  );
+  if (fdmRenderPath) {
+    assert(
+      viewportText.includes('field:"fmvp:frozen_spins') &&
+        viewportText.includes('fdm-cuboid{'),
+      'FDM rendering must bind the frozen_spins scalar buffer to the cuboid pipeline',
+    );
+    assert(
+      fdmObjectTarget?.settings?.surface_color_source === 'colormap',
+      'FDM object target must render frozen_spins through the scalar colormap',
+    );
+  } else {
+    assert(viewportText.includes('surface:magnitude'), 'Scalar surface demand must use magnitude');
+    assert(
+      viewportHasCompleteFemScalarCarrier(viewportText),
+      `Viewport must adopt a complete scalar carrier, either as a target buffer or a full-domain FEM carrier. Viewport state:\n${viewportText}`,
+    );
+    assert(
+      viewportText.includes('surface-vertex-colors:ready'),
+      'FEM rendering must publish ready surface vertex colors',
+    );
+  }
+  assert(
+    (visualizationState?.diagnostics?.degraded_reasons?.length ?? 0) === 0,
+    'Frozen Spins 3D rendering must not degrade',
+  );
+
+  return {
+    constraint_id: authoringConstraintId,
+    create_revision: created.revision,
+    field_meta: field,
+    preview: {
+      preview_id: previewResponseBody.preview_id,
+      authority: previewResponseBody.authority,
+      solver_binding: previewResponseBody.solver_binding,
+      free_site_count: Number(freeCountMatch[1]),
+      frozen_site_count: Number(frozenCountMatch[1]),
+      mask_sha256: previewMaskIdentity,
+      reference_sha256: previewReferenceIdentity,
+      topology_fingerprint: previewTopologyIdentity,
+      source_state_revision: previewSourceStateRevision,
+      request_wall_time_ns: previewRequestWallTimeNs,
+      attempt_wall_time_ns: previewAttemptWallTimeNs,
+      attempt_count: previewAttemptWallTimeNs.length,
+    },
+    solve_command: {
+      command_id: solveCommand.command_id,
+      kind: solveCommand.kind,
+      status: solveCommand.status,
+      scene_revision: solveCommand.precondition?.scene_revision,
+    },
+    solver_certificate: solverStatus,
+    rendered_ack: renderedAck,
+    visualization_state: visualizationState,
+    viewport: {
+      degradation_none:
+        (visualizationState?.diagnostics?.degraded_reasons?.length ?? 0) === 0,
+      quantity_selected: viewportText.includes('q:frozen_spins'),
+      render_path: fdmRenderPath ? 'fdm-cuboid-instance-colors' : 'fem-surface-vertex-colors',
+      scalar_complete: field?.state === 'complete',
+      scalar_carrier_adopted: fdmRenderPath
+        ? viewportText.includes('field:"fmvp:frozen_spins')
+        : viewportHasCompleteFemScalarCarrier(viewportText),
+      surface_ready: fdmRenderPath
+        ? viewportText.includes('field:"fmvp:frozen_spins') &&
+          viewportText.includes('fdm-cuboid{') &&
+          fdmObjectTarget?.settings?.surface_color_source === 'colormap'
+        : viewportText.includes('surface-vertex-colors:ready'),
+    },
+  };
+}
+
 const playwright = await loadPlaywright();
 if (!playwright?.chromium) {
   console.error("Frozen spins smoke requires Playwright or @playwright/test.");
@@ -89,6 +528,7 @@ const consoleWarnings = [];
 const networkLog = [];
 let previousVisualizationState = null;
 let fieldMeta = null;
+let authoringEvidence = null;
 
 page.on("console", (message) => {
   if (message.type() === "error") {
@@ -104,7 +544,15 @@ page.on("pageerror", (error) => {
 page.on("response", (response) => {
   const url = response.url();
   if (url.includes("/v2/")) {
-    networkLog.push({ method: response.request().method(), status: response.status(), url });
+    const request = response.request();
+    networkLog.push({
+      method: request.method(),
+      status: response.status(),
+      url,
+      ...(url.includes("/visualization/client-acks")
+        ? { request_body: request.postData() }
+        : {}),
+    });
   }
 });
 
@@ -144,7 +592,8 @@ try {
   await page.goto(workspaceUrl, { waitUntil: "networkidle", timeout: 30_000 });
 
   // 1. Check Explorer and Ribbon
-  const ribbon = await page.waitForSelector(".fm-ribbon", { timeout: 10_000 });
+  await waitForWorkspace(page);
+  const ribbon = await page.$(".fm-ribbon");
   assert(ribbon !== null, "Ribbon bar must be visible");
 
   // 2. Check 3D Viewport canvas and WebGL context
@@ -172,21 +621,24 @@ try {
 
   console.log("WebGL context verified successfully:", webglStatus);
 
-  const frozenVisualizationPatch = {
-    active_quantity_id: "frozen_spins",
-    overrides: objectQuantityOverrides,
-    quantity: { active_quantity_id: "frozen_spins" },
-    view_mode: "3d",
-  };
-  const materializationVisualizationState = (
-    await apiJson("/v2/sessions/current/visualization/state", {
-      body: JSON.stringify({
-        ...frozenVisualizationPatch,
-      }),
-      headers: { "content-type": "application/json" },
-      method: "PATCH",
-    })
-  ).value;
+  if (runAuthoringWorkflow) {
+    authoringEvidence = await runFrozenSpinsAuthoringWorkflow(page);
+  }
+
+  const materializationVisualizationState = authoringEvidence
+    ? authoringEvidence.visualization_state
+    : (
+        await apiJson("/v2/sessions/current/visualization/state", {
+          body: JSON.stringify({
+            active_quantity_id: "frozen_spins",
+            overrides: objectQuantityOverrides,
+            quantity: { active_quantity_id: "frozen_spins" },
+            view_mode: "3d",
+          }),
+          headers: { "content-type": "application/json" },
+          method: "PATCH",
+        })
+      ).value;
   assert(
     materializationVisualizationState?.active_quantity_id === "frozen_spins" &&
       materializationVisualizationState?.quantity?.active_quantity_id === "frozen_spins",
@@ -212,7 +664,7 @@ try {
   // revision; clients intentionally coalesce such no-op registry updates.
   const visualizationState = materializationVisualizationState;
   const renderRevision = materializationVisualizationState.revision;
-  let renderedAck = null;
+  let renderedAck = authoringEvidence?.rendered_ack ?? null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const ackResource = (
       await apiJson("/v2/sessions/current/visualization/client-acks")
@@ -248,9 +700,18 @@ try {
           ackResource,
           consoleErrors,
           consoleWarnings,
-          networkLog,
+          networkLog: networkLog.filter(
+            (entry) =>
+              entry.url.includes("/visualization/client-acks") ||
+              entry.url.includes("/data/fields/frozen_spins/"),
+          ),
           viewportDiagnostics,
-          visualizationState,
+          visualizationState: {
+            active_quantity_id: visualizationState?.active_quantity_id,
+            quantity: visualizationState?.quantity,
+            revision: visualizationState?.revision,
+            view_mode: visualizationState?.view_mode,
+          },
         },
         null,
         2,
@@ -297,6 +758,7 @@ try {
           location: quantity.location,
         },
         field_meta: fieldMeta,
+        authoring_workflow: authoringEvidence,
         visualization_revision: renderRevision,
         rendered_ack: renderedAck,
         webgl: webglStatus,

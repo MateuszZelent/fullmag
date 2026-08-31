@@ -30,13 +30,31 @@ $ProgressPreference = "SilentlyContinue"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $TargetTriple = "x86_64-pc-windows-msvc"
 $RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
-$defaultCacheRoot = Join-Path $RepoDriveRoot "fullmag-cache"
-$defaultBuildRoot = Join-Path $RepoDriveRoot "fullmag-build"
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
   return [System.IO.Path]::GetFullPath($Path)
 }
+
+function Get-WorkspaceNamespace {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $normalized = (Resolve-AbsolutePath $Path).TrimEnd("\").ToLowerInvariant()
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $digest = ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+  }
+  finally {
+    $hasher.Dispose()
+  }
+  $slug = [System.IO.Path]::GetFileName($normalized) -replace "[^a-z0-9._-]", "-"
+  if (-not $slug) { $slug = "repo" }
+  return "$slug-$($digest.Substring(0, 16))"
+}
+
+$WorkspaceNamespace = Get-WorkspaceNamespace $RepoRoot
+$defaultCacheRoot = Join-Path $RepoDriveRoot ("fullmag-cache\$WorkspaceNamespace")
+$defaultBuildRoot = Join-Path $RepoDriveRoot ("fullmag-build\$WorkspaceNamespace")
 
 function Require-ExternalBuildPath {
   param(
@@ -528,6 +546,7 @@ if ($BuildMode -eq "true") {
     cuda = $useCuda
     features = if ($useCuda) { @("cuda") } else { @() }
     native_fdm_dll = $nativeFdmDll
+    workspace_namespace = $WorkspaceNamespace
     cuda_bin = $cudaBin
     cargo_target_dir = $TargetRoot
     cache_root = $CacheRoot
@@ -566,6 +585,7 @@ else {
       [string]$manifest.git_commit -ne $sourceCommit -or
       [string]$manifest.worktree_state -ne $sourceWorktreeState -or
       [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256 -or
+      [string]$manifest.workspace_namespace -ne $WorkspaceNamespace -or
       [string]$manifest.target_triple -ne $TargetTriple -or
       [string]$manifest.node_version -ne [string]$expectedNodeVersion -or
       [string]$manifest.pnpm_version -ne [string]$expectedPnpmVersion) {

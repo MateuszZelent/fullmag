@@ -100,6 +100,24 @@ export interface DecodedMeshQualityData {
   gamma: Float64Array | null;
   sicn: Float64Array | null;
   volume: Float64Array | null;
+  /**
+   * v2 channels preserved from the immutable FMMQ carrier.  The legacy
+   * ``gamma``/``sicn``/``volume`` projections above remain for existing
+   * viewport consumers; typed family and pair metrics must not be discarded
+   * merely because they have no v1 projection yet.
+   */
+  formatVersion?: 1 | 2;
+  identity?: Readonly<Record<string, unknown>>;
+  metrics?: readonly DecodedMeshQualityMetric[];
+}
+
+export interface DecodedMeshQualityMetric {
+  id: string;
+  unit: string;
+  family: string | null;
+  ordinalArity: number;
+  ordinals: readonly number[];
+  values: Float64Array;
 }
 
 export interface DecodedCrossSection {

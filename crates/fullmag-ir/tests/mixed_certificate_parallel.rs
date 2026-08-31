@@ -1,8 +1,8 @@
 use fullmag_ir::{
     compute_mixed_certificate_evidence, validate_mesh_for_execution,
-    validate_mixed_layer_topology_certificate_against_mesh, FemConnectivityIR, MeshIR,
-    MeshValidationError, MeshValidationPolicy, MixedCertificateEvidenceV1,
-    MixedLayerTopologyCertificateV1IR,
+    validate_mixed_layer_topology_certificate_against_mesh, validate_mixed_mesh_semantics,
+    FemConnectivityIR, MeshIR, MeshValidationError, MeshValidationPolicy,
+    MixedCertificateEvidenceV1, MixedLayerTopologyCertificateV1IR,
 };
 use rayon::ThreadPoolBuilder;
 use serde_json::Value;
@@ -259,6 +259,26 @@ fn computes_python_golden_evidence() {
             "mixed certificate cell/facet counts disagree with the mesh".to_string()
         ])
     );
+}
+
+#[test]
+fn native_semantic_preflight_rejects_wrong_interface_marker() {
+    let mesh = golden_mesh();
+    validate_mixed_mesh_semantics(&mesh).expect("golden mesh semantic contract is valid");
+
+    let mut mutated = mesh;
+    let interface_facet = mutated
+        .facets
+        .roles
+        .iter()
+        .position(|role| matches!(role, fullmag_ir::FemFacetRoleIR::MaterialInterface))
+        .expect("golden mesh has a material interface facet");
+    mutated.boundary_markers[interface_facet] += 1;
+    let errors = validate_mixed_mesh_semantics(&mutated)
+        .expect_err("wrong interface marker must fail native semantic preflight");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("material-interface marker")));
 }
 
 #[test]

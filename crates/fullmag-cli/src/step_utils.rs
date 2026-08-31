@@ -4615,6 +4615,25 @@ pub(crate) fn problem_with_frozen_spins_runtime_plan_binding(
             binding.launch_command_id
         );
     }
+    if binding.source_state_revision == Some(0) {
+        anyhow::bail!("frozen spins runtime plan binding source state revision must be positive");
+    }
+    let requires_source_state_revision = binding
+        .magnetization_constraints
+        .iter()
+        .map(fullmag_ir::MagnetizationConstraintIR::frozen_spins)
+        .any(|constraint| {
+            constraint.enabled
+                && matches!(
+                    constraint.reference,
+                    fullmag_ir::FrozenReferencePolicyIR::CaptureCurrentAtActivation {}
+                )
+        });
+    if requires_source_state_revision && binding.source_state_revision.is_none() {
+        anyhow::bail!(
+            "frozen spins runtime plan binding is missing source state revision for capture_current_at_activation"
+        );
+    }
     let bound_precondition_revision = command
         .precondition
         .as_ref()
@@ -4645,12 +4664,30 @@ pub(crate) fn problem_with_frozen_spins_runtime_plan_binding(
                 binding.source_scene_revision
             );
         }
-        return Ok(None);
+        let applied_source_state_revision = base_problem
+            .problem_meta
+            .runtime_metadata
+            .get(fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY)
+            .and_then(serde_json::Value::as_u64);
+        if applied_source_state_revision == binding.source_state_revision {
+            return Ok(None);
+        }
     }
 
     let mut candidate = base_problem.clone();
     candidate.selections = binding.selection_definitions.clone();
     candidate.magnetization_constraints = binding.magnetization_constraints.clone();
+    if let Some(source_state_revision) = binding.source_state_revision {
+        candidate.problem_meta.runtime_metadata.insert(
+            fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY.to_string(),
+            serde_json::json!(source_state_revision),
+        );
+    } else {
+        candidate
+            .problem_meta
+            .runtime_metadata
+            .remove(fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY);
+    }
     Ok(Some((candidate, binding.source_scene_revision)))
 }
 
@@ -4934,6 +4971,7 @@ mod tests {
                 "schema_version": fullmag_ir::FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION,
                 "launch_command_id": "cmd-run-frozen",
                 "source_scene_revision": source_scene_revision,
+                "source_state_revision": 23,
                 "selection_definitions": [{
                     "schema_version": "selection_expr.v1",
                     "id": "left-side",
@@ -4959,7 +4997,8 @@ mod tests {
 
     #[test]
     fn frozen_spins_binding_replaces_canonical_ir_at_next_plan_boundary() {
-        let base = sample_problem_ir();
+        let mut base = fdm_target_problem_ir();
+        base.magnets[0].object_id = Some("track".to_string());
         let command = frozen_spins_binding_command(17);
 
         let (updated, revision) =
@@ -4974,7 +5013,96 @@ mod tests {
             updated.magnetization_constraints[0].frozen_spins().id,
             "pin-left"
         );
+        assert_eq!(
+            updated.problem_meta.runtime_metadata
+                [fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY],
+            serde_json::json!(23)
+        );
+        let execution_plan = fullmag_plan::plan(&updated)
+            .expect("interactive FDM problem with Frozen Spins should plan");
+        let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = execution_plan.backend_plan else {
+            panic!("sample interactive problem must produce an FDM execution plan");
+        };
+        let frozen = fdm_plan
+            .frozen_spins
+            .expect("Frozen Spins binding must survive into the FDM execution plan");
+        assert_eq!(frozen.source_state_revision, Some(23));
+        assert_eq!(frozen.certificate.source_state_revision, Some(23));
         assert!(base.magnetization_constraints.is_empty());
+    }
+
+    #[test]
+    fn fem_interactive_solve_preserves_frozen_spins_binding_into_execution_plan() {
+        let mut base = fem_target_problem_ir(small_fem_cube_mesh());
+        base.magnets[0].object_id = Some("track".to_string());
+        let mut command = frozen_spins_binding_command(17);
+        command.kind = "solve".to_string();
+
+        let (bound, revision) =
+            problem_with_frozen_spins_runtime_plan_binding(&base, &command, None)
+                .expect("valid FEM binding")
+                .expect("new revision must update the FEM problem");
+        let stage = build_interactive_command_stage(&bound, &command)
+            .expect("interactive FEM solve should build")
+            .expect("solve command should materialize a FEM stage");
+        let execution_plan = fullmag_plan::plan(&stage.ir)
+            .expect("interactive FEM stage with Frozen Spins should plan");
+
+        let fullmag_ir::BackendPlanIR::Fem(fem_plan) = execution_plan.backend_plan else {
+            panic!("interactive FEM solve must produce a FEM execution plan");
+        };
+        let frozen = fem_plan
+            .frozen_spins
+            .expect("Frozen Spins binding must survive into the FEM execution plan");
+        assert_eq!(revision, 17);
+        assert_eq!(frozen.certificate.constraint_ids, vec!["pin-left"]);
+        assert_eq!(frozen.source_state_revision, Some(23));
+        assert_eq!(frozen.certificate.source_state_revision, Some(23));
+        assert!(frozen.certificate.frozen_dof_count > 0);
+    }
+
+    #[test]
+    fn frozen_spins_binding_rebinds_same_scene_to_new_source_state_revision() {
+        let mut base = fdm_target_problem_ir();
+        base.magnets[0].object_id = Some("track".to_string());
+        let command = frozen_spins_binding_command(17);
+        let (first, _) = problem_with_frozen_spins_runtime_plan_binding(&base, &command, None)
+            .expect("first binding must be valid")
+            .expect("first binding must update the problem");
+        assert!(
+            problem_with_frozen_spins_runtime_plan_binding(&first, &command, Some(17))
+                .expect("exact replay must be valid")
+                .is_none(),
+            "an exact scene/state replay must be idempotent"
+        );
+
+        let mut refreshed = command;
+        refreshed
+            .frozen_spins_runtime_plan_binding
+            .as_mut()
+            .expect("binding")
+            .source_state_revision = Some(24);
+        let (rebound, revision) =
+            problem_with_frozen_spins_runtime_plan_binding(&first, &refreshed, Some(17))
+                .expect("new source-state revision must be accepted")
+                .expect("new source-state revision must force a rebind");
+        assert_eq!(revision, 17);
+        assert_eq!(
+            rebound.problem_meta.runtime_metadata
+                [fullmag_ir::FROZEN_SPINS_SOURCE_STATE_REVISION_METADATA_KEY],
+            serde_json::json!(24)
+        );
+        let execution_plan = fullmag_plan::plan(&rebound).expect("rebound FDM problem should plan");
+        let fullmag_ir::BackendPlanIR::Fdm(fdm_plan) = execution_plan.backend_plan else {
+            panic!("rebound problem must remain FDM");
+        };
+        assert_eq!(
+            fdm_plan
+                .frozen_spins
+                .expect("rebound plan must retain Frozen Spins")
+                .source_state_revision,
+            Some(24)
+        );
     }
 
     #[test]
@@ -5008,6 +5136,21 @@ mod tests {
                 .to_string()
                 .contains("replay changed constraints")
         );
+
+        let mut missing_source_revision = frozen_spins_binding_command(18);
+        missing_source_revision
+            .frozen_spins_runtime_plan_binding
+            .as_mut()
+            .expect("binding")
+            .source_state_revision = None;
+        assert!(problem_with_frozen_spins_runtime_plan_binding(
+            &base,
+            &missing_source_revision,
+            None
+        )
+        .expect_err("capture-current binding without source revision must fail")
+        .to_string()
+        .contains("missing source state revision"));
     }
 
     #[test]

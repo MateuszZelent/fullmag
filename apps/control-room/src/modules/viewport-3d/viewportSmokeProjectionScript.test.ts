@@ -99,6 +99,8 @@ describe("viewport smoke projection round-trip", () => {
     expect(justfile).toContain(".fullmag-smoke-disposable");
     expect(justfile).toContain("CONTROL_ROOM_SMOKE_DISPOSABLE_SCRIPT_PATH");
     expect(justfile).toContain("CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN");
+    expect(justfile).toContain('static_stamp="{{local_web_root}}/.build-stamp"');
+    expect(justfile).toContain("static Control Room is stale relative to");
   });
 
   it("uses an explicit timestep policy in the disposable FDM smoke fixture", () => {

@@ -1,0 +1,88 @@
+{
+  "schema_version": "fullmag.frozen_spins.performance_policy.v1",
+  "policy_status": "provisional_engineering_gate",
+  "owner_approval_status": "draft_pending_owner_approval",
+  "policy_revision": 1,
+  "qualification_scope": "fdm_cpu_reference_double_heun_minimal_no_demag_v1",
+  "plan_provenance": "synthetic_deterministic_performance_plan",
+  "plan_validation": "validate_intrinsic_before_runtime_capture",
+  "comparison_scope": "end_to_end_runtime_overhead_including_layout_dispatch",
+  "layout_comparison": {
+    "no_mask_layout": "soa",
+    "partial_mask_layout": "aos",
+    "matched_layout_mask_isolation": "not_measured",
+    "interpretation": "The ratio is an end-to-end production-path comparison; it is not an isolated mask-only overhead measurement."
+  },
+  "required_measurements": {
+    "preview_wall_time": {
+      "status": "separate_preview_receipt_required",
+      "reason": "Preview timing is owned by the browser/API preview receipt and is not measured by this CPU step probe."
+    },
+    "gpu_transfer_bytes": {
+      "status": "not_applicable_cpu_lane",
+      "reason": "H2D/D2H transfer bytes require an executed GPU runtime receipt; this CPU probe must not infer them."
+    }
+  },
+  "required_case_ids": [
+    "FS-P15-PERFORMANCE",
+    "FS-P15-MILLION-SITES"
+  ],
+  "supplemental_case_ids": [
+    "FS-P15-PERFORMANCE-FDM-CPU",
+    "FS-P15-MILLION-SITES-FDM-CPU"
+  ],
+  "global_case_ids_not_claimed": [
+    "FS-P15-PERFORMANCE",
+    "FS-P15-MILLION-SITES"
+  ],
+  "required_site_count": 1000000,
+  "minimum_site_count_cases": 2,
+  "minimum_repetitions": 5,
+  "minimum_steps_per_sample": 2,
+  "partial_mask_stride": 4,
+  "thread_policy": {
+    "schema_version": "fullmag.frozen_spins.performance_thread_policy.v1",
+    "environment_variable": "RAYON_NUM_THREADS",
+    "production_default": {
+      "lane": "production_default",
+      "required_rayon_threads": 48,
+      "require_environment_variable_unset": false,
+      "require_environment_variable_exact": "48",
+      "role": "required_production_gate"
+    },
+    "serial_supplemental": {
+      "lane": "serial_deterministic_supplemental",
+      "canonical_rayon_threads": 1,
+      "require_environment_variable_exact": "1",
+      "role": "supplemental_microbenchmark_only",
+      "may_replace_production_gate": false
+    }
+  },
+  "storage_contract": {
+    "logical_mask_encoding": "dense_u8",
+    "logical_mask_bytes_per_site": 1,
+    "reference_payload_bytes_per_site": 24,
+    "mask_storage_type": "Vec<bool>",
+    "mask_exact_allocated_bytes": "not_observable",
+    "reference_storage_type": "Vec<[f64;3]>",
+    "reference_bytes_semantics": "logical_vec_payload"
+  },
+  "timing": {
+    "partial_over_no_mask_median_ratio_max": 3.0,
+    "partial_over_no_mask_p95_ratio_max": 4.0,
+    "activation_p95_wall_ns_per_site_max": 10000.0
+  },
+  "activation": {
+    "max_allocation_count_per_activation": 16,
+    "max_allocated_bytes_per_site": 64
+  },
+  "steady_state": {
+    "max_allocated_bytes_per_sample": 2048,
+    "max_allocation_count_per_sample": 1
+  },
+  "gpu_transfer_metrics": {
+    "status": "not_applicable",
+    "measured": false,
+    "reason": "This policy covers only the FDM CPU reference lane; GPU transfer bytes require a separate executed GPU receipt."
+  }
+}

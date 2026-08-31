@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+#
+# CI qualification entry point.  The managed-fem gate is deliberately bound
+# to the dedicated Linux runner label; it is not an interactive WSL step and
+# must not be satisfied by the Windows-local Docker Desktop route without a
+# separately verified storage/receipt adapter.
 set -euo pipefail
 
 gate="${1:-}"

@@ -1,0 +1,119 @@
+<h2>Układ narzędzi 2D dla Fullmag</h2>
+<p class="subtitle">Wybierz strukturę, która ma prowadzić do jakości COMSOL lub lepszej — funkcjonalnie, naukowo i operacyjnie.</p>
+
+<div class="section" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:18px">
+  <span class="label">Pytanie projektowe</span>
+  <span style="color:var(--muted);font-size:13px">Gdzie mają mieszkać: XY/XZ/YZ, named layer, requested/resolved, probe, profile, multislice i provenance?</span>
+</div>
+
+<div class="options" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
+  <div class="option" data-choice="instrument-dock" onclick="toggleSelect(this)" style="display:block;padding:0;overflow:hidden">
+    <div class="letter" style="position:absolute;margin:12px;z-index:2">A</div>
+    <div class="mockup" style="margin:0;border:0;border-radius:0;background:#111827;min-height:390px">
+      <div class="mockup-header" style="padding-left:46px">Instrument Dock <span style="float:right;color:#a6e3a1;font-size:11px">REKOMENDOWANY</span></div>
+      <div style="display:grid;grid-template-columns:80px 1fr 104px;grid-template-rows:1fr 48px;height:290px;background:#0b1220;color:#d7e0ee;font-size:8px">
+        <div style="border-right:1px solid #26364c;padding:8px 5px">
+          <div style="color:#89b4fa;margin-bottom:8px">RESULTS</div>
+          <div style="padding:5px;background:#20324a;border-radius:4px;margin-bottom:4px">▾ FieldMap</div>
+          <div style="padding:4px 8px;color:#a6e3a1">● Default</div>
+          <div style="padding:4px 8px">○ Monitor 01</div>
+          <div style="padding:4px 8px">○ Profile</div>
+          <div style="margin-top:15px;color:#7f8ea3">LAYERS</div>
+          <div style="padding:4px 8px">☑ Scalar</div>
+          <div style="padding:4px 8px">☑ Mesh</div>
+          <div style="padding:4px 8px">☐ Vectors</div>
+        </div>
+        <div style="position:relative;padding:11px;background:radial-gradient(circle at 46% 45%,#315a75 0,#172b40 42%,#0b1220 75%)">
+          <div style="position:absolute;top:8px;left:12px;color:#cdd6e0">B<sub>z</sub> · mT</div>
+          <div style="position:absolute;right:12px;top:8px;color:#a6e3a1">frame 4a81 · analysis</div>
+          <div style="position:absolute;left:25%;right:25%;top:25%;bottom:20%;border:1px solid #d6e3f0aa;transform:skewY(-8deg);box-shadow:0 0 18px #7dc4ff44"></div>
+          <div style="position:absolute;left:41%;top:41%;color:#f9e2af;font-size:10px">↗ ↗ → ↘</div>
+          <div style="position:absolute;bottom:10px;left:12px;color:#9ba8b8">x [nm] &nbsp; · &nbsp; y [nm]</div>
+          <div style="position:absolute;bottom:10px;right:12px;color:#9ba8b8">probe: 12.4 mT</div>
+        </div>
+        <div style="border-left:1px solid #26364c;padding:8px 6px">
+          <div style="color:#89b4fa;margin-bottom:7px">INSPECTOR</div>
+          <div style="color:#7f8ea3">SOURCE</div><div style="margin:3px 0 8px;padding:4px;background:#20324a;border-radius:3px">Default · FDM</div>
+          <div style="color:#7f8ea3">PLANE</div><div style="margin:3px 0;padding:4px;background:#20324a;border-radius:3px">XY · z 12.0 nm</div>
+          <div style="height:4px;background:#31455d;border-radius:3px;margin:5px 0 8px"><div style="width:58%;height:100%;background:#89b4fa;border-radius:3px"></div></div>
+          <div style="color:#a6e3a1;font-size:7px">resolved: cell 6 / 8</div>
+          <div style="margin-top:11px;color:#7f8ea3">QUALITY</div><div style="margin-top:3px;color:#f9e2af">analysis · 512²</div>
+        </div>
+        <div style="grid-column:1/4;border-top:1px solid #26364c;padding:7px 12px;display:flex;align-items:center;gap:10px;color:#9ba8b8">
+          <span style="color:#89b4fa">STAGE 03</span><span>◀</span><div style="height:4px;flex:1;background:#31455d;border-radius:3px"><div style="width:64%;height:100%;background:#89b4fa"></div></div><span>▶</span><span>t = 2.40 ns</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body" style="padding:15px 17px">
+      <h3>Instrument Dock</h3>
+      <p>Jedna scena, trzy stabilne strefy: Results po lewej, unified viewport w środku, Inspector po prawej. Profil i stage/time navigator nie zasłaniają pola.</p>
+      <div class="pros-cons" style="margin-top:10px"><div class="pros"><h4>Plusy</h4><ul><li>najlepsza równowaga gęstości i przestrzeni;</li><li>naturalne miejsce na requested/resolved i provenance;</li><li>łatwe rozszerzenie o profile/multislice.</li></ul></div><div class="cons"><h4>Ryzyko</h4><ul><li>wymaga dyscypliny szerokości docków.</li></ul></div></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="results-tree" onclick="toggleSelect(this)" style="display:block;padding:0;overflow:hidden">
+    <div class="letter" style="position:absolute;margin:12px;z-index:2">B</div>
+    <div class="mockup" style="margin:0;border:0;border-radius:0;background:#111827;min-height:390px">
+      <div class="mockup-header" style="padding-left:46px">COMSOL Results Tree</div>
+      <div style="display:grid;grid-template-columns:112px 1fr 92px;grid-template-rows:1fr 48px;height:290px;background:#10151d;color:#d7e0ee;font-size:8px">
+        <div style="border-right:1px solid #394455;padding:8px 5px;background:#171d27">
+          <div style="color:#f9e2af;margin-bottom:8px">DATASETS</div>
+          <div style="padding:5px;background:#334155;border-radius:4px">▾ Study 1</div>
+          <div style="padding:4px 8px">▾ Results</div>
+          <div style="padding:4px 15px;color:#89b4fa">▸ Cut Plane 1</div>
+          <div style="padding:4px 15px">▸ Multislice 1</div>
+          <div style="padding:4px 15px">▸ Line Graph 1</div>
+          <div style="padding:4px 15px">▸ Streamline 1</div>
+          <div style="margin-top:14px;color:#7f8ea3">PLOT GROUPS</div>
+          <div style="padding:4px 8px">☑ Surface</div><div style="padding:4px 8px">☑ Arrow Surface</div>
+        </div>
+        <div style="position:relative;padding:11px;background:linear-gradient(135deg,#20364b,#111a26)">
+          <div style="position:absolute;top:8px;left:12px;color:#cdd6e0">Cut Plane 1 · B<sub>z</sub></div>
+          <div style="position:absolute;right:12px;top:8px;color:#f9e2af">Plot Group 2</div>
+          <div style="position:absolute;left:20%;right:20%;top:23%;bottom:18%;background:linear-gradient(120deg,#243b53,#46718b,#1b2b3a);border:1px solid #d6e3f077"></div>
+          <div style="position:absolute;left:31%;top:47%;color:#f9e2af;font-size:12px">↗ → ↘ ↙</div>
+          <div style="position:absolute;bottom:10px;left:12px;color:#9ba8b8">x [nm] &nbsp; y [nm]</div>
+        </div>
+        <div style="border-left:1px solid #394455;padding:8px 6px;background:#171d27">
+          <div style="color:#f9e2af;margin-bottom:7px">PROPERTIES</div>
+          <div style="color:#7f8ea3">DATASET</div><div style="margin:3px 0 8px;padding:4px;background:#273342">Cut Plane 1</div>
+          <div style="color:#7f8ea3">NORMAL</div><div style="margin:3px 0;padding:4px;background:#273342">(0, 0, 1)</div>
+          <div style="color:#7f8ea3">OFFSET</div><div style="margin:3px 0;padding:4px;background:#273342">12.0 nm</div>
+          <div style="color:#7f8ea3">PLOT</div><div style="margin:3px 0;padding:4px;background:#273342">Surface + arrows</div>
+        </div>
+        <div style="grid-column:1/4;border-top:1px solid #394455;padding:7px 12px;display:flex;align-items:center;gap:10px;color:#9ba8b8"><span>Dataset time</span><span>◀</span><div style="height:4px;flex:1;background:#394455"><div style="width:44%;height:100%;background:#f9e2af"></div></div><span>▶</span><span>2.40 ns</span></div>
+      </div>
+    </div>
+    <div class="card-body" style="padding:15px 17px">
+      <h3>COMSOL Results Tree</h3>
+      <p>Najbardziej znajomy układ dla użytkownika COMSOL: hierarchia datasetów i plot groups jest zawsze widoczna, a właściwości wybranego datasetu są po prawej.</p>
+      <div class="pros-cons" style="margin-top:10px"><div class="pros"><h4>Plusy</h4><ul><li>bardzo dobra orientacja w wielu datasetach;</li><li>czytelny model „dataset → plot”.</li></ul></div><div class="cons"><h4>Minusy</h4><ul><li>mniej miejsca na pole i instrumenty;</li><li>ryzyko skopiowania ogólnego COMSOL zamiast semantyki Fullmag.</li></ul></div></div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="viewport-first" onclick="toggleSelect(this)" style="display:block;padding:0;overflow:hidden">
+    <div class="letter" style="position:absolute;margin:12px;z-index:2">C</div>
+    <div class="mockup" style="margin:0;border:0;border-radius:0;background:#111827;min-height:390px">
+      <div class="mockup-header" style="padding-left:46px">Viewport-first Contextual</div>
+      <div style="position:relative;height:290px;background:#0b1220;color:#d7e0ee;font-size:8px;overflow:hidden">
+        <div style="position:absolute;left:0;right:0;top:0;padding:8px 12px;border-bottom:1px solid #26364c;background:#111b2a"><span style="color:#89b4fa">FIELD MAP</span><span style="margin-left:20px;color:#a6e3a1">Default / FDM / XY</span><span style="float:right">⋯</span></div>
+        <div style="position:absolute;left:12%;right:12%;top:15%;bottom:12%;background:radial-gradient(circle at 60% 45%,#4b8098,#203b50 48%,#0b1220 80%);border:1px solid #d6e3f099;box-shadow:0 0 30px #5aa1c933"></div>
+        <div style="position:absolute;left:20px;top:48px;padding:8px;background:#142238e8;border:1px solid #344e70;border-radius:6px">PLANE&nbsp;&nbsp; XY<br><span style="color:#89b4fa">z 12.0 nm</span><br><span style="color:#a6e3a1">resolved cell 6/8</span><div style="height:4px;width:95px;background:#31455d;margin-top:6px"><div style="width:58%;height:100%;background:#89b4fa"></div></div></div>
+        <div style="position:absolute;right:20px;top:48px;padding:8px;background:#142238e8;border:1px solid #344e70;border-radius:6px">QUANTITY<br><span style="color:#f9e2af">B<sub>z</sub> · mT</span><br><span style="color:#a6e3a1">analysis 512²</span></div>
+        <div style="position:absolute;left:20px;bottom:16px;right:20px;padding:7px 10px;background:#142238e8;border:1px solid #344e70;border-radius:6px;display:flex;gap:13px"><span>probe 12.4 mT</span><span>mesh</span><span>vectors</span><span>profile</span><span style="margin-left:auto">⚙</span></div>
+      </div>
+    </div>
+    <div class="card-body" style="padding:15px 17px">
+      <h3>Viewport-first Contextual</h3>
+      <p>Największa przestrzeń na obraz i manipulację płaszczyzną. Kontrolki pojawiają się kontekstowo jako palety, sheets i readouty.</p>
+      <div class="pros-cons" style="margin-top:10px"><div class="pros"><h4>Plusy</h4><ul><li>najlepsze dla oglądania dużych pól;</li><li>naturalne miejsce na gizmo i probe.</li></ul></div><div class="cons"><h4>Minusy</h4><ul><li>trudniej porównać wiele datasetów;</li><li>większe ryzyko ukrycia stanu i provenance.</li></ul></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:20px;padding:14px 16px;border:1px solid #3c5068;border-radius:8px;background:#111c2b">
+  <div class="label">Rekomendacja</div>
+  <p style="margin:7px 0 0;color:#d7e0ee">A: zachowuje klarowność COMSOL Results Tree, ale lepiej wykorzystuje unified viewport i daje stabilne miejsce na naukowe instrumenty. Drzewo B może pozostać trybem gęstej pracy, a palety C — trybem pełnoekranowym, bez tworzenia drugiej semantyki.</p>
+</div>
+
+<p class="subtitle" style="margin-top:18px">Kliknij wariant, który chcesz przyjąć jako bazę sekcji UI. Możesz wybrać więcej niż jeden, jeśli ma to być tryb podstawowy + tryb opcjonalny.</p>

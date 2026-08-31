@@ -391,6 +391,35 @@ def test_runtime_copy_dependency_closure_can_copy_same_resolved_library_twice(
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_runtime_dependency_filter_rejects_host_abi_and_driver_libraries() -> None:
+    result = run_bash(
+        f"""
+        source {HELPER}
+        for library in \
+          /lib/x86_64-linux-gnu/libc.so.6 \
+          /lib/x86_64-linux-gnu/libc-2.31.so \
+          /lib/x86_64-linux-gnu/libm-2.31.so \
+          /lib/x86_64-linux-gnu/libpthread-2.31.so \
+          /lib/x86_64-linux-gnu/libstdc++.so.6.0.28 \
+          /lib/x86_64-linux-gnu/libgcc_s.so.1 \
+          /lib64/ld-linux-x86-64.so.2 \
+          /usr/lib/x86_64-linux-gnu/libcuda.so.1 \
+          /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1; do
+          runtime_dependency_is_host_owned "$library"
+        done
+        for library in \
+          /usr/local/cuda/lib64/libcublas.so.12 \
+          /usr/local/cuda/lib64/libcudart.so.12 \
+          /usr/lib/x86_64-linux-gnu/libcurl.so.4 \
+          /opt/fullmag-deps/lib/libmfem.so.4.9; do
+          ! runtime_dependency_is_host_owned "$library"
+        done
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_runtime_soname_link_is_noop_when_resolved_name_is_unversioned(
     tmp_path: Path,
 ) -> None:
@@ -473,6 +502,19 @@ def test_export_script_defaults_to_bounded_parallel_cargo_builds() -> None:
     assert 'cargo +nightly -Z checksum-freshness build -j "$cargo_jobs"' in script
 
 
+def test_runtime_cleanup_is_opt_in_and_exposed_as_a_dry_run_first_recipe() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert ': "${FULLMAG_RUNTIME_PRUNE:=0}"' in script
+    assert 'FULLMAG_RUNTIME_PRUNE:-0' in justfile
+    recipe = justfile.split("prune-managed-fem-runtimes", 1)[1].split(
+        "verify-managed-fem-runtime-source-provenance:", 1
+    )[0]
+    assert 'FULLMAG_RUNTIME_DRY_RUN=1' in recipe
+    assert 'if [ "{{apply}}" = "1" ]' in recipe
+
+
 def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None:
     justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
     ensure_recipe = justfile.split("ensure-managed-fem-runtime:", 1)[1].split(
@@ -486,7 +528,7 @@ def test_managed_runtime_staleness_uses_exact_source_snapshot_identity() -> None
     assert '! -name \\"tests.rs\\"' not in ensure_recipe
     assert '--allow-source-drift' in ensure_recipe
     assert 'bash scripts/prune_managed_fem_runtimes.sh' in ensure_recipe
-    assert 'FULLMAG_RUNTIME_PRUNE:-1' in ensure_recipe
+    assert 'FULLMAG_RUNTIME_PRUNE:-0' in ensure_recipe
     assert 'runtime_rebuilt=0' in ensure_recipe
     assert 'runtime_rebuilt=1' in ensure_recipe
     assert 'if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then' in ensure_recipe
@@ -1330,7 +1372,8 @@ def test_managed_runtime_exports_cuda_dependency_closure_without_driver_librarie
     assert "copy_shared_library_dependency_closure ${runtime_root}/lib/libfullmag_fdm.so.0 cuda" in exporter
     assert "cuda:/usr/local/cuda-*/*|cuda:/usr/local/cuda/*" in exporter
     assert "system:/lib/*|system:/lib64/*|system:/usr/lib/*|system:/usr/lib64/*" in exporter
-    assert "|libcuda|libnvidia-[^/]+)\\.so" in exporter
+    assert 'runtime_dependency_is_host_owned "$requested_name"' in exporter
+    assert 'runtime_dependency_is_host_owned "$lib_name"' in exporter
     for library in ("libcurand.so*", "libcublas.so*", "libcusparse.so*", "libnvrtc-builtins.so*"):
         assert f"/usr/local/cuda-12.4/targets/x86_64-linux/lib/{library}" in exporter
 

@@ -6,6 +6,8 @@ import fullmag as fm
 study = fm.study("frozen_spins_fdm_cpu_browser_smoke")
 study.engine("fdm")
 study.device("cpu", precision="double")
+study.interactive(True)
+study.wait_for_solve(True)
 study.universe(
     mode="manual",
     size=(80e-9, 160e-9, 10e-9),

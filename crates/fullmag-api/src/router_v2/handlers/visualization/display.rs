@@ -2413,7 +2413,10 @@ fn object_target_settings(
         points_visible: layers.points.visible,
         render_mode: VisualizationTargetRenderMode::Surface,
         scalar_color_palette: scalar_color_palette.to_string(),
-        surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
+        surface_color_source: surface_color_source_for_quantity(
+            active_quantity_id,
+            vector_style.color_mode,
+        ),
         surface_mono_color: vector_style.mono_color.clone(),
         surface_opacity: layers.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
@@ -2606,6 +2609,19 @@ fn surface_color_source_from_vector_color_mode(color_mode: VectorColorMode) -> S
     }
 }
 
+fn surface_color_source_for_quantity(
+    active_quantity_id: &str,
+    vector_color_mode: VectorColorMode,
+) -> SurfaceColorSource {
+    if fullmag_quantities::quantity_spec(active_quantity_id)
+        .is_some_and(|spec| spec.shape == fullmag_quantities::QuantityShape::SpatialScalar)
+    {
+        SurfaceColorSource::Colormap
+    } else {
+        surface_color_source_from_vector_color_mode(vector_color_mode)
+    }
+}
+
 struct QuantityProjection {
     active_quantity_id: String,
     field_component: FieldComponent,
@@ -2618,6 +2634,18 @@ struct QuantityProjection {
 #[cfg(test)]
 mod visualization_override_migration_tests {
     use super::*;
+
+    #[test]
+    fn scalar_quantities_use_colormap_while_vector_quantities_keep_vector_mode() {
+        assert_eq!(
+            surface_color_source_for_quantity("frozen_spins", VectorColorMode::Orientation),
+            SurfaceColorSource::Colormap
+        );
+        assert_eq!(
+            surface_color_source_for_quantity("m", VectorColorMode::Orientation),
+            SurfaceColorSource::Orientation
+        );
+    }
 
     fn airbox_override(
         scope: VisualizationScopeKind,

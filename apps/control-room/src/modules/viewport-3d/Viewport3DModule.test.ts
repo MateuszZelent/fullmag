@@ -16,6 +16,7 @@ import {
   resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
   resolveViewport3DVisualizationFrameAck,
+  resolveViewport3DVisualizationAckRegistration,
   resolveViewport3DMeshQualityLegend,
   resolveViewport3DVectorSegmentLengthRange,
   createViewport3DPointerHoldLifecycle,
@@ -61,6 +62,26 @@ describe("viewport vector segment diagnostics", () => {
 });
 
 describe("FEM visualization ACK data identity", () => {
+  it("keeps a data classification stable when the same revision effect reruns", () => {
+    const initial = resolveViewport3DVisualizationAckRegistration({
+      existing: null,
+      previousResourceFrameKey: "field:m:61",
+      resourceFrameKey: "field:frozen_spins:63",
+      resourceKey: "field:frozen_spins:63",
+    });
+    expect(initial).toEqual({
+      changeKind: "data",
+      resourceKey: "field:frozen_spins:63",
+    });
+
+    expect(resolveViewport3DVisualizationAckRegistration({
+      existing: initial,
+      previousResourceFrameKey: "field:frozen_spins:63",
+      resourceFrameKey: "field:frozen_spins:63",
+      resourceKey: "field:frozen_spins:part:63",
+    })).toBe(initial);
+  });
+
   it("classifies an early frame as data only when an exact adopted buffer exists", () => {
     const identity = {
       fieldBufferId: "fem:frozen_spins:63",
@@ -113,7 +134,13 @@ describe("FEM visualization ACK data identity", () => {
             }],
           ]),
         },
-        fullFieldBufferIdentity: null,
+        fullFieldBufferIdentity: {
+          bufferId: "fem:frozen_spins:full:63",
+          fieldRevision: "63",
+          resourceKey: "field:frozen_spins:full:63",
+          sessionEpoch: "session-fem@1000",
+          sessionId: "session-fem",
+        },
       } as never,
       visualizationRevision: 12,
     });
@@ -1310,7 +1337,7 @@ describe("resolveViewport3DColorbarLegend", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
     const targetViewsStart = source.indexOf(
       "...sceneProps.fdmTargetViews.map((view) => ({",
     );
@@ -1840,7 +1867,7 @@ describe("Viewport3DModule scene wiring", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
 
     expect(source).toContain(
       'data-fdm-airbox-target={airboxRenderView?.target.id ?? "airbox"}',
@@ -2053,7 +2080,7 @@ describe("Viewport3DModule scene wiring", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
 
     expect(source).toContain("viewport3DOrbitDebugEnabledFromBrowserConfig()");
     expect(source).toContain("const orbitDebugEnabled =");
@@ -2098,7 +2125,7 @@ describe("Viewport3DModule scene wiring", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
-    );
+    ).replace(/\r\n/g, "\n");
 
     expect(source).toContain('aria-label="Airbox overlay"');
     expect(source).toMatch(/\n\s+Airbox\n/);

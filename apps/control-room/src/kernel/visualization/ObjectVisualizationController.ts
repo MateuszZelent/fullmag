@@ -1096,13 +1096,21 @@ export function resolveTargetVisualization({
         )
       : null) ??
       resolveVisualizationBaseSettings(target.kind, target.id, visualizationState);
+  const quantityAwareBaseSettings = isScalarSpatialQuantityId(
+    resolvedBaseSettings.activeQuantityId,
+  )
+    ? {
+        ...resolvedBaseSettings,
+        surfaceColorSource: "colormap" as const,
+      }
+    : resolvedBaseSettings;
   const baseSettings =
     target.kind === "airbox"
       ? {
-          ...resolvedBaseSettings,
-          activeQuantityId: resolvedBaseSettings.activeQuantityId,
+          ...quantityAwareBaseSettings,
+          activeQuantityId: quantityAwareBaseSettings.activeQuantityId,
         }
-      : resolvedBaseSettings;
+      : quantityAwareBaseSettings;
   const targetKey = visualizationTargetKey(target);
   const storedOverride =
     snapshot.overrides[targetKey] ??

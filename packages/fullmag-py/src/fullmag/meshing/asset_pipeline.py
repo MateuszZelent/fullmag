@@ -45,6 +45,47 @@ from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
+
+class MeshQualityUnavailableError(ValueError):
+    """Blocking error when topology mutation invalidates an old quality report."""
+
+    def __init__(self, *, context: str, old_element_count: int, new_element_count: int) -> None:
+        self.code = "quality_unavailable_after_topology_mutation"
+        self.pointer = "/quality"
+        self.context = context
+        self.old_element_count = int(old_element_count)
+        self.new_element_count = int(new_element_count)
+        super().__init__(
+            f"{self.code} at {self.pointer}: {context} removed cells after quality "
+            f"extraction ({old_element_count} -> {new_element_count}); recertify quality "
+            "before publishing the mutated mesh"
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a stable quality-failure envelope for API/CI consumers."""
+
+        return {
+            "schema_version": "mesh_quality_failure.v2",
+            "code": self.code,
+            "pointer": self.pointer,
+            "metric_id": "quality",
+            "threshold": None,
+            "observed": None,
+            "comparator": "must_be_recertified",
+            "family": None,
+            "material_region": None,
+            "zone": None,
+            "element_ordinals": [],
+            "policy_fingerprint": None,
+            "topology_fingerprint": None,
+            "evidence_path": None,
+            "details": {
+                "context": self.context,
+                "old_element_count": self.old_element_count,
+                "new_element_count": self.new_element_count,
+            },
+        }
+
 # PR 2: target resolution extracted into _mesh_targets
 from ._mesh_targets import (
     ResolvedAirboxTarget,
@@ -90,6 +131,38 @@ _SUPPORTED_DOMAIN_MESH_MODES = frozenset(
         _FROZEN_MAGNETIC_SUBMESH_MODE,
     }
 )
+
+
+def _validate_shared_mesh_assembly_policy(
+    assembly_policy: SharedMeshAssemblyPolicy | None,
+) -> SharedMeshAssemblyPolicy:
+    """Validate that an assembly policy has a real shared-domain lowering.
+
+    The public policy record intentionally remains available for round-trip
+    compatibility, but the current generator only realizes its canonical
+    conforming defaults.  Silently accepting a custom factor would make the
+    resulting mesh indistinguishable from a mesh built with another policy.
+    Reject custom values before any geometry import, Gmsh invocation, cache
+    lookup or artifact publication.
+    """
+
+    effective = (
+        SharedMeshAssemblyPolicy()
+        if assembly_policy is None
+        else assembly_policy
+    )
+    if not isinstance(effective, SharedMeshAssemblyPolicy):
+        raise TypeError(
+            "assembly_policy must be a SharedMeshAssemblyPolicy or None"
+        )
+    canonical = SharedMeshAssemblyPolicy()
+    if effective != canonical:
+        raise ValueError(
+            "shared_mesh_assembly_policy_unsupported: non-default assembly "
+            "policy fields have no validated shared-domain lowering; use the "
+            "canonical conforming defaults or omit assembly_policy"
+        )
+    return effective
 
 
 def _is_stl_imported_geometry(geometry: Geometry) -> bool:
@@ -915,6 +988,15 @@ def _drop_degenerate_tetrahedra(
     keep = keep_tetrahedra
     if removed == mesh.n_elements:
         raise ValueError(f"{context} produced only degenerate tetrahedra")
+    # A topology mutation invalidates every element-indexed quality summary.
+    # Never publish a report that still describes the pre-cleanup connectivity;
+    # the caller must recertify the cleaned mesh before exposing it.
+    if mesh.quality is not None or mesh.per_domain_quality:
+        raise MeshQualityUnavailableError(
+            context=context,
+            old_element_count=mesh.n_elements,
+            new_element_count=mesh.n_elements - removed,
+        )
     marker = "shared_domain_degenerate_tetra_cleanup"
     if marker not in fallbacks_triggered:
         fallbacks_triggered.append(marker)
@@ -930,7 +1012,7 @@ def _drop_degenerate_tetrahedra(
         boundary_markers=boundary_markers,
         periodic_boundary_pairs=mesh.periodic_boundary_pairs,
         periodic_node_pairs=mesh.periodic_node_pairs,
-        quality=mesh.quality,
+        quality=None,
         per_domain_quality=None,
     )
 
@@ -977,13 +1059,22 @@ def _execution_mesh_volume_epsilon(mesh: MeshData) -> float:
     The native validator scales its absolute tetra-volume threshold from the
     largest domain span.  Running the same check before publishing a Python
     generated mesh keeps OCC retry decisions consistent with execution-time
-    validation instead of accepting a locally non-degenerate sliver.
+    validation instead of accepting a locally non-degenerate sliver.  The
+    legacy Rust ``MeshTopology`` builder also rejects determinants at or below
+    its absolute ``1e-30`` zero threshold.  Include that floor here as a
+    volume so a conformal OCC attempt cannot reach the builder with a sliver
+    that passed the global airbox-scaled check.
     """
     if mesh.nodes.size == 0:
         return 1.0e-18
     bbox_scale = float(np.max(np.ptp(mesh.nodes, axis=0)))
     scale = bbox_scale if bbox_scale > 0.0 else 1.0
-    return max(np.finfo(np.float64).tiny, scale**3 * 1.0e-18)
+    rust_engine_volume_floor = 1.0e-30 / 6.0
+    return max(
+        np.finfo(np.float64).tiny,
+        scale**3 * 1.0e-18,
+        rust_engine_volume_floor,
+    )
 
 
 def _conformal_occ_algorithm_name(algorithm_3d: int) -> str:
@@ -1101,7 +1192,16 @@ def realize_fem_mesh_asset(
     :func:`resolve_object_preview_target` which implements the standard
     precedence chain: recipe > per_geometry > default_mesh > FEM.
     """
-    _ = study_universe  # reserved for future airbox-aware preview
+    if study_universe is not None:
+        # This API is the standalone object/surface preview path.  Accepting a
+        # declared universe here would silently drop the airbox and produce a
+        # mesh with a misleading solver-ready name.  The shared-domain entry
+        # point is the only route allowed to consume study-universe metadata.
+        raise ValueError(
+            "fem_mesh_preview_ignores_study_universe: use "
+            "realize_fem_domain_mesh_asset_from_components for a solver mesh "
+            "with an airbox/study universe"
+        )
     _validate_per_object_recipe_operations(per_object_recipes)
 
     target = resolve_object_preview_target(
@@ -1369,6 +1469,14 @@ def _study_universe_airbox_options(
     airbox_hmin = study_universe.get("airbox_hmin")
     resolved_airbox_hmin = float(airbox_hmin) if airbox_hmin is not None else None
     resolved_airbox_growth_rate = _coerce_positive_float(study_universe.get("airbox_growth_rate"))
+    if (
+        resolved_airbox_growth_rate is not None
+        and resolved_airbox_growth_rate <= 1.0
+    ):
+        raise ValueError(
+            "study_universe.airbox_growth_rate must be greater than 1.0; "
+            "use null to disable explicit grading"
+        )
     raw_airbox_grading = study_universe.get("airbox_grading")
     resolved_airbox_grading: str | None = None
     if isinstance(raw_airbox_grading, str) and raw_airbox_grading.strip():
@@ -1571,6 +1679,22 @@ def _bounds_intersection_volume(
     return float(np.prod(overlap))
 
 
+class ComponentIdentityResolutionError(ValueError):
+    """Fail-closed component/marker identity mapping error.
+
+    Concatenated STL fallback has no authoritative Gmsh volume tags.  A bbox
+    match is therefore allowed only when the best overlap is unique and
+    positive; silently breaking ties can assign material parameters to the
+    wrong object.
+    """
+
+    code = "component_identity_ambiguous"
+
+    def __init__(self, message: str, *, geometry_names: tuple[str, ...] = ()) -> None:
+        self.geometry_names = geometry_names
+        super().__init__(f"{self.code} at /mesh/component_identity: {message}")
+
+
 def _element_bounds_for_marker(
     mesh: MeshData,
     marker: int,
@@ -1625,10 +1749,7 @@ def _match_geometry_bounds_to_source_markers(
     marker_mapping: dict[str, int] = {}
     for marker in magnetic_markers:
         source_min, source_max = source_bounds_by_marker[marker]
-        source_center = _bounds_center(source_min, source_max)
-        best_name: str | None = None
-        best_intersection = -1.0
-        best_distance = math.inf
+        scored: list[tuple[float, str]] = []
         for geometry_name in unmatched_geometry_names:
             geometry_min, geometry_max = geometry_bounds_by_name[geometry_name]
             intersection = _bounds_intersection_volume(
@@ -1637,16 +1758,22 @@ def _match_geometry_bounds_to_source_markers(
                 geometry_min,
                 geometry_max,
             )
-            geometry_center = _bounds_center(geometry_min, geometry_max)
-            distance = float(np.linalg.norm(source_center - geometry_center))
-            if intersection > best_intersection + 1e-30 or (
-                math.isclose(intersection, best_intersection) and distance < best_distance
-            ):
-                best_name = geometry_name
-                best_intersection = intersection
-                best_distance = distance
-        if best_name is None:
-            return None
+            scored.append((float(intersection), geometry_name))
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        if not scored or scored[0][0] <= 0.0:
+            raise ComponentIdentityResolutionError(
+                f"source marker {marker} has no positive bbox overlap with remaining geometries",
+                geometry_names=tuple(sorted(unmatched_geometry_names)),
+            )
+        if len(scored) > 1 and math.isclose(
+            scored[0][0], scored[1][0], rel_tol=1.0e-12, abs_tol=1.0e-300
+        ):
+            raise ComponentIdentityResolutionError(
+                f"source marker {marker} has an ambiguous bbox-overlap tie between "
+                f"{scored[0][1]!r} and {scored[1][1]!r}",
+                geometry_names=(scored[0][1], scored[1][1]),
+            )
+        best_name = scored[0][1]
         marker_mapping[best_name] = marker
         unmatched_geometry_names.remove(best_name)
 
@@ -2335,6 +2462,9 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     """
     if not geometries:
         raise ValueError("shared FEM domain mesh requires at least one geometry")
+    # Do this before study-universe resolution or any cache/Gmsh work.  A
+    # non-default policy is not silently downgraded to the canonical builder.
+    assembly_policy = _validate_shared_mesh_assembly_policy(assembly_policy)
     _validate_declared_mesh_operations(mesh_workflow)
     _validate_per_object_recipe_operations(per_object_recipes)
     frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
@@ -2425,6 +2555,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         default_hmax=float(hints.hmax),
         bounds_by_name=None,
         include_size_fields=False,
+    )
+    # Reject the unsupported mixed-periodic combination at the planner
+    # boundary, before OCC/STL preparation or any Gmsh invocation.  This keeps
+    # the DSL/UI contract aligned with the typed and native validators.
+    from ._gmsh_types import validate_periodic_mesh_options
+
+    validate_periodic_mesh_options(
+        surface_mesh_options,
+        context="shared-domain mesh planner",
     )
     qualified_mixed_body_hmax: float | None = None
     if surface_mesh_options.mesh_strategy == "swept_prism":
@@ -3193,6 +3332,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             selector_resolution=result.selector_resolution if result is not None else [],
             boundary_layer_result=result.boundary_layer_result if result is not None else None,
             orphan_entities=result.orphan_entities if result is not None else [],
+            algorithm_3d_requested=(
+                result.algorithm_3d_requested if result is not None else None
+            ),
+            algorithm_3d_effective=(
+                result.algorithm_3d_effective if result is not None else None
+            ),
+            algorithm_3d_fallback_reason=(
+                result.algorithm_3d_fallback_reason if result is not None else None
+            ),
             magnetic_submesh_signatures=magnetic_submesh_signatures,
         )
         if classified_mesh.mixed_layer_topology_certificate is not None:

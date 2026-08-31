@@ -449,6 +449,23 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             {"baseline", "expanded"},
         )
 
+    def test_mixed_matrix_environment_explicitly_uses_native_profile(self) -> None:
+        environment = executor._environment(
+            {
+                "phase": "relax",
+                "topology_variant": "mixed_p1",
+                "layers": 1,
+                "mesh_level": "medium",
+                "airbox_id": "baseline",
+                "device": "gpu",
+                "relaxation_algorithm": "projected_gradient_bb",
+                "torque_tolerance_apm": 0.7957747154594767,
+            },
+            1,
+        )
+
+        self.assertEqual(environment["FULLMAG_SP4_COMPATIBILITY"], "native")
+
     def test_executes_cases_with_identity_environment_and_manifests(self) -> None:
         observed: list[tuple[dict[str, object], dict[str, str]]] = []
 
@@ -476,6 +493,7 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
             self.assertEqual(len(observed), 15)
             for spec, environment in observed:
                 self.assertEqual(environment["FULLMAG_SP4_PHASE"], "relax")
+                self.assertEqual(environment["FULLMAG_SP4_COMPATIBILITY"], "native")
                 self.assertEqual(environment["FULLMAG_SP4_TOPOLOGY_VARIANT"], "mixed_p1")
                 self.assertEqual(environment["FULLMAG_SP4_LAYERS"], str(spec["layers"]))
                 self.assertEqual(environment["FULLMAG_SP4_MESH"], spec["mesh_level"])

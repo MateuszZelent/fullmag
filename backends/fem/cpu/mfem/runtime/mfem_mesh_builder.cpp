@@ -237,6 +237,15 @@ bool collect_boundaries(
                 error = "MFEM mesh builder material-interface facet must have exactly two owners";
                 return false;
             }
+            const auto marker_for_owner = [&source](uint32_t element) {
+                return source.cell_markers.empty() ? 1u : source.cell_markers[element];
+            };
+            if (marker_for_owner(owner->second.owners[0]) ==
+                marker_for_owner(owner->second.owners[1])) {
+                error =
+                    "MFEM mesh builder material-interface facet must separate distinct cell markers";
+                return false;
+            }
             continue;
         }
         if (role != FULLMAG_FEM_FACET_ROLE_EXTERIOR &&

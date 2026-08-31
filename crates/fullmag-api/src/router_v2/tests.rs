@@ -20697,6 +20697,9 @@ async fn solver_command_binds_current_frozen_spins_scene_revision_into_canonical
         }]))
         .expect("frozen constraints");
         snapshot.scene_document = Some(scene);
+        snapshot
+            .field_quantity_revisions
+            .insert("m".to_string(), 29);
         41
     };
     let app = build_v2_router().with_state(state.clone());
@@ -20721,6 +20724,7 @@ async fn solver_command_binds_current_frozen_spins_scene_revision_into_canonical
         .as_ref()
         .expect("solver command must carry a Frozen Spins binding");
     assert_eq!(binding.source_scene_revision, expected_revision);
+    assert_eq!(binding.source_state_revision, Some(29));
     assert_eq!(binding.launch_command_id, command.command_id);
     assert_eq!(binding.selection_definitions.len(), 1);
     assert_eq!(binding.magnetization_constraints.len(), 1);
@@ -39506,12 +39510,7 @@ async fn planar_fdm_test_state(counts: [u32; 3]) -> Arc<AppState> {
     } else {
         ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
     };
-    write_test_fdm_membership_artifact_with_geometry(
-        &artifact_dir,
-        counts,
-        origin_m,
-        cell_m,
-    );
+    write_test_fdm_membership_artifact_with_geometry(&artifact_dir, counts, origin_m, cell_m);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.session.artifact_dir = artifact_dir.display().to_string();
     }

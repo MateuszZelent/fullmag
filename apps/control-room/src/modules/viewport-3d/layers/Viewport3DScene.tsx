@@ -1618,6 +1618,7 @@ function useViewport3DRenderAdoptionFrame({
   airboxFrameState,
   invalidate,
   onVisualizationFrameCommitted,
+  resourceFrameKey,
   tracker,
   visualizationRevision,
 }: {
@@ -1628,45 +1629,47 @@ function useViewport3DRenderAdoptionFrame({
     revision: number,
     airboxFrameState: Viewport3DAirboxFrameState,
   ) => void;
+  resourceFrameKey: string;
   tracker: Viewport3DResourceTracker;
   visualizationRevision: number | null;
 }) {
+  const frameIdRef = useRef<number | null>(null);
+  const commitLatestFrame = useEffectEvent(() => {
+    frameIdRef.current = null;
+    if (visualizationRevision === null) return;
+    onVisualizationFrameCommitted(
+      visualizationRevision,
+      airboxFrameState,
+    );
+  });
+  const scheduleFrame = useEffectEvent((reason: "render-adoption" | "resources-updated") => {
+    tracker.recordDirtyFrame(reason);
+    invalidate();
+    if (
+      frameIdRef.current !== null ||
+      visualizationRevision === null ||
+      typeof window === "undefined"
+    ) {
+      return;
+    }
+    // Keep the pending frame across React resource re-renders.  Cancelling and
+    // replacing it on every effect cleanup can starve a cached-field ACK until
+    // the coordinator's timeout even though the WebGL buffer is already live.
+    frameIdRef.current = window.requestAnimationFrame(commitLatestFrame);
+  });
   useEffect(() => {
     if (!adoptionRegistry) return;
-    let frameId: number | null = null;
-    const unsubscribe = adoptionRegistry.subscribeActive(() => {
-      tracker.recordDirtyFrame("render-adoption");
-      invalidate();
-      if (
-        frameId !== null ||
-        visualizationRevision === null ||
-        typeof window === "undefined"
-      ) {
-        return;
-      }
-      // idle-audit-allow-one-shot-raf: acknowledge adoption after its invalidated frame.
-      frameId = window.requestAnimationFrame(() => {
-        frameId = null;
-        onVisualizationFrameCommitted(
-          visualizationRevision,
-          airboxFrameState,
-        );
-      });
-    });
-    return () => {
-      unsubscribe();
-      if (frameId !== null && typeof window !== "undefined") {
-        window.cancelAnimationFrame(frameId);
-      }
-    };
-  }, [
-    adoptionRegistry,
-    airboxFrameState,
-    invalidate,
-    onVisualizationFrameCommitted,
-    tracker,
-    visualizationRevision,
-  ]);
+    return adoptionRegistry.subscribeActive(() => scheduleFrame("render-adoption"));
+  }, [adoptionRegistry]);
+  useEffect(() => {
+    scheduleFrame("resources-updated");
+  }, [resourceFrameKey, visualizationRevision]);
+  useEffect(() => () => {
+    if (frameIdRef.current !== null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(frameIdRef.current);
+      frameIdRef.current = null;
+    }
+  }, []);
 }
 
 export function Viewport3DScene({
@@ -1883,6 +1886,7 @@ export function Viewport3DScene({
     airboxFrameState,
     invalidate,
     onVisualizationFrameCommitted,
+    resourceFrameKey,
     tracker,
     visualizationRevision,
   });
@@ -1943,26 +1947,6 @@ export function Viewport3DScene({
     tracker.recordDirtyFrame("camera-clip");
     invalidate();
   }, [cameraClip, cameraProjection, invalidate, tracker]);
-
-  // Demand rendering needs an explicit frame when async resources settle.
-  useEffect(() => {
-    tracker.recordDirtyFrame("resources-updated");
-    invalidate();
-    if (visualizationRevision === null || typeof window === "undefined") return;
-
-    // idle-audit-allow-one-shot-raf: demand rendering needs one post-invalidate frame ack.
-    const frameId = window.requestAnimationFrame(() => {
-      onVisualizationFrameCommitted(visualizationRevision, airboxFrameState);
-    });
-    return () => window.cancelAnimationFrame(frameId);
-  }, [
-    airboxFrameState,
-    invalidate,
-    onVisualizationFrameCommitted,
-    resourceFrameKey,
-    tracker,
-    visualizationRevision,
-  ]);
 
   return (
     <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>

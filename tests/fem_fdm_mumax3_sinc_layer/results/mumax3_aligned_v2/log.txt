@@ -1,0 +1,42 @@
+//mumax 3.12 [linux_amd64 go1.25.0(gc) CUDA-12.6]
+//mumax3 build: version=development commit=unknown built=unknown
+//CPU info: AMD Ryzen Threadripper 3960X 24-Core Processor, Cores: 20, MHz: 3800.041
+//GPU info: NVIDIA GeForce RTX 4080 SUPER(16375MB), CUDA Driver 13.1, cc=8.9, using cc=89 PTX
+//OS  info: Ubuntu 22.04.5 LTS, Hostname: Orion
+//Timestamp: 2026-08-31 15:26:59
+//(c) Arne Vansteenkiste, Dynamat LAB, Ghent University, Belgium
+//This is free software without any warranty. See license.txt
+//********************************************************************//
+//  If you use mumax in any work or publication,                      //
+//  we kindly ask you to cite the references in references.bib        //
+//********************************************************************//
+//output directory: /mnt/c/git/fullmag/fullmag/tests/fem_fdm_mumax3_sinc_layer/results/mumax3_aligned_v2/
+fcut := 10e9
+t0 := 20 / fcut
+SetGridSize(200, 200, 1)
+SetCellSize(2.5e-9, 2.5e-9, 10e-9)
+SetPBC(0, 0, 0)
+//resizing...
+Msat = 800e3
+Aex = 13e-12
+alpha = 0.01
+Temp = 0
+m = uniform(1, 0, 0)
+B_ext = vector(100e-3, 1e-3*sinc(2*pi*fcut*(t-t0)), 0)
+GammaLL = 2.211e5 / (4 * pi * 1e-7)
+SetSolver(5)
+MinDt = 1e-15
+MaxDt = 2e-12
+MaxErr = 1e-7
+tableadd(E_exch)
+tableadd(E_demag)
+tableadd(E_zeeman)
+tableadd(E_anis)
+tableadd(E_total)
+tableautosave(1 / (2 * 1.3 * fcut))
+run(40 / fcut)
+//********************************************************************//
+//Please cite the following references, relevant for your simulation. //
+//See bibtex file in output folder for justification.                 //
+//********************************************************************//
+//   * Vansteenkiste et al., AIP Adv. 4, 107133 (2014).

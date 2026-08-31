@@ -407,6 +407,7 @@ def _author_sp4_without_meshing() -> object:
             None,
             "mixed_p1",
             1,
+            "native",
         )
         study, _body = build_study(request)
         return study

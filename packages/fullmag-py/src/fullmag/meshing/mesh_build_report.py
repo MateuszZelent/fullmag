@@ -11,7 +11,7 @@ from fullmag.model.geometry import ArchWaveguide, Box, Geometry
 
 from ._gmsh_fields import resolve_effective_algorithm_3d
 from ._gmsh_swept import classify_sweepability
-from ._gmsh_types import AirboxOptions, MeshOptions
+from ._gmsh_types import AirboxOptions, MeshOptions, resolve_mesh_size_controls
 from ._mesh_targets import (
     MeshOperationStatus,
     ResolvedSharedObjectTarget,
@@ -39,6 +39,9 @@ def _build_shared_domain_build_report(
     boundary_layer_result: Mapping[str, object] | None = None,
     orphan_entities: list[dict[str, object]] | None = None,
     magnetic_submesh_signatures: list[dict[str, object]] | None = None,
+    algorithm_3d_requested: int | None = None,
+    algorithm_3d_effective: int | None = None,
+    algorithm_3d_fallback_reason: str | None = None,
 ) -> SharedDomainBuildReport:
     resolved = resolve_shared_domain_targets(
         geometries, hints,
@@ -89,6 +92,30 @@ def _build_shared_domain_build_report(
         boundary_layer_result=boundary_layer_result,
         mesh_workflow=mesh_workflow,
     )
+    # Some semantic downgrades are reported by the operation planner rather
+    # than by a low-level exception/fallback marker.  In particular, an
+    # ArchWaveguide requested as swept/prism is deliberately realized through
+    # the component-aware tetrahedral route.  Promote that explicit status to
+    # the aggregate report so callers cannot treat the build as exact merely
+    # because no exception was raised.
+    degraded = degraded or any(
+        status.kind == "swept_prism" and status.status == "fallback"
+        for status in operation_statuses
+    )
+    if algorithm_3d_requested is None:
+        algorithm_3d_requested = int(mesh_options.algorithm_3d)
+    if algorithm_3d_effective is None or algorithm_3d_fallback_reason is None:
+        resolved_algorithm, resolved_reason = resolve_effective_algorithm_3d(
+            mesh_options,
+            # A shared-domain airbox normally installs at least one background
+            # field before the common option application.  Preserve that fact
+            # in reports created by fallback/frozen paths as well.
+            preexisting_field_ids=[1] if airbox is not None else None,
+        )
+        if algorithm_3d_effective is None:
+            algorithm_3d_effective = int(resolved_algorithm)
+        if algorithm_3d_fallback_reason is None:
+            algorithm_3d_fallback_reason = resolved_reason
     thin_film_diagnostics = _build_thin_film_diagnostics(
         geometries,
         mesh_options,
@@ -140,6 +167,9 @@ def _build_shared_domain_build_report(
         ],
         selector_resolution=[dict(item) for item in selector_resolution or []],
         orphan_entities=[dict(item) for item in orphan_entities or []],
+        algorithm_3d_requested=algorithm_3d_requested,
+        algorithm_3d_effective=algorithm_3d_effective,
+        algorithm_3d_fallback_reason=algorithm_3d_fallback_reason,
         degraded=degraded,
         authored_regions_count=authored_regions_count,
         realized_regions_count=realized_regions_count,
@@ -228,7 +258,15 @@ def _shared_domain_swept_fallback_reason(
         and isinstance(geometries[0], ArchWaveguide)
         and build_mode in {"component_aware", "concatenated_stl_fallback"}
     ):
-        return None
+        # The shared-domain STL/component routes always ask Gmsh for a
+        # tetrahedral volume mesh.  An ArchWaveguide may be sweepable as a
+        # thin ribbon, but it is not realized as a native prism6 in these
+        # routes.  Keep the downgrade explicit so a requested
+        # ``swept_prism`` cannot be mistaken for a strict prism realization.
+        return (
+            "ArchWaveguide swept request is realized by layered surface-"
+            "constrained tetrahedra; prism6 topology is not preserved"
+        )
     if (
         geometry_count == 1
         and isinstance(geometries[0], Box)
@@ -371,7 +409,14 @@ def _build_mesh_operation_statuses(
             )
         )
 
-    actual_algorithm, fallback_reason = resolve_effective_algorithm_3d(opts)
+    actual_algorithm, fallback_reason = resolve_effective_algorithm_3d(
+        opts,
+        # Shared-domain airbox construction installs its grading field before
+        # this report is assembled.  Keep the report aligned with the actual
+        # application-time decision even for frozen/fallback paths.
+        preexisting_field_ids=[1] if airbox is not None else None,
+    )
+    resolved_controls = resolve_mesh_size_controls(opts)
     statuses.append(
         MeshOperationStatus(
             kind="algorithm_3d",
@@ -381,7 +426,16 @@ def _build_mesh_operation_statuses(
             requested_method=_algorithm_3d_name(opts.algorithm_3d),
             actual_method=_algorithm_3d_name(actual_algorithm),
             reason=fallback_reason,
-            details={"size_field_count": len(opts.size_fields)},
+            details={
+                "size_field_count": len(opts.size_fields),
+                "resolved_curvature_samples": int(
+                    resolved_controls["resolved_size_from_curvature"]
+                ),
+                "resolved_narrow_region_count": int(
+                    resolved_controls["resolved_narrow_regions"]
+                ),
+                "preexisting_background_field_count": 1 if airbox is not None else 0,
+            },
         )
     )
 
@@ -496,6 +550,7 @@ def _build_mesh_operation_statuses(
 
     requested_swept = _requested_swept_method(opts)
     requested_thin_film = _requested_thin_film_method(opts)
+    requested_sweep_direction = opts.sweep_direction or "auto"
     if requested_thin_film is not None:
         for geometry in geometries:
             sweepability = classify_sweepability(geometry)
@@ -514,6 +569,12 @@ def _build_mesh_operation_statuses(
                     details={
                         "build_mode": build_mode,
                         "through_thickness_elements": opts.through_thickness_elements,
+                        "requested_sweep_direction": requested_sweep_direction,
+                        "resolved_sweep_direction": (
+                            "xyz"[sweepability.thin_axis]
+                            if sweepability.thin_axis is not None
+                            else None
+                        ),
                         "airbox_present": airbox is not None,
                     },
                 )
@@ -535,7 +596,11 @@ def _build_mesh_operation_statuses(
                         requested_method=requested_swept,
                         actual_method="free_tetrahedral",
                         reason=sweepability.reason,
-                        details={"build_mode": build_mode},
+                        details={
+                            "build_mode": build_mode,
+                            "requested_sweep_direction": requested_sweep_direction,
+                            "resolved_sweep_direction": None,
+                        },
                     )
                 )
             elif fallback_reason is not None:
@@ -552,6 +617,12 @@ def _build_mesh_operation_statuses(
                             "build_mode": build_mode,
                             "fallbacks_triggered": list(fallbacks_triggered),
                             "through_thickness_elements": opts.through_thickness_elements,
+                            "requested_sweep_direction": requested_sweep_direction,
+                            "resolved_sweep_direction": (
+                                "xyz"[sweepability.thin_axis]
+                                if sweepability.thin_axis is not None
+                                else None
+                            ),
                         },
                     )
                 )
@@ -571,6 +642,12 @@ def _build_mesh_operation_statuses(
                         details={
                             "build_mode": build_mode,
                             "through_thickness_elements": opts.through_thickness_elements,
+                            "requested_sweep_direction": requested_sweep_direction,
+                            "resolved_sweep_direction": (
+                                "xyz"[sweepability.thin_axis]
+                                if sweepability.thin_axis is not None
+                                else None
+                            ),
                         },
                     )
                 )

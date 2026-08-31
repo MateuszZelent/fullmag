@@ -574,12 +574,16 @@ fn resolve_fem_frozen_spins(
         }
     }
 
+    let source_state_revision =
+        crate::util::frozen_spins_source_state_revision(problem).map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?;
     let references = constraints
         .iter()
         .map(|constraint| crate::ResolvedFrozenSpinsReference {
             constraint_id: constraint.id.as_str(),
             values: initial_magnetization,
-            source_state_revision: None,
+            source_state_revision,
             topology_fingerprint: &mesh_fingerprint,
         })
         .collect::<Vec<_>>();
@@ -591,7 +595,7 @@ fn resolve_fem_frozen_spins(
         known_entities: &known_entities,
         state_snapshot: None,
         resolved_references: &references,
-        expected_source_state_revision: None,
+        expected_source_state_revision: source_state_revision,
         expected_grid_or_mesh_fingerprint: &mesh_fingerprint,
     };
     crate::selection::compile_fem_frozen_spins(
@@ -1342,6 +1346,206 @@ fn requested_fem_demag_realization(problem: &ProblemIR) -> fullmag_ir::Requested
             _ => None,
         })
         .unwrap_or(fullmag_ir::RequestedFemDemagIR::Auto)
+}
+
+fn validate_fem_demag_accuracy_contract(
+    problem: &ProblemIR,
+    mesh: &fullmag_ir::MeshIR,
+    resolved_demag: Option<fullmag_ir::ResolvedFemDemagIR>,
+) -> Result<(), PlanError> {
+    const KEY: &str = "fem_demag_accuracy_contract";
+    const SCHEMA: &str = "fullmag.fem.demag_accuracy.v1";
+
+    let Some(raw) = problem.problem_meta.runtime_metadata.get(KEY) else {
+        return Ok(());
+    };
+    let Some(contract) = raw.as_object() else {
+        return Err(PlanError {
+            reasons: vec![format!("runtime_metadata.{KEY} must be an object")],
+        });
+    };
+    let allowed_keys = BTreeSet::from([
+        "schema_version",
+        "profile",
+        "required_potential_order",
+        "required_topology",
+    ]);
+    let unknown_keys = contract
+        .keys()
+        .filter(|key| !allowed_keys.contains(key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown_keys.is_empty() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.{KEY} contains unsupported keys: {}",
+                unknown_keys.join(", ")
+            )],
+        });
+    }
+
+    let schema = contract
+        .get("schema_version")
+        .and_then(serde_json::Value::as_str);
+    if schema != Some(SCHEMA) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.{KEY}.schema_version must be '{SCHEMA}'"
+            )],
+        });
+    }
+    let profile = contract
+        .get("profile")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if profile.is_none() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.{KEY}.profile must be a non-empty string"
+            )],
+        });
+    }
+    if contract
+        .get("required_potential_order")
+        .and_then(serde_json::Value::as_u64)
+        != Some(2)
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.{KEY}.required_potential_order must be 2 for schema v1"
+            )],
+        });
+    }
+    if contract
+        .get("required_topology")
+        .and_then(serde_json::Value::as_str)
+        != Some("all_tet")
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "runtime_metadata.{KEY}.required_topology must be 'all_tet' for schema v1"
+            )],
+        });
+    }
+    if !resolved_demag.is_some_and(|realization| realization.is_poisson()) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "fem_demag_accuracy_contract_failed: profile={} requires Poisson airbox demag",
+                profile.expect("validated above")
+            )],
+        });
+    }
+
+    let non_tet_count = mesh
+        .cells
+        .types
+        .iter()
+        .filter(|cell_type| !matches!(cell_type, fullmag_ir::FemCellTypeIR::Tet4))
+        .count();
+    if non_tet_count != 0 {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "fem_demag_accuracy_contract_failed: profile={} requires all_tet for independent P2 potential; non_tet_cells={non_tet_count}",
+                profile.expect("validated above")
+            )],
+        });
+    }
+    if !mesh.periodic_node_pairs.is_empty() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "fem_demag_accuracy_contract_failed: profile={} requires potential_order=2, but periodic node-class Poisson resolves to P1",
+                profile.expect("validated above")
+            )],
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod fem_demag_accuracy_contract_tests {
+    use super::*;
+
+    fn problem_with_contract() -> ProblemIR {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "fem_demag_accuracy_contract".to_string(),
+            serde_json::json!({
+                "schema_version": "fullmag.fem.demag_accuracy.v1",
+                "profile": "mumax3_sp4_v1",
+                "required_potential_order": 2,
+                "required_topology": "all_tet",
+            }),
+        );
+        problem
+    }
+
+    fn tet_mesh() -> fullmag_ir::MeshIR {
+        fullmag_ir::MeshIR {
+            mesh_name: "demag-accuracy-contract".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            element_markers: vec![1],
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn p2_accuracy_contract_accepts_nonperiodic_all_tet_poisson() {
+        validate_fem_demag_accuracy_contract(
+            &problem_with_contract(),
+            &tet_mesh(),
+            Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
+        )
+        .expect("nonperiodic all-tet Poisson must satisfy the P2 contract");
+    }
+
+    #[test]
+    fn p2_accuracy_contract_rejects_pyramid_before_native_downgrade() {
+        let mut mesh = tet_mesh();
+        mesh.nodes.push([1.0, 1.0, 0.0]);
+        mesh.cells = fullmag_ir::FemConnectivityIR {
+            types: vec![fullmag_ir::FemCellTypeIR::Pyramid5],
+            offsets: vec![0, 5],
+            nodes: vec![0, 1, 4, 2, 3],
+            global_ordinals: vec![0],
+            mesh_parts: vec![fullmag_ir::FemCellMeshPartIR::Magnetic],
+        };
+        let error = validate_fem_demag_accuracy_contract(
+            &problem_with_contract(),
+            &mesh,
+            Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin),
+        )
+        .expect_err("a pyramid must not silently lower a required P2 solve to P1");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("fem_demag_accuracy_contract_failed")
+                && reason.contains("requires all_tet")
+                && reason.contains("non_tet_cells=1")
+        }));
+    }
+
+    #[test]
+    fn p2_accuracy_contract_rejects_non_poisson_demag() {
+        let error = validate_fem_demag_accuracy_contract(
+            &problem_with_contract(),
+            &tet_mesh(),
+            Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler),
+        )
+        .expect_err("the P2 airbox contract must not be attached to FEM/BEM");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires Poisson airbox demag")));
+    }
 }
 
 fn fem_single_precision_rejection(requested_cuda: bool, context: &str) -> String {
@@ -3453,6 +3657,7 @@ pub(crate) fn plan_fem(
     } else {
         None
     };
+    validate_fem_demag_accuracy_contract(problem, &mesh, resolved_demag_realization)?;
     let air_box_config =
         build_air_box_config(problem, &mesh, resolved_demag_realization).map_err(|reason| {
             PlanError {

@@ -75,6 +75,32 @@ fn frozen_spins_checkpoint_from_stage_artifacts(
     Ok(Some(value))
 }
 
+fn publish_frozen_spins_runtime_status_for_execution_plan(
+    live_workspace: &LocalLiveWorkspace,
+    execution_plan: &ExecutionPlanIR,
+) -> Result<()> {
+    let status =
+        fullmag_runner::frozen_spins_runtime_status_for_backend_plan(&execution_plan.backend_plan)
+            .map_err(|error| anyhow!(error.to_string()))?;
+    live_workspace.update(|state| {
+        let metadata = state.metadata.get_or_insert_with(|| serde_json::json!({}));
+        let Some(metadata) = metadata.as_object_mut() else {
+            return;
+        };
+        match status {
+            Some(status) => {
+                if let Ok(value) = serde_json::to_value(status) {
+                    metadata.insert("frozen_spins_runtime_status".to_string(), value);
+                }
+            }
+            None => {
+                metadata.remove("frozen_spins_runtime_status");
+            }
+        }
+    });
+    Ok(())
+}
+
 fn preparation_unix_time_millis() -> Result<u64> {
     u64::try_from(unix_time_millis()?).context("preparation timestamp exceeds u64")
 }
@@ -7513,6 +7539,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut saved_state_sources: HashMap<String, ContinuationSource> = HashMap::new();
     let mut continuation_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut start_solver_command_id: Option<String> = None;
+    // The first solver command may be consumed by the wait-for-compute gate
+    // before the regular interactive command loop starts. Keep the applied
+    // scene revision across both paths so a Frozen Spins binding is neither
+    // skipped at initial launch nor replayed later.
+    let mut frozen_spins_applied_scene_revision: Option<u64> = None;
     let mut paused_stage: Option<PausedInteractiveStage> = None;
 
     // ── visualization quantity hint ──────────────────────────────────────
@@ -8373,8 +8404,40 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 WaitForSolveCommandAction::StartSolver => {
                     if matches!(cmd.kind.as_str(), "relax" | "run" | "solve") {
+                        let frozen_binding_summary = cmd
+                            .frozen_spins_runtime_plan_binding
+                            .as_ref()
+                            .map(|binding| {
+                                format!(
+                                    "revision {} with {} selection definition(s) and {} constraint(s)",
+                                    binding.source_scene_revision,
+                                    binding.selection_definitions.len(),
+                                    binding.magnetization_constraints.len()
+                                )
+                            })
+                            .unwrap_or_else(|| "missing".to_string());
+                        let (command_base_ir, bound_frozen_spins_scene_revision) =
+                            match problem_with_frozen_spins_runtime_plan_binding(
+                                &stages[0].ir,
+                                &cmd,
+                                frozen_spins_applied_scene_revision,
+                            ) {
+                                Ok(Some((candidate, source_scene_revision))) => {
+                                    (candidate, Some(source_scene_revision))
+                                }
+                                Ok(None) => (stages[0].ir.clone(), None),
+                                Err(error) => {
+                                    let message = format!(
+                                        "wait_for_solve Frozen Spins runtime-plan binding rejected for command {}: {}",
+                                        cmd.command_id, error
+                                    );
+                                    live_workspace.push_log("error", message.clone());
+                                    eprintln!("[fullmag] {message}");
+                                    continue;
+                                }
+                            };
                         let Some(mut command_stage) = (match build_interactive_command_stage(
-                            &stages[0].ir,
+                            &command_base_ir,
                             &cmd,
                         ) {
                             Ok(Some(stage)) => Some(stage),
@@ -8430,6 +8493,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 continue;
                             }
                         };
+                        let planned_frozen_spins_summary =
+                            match fullmag_runner::frozen_spins_runtime_status_for_backend_plan(
+                                &command_plan.backend_plan,
+                            ) {
+                                Ok(Some(status)) => format!(
+                                    "certificate with {} frozen and {} free site(s)",
+                                    status.frozen_site_count, status.free_site_count
+                                ),
+                                Ok(None) => "no certificate".to_string(),
+                                Err(error) => format!("invalid certificate: {error}"),
+                            };
                         stages[0] = command_stage;
                         stage_execution_plans[0] = command_plan.clone();
                         initial_execution_plan = command_plan;
@@ -8440,9 +8514,24 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if stages.len() == 1 {
                             interactive_template_ir = stages[0].ir.clone();
                         }
+                        if let Some(source_scene_revision) = bound_frozen_spins_scene_revision {
+                            frozen_spins_applied_scene_revision = Some(source_scene_revision);
+                            live_workspace.push_log(
+                                "system",
+                                format!(
+                                    "Applied Frozen Spins scene revision {source_scene_revision} at the initial runtime-plan boundary for command {}",
+                                    cmd.command_id
+                                ),
+                            );
+                        }
                         live_workspace.push_log(
                             "info",
-                            format!("Applied solver command payload overrides for {}", cmd.kind),
+                            format!(
+                                "Applied solver command payload overrides for {}; Frozen Spins binding: {}; planned status: {}",
+                                cmd.kind,
+                                frozen_binding_summary,
+                                planned_frozen_spins_summary
+                            ),
                         );
                     }
                     eprintln!("[fullmag] compute requested — starting solver");
@@ -8924,6 +9013,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 torque_mode,
             )
         });
+        publish_frozen_spins_runtime_status_for_execution_plan(&live_workspace, &execution_plan)?;
         let mut stage_result = match if use_live_callback {
             if supports_dynamic_live_preview(&execution_plan.backend_plan) {
                 let mut live_cadence = LiveProgressCadence::default();
@@ -9546,7 +9636,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         // When a `run_sequence` command is active, this holds the remaining stages.
         // Each completed/skipped stage pops from the front. Break aborts the whole sequence.
         let mut active_sequence: Option<ActiveSequenceState> = None;
-        let mut frozen_spins_applied_scene_revision: Option<u64> = None;
         loop {
             if display_selection_handle.owner_session_lost() {
                 live_workspace.push_log(
@@ -15133,6 +15222,55 @@ mod tests {
         assert!(!wait_for_solve_should_block(true, true, true));
         assert!(!wait_for_solve_should_block(true, false, false));
         assert!(!wait_for_solve_should_block(false, true, false));
+    }
+
+    #[test]
+    fn wait_for_solve_applies_frozen_spins_binding_before_building_the_initial_stage() {
+        let source = include_str!("orchestrator.rs");
+        let branch = source
+            .split("WaitForSolveCommandAction::StartSolver => {")
+            .nth(1)
+            .expect("wait-for-solve start branch")
+            .split("WaitForSolveCommandAction::Remesh => {")
+            .next()
+            .expect("wait-for-solve start branch body");
+        let binding_index = branch
+            .find("problem_with_frozen_spins_runtime_plan_binding(")
+            .expect("initial solver command must consume the Frozen Spins binding");
+        let stage_index = branch
+            .find("build_interactive_command_stage(")
+            .expect("initial solver command must build a stage");
+
+        assert!(
+            binding_index < stage_index,
+            "Frozen Spins must update canonical IR before the initial execution plan is built"
+        );
+        assert!(
+            branch.contains("frozen_spins_applied_scene_revision = Some(source_scene_revision)")
+        );
+    }
+
+    #[test]
+    fn scripted_solver_publishes_frozen_spins_certificate_before_one_shot_execution() {
+        let source = include_str!("orchestrator.rs");
+        let execution = source
+            .split("let mut stage_heartbeat = use_live_callback.then(|| {")
+            .nth(1)
+            .expect("scripted stage execution block")
+            .split("let stage_failed =")
+            .next()
+            .expect("scripted stage execution body");
+        let certificate_index = execution
+            .find("publish_frozen_spins_runtime_status_for_execution_plan(")
+            .expect("scripted execution must publish the runner-owned certificate");
+        let run_index = execution
+            .find("run_planned_problem_with_live_preview_interruptible")
+            .expect("scripted execution must invoke the one-shot runner");
+
+        assert!(
+            certificate_index < run_index,
+            "Frozen Spins activation status must be published before the first solver step"
+        );
     }
 
     #[test]

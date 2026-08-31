@@ -22,6 +22,49 @@ from tests.standard_problems.mumag.sp4.fem.matrix_contract import (
 )
 
 
+MUMAX3_COMPATIBILITY_MODE = "mumax3"
+NATIVE_COMPATIBILITY_MODE = "native"
+MUMAX3_DEMAG_ACCURACY_CONTRACT = {
+    "schema_version": "fullmag.fem.demag_accuracy.v1",
+    "profile": "mumax3_sp4_v1",
+    "required_potential_order": 2,
+    "required_topology": "all_tet",
+}
+
+
+def _validate_compatibility_topology(
+    compatibility_mode: str,
+    topology_variant: str,
+    airbox: str,
+) -> None:
+    if compatibility_mode not in {
+        NATIVE_COMPATIBILITY_MODE,
+        MUMAX3_COMPATIBILITY_MODE,
+    }:
+        raise ValueError(
+            "unsupported FULLMAG_SP4_COMPATIBILITY: "
+            f"{compatibility_mode!r}; expected "
+            f"{MUMAX3_COMPATIBILITY_MODE!r} or {NATIVE_COMPATIBILITY_MODE!r}"
+        )
+    if (
+        compatibility_mode == MUMAX3_COMPATIBILITY_MODE
+        and topology_variant != "all_tet"
+    ):
+        raise ValueError(
+            "FULLMAG_SP4_COMPATIBILITY=mumax3 requires "
+            "FULLMAG_SP4_TOPOLOGY_VARIANT=all_tet: mixed_p1 contains pyramid "
+            "cells and resolves Poisson-Robin to a P1 scalar potential, so it "
+            "cannot provide a MuMax3-compatible FEM texture or energy"
+        )
+    if compatibility_mode == MUMAX3_COMPATIBILITY_MODE and airbox != "baseline":
+        raise ValueError(
+            "FULLMAG_SP4_COMPATIBILITY=mumax3 requires "
+            "FULLMAG_SP4_AIRBOX=baseline: the expanded Robin airbox changes "
+            "the uniform-state demag oracle and is not qualified by the "
+            "MuMax3/FDM compatibility profile"
+        )
+
+
 class SP4RunRequest:
     def __init__(
         self,
@@ -34,6 +77,7 @@ class SP4RunRequest:
         duration_s,
         topology_variant,
         layers,
+        compatibility_mode=MUMAX3_COMPATIBILITY_MODE,
     ):
         self.phase = phase
         self.case = case
@@ -44,6 +88,12 @@ class SP4RunRequest:
         self.duration_s = duration_s
         self.topology_variant = topology_variant
         self.layers = layers
+        self.compatibility_mode = compatibility_mode
+        _validate_compatibility_topology(
+            compatibility_mode,
+            topology_variant,
+            airbox,
+        )
 
     @classmethod
     def from_environment(cls) -> "SP4RunRequest":
@@ -55,6 +105,9 @@ class SP4RunRequest:
         topology_variant = os.environ.get(
             "FULLMAG_SP4_TOPOLOGY_VARIANT", "all_tet"
         )
+        compatibility_mode = os.environ.get(
+            "FULLMAG_SP4_COMPATIBILITY", MUMAX3_COMPATIBILITY_MODE
+        ).strip().lower()
         layer_value = os.environ.get("FULLMAG_SP4_LAYERS")
         if layer_value is None:
             layers = None
@@ -88,6 +141,7 @@ class SP4RunRequest:
             duration,
             topology_variant,
             layers,
+            compatibility_mode,
         )
 
 
@@ -101,13 +155,23 @@ def build_study(request: SP4RunRequest):
         mesh,
         airbox,
     )
+    compatibility_label = request.compatibility_mode
     study = fm.study(
         f"mumag_sp4_fem_{request.phase}_{request.case}_{request.device}_"
         f"{request.mesh}_{request.airbox}_{request.topology_variant}_"
-        f"{mesh_variant.layer_key}"
+        f"{mesh_variant.layer_key}_{compatibility_label}"
     )
     study.engine("fem")
     study.device(request.device, precision="double")
+    if request.compatibility_mode == MUMAX3_COMPATIBILITY_MODE:
+        # This metadata is executable: the FEM planner predicts the scalar
+        # potential order from the realized MeshIR and fails closed unless the
+        # actual topology can provide this contract.  It prevents another
+        # client or a later mesh-policy edit from silently reintroducing P1.
+        study.runtime_metadata(
+            "fem_demag_accuracy_contract",
+            MUMAX3_DEMAG_ACCURACY_CONTRACT,
+        )
     study.universe(mode="manual", size=airbox.dimensions_m, center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
     study.universe.mesh(
         maximum_element_size=airbox.hmax_m,
@@ -120,7 +184,28 @@ def build_study(request: SP4RunRequest):
     body.alpha = CONTRACT.alpha
     body.m = (fm.init.UniformMagnetization(CONTRACT.initial_m) if request.initial_state is None else fm.load_magnetization(request.initial_state, format="json"))
     if request.topology_variant == "all_tet":
-        body.mesh(maximum_element_size=mesh.hmax_m, order=1)
+        if request.compatibility_mode == MUMAX3_COMPATIBILITY_MODE:
+            # The MuMax3 comparison lane needs the independent P2 scalar
+            # potential (mixed meshes with pyramids are intentionally P1).
+            # Do not add component-restricted sub-box fields here: Gmsh's
+            # component-volume restriction is not a safe global background
+            # field for a shared airbox and would refine the overlapping air
+            # slab at the 1 nm target. The 3 nm body mesh already matches the
+            # MuMax3 cell scale and the P2 potential controls the demag error.
+            body.mesh(
+                maximum_element_size=mesh.hmax_m,
+                algorithm_2d=1,
+                algorithm_3d=1,
+                # Native OCC Delaunay can leave a sub-threshold sliver in the
+                # 3 nm film/airbox fragment.  Netgen relocates the generated
+                # first-order tetrahedra before MeshIR extraction while
+                # preserving the conformal CAD boundaries and region markers.
+                optimize="Netgen",
+                optimize_iterations=1,
+                order=1,
+            )
+        else:
+            body.mesh(maximum_element_size=mesh.hmax_m, order=1)
     else:
         body.mesh.thin_film(
             minimum_element_size=mesh.hmax_m,
@@ -134,7 +219,17 @@ def build_study(request: SP4RunRequest):
     study.demag(realization="poisson_robin")
     study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=500)
     study.build_domain_mesh()
-    table_quantities = ["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"]
+    table_quantities = [
+        "step",
+        "t",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_total",
+        "max_torque_T",
+    ]
     if request.phase == "relax":
         algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", DEFAULT_RELAXATION_ALGORITHM)
         maximum_steps = int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "50000"))

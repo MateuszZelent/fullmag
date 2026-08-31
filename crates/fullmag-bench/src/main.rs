@@ -15,6 +15,7 @@ use fullmag_engine::{
 };
 use serde::Serialize;
 
+mod frozen_spins_performance;
 mod production_fdm_cpu;
 
 // ── Allocation counting ────────────────────────────────────────────────
@@ -391,6 +392,16 @@ fn main() {
     if args.first().is_some_and(|arg| arg == "fdm-cpu-production") {
         if let Err(error) = production_fdm_cpu::run_from_args(&args[1..]) {
             eprintln!("fullmag-bench fdm-cpu-production: {error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "frozen-spins-performance")
+    {
+        if let Err(error) = frozen_spins_performance::run_from_args(&args[1..]) {
+            eprintln!("fullmag-bench frozen-spins-performance: {error}");
             std::process::exit(2);
         }
         return;

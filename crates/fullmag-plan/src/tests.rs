@@ -9143,7 +9143,7 @@ fn staged_multilayer_reaches_rk4_and_rejects_rk45() {
 }
 
 #[test]
-fn staged_multilayer_rejects_abm3() {
+fn staged_cpu_multilayer_selects_stateful_abm3() {
     let mut ir = stacked_two_body_multilayer_problem();
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
         panic!("bootstrap study should be time evolution");
@@ -9151,10 +9151,11 @@ fn staged_multilayer_rejects_abm3() {
     let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
     *integrator = "abm3".to_string();
 
-    let err = plan(&ir).expect_err("staged CPU multilayer must reject ABM3");
-    assert!(err.reasons.iter().any(|reason| {
-        reason.contains("staged CPU") && reason.contains("abm3") && reason.contains("rk23")
-    }));
+    let planned = plan(&ir).expect("staged CPU multilayer must select ABM3");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    assert_eq!(multilayer.integrator, IntegratorChoice::Abm3);
 }
 
 #[test]

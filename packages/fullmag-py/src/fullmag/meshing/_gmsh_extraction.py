@@ -59,6 +59,123 @@ class UnsupportedGmshElementError(ValueError):
         )
 
 
+class MeshPhysicalTagCoverageError(ValueError):
+    """Raised when volume elements cannot be mapped to physical groups."""
+
+    def __init__(
+        self,
+        *,
+        all_tags: list[int],
+        missing_tags: list[int] | tuple[int, ...] = (),
+        extra_tags: list[int] | tuple[int, ...] = (),
+        duplicate_tags: dict[int, tuple[int, ...]] | None = None,
+    ) -> None:
+        self.code = "physical_tag_coverage_error"
+        self.pointer = "/physical_groups/volume"
+        self.all_tags = tuple(int(tag) for tag in all_tags)
+        self.missing_tags = tuple(int(tag) for tag in missing_tags)
+        self.extra_tags = tuple(int(tag) for tag in extra_tags)
+        self.duplicate_tags = {
+            int(tag): tuple(int(marker) for marker in markers)
+            for tag, markers in (duplicate_tags or {}).items()
+        }
+        reasons: list[str] = []
+        if self.missing_tags:
+            reasons.append(f"missing element tags={list(self.missing_tags[:8])}")
+        if self.extra_tags:
+            reasons.append(f"unrequested element tags={list(self.extra_tags[:8])}")
+        if self.duplicate_tags:
+            reasons.append(
+                "duplicate mappings="
+                + str({tag: list(markers) for tag, markers in list(self.duplicate_tags.items())[:8]})
+            )
+        detail = "; ".join(reasons) if reasons else "incomplete physical-group mapping"
+        super().__init__(
+            f"{self.code} at {self.pointer}: every volume element must have exactly "
+            f"one physical-group marker; {detail}"
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a stable structured extraction failure for API/CI callers."""
+
+        return {
+            "schema_version": "mesh_quality_failure.v2",
+            "code": self.code,
+            "pointer": self.pointer,
+            "metric_id": "physical_group_marker.v1",
+            "threshold": None,
+            "observed": None,
+            "comparator": "must_cover_all_volume_elements",
+            "family": None,
+            "material_region": None,
+            "zone": None,
+            "element_ordinals": [],
+            "policy_fingerprint": None,
+            "topology_fingerprint": None,
+            "evidence_path": None,
+            "details": {
+                "all_tags": list(self.all_tags),
+                "missing_tags": list(self.missing_tags),
+                "extra_tags": list(self.extra_tags),
+                "duplicate_tags": {
+                    str(tag): list(markers)
+                    for tag, markers in self.duplicate_tags.items()
+                },
+            },
+        }
+
+
+class GmshQualityExtractionError(ValueError):
+    """Raised when Gmsh returns malformed quality data."""
+
+    def __init__(
+        self,
+        *,
+        channel: str,
+        expected_count: int,
+        actual_count: int | None = None,
+        nonfinite_indices: tuple[int, ...] = (),
+        reason: str | None = None,
+    ) -> None:
+        self.code = "gmsh_quality_malformed"
+        self.channel = str(channel)
+        self.pointer = f"/quality/{self.channel}"
+        self.expected_count = int(expected_count)
+        self.actual_count = None if actual_count is None else int(actual_count)
+        self.nonfinite_indices = tuple(int(index) for index in nonfinite_indices)
+        if reason is None:
+            if actual_count is not None and actual_count != expected_count:
+                reason = f"expected {expected_count} values, got {actual_count}"
+            else:
+                reason = f"non-finite values at indices {list(self.nonfinite_indices[:8])}"
+        super().__init__(f"{self.code} at {self.pointer}: {reason}")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a stable structured extraction failure for API/CI callers."""
+
+        return {
+            "schema_version": "mesh_quality_failure.v2",
+            "code": self.code,
+            "pointer": self.pointer,
+            "metric_id": self.channel,
+            "threshold": self.expected_count,
+            "observed": self.actual_count,
+            "comparator": "count_and_finite",
+            "family": None,
+            "material_region": None,
+            "zone": None,
+            "element_ordinals": list(self.nonfinite_indices),
+            "policy_fingerprint": None,
+            "topology_fingerprint": None,
+            "evidence_path": None,
+            "details": {
+                "expected_count": self.expected_count,
+                "actual_count": self.actual_count,
+                "nonfinite_indices": list(self.nonfinite_indices),
+            },
+        }
+
+
 def _gmsh_element_properties(
     gmsh: Any,
     element_type: int,
@@ -1389,19 +1506,72 @@ def _align_quality_report_to_element_tags(
     if quality is None:
         return None
     source_tags = quality.element_tags
-    if (
-        not source_tags
-        or not extracted_element_tags
-        or len(source_tags) != len(extracted_element_tags)
-        or source_tags == extracted_element_tags
-    ):
+    per_element_channels = {
+        name: values
+        for name, values in (
+            ("element_sicn", quality.element_sicn),
+            ("element_gamma", quality.element_gamma),
+            ("element_volume", quality.element_volume),
+        )
+        if values is not None
+    }
+    if not source_tags:
+        if per_element_channels:
+            raise GmshQualityExtractionError(
+                channel="element_tags",
+                expected_count=len(extracted_element_tags),
+                actual_count=0,
+                reason="per-element quality channels have no element-tag identity",
+            )
+        return quality
+    if len(set(int(tag) for tag in source_tags)) != len(source_tags):
+        raise GmshQualityExtractionError(
+            channel="element_tags",
+            expected_count=len(source_tags),
+            actual_count=len(source_tags),
+            reason="quality element tags contain duplicates",
+        )
+    if len(set(int(tag) for tag in extracted_element_tags)) != len(extracted_element_tags):
+        raise GmshQualityExtractionError(
+            channel="element_tags",
+            expected_count=len(extracted_element_tags),
+            actual_count=len(extracted_element_tags),
+            reason="extracted element tags contain duplicates",
+        )
+    for channel, values in per_element_channels.items():
+        if len(values) != len(source_tags):
+            raise GmshQualityExtractionError(
+                channel=channel,
+                expected_count=len(source_tags),
+                actual_count=len(values),
+                reason=f"per-element channel length does not match element_tags",
+            )
+    if len(source_tags) != len(extracted_element_tags):
+        raise GmshQualityExtractionError(
+            channel="element_tags",
+            expected_count=len(extracted_element_tags),
+            actual_count=len(source_tags),
+        )
+    if source_tags == extracted_element_tags:
         return quality
 
+    source_set = {int(tag) for tag in source_tags}
+    extracted_set = {int(tag) for tag in extracted_element_tags}
+    if source_set != extracted_set:
+        missing = sorted(extracted_set - source_set)
+        extra = sorted(source_set - extracted_set)
+        raise GmshQualityExtractionError(
+            channel="element_tags",
+            expected_count=len(extracted_element_tags),
+            actual_count=len(source_tags),
+            reason=(
+                "quality/extraction tag sets differ; "
+                f"missing_in_quality={missing[:8]}, extra_in_quality={extra[:8]}"
+            ),
+        )
+
     tag_to_index = {int(tag): index for index, tag in enumerate(source_tags)}
-    try:
-        order = [tag_to_index[int(tag)] for tag in extracted_element_tags]
-    except KeyError:
-        return quality
+    order = [tag_to_index[int(tag)] for tag in extracted_element_tags]
 
     def reorder(values: list[float] | None) -> list[float] | None:
         if values is None or len(values) != len(order):
@@ -1500,6 +1670,39 @@ def extract_per_domain_quality(
     return result
 
 
+def _validated_gmsh_quality_channel(
+    gmsh: Any,
+    all_tags: list[int],
+    channel: str,
+) -> NDArray[np.float64]:
+    """Read one Gmsh quality channel with count/dtype/finite guards."""
+    raw = gmsh.model.mesh.getElementQualities(all_tags, channel)
+    try:
+        values = np.asarray(raw, dtype=np.float64).reshape(-1)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise GmshQualityExtractionError(
+            channel=channel,
+            expected_count=len(all_tags),
+            actual_count=None,
+            reason=f"quality response is not numeric: {exc}",
+        ) from exc
+    if values.size != len(all_tags):
+        raise GmshQualityExtractionError(
+            channel=channel,
+            expected_count=len(all_tags),
+            actual_count=int(values.size),
+        )
+    finite = np.isfinite(values)
+    if not np.all(finite):
+        raise GmshQualityExtractionError(
+            channel=channel,
+            expected_count=len(all_tags),
+            actual_count=int(values.size),
+            nonfinite_indices=tuple(int(index) for index in np.flatnonzero(~finite)),
+        )
+    return values
+
+
 def _extract_quality_metrics(
     gmsh: Any,
     opts: MeshOptions,
@@ -1512,7 +1715,27 @@ def _extract_quality_metrics(
     elem_types, elem_tags_blocks, _ = gmsh.model.mesh.getElements(dim=3)
     all_tags: list[int] = []
     for block in elem_tags_blocks:
-        all_tags.extend(int(t) for t in block)
+        tags = np.asarray(block).reshape(-1)
+        try:
+            all_tags.extend(int(tag) for tag in tags)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise GmshQualityExtractionError(
+                channel="element_tags",
+                expected_count=int(tags.size),
+                actual_count=None,
+                reason=f"element tags are not integer-like: {exc}",
+            ) from exc
+
+    if len(set(all_tags)) != len(all_tags):
+        duplicate_tags = sorted(
+            tag for tag in set(all_tags) if all_tags.count(tag) > 1
+        )
+        raise GmshQualityExtractionError(
+            channel="element_tags",
+            expected_count=len(all_tags),
+            actual_count=len(all_tags),
+            reason=f"duplicate element tags={duplicate_tags[:8]}",
+        )
 
     if not all_tags:
         return MeshQualityReport(
@@ -1525,10 +1748,25 @@ def _extract_quality_metrics(
             avg_quality=0.0,
         ), None
 
-    sicn = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "minSICN"))
-    gamma = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "gamma"))
-    vols = np.asarray(gmsh.model.mesh.getElementQualities(all_tags, "volume"))
-    avg_q = gmsh.option.getNumber("Mesh.AvgQuality")
+    sicn = _validated_gmsh_quality_channel(gmsh, all_tags, "minSICN")
+    gamma = _validated_gmsh_quality_channel(gmsh, all_tags, "gamma")
+    vols = _validated_gmsh_quality_channel(gmsh, all_tags, "volume")
+    try:
+        avg_q = float(gmsh.option.getNumber("Mesh.AvgQuality"))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise GmshQualityExtractionError(
+            channel="avg_quality",
+            expected_count=1,
+            actual_count=None,
+            reason=f"Mesh.AvgQuality is not numeric: {exc}",
+        ) from exc
+    if not np.isfinite(avg_q):
+        raise GmshQualityExtractionError(
+            channel="avg_quality",
+            expected_count=1,
+            actual_count=1,
+            nonfinite_indices=(0,),
+        )
     resolved_markers = (
         np.asarray(element_markers, dtype=np.int32)
         if element_markers is not None and len(element_markers) == len(all_tags)
@@ -1576,14 +1814,26 @@ def _extract_element_markers_for_tags(
     """Return physical-group markers aligned to ``all_tags`` order."""
     if not all_tags:
         return np.zeros(0, dtype=np.int32)
+    if len(set(int(tag) for tag in all_tags)) != len(all_tags):
+        raise MeshPhysicalTagCoverageError(
+            all_tags=all_tags,
+            duplicate_tags={
+                int(tag): (int(tag),)
+                for tag in sorted(set(int(value) for value in all_tags))
+                if [int(value) for value in all_tags].count(int(tag)) > 1
+            },
+        )
     tag_to_marker: dict[int, int] = {}
+    marker_sources: dict[int, set[int]] = {}
     try:
         physical_groups = gmsh.model.getPhysicalGroups(dim=3)
     except Exception:
         physical_groups = []
     if not physical_groups:
         return None
+    requested_tags = {int(tag) for tag in all_tags}
     for _dim, phys_tag in physical_groups:
+        marker = int(phys_tag)
         try:
             entities = gmsh.model.getEntitiesForPhysicalGroup(3, phys_tag)
         except Exception:
@@ -1595,10 +1845,34 @@ def _extract_element_markers_for_tags(
                 continue
             for block in tag_blocks:
                 for tag in block:
-                    tag_to_marker[int(tag)] = int(phys_tag)
+                    element_tag = int(tag)
+                    marker_sources.setdefault(element_tag, set()).add(marker)
+                    previous = tag_to_marker.get(element_tag)
+                    if previous is not None and previous != marker:
+                        # Keep collecting so the error reports all conflicting
+                        # mappings instead of whichever group happened to be
+                        # visited first.
+                        continue
+                    tag_to_marker[element_tag] = marker
     if not tag_to_marker:
         return None
-    return np.asarray([tag_to_marker.get(tag, 1) for tag in all_tags], dtype=np.int32)
+    missing = sorted(requested_tags - set(tag_to_marker))
+    extra = sorted(set(tag_to_marker) - requested_tags)
+    duplicates = {
+        tag: tuple(sorted(markers))
+        for tag, markers in marker_sources.items()
+        if len(markers) > 1
+    }
+    if missing or extra or duplicates:
+        raise MeshPhysicalTagCoverageError(
+            all_tags=all_tags,
+            missing_tags=missing,
+            extra_tags=extra,
+            duplicate_tags=duplicates,
+        )
+    # No default marker is allowed here.  Marker ``1`` is meaningful only when
+    # a physical group explicitly owns the element.
+    return np.asarray([tag_to_marker[int(tag)] for tag in all_tags], dtype=np.int32)
 
 
 def _extract_gmsh_typed_connectivity(

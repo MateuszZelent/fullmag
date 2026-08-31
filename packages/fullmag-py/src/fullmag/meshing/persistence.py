@@ -146,6 +146,36 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush a closed temporary file before it is atomically promoted."""
+    # Windows requires a writable handle for ``FlushFileBuffers`` (which is
+    # what ``os.fsync`` delegates to).  The files passed here are newly-created
+    # temporary artifacts, so opening them read/write is safe and portable.
+    with path.open("r+b") as stream:
+        os.fsync(stream.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory barrier after ``os.replace``.
+
+    POSIX filesystems can persist the rename itself separately from the file
+    contents.  Windows does not expose a portable directory handle for this
+    operation, so failures are intentionally ignored there; the file flush and
+    atomic replace remain mandatory on every platform.
+    """
+    try:
+        descriptor = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_write_bytes(target: Path, payload: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -155,7 +185,9 @@ def _atomic_write_bytes(target: Path, payload: bytes) -> None:
     temporary = Path(temporary_name)
     try:
         temporary.write_bytes(payload)
+        _fsync_file(temporary)
         os.replace(temporary, target)
+        _fsync_directory(target.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -423,6 +455,7 @@ def _write_native_artifact(
     manifest: Mapping[str, object],
     members: Mapping[str, bytes],
 ) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
     manifest_bytes = _canonical_json(dict(manifest))
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
@@ -434,7 +467,9 @@ def _write_native_artifact(
             archive.writestr("manifest.json", manifest_bytes)
             for name, content in sorted(members.items()):
                 archive.writestr(name, content)
+        _fsync_file(temporary)
         os.replace(temporary, target)
+        _fsync_directory(target.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1042,6 +1077,8 @@ def _load_trusted_cached_mesh_artifact(
             expected={
                 "counts": receipt_hint.mesh_counts.to_dict(),
                 "topology_fingerprint_v3": manifest_fingerprint,
+                "interface_marker": certificate.interface_marker,
+                "outer_marker": certificate.outer_boundary_marker,
             },
             require_native=False,
         )
@@ -1103,6 +1140,8 @@ def _load_trusted_cached_mesh_artifact(
     expected_preflight = {
         "counts": receipt.mesh_counts.to_dict(),
         "topology_fingerprint_v3": f"sha256:{receipt.topology_fingerprint_v3}",
+        "interface_marker": certificate.interface_marker,
+        "outer_marker": certificate.outer_boundary_marker,
     }
     if native is None:
         native = preflight_mixed_mesh_arrays(
@@ -1206,7 +1245,9 @@ def export_gmsh_mesh(artifact: MeshArtifact, path: str | Path) -> Path:
     try:
         volume_export_map, surface_export_map = _write_gmsh41_ascii(artifact, temporary)
         payload = temporary.read_bytes()
+        _fsync_file(temporary)
         os.replace(temporary, target)
+        _fsync_directory(target.parent)
     finally:
         temporary.unlink(missing_ok=True)
     sidecar = Path(f"{target}.fullmag.json")

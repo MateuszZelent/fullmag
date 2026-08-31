@@ -418,6 +418,43 @@ pub fn validate_frozen_spins_checkpoint_value(
         })
 }
 
+/// Build the solver-owned Frozen Spins activation certificate at the execution
+/// boundary. This mirrors the state capture performed by persistent interactive
+/// runtimes, but is also available to one-shot/scripted execution paths.
+pub fn frozen_spins_runtime_status_for_backend_plan(
+    backend_plan: &BackendPlanIR,
+) -> Result<Option<constraints::FrozenSpinsRuntimeStatus>, RunError> {
+    let (frozen_plan, active_mask, initial_magnetization) = match backend_plan {
+        BackendPlanIR::Fdm(plan) => (
+            plan.frozen_spins.as_ref(),
+            plan.active_mask.clone(),
+            plan.initial_magnetization.as_slice(),
+        ),
+        BackendPlanIR::Fem(plan) => (
+            plan.frozen_spins.as_ref(),
+            preview::mesh_quantity_active_mask("m", &plan.mesh),
+            plan.initial_magnetization.as_slice(),
+        ),
+        BackendPlanIR::FdmMultilayer(_)
+        | BackendPlanIR::FemEigen(_)
+        | BackendPlanIR::FemFrequencyResponse(_) => return Ok(None),
+    };
+    let Some(frozen_plan) = frozen_plan else {
+        return Ok(None);
+    };
+    let state = fullmag_engine::FrozenSpinsState::capture_at_activation(
+        frozen_plan,
+        active_mask.as_deref(),
+        initial_magnetization,
+    )
+    .map_err(|error| RunError {
+        message: format!("Frozen Spins runtime activation certificate failed: {error}"),
+    })?;
+    Ok(Some(
+        constraints::FrozenSpinsRuntimeStatus::from_resolved_state(frozen_plan, &state),
+    ))
+}
+
 // Public re-exports (unchanged API surface).
 pub use capabilities::{
     resolve_quantity_capability, scratch_authoring_capabilities, BackendCapabilities,
@@ -493,7 +530,7 @@ use crate::quantities::{
     active_fdm_multilayer_preview_quantities, active_fdm_preview_quantities,
     active_fem_preview_quantities,
 };
-use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
 use interactive::InteractiveBackend;
 use serde_json::Value;
 
@@ -4723,6 +4760,19 @@ pub fn run_reference_fdm(
     Ok(cpu_reference::execute_reference_fdm(plan, until_seconds, outputs, None, None)?.result)
 }
 
+/// Execute the narrow Rust FEM reference plan without artifact writing.
+///
+/// This entry point is intentionally explicit about the reference lane.  It
+/// is used by cross-discretization and regression probes; production FEM
+/// qualification continues to use the managed MFEM/libCEED backend.
+pub fn run_reference_fem(
+    plan: &FemPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    Ok(fem_baseline::execute_reference_fem(plan, until_seconds, outputs, None, None)?.result)
+}
+
 /// Resume the CPU-double coupled M3 reference runtime from the exact backend
 /// state captured in a session checkpoint.
 pub fn resume_reference_fdm_from_coupled_checkpoint(
@@ -4854,6 +4904,30 @@ pub fn run_reference_multilayer_fdm(
         None,
     )?
     .result)
+}
+
+/// Resume the fixed-step CPU-double multilayer ABM3 reference runtime from a
+/// durable solver checkpoint.  The checkpoint binds the complete multilayer
+/// plan, layer layout, ABM3 RHS history and (when enabled) Frozen Spins
+/// reference/mask identity; any mismatch fails closed before state mutation.
+pub fn resume_reference_multilayer_fdm_from_abm3_checkpoint(
+    plan: &FdmMultilayerPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    fdm::reject_adaptive_multilayer_plan(plan)?;
+    Ok(
+        multilayer_reference::execute_reference_fdm_multilayer_with_checkpoint(
+            plan,
+            until_seconds,
+            outputs,
+            None,
+            None,
+            Some(checkpoint),
+        )?
+        .result,
+    )
 }
 
 /// Run a FEM eigenmode analysis on the CPU FEM baseline engine.

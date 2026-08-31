@@ -11,6 +11,7 @@ import subprocess
 import struct
 import sys
 import textwrap
+import threading
 import types
 import unittest
 from dataclasses import replace
@@ -32,7 +33,13 @@ from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 from fullmag.meshing.gmsh_bridge import MeshData
 from fullmag.model.discretization import PerObjectMeshRecipe
-from fullmag.model.problem import build_geometry_assets_for_request
+from fullmag.model.problem import (
+    _fem_mesh_cache_key,
+    _fem_cache_write_lock,
+    _quarantine_fem_mesh_cache_entry,
+    _save_fem_mesh_cache_atomically,
+    build_geometry_assets_for_request,
+)
 
 
 class ProblemApiTests(unittest.TestCase):
@@ -192,6 +199,171 @@ class ProblemApiTests(unittest.TestCase):
             )
 
         self.assertEqual(realize.call_count, 2)
+
+    def test_per_object_fem_cache_publish_is_atomic_and_reloadable(self) -> None:
+        mesh = MeshData.from_legacy_tet4(
+            nodes=np.asarray(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.0e-9, 0.0, 0.0],
+                    [0.0, 1.0e-9, 0.0],
+                    [0.0, 0.0, 1.0e-9],
+                ]
+            ),
+            elements=np.asarray([[0, 1, 2, 3]], dtype=np.int32),
+            element_markers=np.asarray([1], dtype=np.int32),
+            boundary_faces=np.asarray([[0, 1, 2]], dtype=np.int32),
+            boundary_markers=np.asarray([10], dtype=np.int32),
+        )
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "object.npz"
+            _save_fem_mesh_cache_atomically(mesh, target)
+
+            restored = MeshData.load(target)
+            self.assertEqual(restored.n_nodes, mesh.n_nodes)
+            self.assertEqual(restored.n_elements, mesh.n_elements)
+            self.assertEqual(list(root.glob(".*.npz.*")), [])
+
+            original_bytes = target.read_bytes()
+
+            class FailingMesh:
+                def save(self, _path: Path) -> None:
+                    raise RuntimeError("simulated interrupted writer")
+
+            with self.assertRaisesRegex(RuntimeError, "interrupted writer"):
+                _save_fem_mesh_cache_atomically(FailingMesh(), target)  # type: ignore[arg-type]
+            self.assertEqual(target.read_bytes(), original_bytes)
+            self.assertEqual(list(root.glob(".*.npz.*")), [])
+
+    def test_fem_cache_key_binds_import_bytes_and_source_snapshot(self) -> None:
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "shape.stl"
+            source.write_bytes(b"solid a\nendsolid a\n")
+            geometry = fm.ImportedGeometry(source=str(source), volume="surface")
+            hints = fm.FEM(order=1, maximum_element_size=2e-9)
+
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("FULLMAG_SOURCE_SNAPSHOT_SHA256", None)
+                first = _fem_mesh_cache_key(geometry, hints)
+                source.write_bytes(b"solid b\nendsolid b\n")
+                second = _fem_mesh_cache_key(geometry, hints)
+            self.assertNotEqual(first, second)
+
+            source.write_bytes(b"solid c\nendsolid c\n")
+            with patch.dict(
+                os.environ,
+                {"FULLMAG_SOURCE_SNAPSHOT_SHA256": "a" * 64},
+            ):
+                third = _fem_mesh_cache_key(geometry, hints)
+            self.assertNotEqual(second, third)
+
+    def test_corrupt_fem_cache_entry_is_quarantined_without_deletion(self) -> None:
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "broken.npz"
+            target.write_bytes(b"partial archive")
+
+            quarantined = _quarantine_fem_mesh_cache_entry(
+                target,
+                reason="test-corrupt-entry",
+            )
+
+            self.assertIsNotNone(quarantined)
+            assert quarantined is not None
+            self.assertFalse(target.exists())
+            self.assertEqual(quarantined.read_bytes(), b"partial archive")
+            self.assertTrue(quarantined.name.endswith(".corrupt"))
+            self.assertIsNone(_quarantine_fem_mesh_cache_entry(target, reason="gone"))
+
+    def test_fem_cache_writer_lock_records_owner_and_recovers_stale_lock(self) -> None:
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "object.npz"
+            lock_path = target.with_name(f".{target.name}.lock")
+            with _fem_cache_write_lock(target, timeout_s=1.0):
+                metadata = json.loads(lock_path.read_text(encoding="utf-8"))
+                self.assertEqual(metadata["schema"], "fullmag.fem.cache-lock.v1")
+                self.assertEqual(metadata["target"], str(target))
+                self.assertGreater(int(metadata["pid"]), 0)
+                self.assertGreater(int(metadata["heartbeat_unix_ns"]), 0)
+            self.assertFalse(lock_path.exists())
+
+            lock_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "fullmag.fem.cache-lock.v1",
+                        "token": "stale",
+                        "heartbeat_unix_ns": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with _fem_cache_write_lock(
+                target,
+                timeout_s=1.0,
+                stale_after_s=0.001,
+            ):
+                self.assertTrue(lock_path.exists())
+            self.assertFalse(lock_path.exists())
+            self.assertEqual(len(list((Path(tmp) / "quarantine").glob("*.corrupt"))), 1)
+
+    def test_fem_cache_lock_does_not_reclaim_fresh_partial_metadata(self) -> None:
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "object.npz"
+            lock_path = target.with_name(f".{target.name}.lock")
+            # O_EXCL creates the lock before the owner can finish writing its
+            # JSON. A competing reader must wait, not turn that publication
+            # window into a second writer.
+            lock_path.write_bytes(b"")
+            with self.assertRaises(TimeoutError):
+                with _fem_cache_write_lock(
+                    target,
+                    timeout_s=0.05,
+                    stale_after_s=60.0,
+                ):
+                    pass
+            self.assertTrue(lock_path.exists())
+            self.assertEqual(len(list((Path(tmp) / "quarantine").glob("*.corrupt"))), 0)
+
+    def test_fem_cache_writer_lock_serializes_parallel_publishers(self) -> None:
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "object.npz"
+            first_entered = threading.Event()
+            release_first = threading.Event()
+            second_entered = threading.Event()
+            entered: list[int] = []
+            errors: list[BaseException] = []
+
+            def writer(index: int) -> None:
+                try:
+                    with _fem_cache_write_lock(
+                        target,
+                        timeout_s=2.0,
+                        stale_after_s=10.0,
+                    ):
+                        entered.append(index)
+                        if index == 1:
+                            first_entered.set()
+                            if not release_first.wait(2.0):
+                                raise AssertionError("first writer was not released")
+                        else:
+                            second_entered.set()
+                except BaseException as exc:  # pragma: no cover - assertion below reports it
+                    errors.append(exc)
+
+            first = threading.Thread(target=writer, args=(1,))
+            second = threading.Thread(target=writer, args=(2,))
+            first.start()
+            self.assertTrue(first_entered.wait(1.0))
+            second.start()
+            self.assertFalse(second_entered.wait(0.1))
+            release_first.set()
+            first.join(3.0)
+            second.join(3.0)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(entered, [1, 2])
 
     def test_fdm_grid_cache_ignores_region_only_changes(self) -> None:
         geometry = fm.Cylinder(radius=10e-9, height=4e-9, name="film")

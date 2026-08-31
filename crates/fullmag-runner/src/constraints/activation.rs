@@ -34,13 +34,7 @@ impl FrozenSpinsRuntimeStatus {
         plan: &fullmag_ir::ResolvedFrozenSpinsPlanIR,
         state: &fullmag_engine::FrozenSpinsState,
     ) -> Self {
-        let mut reference_hash = Sha256::new();
-        reference_hash.update((state.reference().len() as u64).to_le_bytes());
-        for value in state.reference() {
-            for component in value {
-                reference_hash.update(component.to_bits().to_le_bytes());
-            }
-        }
+        let reference_sha256 = runtime_reference_sha256(state.mask(), state.reference());
         let mut mask_hash = Sha256::new();
         mask_hash.update((state.mask().len() as u64).to_le_bytes());
         mask_hash.update(
@@ -58,7 +52,7 @@ impl FrozenSpinsRuntimeStatus {
             topology_fingerprint: plan.grid_or_mesh_fingerprint.clone(),
             source_state_revision: plan.source_state_revision,
             mask_sha256: format!("{:x}", mask_hash.finalize()),
-            reference_sha256: format!("{:x}", reference_hash.finalize()),
+            reference_sha256,
             active_site_count: plan.active_dof_count,
             frozen_site_count: state.frozen_dof_count() as u64,
             free_site_count: state.free_dof_count() as u64,
@@ -66,6 +60,21 @@ impl FrozenSpinsRuntimeStatus {
             scalar_component_dof_count: plan.active_dof_count.saturating_mul(3),
         }
     }
+}
+
+fn runtime_reference_sha256(mask: &[bool], reference: &[[f64; 3]]) -> String {
+    debug_assert_eq!(mask.len(), reference.len());
+    let mut hash = Sha256::new();
+    hash.update((mask.len() as u64).to_le_bytes());
+    for (selected, value) in mask.iter().zip(reference) {
+        hash.update([u8::from(*selected)]);
+        if *selected {
+            for component in value {
+                hash.update(component.to_bits().to_le_bytes());
+            }
+        }
+    }
+    format!("{:x}", hash.finalize())
 }
 
 /// Immutable activation identity attached to a resolved constraint state.
@@ -339,6 +348,34 @@ impl FrozenSpinsActivationSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_reference_identity_matches_resolved_certificate_encoding() {
+        let mask = [true, false, true];
+        let reference: [[f64; 3]; 3] = [[1.0, 2.0, 3.0], [9.0, 8.0, 7.0], [-1.0, -2.0, -3.0]];
+        let mut expected = Sha256::new();
+        expected.update(3_u64.to_le_bytes());
+        expected.update([1]);
+        for component in reference[0] {
+            expected.update(component.to_bits().to_le_bytes());
+        }
+        expected.update([0]);
+        expected.update([1]);
+        for component in reference[2] {
+            expected.update(component.to_bits().to_le_bytes());
+        }
+        assert_eq!(
+            runtime_reference_sha256(&mask, &reference),
+            format!("{:x}", expected.finalize())
+        );
+
+        let changed_free_reference: [[f64; 3]; 3] =
+            [[1.0, 2.0, 3.0], [90.0, 80.0, 70.0], [-1.0, -2.0, -3.0]];
+        assert_eq!(
+            runtime_reference_sha256(&mask, &reference),
+            runtime_reference_sha256(&mask, &changed_free_reference)
+        );
+    }
 
     #[test]
     fn activation_creation_validates_epoch_and_topology() {

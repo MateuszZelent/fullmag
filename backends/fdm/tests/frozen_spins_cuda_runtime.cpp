@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -42,6 +43,7 @@ struct DeviceInfo {
     std::string runtime_version = "unknown";
     std::string pci_bus_id = "0000:00:00.0";
     std::string uuid = "none";
+    int ordinal = -1;
     int compute_capability_major = 0;
     int compute_capability_minor = 0;
 };
@@ -64,17 +66,23 @@ DeviceInfo query_cuda_device() {
 #if FULLMAG_HAS_CUDA
     int count = 0;
     if (cudaGetDeviceCount(&count) == cudaSuccess && count > 0) {
+        int active_device = -1;
+        check(cudaGetDevice(&active_device) == cudaSuccess,
+              "cudaGetDevice must identify the active qualification device");
+        check(active_device >= 0 && active_device < count,
+              "active CUDA device ordinal is outside the enumerated device range");
         cudaDeviceProp prop{};
-        if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-            info.name = prop.name;
-            char bus_buf[32];
-            std::snprintf(bus_buf, sizeof(bus_buf), "%04x:%02x:%02x.0",
-                          prop.pciDomainID, prop.pciBusID, prop.pciDeviceID);
-            info.pci_bus_id = bus_buf;
-            info.uuid = format_cuda_uuid(prop.uuid);
-            info.compute_capability_major = prop.major;
-            info.compute_capability_minor = prop.minor;
-        }
+        check(cudaGetDeviceProperties(&prop, active_device) == cudaSuccess,
+              "cudaGetDeviceProperties must resolve the active qualification device");
+        info.ordinal = active_device;
+        info.name = prop.name;
+        char bus_buf[32];
+        std::snprintf(bus_buf, sizeof(bus_buf), "%04x:%02x:%02x.0",
+                      prop.pciDomainID, prop.pciBusID, prop.pciDeviceID);
+        info.pci_bus_id = bus_buf;
+        info.uuid = format_cuda_uuid(prop.uuid);
+        info.compute_capability_major = prop.major;
+        info.compute_capability_minor = prop.minor;
         int driver = 0;
         if (cudaDriverGetVersion(&driver) == cudaSuccess) {
             info.driver_version = std::to_string(driver);
@@ -86,6 +94,50 @@ DeviceInfo query_cuda_device() {
     }
 #endif
     return info;
+}
+
+struct EvidenceBinding {
+    std::string run_id;
+    std::string source_snapshot_sha256;
+    std::string native_build_sha256;
+    int requested_gpu_ordinal = -1;
+};
+
+const char *required_environment(const char *name) {
+    const char *value = std::getenv(name);
+    check(value != nullptr && *value != '\0', name);
+    return value;
+}
+
+bool is_lowercase_sha256(const std::string &value) {
+    return value.size() == 64 &&
+           std::all_of(value.begin(), value.end(), [](unsigned char character) {
+               return (character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f');
+           });
+}
+
+EvidenceBinding evidence_binding_from_environment(const DeviceInfo &device) {
+    EvidenceBinding binding{};
+    binding.run_id = required_environment("FULLMAG_FROZEN_SPINS_RUN_ID");
+    binding.source_snapshot_sha256 =
+        required_environment("FULLMAG_FROZEN_SPINS_SOURCE_SNAPSHOT_SHA256");
+    binding.native_build_sha256 =
+        required_environment("FULLMAG_FROZEN_SPINS_NATIVE_BUILD_SHA256");
+    const std::string requested = required_environment("FULLMAG_FDM_GPU_INDEX");
+    char *end = nullptr;
+    const long parsed = std::strtol(requested.c_str(), &end, 10);
+    check(end != requested.c_str() && *end == '\0' && parsed >= 0 &&
+              parsed <= static_cast<long>(std::numeric_limits<int>::max()),
+          "FULLMAG_FDM_GPU_INDEX must be a non-negative i32");
+    binding.requested_gpu_ordinal = static_cast<int>(parsed);
+    check(device.ordinal == binding.requested_gpu_ordinal,
+          "active CUDA device ordinal differs from FULLMAG_FDM_GPU_INDEX");
+    check(is_lowercase_sha256(binding.source_snapshot_sha256),
+          "source snapshot binding must be a lowercase SHA-256");
+    check(is_lowercase_sha256(binding.native_build_sha256),
+          "native build binding must be a lowercase SHA-256");
+    return binding;
 }
 
 struct TestResults {
@@ -379,17 +431,30 @@ TestResults run_qualification() {
     return results;
 }
 
-void write_evidence_json(const char *path, const TestResults &results) {
-    std::ofstream out(path);
+void write_evidence_json(const char *path, const TestResults &results,
+                         const EvidenceBinding &binding) {
+    const std::string temporary_path = std::string(path) + ".write.tmp";
+    std::remove(temporary_path.c_str());
+    std::ofstream out(temporary_path);
     check(out.is_open(), "failed to open evidence output path");
 
     out << "{\n";
     out << "  \"schema_version\": \"fullmag.frozen_spins.cuda.runtime.evidence.v1\",\n";
     out << "  \"timestamp_utc\": \"" << current_iso_timestamp() << "\",\n";
+    out << "  \"run_binding\": {\n";
+    out << "    \"run_id\": \"" << binding.run_id << "\",\n";
+    out << "    \"source_snapshot_sha256\": \""
+        << binding.source_snapshot_sha256 << "\",\n";
+    out << "    \"native_build_sha256\": \""
+        << binding.native_build_sha256 << "\",\n";
+    out << "    \"requested_gpu_ordinal\": "
+        << binding.requested_gpu_ordinal << "\n";
+    out << "  },\n";
     out << "  \"backend\": \"fullmag_fdm\",\n";
     out << "  \"precision\": \"fp64+fp32\",\n";
     out << "  \"lane\": \"single_grid_cuda_explicit_rk\",\n";
     out << "  \"device\": {\n";
+    out << "    \"ordinal\": " << results.device.ordinal << ",\n";
     out << "    \"name\": \"" << results.device.name << "\",\n";
     out << "    \"driver_version\": \"" << results.device.driver_version << "\",\n";
     out << "    \"runtime_version\": \"" << results.device.runtime_version << "\",\n";
@@ -422,7 +487,11 @@ void write_evidence_json(const char *path, const TestResults &results) {
         << (results.full_fp32_integrator_matrix_passed ? "true" : "false") << ",\n";
     out << "  \"status\": \"PASS\"\n";
     out << "}\n";
+    out.flush();
+    check(out.good(), "failed to flush native evidence temporary file");
     out.close();
+    check(std::rename(temporary_path.c_str(), path) == 0,
+          "failed to atomically publish native evidence JSON");
 }
 
 } // namespace
@@ -440,7 +509,8 @@ int main() {
 
     const char *evidence_path = std::getenv("FULLMAG_FDM_FROZEN_SPINS_CUDA_EVIDENCE_PATH");
     if (evidence_path != nullptr && *evidence_path != '\0') {
-        write_evidence_json(evidence_path, results);
+        const auto binding = evidence_binding_from_environment(results.device);
+        write_evidence_json(evidence_path, results, binding);
         std::printf("Wrote evidence JSON to: %s\n", evidence_path);
     }
 

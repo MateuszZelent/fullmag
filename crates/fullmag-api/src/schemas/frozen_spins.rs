@@ -427,6 +427,7 @@ pub struct FrozenSpinsPreviewActivationResponse {
     pub source_state_revision: u64,
     pub topology_fingerprint: String,
     pub mask_sha256: String,
+    pub reference_sha256: String,
     pub mask_resource: String,
     pub revision: u64,
     #[schema(value_type = FrozenSpinsSchema)]

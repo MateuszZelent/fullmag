@@ -1578,6 +1578,41 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("normalizes scalar quantities from the effective target registry to colormap rendering", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    const visualizationState = {
+      revision: 15,
+      targets: {
+        airbox: {} as never,
+        objects: [
+          {
+            label: "Free layer",
+            scope: "object",
+            scope_id: "free-layer",
+            settings: {
+              active_quantity_id: "frozen_spins",
+              surface_color_source: "orientation",
+            },
+            source: "scene_object",
+          },
+        ],
+        parts: [],
+      },
+    } as never;
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState,
+      }).settings,
+    ).toMatchObject({
+      activeQuantityId: "frozen_spins",
+      surfaceColorSource: "colormap",
+    });
+  });
+
   it("uses the effective mesh-part registry settings instead of object defaults", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "part:part-film", kind: "part" as const };

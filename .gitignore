@@ -29,6 +29,9 @@ apps/desktop/src-tauri/gen/
 # === Node / pnpm ===
 node_modules/
 .pnpm-store/
+# The root workspace is pnpm-owned; npm lockfiles belong only to nested
+# projects that explicitly declare npm as their package manager.
+/package-lock.json
 .next/
 storybook-static/
 out/

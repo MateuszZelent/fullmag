@@ -533,14 +533,15 @@ async fn attach_frozen_spins_runtime_plan_binding(
         return Ok(());
     }
 
-    let scene = state
-        .current_live_state
-        .read()
-        .await
-        .as_ref()
-        .and_then(|snapshot| snapshot.scene_document.clone());
-    let Some(scene) = scene else {
-        return Ok(());
+    let (scene, source_state_revision) = {
+        let guard = state.current_live_state.read().await;
+        let Some(snapshot) = guard.as_ref() else {
+            return Ok(());
+        };
+        let Some(scene) = snapshot.scene_document.clone() else {
+            return Ok(());
+        };
+        (scene, snapshot.field_quantity_revisions.get("m").copied())
     };
 
     let precondition = command.precondition.get_or_insert_with(Default::default);
@@ -559,6 +560,7 @@ async fn attach_frozen_spins_runtime_plan_binding(
         schema_version: fullmag_ir::FROZEN_SPINS_RUNTIME_PLAN_BINDING_SCHEMA_VERSION.to_string(),
         launch_command_id: command.command_id.clone(),
         source_scene_revision: scene.revision,
+        source_state_revision,
         selection_definitions: scene.selections,
         magnetization_constraints: scene.magnetization_constraints,
     });

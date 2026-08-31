@@ -7,7 +7,7 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import posixpath
 import stat
 import subprocess
@@ -104,7 +104,21 @@ def _is_excluded_committed_source_path(path: str) -> bool:
 def _git(repo_root: Path, *arguments: str) -> bytes:
     try:
         return subprocess.check_output(
-            ("git", *arguments), cwd=repo_root, stderr=subprocess.PIPE
+            # Managed Linux containers often see the Windows checkout with
+            # executable-bit and CRLF presentation differences.  Git's
+            # normalized worktree view must be used for status/diff decisions;
+            # dirty-path hashing below still records raw bytes whenever the
+            # normalized content actually differs.
+            (
+                "git",
+                "-c",
+                "core.filemode=false",
+                "-c",
+                "core.autocrlf=true",
+                *arguments,
+            ),
+            cwd=repo_root,
+            stderr=subprocess.PIPE,
         )
     except (OSError, subprocess.CalledProcessError) as error:
         raise SourceIdentityError(
@@ -136,9 +150,23 @@ def _read_regular_file_stable(path: Path, label: str) -> tuple[os.stat_result, b
     descriptor = os.open(path, flags)
     try:
         before = os.fstat(descriptor)
+        try:
+            path_before = path.lstat()
+        except OSError as error:
+            raise SourceIdentityError(f"{label} changed while hashing") from error
+        if (
+            not stat.S_ISREG(path_before.st_mode)
+            or path_before.st_dev != before.st_dev
+            or path_before.st_ino != before.st_ino
+        ):
+            raise SourceIdentityError(f"{label} changed while hashing")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             content = stream.read()
         after = os.fstat(descriptor)
+        try:
+            path_after = path.lstat()
+        except OSError as error:
+            raise SourceIdentityError(f"{label} changed while hashing") from error
     finally:
         os.close(descriptor)
     observed = (
@@ -158,6 +186,12 @@ def _read_regular_file_stable(path: Path, label: str) -> tuple[os.stat_result, b
         after.st_ctime_ns,
     ):
         raise SourceIdentityError(f"{label} changed while hashing")
+    if (
+        not stat.S_ISREG(path_after.st_mode)
+        or path_after.st_dev != after.st_dev
+        or path_after.st_ino != after.st_ino
+    ):
+        raise SourceIdentityError(f"{label} changed while hashing")
     if not stat.S_ISREG(before.st_mode):
         raise SourceIdentityError(f"{label} is not a regular file")
     return before, content
@@ -165,9 +199,34 @@ def _read_regular_file_stable(path: Path, label: str) -> tuple[os.stat_result, b
 
 def _safe_relative_path(relative: str, label: str) -> Path:
     candidate = Path(relative)
-    if candidate.is_absolute() or ".." in candidate.parts:
+    windows = PureWindowsPath(relative)
+    posix = PurePosixPath(relative)
+    if (
+        candidate.is_absolute()
+        or candidate.anchor
+        or windows.is_absolute()
+        or windows.anchor
+        or posix.is_absolute()
+        or posix.anchor
+        or ".." in candidate.parts
+        or ".." in windows.parts
+        or ".." in posix.parts
+    ):
         raise SourceIdentityError(f"unsafe {label} path: {relative}")
     return candidate
+
+
+def _resolve_contained_path(root: Path, path: Path, label: str) -> Path:
+    """Resolve a filesystem path and reject any physical escape from root."""
+
+    try:
+        canonical_root = root.resolve()
+        canonical_path = path.resolve()
+    except (OSError, RuntimeError) as error:
+        raise SourceIdentityError(f"cannot resolve {label} path") from error
+    if canonical_path != canonical_root and canonical_root not in canonical_path.parents:
+        raise SourceIdentityError(f"unsafe {label} path escapes snapshot root")
+    return canonical_path
 
 
 def _validate_filesystem_symlink_path(root: Path, relative: str) -> None:
@@ -204,6 +263,7 @@ def _validate_filesystem_symlink_path(root: Path, relative: str) -> None:
             )
         resolved.pop()
         pending = list(Path(target).parts) + pending
+    _resolve_contained_path(root, root / _safe_relative_path(relative, "source"), "source")
 
 
 def _validate_tree_symlinks(entries: dict[str, dict[str, object]]) -> None:
@@ -589,6 +649,14 @@ def _qualification_input_content(
         candidate = _safe_relative_path(relative, "qualification input")
         _validate_filesystem_symlink_path(repo_root, relative)
         path = repo_root / candidate
+        canonical_parent = _resolve_contained_path(
+            repo_root, path.parent, "qualification input"
+        )
+        # Keep the final component lexical so a final symlink is still
+        # rejected by _read_regular_file_stable; resolving only the parent
+        # prevents a retargetable parent link from redirecting the open after
+        # containment was checked.
+        path = canonical_parent / candidate.name
         try:
             metadata, content = _read_regular_file_stable(
                 path, f"qualification input {relative}"

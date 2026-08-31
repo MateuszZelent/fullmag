@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal, Mapping
 
+from fullmag._validation import TypedValidationError, parse_finite_float
 from fullmag.model.discretization import FEM, PerObjectMeshRecipe
 from fullmag.model.geometry import Geometry
 
@@ -74,35 +75,54 @@ class ResolvedSharedDomainTargets:
 # ===================================================================
 
 def _coerce_positive_float(value: object) -> float | None:
-    """Parse *value* as a strictly positive finite float, or ``None``."""
-    if isinstance(value, bool):
+    """Parse legacy metadata without silently accepting malformed numbers.
+
+    Numeric strings remain supported only for the JSON/GUI compatibility
+    adapter.  Missing/empty/``auto`` and the historical explicit zero disable
+    optional refinements; all other malformed, non-finite, or negative values
+    fail before Gmsh is started.
+    """
+    if value is None:
         return None
-    if isinstance(value, (int, float)):
-        candidate = float(value)
-    elif isinstance(value, str):
-        stripped = value.strip()
-        if not stripped or stripped == "auto":
-            return None
-        try:
-            candidate = float(stripped)
-        except ValueError:
-            return None
-    else:
+    if isinstance(value, str) and value.strip().lower() in {
+        "",
+        "auto",
+        # These are intent tokens, not numeric values.  Callers that
+        # resolve transition distances inspect the raw value and expand
+        # them through ``_coerce_transition_distance_intent`` or the
+        # airbox-boundary resolver below.
+        "airbox_boundary",
+        "airbox-boundary",
+        "auto_boundary",
+    }:
         return None
-    return candidate if math.isfinite(candidate) and candidate > 0.0 else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and float(value) == 0.0:
+        return None
+    candidate = parse_finite_float(
+        value,
+        "/mesh_workflow/numeric_value",
+        allow_numeric_string=True,
+    )
+    if candidate == 0.0:
+        return None
+    if candidate < 0.0:
+        raise TypedValidationError(
+            code="numeric_range_error",
+            pointer="/mesh_workflow/numeric_value",
+            message="value must be positive or exactly zero to disable an optional field",
+            value=candidate,
+        )
+    return float(candidate)
 
 
 def _coerce_transition_distance_intent(value: object) -> float | str | None:
-    numeric = _coerce_positive_float(value)
-    if numeric is not None:
-        return numeric
     if isinstance(value, str) and value.strip().lower() in {
         "airbox_boundary",
         "airbox-boundary",
         "auto_boundary",
     }:
         return "airbox_boundary"
-    return None
+    return _coerce_positive_float(value)
 
 
 def _geometry_name_aliases(name: str) -> tuple[str, ...]:
@@ -489,6 +509,9 @@ class SharedDomainBuildReport:
     selector_resolution: list[dict[str, object]] = field(default_factory=list)
     orphan_entities: list[dict[str, object]] = field(default_factory=list)
     rejected_element_types: list[dict[str, object]] = field(default_factory=list)
+    algorithm_3d_requested: int | None = None
+    algorithm_3d_effective: int | None = None
+    algorithm_3d_fallback_reason: str | None = None
     degraded: bool = False
     authored_regions_count: int = 0
     realized_regions_count: int = 0
@@ -545,6 +568,11 @@ class SharedDomainBuildReport:
             "rejected_element_types": [
                 dict(element) for element in self.rejected_element_types
             ],
+            "algorithm_3d": {
+                "requested": self.algorithm_3d_requested,
+                "effective": self.algorithm_3d_effective,
+                "fallback_reason": self.algorithm_3d_fallback_reason,
+            },
             "degraded": self.degraded,
             "authored_regions_count": self.authored_regions_count,
             "realized_regions_count": self.realized_regions_count,

@@ -220,38 +220,39 @@ export function resolveViewport3DVisualizationAckDataIdentity({
   source: Viewport3DVisualizationDebugSource;
   visualizationRevision: number;
 }): VisualizationDataAdoptionIdentity | null {
+  if (sessionIdentity?.sessionEpoch && sessionIdentity.sessionId) {
+    const receipt = adoptionRegistry.latestActiveAdoption({
+      sessionEpoch: sessionIdentity.sessionEpoch,
+      sessionId: sessionIdentity.sessionId,
+    });
+    if (receipt?.fieldBufferId && receipt.resourceKey) {
+      const fieldRevision = [...(source.fieldModel?.targetPasses.values() ?? [])]
+        .map((renderPass) => renderPass.fieldBuffer)
+        .find((fieldBuffer) => fieldBuffer?.bufferId === receipt.fieldBufferId)
+        ?.fieldRevision ?? null;
+      return {
+        fieldBufferId: receipt.fieldBufferId,
+        fieldRevision,
+        resourceKey: receipt.resourceKey,
+        sessionEpoch: receipt.sessionEpoch,
+        sessionId: receipt.sessionId,
+        visualizationRevision,
+      };
+    }
+  }
   const fallback = source.fullFieldBufferIdentity;
   if (
-    fallback?.bufferId &&
-    fallback.resourceKey &&
-    fallback.sessionEpoch &&
-    fallback.sessionId
-  ) {
-    return {
-      fieldBufferId: fallback.bufferId,
-      fieldRevision: fallback.fieldRevision ?? null,
-      resourceKey: fallback.resourceKey,
-      sessionEpoch: fallback.sessionEpoch,
-      sessionId: fallback.sessionId,
-      visualizationRevision,
-    };
-  }
-  if (!sessionIdentity?.sessionEpoch || !sessionIdentity.sessionId) return null;
-  const receipt = adoptionRegistry.latestActiveAdoption({
-    sessionEpoch: sessionIdentity.sessionEpoch,
-    sessionId: sessionIdentity.sessionId,
-  });
-  if (!receipt?.fieldBufferId || !receipt.resourceKey) return null;
-  const fieldRevision = [...(source.fieldModel?.targetPasses.values() ?? [])]
-    .map((renderPass) => renderPass.fieldBuffer)
-    .find((fieldBuffer) => fieldBuffer?.bufferId === receipt.fieldBufferId)
-    ?.fieldRevision ?? null;
+    !fallback?.bufferId ||
+    !fallback.resourceKey ||
+    !fallback.sessionEpoch ||
+    !fallback.sessionId
+  ) return null;
   return {
-    fieldBufferId: receipt.fieldBufferId,
-    fieldRevision,
-    resourceKey: receipt.resourceKey,
-    sessionEpoch: receipt.sessionEpoch,
-    sessionId: receipt.sessionId,
+    fieldBufferId: fallback.bufferId,
+    fieldRevision: fallback.fieldRevision ?? null,
+    resourceKey: fallback.resourceKey,
+    sessionEpoch: fallback.sessionEpoch,
+    sessionId: fallback.sessionId,
     visualizationRevision,
   };
 }
@@ -271,6 +272,24 @@ export function resolveViewport3DVisualizationFrameAck({
   return {
     changeKind,
     dataIdentity: changeKind === "data" ? committedDataIdentity : null,
+  };
+}
+
+export function resolveViewport3DVisualizationAckRegistration({
+  existing,
+  previousResourceFrameKey,
+  resourceFrameKey,
+  resourceKey,
+}: {
+  existing: { changeKind: "data" | "style"; resourceKey: string } | null;
+  previousResourceFrameKey: string | null;
+  resourceFrameKey: string;
+  resourceKey: string;
+}): { changeKind: "data" | "style"; resourceKey: string } {
+  if (existing) return existing;
+  return {
+    changeKind: previousResourceFrameKey === resourceFrameKey ? "style" : "data",
+    resourceKey,
   };
 }
 
@@ -2268,21 +2287,27 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     const revision = sceneProps.visualizationRevision;
     if (revision == null) return;
     const previous = visualizationAckRevisionRef.current;
-    const changeKind = previous?.resourceFrameKey === sceneProps.resourceFrameKey
-      ? "style"
-      : "data";
     const dataIdentity = resolveViewport3DVisualizationAckDataIdentity({
       adoptionRegistry: visualizationDebugAdoptionRegistry,
       sessionIdentity,
       source: visualizationDebugSource,
       visualizationRevision: revision,
     });
-    const resourceKey = dataIdentity?.resourceKey ?? sceneProps.resourceFrameKey;
+    const existingRegistration = visualizationAckKindsRef.current.get(revision) ?? null;
+    const registration = resolveViewport3DVisualizationAckRegistration({
+      existing: existingRegistration,
+      previousResourceFrameKey: previous?.resourceFrameKey ?? null,
+      resourceFrameKey: sceneProps.resourceFrameKey,
+      resourceKey: dataIdentity?.resourceKey ?? sceneProps.resourceFrameKey,
+    });
+    const { changeKind, resourceKey } = registration;
     visualizationAckRevisionRef.current = {
       resourceFrameKey: sceneProps.resourceFrameKey,
       revision,
     };
-    visualizationAckKindsRef.current.set(revision, { changeKind, resourceKey });
+    if (!existingRegistration) {
+      visualizationAckKindsRef.current.set(revision, registration);
+    }
     while (visualizationAckKindsRef.current.size > 64) {
       const oldest = visualizationAckKindsRef.current.keys().next().value;
       if (oldest === undefined) break;

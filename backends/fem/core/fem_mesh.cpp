@@ -508,6 +508,10 @@ bool validate_supported_physics_topology(
         return std::find(ctx.mesh.cell_types.begin(), ctx.mesh.cell_types.end(), type) !=
             ctx.mesh.cell_types.end();
     };
+    const auto has_facet_family = [&](uint32_t type) {
+        return std::find(ctx.mesh.facet_types.begin(), ctx.mesh.facet_types.end(), type) !=
+            ctx.mesh.facet_types.end();
+    };
     const bool exact_cell_families =
         has_cell_family(FULLMAG_FEM_CELL_TET4) &&
         has_cell_family(FULLMAG_FEM_CELL_PRISM6) &&
@@ -528,6 +532,20 @@ bool validate_supported_physics_topology(
                 return type == FULLMAG_FEM_FACET_TRI3 ||
                     type == FULLMAG_FEM_FACET_QUAD4;
             });
+    const bool pure_prism_cell_family =
+        !ctx.mesh.cell_types.empty() &&
+        std::all_of(
+            ctx.mesh.cell_types.begin(), ctx.mesh.cell_types.end(),
+            [](uint32_t type) { return type == FULLMAG_FEM_CELL_PRISM6; });
+    const bool pure_prism_facet_families =
+        has_facet_family(FULLMAG_FEM_FACET_TRI3) &&
+        has_facet_family(FULLMAG_FEM_FACET_QUAD4) &&
+        std::all_of(
+            ctx.mesh.facet_types.begin(), ctx.mesh.facet_types.end(),
+            [](uint32_t type) {
+                return type == FULLMAG_FEM_FACET_TRI3 ||
+                    type == FULLMAG_FEM_FACET_QUAD4;
+            });
     bool markers_match_scope =
         ctx.mesh.cell_markers.size() == ctx.mesh.cell_types.size();
     for (size_t i = 0; markers_match_scope && i < ctx.mesh.cell_types.size(); ++i) {
@@ -535,6 +553,14 @@ bool validate_supported_physics_topology(
         markers_match_scope =
             (ctx.mesh.cell_types[i] == FULLMAG_FEM_CELL_PRISM6) == magnetic;
     }
+    const bool pure_prism_markers_cover_magnetic_and_air =
+        ctx.mesh.cell_markers.size() == ctx.mesh.cell_types.size() &&
+        std::any_of(
+            ctx.mesh.cell_markers.begin(), ctx.mesh.cell_markers.end(),
+            [](uint32_t marker) { return marker != 0u; }) &&
+        std::any_of(
+            ctx.mesh.cell_markers.begin(), ctx.mesh.cell_markers.end(),
+            [](uint32_t marker) { return marker == 0u; });
     const bool exact_plan_topology =
         plan.mesh.cell_types_len == ctx.mesh.cell_types.size() &&
         plan.mesh.periodic_node_pairs_len == 0u &&
@@ -557,14 +583,56 @@ bool validate_supported_physics_topology(
         plan.has_oersted_cylinder == 0 && plan.oersted_field_len == 0u &&
         plan.temperature == 0.0 && plan.has_magnetoelastic == 0 &&
         plan.regional_field_drive_count == 0u;
-    const bool qualified = exact_cell_families && exact_facet_families &&
-        markers_match_scope && exact_plan_topology && explicit_cpu_or_cuda_device &&
+    const bool common_scope = exact_plan_topology && explicit_cpu_or_cuda_device &&
         plan.fe_order == 1u && plan.precision == FULLMAG_FEM_PRECISION_DOUBLE &&
         plan.enable_exchange != 0 && plan.enable_demag != 0 &&
         (plan.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN ||
          plan.demag_realization == FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET) &&
         dmi_supported && no_other_extended_physics;
+    const bool qualified_mixed_p1 =
+        exact_cell_families && exact_facet_families && markers_match_scope;
+    // A conforming shared domain made entirely from prism6 cells does not
+    // need the pyramid transition that forces the Poisson potential to P1.
+    // Keep this first qualification lane deliberately CPU-only and bounded to
+    // the SP4 exchange+Poisson scope until independent CUDA and extended-
+    // physics evidence exists.
+    const bool qualified_pure_prism_p2 =
+        pure_prism_cell_family && pure_prism_facet_families &&
+        pure_prism_markers_cover_magnetic_and_air && mfem_device == "cpu" && !has_dmi;
+    const bool qualified = common_scope &&
+        (qualified_mixed_p1 || qualified_pure_prism_p2);
     if (!qualified) {
+        if (pure_prism_cell_family) {
+            std::string failed_predicates;
+            const auto add_failed = [&failed_predicates](const char *predicate) {
+                if (!failed_predicates.empty()) {
+                    failed_predicates += ",";
+                }
+                failed_predicates += predicate;
+            };
+            if (!pure_prism_facet_families) add_failed("prism_tri3_quad4_facets");
+            if (!pure_prism_markers_cover_magnetic_and_air) {
+                add_failed("prism_shared_domain_magnetic_air_markers");
+            }
+            if (!exact_plan_topology) add_failed("plan_topology_matches_import_no_periodic");
+            if (mfem_device != "cpu") add_failed("pure_prism_p2_cpu_only");
+            if (plan.fe_order != 1u) add_failed("p1_magnetization_state");
+            if (plan.precision != FULLMAG_FEM_PRECISION_DOUBLE) add_failed("double_precision");
+            if (plan.enable_exchange == 0) add_failed("exchange");
+            if (plan.enable_demag == 0 ||
+                (plan.demag_realization != FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
+                 plan.demag_realization != FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET)) {
+                add_failed("poisson_robin_or_dirichlet");
+            }
+            if (has_dmi) add_failed("pure_prism_p2_dmi_not_qualified");
+            if (!no_other_extended_physics) add_failed("unrelated_extended_physics_scope");
+            error =
+                "native FEM pure prism P2 scope rejected: required=explicit_cpu+double+"
+                "P1_magnetization_state+prism6_shared_magnetic_air+tri3_quad4+no_periodic+"
+                "exchange+poisson_robin_or_dirichlet+uniform_Ms_A_alpha+no_DMI; "
+                "failed_predicates=[" + failed_predicates + "]; fallback=none";
+            return false;
+        }
         std::string failed_predicates;
         const auto add_failed = [&failed_predicates](const char *predicate) {
             if (!failed_predicates.empty()) {

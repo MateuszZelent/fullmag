@@ -1,4 +1,11 @@
 #!/usr/bin/env bash
+#
+# Managed Linux qualification exporter.  This script is intentionally separate
+# from the Windows-first launcher: it publishes a managed FEM bundle into the
+# loop-backed ext4 storage used by the dedicated Linux runner.  The
+# `wsl.exe` remount hints below are recovery guidance for that Linux/WSL
+# storage profile only; the local Windows FEM route uses
+# scripts/windows/run_fullmag_fem.ps1 and Docker Desktop bind mounts instead.
 set -euo pipefail
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -233,7 +240,10 @@ readonly VARIANTS_ROOT STAGING_ROOT
 : "${FULLMAG_FEM_RUNTIME_VARIANT:=hypre-${FULLMAG_HYPRE_MEMORY_VARIANT}}"
 : "${FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY:=8.9}"
 : "${FULLMAG_ENABLE_NVTX:=0}"
-: "${FULLMAG_RUNTIME_PRUNE:=1}"
+# Runtime export must never delete older generations implicitly.  Cleanup is a
+# separate, explicit maintenance action; callers that have completed its
+# dry-run may opt in with FULLMAG_RUNTIME_PRUNE=1.
+: "${FULLMAG_RUNTIME_PRUNE:=0}"
 : "${FULLMAG_RUNTIME_ARCHIVE_COPY_VERIFY:=auto}"
 case "${FULLMAG_RUNTIME_PRUNE}" in
   0|1) ;;
@@ -684,7 +694,6 @@ copy_shared_library_dependency_closure() {
   local dest_dir="${runtime_root}/lib"
   local pending=("$initial_lib")
   local visited=" "
-  local skip_system_runtime_regex="/(ld-linux|ld64|libc|libdl|libm|libpthread|libresolv|librt|libutil|libgcc_s|libstdc\+\+|libcuda|libnvidia-[^/]+)\.so"
   while [ "${#pending[@]}" -gt 0 ]; do
     local lib="${pending[0]}"
     pending=("${pending[@]:1}")
@@ -697,13 +706,14 @@ copy_shared_library_dependency_closure() {
       *" $resolved "*) continue ;;
     esac
     visited="${visited}${resolved} "
-    if [[ "$resolved" =~ $skip_system_runtime_regex ]]; then
-      continue
-    fi
     local requested_name
     requested_name="$(basename "$lib")"
     local lib_name
     lib_name="$(basename "$resolved")"
+    if runtime_dependency_is_host_owned "$requested_name" ||
+       runtime_dependency_is_host_owned "$lib_name"; then
+      continue
+    fi
     case "$copy_scope:$resolved" in
       system:/lib/*|system:/lib64/*|system:/usr/lib/*|system:/usr/lib64/*|cuda:/usr/local/cuda-*/*|cuda:/usr/local/cuda/*)
         copy_runtime_resolved_dependency_pair "$lib" "$resolved" "$dest_dir"
@@ -1367,7 +1377,7 @@ publish_runtime_bundle() {
 finalize_verified_source_publication() {
   verify_source_snapshot_identity
   publish_runtime_bundle
-  if [ "${FULLMAG_RUNTIME_PRUNE:-1}" = "1" ]; then
+  if [ "${FULLMAG_RUNTIME_PRUNE:-0}" = "1" ]; then
     FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}" \
       FULLMAG_RUNTIME_KEEP_PER_FAMILY="${FULLMAG_RUNTIME_KEEP_PER_FAMILY:-2}" \
       bash "${SOURCE_SNAPSHOT_ROOT}/scripts/prune_managed_fem_runtimes.sh"

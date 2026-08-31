@@ -1115,12 +1115,16 @@ fn resolve_fdm_frozen_spins(
     for object_id in &object_aliases {
         object_transforms.insert(object_id.clone(), object_transform);
     }
+    let source_state_revision =
+        crate::util::frozen_spins_source_state_revision(problem).map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?;
     let references: Vec<_> = constraints
         .iter()
         .map(|constraint| ResolvedFrozenSpinsReference {
             constraint_id: constraint.id.as_str(),
             values: initial_magnetization,
-            source_state_revision: None,
+            source_state_revision,
             topology_fingerprint: &grid_certificate.grid_fingerprint,
         })
         .collect();
@@ -1132,7 +1136,7 @@ fn resolve_fdm_frozen_spins(
         known_entities: &known_entities,
         state_snapshot: None,
         resolved_references: &references,
-        expected_source_state_revision: None,
+        expected_source_state_revision: source_state_revision,
         expected_grid_or_mesh_fingerprint: &grid_certificate.grid_fingerprint,
     };
     compile_fdm_frozen_spins(
@@ -1319,12 +1323,16 @@ fn resolve_fdm_multilayer_frozen_spins(
             .iter()
             .map(|region| (region.owner_object.clone(), region.region_id.clone())),
     );
+    let source_state_revision =
+        crate::util::frozen_spins_source_state_revision(problem).map_err(|reason| PlanError {
+            reasons: vec![reason],
+        })?;
     let references: Vec<_> = constraints
         .iter()
         .map(|constraint| ResolvedFrozenSpinsReference {
             constraint_id: constraint.id.as_str(),
             values: &initial_magnetization,
-            source_state_revision: None,
+            source_state_revision,
             topology_fingerprint,
         })
         .collect();
@@ -1336,7 +1344,7 @@ fn resolve_fdm_multilayer_frozen_spins(
         known_entities: &known_entities,
         state_snapshot: None,
         resolved_references: &references,
-        expected_source_state_revision: None,
+        expected_source_state_revision: source_state_revision,
         expected_grid_or_mesh_fingerprint: topology_fingerprint,
     };
     compile_fdm_points_frozen_spins(
@@ -4830,7 +4838,10 @@ pub(crate) fn plan_fdm_multilayer(
     if !native_cuda_lane && requested_auto_integrator {
         integrator = Some(IntegratorChoice::Heun);
     }
+    let staged_cpu_abm3 =
+        !runtime_requests_cuda(problem) && integrator == Some(IntegratorChoice::Abm3);
     if !native_cuda_lane
+        && !staged_cpu_abm3
         && !matches!(
             integrator,
             Some(IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23)

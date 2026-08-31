@@ -62,6 +62,7 @@ from fullmag.meshing._mesh_targets import (
 )
 from fullmag.meshing._gmsh_types import (
     FEM_TOPOLOGY_VOLUME_EPS,
+    MixedPeriodicTopologyError,
     _infer_axis_aligned_periodic_pairs,
 )
 from fullmag.meshing._gmsh_infra import _GmshProgressLogger, _gmsh_heartbeat_interval
@@ -126,6 +127,7 @@ from fullmag.meshing.remesh_cli import (
     _mesh_options_from_dict,
     _mesh_result_payload,
     _size_field_from_dict,
+    _write_quality_data_artifact_v2_if_available,
 )
 from fullmag.meshing.remesh_cli import _describe_remesh_job
 from fullmag.meshing._gmsh_extraction import (
@@ -141,6 +143,9 @@ from fullmag.meshing._gmsh_fields import (
     _add_axis_aligned_box_distance_threshold_field,
     _add_curvature_surface_field,
     _add_narrow_region_field,
+    _add_entity_distance_threshold_field,
+    _match_surfaces_within_bounds,
+    resolve_effective_algorithm_3d,
     validate_size_field_config,
 )
 from fullmag.meshing._gmsh_selectors import (
@@ -292,6 +297,22 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
             ):
                 self.film.mesh(**kwargs)
 
+    def test_mixed_periodic_request_is_rejected_before_gmsh(self) -> None:
+        options = MeshOptions(
+            mesh_strategy="swept_prism",
+            through_thickness_elements=2,
+            through_thickness_distribution="fixed",
+            sweep_face_meshing="triangular",
+            periodic_pair_ids=["x_faces"],
+        )
+        with patch("fullmag.meshing._gmsh_generators._import_gmsh") as import_gmsh:
+            with self.assertRaises(MixedPeriodicTopologyError) as raised:
+                generate_mesh(self.film, hmax=20e-9, options=options)
+
+        self.assertEqual(raised.exception.code, "mixed_periodic_topology_unsupported")
+        self.assertIn("free_tetrahedral", str(raised.exception))
+        import_gmsh.assert_not_called()
+
     def test_per_object_recipe_rejects_invalid_direct_size_targets(self) -> None:
         invalid = (
             {"maximum_element_size": -1.0},
@@ -363,6 +384,26 @@ class LayeredMeshDslValidationTests(unittest.TestCase):
         for kwargs in invalid:
             with self.subTest(kwargs=kwargs), self.assertRaises((TypeError, ValueError)):
                 SharedMeshAssemblyPolicy(**kwargs)
+
+    def test_non_default_shared_mesh_assembly_policy_fails_closed_before_generation(self) -> None:
+        film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
+
+        with patch(
+            "fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components",
+        ) as generator:
+            with self.assertRaisesRegex(
+                ValueError,
+                "shared_mesh_assembly_policy_unsupported",
+            ):
+                realize_fem_domain_mesh_asset_from_components_with_report(
+                    [film],
+                    fm.FEM(order=1, hmax=20e-9),
+                    assembly_policy=SharedMeshAssemblyPolicy(
+                        interface_hmax_factor=0.25,
+                    ),
+                )
+
+        generator.assert_not_called()
 
     def test_per_object_recipe_rejects_unavailable_object_mesh_source(self) -> None:
         with self.assertRaisesRegex(ValueError, r"FEM\(mesh=\.\.\.\)"):
@@ -2244,6 +2285,39 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertAlmostEqual(struct.unpack_from("<d", data, 40)[0], 0.25)
         self.assertAlmostEqual(struct.unpack_from("<d", data, 48)[0], 1.0 / 6.0)
 
+    def test_fmmq_v2_artifact_path_is_scoped_to_canonical_identity(self) -> None:
+        mesh = self._unit_tet_mesh()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            first = _write_quality_data_artifact_v2_if_available(
+                mesh,
+                mesh_name="shared-domain",
+                mesh_provenance={
+                    "policy_fingerprint": "sha256:policy-one",
+                    "mesh_revision": "revision-one",
+                },
+                quality_artifact_dir=tmp_dir,
+            )
+            second = _write_quality_data_artifact_v2_if_available(
+                mesh,
+                mesh_name="shared-domain",
+                mesh_provenance={
+                    "policy_fingerprint": "sha256:policy-two",
+                    "mesh_revision": "revision-two",
+                },
+                quality_artifact_dir=tmp_dir,
+            )
+
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            first_path = Path(first["path"])
+            second_path = Path(second["path"])
+            self.assertNotEqual(first_path, second_path)
+            self.assertTrue(first_path.is_file())
+            self.assertTrue(second_path.is_file())
+            self.assertRegex(first_path.name, r"-quality-v2-[0-9a-f]{64}\.fmmq$")
+            self.assertRegex(second_path.name, r"-quality-v2-[0-9a-f]{64}\.fmmq$")
+
     def test_shared_domain_report_includes_truth_first_operation_statuses(self) -> None:
         geometry = fm.Cylinder(radius=50e-9, height=9e-9, name="free_layer")
         mesh_options = MeshOptions(
@@ -2303,6 +2377,80 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertIn("below 4", warning_text)
         self.assertIn("smoothing is disabled", warning_text)
         self.assertIn("fell back", warning_text)
+
+    def test_shared_domain_report_marks_arch_waveguide_swept_downgrade(self) -> None:
+        geometry = fm.ArchWaveguide(
+            length=100e-9,
+            width=40e-9,
+            height=5e-9,
+            arch_height=20e-9,
+            name="arch_waveguide",
+        )
+        report = _build_shared_domain_build_report(
+            [geometry],
+            fm.FEM(order=1, hmax=20e-9),
+            airbox=None,
+            mesh_workflow=None,
+            per_object_recipes=None,
+            size_fields=[],
+            region_markers=[{"geometry_name": "arch_waveguide", "marker": 1}],
+            build_mode="component_aware",
+            fallbacks_triggered=[],
+            mesh_options=MeshOptions(
+                mesh_strategy="swept_prism",
+                through_thickness_elements=3,
+            ),
+        )
+
+        statuses = {
+            (status.kind, status.scope): status
+            for status in report.operation_statuses
+        }
+        swept = statuses[("swept_prism", "arch_waveguide")]
+        self.assertTrue(report.degraded)
+        self.assertEqual(swept.status, "fallback")
+        self.assertEqual(swept.actual_method, "free_tetrahedral")
+        self.assertIn("prism6 topology is not preserved", swept.reason or "")
+        self.assertEqual(report.thin_film_diagnostics[0].actual_method, "free_tetrahedral")
+        self.assertIn(
+            "requested swept/prism meshing fell back to free tetrahedral",
+            report.thin_film_diagnostics[0].warnings,
+        )
+
+    def test_effective_algorithm_accounts_for_generated_and_preexisting_fields(self) -> None:
+        generated = MeshOptions(
+            algorithm_3d=ALGO_3D_MMG3D,
+            size_preset="fine",
+        )
+        effective, reason = resolve_effective_algorithm_3d(generated)
+        self.assertEqual(effective, ALGO_3D_HXT)
+        self.assertIsNotNone(reason)
+        self.assertIn("curvature refinement", reason or "")
+
+        explicit = MeshOptions(algorithm_3d=ALGO_3D_MMG3D)
+        effective, reason = resolve_effective_algorithm_3d(
+            explicit,
+            preexisting_field_ids=[17],
+        )
+        self.assertEqual(effective, ALGO_3D_HXT)
+        self.assertIn("pre-existing background fields", reason or "")
+
+        report = _build_shared_domain_build_report(
+            [fm.Box(10e-9, 10e-9, 10e-9, name="box")],
+            fm.FEM(order=1, hmax=2e-9),
+            airbox=AirboxOptions(maximum_element_size=10e-9),
+            mesh_workflow=None,
+            per_object_recipes=None,
+            size_fields=[],
+            region_markers=[{"geometry_name": "box", "marker": 1}],
+            build_mode="single_geometry_occ",
+            fallbacks_triggered=[],
+            mesh_options=explicit,
+        )
+        algorithm = report.to_dict()["algorithm_3d"]
+        self.assertEqual(algorithm["requested"], ALGO_3D_MMG3D)
+        self.assertEqual(algorithm["effective"], ALGO_3D_HXT)
+        self.assertIsNotNone(algorithm["fallback_reason"])
 
     def test_shared_domain_report_marks_thin_film_tetrahedral_method(self) -> None:
         geometry = fm.Box(100e-9, 40e-9, 2e-9, name="free_layer")
@@ -2654,6 +2802,21 @@ class MeshScaffoldTests(unittest.TestCase):
             self.assertEqual(artifact_payload["facet_offsets"], mesh.facet_offsets.tolist())
             self.assertEqual(artifact_payload["facet_nodes"], mesh.facet_nodes.tolist())
             self.assertEqual(artifact_payload["boundary_markers"], mesh.boundary_markers.tolist())
+
+    def test_topology_artifact_publication_cleans_temp_on_replace_failure(self) -> None:
+        mesh = self._unit_tet_mesh()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch.object(remesh_cli_module.os, "replace", side_effect=OSError("replace failed")):
+                with self.assertRaises(OSError):
+                    remesh_cli_module._write_topology_artifact_if_needed(
+                        mesh,
+                        mesh_name="replace_failure",
+                        topology_artifact_dir=tmp_dir,
+                        inline_topology_max_bytes=1,
+                    )
+
+            self.assertEqual(list(Path(tmp_dir).iterdir()), [])
 
     def test_remesh_cli_payload_preserves_shared_domain_region_markers(self) -> None:
         mesh = self._unit_tet_mesh()
@@ -3859,6 +4022,75 @@ class MeshScaffoldTests(unittest.TestCase):
         )
 
         self.assertIsNone(field_id)
+
+    def test_surface_bbox_ties_are_returned_in_deterministic_order(self) -> None:
+        class _FakeModel:
+            @staticmethod
+            def getEntities(dim: int) -> list[tuple[int, int]]:
+                # Deliberately reverse the two equal-bbox surfaces to model
+                # the unspecified ordering returned by Gmsh.
+                return [(2, 9), (2, 4), (2, 12)] if dim == 2 else []
+
+            @staticmethod
+            def getBoundingBox(dim: int, tag: int) -> tuple[float, ...]:
+                if dim != 2:
+                    raise AssertionError("unexpected entity dimension")
+                if tag in (4, 9):
+                    return (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+                return (2.0, 0.0, 0.0, 3.0, 1.0, 1.0)
+
+        fake_gmsh = type("FakeGmsh", (), {"model": _FakeModel()})()
+
+        matched = _match_surfaces_within_bounds(
+            fake_gmsh,
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+        )
+
+        self.assertEqual(matched, [4, 9])
+
+    def test_entity_distance_field_deduplicates_and_sorts_targets(self) -> None:
+        class _FakeFieldApi:
+            def __init__(self) -> None:
+                self.next_id = 1
+                self.kinds: dict[int, str] = {}
+                self.numbers: dict[tuple[int, str], object] = {}
+
+            def add(self, kind: str) -> int:
+                field_id = self.next_id
+                self.next_id += 1
+                self.kinds[field_id] = kind
+                return field_id
+
+            def setNumbers(self, field_id: int, key: str, values: object) -> None:
+                self.numbers[(field_id, key)] = values
+
+            def setNumber(self, field_id: int, key: str, value: float) -> None:
+                self.numbers[(field_id, key)] = value
+
+        field_api = _FakeFieldApi()
+        fake_gmsh = type(
+            "FakeGmsh",
+            (),
+            {"model": type("FakeModel", (), {"mesh": type("FakeMesh", (), {"field": field_api})()})()},
+        )()
+
+        field_id = _add_entity_distance_threshold_field(
+            fake_gmsh,
+            distance_list_key="SurfacesList",
+            entity_tags=[9, 4, 9],
+            size_min=1.0,
+            size_max=2.0,
+            dist_min=0.0,
+            dist_max=3.0,
+        )
+
+        distance_id = next(
+            identifier
+            for identifier, kind in field_api.kinds.items()
+            if kind == "Distance"
+        )
+        self.assertEqual(field_api.numbers[(distance_id, "SurfacesList")], [4, 9])
 
     def test_narrow_region_field_adds_component_volume_span_constraint(self) -> None:
         class _FakeFieldApi:
@@ -5812,6 +6044,16 @@ class MeshScaffoldTests(unittest.TestCase):
                     fm.FEM(order=1, hmax=0.1),
                 )
 
+    def test_realize_fem_mesh_asset_rejects_study_universe_on_preview_route(self) -> None:
+        with patch("fullmag.meshing.asset_pipeline.generate_mesh") as generator:
+            with self.assertRaisesRegex(ValueError, "fem_mesh_preview_ignores_study_universe"):
+                realize_fem_mesh_asset(
+                    fm.Box(size=(1.0, 1.0, 1.0)),
+                    fm.FEM(order=1, hmax=0.1),
+                    study_universe={"mode": "auto", "padding": [1.0, 1.0, 1.0]},
+                )
+        generator.assert_not_called()
+
     def test_generate_mesh_from_json_works_without_optional_meshing_stack(self) -> None:
         mesh = self._unit_tet_mesh()
 
@@ -7632,6 +7874,74 @@ class FieldStackAcceptanceTests(unittest.TestCase):
         self.assertEqual(fields[0]["kind"], "ComponentVolumeConstant")
         self.assertEqual(fields[0]["params"]["GeometryName"], "left")
         self.assertAlmostEqual(fields[0]["params"]["VIn"], 5e-9)
+
+    def test_legacy_numeric_alias_does_not_override_explicit_zero_disable(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        fields = _build_object_bulk_fields(
+            [left],
+            default_hmax=20e-9,
+            override_by_name={"left": {"bulk_hmax": 0.0, "hmax": 5e-9}},
+            component_aware=True,
+        )
+
+        self.assertEqual(fields, [])
+
+    def test_object_core_legacy_alias_does_not_override_explicit_zero_disable(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        fields = _build_field_stack(
+            [left],
+            default_hmax=20e-9,
+            per_geometry=[
+                {
+                    "geometry": "left",
+                    "size_fields": [
+                        {
+                            "kind": "ObjectCoreRelaxation",
+                            "params": {
+                                "core_maximum_element_size": 0.0,
+                                "core_hmax": 5e-9,
+                                "surface_maximum_element_size": 1e-9,
+                                "surface_distance": 6e-9,
+                            },
+                        }
+                    ],
+                }
+            ],
+            component_aware=True,
+        )
+
+        self.assertFalse(
+            any(
+                isinstance(field.get("params"), dict)
+                and field["params"].get("Source") == "ObjectCoreRelaxation"
+                for field in fields
+            )
+        )
+
+    def test_object_core_rejects_fractional_sampling_without_truncation(self) -> None:
+        left = fm.Box(2.0, 2.0, 2.0, name="left")
+        with self.assertRaisesRegex(ValueError, "sampling_surface"):
+            _build_field_stack(
+                [left],
+                default_hmax=20e-9,
+                per_geometry=[
+                    {
+                        "geometry": "left",
+                        "size_fields": [
+                            {
+                                "kind": "ObjectCoreRelaxation",
+                                "params": {
+                                    "core_maximum_element_size": 5e-9,
+                                    "surface_maximum_element_size": 1e-9,
+                                    "surface_distance": 6e-9,
+                                    "sampling_surface": 2.5,
+                                },
+                            }
+                        ],
+                    }
+                ],
+                component_aware=True,
+            )
 
     def test_interface_field_skipped_when_not_explicitly_set(self) -> None:
         left = fm.Box(2.0, 2.0, 2.0, name="left")

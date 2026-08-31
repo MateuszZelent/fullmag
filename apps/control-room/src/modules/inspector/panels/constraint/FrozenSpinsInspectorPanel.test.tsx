@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DATA_FROZEN_SPINS_RESOLVED_MASK_PATH } from "@/kernel/api/apiPaths";
+import type { FieldMetaResource } from "@/kernel/api/apiTypes";
 
 import {
   installSimulationPreparationTestDom,
@@ -16,6 +17,7 @@ import {
   FrozenSpinsEditor,
   FrozenSpinsInspectorPanel,
   FrozenSpinsPreviewDetails,
+  frozenSpinsPreviewTopologyFingerprint,
   resolveFrozenSpinsSolverBinding,
 } from "./FrozenSpinsInspectorPanel";
 
@@ -63,6 +65,7 @@ const activationReceipt = {
   frozen_site_count: 2,
   mask_resource: preview.mask_resource,
   mask_sha256: preview.mask_sha256,
+  reference_sha256: preview.resolved.resolved_reference_sha256,
   preview_id: preview.preview_id,
   revision: 8,
   runtime_application: {
@@ -100,8 +103,10 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   invalidate: vi.fn(),
   patch: vi.fn(),
+  patchVisualizationDefaults: vi.fn(),
   flushVisualization: vi.fn(),
   queueVisualizationPatch: vi.fn(),
+  refetchFieldMeta: vi.fn(),
   refetchSolverStatus: vi.fn(),
   setActiveViewportMainModule: vi.fn(),
   setFocusedSlot: vi.fn(),
@@ -134,15 +139,20 @@ vi.mock("@/kernel/KernelContext", () => ({
       flushNow: mocks.flushVisualization,
       queuePatch: mocks.queueVisualizationPatch,
     },
+    visualization: {
+      patchDefaults: mocks.patchVisualizationDefaults,
+    },
   }),
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   useFieldMetaResource: () => ({
     data: {
+      field_revision: 42,
       publication_bundle: { topology_hash: "sha256:topology" },
       source_revision: 41,
     },
+    refetch: mocks.refetchFieldMeta,
   }),
   useSolverStatusResource: () => ({
     data: mocks.solverStatusData,
@@ -184,6 +194,52 @@ describe("FrozenSpinsInspectorPanel", () => {
     };
   });
 
+  it("uses the current full carrier fingerprint when publication metadata is absent", () => {
+    const meta = {
+      resolved_capability: {
+        carriers: [
+          {
+            carrier_fingerprint: "sha256:part",
+            payload_state: "current",
+            scope_id: "part:film",
+            scope_kind: "part",
+          },
+          {
+            carrier_fingerprint: "sha256:topology-v3",
+            payload_state: "current",
+            scope_id: null,
+            scope_kind: "full",
+          },
+        ],
+      },
+    } as unknown as FieldMetaResource;
+
+    expect(frozenSpinsPreviewTopologyFingerprint(meta)).toBe("sha256:topology-v3");
+  });
+
+  it("fails closed when carrier fingerprints are ambiguous", () => {
+    const meta = {
+      resolved_capability: {
+        carriers: [
+          {
+            carrier_fingerprint: "sha256:a",
+            payload_state: "current",
+            scope_id: "part:a",
+            scope_kind: "part",
+          },
+          {
+            carrier_fingerprint: "sha256:b",
+            payload_state: "current",
+            scope_id: "part:b",
+            scope_kind: "part",
+          },
+        ],
+      },
+    } as unknown as FieldMetaResource;
+
+    expect(frozenSpinsPreviewTopologyFingerprint(meta)).toBeNull();
+  });
+
   it("renders complete preview evidence including freshness and warnings", () => {
     const markup = renderToStaticMarkup(
       <FrozenSpinsPreviewDetails preview={preview} />,
@@ -218,6 +274,20 @@ describe("FrozenSpinsInspectorPanel", () => {
     expect(
       resolveFrozenSpinsSolverBinding(
         activationReceipt,
+        { ...solverRuntime, reference_sha256: "solver-recomputed" },
+        "pin-edge",
+      ).state,
+    ).toBe("mismatch");
+    expect(
+      resolveFrozenSpinsSolverBinding(
+        activationReceipt,
+        { ...solverRuntime, source_state_revision: null },
+        "pin-edge",
+      ).state,
+    ).toBe("confirmed");
+    expect(
+      resolveFrozenSpinsSolverBinding(
+        activationReceipt,
         { ...solverRuntime, frozen_site_count: 3 },
         "pin-edge",
       ).state,
@@ -246,7 +316,11 @@ describe("FrozenSpinsInspectorPanel", () => {
 
       expect(mocks.queueVisualizationPatch).toHaveBeenCalledWith({
         active_quantity_id: "frozen_spins",
-        quantity: { active_quantity_id: "frozen_spins" },
+        field_component: null,
+        quantity: {
+          active_quantity_id: "frozen_spins",
+          field_component: null,
+        },
       });
       expect(mocks.flushVisualization).toHaveBeenCalledTimes(1);
       expect(mocks.setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
@@ -286,7 +360,7 @@ describe("FrozenSpinsInspectorPanel", () => {
 
       expect(mocks.createPreview).toHaveBeenCalledWith({
         expected_revision: 7,
-        expected_source_state_revision: 41,
+        expected_source_state_revision: 42,
         expected_topology_fingerprint: "sha256:topology",
         selector: {
           kind: "in_region",
@@ -301,6 +375,33 @@ describe("FrozenSpinsInspectorPanel", () => {
         "preview-1",
       );
       expect(container.textContent).toContain("25.00%");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("refreshes field identity after a stale preview revision so the user can retry", async () => {
+    mocks.createPreview.mockRejectedValueOnce(
+      new Error("selection_stale_revision: expected source-state revision 4, current 5"),
+    );
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <FrozenSpinsEditor
+          definition={definitionFixture()}
+          objectId="film"
+          regionId={null}
+          revision={7}
+        />,
+      ));
+      await act(async () => findButton(container, "Preview mask").click());
+
+      expect(mocks.refetchFieldMeta).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("Current field identity was refreshed");
+      expect(container.textContent).toContain("retry Preview mask");
     } finally {
       await act(async () => root.unmount());
       dom.restore();

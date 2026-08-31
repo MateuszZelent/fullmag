@@ -1,5 +1,11 @@
 # FEM Meshing Production Readiness Report
 
+> **Historical / superseded.** This report records a 2026-05-30 snapshot and is
+> not a current production-qualification claim. Its S1-S12 decision is
+> superseded by the active [FEM meshing production closure masterplan](../superpowers/plans/2026-08-31-fem-meshing-production-closure-masterplan.md),
+> which requires current source identity, FMMQ v2, managed CPU/GPU evidence,
+> and browser/WebGL proof. Use this file only as historical provenance.
+
 ## Commit
 
 - Commit: `9e19259d` plus uncommitted production-readiness worktree changes
