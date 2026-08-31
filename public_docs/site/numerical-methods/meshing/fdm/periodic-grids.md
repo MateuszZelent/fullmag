@@ -1,215 +1,120 @@
 ---
 title: "FDM periodic grids"
-description: "Periodic Cartesian topology and finite-image demagnetization for FDM unit-cell models."
-summary: "Periodic FDM requires a grid that tiles exactly along selected axes and an independently declared demagnetization boundary policy; periodic indexing alone does not create a periodic Green function."
+description: "Periodic FDM axes and finite-image demagnetization."
+summary: "Periodic topology and truncated-image demag are explicit fail-closed policies."
 status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
+last_updated: 2026-08-31
 reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "FdmPbc Python contract, FDM periodic kernel construction, runner capability matrix and periodic provenance"
+source_of_truth: "FdmPbc, runner resolution, CPU periodic spectra"
 ---
 
 (public-docs-numerical-methods-meshing-fdm-periodic-grids)=
 # FDM periodic grids
 
-**Last changes: 12:31 24.08.2026**
+(fdm-periodic-grids-problem-statement)=
+## Physical problem
 
-Periodic FDM requires a grid that tiles exactly along selected axes and an independently declared demagnetization boundary policy; periodic indexing alone does not create a periodic Green function.
+`FdmPbc` records periodic local topology and a separate demagnetization policy. `truncated_images` is finite translated-image magnetostatics, not an infinite periodic Green function.
 
-::::{admonition} Implementation status
-:class: important
-
-Periodic axes and finite translated-image demagnetization are source-backed. `truncated_images` is a controlled approximation whose image counts require convergence; it is not an exact infinite Ewald sum.
-::::
-
-## Scope and purpose
-
-Use periodic grids for representative unit cells, nanowire/nanofilm repetition and periodic
-texture calculations. This page concerns the FDM lattice. FEM periodic node pairing and periodic
-airbox closure are separate contracts.
-
-## Scientific and numerical model
-
-### Scientific invariants
-
-An FDM grid stores the magnetization on a Cartesian lattice with cell dimensions
-$\Delta x$, $\Delta y$ and $\Delta z$. Cell centers are
+(fdm-periodic-grids-governing-equations)=
+## Governing equations
 
 ```{math}
-:label: eq-meshing-fdm-cell-centres-fdm-periodic-grids
-\mathbf r_{ijk}=\mathbf r_0+
-\left(i+\tfrac12,j+\tfrac12,k+\tfrac12\right)
-\odot(\Delta x,\Delta y,\Delta z).
+:label: eq-fdm-periodic-images
+\mathbf H_d(\mathbf r_i)=\sum_{\mathbf n\in\mathcal I}\sum_j\mathcal N(\mathbf r_i-\mathbf r_j-\mathbf n\odot\mathbf L)\mathbf M_j .
 ```
 
-The cell size simultaneously controls geometry voxelization, finite-difference exchange and the
-accuracy/cost of FFT demagnetization. It must therefore resolve the smallest magnetic length scale,
-the smallest geometric feature and the desired boundary accuracy. The exchange-length expression
+(fdm-periodic-grids-symbols-and-si-units)=
+## Symbols and SI units
 
-```{math}
-:label: eq-meshing-fdm-exchange-length-fdm-periodic-grids
-\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}
-```
-
-is a useful initial guide, but final values require a grid-refinement study. A one-cell film thickness
-is a thickness-averaged discretization; it cannot represent a nonuniform mode across the thickness.
-
-A periodic axis maps index $i=N_x$ to $i=0$ for supported local stencils. For demagnetization,
-Fullmag's finite-image route replaces the open kernel with
-
-```{math}
-:label: eq-fdm-periodic-image-sum-fdm-periodic-grids
-\mathbf H_d(\mathbf r_i)=
-\sum_{\boldsymbol\ell\in\mathcal I}
-\sum_j \mathbf N(
-\mathbf r_i-\mathbf r_j-oldsymbol\ell\odot\mathbf L)
-\mathbf M_j,
-```
-
-where $\mathbf L$ is the unit-cell size and
-$\mathcal I=[-n_x,n_x]\times[-n_y,n_y]\times[-n_z,n_z]$. Increasing image counts changes the
-discrete operator. Convergence in `images` must be demonstrated separately from convergence in
-cell size.
-
-The unit-cell length along a periodic axis must equal an integer number of cells and all periodic
-fields/regions must agree at the seam according to the interaction's boundary semantics.
-
-## Selection guide
-
-| Use case | Recommended choice | Reason |
+| Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| Periodic local interactions, open demag | periodic axes + `demag="open"` | Useful only when open magnetostatics is physically intended |
-| Finite periodic demag approximation | `demag="truncated_images"` | Adds translated Newell-kernel images |
-| Exact/infinite periodic Green function required | not established by this route | Use a separately qualified periodic solver; do not over-interpret finite images |
+| $\mathbf H_d$ | demagnetizing field | A m^-1 |
+| $\mathbf r_i$ | target cell centre | m |
+| $\mathbf L$ | unit-cell period | m |
+| $\mathbf n$ | image index | 1 |
+| $\mathcal I$ | finite image set | 1 |
+| $\mathbf M_j$ | source magnetization | A m^-1 |
 
-## Parameters
+(fdm-periodic-grids-assumptions-and-validity)=
+## Assumptions and validity
 
-| Python / IR key | Unit | Default | Validation | Numerical effect |
-| --- | --- | --- | --- | --- |
-| `x`, `y`, `z` / `FdmPbc.axes` | 1 | all false | three Boolean axis flags | periodic topology for local FDM operators |
-| `demag` | 1 | `open` | `open`, `truncated_images`, `periodic_airbox_k0` | selects demag boundary policy; `periodic_airbox_k0` is FEM-only |
-| `images` / `image_counts` | 1 | unset | three non-negative integers; only with `truncated_images` | finite image range in each direction |
-| unit-cell size | m | universe size | integer multiple of spacing on periodic axes | translation period of the lattice and demag images |
-| cell origin | m | resolved | consistent across periodic seam | fixes phase/translation alignment of geometry and fields |
+`axes` is first iterated and every value is converted with `bool(value)`; only then must the resulting tuple have length three. If `image_counts` is present, every value is first converted with `int(value)`, then the resulting tuple must have length three and contain no negative value. Consequently numeric strings and truncatable floats can be accepted, while conversion itself may raise `TypeError`, `ValueError`, or `OverflowError`. The demagnetization string is normalized with `strip().lower()` before policy validation. Image counts remain valid only with `truncated_images`. FDM rejects `periodic_airbox_k0`, which is FEM-only. Converge image counts and cell size separately.
 
+(fdm-periodic-grids-python-api)=
 ## Python API
 
-**Complete Python example**
-
 ```python
+# %%
 import fullmag as fm
-
-nm = 1.0e-9
-study = fm.study("periodic_fdm_grid")
+nm = 1e-9
+study = fm.study("periodic-grid")
 study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-study.universe(
-    mode="manual",
-    size=(100 * nm, 40 * nm, 5 * nm),
-    center=(0.0, 0.0, 0.0),
-    padding=(0.0, 0.0, 0.0),
-)
-study.cell(2 * nm, 2 * nm, 5 * nm)
-study.pbc(
-    x=True,
-    y=True,
-    z=False,
-    demag="truncated_images",
-    images=(4, 4, 0),
-)
-
-film = study.geometry(
-    fm.Box(size=(100 * nm, 40 * nm, 5 * nm), name="unit_cell"),
-    name="unit_cell",
-)
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.m = fm.texture.uniform(1.0, 0.0, 0.0)
-
-study.exchange()
+study.fdm(default_cell=(2 * nm, 2 * nm, 5 * nm))
+study.pbc(x=True, y=True, z=False, demag="truncated_images", images=(4, 4, 0))
 study.demag()
-study.solver(fix_dt=1.0e-13, g=2.115)
-study.stages.add_relax(
-    stage_id="periodic_equilibrium",
-    algorithm="llg_overdamped",
-    dt=1.0e-13,
-    tolA=1.0e-4,
-    max_steps=10_000,
-)
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
-## Control Room workflow
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `FdmPbc.axes` | `tuple[bool, bool, bool]` | required | 1 | iterates input, applies `bool(value)`, then requires length three | periodic flags | FDM CPU source-backed; GPU capability-gated; FEM separate contract | `pbc.axes` as `periodic` or `open` |
+| `FdmPbc.demag` | `str` | `open` | 1 | applies `strip().lower()`, then requires `open`, `truncated_images`, or `periodic_airbox_k0` | normalized requested demag policy | FDM CPU open/truncated source-backed; GPU capability-gated; FEM differs | `pbc.demag` |
+| `FdmPbc.image_counts` | `tuple[int, int, int] \| None` | `None` | 1 | applies `int(value)`, then requires length three and non-negative results; only `truncated_images` | finite image ranges; when omitted for active periodic truncated demag, resolves to 10 on periodic axes and 0 on open axes | FDM CPU source-backed; GPU capability-gated; FEM not applicable | `pbc.image_counts` |
 
-1. Set **Backend = FDM** and author the default/per-magnet cell dimensions.
-2. In the Study periodic-boundary section, enable the periodic axes and select the demag policy.
-3. For **truncated images**, enter non-negative image counts for all three axes. Use zero on open
-   axes unless a deliberately asymmetric finite environment is being studied.
-4. Apply the Study and inspect the resolved unit-cell size, cell counts, axis order, image policy,
-   precision and kernel fingerprint.
-5. Repeat the result with larger image counts and finer cells. Store both convergence sweeps.
+(fdm-periodic-grids-problem-ir)=
+## ProblemIR
 
-## Verification
+`StudyBuilder.pbc(...)` applies the setting to the study and constructs `FdmPbc`; `FdmPbc.to_ir()` emits axis strings, the normalized policy, and optional image counts. FDM lowering rejects `periodic_airbox_k0` rather than changing policy.
 
-Verify exact lattice tiling, seam continuity of local fields, axis-order preservation and kernel
-regeneration after every spacing/image edit. Sweep image counts until field and energy changes
-meet the study tolerance. Compare CPU and GPU only at identical precision, cell topology, image
-counts and normalization.
+(fdm-periodic-grids-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-## Mesh-convergence protocol
-
-A production result should include at least three discretizations. Refine only the parameter under
-study while holding geometry, material parameters, solver tolerances, initial state and output
-sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
+Requested intent preserves the coerced Boolean flags, normalized demagnetization policy, and integer counts, not necessarily the caller's original Python value types. Resolved execution validates the runtime boundary and periodic workspace. With active demagnetization, at least one periodic axis, and `truncated_images`, omitted `image_counts` first supplies requested counts `[10, 10, 10]`; resolution keeps 10 on each periodic axis and sets every open axis to 0. The resolved number of translated-image terms is
 
 ```{math}
-:label: eq-meshing-relative-change-fdm-periodic-grids
-\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
-\qquad \rho>1,
+N_{\mathrm{images}}=\prod_{\alpha\in\{x,y,z\}}(2n_\alpha+1),
 ```
 
-with a documented scale for observables that can cross zero. For dynamics, compare resonance
-frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
-compare field/energy and verify that moving the outer boundary does not change the result beyond the
-chosen tolerance.
+where resolved open-axis counts are zero. Resolution rejects more than 1,000,000 image terms. Validation errors cover non-iterable inputs, failed `bool()`/`int()` conversion, wrong post-coercion lengths, negative converted counts, invalid policy, image-budget overflow, or workspace-budget overflow. Unsupported combinations, including FDM `periodic_airbox_k0` and periodic demag without `truncated_images`, fail closed.
 
-## Diagnostics and failure semantics
+(fdm-periodic-grids-discrete-realization)=
+## Discrete realization
 
-- Image counts without `truncated_images` are invalid.
-- `periodic_airbox_k0` on an FDM lane is a planner error and must not fall back to open demag.
-- A noninteger cell count over a periodic length is a topology error.
-- Periodic geometry touching one seam but not its paired seam creates a discontinuous support.
-- Finite energy does not prove image convergence; report the image-count sweep.
+`resolve_demag_boundary` owns the resolved boundary policy, axis-specific image counts, and 1,000,000-term budget. `resolve_periodic_images` owns execution padding and workspace accounting: a periodic axis uses padding `N`, an open axis uses `2N`, and the estimate includes three real buffers plus twelve complex spectral buffers. A workspace estimate above 8 GiB is rejected before allocation. CPU `compute_periodic_newell_kernel_spectra` owns finite Newell image spectra, while the runner consumes and validates the resolved metadata.
 
-## Where this is implemented
+(fdm-periodic-grids-implementation-mapping)=
+## Implementation mapping
 
-| Responsibility | Repository source | Stable owner / symbol |
-| --- | --- | --- |
-| Python periodic policy | [`packages/fullmag-py/src/fullmag/model/problem.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/model/problem.py) | `FdmPbc` |
-| Stage-first facade | [`packages/fullmag-py/src/fullmag/world.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/world.py) | `StudyBuilder.pbc` |
-| CPU periodic spectra | [`crates/fullmag-engine/src/fdm/cpu/fft.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-engine/src/fdm/cpu/fft.rs) | `compute_periodic_newell_kernel_spectra` |
-| FDM shared execution types | [`crates/fullmag-engine/src/fdm/shared/types.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-engine/src/fdm/shared/types.rs) | `periodic policy types` |
-| Runner periodic lowering | [`crates/fullmag-runner/src/fdm/mod.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-runner/src/fdm/mod.rs) | `FDM PBC execution plan` |
+`StudyBuilder.pbc` applies the public setting; `FdmPbc` owns normalization, schema, and lowering; `resolve_demag_boundary` owns resolved counts and the image-term budget; `resolve_periodic_images` owns padding and workspace accounting; the runner validates the resolved metadata; and CPU FFT owns periodic spectra.
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+(fdm-periodic-grids-validation)=
+## Validation
 
-## Related documentation
+Sweep image counts at fixed grid and cell size at fixed images; record field, energy, padding, precision, and kernel identity. Confirm FDM plus `periodic_airbox_k0` rejects.
 
-- [Periodic demagnetization](../../demag-solvers/periodic-demag.md)
-- [FDM Cartesian grids](../fdm-grids.md)
+(fdm-periodic-grids-limitations)=
+## Limitations
 
-## References
+Finite images require convergence and are not an Ewald implementation. The default of 10 images per periodic axis is a resolution default, not evidence of convergence. GPU remains capability-gated.
 
-- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
+(fdm-periodic-grids-scientific-bibliography)=
+## Scientific bibliography
 
-- A. J. Newell, W. Williams and D. J. Dunlop, “A generalization of the demagnetizing tensor for nonuniform magnetization,” *J. Geophys. Res.* **98** (1993), 9551–9555, [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
-- A. Aharoni, “Demagnetizing factors for rectangular ferromagnetic prisms,” *J. Appl. Phys.* **83** (1998), 3432–3434, [doi:10.1063/1.367113](https://doi.org/10.1063/1.367113).
+- C. Abert, *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+- A. J. Newell, W. Williams and D. J. Dunlop, *J. Geophys. Res.* **98** (1993), 9551-9555, [doi:10.1029/93JB00694](https://doi.org/10.1029/93JB00694).
+
+(fdm-periodic-grids-source-code-index)=
 ## Source-code index
 
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
-
+| Source | Stable symbol | Evidence |
+| --- | --- | --- |
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | public `fdm(...)` and `pbc(...)` application routes |
+| `packages/fullmag-py/src/fullmag/model/problem.py` | `class FdmPbc` | policy validation and IR |
+| `crates/fullmag-ir/src/execution.rs` | `resolve_demag_boundary` | default/resolved image counts and image-term budget |
+| `crates/fullmag-ir/src/execution.rs` | `resolve_periodic_images` | periodic padding and workspace accounting |
+| `crates/fullmag-runner/src/fdm/mod.rs` | `resolve_fdm_demag_boundary_for_periodicity` | runtime policy resolution |
+| `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_periodic_newell_kernel_spectra` | CPU periodic spectra |

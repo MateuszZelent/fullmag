@@ -4,16 +4,224 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
     {
-      "id": "mesh_recipe",
-      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
-      "symbol": "class PerObjectMeshRecipe",
-      "responsibility": "Ferromagnet boundary-layer mesh recipe."
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
     }
-  ]
+  ],
+  "sources": [
+    {
+      "id": "authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Public object.mesh arguments and validation."
+    },
+    {
+      "id": "lowering",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_mesh_spec_to_metadata",
+      "responsibility": "Per-object ProblemIR metadata lowering."
+    },
+    {
+      "id": "workflow",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_collect_mesh_workflow_metadata",
+      "responsibility": "Requested mesh_options lowering."
+    },
+    {
+      "id": "field_application",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_apply_mesh_options",
+      "responsibility": "Selector resolution and field-plan application."
+    },
+    {
+      "id": "boundary_realization",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_add_boundary_layer_field",
+      "responsibility": "Gmsh boundary-layer status and realization."
+    },
+    {
+      "id": "status_report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_mesh_operation_statuses",
+      "responsibility": "Requested/resolved operation statuses."
+    },
+    {
+      "id": "domain_backend",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "realize_fem_domain_mesh_asset_from_components_with_report",
+      "responsibility": "FEM domain mesh realization and report."
+    },
+    {
+      "id": "fem_plan",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Consumes validated MeshIR and constructs the FEM CPU/GPU execution plan."
+    },
+    {
+      "id": "fem_execute",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "responsibility": "Production entry normalizes the FEM plan and routes to the configured native execution implementation."
+    },
+    {
+      "id": "fem_gpu_contract",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "responsibility": "Returns () and populates ExecutionProvenance from runtime observations; it is not a gate."
+    }
+  ],
+  "symbols": [
+    {
+      "id": "d0",
+      "latex": "d_0",
+      "meaning": "first requested layer thickness",
+      "si_unit": "m"
+    },
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "requested layer stretching ratio",
+      "si_unit": "1"
+    },
+    {
+      "id": "N",
+      "latex": "N",
+      "meaning": "requested layer count",
+      "si_unit": "1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-boundary-layers-contract",
+      "symbols": [
+        "d0",
+        "q",
+        "N"
+      ],
+      "sources": [
+        "authoring",
+        "lowering",
+        "workflow",
+        "field_application",
+        "boundary_realization",
+        "status_report",
+        "domain_backend"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "boundary_layer_count",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "coerced with int(...), then result must be >= 1; non-integral numeric values truncate toward zero",
+        "meaning": "requested layer count",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_count"
+      },
+      {
+        "python": "boundary_layer_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0 when supplied",
+        "meaning": "first-wall spacing passed as hwall_n and thickness",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_thickness"
+      },
+      {
+        "python": "boundary_layer_stretching",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0 when supplied",
+        "meaning": "successive-layer growth ratio",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_stretching"
+      },
+      {
+        "python": "boundary_layer_target_surface_tags",
+        "type": "Sequence[int] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive integer entity tags",
+        "meaning": "explicit target surfaces; their boundary curves are derived",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_target_surface_tags"
+      },
+      {
+        "python": "boundary_layer_target_curve_tags",
+        "type": "Sequence[int] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive integer entity tags",
+        "meaning": "explicit target curves",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_target_curve_tags"
+      },
+      {
+        "python": "boundary_layer_target_surface_selectors",
+        "type": "Sequence[Mapping[str, object]] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "each item must be a selector mapping",
+        "meaning": "semantic surface targets resolved at build time",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors"
+      },
+      {
+        "python": "boundary_layer_target_curve_selectors",
+        "type": "Sequence[Mapping[str, object]] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "each item must be a selector mapping",
+        "meaning": "semantic curve targets resolved at build time",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].boundary_layer_target_curve_selectors"
+      }
+    ]
+  },
+  "runtime_flow": {
+    "planner": {
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "role": "resolve and validate MeshIR into FemPlanIR"
+    },
+    "production_entry": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "role": "normalize the plan and route production execution"
+    },
+    "native_execution": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_native_fem",
+      "role": "configuration-selected native CPU/GPU implementation; source has cfg-specific definitions"
+    },
+    "provenance_population": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "role": "populate ExecutionProvenance only; returns (); not a validation or execution gate"
+    }
+  }
 }

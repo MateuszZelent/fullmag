@@ -1,19 +1,32 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/swept-hex.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "Current Control Room resolves sweptHex.enabled = false; no executable CPU swept-hex route is qualified."},
-    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "Current Control Room resolves sweptHex.enabled = false; no executable GPU swept-hex route is qualified."},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "swept_mesh",
-      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
-      "symbol": "class PerObjectMeshRecipe",
-      "responsibility": "Swept-hexahedral authoring vocabulary and explicit disabled capability contract."
-    }
-  ]
+  "document":{"path":"public_docs/site/numerical-methods/meshing/fem/ferromagnet/swept-hex.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[
+    {"solver":"FEM","device":"CPU","status":"unsupported","reason":"Current Control Room sets sweptHex.enabled to false and no swept-hex CPU route is qualified."},
+    {"solver":"FEM","device":"GPU","status":"unsupported","reason":"Current Control Room sets sweptHex.enabled to false and no swept-hex GPU route is qualified."},
+    {"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing."},
+    {"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing."}],
+  "sources":[
+    {"id":"controls","path":"packages/fullmag-py/src/fullmag/model/discretization.py","symbol":"class SweptMeshControls","responsibility":"Validates and serializes hex request vocabulary."},
+    {"id":"distribution","path":"packages/fullmag-py/src/fullmag/model/discretization.py","symbol":"class SweepDistribution","responsibility":"Owns layer-distribution defaults, validation, and lowering."},
+    {"id":"mesh_data","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py","symbol":"class MeshData","responsibility":"Owns canonical variable-arity CSR topology."},
+    {"id":"supported_elements","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py","symbol":"_MESHIO_SUPPORTED_ELEMENTS","responsibility":"Owns linear hexahedron arity eight."},
+    {"id":"volume_types","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py","symbol":"_MESHIO_VOLUME_TYPES","responsibility":"Owns imported hexahedron to canonical hex8 mapping."},
+    {"id":"generator","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py","symbol":"generate_swept_mesh","responsibility":"Owns fail-closed dispatch."},
+    {"id":"capability","path":"apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts","symbol":"resolveObjectMeshTopologyCapabilities","responsibility":"Reports swept hex as unsupported."},
+    {"id":"hex_test","path":"packages/fullmag-py/tests/test_mixed_element_meshing.py","symbol":"test_explicit_swept_hex_never_silently_realizes_prism","responsibility":"Tests no silent swept-hex fallback."}],
+  "symbols":[
+    {"id":"arity","latex":"$a(\\mathrm{hex8})$","meaning":"Linear-hexahedron node arity","si_unit":"$1$"},
+    {"id":"connectivity","latex":"$K_c$","meaning":"Local node-index sequence","si_unit":"$1$"},
+    {"id":"offset","latex":"$o_c$","meaning":"Cell start offset","si_unit":"$1$"},
+    {"id":"cell","latex":"$c$","meaning":"Volume-cell ordinal","si_unit":"$1$"}],
+  "equations":[{"id":"eq-swept-hex-arity","symbols":["arity","connectivity","offset"],"sources":["supported_elements","mesh_data"]}],
+  "public_api":{"parameters":[
+    {"python":"distribution","type":"SweepDistribution","default":"SweepDistribution()","si_unit":"$1$","validation":"instance of `SweepDistribution`","meaning":"Layer distribution","backend_support":"FEM unsupported; FDM N/A","problem_ir":"distribution"},
+    {"python":"sweep_direction","type":"Literal[\"auto\", \"x\", \"y\", \"z\"]","default":"\"auto\"","si_unit":"$1$","validation":"one of `auto`, `x`, `y`, `z`","meaning":"Requested axis","backend_support":"FEM unsupported; FDM N/A","problem_ir":"sweep_direction"},
+    {"python":"element_family","type":"Literal[\"prism\", \"hex\"]","default":"\"prism\"","si_unit":"$1$","validation":"one of `prism`, `hex`","meaning":"Requested family","backend_support":"FEM unsupported; FDM N/A","problem_ir":"element_family"},
+    {"python":"transition_policy","type":"Literal[\"pyramid_to_tetrahedra\", \"reject\"]","default":"\"reject\"","si_unit":"$1$","validation":"hex cannot use pyramid transition","meaning":"Transition","backend_support":"FEM unsupported; FDM N/A","problem_ir":"transition_policy"},
+    {"python":"exact_layer_count","type":"bool","default":"False","si_unit":"$1$","validation":"Boolean; needs uniform distribution","meaning":"Exact layers","backend_support":"FEM unsupported; FDM N/A","problem_ir":"exact_layer_count"},
+    {"python":"distribution.kind","type":"Literal[\"uniform\", \"arithmetic\", \"geometric\"]","default":"\"uniform\"","si_unit":"$1$","validation":"one of `uniform`, `arithmetic`, `geometric`","meaning":"Layer-spacing law","backend_support":"FEM unsupported; FDM N/A","problem_ir":"distribution.kind"},
+    {"python":"distribution.num_layers","type":"int","default":"1","si_unit":"$1$","validation":"bool rejected; integer at least 1","meaning":"Number of swept element layers","backend_support":"FEM unsupported; FDM N/A","problem_ir":"distribution.num_layers"},
+    {"python":"distribution.growth_rate","type":"float","default":"1.0","si_unit":"$1$","validation":"must be positive for arithmetic/geometric; ignored for uniform","meaning":"Nonuniform growth factor","backend_support":"FEM unsupported; FDM N/A","problem_ir":"distribution.growth_rate"}]}
 }

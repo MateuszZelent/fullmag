@@ -1,19 +1,46 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/fem/ferromagnet/mixed-elements.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "mixed_repair",
-      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
-      "symbol": "_repair_mixed_tetrahedra",
-      "responsibility": "Mixed-topology repair and quality handling."
-    }
-  ]
+  "document": {"path":"public_docs/site/numerical-methods/meshing/fem/ferromagnet/mixed-elements.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[
+    {"solver":"FEM","device":"CPU","status":"source-backed-capability-gated"},
+    {"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},
+    {"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM mesh topology."},
+    {"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM mesh topology."}],
+  "sources":[
+    {"id":"authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"thin_film","responsibility":"Public strict prismatic authoring and lowering."},
+    {"id":"recipe","path":"packages/fullmag-py/src/fullmag/model/discretization.py","symbol":"class PerObjectMeshRecipe","responsibility":"Validates and serializes the lowered mesh policy."},
+    {"id":"mesh_data","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py","symbol":"class MeshData","responsibility":"Owns canonical typed variable-arity CSR topology."},
+    {"id":"volume_types","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py","symbol":"_MESHIO_VOLUME_TYPES","responsibility":"Maps imported volume blocks to canonical families."},
+    {"id":"local_facets","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py","symbol":"_CELL_LOCAL_FACETS","responsibility":"Defines family-specific local facets."},
+    {"id":"mixed_test","path":"packages/fullmag-py/tests/test_mixed_element_meshing.py","symbol":"test_mesh_data_accepts_canonical_mixed_typed_csr","responsibility":"Tests typed mixed CSR and rejected compatibility views."}],
+  "symbols":[
+    {"id":"cell","latex":"$c$","meaning":"Volume-cell ordinal","si_unit":"$1$"},
+    {"id":"offset","latex":"$o_c$","meaning":"Start offset of cell $c$","si_unit":"$1$"},
+    {"id":"family","latex":"$t_c$","meaning":"Canonical cell family of cell $c$","si_unit":"$1$"},
+    {"id":"arity","latex":"$a(t_c)$","meaning":"Family node arity","si_unit":"$1$"},
+    {"id":"connectivity","latex":"$K_c$","meaning":"Local node-index sequence","si_unit":"$1$"}],
+  "equations":[{"id":"eq-mixed-elements-csr","symbols":["offset","family","arity","connectivity"],"sources":["mesh_data","local_facets"]}],
+  "public_api":{"parameters":[
+    {"python":"hmax","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive finite number or `auto`; overridden by `maximum_element_size`","meaning":"Compatibility maximum-size alias","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"maximum_element_size"},
+    {"python":"hmin","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; overridden by `minimum_element_size`; resolved minimum must not exceed numeric maximum","meaning":"Compatibility minimum-size alias","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"minimum_element_size"},
+    {"python":"maximum_element_size","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive finite number or `auto`; takes precedence over `hmax`","meaning":"In-plane size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"maximum_element_size"},
+    {"python":"minimum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; takes precedence over `hmin`; must not exceed numeric maximum","meaning":"Lower size bound","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"minimum_element_size"},
+    {"python":"curvature_factor","type":"float | None","default":"None","si_unit":"$1$","validation":"float-convertible; downstream recipe requires a positive value when set","meaning":"Curvature-refinement strength","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"curvature_factor"},
+    {"python":"narrow_region_resolution","type":"float | None","default":"None","si_unit":"$1$","validation":"float-convertible; downstream recipe requires a positive value when set","meaning":"Narrow-region refinement strength","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"narrow_region_resolution"},
+    {"python":"layers","type":"int","default":"1","si_unit":"$1$","validation":"bool rejected; integer at least 1","meaning":"Requested element-layer count","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"through_thickness_elements"},
+    {"python":"topology","type":"Literal[\"tetrahedral\", \"prismatic\"] | None","default":"None","si_unit":"$1$","validation":"one of `None`, `tetrahedral`, `prismatic`","meaning":"Thin-film topology","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"topology"},
+    {"python":"exact_layers","type":"bool | None","default":"None","si_unit":"$1$","validation":"Boolean; only valid with prismatic topology; strict prismatic rejects `False` outside extended mode","meaning":"Strict layer-count intent","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"exact_layer_count"},
+    {"python":"transition","type":"Literal[\"pyramid_to_tetrahedra\", \"reject\"] | None","default":"None","si_unit":"$1$","validation":"only valid with prismatic topology; prismatic resolves or requires `pyramid_to_tetrahedra`","meaning":"Shared-domain transition","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"transition_policy"},
+    {"python":"order","type":"int | None","default":"None","si_unit":"$1$","validation":"prismatic topology accepts only `None` or `1` and lowers to P1","meaning":"FEM polynomial order","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"order"},
+    {"python":"interface_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; used unless `surface_maximum_element_size` is set","meaning":"Interface size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_hmax"},
+    {"python":"surface_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; takes precedence over `interface_maximum_element_size`","meaning":"Surface alias for interface size","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_hmax"},
+    {"python":"interface_thickness","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; used unless `surface_thickness` is set","meaning":"Interface refinement-shell thickness","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_thickness"},
+    {"python":"surface_thickness","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; takes precedence over `interface_thickness`","meaning":"Surface alias for interface shell","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"interface_thickness"},
+    {"python":"transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; used unless surface alias is set","meaning":"Interface-to-core transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"transition_distance"},
+    {"python":"surface_transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; takes precedence over `transition_distance`","meaning":"Surface alias for transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"transition_distance"},
+    {"python":"edge_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; must be paired with `edge_thickness`","meaning":"Edge size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"edge_hmax"},
+    {"python":"edge_thickness","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; paired with `edge_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension","meaning":"Edge refinement-shell thickness","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"edge_thickness"},
+    {"python":"edge_transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the edge pair","meaning":"Edge-to-core transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"edge_transition_distance"},
+    {"python":"corner_maximum_element_size","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; paired with `corner_extent`; when edge size is set must not exceed `edge_maximum_element_size`","meaning":"Corner size ceiling","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"corner_hmax"},
+    {"python":"corner_extent","type":"float | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive; paired with `corner_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension","meaning":"Corner refinement extent","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"corner_extent"},
+    {"python":"corner_transition_distance","type":"float | str | None","default":"None","si_unit":"$\\mathrm{m}$","validation":"positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the corner pair","meaning":"Corner-to-core transition distance","backend_support":"FEM capability-gated; FDM N/A","problem_ir":"corner_transition_distance"}]}
 }

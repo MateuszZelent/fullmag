@@ -1,19 +1,29 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/assembly-and-conformity.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "occ_shared",
-      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py",
-      "symbol": "generate_shared_domain_mesh_via_occ",
-      "responsibility": "Conformal shared-domain OCC realization."
-    }
-  ]
+  "document":{"path":"public_docs/site/numerical-methods/meshing/fem/shared-domain/assembly-and-conformity.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[{"solver":"FEM","device":"CPU","status":"source-backed"},{"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},{"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."}],
+  "sources":[
+    {"id":"occ_shared","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py","symbol":"generate_shared_domain_mesh_via_occ","responsibility":"OCC fragment and shared extraction."},
+    {"id":"public_study","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"study","responsibility":"Public study entry point."},
+    {"id":"universe_authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class StudyUniverseHandle","responsibility":"Public universe authoring."},
+    {"id":"mesh_authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class GeometryMeshHandle","responsibility":"Public object-mesh authoring."},
+    {"id":"problem_lowering","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"_build_problem","responsibility":"Builder-state lowering."},
+    {"id":"problem_ir","path":"packages/fullmag-py/src/fullmag/model/problem.py","symbol":"class Problem","responsibility":"ProblemIR and geometry-asset serialization."},
+    {"id":"domain_realization","path":"packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py","symbol":"realize_fem_domain_mesh_asset_from_components_with_report","responsibility":"Shared-domain realization and report."},
+    {"id":"build_report","path":"packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py","symbol":"_build_shared_domain_build_report","responsibility":"Realized method and fallback provenance."},
+    {"id":"planner","path":"crates/fullmag-plan/src/lib.rs","symbol":"plan","responsibility":"ProblemIR planning and compatibility."},
+    {"id":"runtime","path":"crates/fullmag-runner/src/lib.rs","symbol":"run_planned_problem","responsibility":"Planned runtime dispatch; source evidence only here."}
+  ],
+  "symbols":[{"id":"Omega","latex":"\\Omega","meaning":"shared computational domain","si_unit":"\\mathrm{m^3}"},{"id":"Omega_a","latex":"\\Omega_a","meaning":"airbox volume","si_unit":"\\mathrm{m^3}"},{"id":"Omega_i","latex":"\\Omega_i","meaning":"magnetic component volume","si_unit":"\\mathrm{m^3}"}],
+  "equations":[{"id":"eq-assembly-fragment-contract","symbols":["Omega","Omega_a","Omega_i"],"sources":["occ_shared","domain_realization"]}],
+  "public_api":{"parameters":[
+    {"callable":"StudyUniverseHandle.__call__","parameter":"mode","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.mode","python":"study.universe(mode=...)","type":"str | None","default":"None","si_unit":"$1$","validation":"forwarded to StudyUniverseConfig; omitted retains current/default mode","meaning":"domain mode","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.mode"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.size","python":"study.universe(size=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"coerced with as_vector3; explicit dimensions must be positive when realized","meaning":"outer dimensions","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.size"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"center","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.center","python":"study.universe(center=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"coerced with as_vector3","meaning":"outer center","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.center"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"padding","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.padding","python":"study.universe(padding=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"coerced with as_vector3; domain validation governs signs","meaning":"directional padding","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.padding"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"cell_size","owner":"universe_authoring","lowering":"runtime_metadata.common_fdm_cell_size","python":"study.universe.mesh(cell_size=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"positive 3-vector; mutually exclusive with FEM controls","meaning":"structured-grid cell size branch","backend_support":"FDM only; not applicable to this FEM assembly page","problem_ir":"runtime_metadata.common_fdm_cell_size"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"hmax / maximum_element_size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_hmax","python":"study.universe.mesh(hmax=...) / study.universe.mesh(maximum_element_size=...)","type":"float | None","default":"None","si_unit":"m","validation":"positive; canonical maximum size wins over alias","meaning":"airbox coarse target","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_hmax"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"hmin / minimum_element_size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_hmin","python":"study.universe.mesh(hmin=...) / study.universe.mesh(minimum_element_size=...)","type":"float | None","default":"None","si_unit":"m","validation":"positive and no greater than numeric maximum; canonical minimum size wins over alias","meaning":"airbox lower clamp","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_hmin"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"growth_rate / maximum_element_growth_rate","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_growth_rate","python":"study.universe.mesh(growth_rate=...) / study.universe.mesh(maximum_element_growth_rate=...)","type":"float | None","default":"None","si_unit":"1","validation":"finite positive at most 2.5; canonical growth rate wins over alias","meaning":"airbox growth target","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_growth_rate"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"grading","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_grading","python":"study.universe.mesh(grading=...)","type":"str | None","default":"None","si_unit":"1","validation":"forwarded without vocabulary validation by this handle","meaning":"airbox grading request","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_grading"}
+  ]}
 }

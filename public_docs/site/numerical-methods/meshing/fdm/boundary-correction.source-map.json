@@ -4,16 +4,130 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FDM Cartesian-grid semantics."},
-    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FDM Cartesian-grid semantics."}
-  ],  "sources": [
     {
-      "id": "fdm_schema",
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM-only hint."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM-only hint."
+    }
+  ],
+  "sources": [
+    {
+      "id": "study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Public fdm(...) route which applies boundary settings to the current study."
+    },
+    {
+      "id": "schema",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FDM",
-      "responsibility": "FDM boundary-correction request and validation."
+      "responsibility": "FDM boundary field validation and lowering; not an implementation of the conceptual energy equation."
+    },
+    {
+      "id": "pass",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "fdm_boundary_params_passthrough_phi_floor_and_delta_min",
+      "responsibility": "Boundary parameter passthrough."
+    },
+    {
+      "id": "reject",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "fdm_boundary_correction_rejects_geometry_without_supported_sdf",
+      "responsibility": "Unsupported SDF rejection."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "energy",
+      "latex": "$E_h$",
+      "meaning": "discrete energy",
+      "si_unit": "J"
+    },
+    {
+      "id": "occupancy",
+      "latex": "$\\phi_i$",
+      "meaning": "magnetic cell occupancy",
+      "si_unit": "1"
+    },
+    {
+      "id": "volume",
+      "latex": "$V_\\mathrm{cell}$",
+      "meaning": "Cartesian cell volume",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "density",
+      "latex": "$w_i$",
+      "meaning": "discrete energy density",
+      "si_unit": "J m^-3"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fdm-boundary-energy",
+      "symbols": [
+        "energy",
+        "occupancy",
+        "volume",
+        "density"
+      ],
+      "sources": [
+        "schema",
+        "pass"
+      ],
+      "evidence_status": "conceptual_not_implementation_backed",
+      "claim_scope": "Explanatory occupancy quadrature only; the mapped sources validate and lower hints."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "boundary_correction",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`none`, `volume`, or `full`",
+        "meaning": "requested correction tier",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
+      },
+      {
+        "python": "boundary_phi_floor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "strictly in `(0, 1)`",
+        "meaning": "requested occupancy floor",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
+      },
+      {
+        "python": "boundary_delta_min",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "rejects values `< 0.0`; zero, positive values, and `NaN` pass",
+        "meaning": "requested length regularizer",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
+      }
+    ]
+  }
 }

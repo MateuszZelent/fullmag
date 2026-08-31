@@ -14,6 +14,147 @@ source_of_truth: "OCC shared assembly, typed facet adjacency, region/facet roles
 (public-docs-numerical-methods-meshing-fem-shared-domain-assembly-and-conformity)=
 # Shared-domain assembly and conformity
 
+(assembly-problem-statement)=
+## Problem statement
+
+The OCC route creates magnetic and air volumes, fragments them together, then extracts one shared-domain mesh with component and interface provenance.
+
+(assembly-governing-equations)=
+## Governing equations
+
+```{math}
+:label: eq-assembly-fragment-contract
+
+\Omega=\Omega_a\cup\bigcup_i\Omega_i.
+```
+
+(assembly-symbols-and-si-units)=
+## Symbols and SI units
+
+| Token | Meaning | SI unit |
+| --- | --- | --- |
+| $\Omega$ | shared computational domain | $\mathrm{m^3}$ |
+| $\Omega_a$ | airbox volume | $\mathrm{m^3}$ |
+| $\Omega_i$ | magnetic component volume | $\mathrm{m^3}$ |
+
+(assembly-assumptions-and-validity)=
+## Assumptions and validity
+
+The union states the OCC assembly domain. Conformity follows the source's `occ.fragment` realization, not merely the value of a compatibility policy.
+
+(assembly-python-api)=
+## Python API
+
+### Complete public signature and IR matrix
+
+The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| study.universe(mode=...) | str \| None | None | $1$ | forwarded to StudyUniverseConfig; omitted retains current/default mode | domain mode | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.mode |
+| study.universe(size=...) | Sequence[float] \| None | None | m | coerced with as_vector3; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.size |
+| study.universe(center=...) | Sequence[float] \| None | None | m | coerced with as_vector3 | outer center | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.center |
+| study.universe(padding=...) | Sequence[float] \| None | None | m | coerced with as_vector3; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.padding |
+| study.universe.mesh(cell_size=...) | Sequence[float] \| None | None | m | positive 3-vector; mutually exclusive with FEM controls | structured-grid cell size branch | FDM only; not applicable to this FEM assembly page | runtime_metadata.common_fdm_cell_size |
+| study.universe.mesh(hmax=...) / study.universe.mesh(maximum_element_size=...) | float \| None | None | m | positive; canonical maximum size wins over alias | airbox coarse target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmax |
+| study.universe.mesh(hmin=...) / study.universe.mesh(minimum_element_size=...) | float \| None | None | m | positive and no greater than numeric maximum; canonical minimum size wins over alias | airbox lower clamp | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmin |
+| study.universe.mesh(growth_rate=...) / study.universe.mesh(maximum_element_growth_rate=...) | float \| None | None | 1 | finite positive at most 2.5; canonical growth rate wins over alias | airbox growth target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_growth_rate |
+| study.universe.mesh(grading=...) | str \| None | None | 1 | forwarded without vocabulary validation by this handle | airbox grading request | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_grading |
+
+
+
+`generate_shared_domain_mesh_via_occ(geometries, hmax=..., order=1, airbox=..., options=None, object_regions=None)` is internal. Public authoring is split between `study.universe(mode, size, center, padding)` and separate `study.universe.mesh(...)`; `StudyUniverseHandle.__call__` has no `airbox` argument.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `study.universe.mode` | `str | None` | `None` | $1$ | forwarded to `StudyUniverseConfig` | domain mode | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.mode` |
+| `study.universe.size` | `Sequence[float] | None` | `None` | $\mathrm{m}$ | `as_vector3`; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.size` |
+| `study.universe.center` | `Sequence[float] | None` | `None` | $\mathrm{m}$ | `as_vector3` | outer center | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.center` |
+| `study.universe.padding` | `Sequence[float] | None` | `None` | $\mathrm{m}$ | `as_vector3`; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.padding` |
+| `study.universe.mesh.maximum_element_size` | `float | None` | `None` | $\mathrm{m}$ | positive; wins over `hmax` | airbox coarse target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmax` |
+| `study.universe.mesh.minimum_element_size` | `float | None` | `None` | $\mathrm{m}$ | positive and no greater than numeric maximum; wins over `hmin` | airbox lower clamp | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_hmin` |
+| `study.universe.mesh.maximum_element_growth_rate` | `float | None` | `None` | $1$ | finite positive at most `2.5`; wins over `growth_rate` | airbox growth target | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_growth_rate` |
+| `study.universe.mesh.grading` | `str | None` | `None` | $1$ | forwarded without vocabulary validation by this handle | grading request | FEM CPU/GPU capability-gated | `runtime_metadata.study_universe.airbox_grading` |
+
+```python
+# %%
+import fullmag as fm
+
+# %%
+nm = 1.0e-9
+study = fm.study("assembly_contract")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(
+    mode="manual",
+    size=(320 * nm, 200 * nm, 120 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(maximum_element_size=40 * nm, minimum_element_size=5 * nm, maximum_element_growth_rate=1.4)
+film = study.geometry(fm.Box(size=(100 * nm, 50 * nm, 5 * nm), name="film"), name="film")
+film.mesh(maximum_element_size=8 * nm, minimum_element_size=4 * nm)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
+```
+
+(assembly-problem-ir)=
+## ProblemIR
+
+Geometry, universe airbox and mesh policy lower as requested intent. Component volume tags, interface surface tags and final cell blocks are realized artifacts produced after OCC fragmentation.
+
+(assembly-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+**Requested intent** contains geometries, airbox and regions. **Resolved execution** contains OCC tags and extracted topology. **Validation errors** include empty geometry, missing airbox, invalid region identity/owner and non-contained conformal region. **Unsupported combinations** fail before extraction; they are not represented as conformal success.
+
+(assembly-discrete-realization)=
+## Discrete realization
+
+The builder creates an FEM mesh artifact for CPU or capability-gated GPU solver lanes. FDM CPU/GPU are not applicable.
+
+(assembly-implementation-mapping)=
+## Implementation mapping
+
+`StudyUniverseHandle` and `GeometryMeshHandle` own authored intent; `_build_problem` and `Problem.to_ir` lower metadata and assets; `generate_shared_domain_mesh_via_occ` owns OCC fragmentation; the domain asset pipeline records build provenance; planner/runtime consume the resulting topology under separate compatibility and execution gates.
+
+(assembly-validation)=
+## Validation
+
+Inspect final region/interface tags, non-empty volumes and conformity diagnostics. Runtime solver/device execution remains unverified by source inspection.
+
+(assembly-limitations)=
+## Limitations
+
+The source map documents OCC assembly, not a general nonconforming coupling path.
+
+(assembly-scientific-bibliography)=
+## Scientific bibliography
+
+Geuzaine and Remacle, *IJNME* 79 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+
+(assembly-source-code-index)=
+## Contract source-code index
+
+| ID | Path | Symbol | Responsibility | Evidence |
+| --- | --- | --- | --- | --- |
+| occ_shared | packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py | generate_shared_domain_mesh_via_occ | OCC fragment and shared extraction | source-inspected |
+| public_study | packages/fullmag-py/src/fullmag/world.py | study | public study entry point | source-inspected |
+| universe_authoring | packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | public universe authoring | source-inspected |
+| mesh_authoring | packages/fullmag-py/src/fullmag/world.py | class GeometryMeshHandle | public object-mesh authoring | source-inspected |
+| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
+| problem_ir | packages/fullmag-py/src/fullmag/model/problem.py | class Problem | ProblemIR and geometry-asset serialization | source-inspected |
+| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | shared-domain realization and report | source-inspected |
+| build_report | packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py | _build_shared_domain_build_report | realized method/fallback provenance | source-inspected |
+| planner | crates/fullmag-plan/src/lib.rs | plan | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
+| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | planned runtime dispatch | source-inspected, device-unverified |
+
 **Last changes: 12:31 24.08.2026**
 
 A conforming shared mesh represents each physical interface once, with common facet nodes referenced by adjacent regions. This is the default contract for coupled FEM operators in Fullmag.
@@ -150,6 +291,7 @@ study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=20_000,
 )

@@ -4,3 +4,4 @@ linkify-it-py>=2.0,<3
 sphinx_clarity_theme @ https://files.pythonhosted.org/packages/a0/d3/3c44e95b7eb8bbecb2b2bd411f0643ce410671d0101ff79b2e3352c111e3/sphinx_clarity_theme-2.1.0-py3-none-any.whl#sha256=66a946615f0a7366b21956028ea5fdd5991c6c7ae7c9920c0d7f8bfc9b13fb9c
 sphinx-design>=0.6,<1
 sphinx-copybutton>=0.5,<1
+tzdata>=2024.1; sys_platform == "win32"

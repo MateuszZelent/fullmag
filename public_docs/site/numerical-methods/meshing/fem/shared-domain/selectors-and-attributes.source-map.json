@@ -1,19 +1,31 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/selectors-and-attributes.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "selectors",
-      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py",
-      "symbol": "resolve_entity_selectors",
-      "responsibility": "Semantic selector resolution and markers."
-    }
-  ]
+  "document":{"path":"public_docs/site/numerical-methods/meshing/fem/shared-domain/selectors-and-attributes.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[{"solver":"FEM","device":"CPU","status":"source-backed"},{"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},{"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."}],
+  "sources":[
+    {"id":"selectors","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_selectors.py","symbol":"resolve_entity_selectors","responsibility":"Post-realization semantic selection."},
+    {"id":"public_study","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"study","responsibility":"Public study entry point."},
+    {"id":"mesh_authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class GeometryMeshHandle","responsibility":"Selector-bearing mesh authoring."},
+    {"id":"nearest_surface","path":"packages/fullmag-py/src/fullmag/meshing/mesh_controls.py","symbol":"nearest_surface_to_point","responsibility":"Public surface-selector constructor."},
+    {"id":"nearest_curve","path":"packages/fullmag-py/src/fullmag/meshing/mesh_controls.py","symbol":"nearest_curve_to_point","responsibility":"Public curve-selector constructor."},
+    {"id":"selector_point_coercion","path":"packages/fullmag-py/src/fullmag/meshing/mesh_controls.py","symbol":"_point3","responsibility":"Per-component float coercion and three-component length check."},
+    {"id":"selector_geometry_coercion","path":"packages/fullmag-py/src/fullmag/meshing/mesh_controls.py","symbol":"_geometry_name","responsibility":"String coercion, trimming and non-empty geometry validation."},
+    {"id":"selector_count_coercion","path":"packages/fullmag-py/src/fullmag/meshing/mesh_controls.py","symbol":"_selector_count","responsibility":"Integer coercion and minimum-count validation."},
+    {"id":"problem_lowering","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"_build_problem","responsibility":"Builder-state lowering."},
+    {"id":"problem_ir","path":"packages/fullmag-py/src/fullmag/model/problem.py","symbol":"class Problem","responsibility":"ProblemIR mesh-workflow serialization."},
+    {"id":"field_stack","path":"packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py","symbol":"_build_field_stack","responsibility":"Selector-bearing field composition."},
+    {"id":"domain_realization","path":"packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py","symbol":"realize_fem_domain_mesh_asset_from_components_with_report","responsibility":"Shared-domain realization and report."},
+    {"id":"planner","path":"crates/fullmag-plan/src/lib.rs","symbol":"plan","responsibility":"ProblemIR planning and compatibility."},
+    {"id":"runtime","path":"crates/fullmag-runner/src/lib.rs","symbol":"run_planned_problem","responsibility":"Planned runtime dispatch; source evidence only here."}
+  ],
+  "symbols":[{"id":"T","latex":"T","meaning":"resolved unique entity-tag set","si_unit":"1"},{"id":"T_k","latex":"T_k","meaning":"tags selected by descriptor $k$","si_unit":"1"}],
+  "equations":[{"id":"eq-selector-contract","symbols":["T","T_k"],"sources":["selectors","nearest_surface","nearest_curve"]}],
+  "public_api":{"parameters":[
+    {"callable":"nearest_surface_to_point / nearest_curve_to_point","parameter":"point","owner":"selector_point_coercion","lowering":"runtime_metadata.mesh_workflow.per_geometry[].boundary_layer_target_*_selectors[].point","python":"point","type":"Sequence[object]","default":"required","si_unit":"$m$","validation":"each component is converted with float(); resulting list must have length three; no finite check","meaning":"nearest-query point","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh.selectors[].point"},
+    {"callable":"nearest_surface_to_point / nearest_curve_to_point","parameter":"geometry","owner":"selector_geometry_coercion","lowering":"runtime_metadata.mesh_workflow selector descriptor","python":"geometry","type":"object | None","default":"None","si_unit":"$1$","validation":"when supplied, exactly str(value).strip(); empty result raises ValueError","meaning":"restrict candidate component","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh.selectors[].geometry"},
+    {"callable":"nearest_surface_to_point / nearest_curve_to_point","parameter":"count","owner":"selector_count_coercion","lowering":"runtime_metadata.mesh_workflow selector descriptor","python":"count","type":"object","default":"1","si_unit":"$1$","validation":"exactly int(value); result must be at least 1 or ValueError","meaning":"number passed to closest-entity query","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh.selectors[].count"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"boundary_layer_count","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].boundary_layer_count","python":"boundary_layer_count","type":"int | None","default":"None","si_unit":"layers","validation":"int() coercion and at least 1","meaning":"boundary-layer count receiving the selector","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].boundary_layer_count"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"boundary_layer_thickness","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].boundary_layer_thickness","python":"boundary_layer_thickness","type":"float | None","default":"None","si_unit":"$m$","validation":"positive","meaning":"boundary-layer thickness receiving the selector","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].boundary_layer_thickness"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"boundary_layer_stretching","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].boundary_layer_stretching","python":"boundary_layer_stretching","type":"float | None","default":"None","si_unit":"1","validation":"positive","meaning":"boundary-layer growth receiving the selector","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].boundary_layer_stretching"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"boundary_layer_target_surface_selectors","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors","python":"boundary_layer_target_surface_selectors","type":"Sequence[Mapping] | None","default":"None","si_unit":"1","validation":"normalized by _normalize_selector_list; resolved after mesh realization","meaning":"attach semantic surface selector to the policy","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].boundary_layer_target_surface_selectors"}
+  ]}
 }

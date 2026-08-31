@@ -4,60 +4,670 @@
     "reviewed_revision": "88c7160080bc1e8519950df283d2dd02087cc3da"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FDM Cartesian grids are not FEM meshes."},
-    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FDM Cartesian grids are not FEM meshes."}
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM Cartesian grids are not FEM meshes."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM Cartesian grids are not FEM meshes."
+    }
   ],
   "equations": [
-    {"id": "eq-numerical-fdm-grid-centre", "symbols": ["x", "x0", "h"], "sources": ["grid"]},
-    {"id": "eq-numerical-fdm-grid-volume", "symbols": ["Vcell", "h", "Nxyz", "N"], "sources": ["grid"]},
-    {"id": "eq-numerical-fdm-grid-binary-volume", "symbols": ["Vmh", "Vcell", "chi"], "sources": ["fdm"]},
-    {"id": "eq-numerical-fdm-grid-fractional-volume", "symbols": ["Vmh", "Vcell", "phi"], "sources": ["fdm"]},
-    {"id": "eq-numerical-fdm-grid-per-magnet", "symbols": ["Gr", "x0", "Nxyz", "h", "chi"], "sources": ["grid", "fdm"]},
-    {"id": "eq-numerical-fdm-grid-common-transfer", "symbols": ["Mc", "Mr", "Hr", "P", "R"], "sources": ["demag_policy"]},
-    {"id": "eq-numerical-fdm-grid-central-first", "symbols": ["u", "h"], "sources": ["interaction_owned"]},
-    {"id": "eq-numerical-fdm-grid-central-second", "symbols": ["u", "h"], "sources": ["interaction_owned"]}
+    {
+      "id": "eq-numerical-fdm-grid-centre",
+      "symbols": [
+        "x",
+        "x0",
+        "h"
+      ],
+      "sources": [
+        "cell_centres"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-volume",
+      "symbols": [
+        "Vcell",
+        "h",
+        "Nxyz",
+        "N"
+      ],
+      "sources": [
+        "resolved_plan"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-binary-volume",
+      "symbols": [
+        "Vmh",
+        "Vcell",
+        "chi"
+      ],
+      "sources": [
+        "resolved_plan"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-fractional-volume",
+      "symbols": [
+        "Vmh",
+        "Vcell",
+        "phi"
+      ],
+      "sources": [
+        "boundary_geometry"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-per-magnet",
+      "symbols": [
+        "Gr",
+        "x0",
+        "Nxyz",
+        "h",
+        "chi"
+      ],
+      "sources": [
+        "multilayer_plan",
+        "planner"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-common-transfer",
+      "symbols": [
+        "Mc",
+        "Mr",
+        "Hc",
+        "Hr",
+        "P",
+        "R",
+        "F",
+        "Nrs",
+        "r",
+        "s"
+      ],
+      "sources": [
+        "multilayer_runtime",
+        "pair_builder",
+        "pair_catalog",
+        "shifted_pair_runner",
+        "shifted_pair_kernel",
+        "shifted_pair_math"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-central-first",
+      "symbols": [
+        "u",
+        "h"
+      ],
+      "sources": [
+        "cuda_dmi"
+      ]
+    },
+    {
+      "id": "eq-numerical-fdm-grid-central-second",
+      "symbols": [
+        "u",
+        "h"
+      ],
+      "sources": [
+        "cuda_exchange"
+      ]
+    }
   ],
   "symbols": [
-    {"id": "x", "latex": "$\\mathbf x_{ijk}$", "meaning": "cell centre", "si_unit": "$\\mathrm{m}$"},
-    {"id": "x0", "latex": "$\\mathbf x_0$", "meaning": "cell-boundary origin", "si_unit": "$\\mathrm{m}$"},
-    {"id": "h", "latex": "$h_x,h_y,h_z$", "meaning": "native cell spacings", "si_unit": "$\\mathrm{m}$"},
-    {"id": "Vcell", "latex": "$V_{\\mathrm{cell}}$", "meaning": "cell volume", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Vmh", "latex": "$V_{m,h}$", "meaning": "discrete magnetic volume", "si_unit": "$\\mathrm{m^3}$"},
-    {"id": "Nxyz", "latex": "$N_x,N_y,N_z$", "meaning": "cell counts", "si_unit": "$1$"},
-    {"id": "N", "latex": "$N$", "meaning": "total rectangular allocation", "si_unit": "$1$"},
-    {"id": "chi", "latex": "$\\chi_{ijk}$", "meaning": "binary active/material mask", "si_unit": "$1$"},
-    {"id": "phi", "latex": "$\\phi_{ijk}$", "meaning": "magnetic volume fraction", "si_unit": "$1$"},
-    {"id": "Gr", "latex": "$\\mathcal G_r$", "meaning": "native grid owned by magnet r", "si_unit": "$1$"},
-    {"id": "Mc", "latex": "$\\mathbf M_c$", "meaning": "magnetization represented on common convolution grid", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Mr", "latex": "$\\mathbf M_r$", "meaning": "magnetization on native grid r", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "Hr", "latex": "$\\mathbf H_r$", "meaning": "field restricted to native grid r", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "P", "latex": "$\\mathcal P_{r\\to c}$", "meaning": "native-to-common transfer", "si_unit": "implementation-dependent"},
-    {"id": "R", "latex": "$\\mathcal R_{c\\to r}$", "meaning": "common-to-native transfer", "si_unit": "implementation-dependent"},
-    {"id": "u", "latex": "$u$", "meaning": "generic grid scalar component", "si_unit": "quantity-dependent"}
+    {
+      "id": "x",
+      "latex": "$\\mathbf x_{ijk}$",
+      "meaning": "cell centre",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "x0",
+      "latex": "$\\mathbf x_0$",
+      "meaning": "cell-boundary origin",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "h",
+      "latex": "$h_x,h_y,h_z$",
+      "meaning": "native cell spacings",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Vcell",
+      "latex": "$V_{\\mathrm{cell}}$",
+      "meaning": "cell volume",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "Vmh",
+      "latex": "$V_{m,h}$",
+      "meaning": "discrete magnetic volume",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "Nxyz",
+      "latex": "$N_x,N_y,N_z$",
+      "meaning": "cell counts",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "N",
+      "latex": "$N$",
+      "meaning": "total rectangular allocation",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "chi",
+      "latex": "$\\chi_{ijk}$",
+      "meaning": "binary active/material mask",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "phi",
+      "latex": "$\\phi_{ijk}$",
+      "meaning": "magnetic volume fraction",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Gr",
+      "latex": "$\\mathcal G_r$",
+      "meaning": "native grid owned by magnet r",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Mc",
+      "latex": "$\\widehat{\\mathbf M}_{c,s}$",
+      "meaning": "source-layer magnetization spectrum on the common transform grid",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Mr",
+      "latex": "$\\mathbf M_s$",
+      "meaning": "magnetization on native source grid s",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Hc",
+      "latex": "$\\widehat{\\mathbf H}_{c,r}$",
+      "meaning": "accumulated target-layer field spectrum on the common transform grid",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Hr",
+      "latex": "$\\mathbf H_r$",
+      "meaning": "field restricted to native target grid r",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "P",
+      "latex": "$\\mathcal P_s$",
+      "meaning": "source push and insertion into its common transform layout",
+      "si_unit": "implementation-dependent"
+    },
+    {
+      "id": "R",
+      "latex": "$\\mathcal R_r$",
+      "meaning": "target crop and pull to its native grid",
+      "si_unit": "implementation-dependent"
+    },
+    {
+      "id": "F",
+      "latex": "$\\mathcal F_c$",
+      "meaning": "common-layout discrete Fourier transform",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Nrs",
+      "latex": "$\\widehat{\\mathbf N}_{rs}$",
+      "meaning": "FFT-domain demag tensor for ordered target/source pair $(r,s)$",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "r",
+      "latex": "$r$",
+      "meaning": "target-layer index",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "s",
+      "latex": "$s$",
+      "meaning": "source-layer index",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "u",
+      "latex": "$u$",
+      "meaning": "generic grid scalar component",
+      "si_unit": "quantity-dependent"
+    }
   ],
   "sources": [
-    {"id": "grid", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMGrid", "responsibility": "Per-magnet native cell spacing and serialization."},
-    {"id": "fdm", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDM", "responsibility": "Default/per-magnet grids and boundary-correction request."},
-    {"id": "demag_policy", "path": "packages/fullmag-py/src/fullmag/model/discretization.py", "symbol": "class FDMDemag", "responsibility": "Single-grid and multilayer common-grid policy."},
-    {"id": "newell", "path": "crates/fullmag-fdm-demag/src/newell.rs", "symbol": "compute_newell_kernels", "responsibility": "Cell-geometry-dependent Newell demagnetization tensor."},
-    {"id": "fft", "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs", "symbol": "FftWorkspace", "responsibility": "Open/periodic tensor spectra and grid-dependent cache objects."},
-    {"id": "interaction_owned", "path": "public_docs/site/physics/interactions/index.md", "symbol": "DOC-ANCHOR:public-docs-physics-interactions-root", "evidence_status": "planned_contract", "responsibility": "Exact local stencils and boundary equations are interaction-owned."}
+    {
+      "id": "grid",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMGrid",
+      "responsibility": "Per-magnet native spacing, validation, and serialization."
+    },
+    {
+      "id": "fdm",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "Default/per-magnet grids, boundary request, and ProblemIR lowering."
+    },
+    {
+      "id": "demag_policy",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMDemag",
+      "responsibility": "Common-grid policy, FFT request, and validation."
+    },
+    {
+      "id": "body_authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Canonical per-body cell_size authoring."
+    },
+    {
+      "id": "default_authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyObjectsMeshDefaultsHandle",
+      "responsibility": "Canonical default body cell_size authoring."
+    },
+    {
+      "id": "universe_authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Canonical common convolution cell_size authoring."
+    },
+    {
+      "id": "round_trip",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_export_fdm",
+      "responsibility": "Scene/script export of FDM authoring state, including explain."
+    },
+    {
+      "id": "problem_ir",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FdmHintsIR",
+      "responsibility": "ProblemIR grid-hint wire schema."
+    },
+    {
+      "id": "demag_ir",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FdmDemagHintsIR",
+      "responsibility": "ProblemIR demag schema and fail-closed validation."
+    },
+    {
+      "id": "planner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "Native/common grid, transfer, and requested/resolved policy planning."
+    },
+    {
+      "id": "cell_centres",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "resolved_fdm_cell_centers",
+      "responsibility": "Actual resolved cell-centre coordinate evaluation."
+    },
+    {
+      "id": "resolved_plan",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FdmPlanIR",
+      "evidence_status": "documentary_definition",
+      "responsibility": "Resolved shape, spacing, origin, and masks from which cell and magnetic volumes are documentary derived quantities."
+    },
+    {
+      "id": "multilayer_plan",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FdmMultilayerPlanIR",
+      "responsibility": "Resolved per-layer native/common grids and transfer descriptors."
+    },
+    {
+      "id": "boundary_geometry",
+      "path": "crates/fullmag-plan/src/boundary_geometry.rs",
+      "symbol": "compute_boundary_geometry",
+      "responsibility": "SDF sub-sampled volume fractions and boundary geometry."
+    },
+    {
+      "id": "pair_builder",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "build_kernel_catalog_incrementally",
+      "responsibility": "Materializes unique pair tensors and preserves ordered source/target bindings."
+    },
+    {
+      "id": "pair_catalog",
+      "path": "crates/fullmag-fdm-demag/src/descriptors.rs",
+      "symbol": "KernelCatalogSpec",
+      "responsibility": "Canonical ordered pair catalog specification and reusable kernel keys."
+    },
+    {
+      "id": "multilayer_runtime",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "compute_demag_fields_checked",
+      "responsibility": "Separate source FFTs, ordered pair accumulation, and target inverse/crop/pull."
+    },
+    {
+      "id": "cuda_dmi",
+      "path": "backends/fdm/gpu/cuda/interactions/multilayer_dmi.cu",
+      "symbol": "multilayer_dmi_field_kernel",
+      "responsibility": "Implemented centred first derivatives with active-neighbour and DMI boundary handling."
+    },
+    {
+      "id": "cuda_exchange",
+      "path": "backends/fdm/gpu/cuda/interactions/exchange_fp64.cu",
+      "symbol": "exchange_field_fp64_kernel",
+      "responsibility": "Implemented centred second derivatives with region, active-mask, and PBC handling."
+    },
+    {
+      "id": "newell",
+      "path": "crates/fullmag-fdm-demag/src/newell.rs",
+      "symbol": "compute_newell_kernels",
+      "responsibility": "Cell-geometry-dependent Newell demagnetization tensor."
+    },
+    {
+      "id": "fft",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "FftWorkspace",
+      "responsibility": "Tensor spectra and grid-dependent cache objects."
+    },
+    {
+      "id": "python_contract_tests",
+      "path": "packages/fullmag-py/tests/test_fdm_multilayer_contract.py",
+      "symbol": "test_mesh_cell_size_lowers_per_object_and_common_domain",
+      "responsibility": "Canonical Python authoring to ProblemIR lowering contract."
+    },
+    {
+      "id": "ir_contract_tests",
+      "path": "crates/fullmag-ir/tests/ir_tests.rs",
+      "symbol": "fdm_demag_hints_round_trip_preserves_known_wire_values",
+      "responsibility": "ProblemIR round-trip contract for known demag fields."
+    },
+    {
+      "id": "shifted_pair_runner",
+      "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs",
+      "symbol": "build_multilayer_demag_runtime",
+      "responsibility": "Active CPU runner call site deriving ordered source/destination pair geometry."
+    },
+    {
+      "id": "shifted_pair_kernel",
+      "path": "crates/fullmag-fdm-demag/src/shifted_kernel.rs",
+      "symbol": "compute_shifted_kernel_pair",
+      "responsibility": "Checked shifted source/destination pair-kernel entry point."
+    },
+    {
+      "id": "shifted_pair_math",
+      "path": "crates/fullmag-fdm-demag/src/newell.rs",
+      "symbol": "try_compute_newell_kernels_shifted_pair",
+      "responsibility": "Unequal and shifted source/destination Newell tensor mathematics."
+    },
+    {
+      "id": "fft_plan_request",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_fft",
+      "responsibility": "Planner-side FFT compatibility validation and requested backend recording."
+    },
+    {
+      "id": "fft_plan_ir",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "FdmFftPlanIR",
+      "responsibility": "FFT plan IR containing only the requested backend."
+    },
+    {
+      "id": "cpu_fft_runtime",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference/fft_backend.rs",
+      "symbol": "resolve_cpu_fft_execution_for_demag",
+      "responsibility": "CPU runtime FFT resolution and execution receipt."
+    },
+    {
+      "id": "cuda_fft_device_runtime",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs",
+      "symbol": "device_resident_multilayer_provenance",
+      "responsibility": "CUDA device-resident cuFFT execution receipt."
+    },
+    {
+      "id": "cuda_fft_assisted_runtime",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/multilayer.rs",
+      "symbol": "assisted_multilayer_provenance",
+      "responsibility": "CUDA-assisted RustFFT execution receipt."
+    },
+    {
+      "id": "fft_execution_receipt",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "FdmFftExecutionProvenance",
+      "responsibility": "Runtime FFT requested, resolved, and executed receipt schema."
+    },
+    {
+      "id": "scene_boundary_number",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_fdm_number",
+      "responsibility": "Scene/script finite-number validation for boundary controls."
+    },
+    {
+      "id": "single_grid_boundary_forward",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "Single-grid planner forwarding boundary_delta_min."
+    }
   ],
   "public_api": {
     "parameters": [
-      {"python": "FDMGrid.cell", "type": "tuple[float,float,float]", "default": "required", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "per-magnet native spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`fdm.per_magnet.<name>.cell`"},
-      {"python": "FDM.default_cell", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "exactly three finite positive values", "meaning": "default native spacing", "backend_support": "FDM CPU/GPU", "problem_ir": "`fdm.default_cell` and compatibility `fdm.cell`"},
-      {"python": "FDM.per_magnet", "type": "dict[str,FDMGrid] | None", "default": "None", "si_unit": "$1$", "validation": "nonempty names and FDMGrid values", "meaning": "object-owned native grids", "backend_support": "FDM CPU/GPU capability-gated", "problem_ir": "`fdm.per_magnet`"},
-      {"python": "FDM.boundary_correction", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "none, volume, or full", "meaning": "requested boundary correction", "backend_support": "interaction/device gated", "problem_ir": "`fdm.boundary_correction`"},
-      {"python": "FDM.boundary_phi_floor", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "strictly in (0,1)", "meaning": "minimum boundary volume fraction", "backend_support": "boundary-correction gated", "problem_ir": "`fdm.boundary_phi_floor`"},
-      {"python": "FDM.boundary_delta_min", "type": "float | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "nonnegative", "meaning": "minimum geometric distance for full correction", "backend_support": "boundary-correction gated", "problem_ir": "`fdm.boundary_delta_min`"},
-      {"python": "FDMDemag.strategy", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "auto, single_grid, or multilayer_convolution", "meaning": "nonlocal grid strategy", "backend_support": "FDM", "problem_ir": "`fdm.demag.strategy`"},
-      {"python": "FDMDemag.mode", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "auto, two_d_stack, or three_d", "meaning": "multilayer common-grid dimensionality", "backend_support": "FDM", "problem_ir": "`fdm.demag.mode`"},
-      {"python": "FDMDemag.common_cells", "type": "tuple[int,int,int] | None", "default": "None", "si_unit": "$1$", "validation": "positive integer triple; incompatible with two_d_stack", "meaning": "explicit 3D common-grid dimensions", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cells`"},
-      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int,int] | None", "default": "None", "si_unit": "$1$", "validation": "positive integer pair; auto/two_d_stack only", "meaning": "explicit common in-plane dimensions", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cells_xy`"},
-      {"python": "FDMDemag.common_cell_size", "type": "tuple[float,float,float] | None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive triple; mutually exclusive with explicit counts", "meaning": "requested common-grid spacing", "backend_support": "FDM multilayer", "problem_ir": "`fdm.demag.common_cell_size`"}
+      {
+        "python": "FDMGrid.cell",
+        "type": "tuple[float,float,float]",
+        "default": "required",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "exactly three finite positive values",
+        "meaning": "per-magnet native spacing",
+        "backend_support": "FDM CPU; GPU capability-gated",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet.<name>.cell`"
+      },
+      {
+        "python": "FDM.cell",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "legacy input is exclusive with default_cell; three finite positive values when set",
+        "meaning": "legacy constructor input and read-only alias of default_cell",
+        "backend_support": "FDM CPU/GPU compatibility surface",
+        "problem_ir": "both `.fdm.cell` and `.fdm.default_cell`"
+      },
+      {
+        "python": "FDM.default_cell",
+        "type": "tuple[float,float,float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "exactly three finite positive values; default_cell or per_magnet is required",
+        "meaning": "default native spacing",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "both `.fdm.default_cell` and compatibility `.fdm.cell`"
+      },
+      {
+        "python": "FDM.per_magnet",
+        "type": "dict[str,FDMGrid] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "nonblank string keys and FDMGrid values; default_cell or per_magnet is required",
+        "meaning": "object-owned native grids",
+        "backend_support": "FDM CPU; multi-body GPU capability-gated",
+        "problem_ir": "`.fdm.per_magnet`"
+      },
+      {
+        "python": "FDM.demag",
+        "type": "FDMDemag | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "expected FDMDemag when set; FDM has no explicit runtime isinstance check",
+        "meaning": "nested demag authoring policy",
+        "backend_support": "FDM",
+        "problem_ir": "`.fdm.demag`, omitted for None"
+      },
+      {
+        "python": "FDM.boundary_correction",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "none, volume, or full",
+        "meaning": "requested boundary correction",
+        "backend_support": "interaction/device gated; multilayer accepts None or none",
+        "problem_ir": "`.fdm.boundary_correction`, omitted for None"
+      },
+      {
+        "python": "FDM.boundary_phi_floor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "strictly in (0,1)",
+        "meaning": "requested minimum boundary volume fraction",
+        "backend_support": "boundary-correction gated; current multilayer unsupported",
+        "problem_ir": "`.fdm.boundary_phi_floor`, omitted for None"
+      },
+      {
+        "python": "FDM.boundary_delta_min",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Direct FDM rejects only values < 0: NaN and +Inf pass; Scene/script requires a finite number; FdmHintsIR does not revalidate; the single-grid planner forwards the value",
+        "meaning": "requested minimum geometric distance",
+        "backend_support": "boundary-correction gated; current multilayer unsupported",
+        "problem_ir": "`.fdm.boundary_delta_min`, omitted for None"
+      },
+      {
+        "python": "FDM.projection_policy",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "None or unit_sphere",
+        "meaning": "projected-RK state constraint request",
+        "backend_support": "FDM time-integrator policy",
+        "problem_ir": "`.fdm.projection_policy`, omitted for None"
+      },
+      {
+        "python": "FDMDemag.strategy",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "auto, single_grid, or multilayer_convolution",
+        "meaning": "nonlocal grid strategy",
+        "backend_support": "FDM; multi-body single_grid unsupported",
+        "problem_ir": "`.fdm.demag.strategy`"
+      },
+      {
+        "python": "FDMDemag.mode",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "auto, two_d_stack, or three_d",
+        "meaning": "common-grid dimensionality",
+        "backend_support": "FDM multilayer",
+        "problem_ir": "`.fdm.demag.mode`"
+      },
+      {
+        "python": "FDMDemag.common_cells",
+        "type": "tuple[int,int,int] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "positive triple; auto or three_d; exclusive with other common-grid forms",
+        "meaning": "explicit 3D common-grid dimensions",
+        "backend_support": "FDM multilayer",
+        "problem_ir": "`.fdm.demag.common_cells`, omitted for None"
+      },
+      {
+        "python": "FDMDemag.common_cells_xy",
+        "type": "tuple[int,int] | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "positive pair; auto or two_d_stack; exclusive with other common-grid forms",
+        "meaning": "explicit in-plane dimensions",
+        "backend_support": "FDM multilayer",
+        "problem_ir": "`.fdm.demag.common_cells_xy`, omitted for None"
+      },
+      {
+        "python": "FDMDemag.common_cell_size",
+        "type": "tuple[float,float,float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "Python: positive finite triple and exclusive with counts; ProblemIR also rejects explicit two_d_stack",
+        "meaning": "requested common spacing",
+        "backend_support": "FDM multilayer",
+        "problem_ir": "`.fdm.demag.common_cell_size`, omitted for None"
+      },
+      {
+        "python": "FDMDemag.fft_backend",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "$1$",
+        "validation": "auto, rustfft, fftw, mkl, or cufft",
+        "meaning": "requested FFT realization",
+        "backend_support": "demag/device gated; no silent fallback",
+        "problem_ir": "`.fdm.demag.fft_backend`"
+      },
+      {
+        "python": "FDMDemag.explain",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "$1$",
+        "validation": "direct construction does not type-check; Scene/script overrides require Boolean",
+        "meaning": "human-readable plan explanation request",
+        "backend_support": "authoring and Scene/script round-trip only",
+        "problem_ir": "not serialized into ProblemIR"
+      },
+      {
+        "python": "FDMDemag.allow_single_grid_fallback",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "every non-None value is rejected as a removed option",
+        "meaning": "compatibility-only rejected input",
+        "backend_support": "unsupported",
+        "problem_ir": "no ProblemIR mapping; rejected before lowering"
+      },
+      {
+        "python": "body.mesh(cell_size=...)",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "exactly three finite positive values; exclusive with FEM mesh controls",
+        "meaning": "canonical per-body native spacing",
+        "backend_support": "FDM CPU; GPU capability-gated",
+        "problem_ir": "`.fdm.per_magnet.<canonical-name>.cell`"
+      },
+      {
+        "python": "study.objects.mesh.defaults(cell_size=...)",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "exactly three finite positive values; exclusive with FEM mesh controls",
+        "meaning": "canonical default native spacing",
+        "backend_support": "FDM CPU/GPU",
+        "problem_ir": "both `.fdm.default_cell` and compatibility `.fdm.cell`"
+      },
+      {
+        "python": "study.universe.mesh(cell_size=...)",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "$\\mathrm{m}$",
+        "validation": "exactly three finite positive values; exclusive with FEM universe controls",
+        "meaning": "canonical common convolution spacing",
+        "backend_support": "FDM multilayer",
+        "problem_ir": "creates `.fdm.demag` with auto strategy/mode/fft_backend and `.common_cell_size`"
+      }
     ]
   }
 }

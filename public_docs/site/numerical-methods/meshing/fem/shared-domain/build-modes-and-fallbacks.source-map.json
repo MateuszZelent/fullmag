@@ -1,19 +1,18 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/fem/shared-domain/build-modes-and-fallbacks.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "fem_asset",
-      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
-      "symbol": "realize_fem_mesh_asset",
-      "responsibility": "FEM mesh asset realization and fallback lifecycle."
-    }
-  ]
+  "document":{"path":"public_docs/site/numerical-methods/meshing/fem/shared-domain/build-modes-and-fallbacks.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[{"solver":"FEM","device":"CPU","status":"source-backed"},{"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},{"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."}],
+  "sources":[
+    {"id":"fem_asset","path":"packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py","symbol":"realize_fem_mesh_asset","responsibility":"Object preview/source mesh realization and volume checks."},
+    {"id":"public_study","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"study","responsibility":"Public study entry point."},
+    {"id":"build_request","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class StudyBuilder","responsibility":"Public StudyBuilder.build_domain_mesh request."},
+    {"id":"problem_lowering","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"_build_problem","responsibility":"Builder-state lowering."},
+    {"id":"problem_ir","path":"packages/fullmag-py/src/fullmag/model/problem.py","symbol":"class Problem","responsibility":"ProblemIR and geometry-asset serialization."},
+    {"id":"domain_realization","path":"packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py","symbol":"realize_fem_domain_mesh_asset_from_components_with_report","responsibility":"Shared-domain build-mode realization."},
+    {"id":"build_report","path":"packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py","symbol":"_build_shared_domain_build_report","responsibility":"Requested/effective/fallback provenance."},
+    {"id":"planner","path":"crates/fullmag-plan/src/lib.rs","symbol":"plan","responsibility":"ProblemIR planning and compatibility."},
+    {"id":"runtime","path":"crates/fullmag-runner/src/lib.rs","symbol":"run_planned_problem","responsibility":"Planned runtime dispatch; source evidence only here."}
+  ],
+  "symbols":[{"id":"hmax","latex":"h_{max}","meaning":"effective preview element-size target","si_unit":"\\mathrm{m}"},{"id":"h_recipe","latex":"h_{recipe}","meaning":"per-object recipe target","si_unit":"\\mathrm{m}"},{"id":"h_FEM","latex":"h_{FEM}","meaning":"FEM hint target","si_unit":"\\mathrm{m}"}],
+  "equations":[{"id":"eq-build-target-contract","symbols":["hmax","h_recipe","h_FEM"],"sources":["fem_asset","domain_realization"]}],
+  "public_api":{"parameters":[{"callable":"StudyBuilder.build_domain_mesh","parameter":"(none)","owner":"build_request","lowering":"StudyBuilder.build_domain_mesh -> default_mesh.build_requested -> Problem.runtime_metadata.mesh_workflow","python":"study.build_domain_mesh()","type":"zero-argument method","default":"n/a","si_unit":"$1$","validation":"accepts no public arguments; capture marks the request without invoking Gmsh, ordinary execution reaches SDK-backed realization","meaning":"shared-domain materialization request","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.mesh_workflow.default_mesh.build_requested"}]}
 }

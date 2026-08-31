@@ -1,248 +1,179 @@
 ---
 title: "Airbox outer-boundary closure"
-description: "Outer-boundary markers and the separation between mesh closure and physical boundary conditions."
-summary: "Meshing creates and marks the finite outer surface; the selected FEM interaction applies the physical Dirichlet, Robin or periodic/null-mode closure. These responsibilities must remain separate in configuration and provenance."
+description: "Outer mesh marker versus separately selected FEM demagnetization closure."
+summary: "A boundary marker is mesh provenance, not a physical boundary equation."
 status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "Airbox boundary marker, shared-domain facet roles, FEM demag solver policy and boundary-condition assembly"
+last_updated: 2026-08-31
+reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+source_of_truth: "AirboxOptions, periodic OCC groups, and demag authoring"
 ---
 
 (public-docs-numerical-methods-meshing-fem-airbox-boundary-closure)=
 # Airbox outer-boundary closure
 
-**Last changes: 12:31 24.08.2026**
+(airbox-boundary-closure-problem-statement)=
+## Physical problem
 
-Meshing creates and marks the finite outer surface; the selected FEM interaction applies the physical Dirichlet, Robin or periodic/null-mode closure. These responsibilities must remain separate in configuration and provenance.
+The mesher marks non-periodic outer airbox faces as `Gamma_out`; `study.demag(...)` separately authors the physical model. A closed mesh surface is not proof of an open-boundary closure.
 
-::::{admonition} Implementation status
-:class: important
-
-Ordinary outer-boundary marking and Poisson/Robin demag authoring are source-backed. The mesher does not decide the physical boundary equation; changing the demag policy can reuse geometry only when all solver-facing boundary semantics remain compatible.
-::::
-
-## Scope and purpose
-
-Use this page to verify that the finite airbox surface is correctly identified and that the
-intended physical closure is applied to exactly that surface. Do not conflate a closed geometric
-surface with an open-space magnetostatic boundary condition.
-
-## Scientific and numerical model
-
-For open-boundary magnetostatics, Fullmag's FEM route introduces a scalar potential $u$ on a finite
-computational domain $\Omega=\Omega_m\cup\Omega_a$, where $\Omega_m$ is magnetic material and
-$\Omega_a$ is the exterior airbox. In current-free regions,
+(airbox-boundary-closure-governing-equations)=
+## Governing equations
 
 ```{math}
-:label: eq-airbox-poisson-fem-airbox-boundary-closure
-\nabla\cdot\left(-\nabla u+\mathbf M\right)=0,
-\qquad \mathbf H_d=-\nabla u.
+:label: eq-airbox-boundary-marker
+\Gamma_{\mathrm{out}}=\partial\Omega_a\setminus\Gamma_{\mathrm{periodic}}.
 ```
 
-The infinite exterior is replaced by a finite outer boundary $\Gamma_{out}$ plus a separately
-selected boundary closure. The mesh and boundary condition are distinct: making the airbox larger
-does not itself impose an open boundary, and a Robin condition does not eliminate discretization
-error near the magnet.
+(airbox-boundary-closure-symbols-and-si-units)=
+## Symbols and SI units
 
-The exterior mesh should be fine enough at magnetic interfaces to represent surface-charge-driven
-field variation and may grow toward $\Gamma_{out}$. If $h_0$ is the near-interface size and $r>1$ a
-geometric grading ratio, a conceptual layer sequence is
-
-```{math}
-:label: eq-airbox-geometric-grading-fem-airbox-boundary-closure
-h_j=\min(h_{far},h_0 r^j).
-```
-
-The outer-boundary distance and exterior mesh size require independent convergence studies.
-A simple truncation can impose $u=0$ on $\Gamma_{out}$, while an approximate open condition can
-use a Robin form
-
-```{math}
-:label: eq-airbox-robin-fem-airbox-boundary-closure
-\partial_nu+\beta u=0\quad\text{on }\Gamma_{out},
-```
-
-with coefficient $\beta$ defined by the selected demag realization/policy. The exact coefficient
-and gauge treatment belong to the physics solver. The mesh contributes the oriented outer facets,
-normals, quadrature and semantic marker.
-
-Moving $\Gamma_{out}$ changes the truncated problem even with the same closure. Boundary-distance
-convergence is therefore mandatory.
-
-## Selection guide
-
-| Use case | Recommended choice | Reason |
+| Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| Routine finite open-domain approximation | `poisson_robin` when qualified | Approximate open decay on finite boundary |
-| Manufactured/benchmark condition | explicit Dirichlet/known closure | Supports controlled verification |
-| Periodic unit cell | periodic reduced system | Different operator, pairing and null-mode contract |
+| $\Gamma_{\mathrm{out}}$ | non-periodic outer airbox surface | $\mathrm{m^2}$ |
+| $\partial\Omega_a$ | boundary of auxiliary airbox domain | $\mathrm{m^2}$ |
+| $\Gamma_{\mathrm{periodic}}$ | outer faces assigned periodic pairing | $\mathrm{m^2}$ |
 
-## Parameters
+(airbox-boundary-closure-assumptions-and-validity)=
+## Assumptions and validity
 
-| Python / IR key | Unit | Default | Validation | Numerical effect |
-| --- | --- | --- | --- | --- |
-| `boundary_marker` | 1 | `99` in direct options | unique integer/semantic role | identifies `Gamma_out` in mesh data |
-| demag realization | 1 | `auto` | supported policy such as `poisson_robin` | selects physical scalar-potential closure |
-| Robin/gauge solver policy | mixed | backend defaults | valid FEM demag policy JSON/typed contract | controls boundary coefficient, gauge and linear solve |
-| outer-boundary distance | m | airbox geometry | positive enclosure | dominant truncation-error control |
-| outer-facet order/type | 1 | realized | supported `tri3`/`quad4` and FE order | boundary quadrature and normal recovery |
+`AirboxOptions.boundary_marker` is a Gmsh tag with default `99`; it does not expose a Robin
+coefficient. OCC first selects outer min/max surfaces for periodic pairing, assigns paired-face
+physical groups, and removes those paired tags from the faces later assigned to `Gamma_out`.
+The invalid state is simultaneous ordinary-outer and periodic ownership of one face. A solved
+system can still have truncation error.
 
+| Solver lane | Status | Limit |
+| --- | --- | --- |
+| FEM CPU | source-backed | No runtime closure result is claimed. |
+| FEM GPU | capability-gated | No GPU closure receipt is claimed. |
+| FDM CPU | not applicable | FEM shared-domain marker contract. |
+| FDM GPU | not applicable | FEM shared-domain marker contract. |
+
+(airbox-boundary-closure-python-api)=
 ## Python API
 
-**Complete Python example**
-
 ```python
+# %%
 import fullmag as fm
-
-nm = 1.0e-9
-study = fm.study("fem_airbox_reference")
+nm = 1e-9
+study = fm.study("airbox_boundary")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.universe(
-    mode="manual",
-    size=(600 * nm, 400 * nm, 240 * nm),
-    center=(0.0, 0.0, 0.0),
-    padding=(0.0, 0.0, 0.0),
-)
-study.universe.mesh(
-    minimum_element_size=12 * nm,
-    maximum_element_size=80 * nm,
-    maximum_element_growth_rate=1.5,
-    grading="geometric",
-)
+study.universe(mode="manual", size=(600 * nm, 400 * nm, 200 * nm))
 
-magnet = study.geometry(
-    fm.Box(size=(200 * nm, 100 * nm, 10 * nm), name="film"),
-    name="film",
-)
-magnet.mesh(
-    mesh_strategy="free_tetrahedral",
-    minimum_element_size=3 * nm,
-    maximum_element_size=7 * nm,
-    interface_maximum_element_size=5 * nm,
-    interface_thickness=12 * nm,
-    transition_distance="airbox_boundary",
-    transition_growth=1.4,
-    order=1,
-    compute_quality=True,
-)
-magnet.Ms = 800.0e3
-magnet.Aex = 13.0e-12
-magnet.alpha = 0.02
-magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
+# %%
+study.universe.mesh(maximum_element_size=80 * nm, minimum_element_size=10 * nm)
+body = study.geometry(fm.Box(size=(200 * nm, 100 * nm, 10 * nm), name="film"), name="film")
+body.mesh(maximum_element_size=8 * nm, minimum_element_size=4 * nm, order=1)
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
-study.exchange()
-study.demag(realization="poisson_robin")
+# %%
+study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(
-    stage_id="equilibrium",
-    algorithm="llg_overdamped",
-    tolA=1.0e-4,
-    max_steps=20_000,
-)
+study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", max_steps=1000)
 ```
 
-## Control Room workflow
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `AirboxOptions.boundary_marker` | `int` | `99` | $1$ | direct dataclass field; mesh-group allocation avoids collisions | Gmsh tag for `Gamma_out` | FEM authoring and mesh metadata are source-backed; runtime lane requires separate qualification; FDM not applicable | `generated boundary physical-group tag` |
+| `study.demag.enabled` | `bool` | `True` | $1$ | coerced with `bool(enabled)` after `Demag` validation | demag enablement | Authoring/lowering contract only; runtime depends on the resolved realization and a separately qualified lane | `_state._demag_enabled` |
+| `study.demag.model` | `str \| None` | `None` | $1$ | `None`, `airbox`, `bem`, `fredkin_koehler`, or `fmm`; mutually exclusive with `realization` | canonical demag model | Authoring vocabulary only; `bem` is future/unimplemented; runtime requires separate qualification | `_state._demag_realization` |
+| `study.demag.variant` | `str \| None` | `None` | $1$ | With `model="airbox"`: `auto`, `dirichlet`, or `robin`; with another model: rejected; with non-`None` `realization` and no model: ignored; without model/realization: rejected | airbox closure variant | Authoring/lowering contract only; runtime depends on the resolved realization and a separately qualified lane | `_MODEL_TO_IR` |
+| `study.demag.realization` | `str \| None` | `None` | $1$ | Exact string membership; accepts `auto`, `bem`, `fmm`, `fredkin_koehler`, `poisson_dirichlet`, `poisson_robin`, `poisson_airbox`, `airbox_robin`, or `airbox_dirichlet`; no whitespace/case normalization; unknown values are rejected | legacy realization request | Authoring/lowering contract only; runtime depends on the resolved realization and a separately qualified lane | `_state._demag_realization` |
 
-1. In **Explorer**, select **Universe / Airbox Mesh**.
-2. Choose **Domain mode** and enter either explicit **Size X/Y/Z** and **Center X/Y/Z**, or automatic
-   **Padding X/Y/Z**.
-3. For FEM, set **Maximum element size**, **Minimum element size**, **Maximum element growth rate**,
-   **Element grading**, **Curvature factor** and **Narrow-region resolution** as needed.
-4. Select **Apply Airbox Policy** to store the universe-owned exterior-domain intent. This makes any
-   older shared-domain realization stale.
-5. Select **Apply & Build Shared-Domain Mesh** to dispatch `mesh.build-shared-domain`.
-6. Inspect the effective configuration, shared-domain manifest, outer-boundary marker, interface
-   conformity and mesh-quality scopes. The effective configuration returned by the backend is the
-   source of truth.
+### Demagnetization branch precedence and legacy vocabulary
 
-For FDM, the panel filters FEM-only air-mesh controls and exposes structured-domain geometry only.
+The constructor separates authored intent from resolved realization in this exact order:
 
-In the Universe panel, build the airbox and inspect the outer marker. In the Study Inspector,
-enable FEM demag and select/configure the FEM demag solver policy. Keep these two edits separate:
-**Apply Airbox Policy** changes mesh intent; Study authoring changes the physical operator. The
-current run must reference both revisions.
-
-## Closure verification
-
-Confirm that the outer marker covers one closed external surface and excludes internal magnetic
-interfaces. Verify outward normal orientation, boundary-facet count and boundary-condition
-assembly. Move the boundary outward and compare energy/field. For manufactured potential tests,
-report the boundary residual and bulk error separately.
-
-## Verification, quality and provenance
-
-After every build, inspect the **realized** resource rather than assuming that the authored request
-was applied. The production check is:
-
-- geometry and mesh revisions match the current model;
-- requested and realized discretization/topology/order are recorded;
-- node, element and boundary-facet counts are nonzero for every required region;
-- region and boundary markers cover the complete topology;
-- inverted and degenerate element counts are zero;
-- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
-- local size distributions are consistent with the intended edge/interface/core grading;
-- any fallback or degradation has an explicit reason and an actual method;
-- a mesh-refinement sequence demonstrates convergence of the scientific observable.
-
-`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
-statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
-`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
-acceptance thresholds for every element family or study.
-
-## Mesh-convergence protocol
-
-A production result should include at least three discretizations. Refine only the parameter under
-study while holding geometry, material parameters, solver tolerances, initial state and output
-sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
-
-```{math}
-:label: eq-meshing-relative-change-fem-airbox-boundary-closure
-\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
-\qquad \rho>1,
-```
-
-with a documented scale for observables that can cross zero. For dynamics, compare resonance
-frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
-compare field/energy and verify that moving the outer boundary does not change the result beyond the
-chosen tolerance.
-
-## Diagnostics and failure semantics
-
-- Missing, duplicate or misassigned outer marker is blocking.
-- Applying a closure to magnetic interfaces instead of `Gamma_out` is a severe physics error.
-- An open-airbox mesh must not be reused as a periodic mesh without a new periodic certificate.
-- A Robin solve that converges algebraically can still have large truncation error.
-- A gauge/null-space problem must be reported by the FEM solver; the mesher cannot fix it.
-
-## Where this is implemented
-
-| Responsibility | Repository source | Stable owner / symbol |
+| Authored state | Validation and lowering | Resolved consequence |
 | --- | --- | --- |
-| Outer marker contract | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `AirboxOptions.boundary_marker` |
-| Airbox physical groups | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py) | `outer boundary group construction` |
-| Facet roles | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py) | `_derive_facet_roles` |
-| FEM demag interaction | [`backends/fem/cpu/mfem/interactions/demag_poisson.cpp`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/backends/fem/cpu/mfem/interactions/demag_poisson.cpp) | `open/Robin Poisson assembly` |
-| Study demag policy UI | [`apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx) | `FEM demag policy` |
+| `model is not None` and `realization is not None` | Rejected as mutually exclusive before either model or legacy realization is selected. | No realization is produced. |
+| `model is not None`, `realization is None` | The model branch validates `model`; `variant` is validated for that model. Only `model="airbox"` accepts `auto`, `dirichlet`, or `robin`; a non-airbox model rejects a supplied variant. | `airbox/auto` and `airbox/robin` lower to `poisson_robin`; `airbox/dirichlet` lowers to `poisson_dirichlet`; the other accepted models with no variant lower to their model realization. |
+| `model is None`, `realization is not None` | The legacy realization branch runs before standalone-variant validation. It checks exact membership in `_DEMAG_ALLOWED` without `strip()` or `lower()` and ignores `variant`, including an otherwise invalid value. | The exact legacy value is lowered through the alias table below. |
+| `model is None`, `realization is None`, `variant is not None` | Rejected because no branch owns the variant. | No realization is produced. |
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+| Accepted legacy authored realization (exact string) | Resolved realization |
+| --- | --- |
+| `auto` | `auto` |
+| `bem` | `bem` |
+| `fmm` | `fmm` |
+| `fredkin_koehler` | `fredkin_koehler` |
+| `poisson_dirichlet` | `poisson_dirichlet` |
+| `poisson_robin` | `poisson_robin` |
+| `poisson_airbox` | `poisson_robin` |
+| `airbox_robin` | `poisson_robin` |
+| `airbox_dirichlet` | `poisson_dirichlet` |
 
-## Related documentation
+Any other exact legacy realization is rejected; values such as `" BEM "` and `"BEM"` are not accepted. These tables establish Python validation and lowering, not runtime availability. In particular, `Demag(model="bem")` is accepted vocabulary but BEM is explicitly future/unimplemented in the current Python source; `fmm` acceptance likewise does not qualify a runtime lane.
 
-- [Airbox geometry](geometry.md)
-- [Periodic airbox](periodic-airbox.md)
-- [Demag solvers](../../../demag-solvers/index.md)
+(airbox-boundary-closure-problem-ir)=
+## ProblemIR
 
-## References
+The marker is generated mesh data. `study.demag(...)` first constructs `Demag`, then coerces
+`enabled` with `bool` and stores `Demag._resolved_realization()`. Canonical mappings are
+`airbox/auto -> poisson_robin`, `airbox/robin -> poisson_robin`,
+`airbox/dirichlet -> poisson_dirichlet`, and each non-airbox model with implicit `auto` maps to
+its model name. Legacy aliases use exact-key lookup: `poisson_airbox` and `airbox_robin` map to
+`poisson_robin`, and `airbox_dirichlet` maps to `poisson_dirichlet`; no whitespace or case
+normalization is applied.
 
-- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
+(airbox-boundary-closure-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+**Requested intent** is airbox mesh plus `enabled`, `model`, `variant`, or legacy `realization`.
+**Resolved execution** contains disjoint outer/periodic marker data and a canonical demag
+realization. **Validation errors** include `model` with `realization`, `variant` without `model`,
+an airbox variant outside the supported set, any variant on a non-airbox model, invalid legacy
+vocabulary, invalid mesh generation, or missing required shared-domain air. **Unsupported
+combinations** include retaining one face simultaneously as ordinary outer and periodic, or
+interpreting a marker as a physical equation.
+
+In validator vocabulary, unsupported combinations are rejected rather than lowered to a fallback.
+
+(airbox-boundary-closure-discrete-realization)=
+## Discrete realization
+
+The OCC path assigns periodic physical surfaces first, then adds remaining `gamma_out` faces using `boundary_marker` and name `Gamma_out`; interface faces are separate.
+
+(airbox-boundary-closure-implementation-mapping)=
+## Implementation mapping
+
+| Responsibility | Repository path | Stable symbol |
+| --- | --- | --- |
+| marker default | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class AirboxOptions` |
+| periodic marker allocation | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _add_periodic_boundary_physical_groups` |
+| periodic exclusion | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _configure_axis_periodic_surfaces` |
+| demag authoring | `packages/fullmag-py/src/fullmag/world.py` | `def demag` |
+
+(airbox-boundary-closure-validation)=
+## Validation
+
+Inspect outer and interface facets, markers, and periodic-face exclusion; then run an outer-distance and mesh-refinement study. No runtime, coefficient, or parity proof is supplied.
+
+(airbox-boundary-closure-limitations)=
+## Limitations
+
+The marker default is not a global uniqueness proof and no public coefficient API is exposed.
+
+(airbox-boundary-closure-scientific-bibliography)=
+## Scientific bibliography
+
+- C. Abert, *European Physical Journal B* **92** (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
+
+(airbox-boundary-closure-source-code-index)=
 ## Source-code index
 
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
-
+| Claim | Repository path | Stable symbol | Evidence |
+| --- | --- | --- | --- |
+| marker default | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class AirboxOptions` | source-backed |
+| periodic groups | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _add_periodic_boundary_physical_groups` | source-backed |
+| outer pairing | `packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py` | `def _configure_axis_periodic_surfaces` | source-backed |
+| canonical realization validation/lowering | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | source-backed |
+| direct demag request | `packages/fullmag-py/src/fullmag/world.py` | `def demag` | source-backed module-level public entry point; the `StudyBuilder.demag` method delegates to it |
+| `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Public `StudyBuilder.demag` delegates to `world.demag`; world state owns enabled-state and resolved-realization lowering. |

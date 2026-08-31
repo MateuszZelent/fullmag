@@ -33,363 +33,126 @@
     {
       "id": "eq-numerical-frequency-response-ansatz",
       "symbols": ["dm", "mhat", "hext", "omega", "t"],
-      "sources": ["native", "artifact_contract"]
+      "sources": ["native_impl"]
     },
     {
       "id": "eq-numerical-frequency-response-system",
       "symbols": ["Aomega", "K", "omega", "G", "qhat", "bhat", "C", "hext"],
-      "sources": ["native", "block_real"]
+      "sources": ["native_impl", "block_solve"]
     },
     {
       "id": "eq-numerical-frequency-response-reconstruction",
       "symbols": ["mhat", "e1", "e2", "qhat", "m0"],
-      "sources": ["native"]
+      "sources": ["native_impl"]
     },
     {
       "id": "eq-numerical-frequency-response-physical-susceptibility",
       "symbols": ["chiM", "Mhat", "hext", "Ms", "mhat"],
-      "sources": ["artifact_contract", "block_real"]
+      "sources": ["si_observable_contract"]
     },
     {
       "id": "eq-numerical-frequency-response-reduced-susceptibility",
       "symbols": ["chim", "mhat", "hext"],
-      "sources": ["block_real"]
+      "sources": ["si_observable_contract"]
     },
     {
       "id": "eq-numerical-frequency-response-v1-susceptibility",
       "symbols": ["chiv1", "hext", "mhat"],
-      "sources": ["block_real"]
+      "sources": ["artifact_point", "artifact_units"]
     },
     {
       "id": "eq-numerical-frequency-response-absorbed-power",
       "symbols": ["pabs", "mu0", "omega", "hext", "Mhat"],
-      "sources": ["block_real", "artifact_contract"]
+      "sources": ["si_observable_contract"]
     },
     {
       "id": "eq-numerical-frequency-response-residual",
       "symbols": ["residual", "bhat", "Aomega", "qhat"],
-      "sources": ["native", "block_real", "solve_plan"]
+      "sources": ["native_impl", "block_solve"]
     },
     {
       "id": "eq-numerical-frequency-response-relative-residual",
       "symbols": ["eps", "residual", "bhat", "bscale"],
-      "sources": ["block_real", "artifact_contract"]
+      "sources": ["block_solve", "artifact_writer"]
     }
   ],
   "symbols": [
-    {
-      "id": "dm",
-      "latex": "$\\delta\\mathbf m$",
-      "meaning": "dynamic reduced-magnetization perturbation",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "m0",
-      "latex": "$\\mathbf m_0$",
-      "meaning": "equilibrium reduced magnetization",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "mhat",
-      "latex": "$\\widehat{\\mathbf m}$",
-      "meaning": "complex reduced-magnetization response amplitude",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "Mhat",
-      "latex": "$\\widehat{\\mathbf M}$",
-      "meaning": "complex physical magnetization response amplitude",
-      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
-    },
-    {
-      "id": "Ms",
-      "latex": "$M_s$",
-      "meaning": "saturation magnetization",
-      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
-    },
-    {
-      "id": "hext",
-      "latex": "$\\widehat{\\mathbf h}_{\\mathrm{ext}}$",
-      "meaning": "complex excitation-field amplitude",
-      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
-    },
-    {
-      "id": "Aomega",
-      "latex": "$\\mathsf A(\\omega)$",
-      "meaning": "shifted complex tangent response operator",
-      "si_unit": "operator-dependent"
-    },
-    {
-      "id": "K",
-      "latex": "$\\mathsf K$",
-      "meaning": "tangent stiffness/dynamic matrix",
-      "si_unit": "operator-dependent"
-    },
-    {
-      "id": "G",
-      "latex": "$\\mathsf G$",
-      "meaning": "gyrotropic, mass, and damping matrix",
-      "si_unit": "operator-dependent"
-    },
-    {
-      "id": "omega",
-      "latex": "$\\omega$",
-      "meaning": "angular frequency",
-      "si_unit": "$\\mathrm{rad\\,s^{-1}}$"
-    },
-    {
-      "id": "t",
-      "latex": "$t$",
-      "meaning": "time",
-      "si_unit": "$\\mathrm{s}$"
-    },
-    {
-      "id": "qhat",
-      "latex": "$\\widehat{\\mathbf q}$",
-      "meaning": "complex tangent-coordinate response",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "bhat",
-      "latex": "$\\widehat{\\mathbf b}$",
-      "meaning": "assembled harmonic right-hand side",
-      "si_unit": "operator-dependent"
-    },
-    {
-      "id": "C",
-      "latex": "$\\mathsf C$",
-      "meaning": "drive coupling operator",
-      "si_unit": "operator-dependent"
-    },
-    {
-      "id": "e1",
-      "latex": "$\\mathbf e_1$",
-      "meaning": "first local tangent basis vector",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "e2",
-      "latex": "$\\mathbf e_2$",
-      "meaning": "second local tangent basis vector",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "chiM",
-      "latex": "$\\widehat{\\boldsymbol\\chi}_M$",
-      "meaning": "physical magnetization susceptibility, M response divided by H drive",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "chim",
-      "latex": "$\\widehat{\\boldsymbol\\chi}_m$",
-      "meaning": "reduced-magnetization response divided by H drive",
-      "si_unit": "$\\mathrm{m\\,A^{-1}}$"
-    },
-    {
-      "id": "chiv1",
-      "latex": "$\\chi_{\\mathrm{v1}}$",
-      "meaning": "current dense v1 scalar projection h^H m / h^H h",
-      "si_unit": "$\\mathrm{m\\,A^{-1}}$ when h is in A/m; current writer label is a documented contract gap"
-    },
-    {
-      "id": "pabs",
-      "latex": "$p_{\\mathrm{abs}}$",
-      "meaning": "cycle-averaged absorbed magnetic power density",
-      "si_unit": "$\\mathrm{W\\,m^{-3}}$ after complete SI scaling and spatial reduction"
-    },
-    {
-      "id": "mu0",
-      "latex": "$\\mu_0$",
-      "meaning": "vacuum permeability",
-      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
-    },
-    {
-      "id": "residual",
-      "latex": "$\\mathbf r$",
-      "meaning": "original-operator algebraic residual",
-      "si_unit": "right-hand-side-dependent"
-    },
-    {
-      "id": "eps",
-      "latex": "$\\varepsilon_{\\mathrm{true}}$",
-      "meaning": "true relative residual",
-      "si_unit": "$1$"
-    },
-    {
-      "id": "bscale",
-      "latex": "$b_{\\mathrm{scale}}$",
-      "meaning": "absolute residual normalization floor",
-      "si_unit": "same as right-hand side"
-    }
+    {"id": "dm", "latex": "$\\delta\\mathbf m$", "meaning": "dynamic reduced-magnetization perturbation", "si_unit": "$1$"},
+    {"id": "m0", "latex": "$\\mathbf m_0$", "meaning": "equilibrium reduced magnetization", "si_unit": "$1$"},
+    {"id": "mhat", "latex": "$\\widehat{\\mathbf m}$", "meaning": "complex reduced-magnetization response amplitude", "si_unit": "$1$"},
+    {"id": "Mhat", "latex": "$\\widehat{\\mathbf M}$", "meaning": "complex physical magnetization response amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "hext", "latex": "$\\widehat{\\mathbf h}_{\\mathrm{ext}}$", "meaning": "complex excitation-field amplitude", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Aomega", "latex": "$\\mathsf A(\\omega)$", "meaning": "shifted complex tangent response operator", "si_unit": "operator-dependent"},
+    {"id": "K", "latex": "$\\mathsf K$", "meaning": "tangent stiffness/dynamic matrix", "si_unit": "operator-dependent"},
+    {"id": "G", "latex": "$\\mathsf G$", "meaning": "gyrotropic, mass, and damping matrix", "si_unit": "operator-dependent"},
+    {"id": "omega", "latex": "$\\omega$", "meaning": "angular frequency", "si_unit": "$\\mathrm{rad\\,s^{-1}}$"},
+    {"id": "t", "latex": "$t$", "meaning": "time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "qhat", "latex": "$\\widehat{\\mathbf q}$", "meaning": "complex tangent-coordinate response", "si_unit": "$1$"},
+    {"id": "bhat", "latex": "$\\widehat{\\mathbf b}$", "meaning": "assembled harmonic right-hand side", "si_unit": "operator-dependent"},
+    {"id": "C", "latex": "$\\mathsf C$", "meaning": "drive coupling operator", "si_unit": "operator-dependent"},
+    {"id": "e1", "latex": "$\\mathbf e_1$", "meaning": "first local tangent basis vector", "si_unit": "$1$"},
+    {"id": "e2", "latex": "$\\mathbf e_2$", "meaning": "second local tangent basis vector", "si_unit": "$1$"},
+    {"id": "chiM", "latex": "$\\widehat{\\boldsymbol\\chi}_M$", "meaning": "physical magnetization susceptibility, M response divided by H drive", "si_unit": "$1$"},
+    {"id": "chim", "latex": "$\\widehat{\\boldsymbol\\chi}_m$", "meaning": "reduced-magnetization response divided by H drive", "si_unit": "$\\mathrm{m\\,A^{-1}}$"},
+    {"id": "chiv1", "latex": "$\\chi_{\\mathrm{v1}}$", "meaning": "current dense v1 scalar projection h^H m / h^H h", "si_unit": "$\\mathrm{m\\,A^{-1}}$ (implemented; writer currently labels it dimensionless)"},
+    {"id": "pabs", "latex": "$p_{\\mathrm{abs}}$", "meaning": "cycle-averaged absorbed magnetic power density", "si_unit": "$\\mathrm{W\\,m^{-3}}$ after complete SI scaling and spatial reduction"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "residual", "latex": "$\\mathbf r$", "meaning": "original-operator algebraic residual", "si_unit": "right-hand-side-dependent"},
+    {"id": "eps", "latex": "$\\varepsilon_{\\mathrm{true}}$", "meaning": "true relative residual", "si_unit": "$1$"},
+    {"id": "bscale", "latex": "$b_{\\mathrm{scale}}$", "meaning": "absolute residual normalization floor", "si_unit": "same as right-hand side"}
   ],
   "sources": [
-    {
-      "id": "stage",
-      "path": "packages/fullmag-py/src/fullmag/world.py",
-      "symbol": "class FrequencyResponseStageSpec",
-      "responsibility": "Public frequency-response stage schema."
-    },
-    {
-      "id": "builder",
-      "path": "packages/fullmag-py/src/fullmag/world.py",
-      "symbol": "frequency_response_stage",
-      "responsibility": "Public stage and solver-policy lowering."
-    },
-    {
-      "id": "validate",
-      "path": "backends/fem/src/frequency_domain/operator_contract.cpp",
-      "symbol": "validate_driven_frequency_response_request",
-      "responsibility": "Native operator and boundary legality checks."
-    },
-    {
-      "id": "native",
-      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
-      "symbol": "solve_driven_response_contract",
-      "responsibility": "Native driven-response contract and diagnostics."
-    },
-    {
-      "id": "solve_plan",
-      "path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp",
-      "symbol": "struct FrequencySolvePlan",
-      "responsibility": "Frequency execution lanes, representations, solver families, preconditioners, and certification fields."
-    },
-    {
-      "id": "planner",
-      "path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp",
-      "symbol": "plan_frequency_response",
-      "responsibility": "Architecture-level frequency-response lane selection."
-    },
-    {
-      "id": "runtime_gate",
-      "path": "crates/fullmag-runner/src/frequency_response.rs",
-      "symbol": "frequency_response_solver_method_rejection_reason",
-      "responsibility": "Current runtime availability boundary for explicit solver methods."
-    },
-    {
-      "id": "block_real",
-      "path": "crates/fullmag-runner/src/eigen/response_block_real.rs",
-      "symbol": "solve_block_real_harmonic_response; field_driven_response_point; response_sweep_si_units",
-      "responsibility": "Dense block-real validation solve, derived response observables, and current v1 unit metadata."
-    },
-    {
-      "id": "artifact_contract",
-      "path": "docs/specs/frequency-domain-artifacts-v2.md",
-      "symbol": "Frequency-domain artifacts v2",
-      "responsibility": "Requested/resolved execution, phasor, residual, residency, and artifact semantics."
-    }
+    {"id": "stage_spec", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class FrequencyResponseStageSpec", "responsibility": "Public frequency-response stage schema."},
+    {"id": "stage_builder", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "frequency_response_stage", "responsibility": "Public stage and solver-policy construction."},
+    {"id": "public_callable", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "add_frequency_response", "responsibility": "Public StudyStagesBuilder frequency-response entry point."},
+    {"id": "solver_policy", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponseSolverPolicy", "responsibility": "Solver-policy names and numeric validation."},
+    {"id": "problem_ir", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FrequencyResponse", "responsibility": "Frequency-response validation and exact ProblemIR lowering."},
+    {"id": "observable", "path": "packages/fullmag-py/src/fullmag/model/outputs.py", "symbol": "class SaveResponse", "responsibility": "Supported response-output vocabulary and lowering."},
+    {"id": "k_sampling", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "coerce_k_sampling", "responsibility": "Exact single-point/path wave-vector lowering and mutual exclusion."},
+    {"id": "k_point", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class KPoint", "responsibility": "Exact nested K-point label and vector lowering."},
+    {"id": "k_path", "path": "packages/fullmag-py/src/fullmag/model/eigen.py", "symbol": "class KPath", "responsibility": "Exact ordered K-path points, segment counts, and closed-flag lowering."},
+    {"id": "native_validate", "path": "backends/fem/src/frequency_domain/operator_contract.cpp", "symbol": "validate_driven_frequency_response_request", "responsibility": "Native operator and boundary legality checks."},
+    {"id": "native_decl", "path": "backends/fem/include/frequency_domain/driven_response_solver.hpp", "symbol": "solve_driven_frequency_response", "responsibility": "Production driven-response ABI declaration."},
+    {"id": "native_impl", "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp", "symbol": "solve_driven_frequency_response", "responsibility": "Production validation, lane dispatch, solve, residual, and artifact entry point."},
+    {"id": "si_observable_contract", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-si-observable-reference", "responsibility": "Literature-backed target definitions for full-SI susceptibility and magnetic work; not implementation evidence.", "evidence_status": "planned_contract"},
+    {"id": "planner_struct", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-planner-struct-source", "responsibility": "Validated documentation identity for backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp declaration struct FrequencySolvePlan.", "evidence_status": "planned_contract", "implementation_path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp", "declaration": "struct FrequencySolvePlan"},
+    {"id": "planner_input_overload", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-planner-input-overload-source", "responsibility": "Validated documentation identity for the FrequencySolvePlannerInput overload in frequency_solve_planner.hpp.", "evidence_status": "planned_contract", "implementation_path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp", "declaration": "plan_frequency_response(const FrequencySolvePlannerInput&)"},
+    {"id": "planner_capability_overload", "path": "public_docs/site/numerical-methods/frequency-domain/response-solver.md", "symbol": "DOC-ANCHOR:numerical-methods-frequency-response-planner-capability-overload-source", "responsibility": "Validated documentation identity for the FrequencyBackendCapabilities and FrequencySolverPolicy overload in frequency_solve_planner.hpp.", "evidence_status": "planned_contract", "implementation_path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp", "declaration": "plan_frequency_response(const FrequencyBackendCapabilities&, const FrequencySolverPolicy&)"},
+    {"id": "runtime_gate", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "frequency_response_solver_method_rejection_reason", "responsibility": "Current runtime availability boundary for explicit solver methods."},
+    {"id": "runtime_resolver", "path": "crates/fullmag-runner/src/frequency_response.rs", "symbol": "resolved_frequency_response_solver_method_name", "responsibility": "Resolved runtime method identity."},
+    {"id": "block_solve", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "solve_block_real_harmonic_response", "responsibility": "Dense block-real validation solve."},
+    {"id": "block_sweep", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "solve_field_driven_block_real_sweep_with_interrupt", "responsibility": "Per-frequency sweep, reuse, and interruption semantics."},
+    {"id": "artifact_writer", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "build_field_driven_response_sweep_artifact", "responsibility": "Dense response artifact assembly."},
+    {"id": "artifact_units", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "response_sweep_si_units", "responsibility": "Current v1 serialized unit metadata."},
+    {"id": "artifact_point", "path": "crates/fullmag-runner/src/eigen/response_block_real.rs", "symbol": "field_driven_response_point", "responsibility": "Current v1 derived response observables."}
+  ],
+  "planner_ownership": [
+    {"path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp", "declaration": "struct FrequencySolvePlan", "responsibility": "Selected lane, operator representation, linear solver, preconditioner, and certification gates."},
+    {"path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp", "declaration": "plan_frequency_response(const FrequencySolvePlannerInput&)", "responsibility": "Direct planner-input overload."},
+    {"path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp", "declaration": "plan_frequency_response(const FrequencyBackendCapabilities&, const FrequencySolverPolicy&)", "responsibility": "Capability/policy overload."}
   ],
   "public_api": {
     "parameters": [
-      {
-        "python": "FrequencyResponseStageSpec.frequencies_hz",
-        "type": "Sequence[float]",
-        "default": "required",
-        "si_unit": "$\\mathrm{Hz}$",
-        "validation": "nonempty finite positive values",
-        "meaning": "response sampling frequencies",
-        "backend_support": "FEM",
-        "problem_ir": "`study.frequencies_hz`"
-      },
-      {
-        "python": "FrequencyResponseStageSpec.excitation_field_au_per_m",
-        "type": "tuple[float,float,float]",
-        "default": "(0,0,1)",
-        "si_unit": "$\\mathrm{A\\,m^{-1}}$",
-        "validation": "finite three-vector; nonzero for normalized response",
-        "meaning": "harmonic drive amplitude before phase rotation",
-        "backend_support": "FEM",
-        "problem_ir": "`study.excitation.field_au_per_m`"
-      },
-      {
-        "python": "FrequencyResponseStageSpec.excitation_phase_rad",
-        "type": "float",
-        "default": "0",
-        "si_unit": "$\\mathrm{rad}$",
-        "validation": "finite",
-        "meaning": "global harmonic-drive phase",
-        "backend_support": "FEM",
-        "problem_ir": "`study.excitation.phase_rad`"
-      },
-      {
-        "python": "FrequencyResponseStageSpec.observable",
-        "type": "str",
-        "default": "susceptibility_tensor",
-        "si_unit": "quantity-dependent; artifact must identify numerator, denominator, reduction, and unit",
-        "validation": "supported response output",
-        "meaning": "requested response observable",
-        "backend_support": "FEM, writer-dependent materialization",
-        "problem_ir": "`study.outputs`"
-      },
-      {
-        "python": "FrequencyResponseStageSpec.include_demag",
-        "type": "bool",
-        "default": "True",
-        "si_unit": "$1$",
-        "validation": "Boolean and capability-compatible",
-        "meaning": "include dynamic demagnetization",
-        "backend_support": "FEM gated",
-        "problem_ir": "`study.operator.include_demag`"
-      },
-      {
-        "python": "FrequencyResponseStageSpec.damping_policy",
-        "type": "str",
-        "default": "ignore",
-        "si_unit": "$1$",
-        "validation": "`ignore` or `include`",
-        "meaning": "damping in the linearized operator",
-        "backend_support": "FEM",
-        "problem_ir": "`study.damping_policy`"
-      },
-      {
-        "python": "FrequencyResponseStageSpec.magnetostatic_bc",
-        "type": "str",
-        "default": "open",
-        "si_unit": "$1$",
-        "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`",
-        "meaning": "dynamic magnetostatic closure",
-        "backend_support": "FEM",
-        "problem_ir": "`study.magnetostatic_bc`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.method",
-        "type": "enum | None",
-        "default": "auto",
-        "si_unit": "$1$",
-        "validation": "current executable subset is runtime-gated",
-        "meaning": "requested algebraic execution method",
-        "backend_support": "FEM bounded",
-        "problem_ir": "`study.solver_policy.method`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.rtol",
-        "type": "float | None",
-        "default": "None",
-        "si_unit": "$1$",
-        "validation": "finite positive",
-        "meaning": "algebraic relative tolerance",
-        "backend_support": "FEM",
-        "problem_ir": "`study.solver_policy.rtol`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.max_iterations",
-        "type": "int | None",
-        "default": "None",
-        "si_unit": "$1$",
-        "validation": "positive integer",
-        "meaning": "iteration ceiling",
-        "backend_support": "FEM iterative lanes",
-        "problem_ir": "`study.solver_policy.max_iterations`"
-      },
-      {
-        "python": "FrequencyResponseSolverPolicy.restart_iterations",
-        "type": "int | None",
-        "default": "None",
-        "si_unit": "$1$",
-        "validation": "positive integer",
-        "meaning": "restarted-GMRES subspace length",
-        "backend_support": "FEM iterative lanes",
-        "problem_ir": "`study.solver_policy.restart_iterations`"
-      }
+      {"python": "frequencies_hz", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm{Hz}$", "validation": "nonempty; every value finite and positive", "meaning": "prescribed response samples", "backend_support": "FEM", "problem_ir": "frequencies_hz.values_hz"},
+      {"python": "excitation_field_au_per_m", "type": "tuple[float, float, float]", "default": "(0.0, 0.0, 1.0)", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "exactly three finite values; zero physical drive is allowed but normalized output may be unavailable", "meaning": "harmonic field amplitude before phase rotation", "backend_support": "FEM", "problem_ir": "excitation.field_au_per_m"},
+      {"python": "excitation_phase_rad", "type": "float", "default": "0.0", "si_unit": "$\\mathrm{rad}$", "validation": "finite after float conversion", "meaning": "global harmonic-drive phase", "backend_support": "FEM", "problem_ir": "excitation.phase_rad"},
+      {"python": "observable", "type": "str", "default": "susceptibility_tensor", "si_unit": "quantity-dependent", "validation": "one of m_complex, u_complex, strain_complex, stress_complex, susceptibility_tensor, absorbed_power_density, response_amplitude, response_phase, mode_hybridization_index", "meaning": "requested response output", "backend_support": "FEM; materialization is writer-dependent", "problem_ir": "sampling.outputs[0] = {\"kind\":\"frequency_response_output\",\"observable\": observable}"},
+      {"python": "include_demag", "type": "bool", "default": "True", "si_unit": "$1$", "validation": "type annotation only; no authoring-time isinstance validation or normalization; value lowers unchanged", "meaning": "include dynamic demagnetization", "backend_support": "FEM capability-gated; IR/backend must reject invalid values", "problem_ir": "operator.include_demag"},
+      {"python": "equilibrium_source", "type": "str", "default": "provided", "si_unit": "$1$", "validation": "one of provided, relax, artifact", "meaning": "source of the linearization state", "backend_support": "FEM planner", "problem_ir": "equilibrium = {\"kind\":\"provided\"} / {\"kind\":\"relaxed_initial_state\"} / {\"kind\":\"artifact\",\"path\": equilibrium_artifact}"},
+      {"python": "equilibrium_artifact", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "required and nonempty for artifact source; nonempty if otherwise supplied", "meaning": "equilibrium artifact path", "backend_support": "FEM planner", "problem_ir": "equilibrium.path when equilibrium.kind is artifact"},
+      {"python": "normalization", "type": "str", "default": "unit_l2", "si_unit": "$1$", "validation": "one of unit_l2, unit_max_amplitude", "meaning": "internal basis normalization, not drive amplitude", "backend_support": "FEM", "problem_ir": "normalization"},
+      {"python": "damping_policy", "type": "str", "default": "ignore", "si_unit": "$1$", "validation": "one of ignore, include", "meaning": "damping treatment in the linearized operator", "backend_support": "FEM", "problem_ir": "damping_policy"},
+      {"python": "k_vector", "type": "tuple[float, float, float] | None", "default": "None", "si_unit": "$\\mathrm{m^{-1}}$", "validation": "legacy finite three-vector; mutually exclusive with k_sampling", "meaning": "one Bloch-wave sample", "backend_support": "FEM Floquet capability-gated", "problem_ir": "k_sampling = {\"kind\":\"single\",\"k_vector\":[kx,ky,kz]}"},
+      {"python": "k_sampling", "type": "object | None", "default": "None", "si_unit": "$1$", "validation": "None, finite three-vector, KPoint, or KPath; KPoint label is null or nonempty; KPath has at least two points and positive per-segment counts; mutually exclusive with k_vector", "meaning": "explicit Bloch sampling definition", "backend_support": "FEM Floquet capability-gated", "problem_ir": "None -> null; vector or KPoint -> {\"kind\":\"single\",\"k_vector\":[...]}; KPath -> {\"kind\":\"path\",\"points\":[{\"label\": string-or-null,\"k_vector\":[kx,ky,kz]},...],\"samples_per_segment\":[n0,...],\"closed\": bool}"},
+      {"python": "bc", "type": "str | dict[str, object]", "default": "free", "si_unit": "$1$", "validation": "raw string allow-list; PeriodicBC/FloquetBC require nonempty pair_ids; raw dict checks only accepted kind and does not validate required fields", "meaning": "dynamic-magnetization boundary", "backend_support": "FEM; malformed raw dict may survive authoring and fail later", "problem_ir": "raw free/pinned/periodic/floquet/surface_anisotropy string unchanged; PeriodicBC -> {\"kind\":\"periodic\",\"pair_ids\":[...]}; FloquetBC -> {\"kind\":\"floquet\",\"pair_ids\":[...],\"phase_convention\": value}; raw dict -> unchanged after kind-only check"},
+      {"python": "magnetostatic_bc", "type": "str", "default": "open", "si_unit": "$1$", "validation": "one of open, periodic_airbox_k0, floquet_airbox", "meaning": "dynamic magnetostatic closure", "backend_support": "FEM", "problem_ir": "magnetostatic_bc"},
+      {"python": "solver_method", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "known solver-tree name; explicit runtime subset is gated below", "meaning": "requested algebraic route; omission means automatic resolution", "backend_support": "FEM bounded", "problem_ir": "solver_policy.method"},
+      {"python": "solver_preconditioner", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "one of auto, graph_demag_coarse, demag_coarse, block_jacobi, none", "meaning": "requested preconditioner", "backend_support": "FEM bounded", "problem_ir": "solver_policy.preconditioner"},
+      {"python": "solver_rtol", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "finite and positive", "meaning": "relative algebraic tolerance", "backend_support": "FEM", "problem_ir": "solver_policy.rtol"},
+      {"python": "solver_max_iterations", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; Boolean rejected", "meaning": "iteration ceiling", "backend_support": "FEM iterative lanes", "problem_ir": "solver_policy.max_iterations"},
+      {"python": "solver_restart_iterations", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "positive integer; at most solver_max_iterations when both are supplied", "meaning": "restarted-GMRES subspace length", "backend_support": "FEM iterative lanes", "problem_ir": "solver_policy.restart_iterations"},
+      {"python": "MAX_ITERATIONS", "type": "int | None", "default": "None", "si_unit": "$1$", "validation": "compatibility alias; conflicts with a different solver_max_iterations value", "meaning": "legacy spelling of the iteration ceiling", "backend_support": "FEM iterative lanes", "problem_ir": "solver_policy.max_iterations"}
     ]
   },
   "known_contract_gaps": [

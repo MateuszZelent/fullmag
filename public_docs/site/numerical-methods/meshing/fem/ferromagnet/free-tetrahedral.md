@@ -1,262 +1,179 @@
 ---
 title: "Free tetrahedral ferromagnet mesh"
-description: "Unstructured tetrahedral volume meshing for general magnetic geometry."
-summary: "Free tetrahedral meshing is the default general-purpose FEM route for curved, boolean and imported magnetic geometry. It prioritizes robust geometry conformity over explicit layer topology."
+description: "The public `object.mesh(...)` route for general unstructured FEM volume meshing."
+summary: "The public `object.mesh(...)` route for general unstructured FEM volume meshing."
 status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "MeshOptions, free-tetrahedral dispatch, Gmsh OCC generation, typed tet4 extraction and scoped mesh reports"
+last_updated: 2026-08-31
+reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+source_of_truth: "current public authoring, ProblemIR lowering, mesh realization, and build report"
 ---
 
 (public-docs-numerical-methods-meshing-fem-ferromagnet-free-tetrahedral)=
 # Free tetrahedral ferromagnet mesh
 
-**Last changes: 12:31 24.08.2026**
+(free-tetrahedral-problem-statement)=
+## Problem statement
 
-Free tetrahedral meshing is the default general-purpose FEM route for curved, boolean and imported magnetic geometry. It prioritizes robust geometry conformity over explicit layer topology.
+The public `object.mesh(...)` route for general unstructured FEM volume meshing.
 
-::::{admonition} Implementation status
-:class: important
-
-Linear `tet4` generation is implemented for supported primitives, CSG and imported surfaces. Higher-order authoring may exist at the FEM schema level, but the canonical mixed extraction path accepts exact supported element types and must reject unsupported families.
-::::
-
-## Scope and purpose
-
-Select this method when geometry is not naturally sweepable, when local refinement is more
-important than aligned layer planes, or when a robust fallback-free tetrahedral mesh is preferred.
-It is the baseline against which specialized thin-film and swept meshes should be validated.
-
-## Scientific and numerical model
-
-### Scientific invariants
-
-A finite-element mesh is not only a visualization asset. It defines the trial/test spaces used by
-exchange, anisotropy, DMI, magnetostatic and dynamic operators. The following conditions are therefore
-part of the numerical contract:
-
-1. Every magnetic volume has an unambiguous region marker and every exterior-air volume has the
-   canonical air role.
-2. Interfaces used by coupled operators are conforming, or an explicitly supported nonconforming
-   coupling operator is selected. Fullmag's ordinary shared-domain path expects conformity.
-3. Cell orientation is valid: the element mapping has a positive Jacobian at all required evaluation
-   points. Inverted or collapsed cells are build failures, not warnings to ignore.
-4. Requested topology, polynomial order, layer count and mesh-size controls are compared with the
-   realized mesh. A topology change is legal only when the build mode permits fallback and the report
-   names the actual method and reason.
-5. Mesh convergence is assessed on physical observables—energy, average magnetization, switching
-   field, eigenfrequency, linewidth or field error—not only on element count.
-
-For exchange-dominated variation, a useful *starting* scale is the magnetostatic exchange length
+(free-tetrahedral-governing-equations)=
+## Governing equations
 
 ```{math}
-:label: eq-meshing-exchange-length-fem-ferromagnet-free-tetrahedral
-\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}.
+:label: eq-free-tetrahedral-contract
+V_K=\frac{1}{6}\det[\mathbf{x}_1-\mathbf{x}_0,\mathbf{x}_2-\mathbf{x}_0,\mathbf{x}_3-\mathbf{x}_0].
 ```
 
-Using an element size below roughly one half of the smallest relevant magnetic length scale is a
-common initial choice, not a proof of convergence. Curved boundaries, surface charges, DMI, defects,
-interfaces and through-thickness modes can demand a smaller local size.
+(free-tetrahedral-symbols-and-si-units)=
+## Symbols and SI units
 
-Each linear tetrahedron maps the reference simplex to physical space by an affine map. Its
-Jacobian determinant is proportional to signed volume,
-
-```{math}
-:label: eq-tet-signed-volume-fem-ferromagnet-free-tetrahedral
-V_K=\frac{1}{6}\det[\mathbf x_1-\mathbf x_0,\mathbf x_2-\mathbf x_0,
-\mathbf x_3-\mathbf x_0].
-```
-
-Positive orientation is mandatory. Slivers can have positive volume but poor gradient accuracy
-and conditioning, so inspect SICN/gamma distributions rather than volume alone. Surface
-triangulation quality propagates into the volume mesh.
-
-## Selection guide
-
-| Use case | Recommended choice | Reason |
+| Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| General default | 2-D algorithm 6 + 3-D algorithm 1 | Current defaults: Frontal-Delaunay surface, Delaunay volume |
-| Lofted ArchWaveguide where Delaunay recovery fails | planner/source fallback to HXT | Generator records the fallback reason explicitly |
-| Very large/complex tetrahedralization | HXT when validated | Alternative 3-D algorithm; compare quality and reproducibility |
-| Thin film requiring exact planes | use swept prism instead | Free tetrahedra do not certify layer planes |
+| $V_K$ | signed tetrahedron volume | m^3 |
+| $\mathbf{x}_i$ | tetrahedron vertex position | m |
 
-## Parameters
+(free-tetrahedral-assumptions-and-validity)=
+## Assumptions and validity
 
-| Python / IR key | Unit | Default | Validation | Numerical effect |
-| --- | --- | --- | --- | --- |
-| `maximum_element_size` | m | required for direct FEM generation | positive finite | coarse upper target; local size fields may request smaller elements |
-| `minimum_element_size` | m | unset | positive and not greater than the maximum | lower size clamp for local refinement and curvature sizing |
-| `maximum_element_growth_rate` | 1 | preset/backend dependent | positive | limits requested growth between neighboring size zones |
-| `calibrate_for` | 1 | unset | named calibration family | selects physics-aware preset calibration |
-| `size_preset` | 1 | unset | extremely fine through extremely coarse | fills common size/growth/curvature controls before explicit overrides |
-| `size_factor` | 1 | `1` | positive | multiplies preset-derived target sizes |
-| `curvature_factor` | 1 | unset | positive when set | controls curvature-driven refinement; smaller values generally refine more |
-| `narrow_region_resolution` | 1 | unset | positive when set | requests additional resolution in narrow geometric gaps/features |
-| `order` | 1 | `1` | positive integer; topology/device support may be narrower | finite-element polynomial order |
-| `algorithm_2d` | Gmsh ID | `6` | supported Gmsh 2-D algorithm number | surface triangulation before volume meshing |
-| `algorithm_3d` | Gmsh ID | `1` | supported Gmsh 3-D algorithm number | volume tetrahedralization algorithm |
-| `smoothing_steps` | passes | `1` | non-negative integer | post-generation node smoothing |
-| `optimize` | 1 | unset | Gmsh optimizer name | optional quality optimization; does not replace convergence checks |
-| `optimize_iterations` | passes | `1` | positive integer | number of optimizer passes |
-| `compute_quality` | 1 | `True` in Control Room defaults | Boolean | requests aggregate quality metrics |
-| `per_element_quality` | 1 | `True` in Control Room defaults | Boolean | requests per-element quality arrays and scoped distributions |
+The geometry must define a meshable volume. Alias pairs must agree when both forms are supplied. The exported geometric connectivity is first order; `order` controls the FEM solution space. Positive volume is necessary but sliver quality and observable convergence still require checks.
 
+(free-tetrahedral-python-api)=
 ## Python API
 
-**Complete Python example**
+The table is exhaustive for this public family entry point. Alias rows are alternatives, not extra simultaneous requirements.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hmax` | `float \| str \| None` | `None` | m | positive length or auto; alias of maximum_element_size | maximum size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].hmax` |
+| `maximum_element_size` | `float \| str \| None` | `None` | m | positive length or auto | maximum element-size request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_size` |
+| `hmin` | `float \| None` | `None` | m | positive and <= maximum when both supplied | minimum size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].hmin` |
+| `minimum_element_size` | `float \| None` | `None` | m | positive and <= maximum when both supplied | minimum element-size request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].minimum_element_size` |
+| `order` | `int \| None` | `None` | 1 | integer order when supplied | FEM solution-space order request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].order` |
+| `calibrate_for` | `str \| None` | `None` | 1 | supported calibration vocabulary | physics calibration family | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].calibrate_for` |
+| `size_preset` | `str \| None` | `None` | 1 | supported size-preset vocabulary | named sizing preset | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].size_preset` |
+| `algorithm_2d` | `int \| None` | `None` | 1 | integer Gmsh algorithm identifier | surface algorithm request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].algorithm_2d` |
+| `algorithm_3d` | `int \| None` | `None` | 1 | integer Gmsh algorithm identifier | volume algorithm request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].algorithm_3d` |
+| `optimize` | `str \| None` | `None` | 1 | supported Gmsh optimizer name | post-generation optimizer | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].optimize` |
+| `optimize_iterations` | `int \| None` | `None` | 1 | integer >= 1 | optimizer pass count | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].optimize_iterations` |
+| `smoothing_steps` | `int \| None` | `None` | 1 | integer >= 0 | Gmsh smoothing passes | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].smoothing_steps` |
+| `size_factor` | `float \| None` | `None` | 1 | finite and > 0 | global factor on requested sizes | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].size_factor` |
+| `size_from_curvature` | `int \| None` | `None` | 1 | integer >= 0 | curvature points control | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].size_from_curvature` |
+| `curvature_factor` | `float \| None` | `None` | 1 | finite and > 0 | curvature refinement factor | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].curvature_factor` |
+| `growth_rate` | `float \| None` | `None` | 1 | finite, > 0, and <= 2.5 | size-growth alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].growth_rate` |
+| `maximum_element_growth_rate` | `float \| None` | `None` | 1 | finite, > 0, and <= 2.5 | maximum growth request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].maximum_element_growth_rate` |
+| `narrow_regions` | `int \| None` | `None` | 1 | integer >= 0 | narrow-region sampling count | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].narrow_regions` |
+| `narrow_region_resolution` | `float \| None` | `None` | 1 | finite and > 0 | narrow-region resolution | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].narrow_region_resolution` |
+| `interface_maximum_element_size` | `float \| None` | `None` | m | finite and > 0 | interface size request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
+| `interface_hmax` | `float \| None` | `None` | m | finite and > 0; alias | interface size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_hmax` |
+| `interface_thickness` | `float \| None` | `None` | m | finite and > 0 | interface refinement shell | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].interface_thickness` |
+| `transition_distance` | `float \| str \| None` | `None` | m | zero or positive length, or supported automatic value | interface transition distance | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_distance` |
+| `transition_growth` | `float \| None` | `None` | 1 | finite and > 0 | interface transition growth | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].transition_growth` |
+| `edge_maximum_element_size` | `float \| None` | `None` | m | finite and > 0 | edge size request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_hmax` |
+| `edge_hmax` | `float \| None` | `None` | m | finite and > 0; alias | edge size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_hmax` |
+| `edge_thickness` | `float \| None` | `None` | m | finite and > 0 | edge refinement shell | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_thickness` |
+| `edge_transition_distance` | `float \| str \| None` | `None` | m | positive length or supported automatic value | edge transition distance | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].edge_transition_distance` |
+| `corner_maximum_element_size` | `float \| None` | `None` | m | finite and > 0 | corner size request | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_hmax` |
+| `corner_hmax` | `float \| None` | `None` | m | finite and > 0; alias | corner size alias | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_hmax` |
+| `corner_extent` | `float \| None` | `None` | m | finite and > 0 | corner refinement extent | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_extent` |
+| `corner_transition_distance` | `float \| str \| None` | `None` | m | positive length or supported automatic value | corner transition distance | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].corner_transition_distance` |
+| `compute_quality` | `bool \| None` | `None` | 1 | boolean when supplied | request aggregate quality | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].compute_quality` |
+| `per_element_quality` | `bool \| None` | `None` | 1 | boolean when supplied | request per-cell quality arrays | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].per_element_quality` |
+| `mesh_strategy` | `str \| None` | `None` | 1 | use free_tetrahedral for this family | explicit general tetrahedral strategy | FEM CPU source-backed; FEM GPU capability-gated | `mesh_workflow.per_geometry[].mesh_strategy` |
 
 ```python
+# %% imports
 import fullmag as fm
 
-nm = 1.0e-9
+# %% stage-first study and complete free-tetrahedral request
 study = fm.study("free_tetrahedral_reference")
 study.engine("fem")
-study.device("cpu", precision="double")
-study.mode("strict")
-study.universe(
-    mode="manual",
-    size=(500 * nm, 300 * nm, 160 * nm),
-    center=(0.0, 0.0, 0.0),
-    padding=(0.0, 0.0, 0.0),
-)
-study.universe.mesh(
-    minimum_element_size=20 * nm,
-    maximum_element_size=80 * nm,
-    maximum_element_growth_rate=1.5,
-    grading="geometric",
-)
-
-magnet = study.geometry(
-    fm.Ellipsoid(110 * nm, 50 * nm, 20 * nm, name="ellipsoid"),
-    name="ellipsoid",
-)
-magnet.mesh(
+body = study.geometry(fm.Box(size=(80e-9, 40e-9, 20e-9)), name="body")
+body.mesh(
     mesh_strategy="free_tetrahedral",
-    minimum_element_size=4 * nm,
-    maximum_element_size=8 * nm,
-    maximum_element_growth_rate=1.35,
+    maximum_element_size=8e-9,
+    minimum_element_size=2e-9,
     algorithm_2d=6,
     algorithm_3d=1,
-    order=1,
-    smoothing_steps=3,
     optimize="Netgen",
-    optimize_iterations=3,
+    optimize_iterations=1,
+    smoothing_steps=1,
+    size_factor=1.0,
+    size_from_curvature=0,
+    curvature_factor=0.5,
+    growth_rate=1.3,
+    narrow_regions=0,
+    interface_maximum_element_size=4e-9,
+    interface_thickness=4e-9,
+    transition_distance=16e-9,
+    edge_maximum_element_size=3e-9,
+    edge_thickness=4e-9,
+    edge_transition_distance=12e-9,
+    corner_maximum_element_size=2e-9,
+    corner_extent=3e-9,
+    corner_transition_distance=8e-9,
+    order=1,
     compute_quality=True,
     per_element_quality=True,
 )
-magnet.Ms = 800.0e3
-magnet.Aex = 13.0e-12
-magnet.alpha = 0.02
-magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
-
-study.exchange()
-study.demag(realization="poisson_robin")
-study.build_domain_mesh()
-study.stages.add_relax(
-    stage_id="equilibrium",
-    algorithm="llg_overdamped",
-    tolA=1.0e-4,
-    max_steps=20_000,
-)
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
-## Control Room workflow
+(free-tetrahedral-problem-ir)=
+## ProblemIR
 
-1. In **Explorer**, select the magnetic object's **Mesh** child (the object mesh-policy route).
-2. In **Inspector → Object Mesh Policy**, enable **Use object policy** when an object-specific override
-   is required.
-3. Configure the relevant groups: **Mesh Size Presets**, **Element Size Parameters**,
-   **Thin-Film Sweep Strategy**, **Interface and Transition Refinement**, **Backend Mesh Parameters**,
-   **Core Relaxation**, **Manual Size Field**, and **Edge and Corner Refinement**.
-4. Select **Apply Object Policy**. This stores authoring intent and invalidates mesh resources whose
-   revision no longer matches the model.
-5. Select **Build Mesh**. If the draft is dirty, the panel applies it first and dispatches the canonical
-   `mesh.build-selected` command.
-6. Open the **Quality** and **History** tabs. Compare requested and realized values, then inspect the
-   scoped size/quality distributions and the raw build report before running a solver.
+`GeometryMeshHandle.configure` coalesces canonical names and aliases. `_mesh_spec_to_metadata` writes every `body.mesh(...)` value under the matching `mesh_workflow.per_geometry[]` entry. `_collect_mesh_workflow_metadata` derives top-level `mesh_options` from the default spec only; it is not the authoring destination for this per-object call. The build report separately records actual method and quality.
 
-The read-only effective values come from backend resources. They must not be reconstructed from the
-current form fields because presets, capability gates and backend normalization can change the
-resolved configuration.
+(free-tetrahedral-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-Set **Mesh strategy = Free tetrahedral**. Configure size presets and local refinement before
-advanced Gmsh algorithms. Build and inspect cell-family counts: an ordinary free-tetrahedral
-realization should report `tet4` volume cells and `tri3` boundary facets for the linear route.
+**Requested intent** is the complete `object.mesh(...)` configuration. **Resolved execution** records normalized aliases, selected effective algorithm, actual mesh method, element counts, and quality. **Validation errors** cover conflicting aliases, nonpositive sizes, minimum greater than maximum, a growth rate above `2.5`, invalid counts, and FDM `cell_size` mixed with FEM controls. Interface `transition_distance=0` is valid; edge and corner transition distances remain strictly positive when numeric. **Unsupported combinations** must be reported; the known MMG3D-with-background-fields case resolves to HXT with an explicit reason, not silently.
 
-## Verification, quality and provenance
+(free-tetrahedral-discrete-realization)=
+## Discrete realization
 
-After every build, inspect the **realized** resource rather than assuming that the authored request
-was applied. The production check is:
+`_apply_mesh_options` applies sizes, first-order geometric connectivity, algorithms, smoothing, optimization, and fields. `generate_mesh` dispatches supported geometries, while domain realization and `_build_shared_domain_build_report` record actual method, requested method, and fallbacks. FEM CPU consumes the resulting MeshIR; GPU consumption remains capability-gated.
 
-- geometry and mesh revisions match the current model;
-- requested and realized discretization/topology/order are recorded;
-- node, element and boundary-facet counts are nonzero for every required region;
-- region and boundary markers cover the complete topology;
-- inverted and degenerate element counts are zero;
-- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
-- local size distributions are consistent with the intended edge/interface/core grading;
-- any fallback or degradation has an explicit reason and an actual method;
-- a mesh-refinement sequence demonstrates convergence of the scientific observable.
+(free-tetrahedral-implementation-mapping)=
+## Implementation mapping
 
-`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
-statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
-`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
-acceptance thresholds for every element family or study.
+The source index maps public authoring, lowering, realization, reporting, and backend consumption. Source-backed FEM CPU support does not imply that every requested topology is supported; FEM GPU remains capability-gated by the realized mesh and active runtime.
 
-## Mesh-convergence protocol
+### FEM CPU/GPU plan and runtime consumption
 
-A production result should include at least three discretizations. Refine only the parameter under
-study while holding geometry, material parameters, solver tolerances, initial state and output
-sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
+`plan_fem` resolves the domain or per-object mesh asset, validates typed MeshIR and region ownership, and places that mesh in `FemPlanIR`; this is the planning consumer after Python realization. The production runner enters `execute_fem_with_context_in_mode`, normalizes the FEM plan, resolves CPU/GPU behavior, and calls the configuration-selected `execute_native_fem` implementation for native execution. `apply_native_fem_runtime_contract` is not a gate: after runtime observations exist, it returns `()` and only populates `ExecutionProvenance` fields such as execution mode, qualification status, data residency, CUDA-kernel use, GPU Poisson use, and hot-loop synchronization counts. A source-backed Python mesh build is therefore not itself CPU or GPU runtime proof; actual execution and its populated provenance provide that evidence.
+(free-tetrahedral-validation)=
+## Validation
 
-```{math}
-:label: eq-meshing-relative-change-fem-ferromagnet-free-tetrahedral
-\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
-\qquad \rho>1,
-```
+Confirm source identity, requested and actual methods, typed cell families, complete region/boundary markers, zero inverted or degenerate cells, and the relevant quality distributions. Then refine the controlling size or layer count while holding geometry, materials, solver tolerances, and outputs fixed, and require convergence of a physical observable.
 
-with a documented scale for observables that can cross zero. For dynamics, compare resonance
-frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
-compare field/energy and verify that moving the outer boundary does not change the result beyond the
-chosen tolerance.
+(free-tetrahedral-limitations)=
+## Limitations
 
-## Diagnostics and failure semantics
+This page does not cover imported `FEM(mesh=...)`, boundary layers, or thin-film/swept topology. `mesh_strategy="free_tetrahedral"` requests the family, but only the realized typed cells prove it.
 
-- Boundary recovery failures should report the attempted and retry algorithm.
-- Surface algorithm 8 is sanitized to 6 for source-visible 3-D thin-body volume workflows.
-- Inverted/degenerate tetrahedra are build failures.
-- A low-quality tail can dominate exchange conditioning even when mean quality is acceptable.
-- Imported non-watertight surfaces must fail or be repaired explicitly; volume meshing a visually
-  closed surface is not guaranteed.
+(free-tetrahedral-scientific-bibliography)=
+## Scientific bibliography
 
-## Where this is implemented
+- C. Geuzaine and J.-F. Remacle, "Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities," *International Journal for Numerical Methods in Engineering* **79** (2009), 1309-1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+- C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
-| Responsibility | Repository source | Stable owner / symbol |
-| --- | --- | --- |
-| Free-tet dispatch | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `generate_mesh, generate_box_mesh` |
-| Gmsh option application | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py) | `_apply_mesh_options` |
-| Tet extraction and orientation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py) | `tet4 extraction` |
-| Object recipe validation | [`packages/fullmag-py/src/fullmag/model/discretization.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/model/discretization.py) | `PerObjectMeshRecipe` |
-| Fallback regression tests | [`packages/fullmag-py/tests/test_meshing_fallbacks.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/tests/test_meshing_fallbacks.py) | `explicit fallback tests` |
-
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
-
-## Related documentation
-
-- [Thin-film tetrahedral](thin-film-tetrahedral.md)
-- [Refinement](../../refinement.md)
-
-## References
-
-- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
-
-- H. Si, “TetGen, a Delaunay-based quality tetrahedral mesh generator,” *ACM Transactions on Mathematical Software* **41** (2015), [doi:10.1145/2629697](https://doi.org/10.1145/2629697).
+(free-tetrahedral-source-code-index)=
 ## Source-code index
 
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
+| Repository path | Stable symbol | Responsibility |
+| --- | --- | --- |
+| `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | Public object.mesh authoring and validation. |
+| `packages/fullmag-py/src/fullmag/world.py` | `_mesh_spec_to_metadata` | Per-object ProblemIR lowering. |
+| `packages/fullmag-py/src/fullmag/world.py` | `_collect_mesh_workflow_metadata` | Generator mesh_options lowering. |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `_apply_mesh_options` | Gmsh option normalization and effective algorithm. |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py` | `generate_mesh` | Geometry-specific free volume generation. |
+| `packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py` | `_build_shared_domain_build_report` | Requested/resolved method and fallback report. |
+| `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `realize_fem_domain_mesh_asset_from_components_with_report` | FEM domain MeshIR realization. |
+| `crates/fullmag-plan/src/fem.rs` | `plan_fem` | Validated MeshIR consumption and FEM plan construction. |
+| `crates/fullmag-runner/src/dispatch.rs` | `execute_fem_with_context_in_mode` | Production plan normalization and CPU/GPU native execution routing. |
+| `crates/fullmag-runner/src/dispatch.rs` | `execute_native_fem` | Configuration-selected native CPU/GPU execution implementation. |
+| `crates/fullmag-runner/src/dispatch.rs` | `apply_native_fem_runtime_contract` | Populates runtime provenance fields after observations exist; returns `()`. |
 

@@ -1,19 +1,30 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/fem-shared-domain.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "shared_policy",
-      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
-      "symbol": "class SharedMeshAssemblyPolicy",
-      "responsibility": "Shared-domain assembly policy."
-    }
-  ]
+  "document":{"path":"public_docs/site/numerical-methods/meshing/fem-shared-domain.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[{"solver":"FEM","device":"CPU","status":"source-backed"},{"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},{"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."}],
+  "sources":[
+    {"id":"shared_policy","path":"packages/fullmag-py/src/fullmag/model/discretization.py","symbol":"class SharedMeshAssemblyPolicy","responsibility":"Compatibility policy validation and serialization."},
+    {"id":"public_study","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"study","responsibility":"Public study entry point."},
+    {"id":"universe_authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class StudyUniverseHandle","responsibility":"Public shared-domain authoring."},
+    {"id":"problem_lowering","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"_build_problem","responsibility":"Builder-state lowering."},
+    {"id":"problem_ir","path":"packages/fullmag-py/src/fullmag/model/problem.py","symbol":"class Problem","responsibility":"ProblemIR and geometry-asset serialization."},
+    {"id":"domain_realization","path":"packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py","symbol":"realize_fem_domain_mesh_asset_from_components_with_report","responsibility":"Shared-domain realization and report."},
+    {"id":"occ_shared","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py","symbol":"generate_shared_domain_mesh_via_occ","responsibility":"Conformal OCC realization."},
+    {"id":"planner","path":"crates/fullmag-plan/src/lib.rs","symbol":"plan","responsibility":"ProblemIR planning and compatibility."},
+    {"id":"runtime","path":"crates/fullmag-runner/src/lib.rs","symbol":"run_planned_problem","responsibility":"Planned runtime dispatch; source evidence only here."}
+  ],
+  "symbols":[{"id":"P","latex":"P","meaning":"preserved assembly-policy record","si_unit":"1"},{"id":"f_gamma","latex":"f_{\\Gamma}","meaning":"interface size factor","si_unit":"1"},{"id":"c","latex":"c","meaning":"conformity request","si_unit":"1"},{"id":"f_a","latex":"f_a","meaning":"airbox size factor","si_unit":"1"}],
+  "equations":[{"id":"eq-shared-policy-contract","symbols":["P","f_gamma","c","f_a"],"sources":["shared_policy"]}],
+  "public_api":{"parameters":[
+    {"callable":"StudyUniverseHandle.__call__","parameter":"mode","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.mode","python":"study.universe(mode=...)","type":"str | None","default":"None","si_unit":"1","validation":"forwarded to StudyUniverseConfig","meaning":"domain mode","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.mode"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.size","python":"study.universe(size=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"as_vector3; explicit dimensions must be positive when realized","meaning":"outer dimensions","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.size"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"center","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.center","python":"study.universe(center=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"as_vector3","meaning":"outer center","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.center"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"padding","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.padding","python":"study.universe(padding=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"as_vector3; domain validation governs signs","meaning":"directional padding","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.padding"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"maximum_element_size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_hmax","python":"study.universe.mesh(maximum_element_size=...)","type":"float | None","default":"None","si_unit":"m","validation":"positive","meaning":"airbox coarse target","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_hmax"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"minimum_element_size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_hmin","python":"study.universe.mesh(minimum_element_size=...)","type":"float | None","default":"None","si_unit":"m","validation":"positive and no greater than numeric maximum","meaning":"airbox lower clamp","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_hmin"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"maximum_element_growth_rate","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_growth_rate","python":"study.universe.mesh(maximum_element_growth_rate=...)","type":"float | None","default":"None","si_unit":"1","validation":"finite positive at most 2.5","meaning":"airbox growth target","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_growth_rate"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"grading","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_grading","python":"study.universe.mesh(grading=...)","type":"str | None","default":"None","si_unit":"1","validation":"forwarded without vocabulary validation by this handle","meaning":"airbox grading request","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_grading"},
+    {"callable":"SharedMeshAssemblyPolicy","parameter":"interface_hmax_factor","owner":"shared_policy","lowering":"SharedMeshAssemblyPolicy.to_ir","python":"SharedMeshAssemblyPolicy.interface_hmax_factor","type":"float","default":"0.5","si_unit":"$1$","validation":"finite real in $(0,1]$; `TypeError`/`ValueError`","meaning":"compatibility field","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"shared_mesh_policy.interface_hmax_factor"},
+    {"callable":"SharedMeshAssemblyPolicy","parameter":"enforce_conforming","owner":"shared_policy","lowering":"SharedMeshAssemblyPolicy.to_ir","python":"SharedMeshAssemblyPolicy.enforce_conforming","type":"bool","default":"True","si_unit":"$1$","validation":"boolean; `TypeError` otherwise","meaning":"compatibility field","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"shared_mesh_policy.enforce_conforming"},
+    {"callable":"SharedMeshAssemblyPolicy","parameter":"airbox_hmax_factor","owner":"shared_policy","lowering":"SharedMeshAssemblyPolicy.to_ir","python":"SharedMeshAssemblyPolicy.airbox_hmax_factor","type":"float","default":"3.0","si_unit":"$1$","validation":"finite positive real; `TypeError`/`ValueError`","meaning":"compatibility field","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"shared_mesh_policy.airbox_hmax_factor"}
+  ]}
 }

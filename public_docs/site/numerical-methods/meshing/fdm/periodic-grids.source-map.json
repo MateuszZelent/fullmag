@@ -4,16 +4,154 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FDM Cartesian-grid semantics."},
-    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FDM Cartesian-grid semantics."}
-  ],  "sources": [
     {
-      "id": "fdm_pbc",
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "Separate FEM PBC contract."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "Separate FEM PBC contract."
+    }
+  ],
+  "sources": [
+    {
+      "id": "study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Public fdm(...) and pbc(...) application routes."
+    },
+    {
+      "id": "pbc",
       "path": "packages/fullmag-py/src/fullmag/model/problem.py",
       "symbol": "class FdmPbc",
-      "responsibility": "Periodic-boundary authoring contract."
+      "responsibility": "PBC validation and IR."
+    },
+    {
+      "id": "resolved_boundary",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "resolve_demag_boundary",
+      "responsibility": "Default and resolved image counts plus translated-image budget."
+    },
+    {
+      "id": "resolved_workspace",
+      "path": "crates/fullmag-ir/src/execution.rs",
+      "symbol": "resolve_periodic_images",
+      "responsibility": "Periodic padding and workspace accounting."
+    },
+    {
+      "id": "runner",
+      "path": "crates/fullmag-runner/src/fdm/mod.rs",
+      "symbol": "resolve_fdm_demag_boundary_for_periodicity",
+      "responsibility": "FDM policy resolution."
+    },
+    {
+      "id": "cpu",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fft.rs",
+      "symbol": "compute_periodic_newell_kernel_spectra",
+      "responsibility": "CPU periodic spectra."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "field",
+      "latex": "$\\mathbf H_d$",
+      "meaning": "demagnetizing field",
+      "si_unit": "A m^-1"
+    },
+    {
+      "id": "position",
+      "latex": "$\\mathbf r_i$",
+      "meaning": "target cell centre",
+      "si_unit": "m"
+    },
+    {
+      "id": "period",
+      "latex": "$\\mathbf L$",
+      "meaning": "unit-cell period",
+      "si_unit": "m"
+    },
+    {
+      "id": "index",
+      "latex": "$\\mathbf n$",
+      "meaning": "image index",
+      "si_unit": "1"
+    },
+    {
+      "id": "set",
+      "latex": "$\\mathcal I$",
+      "meaning": "finite image set",
+      "si_unit": "1"
+    },
+    {
+      "id": "magnetization",
+      "latex": "$\\mathbf M_j$",
+      "meaning": "source magnetization",
+      "si_unit": "A m^-1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fdm-periodic-images",
+      "symbols": [
+        "field",
+        "position",
+        "period",
+        "index",
+        "set",
+        "magnetization"
+      ],
+      "sources": [
+        "pbc",
+        "cpu"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FdmPbc.axes",
+        "type": "tuple[bool, bool, bool]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "iterates input, applies `bool(value)`, then requires length three",
+        "meaning": "periodic flags",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM separate contract",
+        "problem_ir": "pbc.axes"
+      },
+      {
+        "python": "FdmPbc.demag",
+        "type": "str",
+        "default": "open",
+        "si_unit": "1",
+        "validation": "applies `strip().lower()`, then requires `open`, `truncated_images`, or `periodic_airbox_k0`",
+        "meaning": "normalized requested demag policy",
+        "backend_support": "FDM CPU open/truncated source-backed; GPU capability-gated; FEM differs",
+        "problem_ir": "pbc.demag"
+      },
+      {
+        "python": "FdmPbc.image_counts",
+        "type": "tuple[int, int, int] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "applies `int(value)`, then requires length three and non-negative results; only `truncated_images`",
+        "meaning": "finite image ranges; when omitted for active periodic truncated demag, resolves to 10 on periodic axes and 0 on open axes",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "pbc.image_counts"
+      }
+    ]
+  }
 }

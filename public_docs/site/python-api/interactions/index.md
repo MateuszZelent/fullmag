@@ -31,7 +31,7 @@ inter-region-couplings
 ```
 ## Control Room crosswalk
 
-Use `Model Explorer -> Objects -> <object> -> Physics` for interaction controls exposed by `PhysicsInteractionPanel`. Interaction-specific fields absent from that panel are `TODO: frontend support`; the child API page remains authoritative. See {doc}`/frontend/capability-register`.
+Use `Model Explorer -> Objects -> <object> -> Physics` for interaction controls exposed by `PhysicsInteractionPanel`. Interaction-specific fields absent from that panel are explicitly marked `not implemented`; the child API page remains authoritative. See {doc}`/frontend/capability-register`.
 
 ## API and source scope
 

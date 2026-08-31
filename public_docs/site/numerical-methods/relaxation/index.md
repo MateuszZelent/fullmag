@@ -204,7 +204,7 @@ shared with [`docs/physics/0500-fdm-relaxation-algorithms.md`](https://github.co
 and [`docs/physics/0580-canonical-relaxation-equilibrium-contract.md`](https://github.com/MateuszZelent/fullmag/blob/master/docs/physics/0580-canonical-relaxation-equilibrium-contract.md).
 ## Control Room crosswalk
 
-This is a navigation page; use the terminal page named by the selected stage or solver. The category itself has no standalone editor. TODO: frontend support applies to numerical parameters without a matching control. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+This is a navigation page; use the terminal page named by the selected stage or solver. The category itself has no standalone editor. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 
 ## Bibliography
 

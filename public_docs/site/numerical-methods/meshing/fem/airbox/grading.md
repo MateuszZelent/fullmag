@@ -1,243 +1,182 @@
 ---
 title: "Airbox mesh grading"
-description: "Near-interface refinement, far-field coarsening and growth control in the exterior domain."
-summary: "A graded airbox concentrates tetrahedra near magnetic interfaces and lets size grow toward the outer boundary. Grading reduces cost only when it preserves field accuracy and acceptable element quality."
+description: "Universe-scoped FEM airbox element-size controls."
+summary: "Airbox controls are authored independently of magnetic-object controls and are normalized into universe metadata."
 status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "Airbox mesh-size controls, interface/transition fields, Gmsh field plan and scoped airbox quality report"
+last_updated: 2026-08-31
+reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+source_of_truth: "StudyUniverseHandle.mesh and StudyUniverseConfig"
 ---
 
 (public-docs-numerical-methods-meshing-fem-airbox-grading)=
 # Airbox mesh grading
 
-**Last changes: 12:31 24.08.2026**
+(airbox-grading-problem-statement)=
+## Physical problem
 
-A graded airbox concentrates tetrahedra near magnetic interfaces and lets size grow toward the outer boundary. Grading reduces cost only when it preserves field accuracy and acceptable element quality.
+`study.universe.mesh(...)` is the requested resolution of the FEM auxiliary airbox. It is not the magnetic-body mesh and it does not establish an observable error bound.
 
-::::{admonition} Implementation status
-:class: important
-
-Minimum/maximum size, growth, grading, curvature and narrow-region controls are exposed. The effective field plan and realized size distribution are authoritative because object/interface fields can dominate airbox defaults.
-::::
-
-## Scope and purpose
-
-Use grading after the airbox geometry is fixed. The key design is a fine magnetic-interface zone,
-a controlled transition and a coarser far field. Uniformly refining the entire exterior is usually
-expensive; overaggressive coarsening can corrupt the scalar potential and conditioning.
-
-## Scientific and numerical model
-
-For open-boundary magnetostatics, Fullmag's FEM route introduces a scalar potential $u$ on a finite
-computational domain $\Omega=\Omega_m\cup\Omega_a$, where $\Omega_m$ is magnetic material and
-$\Omega_a$ is the exterior airbox. In current-free regions,
+(airbox-grading-governing-equations)=
+## Governing equations
 
 ```{math}
-:label: eq-airbox-poisson-fem-airbox-grading
-\nabla\cdot\left(-\nabla u+\mathbf M\right)=0,
-\qquad \mathbf H_d=-\nabla u.
+:label: eq-airbox-grading-bounds
+0<h_{\min}\leq h_{\max}.
 ```
-
-The infinite exterior is replaced by a finite outer boundary $\Gamma_{out}$ plus a separately
-selected boundary closure. The mesh and boundary condition are distinct: making the airbox larger
-does not itself impose an open boundary, and a Robin condition does not eliminate discretization
-error near the magnet.
-
-The exterior mesh should be fine enough at magnetic interfaces to represent surface-charge-driven
-field variation and may grow toward $\Gamma_{out}$. If $h_0$ is the near-interface size and $r>1$ a
-geometric grading ratio, a conceptual layer sequence is
 
 ```{math}
-:label: eq-airbox-geometric-grading-fem-airbox-grading
-h_j=\min(h_{far},h_0 r^j).
+:label: eq-airbox-grading-growth
+0 < g \leq 2.5.
 ```
 
-The outer-boundary distance and exterior mesh size require independent convergence studies.
-If the target size changes from $h_i$ at an interface to $h_f$ over distance $D$, a geometric
-progression with ratio $r$ uses approximately
+(airbox-grading-symbols-and-si-units)=
+## Symbols and SI units
 
-```{math}
-:label: eq-airbox-grading-layer-count-fem-airbox-grading
-n\approx\frac{\log(h_f/h_i)}{\log r}
-```
-
-growth steps. This is a planning estimate, not a guarantee that Gmsh creates concentric layers.
-Size fields constrain local targets; final tetrahedra also depend on geometry, neighboring fields,
-smoothing and algorithms. A large ratio can create abrupt transitions and poor conditioning.
-
-## Selection guide
-
-| Use case | Recommended choice | Reason |
+| Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| Open demag baseline | geometric grading 1.3–1.5 | Typical controlled start, then convergence |
-| Narrow gap between magnets | smaller hmin + narrow-region refinement | Resolves strong gap fields |
-| Curved particle | curvature refinement near interface | Captures surface geometry/charge |
-| Very distant outer boundary | larger hmax only after interface protected | Reduces far-field count |
+| $h_{\min}$ | requested airbox minimum element size | $\mathrm{m}$ |
+| $h_{\max}$ | requested airbox maximum element size | $\mathrm{m}$ |
+| $g$ | requested airbox growth-rate control | $1$ |
 
-## Parameters
+(airbox-grading-assumptions-and-validity)=
+## Assumptions and validity
 
-| Python / IR key | Unit | Default | Validation | Numerical effect |
-| --- | --- | --- | --- | --- |
-| `airbox_hmax` / `maximum_element_size` | m | unset | positive | far-field maximum tetrahedron size |
-| `airbox_hmin` / `minimum_element_size` | m | unset | positive and no greater than hmax | lower clamp for airbox refinement |
-| `airbox_growth_rate` / `grading_ratio` | 1 | `1.3` in `AirboxOptions` | positive; typically >1 for geometric grading | rate at which element size grows away from the magnet |
-| `airbox_grading` / `grading_mode` | 1 | `geometric` | `auto`, `geometric`, `linear` in the UI contract | controls the transition from interface to far field |
-| `curvature_factor` | 1 | unset | positive when set | curvature-based sizing in the exterior geometry |
-| `narrow_region_resolution` | 1 | unset | positive when set | resolution request for narrow exterior gaps |
-| `interface_maximum_element_size` | m | object-policy dependent | positive | target on magnetic/air interface |
-| `interface_thickness` | m | object-policy dependent | positive | fine interface shell width |
-| `transition_growth` | 1 | object-policy dependent | positive | requested interface-to-air growth |
+Controls are input constraints, not a quality or convergence certificate. The public validator
+accepts a finite growth rate only when $0<g\leq2.5$; despite the error text naming the practical
+range `1.0-2.5`, the code does not reject values in $(0,1)$. `asset_pipeline` lowers authored
+`airbox_grading="auto"` to the realized `AirboxOptions.grading_mode="geometric"`. Gmsh
+narrow-region fields restrict body-surface/body-volume refinement so outer airbox faces are not
+treated as magnetic narrow-region walls.
 
+| Solver lane | Status | Limit |
+| --- | --- | --- |
+| FEM CPU | source-backed | No completed numerical convergence claimed. |
+| FEM GPU | capability-gated | No GPU runtime qualification claimed. |
+| FDM CPU | not applicable | `cell_size` cannot be combined with these FEM controls. |
+| FDM GPU | not applicable | `cell_size` cannot be combined with these FEM controls. |
+
+(airbox-grading-python-api)=
 ## Python API
 
-**Complete Python example**
-
 ```python
+# %%
 import fullmag as fm
-
-nm = 1.0e-9
-study = fm.study("graded_airbox_mesh")
+nm = 1e-9
+study = fm.study("airbox_grading")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.universe(
-    mode="manual",
-    size=(800 * nm, 600 * nm, 300 * nm),
-    center=(0.0, 0.0, 0.0),
-    padding=(0.0, 0.0, 0.0),
-)
-study.universe.mesh(
-    minimum_element_size=8 * nm,
-    maximum_element_size=100 * nm,
-    maximum_element_growth_rate=1.35,
-    grading="geometric",
-)
+study.universe(mode="manual", size=(600 * nm, 400 * nm, 200 * nm))
 
-film = study.geometry(
-    fm.Box(size=(300 * nm, 120 * nm, 10 * nm), name="film"),
-    name="film",
-)
-film.mesh(
-    mesh_strategy="free_tetrahedral",
-    minimum_element_size=3 * nm,
-    maximum_element_size=7 * nm,
-    interface_maximum_element_size=5 * nm,
-    interface_thickness=15 * nm,
-    transition_distance="airbox_boundary",
-    transition_growth=1.35,
-    order=1,
-    compute_quality=True,
-)
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+# %%
+study.universe.mesh(maximum_element_size=80 * nm, minimum_element_size=10 * nm, maximum_element_growth_rate=1.3, grading="geometric")
+body = study.geometry(fm.Box(size=(200 * nm, 100 * nm, 10 * nm), name="film"), name="film")
+body.mesh(maximum_element_size=8 * nm, minimum_element_size=4 * nm, order=1)
+body.Ms = 800e3
+body.Aex = 13e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
+# %%
 study.exchange()
-study.demag(realization="poisson_robin")
+study.demag(model="airbox", variant="robin")
 study.build_domain_mesh()
-study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=10_000, tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", max_steps=1000)
 ```
 
-## Control Room workflow
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `study.universe.mesh.cell_size` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | `None`, a positive scalar, or a positive length-3 vector; same-call FEM controls conflict, prior FDM state blocks later FEM controls, but a later `cell_size` does not inspect prior FEM controls | common FDM cell size | FDM authoring state only; runtime lane requires separate qualification; FEM not applicable | `_state._common_fdm_cell_size` |
+| `study.universe.mesh.hmax` | `float \| None` | `None` | $\mathrm{m}$ | positive; ignored when canonical maximum is supplied | compatibility alias for airbox maximum | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmax` |
+| `study.universe.mesh.hmin` | `float \| None` | `None` | $\mathrm{m}$ | positive; ignored when canonical minimum is supplied | compatibility alias for airbox minimum | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmin` |
+| `study.universe.mesh.maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; canonical value wins over `hmax` | far-airbox size | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmax` |
+| `study.universe.mesh.minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive and not greater than resolved maximum; canonical value wins over `hmin` | near-airbox size | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_hmin` |
+| `study.universe.mesh.growth_rate` | `float \| None` | `None` | $1$ | Finite and `0 < value <= 2.5` | compatibility growth alias | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_growth_rate` |
+| `study.universe.mesh.maximum_element_growth_rate` | `float \| None` | `None` | $1$ | Finite and `0 < value <= 2.5`; ignored when `growth_rate` is supplied | growth control | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `study.universe.airbox_growth_rate` |
+| `study.universe.mesh.grading` | `str \| None` | `None` | $1$ | `auto`, `geometric`, or `linear`; `auto` resolves to `geometric`; `None` and `"auto"` both resolve to `"geometric"` | grading vocabulary | FEM authoring/lowering is source-backed; runtime lane requires separate qualification | `AirboxOptions.grading_mode` |
 
-1. In **Explorer**, select **Universe / Airbox Mesh**.
-2. Choose **Domain mode** and enter either explicit **Size X/Y/Z** and **Center X/Y/Z**, or automatic
-   **Padding X/Y/Z**.
-3. For FEM, set **Maximum element size**, **Minimum element size**, **Maximum element growth rate**,
-   **Element grading**, **Curvature factor** and **Narrow-region resolution** as needed.
-4. Select **Apply Airbox Policy** to store the universe-owned exterior-domain intent. This makes any
-   older shared-domain realization stale.
-5. Select **Apply & Build Shared-Domain Mesh** to dispatch `mesh.build-shared-domain`.
-6. Inspect the effective configuration, shared-domain manifest, outer-boundary marker, interface
-   conformity and mesh-quality scopes. The effective configuration returned by the backend is the
-   source of truth.
+### Realized defaults and asymmetric `cell_size` state
 
-For FDM, the panel filters FEM-only air-mesh controls and exposes structured-domain geometry only.
+The Python signature exposes authored defaults of `None`. Asset-pipeline realization is more specific: an absent growth control resolves to `grading_ratio=1.3`, and both absent `grading` and authored `grading="auto"` resolve to `grading="geometric"`. Every supplied growth value must be finite and satisfy
 
-Configure airbox min/max size and growth in the Universe panel, then protect the magnetic
-interface in each object's **Interface and Transition Refinement** group. After build, use scoped
-size histograms for **air**, **magnet**, and **interface**. A single global histogram can hide a
-coarse interface or an unnecessarily fine far field.
+\[
+0 < \mathrm{growth\_rate} \leq 2.5.
+\]
 
-## Grading-convergence checks
+The source permits values below `1.0`; the narrower interval sometimes described as practical guidance is not a validation bound.
 
-Hold outer geometry fixed. Refine the interface target and growth ratio while monitoring field
-and energy. Separately refine far-field hmax. Inspect quality/condition proxies and solver
-iterations: a mesh that reduces cell count but greatly increases iterations may not be cheaper.
+| Call/state ordering | Actual validation or mutation |
+| --- | --- |
+| One `mesh(...)` call supplies `cell_size` together with any FEM size, growth, or grading control. | Rejected before either route is applied. |
+| FDM `cell_size` is already stored, then a later `mesh(...)` call supplies FEM controls. | Rejected because the prior FDM state blocks the FEM route. |
+| FEM controls are already stored, then a later `mesh(cell_size=...)` call is made. | Accepted by the current code: it writes `_common_fdm_cell_size` and returns without checking or clearing the prior FEM controls. |
 
-## Verification, quality and provenance
+The third case can leave contradictory authored state. This is a source-backed limitation, not a supported mixed FEM/FDM configuration and not evidence that either runtime consumes both routes coherently.
 
-After every build, inspect the **realized** resource rather than assuming that the authored request
-was applied. The production check is:
+(airbox-grading-problem-ir)=
+## ProblemIR
 
-- geometry and mesh revisions match the current model;
-- requested and realized discretization/topology/order are recorded;
-- node, element and boundary-facet counts are nonzero for every required region;
-- region and boundary markers cover the complete topology;
-- inverted and degenerate element counts are zero;
-- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
-- local size distributions are consistent with the intended edge/interface/core grading;
-- any fallback or degradation has an explicit reason and an actual method;
-- a mesh-refinement sequence demonstrates convergence of the scientific observable.
+The facade resolves each canonical name over its alias, validates values, and
+`StudyUniverseConfig.to_ir` stores `airbox_hmax`, `airbox_hmin`,
+`airbox_growth_rate`, and `airbox_grading`. `cell_size` takes the separate FDM branch and writes
+`_state._common_fdm_cell_size`. The asset pipeline maps `auto` grading to `geometric` and passes
+the resolved values to `AirboxOptions`; these remain requested/effective controls, not measured
+edge lengths.
 
-`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
-statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
-`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
-acceptance thresholds for every element family or study.
+(airbox-grading-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-## Mesh-convergence protocol
+**Requested intent** is the full eight-parameter call. **Resolved execution** separates the FDM
+`cell_size` branch from normalized FEM controls, then records effective `AirboxOptions`, Gmsh
+field plan, and elements. **Validation errors** include non-positive sizes, non-finite growth,
+growth above `2.5`, `hmin > hmax`, invalid grading, and the documented same-call and prior-state
+conflict branches for `cell_size` and FEM controls.
+**Unsupported combinations** include retaining a prior common FDM `cell_size` while configuring
+FEM universe controls or treating growth as a guaranteed layer sequence.
 
-A production result should include at least three discretizations. Refine only the parameter under
-study while holding geometry, material parameters, solver tolerances, initial state and output
-sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
+(airbox-grading-discrete-realization)=
+## Discrete realization
 
-```{math}
-:label: eq-meshing-relative-change-fem-airbox-grading
-\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
-\qquad \rho>1,
-```
+Gmsh receives mesh options after shared-domain assembly. The narrow-region field confines body refinement to component surfaces/volumes; inspect the realized field plan, size statistics, and operation status.
 
-with a documented scale for observables that can cross zero. For dynamics, compare resonance
-frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
-compare field/energy and verify that moving the outer boundary does not change the result beyond the
-chosen tolerance.
+(airbox-grading-implementation-mapping)=
+## Implementation mapping
 
-## Diagnostics and failure semantics
-
-- `hmin > hmax` is invalid.
-- If a semantic interface field matches no surfaces, the airbox can remain coarse at the magnet.
-- Multiple fields combine by the normalized field plan; inspect whether minimum/clamp operations
-  produced the intended result.
-- Excessive growth creates low-quality transition cells and potential error.
-- A far-field hmax larger than the outer-domain feature scale can leave the boundary underresolved.
-
-## Where this is implemented
-
-| Responsibility | Repository source | Stable owner / symbol |
+| Responsibility | Repository path | Stable symbol |
 | --- | --- | --- |
-| Airbox size contract | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `AirboxOptions` |
-| Volume clamp fields | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `_add_airbox_volume_clamp_fields` |
-| Size-field plan | [`packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py) | `normalized size-field plan` |
-| Gmsh fields | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py) | `_apply_mesh_options` |
-| Airbox UI | [`apps/control-room/src/modules/inspector/panels/AirboxMeshParametersPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/AirboxMeshParametersPanel.tsx) | `airbox sizing controls` |
+| public mesh controls | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` |
+| normalized controls | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseConfig` |
+| generic validation | `packages/fullmag-py/src/fullmag/world.py` | `def _validate_mesh_control_values` |
+| auto grading realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` |
+| Gmsh options | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _apply_mesh_options` |
+| body-only field restriction | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _add_narrow_region_field` |
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
+(airbox-grading-validation)=
+## Validation
 
-## Related documentation
+Test rejection first, then record requested controls, realized field plan, size distribution, quality, and solver iterations. Refine one control at a time. No runtime receipt is provided.
 
-- [Airbox geometry](geometry.md)
-- [Refinement](../../refinement.md)
+(airbox-grading-limitations)=
+## Limitations
 
-## References
+Current code bounds `g` and resolves the grading vocabulary, but has no universal formula from
+`g` to every realized element and no universal physics error estimator or runtime qualification.
 
-- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
+(airbox-grading-scientific-bibliography)=
+## Scientific bibliography
+
+- C. Geuzaine and J.-F. Remacle, *International Journal for Numerical Methods in Engineering* **79** (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+
+(airbox-grading-source-code-index)=
 ## Source-code index
 
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
-
+| Claim | Repository path | Stable symbol | Evidence |
+| --- | --- | --- | --- |
+| API and aliases | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseHandle` | source-backed |
+| constraints and IR | `packages/fullmag-py/src/fullmag/world.py` | `class StudyUniverseConfig` | source-backed |
+| input validation | `packages/fullmag-py/src/fullmag/world.py` | `def _validate_mesh_control_values` | source-backed |
+| `auto` to `geometric` realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` | source-backed |
+| Gmsh application | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _apply_mesh_options` | source-backed |
+| airbox-safe refinement | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _add_narrow_region_field` | source-backed |

@@ -3,17 +3,258 @@
     "path": "public_docs/site/numerical-methods/meshing/fem/airbox/periodic-airbox.md",
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
+  "public_ownership": [
     {
-      "id": "periodic_occ",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "pbc",
+      "responsibility": "Direct module-level world.pbc public entry point; performs the raw no-axis guard, then constructs FdmPbc for active axes."
+    }
+  ],
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "partial-source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "authoring-only",
+      "reason": "FDM truncated_images authoring/lowering is documented; execution is not qualified here."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "authoring-only",
+      "reason": "FDM truncated_images authoring/lowering is documented; execution is not qualified here."
+    }
+  ],
+  "sources": [
+    {
+      "id": "pbc_ir",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class FdmPbc",
+      "responsibility": "Validate images conditions and serialize PBC IR."
+    },
+    {
+      "id": "pair_ids",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_sync_default_mesh_periodic_pair_ids_from_pbc",
+      "responsibility": "Derive x_faces/y_faces/z_faces mesh IDs."
+    },
+    {
+      "id": "descriptor",
+      "path": "packages/fullmag-py/src/fullmag/meshing/periodic.py",
+      "symbol": "class PeriodicBoundaryPair",
+      "responsibility": "Validate and serialize every pair descriptor field."
+    },
+    {
+      "id": "occ_pairing",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py",
       "symbol": "_configure_axis_periodic_surfaces",
-      "responsibility": "Periodic airbox surface pairing."
+      "responsibility": "Derive translation/tolerance and call Gmsh periodic pairing."
+    },
+    {
+      "id": "occ_groups",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py",
+      "symbol": "_add_periodic_boundary_physical_groups",
+      "responsibility": "Assign dedicated periodic physical groups."
+    },
+    {
+      "id": "asset_pairs",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_periodic_pair_counts_by_id",
+      "responsibility": "Preserve and report periodic-pair ownership in shared assets."
+    },
+    {
+      "id": "planner",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "fem_frequency_response_production_slice_rejection_reason",
+      "responsibility": "Frequency-response-only planner gate requiring shared-domain air, demag, `spin_wave_bc=periodic`, `k=0`, magnetic `delta_m` periodic constraints, and magnetostatic-with-air `delta_phi` periodic constraints."
+    },
+    {
+      "id": "public_pbc_owner",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Public `StudyBuilder.pbc` delegates to `world.pbc`; `world.pbc` owns axis bool coercion and `FdmPbc` creation."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "slave",
+      "latex": "\\mathbf{x}_{\\mathrm{slave}}",
+      "meaning": "destination-surface coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "master",
+      "latex": "\\mathbf{x}_{\\mathrm{master}}",
+      "meaning": "source-surface coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "t",
+      "latex": "\\mathbf{t}",
+      "meaning": "axis translation",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "k",
+      "latex": "\\mathbf{k}",
+      "meaning": "wave vector",
+      "si_unit": "\\mathrm{m^{-1}}"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-airbox-periodic-translation",
+      "symbols": [
+        "slave",
+        "master",
+        "t"
+      ],
+      "sources": [
+        "occ_pairing",
+        "descriptor"
+      ]
+    },
+    {
+      "id": "eq-airbox-periodic-k0",
+      "symbols": [
+        "k"
+      ],
+      "sources": [
+        "planner"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.pbc.x",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "1",
+        "validation": "Coerced with `bool(value)`; a non-open demag policy or `images` requires at least one true axis",
+        "meaning": "x periodic axis",
+        "backend_support": "FEM and FDM authoring contract; runtime lanes require separate qualification",
+        "problem_ir": "periodic axes and `x_faces`"
+      },
+      {
+        "python": "study.pbc.y",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "1",
+        "validation": "Coerced with `bool(value)`; a non-open demag policy or `images` requires at least one true axis",
+        "meaning": "y periodic axis",
+        "backend_support": "FEM and FDM authoring contract; runtime lanes require separate qualification",
+        "problem_ir": "periodic axes and `y_faces`"
+      },
+      {
+        "python": "study.pbc.z",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "1",
+        "validation": "Coerced with `bool(value)`; a non-open demag policy or `images` requires at least one true axis",
+        "meaning": "z periodic axis",
+        "backend_support": "FEM and FDM authoring contract; runtime lanes require separate qualification",
+        "problem_ir": "periodic axes and `z_faces`"
+      },
+      {
+        "python": "study.pbc.demag",
+        "type": "Literal[open, truncated_images, periodic_airbox_k0]",
+        "default": "open",
+        "si_unit": "1",
+        "validation": "With any true axis, `FdmPbc` applies `strip().lower()` and accepts `open`, `truncated_images`, or `periodic_airbox_k0`; with no true axis, `world.pbc` compares raw `demag` to exact `\"open\"` before `FdmPbc`; unknown values are rejected",
+        "meaning": "periodic demag request",
+        "backend_support": "FEM and FDM authoring contract; runtime lanes require separate qualification",
+        "problem_ir": "periodic demag request"
+      },
+      {
+        "python": "study.pbc.images",
+        "type": "tuple[int, int, int] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Only with `truncated_images` and at least one true axis; integer-coerced length-3 tuple with every count >= 0",
+        "meaning": "FDM image counts",
+        "backend_support": "FDM authoring contract only; runtime requires separate qualification",
+        "problem_ir": "problem.pbc.image_counts"
+      },
+      {
+        "python": "PeriodicBoundaryPair.pair_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty after validation",
+        "meaning": "stable pair identity",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().pair_id"
+      },
+      {
+        "python": "PeriodicBoundaryPair.source_marker",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "authored source marker",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().source_marker"
+      },
+      {
+        "python": "PeriodicBoundaryPair.destination_marker",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "authored destination marker",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().destination_marker"
+      },
+      {
+        "python": "PeriodicBoundaryPair.translation",
+        "type": "tuple[float, float, float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly 3 components; each coerced with `float`",
+        "meaning": "source-to-destination translation",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().translation"
+      },
+      {
+        "python": "PeriodicBoundaryPair.tolerance_m",
+        "type": "float",
+        "default": "1e-12",
+        "si_unit": "\\mathrm{m}",
+        "validation": "strictly positive through `require_positive`",
+        "meaning": "authored matching tolerance",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().tolerance_m"
+      },
+      {
+        "python": "PeriodicBoundaryPair.axis_hint",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "when present, non-empty; no x/y/z enum restriction",
+        "meaning": "optional diagnostic axis hint",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().axis_hint"
+      },
+      {
+        "python": "PeriodicBoundaryPair.pairing_policy",
+        "type": "str",
+        "default": "node_nearest_within_tolerance",
+        "si_unit": "1",
+        "validation": "non-empty; no enumerated-policy validation in dataclass",
+        "meaning": "authored pairing-policy name",
+        "backend_support": "FEM periodic-pair metadata is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "PeriodicBoundaryPair.to_ir().pairing_policy"
+      }
+    ]
+  }
 }

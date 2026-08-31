@@ -140,10 +140,10 @@ Status: Interaction selection is partial; only fields advertised by the current 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Physics` | `partial` | Apply physics draft; solver/stage resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Physics` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Physics` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for interaction-specific parameters absent from PhysicsInteractionPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend support is not implemented for interaction-specific parameters absent from `PhysicsInteractionPanel`.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and explicit not-implemented status.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx (PhysicsInteractionPanel)`.
 
 ## Python API

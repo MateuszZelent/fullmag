@@ -4,16 +4,185 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
     {
-      "id": "airbox_options",
-      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
-      "symbol": "class AirboxOptions",
-      "responsibility": "Airbox geometry and clearance options."
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FEM airbox mesh API."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM airbox mesh API."
     }
-  ]
+  ],
+  "sources": [
+    {
+      "id": "config",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseConfig",
+      "responsibility": "Validate and serialize universe geometry."
+    },
+    {
+      "id": "airbox_lowering",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_study_universe_airbox_options",
+      "responsibility": "Resolve explicit or padded auto airbox bounds and grading."
+    },
+    {
+      "id": "rectangular_bounds",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_rectangular_airbox_bounds_from_options",
+      "responsibility": "Resolve rectangular min/max bounds from AirboxOptions."
+    },
+    {
+      "id": "study_universe_mesh_owner",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Public `StudyUniverseHandle.mesh` owns authored FEM/FDM mesh controls and the asymmetric `cell_size` routing."
+    },
+    {
+      "id": "study_universe_airbox_owner",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_configure_study_universe",
+      "responsibility": "Public `universe.airbox(...)` configuration owns authored `AirboxOptions` before asset-pipeline realization."
+    }
+  ],
+  "symbols": [
+    {
+      "id": "omega",
+      "latex": "\\Omega_a",
+      "meaning": "authored auxiliary airbox domain",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "x",
+      "latex": "\\mathbf{x}",
+      "meaning": "spatial coordinate",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "c",
+      "latex": "c_i",
+      "meaning": "center component",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "l",
+      "latex": "L_i",
+      "meaning": "size component",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "p",
+      "latex": "p_i",
+      "meaning": "authored non-negative padding component",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "xmin",
+      "latex": "x_{i,\\min}^{\\mathrm{obj}}",
+      "meaning": "minimum aggregate object bound",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "xmax",
+      "latex": "x_{i,\\max}^{\\mathrm{obj}}",
+      "meaning": "maximum aggregate object bound",
+      "si_unit": "\\mathrm{m}"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-airbox-geometry-bounds",
+      "symbols": [
+        "omega",
+        "x",
+        "c",
+        "l"
+      ],
+      "sources": [
+        "config",
+        "rectangular_bounds"
+      ]
+    },
+    {
+      "id": "eq-airbox-auto-size",
+      "symbols": [
+        "l",
+        "xmin",
+        "xmax",
+        "p"
+      ],
+      "sources": [
+        "airbox_lowering"
+      ]
+    },
+    {
+      "id": "eq-airbox-auto-center",
+      "symbols": [
+        "c",
+        "xmin",
+        "xmax"
+      ],
+      "sources": [
+        "airbox_lowering"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.universe.mode",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`auto` or `manual`; manual requires size",
+        "meaning": "universe mode",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification; FDM not applicable",
+        "problem_ir": "study.universe.mode"
+      },
+      {
+        "python": "study.universe.size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "three strictly positive components when present",
+        "meaning": "outer dimensions",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification; FDM not applicable",
+        "problem_ir": "study.universe.size"
+      },
+      {
+        "python": "study.universe.center",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "three finite components",
+        "meaning": "outer-domain center",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification; FDM not applicable",
+        "problem_ir": "study.universe.center"
+      },
+      {
+        "python": "study.universe.padding",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "three non-negative components",
+        "meaning": "authored padding",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification; FDM not applicable",
+        "problem_ir": "study.universe.padding"
+      }
+    ]
+  }
 }

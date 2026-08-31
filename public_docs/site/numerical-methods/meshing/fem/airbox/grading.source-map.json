@@ -4,16 +4,191 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
     {
-      "id": "mesh_options",
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "authoring-only",
+      "reason": "FDM cell_size authoring/lowering is documented; execution is not qualified here."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "authoring-only",
+      "reason": "FDM cell_size authoring/lowering is documented; execution is not qualified here."
+    }
+  ],
+  "sources": [
+    {
+      "id": "handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Expose all universe mesh controls, aliases, precedence and collisions."
+    },
+    {
+      "id": "config",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseConfig",
+      "responsibility": "Validate and serialize normalized FEM airbox controls."
+    },
+    {
+      "id": "validation",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_validate_mesh_control_values",
+      "responsibility": "Validate sizes and the 2.5 growth-rate ceiling."
+    },
+    {
+      "id": "airbox_lowering",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "_study_universe_airbox_options",
+      "responsibility": "Lower auto grading to geometric AirboxOptions."
+    },
+    {
+      "id": "gmsh_options",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
       "symbol": "_apply_mesh_options",
-      "responsibility": "Mesh-size field application and grading."
+      "responsibility": "Apply resolved Gmsh mesh options."
+    },
+    {
+      "id": "narrow_region",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_add_narrow_region_field",
+      "responsibility": "Restrict narrow-region refinement to magnetic bodies."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "hmin",
+      "latex": "h_{\\min}",
+      "meaning": "requested airbox minimum element size",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "hmax",
+      "latex": "h_{\\max}",
+      "meaning": "requested airbox maximum element size",
+      "si_unit": "\\mathrm{m}"
+    },
+    {
+      "id": "g",
+      "latex": "g",
+      "meaning": "requested airbox growth-rate control",
+      "si_unit": "1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-airbox-grading-bounds",
+      "symbols": [
+        "hmin",
+        "hmax"
+      ],
+      "sources": [
+        "validation"
+      ]
+    },
+    {
+      "id": "eq-airbox-grading-growth",
+      "symbols": [
+        "g"
+      ],
+      "sources": [
+        "validation",
+        "airbox_lowering"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.universe.mesh.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "`None`, a positive scalar, or a positive length-3 vector; same-call FEM controls conflict, prior FDM state blocks later FEM controls, but a later `cell_size` does not inspect prior FEM controls",
+        "meaning": "common FDM cell size",
+        "backend_support": "FDM authoring state only; runtime lane requires separate qualification; FEM not applicable",
+        "problem_ir": "_state._common_fdm_cell_size"
+      },
+      {
+        "python": "study.universe.mesh.hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive; ignored when canonical maximum is supplied",
+        "meaning": "compatibility alias for airbox maximum",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_hmax"
+      },
+      {
+        "python": "study.universe.mesh.hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive; ignored when canonical minimum is supplied",
+        "meaning": "compatibility alias for airbox minimum",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_hmin"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive; canonical value wins over `hmax`",
+        "meaning": "far-airbox size",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_hmax"
+      },
+      {
+        "python": "study.universe.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive and not greater than resolved maximum; canonical value wins over `hmin`",
+        "meaning": "near-airbox size",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_hmin"
+      },
+      {
+        "python": "study.universe.mesh.growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Finite and `0 < value <= 2.5`",
+        "meaning": "compatibility growth alias",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_growth_rate"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Finite and `0 < value <= 2.5`; ignored when `growth_rate` is supplied",
+        "meaning": "growth control",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "study.universe.airbox_growth_rate"
+      },
+      {
+        "python": "study.universe.mesh.grading",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`auto`, `geometric`, or `linear`; `auto` resolves to `geometric`; `None` and `\"auto\"` both resolve to `\"geometric\"`",
+        "meaning": "grading vocabulary",
+        "backend_support": "FEM authoring/lowering is source-backed; runtime lane requires separate qualification",
+        "problem_ir": "AirboxOptions.grading_mode"
+      }
+    ]
+  }
 }

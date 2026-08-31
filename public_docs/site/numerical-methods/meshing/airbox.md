@@ -1,129 +1,139 @@
 ---
 title: "FEM airbox meshing"
 description: "Exterior-domain geometry, grading, boundary markers and convergence for FEM magnetostatics."
-summary: "The FEM airbox is a nonmagnetic computational domain around magnetic bodies. Its geometry, graded tetrahedral mesh, outer marker and boundary closure jointly define the approximation to open space."
+summary: "Public authoring and realization semantics for a conforming FEM airbox around magnetic geometry."
 status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "Universe-owned airbox policy, Gmsh airbox construction, shared-domain manifest and FEM demag boundary policy"
+last_updated: 2026-08-31
+reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
+source_of_truth: "current public authoring, ProblemIR lowering, mesh realization, and build report"
 ---
 
 (public-docs-numerical-methods-meshing-airbox)=
 # FEM airbox meshing
 
-**Last changes: 12:31 24.08.2026**
+(airbox-problem-statement)=
+## Problem statement
 
-The FEM airbox is a nonmagnetic computational domain around magnetic bodies. Its geometry, graded tetrahedral mesh, outer marker and boundary closure jointly define the approximation to open space.
+An airbox is the finite nonmagnetic exterior domain around magnetic geometry in an
+unstructured FEM shared-domain mesh. It is authored at study scope, not as an
+independent magnetic body. The outer geometry, region markers, conforming interfaces and
+outer-boundary marker are mesh data; a physical outer-boundary closure remains a separate
+solver decision.
 
-::::{admonition} Implementation status
-:class: important
+(airbox-governing-equations)=
+## Governing equations
 
-Explicit and automatic FEM airbox geometry and graded meshing are implemented. Periodic-airbox and some swept/shared-domain combinations are separately capability-gated and must not be inferred from ordinary open-airbox support.
-::::
-
-## Scope and purpose
-
-Use an airbox when a FEM interaction solves a field in the nonmagnetic exterior, most notably the
-scalar-potential demagnetization formulation. The airbox belongs to the **Universe**, not to one
-magnetic object. A shared-domain build must preserve magnetic region markers, air marker, internal
-interfaces and the outer boundary marker.
-
-## Scientific and numerical model
-
-For open-boundary magnetostatics, Fullmag's FEM route introduces a scalar potential $u$ on a finite
-computational domain $\Omega=\Omega_m\cup\Omega_a$, where $\Omega_m$ is magnetic material and
-$\Omega_a$ is the exterior airbox. In current-free regions,
+For the scalar-potential demagnetization formulation on the shared magnetic-plus-air domain,
+the current-free exterior uses
 
 ```{math}
-:label: eq-airbox-poisson-airbox
-\nabla\cdot\left(-\nabla u+\mathbf M\right)=0,
-\qquad \mathbf H_d=-\nabla u.
+:label: eq-airbox-poisson
+
+\nabla\!\cdot\!\left(-\nabla u+\mathbf{M}\right)=0,
+\qquad \mathbf{H}_d=-\nabla u.
 ```
 
-The infinite exterior is replaced by a finite outer boundary $\Gamma_{out}$ plus a separately
-selected boundary closure. The mesh and boundary condition are distinct: making the airbox larger
-does not itself impose an open boundary, and a Robin condition does not eliminate discretization
-error near the magnet.
-
-The exterior mesh should be fine enough at magnetic interfaces to represent surface-charge-driven
-field variation and may grow toward $\Gamma_{out}$. If $h_0$ is the near-interface size and $r>1$ a
-geometric grading ratio, a conceptual layer sequence is
+Exterior sizing can use geometric grading from a near-interface target $h_0$:
 
 ```{math}
-:label: eq-airbox-geometric-grading-airbox
-h_j=\min(h_{far},h_0 r^j).
+:label: eq-airbox-geometric-grading
+
+h_j=\min(h_{\mathrm{far}},h_0 r^j),\qquad r>1.
 ```
 
-The outer-boundary distance and exterior mesh size require independent convergence studies.
+(airbox-symbols-and-si-units)=
+## Symbols and SI units
 
-### Scientific invariants
-
-A finite-element mesh is not only a visualization asset. It defines the trial/test spaces used by
-exchange, anisotropy, DMI, magnetostatic and dynamic operators. The following conditions are therefore
-part of the numerical contract:
-
-1. Every magnetic volume has an unambiguous region marker and every exterior-air volume has the
-   canonical air role.
-2. Interfaces used by coupled operators are conforming, or an explicitly supported nonconforming
-   coupling operator is selected. Fullmag's ordinary shared-domain path expects conformity.
-3. Cell orientation is valid: the element mapping has a positive Jacobian at all required evaluation
-   points. Inverted or collapsed cells are build failures, not warnings to ignore.
-4. Requested topology, polynomial order, layer count and mesh-size controls are compared with the
-   realized mesh. A topology change is legal only when the build mode permits fallback and the report
-   names the actual method and reason.
-5. Mesh convergence is assessed on physical observables—energy, average magnetization, switching
-   field, eigenfrequency, linewidth or field error—not only on element count.
-
-For exchange-dominated variation, a useful *starting* scale is the magnetostatic exchange length
-
-```{math}
-:label: eq-meshing-exchange-length-airbox
-\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}.
-```
-
-Using an element size below roughly one half of the smallest relevant magnetic length scale is a
-common initial choice, not a proof of convergence. Curved boundaries, surface charges, DMI, defects,
-interfaces and through-thickness modes can demand a smaller local size.
-
-## Selection guide
-
-| Use case | Recommended choice | Reason |
+| Token | Meaning | SI unit |
 | --- | --- | --- |
-| Compact single magnet; routine open demag | rectangular explicit/automatic airbox | robust OCC construction and simple convergence sweep |
-| Nearly isotropic isolated object | spherical outer boundary when qualified | reduces directional bias of the truncation geometry |
-| Thin film with strong near-edge field | fine interface + geometric grading | resolves surface-charge variation without filling all exterior volume uniformly |
-| Periodic unit cell | periodic-airbox route only when advertised | ordinary open airbox is not a periodic Poisson problem |
+| $u$ | scalar magnetic potential | $\mathrm{A}$ |
+| $\mathbf{M}$ | magnetization in the magnetic region | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf{H}_d$ | demagnetizing field | $\mathrm{A\,m^{-1}}$ |
+| $h_j$ | target airbox element size in grading layer $j$ | $\mathrm{m}$ |
+| $h_0$ | near-interface target element size | $\mathrm{m}$ |
+| $h_{\mathrm{far}}$ | far-field element-size cap | $\mathrm{m}$ |
+| $r$ | geometric grading ratio | $1$ |
 
-## Parameters
+(airbox-assumptions-and-validity)=
+## Assumptions and validity
 
-| Python / IR key | Unit | Default | Validation | Numerical effect |
-| --- | --- | --- | --- | --- |
-| `mode` | 1 | `auto` / authored universe mode | supported universe mode | chooses automatic bounds, explicit bounds or lane-specific domain handling |
-| `padding` | m | unset/zero | three non-negative components | adds directional clearance around the magnetic geometry |
-| `size` | m | unset | three positive components | explicit outer-domain dimensions |
-| `center` | m | geometry-derived or zero | three finite components | positions the explicit outer domain |
-| `padding_factor` | 1 | `3.0` in `AirboxOptions` | positive | scales the magnetic bounding box when automatic scalar padding is used |
-| `shape` | 1 | `bbox` | `bbox` or `sphere` where supported | outer-domain geometry |
-| `airbox_hmax` / `maximum_element_size` | m | unset | positive | far-field maximum tetrahedron size |
-| `airbox_hmin` / `minimum_element_size` | m | unset | positive and no greater than hmax | lower clamp for airbox refinement |
-| `airbox_growth_rate` / `grading_ratio` | 1 | `1.3` in `AirboxOptions` | positive; typically >1 for geometric grading | rate at which element size grows away from the magnet |
-| `airbox_grading` / `grading_mode` | 1 | `geometric` | `auto`, `geometric`, `linear` in the UI contract | controls the transition from interface to far field |
-| `boundary_marker` | 1 | `99` in direct Python options | integer marker not colliding with region semantics | identifies the outer boundary used by the physical closure |
-| `curvature_factor` | 1 | unset | positive when set | curvature-based sizing in the exterior geometry |
-| `narrow_region_resolution` | 1 | unset | positive when set | resolution request for narrow exterior gaps |
+The finite airbox is a truncation of an exterior problem, not proof of an open-boundary
+solution. Converge outer distance separately from magnetic and air-region discretization.
+The OCC shared-domain route realizes an exact sphere only when
+`AirboxOptions.shape == "sphere"`; every other value takes its box branch. The mixed swept
+shared-domain route accepts only normalized `bbox`; a non-bbox request is rejected. In
+`component_aware` and `concatenated_stl_fallback` modes, a requested sphere is realized as a
+`bbox` and the mesh report records `status="degraded"`, `requested_method="sphere"` and
+`actual_method="bbox"`.
 
+When that mixed route derives size automatically, `padding_factor` must be finite and strictly
+greater than `1`. Explicit `size` and `center` are finite three-vectors and the airbox must
+strictly contain the magnetic body. The public `study.universe(...)` handle does not expose
+`shape` or `padding_factor`; they are realization-schema fields, documented here so that
+requested and realized shapes are not conflated.
+
+(airbox-python-api)=
 ## Python API
+
+### Complete public signature and IR matrix
+
+The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| study.universe(mode=...) | str \| None | None | 1 | forwarded to StudyUniverseConfig | domain mode | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.mode |
+| study.universe(size=...) | Sequence[float] \| None | None | m | as_vector3; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.size |
+| study.universe(center=...) | Sequence[float] \| None | None | m | as_vector3 | outer center | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.center |
+| study.universe(padding=...) | Sequence[float] \| None | None | m | as_vector3; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.padding |
+| study.universe.mesh(maximum_element_size=...) | float \| None | None | m | positive | airbox coarse target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmax |
+| study.universe.mesh(minimum_element_size=...) | float \| None | None | m | positive and no greater than numeric maximum | airbox lower clamp | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmin |
+| study.universe.mesh(maximum_element_growth_rate=...) | float \| None | None | 1 | finite positive at most 2.5 | airbox growth target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_growth_rate |
+| study.universe.mesh(grading=...) | str \| None | None | 1 | forwarded without vocabulary validation by this handle | airbox grading request | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_grading |
+| study.universe(mode=...) | str or None | None | $1$ | normalized by `_configure_study_universe` | requested universe mode | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.mode |
+| study.universe(size=...) | Sequence[float] or None | None | $\mathrm{m}$ | explicit realized dimensions must be positive | requested outer-domain dimensions | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.size |
+| study.universe(center=...) | Sequence[float] or None | None | $\mathrm{m}$ | supplied center is a finite three-vector at realization | requested outer-domain center | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.center |
+| study.universe(padding=...) | Sequence[float] or None | None | $\mathrm{m}$ | universe configuration validation | requested directional clearance | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.padding |
+| study.universe.mesh(maximum_element_size=...) | float or None | None | $\mathrm{m}$ | positive when supplied | far-field airbox target | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_hmax |
+| study.universe.mesh(minimum_element_size=...) | float or None | None | $\mathrm{m}$ | positive and no greater than maximum size | near-interface airbox target | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_hmin |
+| study.universe.mesh(maximum_element_growth_rate=...) | float or None | None | $1$ | positive when supplied | requested neighbor growth limit | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_growth_rate |
+| study.universe.mesh(grading=...) | str or None | None | $1$ | stored as requested grading mode | requested exterior grading mode | FEM authoring/lowering; runtime not qualified here | runtime_metadata.study_universe.airbox_grading |
+| study.build_domain_mesh() | StudyBuilder | n/a | $1$ | requires a realizable shared-domain configuration | public realization boundary | FEM build path; no device-runtime claim | current builder state to shared-domain mesh artifact |
+| AirboxOptions.padding_factor | float | 3.0 | $1$ | finite and greater than `1` for automatic mixed shared-domain sizing | automatic magnetic-bounding-box scale | FEM realization only | runtime_metadata.study_universe to AirboxOptions.padding_factor |
+| AirboxOptions.shape | str | bbox | $1$ | OCC: exact `sphere` only for that value; mixed swept route requires `bbox` | requested outer geometry | FEM realization only | runtime_metadata.study_universe to route-specific AirboxOptions.shape |
+
+
+
+The public authoring boundary is `study.universe(...)`, followed by the separately scoped
+`study.universe.mesh(...)`; `StudyBuilder.build_domain_mesh()` realizes the configured shared
+domain. `AirboxOptions` is the source-backed realization schema, not a replacement for the
+canonical study API.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `study.universe(mode=...)` | `str or None` | `None` | $1$ | normalized by `_configure_study_universe` | requested universe mode | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.mode` |
+| `study.universe(size=...)` | `Sequence[float] or None` | `None` | $\mathrm{m}$ | explicit realized dimensions must be positive | requested outer-domain dimensions | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.size` |
+| `study.universe(center=...)` | `Sequence[float] or None` | `None` | $\mathrm{m}$ | supplied center is a finite three-vector at realization | requested outer-domain center | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.center` |
+| `study.universe(padding=...)` | `Sequence[float] or None` | `None` | $\mathrm{m}$ | universe configuration validation | requested directional clearance | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.padding` |
+| `study.universe.mesh(maximum_element_size=...)` | `float or None` | `None` | $\mathrm{m}$ | positive when supplied | far-field airbox target | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_hmax` |
+| `study.universe.mesh(minimum_element_size=...)` | `float or None` | `None` | $\mathrm{m}$ | positive and no greater than maximum size | near-interface airbox target | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_hmin` |
+| `study.universe.mesh(maximum_element_growth_rate=...)` | `float or None` | `None` | $1$ | positive when supplied | requested neighbor growth limit | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_growth_rate` |
+| `study.universe.mesh(grading=...)` | `str or None` | `None` | $1$ | stored as requested grading mode | requested exterior grading mode | FEM authoring/lowering; runtime not qualified here | `runtime_metadata.study_universe.airbox_grading` |
+| `study.build_domain_mesh()` | `StudyBuilder` | `n/a` | $1$ | requires a realizable shared-domain configuration | public realization boundary | FEM build path; no device-runtime claim | current builder state to shared-domain mesh artifact |
+| `AirboxOptions.padding_factor` | `float` | `3.0` | $1$ | finite and greater than `1` for automatic mixed shared-domain sizing | automatic magnetic-bounding-box scale | FEM realization only | `runtime_metadata.study_universe` to `AirboxOptions.padding_factor` |
+| `AirboxOptions.shape` | `str` | `bbox` | $1$ | OCC: exact `sphere` only for that value; mixed swept route requires `bbox` | requested outer geometry | FEM realization only | `runtime_metadata.study_universe` to route-specific `AirboxOptions.shape` |
 
 **Complete Python example**
 
 ```python
+# %%
 import fullmag as fm
 
+# %%
 nm = 1.0e-9
-study = fm.study("fem_airbox_reference")
+study = fm.study("airbox_contract")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
@@ -134,139 +144,98 @@ study.universe(
     padding=(0.0, 0.0, 0.0),
 )
 study.universe.mesh(
-    minimum_element_size=12 * nm,
     maximum_element_size=80 * nm,
-    maximum_element_growth_rate=1.5,
+    minimum_element_size=10 * nm,
+    maximum_element_growth_rate=1.3,
     grading="geometric",
 )
 
-magnet = study.geometry(
-    fm.Box(size=(200 * nm, 100 * nm, 10 * nm), name="film"),
-    name="film",
-)
-magnet.mesh(
-    mesh_strategy="free_tetrahedral",
-    minimum_element_size=3 * nm,
-    maximum_element_size=7 * nm,
-    interface_maximum_element_size=5 * nm,
-    interface_thickness=12 * nm,
-    transition_distance="airbox_boundary",
-    transition_growth=1.4,
-    order=1,
-    compute_quality=True,
-)
-magnet.Ms = 800.0e3
-magnet.Aex = 13.0e-12
-magnet.alpha = 0.02
-magnet.m = fm.texture.uniform(1.0, 0.0, 0.0)
-
+# %%
+film = study.geometry(fm.Box(size=(200 * nm, 100 * nm, 10 * nm), name="film"), name="film")
+film.mesh(maximum_element_size=8 * nm, minimum_element_size=4 * nm)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
-study.stages.add_relax(
-    stage_id="equilibrium",
-    algorithm="llg_overdamped",
-    tolA=1.0e-4,
-    max_steps=20_000,
-)
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=20_000)
 ```
 
-## Control Room workflow
+(airbox-problem-ir)=
+## ProblemIR
 
-1. In **Explorer**, select **Universe / Airbox Mesh**.
-2. Choose **Domain mode** and enter either explicit **Size X/Y/Z** and **Center X/Y/Z**, or automatic
-   **Padding X/Y/Z**.
-3. For FEM, set **Maximum element size**, **Minimum element size**, **Maximum element growth rate**,
-   **Element grading**, **Curvature factor** and **Narrow-region resolution** as needed.
-4. Select **Apply Airbox Policy** to store the universe-owned exterior-domain intent. This makes any
-   older shared-domain realization stale.
-5. Select **Apply & Build Shared-Domain Mesh** to dispatch `mesh.build-shared-domain`.
-6. Inspect the effective configuration, shared-domain manifest, outer-boundary marker, interface
-   conformity and mesh-quality scopes. The effective configuration returned by the backend is the
-   source of truth.
+The public calls lower requested universe mode, dimensions, center, padding and mesh controls
+through `runtime_metadata.study_universe`. `build_domain_mesh()` consumes that builder state to
+produce the shared-domain mesh artifact. OCC solids, physical tags, quality metrics and any
+fallback report are realized artifacts, not user-authored ProblemIR fields.
 
-For FDM, the panel filters FEM-only air-mesh controls and exposes structured-domain geometry only.
+(airbox-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-## Airbox-convergence protocol
+**Requested intent** is the universe and air-mesh policy preserved in builder metadata.
+**Resolved execution** is the selected build route, effective shape, mesh artifact and status
+report. **Validation errors** reject invalid dimensions, containment and mixed-route padding or
+shape violations. **Unsupported combinations** remain fail closed: ordinary open airbox authoring
+does not silently become a periodic domain, a different topology, or a CPU/GPU fallback.
 
-Hold the magnetic mesh fixed and first move the outer boundary outward while monitoring demag
-energy, average field and the study observable. Then hold the outer geometry fixed and refine the
-exterior mesh/interface grading. Finally refine the magnetic mesh. This separates truncation,
-exterior-discretization and magnetic-discretization errors. Record outer-boundary distance,
-closure, airbox element counts and mesh fingerprints for each run.
+(airbox-discrete-realization)=
+## Discrete realization
 
-## Verification, quality and provenance
+| Solver | Device | Status | Limit |
+| --- | --- | --- | --- |
+| FEM | CPU | source-backed authoring and mesh lowering | no new native runtime or convergence receipt in this page |
+| FEM | GPU | capability-gated after mesh realization | source inspection is not GPU execution or parity proof |
+| FDM | CPU | not applicable | structured FDM domain sizing is outside this unstructured FEM airbox page |
+| FDM | GPU | not applicable | structured FDM domain sizing is outside this unstructured FEM airbox page |
 
-After every build, inspect the **realized** resource rather than assuming that the authored request
-was applied. The production check is:
+(airbox-implementation-mapping)=
+## Implementation mapping
 
-- geometry and mesh revisions match the current model;
-- requested and realized discretization/topology/order are recorded;
-- node, element and boundary-facet counts are nonzero for every required region;
-- region and boundary markers cover the complete topology;
-- inverted and degenerate element counts are zero;
-- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
-- local size distributions are consistent with the intended edge/interface/core grading;
-- any fallback or degradation has an explicit reason and an actual method;
-- a mesh-refinement sequence demonstrates convergence of the scientific observable.
+`StudyUniverseHandle.__call__` and `StudyUniverseHandle.mesh` own the public study policy;
+`StudyBuilder.build_domain_mesh` is the public build boundary. `_build_problem` preserves the
+builder metadata, and the asset pipeline selects the shared-domain realization. The OCC route
+constructs a sphere or box; the mixed swept route enforces its bbox-only policy; the report helper
+records route-specific sphere degradation.
 
-`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
-statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
-`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
-acceptance thresholds for every element family or study.
+(airbox-validation)=
+## Validation
 
-## Mesh-convergence protocol
+After a build, inspect the realized outer marker, magnetic and air-region markers, interface
+conformity, counts, quality report, effective shape and any fallback status. Converge outer
+distance, exterior sizing and magnetic sizing independently against a physical observable. The
+page-specific executable probe exercises public builder/lowering semantics only; it is not a
+native FEM, GPU, or scientific-convergence qualification.
 
-A production result should include at least three discretizations. Refine only the parameter under
-study while holding geometry, material parameters, solver tolerances, initial state and output
-sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
+(airbox-limitations)=
+## Limitations
 
-```{math}
-:label: eq-meshing-relative-change-airbox
-\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
-\qquad \rho>1,
-```
+A geometrically valid mesh does not establish a correct boundary closure or a converged solution.
+No runtime claim follows from the page, source map, or builder/lowering probe. Sphere support is
+route-specific, and mixed swept meshing deliberately rejects non-bbox requests.
 
-with a documented scale for observables that can cross zero. For dynamics, compare resonance
-frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
-compare field/energy and verify that moving the outer boundary does not change the result beyond the
-chosen tolerance.
+(airbox-scientific-bibliography)=
+## Scientific bibliography
 
-## Diagnostics and failure semantics
+- C. Geuzaine and J.-F. Remacle, "Gmsh: a three-dimensional finite element mesh generator with
+  built-in pre- and post-processing facilities," *International Journal for Numerical Methods in
+  Engineering* **79** (2009), 1309-1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+- C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European Physical
+  Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
-- An airbox that intersects or fails to enclose every magnetic body is invalid.
-- A missing/ambiguous outer marker prevents the physics layer from applying the intended closure.
-- A nonconforming magnetic/air interface is invalid for the ordinary shared-domain formulation.
-- Excessive growth can create poorly conditioned exterior elements and field error near the
-  interface even when the far-field count is small.
-- Changing airbox size without regenerating the shared mesh leaves a stale domain.
-- Never treat a visually smooth potential at the outer boundary as an airbox-convergence proof.
-
-## Where this is implemented
-
-| Responsibility | Repository source | Stable owner / symbol |
-| --- | --- | --- |
-| Python airbox data contract | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `AirboxOptions` |
-| Airbox geometry and fragmentation | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py) | `_add_airbox_and_fragment` |
-| Mesh dispatch and SI scaling | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py) | `_scale_airbox_options, generate_mesh` |
-| Control Room universe policy | [`apps/control-room/src/modules/inspector/panels/AirboxMeshParametersPanel.tsx`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/AirboxMeshParametersPanel.tsx) | `AirboxMeshParametersPanel` |
-| Typed UI draft | [`apps/control-room/src/modules/inspector/panels/airboxMeshPolicyDraft.ts`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/airboxMeshPolicyDraft.ts) | `airbox mesh policy draft` |
-| Shared-domain API handler | [`crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/crates/fullmag-api/src/router_v2/handlers/meshing/mesh.rs) | `shared-domain mesh build` |
-
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
-
-## Related documentation
-
-- [Airbox branch](fem/airbox/index.md)
-- [Shared-domain FEM](fem-shared-domain.md)
-- [Demagnetization solvers](../demag-solvers/index.md)
-
-## References
-
-- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
+(airbox-source-code-index)=
 ## Source-code index
 
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
-
+| ID | Path | Symbol | Responsibility | Evidence |
+| --- | --- | --- | --- | --- |
+| airbox_options | packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py | class AirboxOptions | realization schema and defaults | source-inspected |
+| universe_authoring | packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | public universe and air-mesh authoring | source-inspected |
+| domain_build | packages/fullmag-py/src/fullmag/world.py | class StudyBuilder | public shared-domain build boundary | source-inspected |
+| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
+| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | shared-domain asset realization | source-inspected |
+| occ_airbox | packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py | generate_shared_domain_mesh_via_occ | OCC sphere and box realization | source-inspected |
+| mixed_airbox | packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py | _add_conforming_swept_box_airbox_geo | mixed-route bbox and padding checks | source-inspected |
+| airbox_status | packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py | _airbox_shape_status | requested/effective shape reporting | source-inspected |
+| planner | crates/fullmag-plan/src/lib.rs | plan | capability rejection after lowering | source-inspected; runtime unverified |
+| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | resolved-plan execution boundary | source-inspected; device runtime unverified |

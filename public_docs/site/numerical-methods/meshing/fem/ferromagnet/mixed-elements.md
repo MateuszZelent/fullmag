@@ -1,288 +1,165 @@
 ---
 title: "Mixed-element FEM meshes"
-description: "Typed tet4, prism6, pyramid5 and hex8 topology, transitions and solver qualification."
-summary: "A mixed mesh stores every volume and facet family explicitly. Fullmag currently uses the prism–pyramid–tetrahedron combination for qualified layered-film/shared-airbox scenarios; generic mixed support is not assumed."
+description: "Typed tet4, prism6, pyramid5 and hex8 topology."
+summary: "Mixed topology is preserved as typed CSR data and never silently coerced to tet4."
 status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
-source_of_truth: "Typed MeshData topology, mixed-element extraction, exact-layer certificate, solver capability matrix and mixed tests"
+last_updated: 2026-08-31
+reviewed_revision: 969efa0941905825ac569d525f4bdaefc059e2af
 ---
 
 (public-docs-numerical-methods-meshing-fem-ferromagnet-mixed-elements)=
 # Mixed-element FEM meshes
 
-**Last changes: 12:31 24.08.2026**
+(mixed-elements-problem-statement)=
+## Physical problem
 
-A mixed mesh stores every volume and facet family explicitly. Fullmag currently uses the prism–pyramid–tetrahedron combination for qualified layered-film/shared-airbox scenarios; generic mixed support is not assumed.
+This FEM contract carries linear `tet4`, `prism6`, `pyramid5`, and imported `hex8` cells explicitly. A family is solver input, not display metadata; preserving `hex8` at ingress does not qualify an executable swept-hex solver.
 
-::::{admonition} Implementation status
-:class: important
+(mixed-elements-governing-equations)=
+## Governing equations
 
-Canonical linear families are represented as `tet4`, `prism6`, `pyramid5`, `hex8`, with `tri3`/`quad4` facets. Generation and solver execution are scenario-qualified. Imported `hex8` parsing does not establish swept-hex solver support.
-::::
-
-## Scope and purpose
-
-Use this page to understand the final solver-facing topology when a layered prism region connects
-to tetrahedral surroundings or when an external mixed mesh is imported. A mixed mesh is not a
-rectangular connectivity array; it requires cell type, offsets, flattened node indices and
-family-aware local facets/quadrature.
-
-## Scientific and numerical model
-
-### Scientific invariants
-
-A finite-element mesh is not only a visualization asset. It defines the trial/test spaces used by
-exchange, anisotropy, DMI, magnetostatic and dynamic operators. The following conditions are therefore
-part of the numerical contract:
-
-1. Every magnetic volume has an unambiguous region marker and every exterior-air volume has the
-   canonical air role.
-2. Interfaces used by coupled operators are conforming, or an explicitly supported nonconforming
-   coupling operator is selected. Fullmag's ordinary shared-domain path expects conformity.
-3. Cell orientation is valid: the element mapping has a positive Jacobian at all required evaluation
-   points. Inverted or collapsed cells are build failures, not warnings to ignore.
-4. Requested topology, polynomial order, layer count and mesh-size controls are compared with the
-   realized mesh. A topology change is legal only when the build mode permits fallback and the report
-   names the actual method and reason.
-5. Mesh convergence is assessed on physical observables—energy, average magnetization, switching
-   field, eigenfrequency, linewidth or field error—not only on element count.
-
-For exchange-dominated variation, a useful *starting* scale is the magnetostatic exchange length
+Variable-arity connectivity is stored in typed CSR form:
 
 ```{math}
-:label: eq-meshing-exchange-length-fem-ferromagnet-mixed-elements
-\ell_{\mathrm{ex}}=\sqrt{\frac{2A}{\mu_0M_s^2}}.
+:label: eq-mixed-elements-csr
+o_{c+1}-o_c=a(t_c),\qquad K_c=\mathrm{cell\_nodes}[o_c:o_{c+1}].
 ```
 
-Using an element size below roughly one half of the smallest relevant magnetic length scale is a
-common initial choice, not a proof of convergence. Curved boundaries, surface charges, DMI, defects,
-interfaces and through-thickness modes can demand a smaller local size.
+(mixed-elements-symbols-and-si-units)=
+## Symbols and SI units
 
-The canonical topology is stored as
-
-```text
-cell_types[c]
-cell_offsets[c:c+2]
-cell_nodes[cell_offsets[c]:cell_offsets[c+1]]
-```
-
-so arity is family-dependent. Local facets are family-specific: a `prism6` has two triangular and
-three quadrilateral faces; a `pyramid5` has one quadrilateral and four triangular faces; a `tet4`
-has four triangular faces; a `hex8` has six quadrilateral faces. Interface adjacency must be
-constructed from complete sorted facet node sets, not from a tetra-only assumption.
-
-Fullmag keeps explicit Gmsh-to-canonical node permutations even where the current mapping is
-identity. This prevents a future family/order from accidentally inheriting prefix or ordering
-assumptions.
-
-## Selection guide
-
-| Use case | Recommended choice | Reason |
+| Symbol | Meaning | SI unit |
 | --- | --- | --- |
-| Layered prism magnet + tetrahedral air | `prism6 + pyramid5 + tet4` | Current target mixed transition when capabilities permit |
-| Pure tetrahedral shared domain | `tet4` | Most broadly supported baseline |
-| Imported valid mixed linear mesh | typed ingress | Preserves exact families after validation |
-| Higher-order/missing family support | reject | No prefix truncation or silent family replacement |
+| $c$ | Volume-cell ordinal | $1$ |
+| $o_c$ | Start offset of cell $c$ | $1$ |
+| $t_c$ | Canonical cell family of cell $c$ | $1$ |
+| $a(t_c)$ | Family node arity | $1$ |
+| $K_c$ | Local node-index sequence | $1$ |
 
-## Parameters
+(mixed-elements-assumptions-and-validity)=
+## Assumptions and validity
 
-| Python / IR key | Unit | Default | Validation | Numerical effect |
-| --- | --- | --- | --- | --- |
-| `mesh_strategy` | 1 | `auto` | `swept_prism` or `swept_hex` for explicit requests | selects the swept topology family |
-| `through_thickness_elements` | layers | strategy/backend dependent | positive integer; Control Room exact prism gate advertises 1–3 | number of volume-element layers across thickness |
-| `through_thickness_distribution` | 1 | `fixed` / uniform exact route | `fixed`, `uniform`, `arithmetic`, `geometric` by authoring layer | controls layer-plane spacing |
-| `through_thickness_element_ratio` | 1 | `1` | positive | growth ratio for nonuniform distributions |
-| `through_thickness_symmetric` | 1 | `False` | Boolean | mirrors nonuniform grading about the midplane when supported |
-| `sweep_face_meshing` | 1 | strategy-derived | `triangular` or `quadrilateral` | source-surface topology |
-| `sweep_direction` | 1 | `auto` | `auto`, `x`, `y`, `z` | axis used to identify source/destination faces |
-| `sweep_source`, `sweep_destination` | 1 | auto selectors | semantic selector strings/descriptors | explicit paired sweep faces |
-| `element_family` | 1 | strategy-derived | `prism` or `hex` | requested volume-element family |
-| `topology` | 1 | strategy-derived | `prismatic` or `tetrahedral` in current object policy | topology declaration checked against all swept fields |
-| `transition_policy` | 1 | `reject` or route-derived | `pyramid_to_tetrahedra` or `reject` | connects prism layer to tetrahedral surroundings when qualified |
-| `exact_layer_count` | 1 | `False` | Boolean; exact prism route requires true | turns layer count into a strict certificate requirement |
-| `cell_types` | 1 | realized | one canonical type per volume cell | selects shape, arity, facets, quadrature and assembly |
-| `cell_offsets` | indices | realized | monotone length `n_cells+1` | indexes flattened connectivity |
-| `cell_nodes` | node indices | realized | valid node IDs and exact arity by family | canonical local-node connectivity |
-| `facet_types` | 1 | realized | `tri3` or `quad4` | typed boundary/interface facets |
-| `facet_roles` | 1 | realized | supported semantic roles | outer/interface/periodic/provisional ownership |
-| family capability | 1 | backend-reported | all realized types executable | gates assembly and every active interaction |
+The carrier is linear typed topology: 4, 6, 5, and 8 nodes for `tet4`, `prism6`, `pyramid5`, and `hex8`. `pyramid5` is a prism--tet transition family, not a prism replacement. Mixed compatibility views fail rather than converting to tetrahedra.
 
+(mixed-elements-python-api)=
 ## Python API
 
-**Complete Python example**
-
 ```python
+# %%
 import fullmag as fm
 
-nm = 1.0e-9
-study = fm.study("swept_prism_reference")
+nm = 1e-9
+study = fm.study("mixed_film")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.universe(
-    mode="manual",
-    size=(800 * nm, 400 * nm, 200 * nm),
-    center=(0.0, 0.0, 0.0),
-    padding=(0.0, 0.0, 0.0),
-)
-study.universe.mesh(
-    minimum_element_size=15 * nm,
-    maximum_element_size=100 * nm,
-    maximum_element_growth_rate=1.6,
-    grading="geometric",
-)
+study.universe(mode="manual", size=(100 * nm, 80 * nm, 65 * nm), center=(0.0, 0.0, 0.0))
+study.universe.mesh(maximum_element_size=40 * nm, minimum_element_size=15 * nm, growth_rate=1.3, grading="geometric")
 
-film = study.geometry(
-    fm.Box(size=(600 * nm, 200 * nm, 6 * nm), name="film"),
-    name="film",
-)
-film.mesh(
-    minimum_element_size=4 * nm,
-    maximum_element_size=8 * nm,
-    mesh_strategy="swept_prism",
+# %%
+film = study.geometry(fm.Box(size=(24 * nm, 12 * nm, 1 * nm), name="film"), name="film")
+film.mesh.thin_film(
+    maximum_element_size=3 * nm,
+    minimum_element_size=1 * nm,
+    layers=1,
     topology="prismatic",
-    through_thickness_elements=2,
-    through_thickness_distribution="fixed",
-    through_thickness_symmetric=False,
-    sweep_face_meshing="triangular",
-    sweep_direction="auto",
-    element_family="prism",
-    transition_policy="pyramid_to_tetrahedra",
-    exact_layer_count=True,
+    exact_layers=True,
+    transition="pyramid_to_tetrahedra",
     order=1,
-    algorithm_2d=6,
-    algorithm_3d=1,
-    maximum_element_growth_rate=1.2,
-    smoothing_steps=4,
-    optimize="Netgen",
-    optimize_iterations=4,
-    compute_quality=True,
-    per_element_quality=True,
 )
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.m = fm.texture.uniform(1.0, 1.0e-4, 0.0)
-
+film.Ms = 800e3
+film.Aex = 13e-12
+film.m = fm.texture.uniform(1.0, 1e-4, 0.0)
 study.exchange()
 study.demag(realization="poisson_robin")
 study.build_domain_mesh()
-study.stages.add_relax(
-    stage_id="equilibrium",
-    algorithm="llg_overdamped",
-    tolA=1.0e-4,
-    max_steps=20_000,
-)
+study.stages.add_relax(stage_id="equilibrium", algorithm="llg_overdamped", tolA=1e-4, max_steps=20_000, dt=1e-13)
 ```
 
-## Control Room workflow
+`GeometryMeshHandle.thin_film` is the supported public authoring callable for this strict route:
 
-1. In **Explorer**, select the magnetic object's **Mesh** child (the object mesh-policy route).
-2. In **Inspector → Object Mesh Policy**, enable **Use object policy** when an object-specific override
-   is required.
-3. Configure the relevant groups: **Mesh Size Presets**, **Element Size Parameters**,
-   **Thin-Film Sweep Strategy**, **Interface and Transition Refinement**, **Backend Mesh Parameters**,
-   **Core Relaxation**, **Manual Size Field**, and **Edge and Corner Refinement**.
-4. Select **Apply Object Policy**. This stores authoring intent and invalidates mesh resources whose
-   revision no longer matches the model.
-5. Select **Build Mesh**. If the draft is dirty, the panel applies it first and dispatches the canonical
-   `mesh.build-selected` command.
-6. Open the **Quality** and **History** tabs. Compare requested and realized values, then inspect the
-   scoped size/quality distributions and the raw build report before running a solver.
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hmax` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive finite number or `auto`; overridden by `maximum_element_size` | Compatibility maximum-size alias | FEM capability-gated; FDM N/A | `maximum_element_size` |
+| `hmin` | `float \| None` | `None` | $\mathrm{m}$ | positive; overridden by `minimum_element_size`; resolved minimum must not exceed numeric maximum | Compatibility minimum-size alias | FEM capability-gated; FDM N/A | `minimum_element_size` |
+| `maximum_element_size` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive finite number or `auto`; takes precedence over `hmax` | In-plane size ceiling | FEM capability-gated; FDM N/A | `maximum_element_size` |
+| `minimum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; takes precedence over `hmin`; must not exceed numeric maximum | Lower size bound | FEM capability-gated; FDM N/A | `minimum_element_size` |
+| `order` | `int \| None` | `None` | $1$ | prismatic topology accepts only `None` or `1` and lowers to P1 | FEM polynomial order | FEM capability-gated; FDM N/A | `order` |
+| `curvature_factor` | `float \| None` | `None` | $1$ | float-convertible; downstream recipe requires a positive value when set | Curvature-refinement strength | FEM capability-gated; FDM N/A | `curvature_factor` |
+| `narrow_region_resolution` | `float \| None` | `None` | $1$ | float-convertible; downstream recipe requires a positive value when set | Narrow-region refinement strength | FEM capability-gated; FDM N/A | `narrow_region_resolution` |
+| `layers` | `int` | `1` | $1$ | bool rejected; integer at least 1 | Requested element-layer count | FEM capability-gated; FDM N/A | `through_thickness_elements` |
+| `topology` | `Literal["tetrahedral", "prismatic"] \| None` | `None` | $1$ | one of `None`, `tetrahedral`, `prismatic` | Thin-film topology | FEM capability-gated; FDM N/A | `topology` |
+| `exact_layers` | `bool \| None` | `None` | $1$ | Boolean; only valid with prismatic topology; strict prismatic rejects `False` outside extended mode | Strict layer-count intent | FEM capability-gated; FDM N/A | `exact_layer_count` |
+| `transition` | `Literal["pyramid_to_tetrahedra", "reject"] \| None` | `None` | $1$ | only valid with prismatic topology; prismatic resolves or requires `pyramid_to_tetrahedra` | Shared-domain transition | FEM capability-gated; FDM N/A | `transition_policy` |
+| `interface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; used unless `surface_maximum_element_size` is set | Interface size ceiling | FEM capability-gated; FDM N/A | `interface_hmax` |
+| `surface_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; takes precedence over `interface_maximum_element_size` | Surface alias for interface size | FEM capability-gated; FDM N/A | `interface_hmax` |
+| `interface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive; used unless `surface_thickness` is set | Interface refinement-shell thickness | FEM capability-gated; FDM N/A | `interface_thickness` |
+| `surface_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive; takes precedence over `interface_thickness` | Surface alias for interface shell | FEM capability-gated; FDM N/A | `interface_thickness` |
+| `transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; used unless surface alias is set | Interface-to-core transition distance | FEM capability-gated; FDM N/A | `transition_distance` |
+| `surface_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | number at least 0 or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; takes precedence over `transition_distance` | Surface alias for transition distance | FEM capability-gated; FDM N/A | `transition_distance` |
+| `edge_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; must be paired with `edge_thickness` | Edge size ceiling | FEM capability-gated; FDM N/A | `edge_hmax` |
+| `edge_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive; paired with `edge_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension | Edge refinement-shell thickness | FEM capability-gated; FDM N/A | `edge_thickness` |
+| `edge_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the edge pair | Edge-to-core transition distance | FEM capability-gated; FDM N/A | `edge_transition_distance` |
+| `corner_maximum_element_size` | `float \| None` | `None` | $\mathrm{m}$ | positive; paired with `corner_extent`; when edge size is set must not exceed `edge_maximum_element_size` | Corner size ceiling | FEM capability-gated; FDM N/A | `corner_hmax` |
+| `corner_extent` | `float \| None` | `None` | $\mathrm{m}$ | positive; paired with `corner_maximum_element_size`; for Box geometry smaller than half the shorter in-plane dimension | Corner refinement extent | FEM capability-gated; FDM N/A | `corner_extent` |
+| `corner_transition_distance` | `float \| str \| None` | `None` | $\mathrm{m}$ | positive number or `airbox_boundary`, `airbox-boundary`, `auto_boundary`; sentinels normalize to `airbox_boundary`; requires the corner pair | Corner-to-core transition distance | FEM capability-gated; FDM N/A | `corner_transition_distance` |
 
-The read-only effective values come from backend resources. They must not be reconstructed from the
-current form fields because presets, capability gates and backend normalization can change the
-resolved configuration.
+(mixed-elements-problem-ir)=
+## ProblemIR
 
-Request mixed topology through **Swept prism**, not through an untyped generic checkbox. After
-build, inspect family counts by object/air/interface and the exact-layer/transition certificate.
-The active-lane capability panel must list every realized family. If any family is unsupported,
-execution remains disabled even when the mesh quality report is otherwise valid.
+For `topology="prismatic"`, `thin_film()` lowers the request to `mesh_strategy="swept_prism"`, `through_thickness_elements=layers`, `through_thickness_distribution="fixed"`, `through_thickness_symmetric=False`, `sweep_face_meshing="triangular"`, `sweep_direction="auto"`, `element_family="prism"`, `transition_policy="pyramid_to_tetrahedra"`, `exact_layer_count=True`, and `order=1`. The underlying `PerObjectMeshRecipe` accepts `through_thickness_distribution` values `None`, `fixed`, `linear`, or `exponential`, and `sweep_direction` values `None`, `auto`, `x`, `y`, or `z`; those broader values are not additional arguments to `thin_film()`.
 
-## Mixed-topology verification
+All four transition-distance arguments accept the sentinels `airbox_boundary`, `airbox-boundary`, and `auto_boundary`; lowering canonicalizes each to `airbox_boundary`. Perimeter validation also enforces `corner_hmax <= edge_hmax` when both are active and, for a `Box` (including translated boxes), requires `edge_thickness` and `corner_extent` to be strictly smaller than half the shorter in-plane dimension.
 
-Verify exact family counts, local-node orientation, positive Jacobians at family-appropriate
-points, complete facet adjacency, region markers, transition conformity and operator support.
-Validate mixed assembly against a tetrahedral decomposition/reference on a manufactured field or
-a converged micromagnetic observable. Record the quality metric name because tet and prism/hex
-quality numbers are not automatically interchangeable.
+(mixed-elements-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
-## Verification, quality and provenance
+**Requested intent** is the `thin_film()` call and lowered object policy. **Resolved execution** is the typed `MeshData` and realization report. **Validation errors** reject invalid CSR arity, invalid recipe distribution/direction, and any prismatic request whose transition is not `pyramid_to_tetrahedra`. That transition is mandatory because `topology="prismatic"`; it is not an unconditional rule for every policy whose family happens to be `prism`. **Unsupported combinations** include a solver/device lacking a realized family. No `prism6`, `pyramid5`, or `hex8` is silently replaced by `tet4`.
 
-After every build, inspect the **realized** resource rather than assuming that the authored request
-was applied. The production check is:
+(mixed-elements-discrete-realization)=
+## Discrete realization
 
-- geometry and mesh revisions match the current model;
-- requested and realized discretization/topology/order are recorded;
-- node, element and boundary-facet counts are nonzero for every required region;
-- region and boundary markers cover the complete topology;
-- inverted and degenerate element counts are zero;
-- interface diagnostics report no orphan, coincident, nonmanifold or unmatched facets;
-- local size distributions are consistent with the intended edge/interface/core grading;
-- any fallback or degradation has an explicit reason and an actual method;
-- a mesh-refinement sequence demonstrates convergence of the scientific observable.
+`_MESHIO_VOLUME_TYPES` maps `tetra`, `wedge`/`prism`, `pyramid`, and `hexahedron` to canonical types; `_CELL_LOCAL_FACETS` supplies the local `tri3`/`quad4` faces.
 
-`MeshQualityReport` exposes signed inverse condition number (SICN), gamma/radius quality, volume
-statistics and optional per-element arrays. The source constants `gamma_min=0.08` and
-`SICN p05=0.1` are implementation gates for named report paths; they are not universal physical
-acceptance thresholds for every element family or study.
+| Solver | Device | Status | Reason |
+| --- | --- | --- | --- |
+| FEM | CPU | source-backed, capability-gated | Active execution must accept every realized family. |
+| FEM | GPU | source-backed, capability-gated | No GPU runtime or parity evidence is claimed. |
+| FDM | CPU | not applicable | FEM mesh topology. |
+| FDM | GPU | not applicable | FEM mesh topology. |
 
-## Mesh-convergence protocol
+(mixed-elements-implementation-mapping)=
+## Implementation mapping
 
-A production result should include at least three discretizations. Refine only the parameter under
-study while holding geometry, material parameters, solver tolerances, initial state and output
-sampling fixed. Let $Q_h$ denote the observable for characteristic size $h$. Report
+`GeometryMeshHandle.thin_film` is the public authoring callable. `PerObjectMeshRecipe` owns the lowered policy. `MeshData` owns canonical typed variable-arity CSR, while the extraction maps preserve typed volume and facet families. `test_mesh_data_accepts_canonical_mixed_typed_csr` asserts typed mixed CSR and rejects tetra-only compatibility access.
 
-```{math}
-:label: eq-meshing-relative-change-fem-ferromagnet-mixed-elements
-\varepsilon_h=\frac{|Q_h-Q_{h/\rho}|}{\max(|Q_{h/\rho}|,Q_{\mathrm{scale}})},
-\qquad \rho>1,
-```
+(mixed-elements-validation)=
+## Validation
 
-with a documented scale for observables that can cross zero. For dynamics, compare resonance
-frequency, linewidth and mode profile; for relaxation, compare total energy and texture; for demag,
-compare field/energy and verify that moving the outer boundary does not change the result beyond the
-chosen tolerance.
+Focused tests cover typed CSR, arity, offsets, node indices, facets, and Gmsh prism ordering. This is source/test evidence, not an executed CPU/GPU solver qualification.
 
-## Diagnostics and failure semantics
+(mixed-elements-limitations)=
+## Limitations
 
-- Any code path assuming four nodes per cell is invalid for mixed topology.
-- Unsupported exact element type raises an ingress/build error.
-- A quadrilateral interface facet cannot be matched to one triangle without an explicit
-  transition/subdivision certificate.
-- `hex8` ingress support is not a generation or solver qualification claim.
-- Missing per-family quadrature/device kernel must block the active interaction.
-- A mixed request realized as all tetrahedra is a fallback or failure, never exact success.
+Imported `hex8` preservation does not establish hex assembly, a qualified transition, CPU/GPU execution, or observable convergence.
 
-## Where this is implemented
+(mixed-elements-scientific-bibliography)=
+## Scientific bibliography
 
-| Responsibility | Repository source | Stable owner / symbol |
-| --- | --- | --- |
-| Canonical mixed types | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py) | `SUPPORTED_VOLUME_ELEMENTS, SUPPORTED_BOUNDARY_ELEMENTS` |
-| Exact extraction/permutations | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py) | `_GMSH_TO_FULLMAG_NODE_PERMUTATION, _CELL_LOCAL_FACETS` |
-| Mixed generator | [`packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py) | `prism/transition generation` |
-| Mixed certificate | [`packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py) | `family/layer/conformity report` |
-| Capability gate | [`apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanelModel.ts) | `mixed-P1 capability resolution` |
-| Regression tests | [`packages/fullmag-py/tests/test_mixed_element_meshing.py`](https://github.com/MateuszZelent/fullmag/blob/5db00ccf0113b9756fec2d46feb36ade762b12c2/packages/fullmag-py/tests/test_mixed_element_meshing.py) | `mixed topology tests` |
+- C. Geuzaine and J.-F. Remacle, "Gmsh," *International Journal for Numerical Methods in Engineering* **79** (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+- C. Abert, "Micromagnetics and spintronics," *European Physical Journal B* **92** (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
-Implementation map reviewed against commit `5db00ccf0113b9756fec2d46feb36ade762b12c2` on 2026-08-24.
-
-## Related documentation
-
-- [Swept prism](swept-prism.md)
-- [Imported mesh](imported-mesh.md)
-- [Shared-domain conformity](../shared-domain/assembly-and-conformity.md)
-
-## References
-
-- C. Geuzaine and J.-F. Remacle, “Gmsh: a three-dimensional finite element mesh generator with built-in pre- and post-processing facilities,” *International Journal for Numerical Methods in Engineering* **79** (2009), 1309–1331, [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
-- C. Abert, “Micromagnetics and spintronics: models and numerical methods,” *European Physical Journal B* **92**, 120 (2019), [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-- Gmsh reference manual, mesh algorithms, size fields, extrusion and physical groups: [gmsh.info/doc/texinfo](https://gmsh.info/doc/texinfo/).
+(mixed-elements-source-code-index)=
 ## Source-code index
 
-- Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Runtime realization is owned by the relevant `backends/fdm` or `backends/fem` implementation; the page must not claim a symbol not named in its implementation mapping.
-
+| Path | Stable symbol | Responsibility |
+| --- | --- | --- |
+| `packages/fullmag-py/src/fullmag/world.py` | `thin_film` | Public prismatic authoring and lowering |
+| `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Lowered recipe validation and IR |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Canonical typed variable-arity CSR |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_MESHIO_VOLUME_TYPES` | Canonical volume families |
+| `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py` | `_CELL_LOCAL_FACETS` | Typed local facets |
+| `packages/fullmag-py/tests/test_mixed_element_meshing.py` | `test_mesh_data_accepts_canonical_mixed_typed_csr` | No coercion regression |

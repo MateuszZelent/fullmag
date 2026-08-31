@@ -107,15 +107,15 @@ No physical model is introduced. Primary references belong to consuming interact
 
 ## Control Room crosswalk
 
-Status: Advertised global/object mesh controls are partial; compatibility-only fields remain TODO.
+Status: Advertised global/object mesh controls are partial; compatibility-only frontend fields remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `partial` | Apply mesh policy or Build Mesh; mesh resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for discretization parameters not represented by the mesh panels.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+Frontend support is not implemented for discretization parameters not represented by the mesh panels.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and explicit not-implemented status.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx (ObjectMeshPolicyPanel)`.
 
 ## Source-code index

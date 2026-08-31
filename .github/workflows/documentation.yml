@@ -110,7 +110,7 @@ jobs:
           DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
         run: |
           set -euo pipefail
-          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site/physics public_docs/site/python-api | grep -E '\\.source-map\\.json$' || true)"
+          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site | grep -E '\\.source-map\\.json$' || true)"
           if [[ -z "$map_files" ]]; then
             echo "No changed public scientific source maps; changed-page validation already ran."
             exit 0
@@ -163,7 +163,7 @@ jobs:
           DOCS_DIFF_BASE: ${{ steps.docs-diff.outputs.base }}
         run: |
           set -euo pipefail
-          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site/physics public_docs/site/python-api | grep -E '\\.source-map\\.json$' || true)"
+          map_files="$(git diff --name-only "$DOCS_DIFF_BASE" HEAD -- public_docs/site | grep -E '\\.source-map\\.json$' || true)"
           if [[ -z "$map_files" ]]; then
             echo "No changed public scientific source maps; rendered changed-page validation already ran."
             exit 0

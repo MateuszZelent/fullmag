@@ -4,16 +4,270 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FDM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FDM Cartesian-grid semantics."},
-    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FDM Cartesian-grid semantics."}
-  ],  "sources": [
     {
-      "id": "fdm_demag",
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM grid contract."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM grid contract."
+    }
+  ],
+  "sources": [
+    {
+      "id": "study_builder",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Applies FDM and nested demag policy to the active study."
+    },
+    {
+      "id": "grid",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMGrid",
+      "responsibility": "Native grid."
+    },
+    {
+      "id": "demag",
       "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
       "symbol": "class FDMDemag",
-      "responsibility": "Common-grid and multilayer demagnetization policy."
+      "responsibility": "Demag policy."
+    },
+    {
+      "id": "fdm",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "FDM hints."
+    },
+    {
+      "id": "demag_ir",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "FdmDemagHintsIR",
+      "responsibility": "Validates common-grid policy, including explicit two_d_stack incompatibility."
+    },
+    {
+      "id": "fft_plan",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_fft",
+      "responsibility": "Resolves executable FFT lane and requires active demag for explicit selection."
+    },
+    {
+      "id": "multilayer_plan",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "Rejects multi-body single_grid and resolves exact common-cell counts."
+    },
+    {
+      "id": "preflight",
+      "path": "crates/fullmag-runner/src/fdm/mod.rs",
+      "symbol": "validate_multilayer_grid_budget",
+      "responsibility": "Plan admission."
+    },
+    {
+      "id": "cpu",
+      "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference/construction.rs",
+      "symbol": "build_contexts_and_states",
+      "responsibility": "CPU construction."
+    },
+    {
+      "id": "cpu_convolution",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "compute_demag_fields_checked",
+      "responsibility": "Executes CPU destination/source tensor convolution."
+    },
+    {
+      "id": "cuda_convolution_fp64",
+      "path": "backends/fdm/gpu/cuda/demag/multilayer_convolution.cu",
+      "symbol": "launch_multilayer_demag_field_fp64",
+      "responsibility": "Executes CUDA FP64 multilayer convolution."
+    },
+    {
+      "id": "cuda_convolution_fp32",
+      "path": "backends/fdm/gpu/cuda/demag/multilayer_convolution.cu",
+      "symbol": "launch_multilayer_demag_field_fp32",
+      "responsibility": "Executes CUDA FP32 multilayer convolution."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "field",
+      "latex": "$\\mathbf H_a$",
+      "meaning": "field on layer $a$",
+      "si_unit": "A m^-1"
+    },
+    {
+      "id": "kernel",
+      "latex": "$\\mathcal N_{ab}$",
+      "meaning": "cross-kernel",
+      "si_unit": "1"
+    },
+    {
+      "id": "magnetization",
+      "latex": "$\\mathbf M_b$",
+      "meaning": "magnetization on layer $b$",
+      "si_unit": "A m^-1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fdm-multi-demag",
+      "symbols": [
+        "field",
+        "kernel",
+        "magnetization"
+      ],
+      "sources": [
+        "cpu_convolution",
+        "cuda_convolution_fp64",
+        "cuda_convolution_fp32"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FDMGrid.cell",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "exactly three positive finite values",
+        "meaning": "native cell dimensions",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "per_magnet.<name>.cell"
+      },
+      {
+        "python": "FDM.cell",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "exclusive with `default_cell`; three positive finite values",
+        "meaning": "compatibility alias for default grid",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "`cell` and `default_cell`"
+      },
+      {
+        "python": "FDM.default_cell",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "three positive finite values",
+        "meaning": "default grid",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "default_cell"
+      },
+      {
+        "python": "FDM.per_magnet",
+        "type": "dict[str, FDMGrid] | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "non-empty names and `FDMGrid` values",
+        "meaning": "named grid overrides",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "per_magnet"
+      },
+      {
+        "python": "FDM.demag",
+        "type": "FDMDemag | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`FDMDemag` annotation; no constructor type guard; `.to_ir()` is called when present",
+        "meaning": "nested demag policy",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "demag"
+      },
+      {
+        "python": "FDMDemag.strategy",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "1",
+        "validation": "`auto`, `single_grid`, or `multilayer_convolution`; `single_grid` rejects multiple magnets",
+        "meaning": "demag strategy",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "demag.strategy"
+      },
+      {
+        "python": "FDMDemag.mode",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "1",
+        "validation": "`auto`, `two_d_stack`, `three_d`",
+        "meaning": "grid topology mode",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "demag.mode"
+      },
+      {
+        "python": "FDMDemag.common_cells",
+        "type": "tuple[int, int, int] | None",
+        "default": "None",
+        "si_unit": "cells",
+        "validation": "three positive integers; exclusive with `common_cells_xy` and `common_cell_size`; incompatible with `two_d_stack`",
+        "meaning": "common 3-D cell counts",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "demag.common_cells"
+      },
+      {
+        "python": "FDMDemag.common_cells_xy",
+        "type": "tuple[int, int] | None",
+        "default": "None",
+        "si_unit": "cells",
+        "validation": "positive values; only `auto` or `two_d_stack`",
+        "meaning": "common in-plane cells",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "demag.common_cells_xy"
+      },
+      {
+        "python": "FDMDemag.common_cell_size",
+        "type": "tuple[float, float, float] | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive finite; exclusive with count fields; forbidden with explicit `two_d_stack`; must divide every common extent without rounding",
+        "meaning": "common convolution cell size",
+        "backend_support": "FDM CPU source-backed; GPU capability-gated; FEM not applicable",
+        "problem_ir": "demag.common_cell_size"
+      },
+      {
+        "python": "FDMDemag.fft_backend",
+        "type": "str",
+        "default": "auto",
+        "si_unit": "1",
+        "validation": "explicit choice requires active demag; `fftw` and `mkl` unavailable; `rustfft` CPU; `cufft` CUDA",
+        "meaning": "requested FFT backend",
+        "backend_support": "`auto` resolves by lane; `rustfft` CPU; `cufft` CUDA; `fftw`/`mkl` unsupported",
+        "problem_ir": "demag.fft_backend"
+      },
+      {
+        "python": "FDMDemag.explain",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "1",
+        "validation": "no runtime type guard",
+        "meaning": "authoring-only explanation flag",
+        "backend_support": "authoring only; not a backend capability",
+        "problem_ir": "not lowered"
+      },
+      {
+        "python": "FDMDemag.allow_single_grid_fallback",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "any non-`None` value raises `ValueError`",
+        "meaning": "removed compatibility input",
+        "backend_support": "unsupported on all lanes",
+        "problem_ir": "no field; construction fails"
+      }
+    ]
+  }
 }

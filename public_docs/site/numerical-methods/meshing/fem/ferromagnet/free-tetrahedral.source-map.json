@@ -4,16 +4,497 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
     {
-      "id": "mesh_recipe",
-      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
-      "symbol": "class PerObjectMeshRecipe",
-      "responsibility": "Free-tetrahedral mesh recipe."
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
     }
-  ]
+  ],
+  "sources": [
+    {
+      "id": "authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Public object.mesh authoring and validation."
+    },
+    {
+      "id": "lowering",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_mesh_spec_to_metadata",
+      "responsibility": "Per-object ProblemIR lowering."
+    },
+    {
+      "id": "workflow",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_collect_mesh_workflow_metadata",
+      "responsibility": "Generator mesh_options lowering."
+    },
+    {
+      "id": "option_application",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_apply_mesh_options",
+      "responsibility": "Gmsh option normalization and effective algorithm."
+    },
+    {
+      "id": "generator",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
+      "symbol": "generate_mesh",
+      "responsibility": "Geometry-specific free volume generation."
+    },
+    {
+      "id": "reporting",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_shared_domain_build_report",
+      "responsibility": "Requested/resolved method and fallback report."
+    },
+    {
+      "id": "domain_backend",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "realize_fem_domain_mesh_asset_from_components_with_report",
+      "responsibility": "FEM domain MeshIR realization."
+    },
+    {
+      "id": "fem_plan",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Consumes validated MeshIR and constructs the FEM CPU/GPU execution plan."
+    },
+    {
+      "id": "fem_execute",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "responsibility": "Production entry normalizes the FEM plan and routes to the configured native execution implementation."
+    },
+    {
+      "id": "fem_gpu_contract",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "responsibility": "Returns () and populates ExecutionProvenance from runtime observations; it is not a gate."
+    }
+  ],
+  "symbols": [
+    {
+      "id": "VK",
+      "latex": "V_K",
+      "meaning": "signed tetrahedron volume",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "xi",
+      "latex": "\\mathbf{x}_i",
+      "meaning": "tetrahedron vertex position",
+      "si_unit": "m"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-free-tetrahedral-contract",
+      "symbols": [
+        "VK",
+        "xi"
+      ],
+      "sources": [
+        "authoring",
+        "lowering",
+        "workflow",
+        "option_application",
+        "generator",
+        "reporting",
+        "domain_backend"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "hmax",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or auto; alias of maximum_element_size",
+        "meaning": "maximum size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].hmax"
+      },
+      {
+        "python": "maximum_element_size",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or auto",
+        "meaning": "maximum element-size request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].maximum_element_size"
+      },
+      {
+        "python": "hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive and <= maximum when both supplied",
+        "meaning": "minimum size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].hmin"
+      },
+      {
+        "python": "minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive and <= maximum when both supplied",
+        "meaning": "minimum element-size request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].minimum_element_size"
+      },
+      {
+        "python": "order",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer order when supplied",
+        "meaning": "FEM solution-space order request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].order"
+      },
+      {
+        "python": "calibrate_for",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "supported calibration vocabulary",
+        "meaning": "physics calibration family",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].calibrate_for"
+      },
+      {
+        "python": "size_preset",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "supported size-preset vocabulary",
+        "meaning": "named sizing preset",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].size_preset"
+      },
+      {
+        "python": "algorithm_2d",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer Gmsh algorithm identifier",
+        "meaning": "surface algorithm request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].algorithm_2d"
+      },
+      {
+        "python": "algorithm_3d",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer Gmsh algorithm identifier",
+        "meaning": "volume algorithm request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].algorithm_3d"
+      },
+      {
+        "python": "optimize",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "supported Gmsh optimizer name",
+        "meaning": "post-generation optimizer",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].optimize"
+      },
+      {
+        "python": "optimize_iterations",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer >= 1",
+        "meaning": "optimizer pass count",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].optimize_iterations"
+      },
+      {
+        "python": "smoothing_steps",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer >= 0",
+        "meaning": "Gmsh smoothing passes",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].smoothing_steps"
+      },
+      {
+        "python": "size_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0",
+        "meaning": "global factor on requested sizes",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].size_factor"
+      },
+      {
+        "python": "size_from_curvature",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer >= 0",
+        "meaning": "curvature points control",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].size_from_curvature"
+      },
+      {
+        "python": "curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0",
+        "meaning": "curvature refinement factor",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].curvature_factor"
+      },
+      {
+        "python": "growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite, > 0, and <= 2.5",
+        "meaning": "size-growth alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].growth_rate"
+      },
+      {
+        "python": "maximum_element_growth_rate",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite, > 0, and <= 2.5",
+        "meaning": "maximum growth request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].maximum_element_growth_rate"
+      },
+      {
+        "python": "narrow_regions",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer >= 0",
+        "meaning": "narrow-region sampling count",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].narrow_regions"
+      },
+      {
+        "python": "narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0",
+        "meaning": "narrow-region resolution",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].narrow_region_resolution"
+      },
+      {
+        "python": "interface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "interface size request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_hmax"
+      },
+      {
+        "python": "interface_hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0; alias",
+        "meaning": "interface size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_hmax"
+      },
+      {
+        "python": "interface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "interface refinement shell",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_thickness"
+      },
+      {
+        "python": "transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "zero or positive length, or supported automatic value",
+        "meaning": "interface transition distance",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].transition_distance"
+      },
+      {
+        "python": "transition_growth",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0",
+        "meaning": "interface transition growth",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].transition_growth"
+      },
+      {
+        "python": "edge_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "edge size request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_hmax"
+      },
+      {
+        "python": "edge_hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0; alias",
+        "meaning": "edge size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_hmax"
+      },
+      {
+        "python": "edge_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "edge refinement shell",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_thickness"
+      },
+      {
+        "python": "edge_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or supported automatic value",
+        "meaning": "edge transition distance",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_transition_distance"
+      },
+      {
+        "python": "corner_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "corner size request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_hmax"
+      },
+      {
+        "python": "corner_hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0; alias",
+        "meaning": "corner size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_hmax"
+      },
+      {
+        "python": "corner_extent",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "corner refinement extent",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_extent"
+      },
+      {
+        "python": "corner_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or supported automatic value",
+        "meaning": "corner transition distance",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_transition_distance"
+      },
+      {
+        "python": "compute_quality",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "boolean when supplied",
+        "meaning": "request aggregate quality",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].compute_quality"
+      },
+      {
+        "python": "per_element_quality",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "boolean when supplied",
+        "meaning": "request per-cell quality arrays",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].per_element_quality"
+      },
+      {
+        "python": "mesh_strategy",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "use free_tetrahedral for this family",
+        "meaning": "explicit general tetrahedral strategy",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].mesh_strategy"
+      }
+    ]
+  },
+  "runtime_flow": {
+    "planner": {
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "role": "resolve and validate MeshIR into FemPlanIR"
+    },
+    "production_entry": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "role": "normalize the plan and route production execution"
+    },
+    "native_execution": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_native_fem",
+      "role": "configuration-selected native CPU/GPU implementation; source has cfg-specific definitions"
+    },
+    "provenance_population": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "role": "populate ExecutionProvenance only; returns (); not a validation or execution gate"
+    }
+  }
 }

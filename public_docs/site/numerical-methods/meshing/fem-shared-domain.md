@@ -14,6 +14,153 @@ source_of_truth: "Shared-domain assembly policy, Gmsh OCC fragmentation, typed t
 (public-docs-numerical-methods-meshing-fem-shared-domain)=
 # FEM shared-domain meshing
 
+(shared-domain-problem-statement)=
+## Problem statement
+
+A shared FEM domain is one conformal mesh carrying magnetic objects, interfaces and air. `SharedMeshAssemblyPolicy` is retained for compatibility; its fields are validated and serialized but are not consumed by the current builder.
+
+(shared-domain-governing-equations)=
+## Governing equations
+
+```{math}
+:label: eq-shared-policy-contract
+
+P=(f_{\Gamma},c,f_a).
+```
+
+(shared-domain-symbols-and-si-units)=
+## Symbols and SI units
+
+| Token | Meaning | SI unit |
+| --- | --- | --- |
+| $P$ | preserved assembly-policy record | $1$ |
+| $f_{\Gamma}$ | interface size factor | $1$ |
+| $c$ | conformity request | $1$ |
+| $f_a$ | airbox size factor | $1$ |
+
+(shared-domain-assumptions-and-validity)=
+## Assumptions and validity
+
+The equation denotes a record, not an effective meshing law. Current effective sizing must be authored through explicit object, interface and airbox targets.
+
+(shared-domain-python-api)=
+## Python API
+
+### Complete public signature and IR matrix
+
+The following rows are the exhaustive public-signature contract for this page; each row mirrors one public_api.parameters entry in the source map.
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| study.universe(mode=...) | str \| None | None | 1 | forwarded to StudyUniverseConfig | domain mode | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.mode |
+| study.universe(size=...) | Sequence[float] \| None | None | m | as_vector3; explicit dimensions must be positive when realized | outer dimensions | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.size |
+| study.universe(center=...) | Sequence[float] \| None | None | m | as_vector3 | outer center | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.center |
+| study.universe(padding=...) | Sequence[float] \| None | None | m | as_vector3; domain validation governs signs | directional padding | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.padding |
+| study.universe.mesh(maximum_element_size=...) | float \| None | None | m | positive | airbox coarse target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmax |
+| study.universe.mesh(minimum_element_size=...) | float \| None | None | m | positive and no greater than numeric maximum | airbox lower clamp | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_hmin |
+| study.universe.mesh(maximum_element_growth_rate=...) | float \| None | None | 1 | finite positive at most 2.5 | airbox growth target | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_growth_rate |
+| study.universe.mesh(grading=...) | str \| None | None | 1 | forwarded without vocabulary validation by this handle | airbox grading request | FEM CPU/GPU capability-gated | runtime_metadata.study_universe.airbox_grading |
+| SharedMeshAssemblyPolicy.interface_hmax_factor | float | 0.5 | $1$ | finite real in $(0,1]$; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | shared_mesh_policy.interface_hmax_factor |
+| SharedMeshAssemblyPolicy.enforce_conforming | bool | True | $1$ | boolean; `TypeError` otherwise | compatibility field | FEM CPU/GPU capability-gated | shared_mesh_policy.enforce_conforming |
+| SharedMeshAssemblyPolicy.airbox_hmax_factor | float | 3.0 | $1$ | finite positive real; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | shared_mesh_policy.airbox_hmax_factor |
+
+
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `SharedMeshAssemblyPolicy.interface_hmax_factor` | `float` | `0.5` | $1$ | finite real in $(0,1]$; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | `shared_mesh_policy.interface_hmax_factor` |
+| `SharedMeshAssemblyPolicy.enforce_conforming` | `bool` | `True` | $1$ | boolean; `TypeError` otherwise | compatibility field | FEM CPU/GPU capability-gated | `shared_mesh_policy.enforce_conforming` |
+| `SharedMeshAssemblyPolicy.airbox_hmax_factor` | `float` | `3.0` | $1$ | finite positive real; `TypeError`/`ValueError` | compatibility field | FEM CPU/GPU capability-gated | `shared_mesh_policy.airbox_hmax_factor` |
+
+```python
+# %%
+import fullmag as fm
+from fullmag.model import SharedMeshAssemblyPolicy
+
+# %%
+nm = 1.0e-9
+compatibility_policy = SharedMeshAssemblyPolicy(
+    interface_hmax_factor=0.5,
+    enforce_conforming=True,
+    airbox_hmax_factor=3.0,
+)
+compatibility_policy_ir = compatibility_policy.to_ir()
+study = fm.study("shared_domain_contract")
+study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(
+    mode="manual",
+    size=(300 * nm, 180 * nm, 120 * nm),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    maximum_element_size=40 * nm,
+    minimum_element_size=5 * nm,
+    maximum_element_growth_rate=1.4,
+)
+film = study.geometry(fm.Box(size=(100 * nm, 50 * nm, 5 * nm), name="film"), name="film")
+film.mesh(maximum_element_size=8 * nm, minimum_element_size=4 * nm)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
+```
+
+(shared-domain-problem-ir)=
+## ProblemIR
+
+`SharedMeshAssemblyPolicy.to_ir()` emits exactly the three fields shown above. This serialization preserves authored intent; it is not proof that the planner or runtime applied those values.
+
+(shared-domain-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+**Requested intent** is the serialized compatibility record plus explicit targets. **Resolved execution** is the builder's actual mesh configuration and topology. **Validation errors** are the field-domain exceptions in `__post_init__`. **Unsupported combinations** remain rejected or capability-gated; compatibility serialization does not create an implementation.
+
+(shared-domain-discrete-realization)=
+## Discrete realization
+
+FEM CPU/GPU use the shared mesh subject to runtime capability. FDM CPU/GPU are not applicable: no unstructured shared-domain mesh is lowered into the FDM mesh route.
+
+(shared-domain-implementation-mapping)=
+## Implementation mapping
+
+`SharedMeshAssemblyPolicy` owns compatibility validation and `to_ir` only. `StudyUniverseHandle` authors the public universe; `_build_problem` and `Problem.to_ir` preserve requested metadata; the asset pipeline and OCC own mesh realization; `fullmag_plan::plan` and `run_planned_problem` own planning/runtime boundaries without implying GPU qualification.
+
+(shared-domain-validation)=
+## Validation
+
+Validate policy construction and inspect the realized shared mesh separately. A source map pass does not demonstrate planner consumption or GPU execution.
+
+(shared-domain-limitations)=
+## Limitations
+
+Do not treat `enforce_conforming=True` as an effective current build-mode switch; the source explicitly states that the builder does not consume this policy.
+
+(shared-domain-scientific-bibliography)=
+## Scientific bibliography
+
+Geuzaine and Remacle, *IJNME* 79 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
+
+(shared-domain-source-code-index)=
+## Contract source-code index
+
+| ID | Path | Symbol | Responsibility | Evidence |
+| --- | --- | --- | --- | --- |
+| shared_policy | packages/fullmag-py/src/fullmag/model/discretization.py | class SharedMeshAssemblyPolicy | compatibility validation and lowering | source-inspected |
+| public_study | packages/fullmag-py/src/fullmag/world.py | study | public study entry point | source-inspected |
+| universe_authoring | packages/fullmag-py/src/fullmag/world.py | class StudyUniverseHandle | public shared-domain authoring | source-inspected |
+| problem_lowering | packages/fullmag-py/src/fullmag/world.py | _build_problem | builder-state lowering | source-inspected |
+| problem_ir | packages/fullmag-py/src/fullmag/model/problem.py | class Problem | ProblemIR and geometry-asset serialization | source-inspected |
+| domain_realization | packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py | realize_fem_domain_mesh_asset_from_components_with_report | shared-domain realization and report | source-inspected |
+| occ_shared | packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py | generate_shared_domain_mesh_via_occ | conformal OCC realization | source-inspected |
+| planner | crates/fullmag-plan/src/lib.rs | plan | ProblemIR planning and compatibility | source-inspected, runtime-unverified |
+| runtime | crates/fullmag-runner/src/lib.rs | run_planned_problem | planned runtime dispatch | source-inspected, device-unverified |
+
 **Last changes: 12:31 24.08.2026**
 
 A shared-domain mesh is one immutable topology containing all magnetic and air regions required by coupled FEM operators, with conforming interfaces and semantic markers.
@@ -160,6 +307,7 @@ study.build_domain_mesh()
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
+    dt=5.0e-13,
     tolA=1.0e-4,
     max_steps=20_000,
 )

@@ -3,17 +3,155 @@
     "path": "public_docs/site/numerical-methods/meshing/fem/airbox/boundary-closure.md",
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
+  "public_ownership": [
     {
-      "id": "airbox_options",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "demag",
+      "responsibility": "Direct module-level world.demag public entry point; constructs Demag and stores resolved state before StudyBuilder delegation."
+    }
+  ],
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FEM shared-domain marker contract; FDM demag is separate."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM shared-domain marker contract; FDM demag is separate."
+    }
+  ],
+  "sources": [
+    {
+      "id": "options",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
       "symbol": "class AirboxOptions",
-      "responsibility": "Airbox boundary-marker and closure options."
+      "responsibility": "Define the outer marker default."
+    },
+    {
+      "id": "pairing",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py",
+      "symbol": "_configure_axis_periodic_surfaces",
+      "responsibility": "Select and pair outer min/max surfaces."
+    },
+    {
+      "id": "periodic_groups",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py",
+      "symbol": "_add_periodic_boundary_physical_groups",
+      "responsibility": "Assign paired faces dedicated periodic physical groups."
+    },
+    {
+      "id": "demag_model",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "Validate and lower canonical and legacy demag authoring."
+    },
+    {
+      "id": "public_demag_owner",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyBuilder",
+      "responsibility": "Public `StudyBuilder.demag` delegates to `world.demag`; world state owns enabled-state and resolved-realization lowering."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "out",
+      "latex": "\\Gamma_{\\mathrm{out}}",
+      "meaning": "non-periodic outer airbox surface",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "bound",
+      "latex": "\\partial\\Omega_a",
+      "meaning": "boundary of auxiliary airbox domain",
+      "si_unit": "\\mathrm{m^2}"
+    },
+    {
+      "id": "periodic",
+      "latex": "\\Gamma_{\\mathrm{periodic}}",
+      "meaning": "outer faces assigned periodic pairing",
+      "si_unit": "\\mathrm{m^2}"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-airbox-boundary-marker",
+      "symbols": [
+        "out",
+        "bound",
+        "periodic"
+      ],
+      "sources": [
+        "pairing",
+        "periodic_groups"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "AirboxOptions.boundary_marker",
+        "type": "int",
+        "default": "99",
+        "si_unit": "1",
+        "validation": "direct dataclass field; mesh-group allocation avoids collisions",
+        "meaning": "Gmsh tag for `Gamma_out`",
+        "backend_support": "FEM authoring and mesh metadata are source-backed; runtime lane requires separate qualification; FDM not applicable",
+        "problem_ir": "generated boundary physical-group tag"
+      },
+      {
+        "python": "study.demag.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "1",
+        "validation": "coerced with `bool(enabled)` after `Demag` validation",
+        "meaning": "demag enablement",
+        "backend_support": "Authoring/lowering contract only; runtime depends on the resolved realization and a separately qualified lane",
+        "problem_ir": "_state._demag_enabled"
+      },
+      {
+        "python": "study.demag.model",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "`None`, `airbox`, `bem`, `fredkin_koehler`, or `fmm`; mutually exclusive with `realization`",
+        "meaning": "canonical demag model",
+        "backend_support": "Authoring vocabulary only; `bem` is future/unimplemented; runtime requires separate qualification",
+        "problem_ir": "_state._demag_realization"
+      },
+      {
+        "python": "study.demag.variant",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "With `model=\"airbox\"`: `auto`, `dirichlet`, or `robin`; with another model: rejected; with non-`None` `realization` and no model: ignored; without model/realization: rejected",
+        "meaning": "airbox closure variant",
+        "backend_support": "Authoring/lowering contract only; runtime depends on the resolved realization and a separately qualified lane",
+        "problem_ir": "_MODEL_TO_IR"
+      },
+      {
+        "python": "study.demag.realization",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Exact string membership; accepts `auto`, `bem`, `fmm`, `fredkin_koehler`, `poisson_dirichlet`, `poisson_robin`, `poisson_airbox`, `airbox_robin`, or `airbox_dirichlet`; no whitespace/case normalization; unknown values are rejected",
+        "meaning": "legacy realization request",
+        "backend_support": "Authoring/lowering contract only; runtime depends on the resolved realization and a separately qualified lane",
+        "problem_ir": "_state._demag_realization"
+      }
+    ]
+  }
 }

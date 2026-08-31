@@ -4,16 +4,187 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
     {
-      "id": "mesh_import",
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
+    }
+  ],
+  "sources": [
+    {
+      "id": "fem_authoring",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FEM",
+      "responsibility": "Supported study-level mesh path and IR."
+    },
+    {
+      "id": "per_object_rejection",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Fail-closed rejection of per-object source."
+    },
+    {
+      "id": "study_resolution",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_resolve_flat_fem_hint",
+      "responsibility": "Study-level FEM hint and shared source resolution."
+    },
+    {
+      "id": "file_dispatch",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_generators.py",
       "symbol": "generate_mesh_from_file",
-      "responsibility": "Imported geometry and mesh dispatch."
+      "responsibility": "Python imported-file dispatch."
+    },
+    {
+      "id": "asset_realization",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "realize_fem_mesh_asset",
+      "responsibility": "Imported asset preference and validation."
+    },
+    {
+      "id": "planner_load",
+      "path": "crates/fullmag-plan/src/mesh.rs",
+      "symbol": "load_mesh_from_source",
+      "responsibility": "Lazy planner JSON MeshIR loading and validation."
+    },
+    {
+      "id": "fem_plan",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Consumes validated MeshIR and constructs the FEM CPU/GPU execution plan."
+    },
+    {
+      "id": "fem_execute",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "responsibility": "Production entry normalizes the FEM plan and routes to the configured native execution implementation."
+    },
+    {
+      "id": "fem_gpu_contract",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "responsibility": "Returns () and populates ExecutionProvenance from runtime observations; it is not a gate."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "mh",
+      "latex": "\\mathbf{m}_h",
+      "meaning": "discrete magnetization field",
+      "si_unit": "1"
+    },
+    {
+      "id": "mi",
+      "latex": "\\mathbf{m}_i",
+      "meaning": "nodal magnetization coefficient",
+      "si_unit": "1"
+    },
+    {
+      "id": "phii",
+      "latex": "\\phi_i",
+      "meaning": "finite-element basis function",
+      "si_unit": "1"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-imported-mesh-contract",
+      "symbols": [
+        "mh",
+        "mi",
+        "phii"
+      ],
+      "sources": [
+        "fem_authoring",
+        "per_object_rejection",
+        "study_resolution",
+        "file_dispatch",
+        "asset_realization",
+        "planner_load"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FEM.order",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "integer >= 1",
+        "meaning": "FEM solution-space order",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "backend_policy.discretization_hints.fem.order"
+      },
+      {
+        "python": "FEM.maximum_element_size",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "required FEM size hint even with a mesh source",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+      },
+      {
+        "python": "FEM.hmax",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "alias; must equal maximum_element_size if both are supplied",
+        "meaning": "maximum size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+      },
+      {
+        "python": "FEM.mesh",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "nonempty path when supplied",
+        "meaning": "study-level pre-built mesh source",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "backend_policy.discretization_hints.fem.mesh"
+      }
+    ]
+  },
+  "runtime_flow": {
+    "planner": {
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "role": "resolve and validate MeshIR into FemPlanIR"
+    },
+    "production_entry": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "role": "normalize the plan and route production execution"
+    },
+    "native_execution": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_native_fem",
+      "role": "configuration-selected native CPU/GPU implementation; source has cfg-specific definitions"
+    },
+    "provenance_population": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "role": "populate ExecutionProvenance only; returns (); not a validation or execution gate"
+    }
+  }
 }

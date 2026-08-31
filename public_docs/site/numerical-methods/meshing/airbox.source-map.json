@@ -1,19 +1,55 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/airbox.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
+  "document": {"path": "public_docs/site/numerical-methods/meshing/airbox.md", "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"},
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "airbox_options",
-      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
-      "symbol": "class AirboxOptions",
-      "responsibility": "Python airbox option schema and defaults."
-    }
-  ]
+    {"solver": "FEM", "device": "CPU", "status": "source-backed authoring/lowering; runtime not qualified by this page"},
+    {"solver": "FEM", "device": "GPU", "status": "capability-gated; no device runtime or parity receipt"},
+    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page covers unstructured FEM exterior meshing."},
+    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page covers unstructured FEM exterior meshing."}
+  ],
+  "sources": [
+    {"id": "airbox_options", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py", "symbol": "class AirboxOptions", "responsibility": "Realization schema and defaults."},
+    {"id": "universe_authoring", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyUniverseHandle", "responsibility": "Public universe and air-mesh authoring."},
+    {"id": "domain_build", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "class StudyBuilder", "responsibility": "Public shared-domain build boundary."},
+    {"id": "problem_lowering", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "_build_problem", "responsibility": "Builder-state lowering."},
+    {"id": "domain_realization", "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py", "symbol": "realize_fem_domain_mesh_asset_from_components_with_report", "responsibility": "Shared-domain asset realization."},
+    {"id": "occ_airbox", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_occ.py", "symbol": "generate_shared_domain_mesh_via_occ", "responsibility": "OCC sphere and box realization."},
+    {"id": "mixed_airbox", "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py", "symbol": "_add_conforming_swept_box_airbox_geo", "responsibility": "Mixed-route bbox and padding checks."},
+    {"id": "airbox_status", "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py", "symbol": "_airbox_shape_status", "responsibility": "Requested/effective shape reporting."},
+    {"id": "planner", "path": "crates/fullmag-plan/src/lib.rs", "symbol": "plan", "responsibility": "Capability rejection after lowering."},
+    {"id": "runtime", "path": "crates/fullmag-runner/src/lib.rs", "symbol": "run_planned_problem", "responsibility": "Resolved-plan execution boundary."}
+  ],
+  "symbols": [
+    {"id": "u", "latex": "u", "meaning": "scalar magnetic potential", "si_unit": "\\mathrm{A}"},
+    {"id": "M", "latex": "\\mathbf{M}", "meaning": "magnetization in the magnetic region", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Hd", "latex": "\\mathbf{H}_d", "meaning": "demagnetizing field", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "hj", "latex": "h_j", "meaning": "target airbox element size in grading layer $j$", "si_unit": "\\mathrm{m}"},
+    {"id": "h0", "latex": "h_0", "meaning": "near-interface target element size", "si_unit": "\\mathrm{m}"},
+    {"id": "hfar", "latex": "h_{\\mathrm{far}}", "meaning": "far-field element-size cap", "si_unit": "\\mathrm{m}"},
+    {"id": "r", "latex": "r", "meaning": "geometric grading ratio", "si_unit": "1"}
+  ],
+  "equations": [
+    {"id": "eq-airbox-poisson", "symbols": ["u", "M", "Hd"], "sources": ["occ_airbox"]},
+    {"id": "eq-airbox-geometric-grading", "symbols": ["hj", "h0", "hfar", "r"], "sources": ["airbox_options", "occ_airbox"]}
+  ],
+  "public_api": {"parameters": [
+    {"callable":"StudyUniverseHandle.__call__","parameter":"mode","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.mode","python":"study.universe(mode=...)","type":"str | None","default":"None","si_unit":"1","validation":"forwarded to StudyUniverseConfig","meaning":"domain mode","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.mode"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.size","python":"study.universe(size=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"as_vector3; explicit dimensions must be positive when realized","meaning":"outer dimensions","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.size"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"center","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.center","python":"study.universe(center=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"as_vector3","meaning":"outer center","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.center"},
+    {"callable":"StudyUniverseHandle.__call__","parameter":"padding","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.padding","python":"study.universe(padding=...)","type":"Sequence[float] | None","default":"None","si_unit":"m","validation":"as_vector3; domain validation governs signs","meaning":"directional padding","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.padding"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"maximum_element_size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_hmax","python":"study.universe.mesh(maximum_element_size=...)","type":"float | None","default":"None","si_unit":"m","validation":"positive","meaning":"airbox coarse target","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_hmax"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"minimum_element_size","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_hmin","python":"study.universe.mesh(minimum_element_size=...)","type":"float | None","default":"None","si_unit":"m","validation":"positive and no greater than numeric maximum","meaning":"airbox lower clamp","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_hmin"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"maximum_element_growth_rate","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_growth_rate","python":"study.universe.mesh(maximum_element_growth_rate=...)","type":"float | None","default":"None","si_unit":"1","validation":"finite positive at most 2.5","meaning":"airbox growth target","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_growth_rate"},
+    {"callable":"StudyUniverseHandle.mesh","parameter":"grading","owner":"universe_authoring","lowering":"runtime_metadata.study_universe.airbox_grading","python":"study.universe.mesh(grading=...)","type":"str | None","default":"None","si_unit":"1","validation":"forwarded without vocabulary validation by this handle","meaning":"airbox grading request","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"runtime_metadata.study_universe.airbox_grading"},
+    {"python": "study.universe(mode=...)", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "normalized by `_configure_study_universe`", "meaning": "requested universe mode", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.mode"},
+    {"python": "study.universe(size=...)", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "explicit realized dimensions must be positive", "meaning": "requested outer-domain dimensions", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.size"},
+    {"python": "study.universe(center=...)", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "supplied center is a finite three-vector at realization", "meaning": "requested outer-domain center", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.center"},
+    {"python": "study.universe(padding=...)", "type": "Sequence[float] or None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "universe configuration validation", "meaning": "requested directional clearance", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.padding"},
+    {"python": "study.universe.mesh(maximum_element_size=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive when supplied", "meaning": "far-field airbox target", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.airbox_hmax"},
+    {"python": "study.universe.mesh(minimum_element_size=...)", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{m}$", "validation": "positive and no greater than maximum size", "meaning": "near-interface airbox target", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.airbox_hmin"},
+    {"python": "study.universe.mesh(maximum_element_growth_rate=...)", "type": "float or None", "default": "None", "si_unit": "$1$", "validation": "positive when supplied", "meaning": "requested neighbor growth limit", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.airbox_growth_rate"},
+    {"python": "study.universe.mesh(grading=...)", "type": "str or None", "default": "None", "si_unit": "$1$", "validation": "stored as requested grading mode", "meaning": "requested exterior grading mode", "backend_support": "FEM authoring/lowering; runtime not qualified here", "problem_ir": "runtime_metadata.study_universe.airbox_grading"},
+    {"python": "study.build_domain_mesh()", "type": "StudyBuilder", "default": "n/a", "si_unit": "$1$", "validation": "requires a realizable shared-domain configuration", "meaning": "public realization boundary", "backend_support": "FEM build path; no device-runtime claim", "problem_ir": "current builder state to shared-domain mesh artifact"},
+    {"python": "AirboxOptions.padding_factor", "type": "float", "default": "3.0", "si_unit": "$1$", "validation": "finite and greater than `1` for automatic mixed shared-domain sizing", "meaning": "automatic magnetic-bounding-box scale", "backend_support": "FEM realization only", "problem_ir": "runtime_metadata.study_universe to AirboxOptions.padding_factor"},
+    {"python": "AirboxOptions.shape", "type": "str", "default": "bbox", "si_unit": "$1$", "validation": "OCC: exact `sphere` only for that value; mixed swept route requires `bbox`", "meaning": "requested outer geometry", "backend_support": "FEM realization only", "problem_ir": "runtime_metadata.study_universe to route-specific AirboxOptions.shape"}
+  ]}
 }

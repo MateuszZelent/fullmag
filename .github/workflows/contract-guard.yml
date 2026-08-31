@@ -26,4 +26,4 @@ jobs:
           while IFS= read -r -d '' manifest; do
             python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
               "$manifest" --repo-root .
-          done < <(find public_docs/site/physics -name '*.source-map.json' -print0)
+          done < <(find public_docs/site -name '*.source-map.json' -print0)

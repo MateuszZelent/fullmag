@@ -1,19 +1,31 @@
 {
-  "document": {
-    "path": "public_docs/site/numerical-methods/meshing/swept-meshes.md",
-    "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
-  },
-  "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
-    {
-      "id": "swept_mesh",
-      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
-      "symbol": "generate_swept_mesh",
-      "responsibility": "Swept mesh realization and topology dispatch."
-    }
-  ]
+  "document":{"path":"public_docs/site/numerical-methods/meshing/swept-meshes.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "backend_matrix":[{"solver":"FEM","device":"CPU","status":"source-backed"},{"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},{"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."}],
+  "sources":[
+    {"id":"swept_mesh","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py","symbol":"generate_swept_mesh","responsibility":"Layered mesh dispatch and fail-closed restrictions."},
+    {"id":"public_study","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"study","responsibility":"Public study entry point."},
+    {"id":"mesh_authoring","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"class GeometryMeshHandle","responsibility":"Swept-policy authoring and validation."},
+    {"id":"problem_lowering","path":"packages/fullmag-py/src/fullmag/world.py","symbol":"_build_problem","responsibility":"Builder-state lowering."},
+    {"id":"problem_ir","path":"packages/fullmag-py/src/fullmag/model/problem.py","symbol":"class Problem","responsibility":"ProblemIR mesh-workflow serialization."},
+    {"id":"realization_report","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py","symbol":"class MeshRealizationReport","responsibility":"Requested/resolved topology contract."},
+    {"id":"domain_realization","path":"packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py","symbol":"realize_fem_domain_mesh_asset_from_components_with_report","responsibility":"Shared-domain realization and report."},
+    {"id":"planner","path":"crates/fullmag-plan/src/lib.rs","symbol":"plan","responsibility":"ProblemIR planning and compatibility."},
+    {"id":"runtime","path":"crates/fullmag-runner/src/lib.rs","symbol":"run_planned_problem","responsibility":"Planned runtime dispatch; source evidence only here."}
+  ],
+  "symbols":[{"id":"N_z","latex":"N_z","meaning":"realized through-thickness layer count","si_unit":"1"},{"id":"n_layers","latex":"n_{layers}","meaning":"requested layer count","si_unit":"1"}],
+  "equations":[{"id":"eq-swept-layer-contract","symbols":["N_z","n_layers"],"sources":["swept_mesh","realization_report"]}],
+  "public_api":{"parameters":[
+    {"callable":"GeometryMeshHandle.__call__","parameter":"mesh_strategy","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].mesh_strategy","python":"mesh_strategy","type":"str | None","default":"None","si_unit":"$1$","validation":"stored without standalone vocabulary validation; typed prism/hex intent requires `swept_prism`/`swept_hex`","meaning":"generator family","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].mesh_strategy"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"topology","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].topology","python":"topology","type":"Literal[\"tetrahedral\", \"prismatic\"] | None","default":"None","si_unit":"$1$","validation":"exact vocabulary; tetrahedral topology contradicts explicit swept element intent","meaning":"topology request","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].topology"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"through_thickness_elements","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].through_thickness_elements","python":"through_thickness_elements","type":"int | None","default":"None","si_unit":"layers","validation":"non-Boolean integer at least `1`; required for layered intent","meaning":"requested layers","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].through_thickness_elements"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"through_thickness_distribution","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].through_thickness_distribution","python":"through_thickness_distribution","type":"Literal[ fixed, linear, exponential ] | None","default":"None","si_unit":"$1$","validation":"must be `fixed`, `linear`, or `exponential`; exact layer count requires `fixed`","meaning":"layer spacing","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].through_thickness_distribution"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"through_thickness_element_ratio","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].through_thickness_element_ratio","python":"through_thickness_element_ratio","type":"float | None","default":"None","si_unit":"$1$","validation":"finite positive; exact layer count permits `1.0`","meaning":"grading ratio","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].through_thickness_element_ratio"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"through_thickness_symmetric","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].through_thickness_symmetric","python":"through_thickness_symmetric","type":"bool | None","default":"None (stored state `False`)","si_unit":"$1$","validation":"non-None value must be Boolean; exact layer count rejects `True`","meaning":"mirrored grading","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].through_thickness_symmetric"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"sweep_face_meshing","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].sweep_face_meshing","python":"sweep_face_meshing","type":"Literal[ triangular, quadrilateral ] | None","default":"None","si_unit":"$1$","validation":"prism requires triangular; hex requires quadrilateral","meaning":"source-face topology","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].sweep_face_meshing"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"sweep_direction","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].sweep_direction","python":"sweep_direction","type":"Literal[ auto, x, y, z ] | None","default":"None","si_unit":"$1$","validation":"exact vocabulary; required for layered intent","meaning":"sweep axis","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].sweep_direction"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"element_family","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].element_family","python":"element_family","type":"Literal[ prism, hex ] | None","default":"None","si_unit":"$1$","validation":"exact vocabulary and strategy/face consistency checks","meaning":"volume family","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].element_family"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"transition_policy","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].transition_policy","python":"transition_policy","type":"Literal[ pyramid_to_tetrahedra, reject ] | None","default":"None","si_unit":"$1$","validation":"prismatic shared route requires `pyramid_to_tetrahedra`","meaning":"mixed-topology transition","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].transition_policy"},
+    {"callable":"GeometryMeshHandle.__call__","parameter":"exact_layer_count","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].exact_layer_count","python":"exact_layer_count","type":"bool | None","default":"None","si_unit":"$1$","validation":"Boolean; strict prismatic route requires `True`","meaning":"layer-count certificate requirement","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].exact_layer_count"}
+    ,{"callable":"GeometryMeshHandle.__call__","parameter":"order","owner":"mesh_authoring","lowering":"runtime_metadata.mesh_workflow.per_geometry[].order","python":"order","type":"int | None","default":"None","si_unit":"$1$","validation":"prismatic intent supports only `1`; otherwise backend-realization policy applies","meaning":"FEM order request","backend_support":"FEM CPU/GPU capability-gated","problem_ir":"mesh_workflow.per_geometry[].order"}
+  ]}
 }

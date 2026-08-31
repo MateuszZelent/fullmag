@@ -4,16 +4,547 @@
     "reviewed_revision": "969efa0941905825ac569d525f4bdaefc059e2af"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "source-backed"},
-    {"solver": "FEM", "device": "GPU", "status": "source-backed-capability-gated"},
-    {"solver": "FDM", "device": "CPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."},
-    {"solver": "FDM", "device": "GPU", "status": "not-applicable", "reason": "This page documents FEM meshing semantics."}
-  ],  "sources": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "source-backed"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-backed-capability-gated"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "This is a FEM mesh contract."
+    }
+  ],
+  "sources": [
+    {
+      "id": "authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Public thin_film signature and fail-closed validation."
+    },
+    {
+      "id": "lowering",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_mesh_spec_to_metadata",
+      "responsibility": "Per-object strategy and topology lowering."
+    },
+    {
+      "id": "workflow",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_collect_mesh_workflow_metadata",
+      "responsibility": "Generator mesh_options lowering."
+    },
     {
       "id": "sweepability",
       "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
       "symbol": "classify_sweepability",
-      "responsibility": "Thin-film sweepability classification."
+      "responsibility": "Thin-direction and sweepability classification."
+    },
+    {
+      "id": "swept_realization",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py",
+      "symbol": "generate_swept_mesh",
+      "responsibility": "Strict prism realization."
+    },
+    {
+      "id": "tetra_options",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py",
+      "symbol": "_apply_mesh_options",
+      "responsibility": "Tetrahedral option and field application."
+    },
+    {
+      "id": "thin_report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_thin_film_diagnostics",
+      "responsibility": "Requested versus realized thin-film diagnostics."
+    },
+    {
+      "id": "domain_report",
+      "path": "packages/fullmag-py/src/fullmag/meshing/mesh_build_report.py",
+      "symbol": "_build_shared_domain_build_report",
+      "responsibility": "Actual method, topology, and fallback report."
+    },
+    {
+      "id": "domain_backend",
+      "path": "packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py",
+      "symbol": "realize_fem_domain_mesh_asset_from_components_with_report",
+      "responsibility": "Typed domain mesh and report realization."
+    },
+    {
+      "id": "fem_plan",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "responsibility": "Consumes validated MeshIR and constructs the FEM CPU/GPU execution plan."
+    },
+    {
+      "id": "fem_execute",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "responsibility": "Production entry normalizes the FEM plan and routes to the configured native execution implementation."
+    },
+    {
+      "id": "fem_gpu_contract",
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "responsibility": "Returns () and populates ExecutionProvenance from runtime observations; it is not a gate."
     }
-  ]
+  ],
+  "symbols": [
+    {
+      "id": "t",
+      "latex": "t",
+      "meaning": "film thickness",
+      "si_unit": "m"
+    },
+    {
+      "id": "Nt",
+      "latex": "N_t",
+      "meaning": "requested through-thickness count",
+      "si_unit": "1"
+    },
+    {
+      "id": "ht",
+      "latex": "h_t",
+      "meaning": "nominal thickness spacing",
+      "si_unit": "m"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-thin-film-tetrahedral-contract",
+      "symbols": [
+        "t",
+        "Nt",
+        "ht"
+      ],
+      "sources": [
+        "authoring",
+        "lowering",
+        "workflow",
+        "sweepability",
+        "swept_realization",
+        "tetra_options",
+        "thin_report",
+        "domain_report",
+        "domain_backend"
+      ]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "hmax",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or auto; alias",
+        "meaning": "body maximum-size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].hmax"
+      },
+      {
+        "python": "maximum_element_size",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or auto",
+        "meaning": "body maximum size",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].maximum_element_size"
+      },
+      {
+        "python": "hmin",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length; alias",
+        "meaning": "body minimum-size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].hmin"
+      },
+      {
+        "python": "minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length",
+        "meaning": "body minimum size",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].minimum_element_size"
+      },
+      {
+        "python": "order",
+        "type": "int | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "integer; prismatic topology permits only 1",
+        "meaning": "FEM order",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].order"
+      },
+      {
+        "python": "curvature_factor",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0",
+        "meaning": "curvature refinement",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].curvature_factor"
+      },
+      {
+        "python": "narrow_region_resolution",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite and > 0",
+        "meaning": "narrow-region refinement",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].narrow_region_resolution"
+      },
+      {
+        "python": "layers",
+        "type": "int",
+        "default": "1",
+        "si_unit": "1",
+        "validation": "integer >= 1",
+        "meaning": "through-thickness element count",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].through_thickness_elements"
+      },
+      {
+        "python": "topology",
+        "type": "Literal[\"tetrahedral\", \"prismatic\"] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "one of the two values",
+        "meaning": "tetrahedral route or strict prism request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].mesh_strategy"
+      },
+      {
+        "python": "exact_layers",
+        "type": "bool | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "requires prismatic; strict mode rejects False",
+        "meaning": "exact prism-layer requirement",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].exact_layer_count"
+      },
+      {
+        "python": "transition",
+        "type": "Literal[\"pyramid_to_tetrahedra\", \"reject\"] | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "prismatic requires pyramid_to_tetrahedra",
+        "meaning": "shared-domain transition request",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].transition_policy"
+      },
+      {
+        "python": "interface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "interface size",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_hmax"
+      },
+      {
+        "python": "surface_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0; overrides interface alias",
+        "meaning": "surface size alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_hmax"
+      },
+      {
+        "python": "interface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "interface shell",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_thickness"
+      },
+      {
+        "python": "surface_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0; overrides interface alias",
+        "meaning": "surface shell alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].interface_thickness"
+      },
+      {
+        "python": "transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "zero or positive length, or supported automatic value",
+        "meaning": "interface transition",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].transition_distance"
+      },
+      {
+        "python": "surface_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "zero or positive length, or supported automatic value",
+        "meaning": "surface transition alias",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].transition_distance"
+      },
+      {
+        "python": "edge_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "edge size",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_hmax"
+      },
+      {
+        "python": "edge_thickness",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "edge shell",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_thickness"
+      },
+      {
+        "python": "edge_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or supported automatic value",
+        "meaning": "edge transition",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].edge_transition_distance"
+      },
+      {
+        "python": "corner_maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "corner size",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_hmax"
+      },
+      {
+        "python": "corner_extent",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "corner extent",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_extent"
+      },
+      {
+        "python": "corner_transition_distance",
+        "type": "float | str | None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive length or supported automatic value",
+        "meaning": "corner transition",
+        "backend_support": "FEM CPU source-backed; FEM GPU capability-gated",
+        "problem_ir": "mesh_workflow.per_geometry[].corner_transition_distance"
+      }
+    ]
+  },
+  "resolved_execution": [
+    {
+      "field": "body_hmax",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "explicit maximum_element_size/hmax, otherwise inherited object hmax",
+      "prismatic": "explicit/inherited size passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].hmax and .maximum_element_size"
+    },
+    {
+      "field": "body_hmin",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "explicit minimum_element_size/hmin, otherwise inherited object hmin, otherwise classified thickness divided by layers",
+      "prismatic": "explicit/inherited size passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].hmin and .minimum_element_size"
+    },
+    {
+      "field": "through_thickness_elements",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "layers",
+      "prismatic": "layers",
+      "problem_ir": "mesh_workflow.per_geometry[].through_thickness_elements"
+    },
+    {
+      "field": "through_thickness_distribution",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "fixed",
+      "prismatic": "fixed",
+      "problem_ir": "mesh_workflow.per_geometry[].through_thickness_distribution"
+    },
+    {
+      "field": "through_thickness_symmetric",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "false, omitted by sparse metadata",
+      "prismatic": "false, omitted by sparse metadata",
+      "problem_ir": "mesh_workflow.per_geometry[].through_thickness_symmetric only when true"
+    },
+    {
+      "field": "sweep_face_meshing",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "triangular",
+      "prismatic": "triangular",
+      "problem_ir": "mesh_workflow.per_geometry[].sweep_face_meshing"
+    },
+    {
+      "field": "mesh_strategy",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "thin_film_tetrahedral",
+      "prismatic": "swept_prism",
+      "problem_ir": "mesh_workflow.per_geometry[].mesh_strategy"
+    },
+    {
+      "field": "topology",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "absent after branch resolution",
+      "prismatic": "prismatic",
+      "problem_ir": "mesh_workflow.per_geometry[].topology"
+    },
+    {
+      "field": "element_family",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "absent",
+      "prismatic": "prism",
+      "problem_ir": "mesh_workflow.per_geometry[].element_family"
+    },
+    {
+      "field": "sweep_direction",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "absent",
+      "prismatic": "auto",
+      "problem_ir": "mesh_workflow.per_geometry[].sweep_direction"
+    },
+    {
+      "field": "exact_layer_count",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "absent",
+      "prismatic": "true when exact_layers is None, otherwise accepted boolean",
+      "problem_ir": "mesh_workflow.per_geometry[].exact_layer_count"
+    },
+    {
+      "field": "transition_policy",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "absent",
+      "prismatic": "pyramid_to_tetrahedra by default and requirement",
+      "problem_ir": "mesh_workflow.per_geometry[].transition_policy"
+    },
+    {
+      "field": "surface_hmax",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "surface_maximum_element_size, else interface_maximum_element_size, else resolved body hmax",
+      "prismatic": "surface_maximum_element_size, else interface_maximum_element_size, passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].interface_hmax"
+    },
+    {
+      "field": "surface_shell",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "surface_thickness, else interface_thickness, else resolved surface hmax, body hmin, or classified thickness",
+      "prismatic": "surface_thickness, else interface_thickness, passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].interface_thickness"
+    },
+    {
+      "field": "surface_transition",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "surface_transition_distance, else transition_distance, else 8 times resolved surface hmax when available",
+      "prismatic": "surface_transition_distance, else transition_distance, passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].transition_distance"
+    },
+    {
+      "field": "edge_hmax",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "edge_maximum_element_size, else resolved body hmin",
+      "prismatic": "explicit edge_maximum_element_size passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].edge_hmax"
+    },
+    {
+      "field": "edge_shell",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "edge_thickness, else resolved surface shell",
+      "prismatic": "explicit edge_thickness passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].edge_thickness"
+    },
+    {
+      "field": "edge_transition",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "edge_transition_distance, else half of numeric surface transition or the same automatic string",
+      "prismatic": "explicit edge_transition_distance passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].edge_transition_distance"
+    },
+    {
+      "field": "corner_hmax",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "corner_maximum_element_size, else resolved edge hmax",
+      "prismatic": "explicit corner_maximum_element_size passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].corner_hmax"
+    },
+    {
+      "field": "corner_extent",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "corner_extent, else resolved edge shell",
+      "prismatic": "explicit corner_extent passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].corner_extent"
+    },
+    {
+      "field": "corner_transition",
+      "owner": "packages/fullmag-py/src/fullmag/world.py::GeometryMeshHandle.thin_film",
+      "tetrahedral": "corner_transition_distance, else resolved edge transition",
+      "prismatic": "explicit corner_transition_distance passed to common configure",
+      "problem_ir": "mesh_workflow.per_geometry[].corner_transition_distance"
+    }
+  ],
+  "runtime_flow": {
+    "planner": {
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "plan_fem",
+      "role": "resolve and validate MeshIR into FemPlanIR"
+    },
+    "production_entry": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_fem_with_context_in_mode",
+      "role": "normalize the plan and route production execution"
+    },
+    "native_execution": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "execute_native_fem",
+      "role": "configuration-selected native CPU/GPU implementation; source has cfg-specific definitions"
+    },
+    "provenance_population": {
+      "path": "crates/fullmag-runner/src/dispatch.rs",
+      "symbol": "apply_native_fem_runtime_contract",
+      "role": "populate ExecutionProvenance only; returns (); not a validation or execution gate"
+    }
+  }
 }

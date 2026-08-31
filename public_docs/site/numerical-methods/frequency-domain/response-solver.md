@@ -79,6 +79,37 @@ The physical perturbation is obtained by reconstructing tangent coordinates in t
 
 up to the numerical tangent-leakage tolerance.
 
+(numerical-methods-frequency-response-symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $\delta\mathbf m$ | dynamic reduced-magnetization perturbation | $1$ |
+| $\mathbf m_0$ | equilibrium reduced magnetization | $1$ |
+| $\widehat{\mathbf m}$ | complex reduced-magnetization response amplitude | $1$ |
+| $\widehat{\mathbf M}$ | complex physical magnetization response amplitude | $\mathrm{A\,m^{-1}}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\widehat{\mathbf h}_{\mathrm{ext}}$ | complex excitation-field amplitude | $\mathrm{A\,m^{-1}}$ |
+| $\mathsf A(\omega)$ | shifted complex tangent response operator | operator-dependent |
+| $\mathsf K$ | tangent stiffness/dynamic matrix | operator-dependent |
+| $\mathsf G$ | gyrotropic, mass, and damping matrix | operator-dependent |
+| $\omega$ | angular frequency | $\mathrm{rad\,s^{-1}}$ |
+| $t$ | time | $\mathrm{s}$ |
+| $\widehat{\mathbf q}$ | complex tangent-coordinate response | $1$ |
+| $\widehat{\mathbf b}$ | assembled harmonic right-hand side | operator-dependent |
+| $\mathsf C$ | drive coupling operator | operator-dependent |
+| $\mathbf e_1$ | first local tangent basis vector | $1$ |
+| $\mathbf e_2$ | second local tangent basis vector | $1$ |
+| $\widehat{\boldsymbol\chi}_M$ | physical magnetization susceptibility, M response divided by H drive | $1$ |
+| $\widehat{\boldsymbol\chi}_m$ | reduced-magnetization response divided by H drive | $\mathrm{m\,A^{-1}}$ |
+| $\chi_{\mathrm{v1}}$ | current dense v1 scalar projection h^H m / h^H h | $\mathrm{m\,A^{-1}}$ (implemented; writer currently labels it dimensionless) |
+| $p_{\mathrm{abs}}$ | cycle-averaged absorbed magnetic power density | $\mathrm{W\,m^{-3}}$ after complete SI scaling and spatial reduction |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $\mathbf r$ | original-operator algebraic residual | right-hand-side-dependent |
+| $\varepsilon_{\mathrm{true}}$ | true relative residual | $1$ |
+| $b_{\mathrm{scale}}$ | absolute residual normalization floor | same as right-hand side |
+
+(numerical-methods-frequency-response-si-observable-reference)=
 (numerical-methods-frequency-response-susceptibility)=
 ## Susceptibility and response-unit conventions
 
@@ -93,7 +124,13 @@ Two quantities that are often both called “susceptibility” are dimensionally
 \widehat{\mathbf M}=M_s\widehat{\mathbf m},
 ```
 
-which is dimensionless in SI, and
+which is dimensionless in SI.
+
+This is the conventional full-SI definition obtained from $\widehat{\mathbf M}=M_s
+\widehat{\mathbf m}$; it is the scientific target described by references 1 and 4, not a claim
+that every current artifact writer materializes a full tensor with this scaling.
+
+The corresponding reduced-magnetization response is
 
 ```{math}
 :label: eq-numerical-frequency-response-reduced-susceptibility
@@ -139,7 +176,10 @@ p_{\mathrm{abs}}
 with an explicitly declared local or volume-averaged reduction. The dense validation writer
 currently evaluates `-0.5 * omega * Im(h^H m)` and labels it $\mathrm{W\,m^{-3}}$; therefore the
 native scaling, $M_s$, $\mu_0$, and volume normalization must be certified before using that field
-as a physical power density.
+as a physical power density. The full-SI magnetic-work expression follows the phasor convention
+and energy coupling discussed in references 1 and 4. Neither the Rust validation proxy nor the
+native drive-projected, non-volume-weighted proxy is implementation evidence for this full
+physical power density.
 
 (numerical-methods-frequency-response-true-residual)=
 ## Algebraic residual and per-frequency status
@@ -215,7 +255,6 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.exchange()
 study.demag(model="airbox", variant="robin")
 study.stages.add_frequency_response(
-    stage_id="linear_response",
     frequencies_hz=(1.0e9, 2.0e9, 3.0e9),
     excitation_field_au_per_m=(0.0, 0.0, 1.0),
     excitation_phase_rad=0.0,
@@ -235,24 +274,25 @@ study.stages.add_frequency_response(
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---:|---:|---|---|---|---|
-| `FrequencyResponseStageSpec.frequencies_hz` | `Sequence[float]` | required | $\mathrm{Hz}$ | nonempty finite positive values | response samples | FEM | `study.frequencies_hz` |
-| `FrequencyResponseStageSpec.excitation_field_au_per_m` | `tuple[float,float,float]` | `(0,0,1)` | $\mathrm{A\,m^{-1}}$ | finite three-vector; nonzero for normalized observables | complex-drive magnitude before phase rotation | FEM | `study.excitation.field_au_per_m` |
-| `FrequencyResponseStageSpec.excitation_phase_rad` | `float` | `0` | $\mathrm{rad}$ | finite | global drive phase | FEM | `study.excitation.phase_rad` |
-| `FrequencyResponseStageSpec.observable` | `str` | `susceptibility_tensor` | quantity-dependent | supported response output | requested materialized observable | FEM | `study.outputs` |
-| `FrequencyResponseStageSpec.include_demag` | `bool` | `True` | $1$ | Boolean | include dynamic demagnetization | FEM, capability-gated | `study.operator.include_demag` |
-| `FrequencyResponseStageSpec.equilibrium_source` | `str` | `provided` | $1$ | `provided`, `relax`, or `artifact` | equilibrium source | planner | `study.equilibrium` |
-| `FrequencyResponseStageSpec.equilibrium_artifact` | `str | None` | `None` | $1$ | required for `artifact` | equilibrium artifact identity | planner | `study.equilibrium_artifact` |
-| `FrequencyResponseStageSpec.normalization` | `str` | `unit_l2` | $1$ | supported internal basis normalization | modal/reduced-basis policy, not physical response amplitude | FEM | `study.normalization` |
-| `FrequencyResponseStageSpec.damping_policy` | `str` | `ignore` | $1$ | `ignore` or `include` | damping in the linearized operator | FEM | `study.damping_policy` |
-| `FrequencyResponseStageSpec.k_vector` | `tuple[float,float,float] | None` | `None` | $\mathrm{m^{-1}}$ | finite three-vector | one Bloch sample | FEM Floquet gate | `study.k_vector` |
-| `FrequencyResponseStageSpec.k_sampling` | object | `None` | $1$ | valid sampling schema | multiple Bloch samples | FEM Floquet gate | `study.k_sampling` |
-| `FrequencyResponseStageSpec.bc` | `str | dict` | `free` | $1$ | supported spin-wave boundary schema | dynamic magnetization boundary | FEM | `study.spin_wave_bc` |
-| `FrequencyResponseStageSpec.magnetostatic_bc` | `str` | `open` | $1$ | `open`, `periodic_airbox_k0`, or `floquet_airbox` | dynamic magnetostatic closure | FEM | `study.magnetostatic_bc` |
-| solver `method` | enum/string | `auto` | $1$ | current-runtime availability described below | requested algebraic route | FEM | `study.solver_policy.method` |
-| solver `preconditioner` | enum/string | `auto` | $1$ | method/lane-compatible value | requested preconditioner | FEM | `study.solver_policy.preconditioner` |
-| solver `rtol` | `float | None` | `None` | $1$ | finite positive | relative algebraic tolerance | FEM | `study.solver_policy.rtol` |
-| solver `max_iterations` | `int | None` | `None` | $1$ | positive integer | iteration budget | FEM | `study.solver_policy.max_iterations` |
-| solver `restart_iterations` | `int | None` | `None` | $1$ | positive integer | restarted-GMRES subspace length | FEM iterative lanes | `study.solver_policy.restart_iterations` |
+| `frequencies_hz` | `Sequence[float]` | required | $\mathrm{Hz}$ | nonempty; every value finite and positive | prescribed response samples | FEM | `frequencies_hz.values_hz` |
+| `excitation_field_au_per_m` | `tuple[float, float, float]` | `(0.0, 0.0, 1.0)` | $\mathrm{A\,m^{-1}}$ | exactly three finite values; zero physical drive is allowed but normalized output may be unavailable | harmonic field amplitude before phase rotation | FEM | `excitation.field_au_per_m` |
+| `excitation_phase_rad` | `float` | `0.0` | $\mathrm{rad}$ | finite after float conversion | global harmonic-drive phase | FEM | `excitation.phase_rad` |
+| `observable` | `str` | `susceptibility_tensor` | quantity-dependent | one of m_complex, u_complex, strain_complex, stress_complex, susceptibility_tensor, absorbed_power_density, response_amplitude, response_phase, mode_hybridization_index | requested response output | FEM; materialization is writer-dependent | `sampling.outputs[0] = {"kind":"frequency_response_output","observable": observable}` |
+| `include_demag` | `bool` | `True` | $1$ | type annotation only; no authoring-time isinstance validation or normalization; value lowers unchanged | include dynamic demagnetization | FEM capability-gated; IR/backend must reject invalid values | `operator.include_demag` |
+| `equilibrium_source` | `str` | `provided` | $1$ | one of provided, relax, artifact | source of the linearization state | FEM planner | `equilibrium = {"kind":"provided"} / {"kind":"relaxed_initial_state"} / {"kind":"artifact","path": equilibrium_artifact}` |
+| `equilibrium_artifact` | `str \| None` | `None` | $1$ | required and nonempty for artifact source; nonempty if otherwise supplied | equilibrium artifact path | FEM planner | `equilibrium.path when equilibrium.kind is artifact` |
+| `normalization` | `str` | `unit_l2` | $1$ | one of unit_l2, unit_max_amplitude | internal basis normalization, not drive amplitude | FEM | `normalization` |
+| `damping_policy` | `str` | `ignore` | $1$ | one of ignore, include | damping treatment in the linearized operator | FEM | `damping_policy` |
+| `k_vector` | `tuple[float, float, float] \| None` | `None` | $\mathrm{m^{-1}}$ | legacy finite three-vector; mutually exclusive with k_sampling | one Bloch-wave sample | FEM Floquet capability-gated | `k_sampling = {"kind":"single","k_vector":[kx,ky,kz]}` |
+| `k_sampling` | `object \| None` | `None` | $1$ | None, finite three-vector, KPoint, or KPath; KPoint label is null or nonempty; KPath has at least two points and positive per-segment counts; mutually exclusive with k_vector | explicit Bloch sampling definition | FEM Floquet capability-gated | `None -> null; vector or KPoint -> {"kind":"single","k_vector":[...]}; KPath -> {"kind":"path","points":[{"label": string-or-null,"k_vector":[kx,ky,kz]},...],"samples_per_segment":[n0,...],"closed": bool}` |
+| `bc` | `str \| dict[str, object]` | `free` | $1$ | raw string allow-list; PeriodicBC/FloquetBC require nonempty pair_ids; raw dict checks only accepted kind and does not validate required fields | dynamic-magnetization boundary | FEM; malformed raw dict may survive authoring and fail later | `raw free/pinned/periodic/floquet/surface_anisotropy string unchanged; PeriodicBC -> {"kind":"periodic","pair_ids":[...]}; FloquetBC -> {"kind":"floquet","pair_ids":[...],"phase_convention": value}; raw dict -> unchanged after kind-only check` |
+| `magnetostatic_bc` | `str` | `open` | $1$ | one of open, periodic_airbox_k0, floquet_airbox | dynamic magnetostatic closure | FEM | `magnetostatic_bc` |
+| `solver_method` | `str \| None` | `None` | $1$ | known solver-tree name; explicit runtime subset is gated below | requested algebraic route; omission means automatic resolution | FEM bounded | `solver_policy.method` |
+| `solver_preconditioner` | `str \| None` | `None` | $1$ | one of auto, graph_demag_coarse, demag_coarse, block_jacobi, none | requested preconditioner | FEM bounded | `solver_policy.preconditioner` |
+| `solver_rtol` | `float \| None` | `None` | $1$ | finite and positive | relative algebraic tolerance | FEM | `solver_policy.rtol` |
+| `solver_max_iterations` | `int \| None` | `None` | $1$ | positive integer; Boolean rejected | iteration ceiling | FEM iterative lanes | `solver_policy.max_iterations` |
+| `solver_restart_iterations` | `int \| None` | `None` | $1$ | positive integer; at most solver_max_iterations when both are supplied | restarted-GMRES subspace length | FEM iterative lanes | `solver_policy.restart_iterations` |
+| `MAX_ITERATIONS` | `int \| None` | `None` | $1$ | compatibility alias; conflicts with a different solver_max_iterations value | legacy spelling of the iteration ceiling | FEM iterative lanes | `solver_policy.max_iterations` |
 
 `observable="m_complex"` is used in the example because its stored quantity is unambiguous: complex
 reduced magnetization. When requesting `susceptibility_tensor`, consumers must inspect the artifact
@@ -260,6 +300,28 @@ schema and SI-unit metadata rather than assume conventional dimensionless suscep
 
 (numerical-methods-frequency-response-problem-ir)=
 ## ProblemIR and provenance
+
+The structured lowering is deterministic. `provided`, `relax`, and `artifact` equilibrium requests
+become `{"kind":"provided"}`, `{"kind":"relaxed_initial_state"}`, and
+`{"kind":"artifact","path":...}` respectively. A legacy `k_vector`, a three-vector
+`k_sampling`, or a `KPoint` becomes `{"kind":"single","k_vector":[...]}`; a `KPath`
+becomes
+`{"kind":"path","points":[{"label":<string-or-null>,"k_vector":[kx,ky,kz]},...],`
+`"samples_per_segment":[n0,...],"closed":<bool>}`. Each nested point comes from
+`KPoint.to_ir()` exactly; `KPath.to_ir()` preserves point order, the full positive
+`samples_per_segment` list, and `closed`. Supplying both `k_vector` and `k_sampling` fails.
+
+The boundary serializer has a deliberately weak raw-input boundary. Each raw string
+`"free"`, `"pinned"`, `"periodic"`, `"floquet"`, or `"surface_anisotropy"` is returned
+unchanged. `PeriodicBC` becomes `{"kind":"periodic","pair_ids":[...]}` and validates a
+nonempty list of nonempty pair IDs. `FloquetBC` becomes
+`{"kind":"floquet","pair_ids":[...],"phase_convention":...}` and validates nonempty pair
+IDs plus a nonempty phase convention. For a raw dictionary, authoring checks only that `kind` is
+one of those five accepted names, then returns the entire dictionary unchanged: required fields,
+field types, pair IDs, phase convention, and unexpected keys are not validated at this boundary.
+Such malformed raw dictionaries can fail only in later IR/backend validation. The output is the
+complete object `{"kind":"frequency_response_output","observable":...}` inside
+`sampling.outputs`, not a bare observable name.
 
 The IR stores sampling, excitation, linearized operator, equilibrium, boundary conditions, output
 intent, and solver policy separately. Required resolved provenance includes:
@@ -308,11 +370,24 @@ revision-specific implementation boundary, not a permanent API promise.
 (numerical-methods-frequency-response-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Script export preserves the full frequency sequence, excitation, phase, operator, boundary, output,
-and solver policy. Validation failures include:
+**Requested intent.** Script capture and export preserve the full frequency sequence, excitation,
+phase, equilibrium source, operator choices, boundary conditions, requested output, and every
+explicit solver-policy field. An omitted solver policy remains omitted; it is not rewritten as an
+explicit runtime method. `MAX_ITERATIONS` is normalized to `solver_max_iterations`, and supplying
+both with different values is a validation error.
+
+**Resolved execution.** Runtime provenance separately records the resolved engine, device,
+precision, solver method, preconditioner, dependency, lane, residency, fallback status, and one
+completion record per frequency. Resolved execution may select an automatic method, but it does
+not alter the preserved requested intent.
+
+**Validation errors.** Authoring validation rejects malformed frequencies, phase, equilibrium,
+normalization, damping, boundary, observable, and solver-policy values before lowering. Native and
+runtime validation then reject unavailable operator data, incompatible boundaries, failed
+equilibria, non-finite systems, and failed residual certification. Representative failures include:
 
 - empty, non-finite, or nonpositive frequency lists;
-- zero drive for a normalized response;
+- unavailable normalization for a zero-drive derived response;
 - missing or rejected equilibrium;
 - unsupported explicit solver method;
 - invalid boundary/Floquet metadata;
@@ -322,9 +397,10 @@ and solver policy. Validation failures include:
 - non-finite response, residual, or output;
 - failed true-residual/full-block certification.
 
-An unsupported request fails before execution. It cannot silently become FDM, free-boundary,
-no-demag, CPU, dense validation, or a different solver method. Interrupted sweeps publish only an
-explicitly partial artifact with completed-point count and requested-point count.
+**Unsupported combinations.** An unsupported combination fails before execution. It cannot
+silently become FDM, free-boundary, no-demag, CPU, dense validation, or a different solver method.
+Interrupted sweeps publish only an explicitly partial artifact with completed-point count and
+requested-point count.
 
 (numerical-methods-frequency-response-discrete-realization)=
 ## Discrete realization by lane
@@ -342,19 +418,34 @@ operator, vectors, Krylov basis, and preconditioner have separate residency fiel
 (numerical-methods-frequency-response-implementation-mapping)=
 ## Implementation mapping
 
+(numerical-methods-frequency-response-planner-struct-source)=
+(numerical-methods-frequency-response-planner-input-overload-source)=
+(numerical-methods-frequency-response-planner-capability-overload-source)=
+
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
 | Python stage schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | public response request | Python |
 | Python stage builder | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | stage and solver-policy lowering | Python/IR |
+| Public stage callable | `packages/fullmag-py/src/fullmag/world.py` | `add_frequency_response` | public `StudyStagesBuilder` entry point | Python/IR |
+| Solver policy validation | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponseSolverPolicy` | public solver names, defaults, and numeric validation | Python/IR |
+| ProblemIR lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponse` | response request validation and exact IR shape | Python/IR |
+| Observable validation | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveResponse` | supported response-output vocabulary | Python/IR |
+| Wave-vector lowering | `packages/fullmag-py/src/fullmag/model/eigen.py` | `coerce_k_sampling` | exact single-point/path representation and exclusivity | Python/IR |
+| K-point lowering | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class KPoint` | nested label and three-vector representation | Python/IR |
+| K-path lowering | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class KPath` | ordered nested points, segment counts, and closed flag | Python/IR |
 | Native request validation | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | operator and boundary legality | FEM |
-| Native response contract | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | driven solve status and diagnostics | FEM |
-| Solver-tree types | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `FrequencySolvePlan` | lanes, representations, solvers, preconditioners, certificates | FEM planner |
-| Planner selection | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response` | architecture-level lane selection | FEM planner |
+| Native response ABI | `backends/fem/include/frequency_domain/driven_response_solver.hpp` | `solve_driven_frequency_response` | production entry-point declaration | FEM |
+| Native response implementation | `backends/fem/src/frequency_domain/driven_response_solver.cpp` | `solve_driven_frequency_response` | validation, lane dispatch, solve, residuals, and artifacts | FEM |
+| Solver plan data contract | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `struct FrequencySolvePlan` | selected lane, representation, solver, preconditioner, and gates | FEM planner |
+| Planner request overload | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response(const FrequencySolvePlannerInput&)` | direct planner-input selection | FEM planner |
+| Planner capability overload | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response(const FrequencyBackendCapabilities&, const FrequencySolverPolicy&)` | capability/policy lowering into planner input | FEM planner |
 | Runtime availability gate | `crates/fullmag-runner/src/frequency_response.rs` | `frequency_response_solver_method_rejection_reason` | rejects target lanes not yet executable | runner |
 | Runtime resolved-name mapping | `crates/fullmag-runner/src/frequency_response.rs` | `resolved_frequency_response_solver_method_name` | broad runtime lane identity | runner |
 | Dense block-real solve | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_block_real_harmonic_response` | complex system represented as a real $2n\times2n$ solve | validation/reference |
 | Dense sweep and reuse | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_field_driven_block_real_sweep_with_interrupt` | per-frequency solve, template reuse, warm-start provenance | validation/reference |
 | v1 response artifact | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `build_field_driven_response_sweep_artifact` | complex response, residuals, derived outputs, SI map | validation/reference |
+| v1 unit map | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `response_sweep_si_units` | serialized output-unit labels | validation/reference |
+| v1 derived point | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `field_driven_response_point` | susceptibility projection and absorbed-power scalar | validation/reference |
 
 (numerical-methods-frequency-response-validation)=
 ## Verification and scientific validation
@@ -405,6 +496,9 @@ outside the basis-certification frequency interval.
   susceptibility; its SI contract must be corrected before physical interpretation.
 - The v1 dense artifact's absorbed-power label requires independent verification of $\mu_0M_s$,
   volume, and operator scaling.
+- The native writer labels its drive-projected susceptibility provenance explicitly, but its
+  absorbed quantity remains a non-volume-weighted proxy with `physical_power_density=false`; it is
+  not the full SI power-density equation above.
 - Solver `rtol` does not establish equilibrium, mesh, airbox, frequency, or model convergence.
 - The public observable request does not guarantee that every writer materializes every output.
 
@@ -428,18 +522,31 @@ outside the basis-certification frequency interval.
 
 ## Control Room crosswalk
 
-Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. TODO: frontend support applies to numerical parameters without a matching control. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 
 ## Source-code index
 
 | Claim | Repository path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
-| Public response schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | request fields and validation | Python source/tests |
-| Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | canonical solver policy | Python/IR tests |
+| Public response schema | `packages/fullmag-py/src/fullmag/world.py` | `class FrequencyResponseStageSpec` | request fields | Python source/tests |
+| Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `frequency_response_stage` | stage and solver-policy construction | Python source/tests |
+| Public callable | `packages/fullmag-py/src/fullmag/world.py` | `add_frequency_response` | public builder entry point | Python source/tests |
+| Solver policy | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponseSolverPolicy` | names and numeric validation | Python source/tests |
+| ProblemIR response | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponse` | validation and exact IR shape | Python source/tests |
+| Response observable | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveResponse` | accepted output names | Python source/tests |
+| Wave-vector lowering | `packages/fullmag-py/src/fullmag/model/eigen.py` | `coerce_k_sampling` | exact sampling object and exclusivity | Python source/tests |
+| K-point lowering | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class KPoint` | exact nested point object | Python source/tests |
+| K-path lowering | `packages/fullmag-py/src/fullmag/model/eigen.py` | `class KPath` | exact path object | Python source/tests |
 | Native legality | `backends/fem/src/frequency_domain/operator_contract.cpp` | `validate_driven_frequency_response_request` | native request validation | native source |
-| Native response | `backends/fem/src/frequency_domain/modal_eigen_solver.cpp` | `solve_driven_response_contract` | solve contract and diagnostics | native source |
-| Solver plan | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `FrequencySolvePlan` | architecture lane vocabulary | header contract |
-| Solver planner | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response` | architecture selection | header tests/contracts |
+| Native response ABI | `backends/fem/include/frequency_domain/driven_response_solver.hpp` | `solve_driven_frequency_response` | production entry-point declaration | native source |
+| Native response implementation | `backends/fem/src/frequency_domain/driven_response_solver.cpp` | `solve_driven_frequency_response` | production solve and artifacts | native source/tests |
+| Solver plan | `backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp` | `struct FrequencySolvePlan` | selected lane, representation, solver, preconditioner, and gates | header contract |
+| Planner request overload | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response(const FrequencySolvePlannerInput&)` | direct planner-input selection | header contract/tests |
+| Planner capability overload | `backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp` | `plan_frequency_response(const FrequencyBackendCapabilities&, const FrequencySolverPolicy&)` | capability/policy selection | header contract/tests |
 | Runtime lane gate | `crates/fullmag-runner/src/frequency_response.rs` | `frequency_response_solver_method_rejection_reason` | current executable subset | runner tests |
+| Runtime resolved lane | `crates/fullmag-runner/src/frequency_response.rs` | `resolved_frequency_response_solver_method_name` | resolved method identity | runner source/tests |
 | Block-real reference | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_block_real_harmonic_response` | dense validation system | unit tests |
-| v1 artifact units/outputs | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `response_sweep_si_units`, `field_driven_response_point` | serialized units and derived observables | source audit |
+| Block-real sweep | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `solve_field_driven_block_real_sweep_with_interrupt` | pointwise solve and interruption | unit tests |
+| v1 artifact writer | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `build_field_driven_response_sweep_artifact` | response artifact assembly | source audit |
+| v1 unit map | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `response_sweep_si_units` | serialized SI labels | source audit |
+| v1 derived point | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `field_driven_response_point` | derived response scalars | source audit |
