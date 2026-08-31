@@ -1,135 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 820" role="img" aria-labelledby="title desc">
-  <title id="title">Spin Hall drift-diffusion at a heavy-metal ferromagnet interface</title>
-  <desc id="desc">A conventional charge current flows along x in the heavy metal. The spin Hall effect creates spin-current flow along the interface normal z, with spin polarization along y out of the page. Transverse spin absorbed at the interface torques the ferromagnet magnetization.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 720" role="img" aria-labelledby="title desc">
+  <title id="title">Spin Hall transport across a heavy-metal ferromagnet interface</title>
+  <desc id="desc">A conventional charge current flows along positive x in the heavy metal. The spin Hall effect creates a spin current flowing along the interface normal, positive z, with spin polarization along positive y, out of the page. Transverse spin absorbed in the ferromagnet produces torque on the magnetization.</desc>
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#07151e"/>
-      <stop offset="1" stop-color="#0b2230"/>
-    </linearGradient>
-    <linearGradient id="hm" x1="0" x2="1">
-      <stop stop-color="#123b57"/>
-      <stop offset="1" stop-color="#176c80"/>
-    </linearGradient>
-    <linearGradient id="fm" x1="0" x2="1">
-      <stop stop-color="#a83f27"/>
-      <stop offset="1" stop-color="#db842f"/>
-    </linearGradient>
-    <filter id="shadow" x="-10%" y="-20%" width="120%" height="150%">
-      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#02080d" flood-opacity=".38"/>
-    </filter>
-    <marker id="arrow-cyan" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto">
-      <path d="M0 0v10l11-5z" fill="#72d7e8"/>
-    </marker>
-    <marker id="arrow-gold" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto">
-      <path d="M0 0v10l11-5z" fill="#ffd166"/>
-    </marker>
-    <marker id="arrow-coral" markerWidth="12" markerHeight="12" refX="10" refY="5" orient="auto">
-      <path d="M0 0v10l11-5z" fill="#ff7666"/>
-    </marker>
-    <marker id="arrow-white" markerWidth="11" markerHeight="11" refX="9" refY="5" orient="auto">
-      <path d="M0 0v10l10-5z" fill="#f4fbff"/>
-    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#276f91"/></marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#c78324"/></marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b84c3e"/></marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#56616a"/></marker>
     <style>
-      text{font-family:"Segoe UI",Arial,sans-serif;fill:#edf8fb}
-      .title{font-size:32px;font-weight:700;letter-spacing:.2px}
-      .subtitle{font-size:18px;fill:#a9c6d2}
-      .band{font-size:27px;font-weight:700}
-      .section{font-size:18px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;fill:#b9d5de}
-      .body{font-size:20px}
-      .small{font-size:17px;fill:#c5dbe3}
-      .math{font-family:"Cambria Math","STIX Two Math",serif;font-size:24px}
-      .math-small{font-family:"Cambria Math","STIX Two Math",serif;font-size:19px}
-      .sub{font-size:15px;baseline-shift:sub}
-      .sup{font-size:15px;baseline-shift:super}
-      .line{fill:none;stroke-linecap:round;stroke-linejoin:round}
+      .label { font: 600 23px 'Segoe UI', Arial, sans-serif; fill: #18242b; }
+      .body { font: 20px 'Segoe UI', Arial, sans-serif; fill: #34434b; }
+      .small { font: 17px 'Segoe UI', Arial, sans-serif; fill: #52616a; }
+      .math { font: italic 22px 'Cambria Math', 'Times New Roman', serif; fill: #18242b; }
+      .blue { fill: #276f91; } .gold { fill: #a96713; } .red { fill: #a63e34; }
     </style>
   </defs>
+  <rect width="1400" height="720" fill="#fffefb"/>
 
-  <rect width="1400" height="820" fill="url(#background)"/>
+  <rect x="75" y="70" width="850" height="245" rx="4" fill="#f7e7d7" stroke="#c8855d" stroke-width="2"/>
+  <rect x="75" y="340" width="850" height="270" rx="4" fill="#e5f0f4" stroke="#4f879d" stroke-width="2"/>
+  <line x1="75" y1="327.5" x2="925" y2="327.5" stroke="#26343b" stroke-width="2.5"/>
+  <text x="105" y="112" class="label">ferromagnet (FM)</text>
+  <text x="105" y="382" class="label">heavy metal (HM)</text>
+  <text x="90" y="321" class="small">HM/FM interface</text>
 
-  <text x="70" y="58" class="title">Spin Hall drift-diffusion at an HM/FM interface</text>
-  <text x="70" y="88" class="subtitle">Flow direction, spin polarization, interface orientation, and absorbed transverse spin</text>
+  <line x1="175" y1="505" x2="465" y2="505" stroke="#276f91" stroke-width="6" stroke-linecap="round" marker-end="url(#arrow-blue)"/>
+  <text x="220" y="474" class="math blue">J<tspan baseline-shift="sub" font-size="15">c</tspan>, E = &#x2212;&#x2207;V</text>
+  <text x="220" y="545" class="small">conventional charge current, +x</text>
 
-  <rect x="70" y="120" width="1260" height="240" rx="22" fill="url(#fm)" filter="url(#shadow)"/>
-  <rect x="70" y="395" width="1260" height="270" rx="22" fill="url(#hm)" filter="url(#shadow)"/>
+  <circle cx="700" cy="505" r="24" fill="#fffefb" stroke="#276f91" stroke-width="3"/>
+  <circle cx="700" cy="505" r="6" fill="#276f91"/>
+  <text x="741" y="499" class="math blue">&#x03C3;&#x0302; &#x221D; n&#x0302; &#x00D7; E&#x0302; = +y&#x0302;</text>
+  <text x="741" y="529" class="small">spin polarization, out of page</text>
 
-  <rect x="100" y="145" width="245" height="48" rx="24" fill="#762b21" fill-opacity=".72"/>
-  <text x="122" y="178" class="band">FM  ferromagnet</text>
-  <rect x="100" y="420" width="255" height="48" rx="24" fill="#082f48" fill-opacity=".78"/>
-  <text x="122" y="453" class="band">HM  heavy metal</text>
+  <line x1="605" y1="535" x2="605" y2="205" stroke="#c78324" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-gold)"/>
+  <text x="515" y="460" class="math gold">Q<tspan baseline-shift="sub" font-size="15">ia</tspan></text>
+  <text x="478" y="488" class="small">spin flow, +z</text>
 
-  <line x1="70" y1="378" x2="1330" y2="378" stroke="#f4fbff" stroke-width="4" stroke-dasharray="14 10"/>
-  <rect x="95" y="356" width="225" height="42" rx="21" fill="#07151e"/>
-  <text x="116" y="383" class="small">oriented HM/FM interface</text>
+  <line x1="530" y1="390" x2="530" y2="280" stroke="#56616a" stroke-width="3" marker-end="url(#arrow-gray)"/>
+  <text x="470" y="415" class="math">n&#x0302;</text>
+  <text x="495" y="415" class="small">HM &#x2192; FM</text>
 
-  <text x="145" y="505" class="section">Charge transport</text>
-  <line x1="150" y1="555" x2="505" y2="555" class="line" stroke="#72d7e8" stroke-width="8" marker-end="url(#arrow-cyan)"/>
-  <text x="150" y="605" class="math">
-    J<tspan class="sub">c</tspan> &#x2225; E
-    <tspan dx="10">and</tspan>
-    <tspan dx="10">E = &#x2212;&#x2207;V</tspan>
-  </text>
-  <text x="150" y="634" class="small">conventional current; reversing it reverses the direct-SHE source</text>
+  <circle cx="653" cy="327.5" r="7" fill="#c78324"/><circle cx="681" cy="327.5" r="7" fill="#c78324"/>
+  <circle cx="709" cy="327.5" r="7" fill="#c78324"/><circle cx="737" cy="327.5" r="7" fill="#c78324"/>
+  <text x="760" y="335" class="small">spin accumulation &#x03BC;<tspan baseline-shift="sub" font-size="13">s</tspan></text>
 
-  <text x="545" y="485" class="section">Spin-current flow</text>
-  <line x1="650" y1="590" x2="650" y2="315" class="line" stroke="#ffd166" stroke-width="9" marker-end="url(#arrow-gold)"/>
-  <circle cx="650" cy="378" r="21" fill="#ffd166" stroke="#fff1b8" stroke-width="4"/>
-  <text x="548" y="535" class="math">
-    Q<tspan class="sub">ia</tspan>
-  </text>
-  <text x="548" y="565" class="small">flow index i along +n</text>
+  <line x1="700" y1="225" x2="840" y2="145" stroke="#b84c3e" stroke-width="7" stroke-linecap="round" marker-end="url(#arrow-red)"/>
+  <text x="847" y="146" class="math red">m</text>
+  <path d="M 655 277 C 690 215, 770 205, 800 255" fill="none" stroke="#c78324" stroke-width="4" marker-end="url(#arrow-gold)"/>
+  <text x="665" y="285" class="body">absorbed transverse spin</text>
+  <text x="690" y="312" class="math gold">&#x2192; T<tspan baseline-shift="sub" font-size="15">tr</tspan><tspan baseline-shift="super" font-size="15">G</tspan></text>
 
-  <line x1="735" y1="430" x2="735" y2="300" class="line" stroke="#f4fbff" stroke-width="5" marker-end="url(#arrow-white)"/>
-  <text x="760" y="328" class="math">n&#x0302;</text>
-  <text x="760" y="355" class="small">HM &#x2192; FM</text>
+  <line x1="985" y1="70" x2="985" y2="610" stroke="#d6d4cd" stroke-width="2"/>
+  <text x="1030" y="110" class="label">Geometry in this sketch</text>
+  <circle cx="1090" cy="220" r="18" fill="#fffefb" stroke="#276f91" stroke-width="2.5"/><circle cx="1090" cy="220" r="5" fill="#276f91"/>
+  <line x1="1090" y1="220" x2="1215" y2="220" stroke="#276f91" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <line x1="1090" y1="220" x2="1090" y2="145" stroke="#c78324" stroke-width="3" marker-end="url(#arrow-gold)"/>
+  <text x="1228" y="227" class="math blue">+x</text><text x="1068" y="138" class="math gold">+z</text><text x="1028" y="227" class="math blue">+y</text>
 
-  <g aria-label="spin accumulation near the interface">
-    <circle cx="475" cy="419" r="8" fill="#ffd166" opacity=".45"/>
-    <circle cx="505" cy="426" r="10" fill="#ffd166" opacity=".62"/>
-    <circle cx="537" cy="414" r="8" fill="#ffd166" opacity=".78"/>
-    <circle cx="568" cy="425" r="11" fill="#ffd166" opacity=".92"/>
-    <circle cx="600" cy="414" r="9" fill="#ffd166"/>
-  </g>
-  <text x="390" y="462" class="math-small">
-    spin accumulation &#x03BC;<tspan class="sub">s</tspan>
-  </text>
+  <text x="1030" y="306" class="body">charge current and E</text><text x="1280" y="306" class="math blue">+x</text>
+  <text x="1030" y="344" class="body">spin-flow direction</text><text x="1280" y="344" class="math gold">+z</text>
+  <text x="1030" y="382" class="body">spin polarization</text><text x="1280" y="382" class="math blue">+y</text>
 
-  <rect x="835" y="438" width="445" height="184" rx="18" fill="#082a3a" stroke="#3f8698" stroke-width="2"/>
-  <text x="865" y="475" class="section">Spin Hall polarization</text>
-  <circle cx="895" cy="530" r="25" fill="none" stroke="#ff7666" stroke-width="5"/>
-  <circle cx="895" cy="530" r="7" fill="#ff7666"/>
-  <text x="935" y="526" class="math">
-    &#x03C3;&#x0302; &#x221D; &#x03B8;<tspan class="sub">SH</tspan>
-    (n&#x0302; &#x00D7; E&#x0302;)
-  </text>
-  <text x="935" y="561" class="body">for n&#x0302; = +z&#x0302; and E&#x0302; = +x&#x0302;</text>
-  <text x="935" y="594" class="body" fill="#ffb4aa">&#x03C3;&#x0302; = +y&#x0302;  out of the page</text>
-
-  <text x="790" y="165" class="section">Magnetization response</text>
-  <line x1="845" y1="278" x2="1135" y2="188" class="line" stroke="#ff7666" stroke-width="9" marker-end="url(#arrow-coral)"/>
-  <text x="1155" y="190" class="math">m</text>
-
-  <path d="M735 300 C790 205 900 200 955 286" class="line" stroke="#ffd166" stroke-width="6" marker-end="url(#arrow-gold)"/>
-  <text x="755" y="235" class="body">absorbed transverse spin</text>
-  <text x="965" y="302" class="math">
-    T<tspan class="sub">tr,G</tspan>
-  </text>
-  <text x="1000" y="330" class="small">torque on the FM</text>
-
-  <rect x="70" y="700" width="1260" height="78" rx="18" fill="#061018" stroke="#274554" stroke-width="2"/>
-  <text x="100" y="733" class="math-small">
-    Tensor convention: Q<tspan class="sub">ia</tspan>
-    <tspan dx="8">has flow direction i and spin-polarization component a.</tspan>
-  </text>
-  <text x="100" y="762" class="small">e &gt; 0  |  Jc is conventional current  |  the polarization marker &#x2299; means out of the page</text>
-
-  <g transform="translate(1195 735)" aria-label="coordinate key">
-    <circle cx="0" cy="0" r="12" fill="none" stroke="#ff7666" stroke-width="3"/>
-    <circle cx="0" cy="0" r="4" fill="#ff7666"/>
-    <text x="18" y="6" class="math-small">+y&#x0302;</text>
-    <line x1="0" y1="0" x2="72" y2="0" stroke="#72d7e8" stroke-width="3" marker-end="url(#arrow-cyan)"/>
-    <text x="76" y="6" class="math-small">+x&#x0302;</text>
-    <line x1="0" y1="0" x2="0" y2="-48" stroke="#f4fbff" stroke-width="3" marker-end="url(#arrow-white)"/>
-    <text x="-8" y="-57" class="math-small">+z&#x0302;</text>
-  </g>
+  <line x1="1030" y1="425" x2="1330" y2="425" stroke="#d6d4cd" stroke-width="2"/>
+  <text x="1030" y="470" class="math">Q<tspan baseline-shift="sub" font-size="15">ia</tspan></text><text x="1090" y="470" class="body">spin-current tensor</text>
+  <text x="1030" y="510" class="math">i</text><text x="1060" y="510" class="body">flow direction</text>
+  <text x="1030" y="548" class="math">a</text><text x="1060" y="548" class="body">spin component</text>
+  <text x="1030" y="598" class="small">e &gt; 0; J<tspan baseline-shift="sub" font-size="12">c</tspan> is conventional current</text>
+  <text x="75" y="676" class="small">Schematic, not to scale. Arrow directions follow the sign convention stated above.</text>
 </svg>
