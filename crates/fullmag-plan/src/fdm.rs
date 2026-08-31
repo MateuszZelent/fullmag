@@ -2210,6 +2210,7 @@ pub(crate) fn plan_fdm(
     let mut enable_exchange = false;
     let mut enable_demag = false;
     let mut has_bulk_dmi = false;
+    let mut has_rotated_interfacial_dmi = false;
     let mut external_field = None;
     let mut has_thermal_noise = false;
     let mut thermal_temperature = problem.temperature;
@@ -2267,6 +2268,9 @@ pub(crate) fn plan_fdm(
             }
             EnergyTermIR::BulkDmi { .. } => {
                 has_bulk_dmi = true;
+            }
+            EnergyTermIR::RotatedInterfacialDmi { .. } => {
+                has_rotated_interfacial_dmi = true;
             }
             EnergyTermIR::ThermalNoise { temperature, seed } => {
                 if has_thermal_noise {
@@ -2345,9 +2349,25 @@ pub(crate) fn plan_fdm(
             correction = boundary_correction.unwrap_or("?"),
         ));
     }
-    if !(enable_exchange || enable_demag || external_field.is_some() || has_static_field_map) {
+    if !(enable_exchange
+        || enable_demag
+        || external_field.is_some()
+        || has_static_field_map
+        || has_rotated_interfacial_dmi)
+    {
         errors.push(
-        "the current executable FDM path requires at least one of Exchange, Demag, Zeeman, or StaticFieldMap"
+        "the current executable FDM path requires at least one of Exchange, Demag, Zeeman, StaticFieldMap, or RotatedInterfacialDmi"
+                .to_string(),
+        );
+    }
+    let has_open_magnetic_boundary = problem.pbc.as_ref().is_none_or(|pbc| {
+        pbc.axes
+            .iter()
+            .any(|axis| matches!(axis, AxisBoundary::Open))
+    });
+    if has_rotated_interfacial_dmi && has_open_magnetic_boundary && !enable_exchange {
+        errors.push(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
         );
     }
@@ -2466,13 +2486,12 @@ pub(crate) fn plan_fdm(
         enable_demag,
         external_field.is_some() || has_static_field_map,
         enable_oersted,
-        problem.energy_terms.iter().any(|term| {
-            matches!(
-                term,
-                EnergyTermIR::InterfacialDmi { .. } | EnergyTermIR::BulkDmi { .. }
-            )
-        }),
-        false,
+        problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, EnergyTermIR::InterfacialDmi { .. })),
+        has_bulk_dmi,
+        has_rotated_interfacial_dmi,
         false,
         false,
         problem
@@ -3200,6 +3219,7 @@ pub(crate) fn plan_fdm(
         temperature: thermal_temperature,
         thermal_seed_config,
         interfacial_dmi: None,
+        rotated_interfacial_dmi: None,
         bulk_dmi: None,
         dind_field: None,
         dbulk_field: None,
@@ -3297,6 +3317,9 @@ pub(crate) fn plan_fdm(
             }
             EnergyTermIR::BulkDmi { d } => {
                 fdm_plan.bulk_dmi = Some(*d);
+            }
+            EnergyTermIR::RotatedInterfacialDmi { d } => {
+                fdm_plan.rotated_interfacial_dmi = Some(*d);
             }
             _ => {}
         }
@@ -3980,6 +4003,7 @@ pub(crate) fn plan_fdm_multilayer(
     let mut enable_demag = false;
     let mut external_field = None;
     let mut interfacial_dmi = None;
+    let mut rotated_interfacial_dmi = None;
     let mut bulk_dmi = None;
     for term in &problem.energy_terms {
         match term {
@@ -4030,6 +4054,11 @@ pub(crate) fn plan_fdm_multilayer(
                 }
                 bulk_dmi = Some(*d);
             }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+                if rotated_interfacial_dmi.replace(*d).is_some() {
+                    errors.push("RotatedInterfacialDmi is declared more than once".to_string());
+                }
+            }
             fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
             | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
                 errors.push(
@@ -4049,6 +4078,12 @@ pub(crate) fn plan_fdm_multilayer(
     if bulk_dmi.is_some() {
         errors.push(
             "BulkDmi requires a natural exchange+DMI free-surface boundary condition; the current executable multilayer FDM lane does not implement it. Use a qualified fully periodic single-grid FDM plan or remove BulkDmi."
+                .to_string(),
+        );
+    }
+    if rotated_interfacial_dmi.is_some() && !enable_exchange {
+        errors.push(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
         );
     }
@@ -4078,9 +4113,13 @@ pub(crate) fn plan_fdm_multilayer(
             );
         }
     }
-    if !(enable_exchange || enable_demag || external_field.is_some()) {
+    if !(enable_exchange
+        || enable_demag
+        || external_field.is_some()
+        || rotated_interfacial_dmi.is_some())
+    {
         errors.push(
-            "the current executable multilayer FDM path requires at least one of Exchange, Demag, or Zeeman"
+            "the current executable multilayer FDM path requires at least one of Exchange, Demag, Zeeman, or RotatedInterfacialDmi"
                 .to_string(),
         );
     }
@@ -4095,8 +4134,9 @@ pub(crate) fn plan_fdm_multilayer(
                 EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
             )
         }),
-        interfacial_dmi.is_some() || bulk_dmi.is_some(),
-        false,
+        interfacial_dmi.is_some(),
+        bulk_dmi.is_some(),
+        rotated_interfacial_dmi.is_some(),
         false,
         false,
         false,
@@ -4885,6 +4925,7 @@ pub(crate) fn plan_fdm_multilayer(
         fft,
         external_field,
         interfacial_dmi,
+        rotated_interfacial_dmi,
         bulk_dmi,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,

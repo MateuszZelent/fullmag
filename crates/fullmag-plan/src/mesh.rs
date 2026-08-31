@@ -1402,6 +1402,7 @@ fn mixed_p1_scope_failed_predicates(
             term,
             fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
                 | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+                | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }
         )
     }) || problem.materials.iter().any(|material| {
         material.interfacial_dmi.is_some()
@@ -1426,7 +1427,8 @@ fn mixed_p1_scope_failed_predicates(
                 demag_count += 1;
             }
             fullmag_ir::EnergyTermIR::InterfacialDmi { .. }
-            | fullmag_ir::EnergyTermIR::BulkDmi { .. } => {}
+            | fullmag_ir::EnergyTermIR::BulkDmi { .. }
+            | fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. } => {}
             fullmag_ir::EnergyTermIR::Zeeman { .. } => {}
             _ => unsupported_energy = true,
         }
