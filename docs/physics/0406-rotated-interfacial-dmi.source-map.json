@@ -41,7 +41,7 @@
     {
       "id": "ir-term",
       "path": "crates/fullmag-ir/src/study.rs",
-      "symbol": "EnergyTermIR::RotatedInterfacialDmi",
+      "symbol": "EnergyTermIR",
       "responsibility": "Own the backend-neutral serialized physical interaction.",
       "evidence_status": "planned_contract"
     },

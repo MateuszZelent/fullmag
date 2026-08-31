@@ -342,7 +342,7 @@ Do czasu przejścia wszystkich bramek każdy lane pozostaje `planned` i
 | Kontrakt | Ścieżka | Symbol | Odpowiedzialność | Lane | Stan dowodu |
 |---|---|---|---|---|---|
 | Python API | `packages/fullmag-py/src/fullmag/model/energy.py` | `class RotatedInterfacialDMI` | walidacja i lowering | wspólny | planned contract |
-| `ProblemIR` | `crates/fullmag-ir/src/study.rs` | `EnergyTermIR::RotatedInterfacialDmi` | kanoniczna serializacja | wspólny | planned contract |
+| `ProblemIR` | `crates/fullmag-ir/src/study.rs` | `EnergyTermIR` | wariant `RotatedInterfacialDmi` i kanoniczna serializacja | wspólny | implemented, source test |
 | energia i pole FDM | `crates/fullmag-engine/src/fdm/shared/rotated_interfacial_dmi.rs` | `rotated_interfacial_dmi_field` | referencyjna algebra dyskretna | FDM CPU | planned contract |
 | residual FEM | `backends/fem/src/dmi_weak_residual.cpp` | `dmi_accumulate_rotated_interfacial_residual` | wspólna pierwsza wariacja | FEM CPU/GPU | planned contract |
 

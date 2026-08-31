@@ -2058,6 +2058,7 @@ pub(crate) fn validate_oersted_energy_terms(problem: &ProblemIR, errors: &mut Ve
 }
 
 pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let mut rotated_interfacial_dmi_count = 0usize;
     for (index, term) in problem.energy_terms.iter().enumerate() {
         match term {
             EnergyTermIR::InterfacialDmi {
@@ -2085,6 +2086,14 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
                     }
                 }
             }
+            EnergyTermIR::RotatedInterfacialDmi { d } => {
+                rotated_interfacial_dmi_count += 1;
+                if !d.is_finite() {
+                    errors.push(format!(
+                        "energy_terms[{index}] rotated_interfacial_dmi D must be finite"
+                    ));
+                }
+            }
             EnergyTermIR::BulkDmi { d } => {
                 if !d.is_finite() {
                     errors.push(format!("energy_terms[{index}] bulk_dmi D must be finite"));
@@ -2092,6 +2101,9 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
             }
             _ => {}
         }
+    }
+    if rotated_interfacial_dmi_count > 1 {
+        errors.push("at most one rotated_interfacial_dmi energy term is supported".to_string());
     }
 }
 

@@ -553,6 +553,10 @@ pub enum EnergyTermIR {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         interface_normal: Option<[f64; 3]>,
     },
+    RotatedInterfacialDmi {
+        #[serde(rename = "D")]
+        d: f64,
+    },
     BulkDmi {
         #[serde(rename = "D")]
         d: f64,

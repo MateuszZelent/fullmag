@@ -2247,6 +2247,18 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "bulk_dmi", "D": -2e-3},
         )
 
+    def test_rotated_interfacial_dmi_serializes_exact_contract(self) -> None:
+        self.assertEqual(
+            fm.RotatedInterfacialDMI(D=-3.0e-3).to_ir(),
+            {"kind": "rotated_interfacial_dmi", "D": -3.0e-3},
+        )
+
+    def test_rotated_interfacial_dmi_rejects_non_finite_d(self) -> None:
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "D must be finite"):
+                    fm.RotatedInterfacialDMI(D=value)
+
     def test_interfacial_dmi_rejects_invalid_interface_normal_shape(self) -> None:
         with self.assertRaises(ValueError):
             fm.InterfacialDMI(D=3e-3, interface_normal=(0.0, 1.0))

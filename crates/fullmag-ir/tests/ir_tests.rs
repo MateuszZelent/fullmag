@@ -6691,6 +6691,43 @@ fn validation_rejects_invalid_dmi_energy_terms() {
 }
 
 #[test]
+fn rotated_interfacial_dmi_round_trips_and_preserves_signed_d() {
+    let term = EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 };
+    let json = serde_json::to_value(&term).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"kind": "rotated_interfacial_dmi", "D": -3.0e-3})
+    );
+    assert_eq!(serde_json::from_value::<EnergyTermIR>(json).unwrap(), term);
+}
+
+#[test]
+fn rotated_interfacial_dmi_rejects_non_finite_d_and_duplicates() {
+    let mut non_finite = ProblemIR::bootstrap_example();
+    non_finite
+        .energy_terms
+        .push(EnergyTermIR::RotatedInterfacialDmi { d: f64::NAN });
+    let errors = non_finite
+        .validate()
+        .expect_err("non-finite rotated interfacial DMI must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("rotated_interfacial_dmi D must be finite")));
+
+    let mut duplicate = ProblemIR::bootstrap_example();
+    duplicate.energy_terms.extend([
+        EnergyTermIR::RotatedInterfacialDmi { d: 3.0e-3 },
+        EnergyTermIR::RotatedInterfacialDmi { d: -3.0e-3 },
+    ]);
+    let errors = duplicate
+        .validate()
+        .expect_err("duplicate rotated interfacial DMI terms must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("at most one rotated_interfacial_dmi energy term is supported")
+    }));
+}
+
+#[test]
 fn validation_rejects_invalid_material_dmi_values() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.materials[0].interfacial_dmi = Some(f64::NAN);
