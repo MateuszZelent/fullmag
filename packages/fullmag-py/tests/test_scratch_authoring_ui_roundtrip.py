@@ -258,6 +258,26 @@ def test_explicit_zero_dmi_modules_are_preserved_in_python_export() -> None:
     assert ".Dbulk = 0" in source
 
 
+def test_rotated_dmi_study_term_round_trips_signed_coefficient() -> None:
+    from fullmag.runtime.script_builder import render_scene_document_as_script
+
+    builder = _builder(backend="fdm")
+    builder["rotated_interfacial_dmi"] = -0.003
+    scene = build_scene_document_from_builder(builder)
+
+    assert scene["study"]["rotated_interfacial_dmi"] == -0.003
+    source = render_scene_document_as_script(scene)
+    assert "study.terms.add(fm.RotatedInterfacialDMI(D=-0.003))" in source
+
+    with TemporaryDirectory() as temporary:
+        script = Path(temporary) / "rotated-dmi.py"
+        script.write_text(source, encoding="utf-8")
+        loaded = load_problem_from_script(script, lightweight_assets=True)
+        draft = export_builder_draft(loaded)
+
+    assert draft["rotated_interfacial_dmi"] == -0.003
+
+
 def test_scene_document_export_rejects_an_incomplete_scene() -> None:
     from fullmag.runtime.script_builder import render_scene_document_as_script
 

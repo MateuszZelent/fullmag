@@ -1543,6 +1543,7 @@ mod tests {
             demag_realization: None,
             fdm: None,
             external_field: None,
+            rotated_interfacial_dmi: None,
             solver: fullmag_authoring::ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),

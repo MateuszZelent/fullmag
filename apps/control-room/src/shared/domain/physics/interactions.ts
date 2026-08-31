@@ -11,6 +11,7 @@ export const BACKEND_INTERACTION_IDS = [
   "current_transport",
   "spin_torque",
   "interfacial_dmi",
+  "rotated_interfacial_dmi",
   "bulk_dmi",
   "uniaxial_anisotropy",
   "cubic_anisotropy",
@@ -309,6 +310,26 @@ const INTERACTION_SPECS: readonly InteractionSpec[] = [
     label: "Interfacial DMI",
     scope: "object_or_region",
     storage: "object_interaction",
+  },
+  {
+    availability: "study",
+    description:
+      "Göbel rotated interfacial DMI with D21 = D32 = D for in-plane bimerons.",
+    fields: [
+      {
+        defaultValue: "0.003",
+        description: "Signed rotated interfacial DMI coefficient.",
+        id: "d",
+        kind: "number",
+        label: "D",
+        required: true,
+        unit: "J/m^2",
+      },
+    ],
+    id: "rotated_interfacial_dmi",
+    label: "Rotated interfacial DMI",
+    scope: "global",
+    storage: "study",
   },
   {
     availability: "study",
@@ -755,6 +776,18 @@ export function buildStudyInteractionPatchFromDraft(
       },
     };
   }
+  if (draft.id === "rotated_interfacial_dmi") {
+    const d = parseNumber(draft.values.d, "D");
+    if ("error" in d) return d;
+    return {
+      patch: {
+        study: {
+          rotated_interfacial_dmi:
+            draft.enabled && draft.present ? d.value : null,
+        },
+      },
+    };
+  }
   return { error: deferredMessage(spec) };
 }
 
@@ -764,6 +797,9 @@ function valuesFromParams(
 ): Record<string, string | string[]> {
   if (id === "interfacial_dmi") {
     return { dind: stringValue(params.dind, "1e-3") };
+  }
+  if (id === "rotated_interfacial_dmi") {
+    return { d: stringValue(params.d, "0.003") };
   }
   if (id === "uniaxial_anisotropy") {
     return {
@@ -782,6 +818,11 @@ function objectParamsFromDraft(
     const dind = parseNumber(draft.values.dind, "D_ind");
     if ("error" in dind) return dind;
     return { params: { dind: dind.value } };
+  }
+  if (draft.id === "rotated_interfacial_dmi") {
+    const d = parseNumber(draft.values.d, "D");
+    if ("error" in d) return d;
+    return { params: { d: d.value } };
   }
   if (draft.id === "uniaxial_anisotropy") {
     const ku1 = parseNumber(draft.values.ku1, "K_u1");
@@ -819,6 +860,7 @@ function isObjectInteractionKind(id: string): id is ObjectInteractionKind {
     id === "exchange" ||
     id === "demag" ||
     id === "interfacial_dmi" ||
+    id === "rotated_interfacial_dmi" ||
     id === "uniaxial_anisotropy"
   );
 }

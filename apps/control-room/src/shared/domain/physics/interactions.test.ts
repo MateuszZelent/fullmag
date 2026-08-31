@@ -22,6 +22,7 @@ describe("physics interaction catalog", () => {
       "current_transport",
       "spin_torque",
       "interfacial_dmi",
+      "rotated_interfacial_dmi",
       "bulk_dmi",
       "uniaxial_anisotropy",
       "cubic_anisotropy",
@@ -203,6 +204,18 @@ describe("physics interaction catalog", () => {
     ).toEqual({
       patch: { study: { external_field: [0.01, 0, -0.002] } },
     });
+    for (const d of [0.003, -0.003, 0]) {
+      expect(
+        buildStudyInteractionPatchFromDraft({
+          enabled: true,
+          id: "rotated_interfacial_dmi",
+          present: true,
+          values: { d: String(d) },
+        }),
+      ).toEqual({
+        patch: { study: { rotated_interfacial_dmi: d } },
+      });
+    }
   });
 
   it("rejects invalid typed drafts before hitting the API", () => {
@@ -234,6 +247,10 @@ describe("physics interaction catalog", () => {
     expect(findInteractionSpec("zeeman")?.fields[0]).toMatchObject({
       label: "B_ext",
       unit: "T",
+    });
+    expect(defaultDraftForInteraction("rotated_interfacial_dmi")).toMatchObject({
+      id: "rotated_interfacial_dmi",
+      values: { d: "0.003" },
     });
   });
 

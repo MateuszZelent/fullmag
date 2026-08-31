@@ -486,6 +486,7 @@ pub enum ScriptBuilderMagneticInteractionKind {
     Exchange,
     Demag,
     InterfacialDmi,
+    RotatedInterfacialDmi,
     BulkDmi,
     UniaxialAnisotropy,
 }
@@ -855,6 +856,8 @@ pub struct ScriptBuilderState {
     pub fdm: Option<ScriptBuilderFdmState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_field: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi: Option<f64>,
     pub solver: ScriptBuilderSolverState,
     pub mesh: ScriptBuilderMeshState,
     #[serde(default, skip_serializing_if = "Option::is_none")]

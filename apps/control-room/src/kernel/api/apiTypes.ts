@@ -14,6 +14,7 @@ export type ObjectInteractionKind =
   | "exchange"
   | "demag"
   | "interfacial_dmi"
+  | "rotated_interfacial_dmi"
   | "uniaxial_anisotropy";
 
 interface BaseAuthoringTransaction {
@@ -943,5 +944,9 @@ export interface BinaryRequestOptions extends RequestOptions {
 export function isOptionalObjectInteractionKind(
   kind: ObjectInteractionKind,
 ): boolean {
-  return kind === "interfacial_dmi" || kind === "uniaxial_anisotropy";
+  return (
+    kind === "interfacial_dmi" ||
+    kind === "rotated_interfacial_dmi" ||
+    kind === "uniaxial_anisotropy"
+  );
 }

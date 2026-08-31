@@ -1217,6 +1217,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "demag_enabled": bool(builder.get("demag_enabled", True)),
             "demag_realization": builder.get("demag_realization"),
             "external_field": builder.get("external_field"),
+            "rotated_interfacial_dmi": builder.get("rotated_interfacial_dmi"),
             "solver": builder.get("solver") or {},
             "universe_mesh": builder.get("universe"),
             "shared_domain_mesh": builder.get("mesh") or {},
@@ -1377,6 +1378,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "demag_enabled": bool(study.get("demag_enabled", True)),
         "demag_realization": study.get("demag_realization"),
         "external_field": study.get("external_field"),
+        "rotated_interfacial_dmi": study.get("rotated_interfacial_dmi"),
         "solver": study.get("solver") or {},
         "mesh": study.get("shared_domain_mesh") or study.get("mesh_defaults") or {},
         "universe": study.get("universe_mesh") or scene.get("universe"),
@@ -1484,6 +1486,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             and len(builder.get("external_field")) == 3
             else None
         ),
+        "rotated_interfacial_dmi": builder.get("rotated_interfacial_dmi"),
         "solver": solver_override,
         "mesh": {
             "algorithm_2d": mesh.get("algorithm_2d"),
