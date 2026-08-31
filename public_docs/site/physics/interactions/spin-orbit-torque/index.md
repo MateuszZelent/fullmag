@@ -1,11 +1,12 @@
 ---
-title: Prescribed spin-orbit torque
+title: Spin-orbit torque
 description: Local damping-like and field-like spin-orbit torque with prescribed signed current or a named vector-current source.
 status: partial
+doc_kind: reference
 ---
 
-(physics-spin-orbit-torque)=
-# Prescribed spin-orbit torque
+(public-docs-physics-interactions-sot)=
+# Spin-orbit torque
 
 `PrescribedSpinOrbitTorque` adds a local damping-like (DL) and field-like (FL)
 source to the magnetization equation. It does **not** solve charge accumulation,
@@ -329,4 +330,3 @@ backend and device:
 
 - L. Liu et al., "Current-Induced Switching of Perpendicularly Magnetized Magnetic Layers Using Spin Torque from the Spin Hall Effect," *Physical Review Letters* **109**, 096602 (2012), [doi:10.1103/PhysRevLett.109.096602](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.109.096602).
 - A. Manchon et al., "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**, 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://journals.aps.org/rmp/abstract/10.1103/RevModPhys.91.035004).
-
