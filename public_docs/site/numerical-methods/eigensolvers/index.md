@@ -248,7 +248,6 @@ study.stages.add_relax(
     max_steps=50_000,
 )
 study.stages.add_eigenmodes(
-    stage_id="modes",
     count=12,
     target="lowest",
     operator="linearized_llg",

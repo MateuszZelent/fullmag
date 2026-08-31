@@ -97,7 +97,7 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 left = body.add_region("left", fm.Box(20 * nm, 20 * nm, 4 * nm).translate((-10 * nm, 0.0, 0.0)))
 right = body.add_region("right", fm.Box(20 * nm, 20 * nm, 4 * nm).translate((10 * nm, 0.0, 0.0)))
 study.couplings.exchange(source=left, target=right, mode="explicit", inter_exchange=13.0e-12)
-study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", max_steps=500, tolT=1.0e-6)
+study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5.0e-13, max_steps=500, tolT=1.0e-6)
 ```
 
 The two region shapes are explicitly displaced; overlapping identical boxes must not be presented

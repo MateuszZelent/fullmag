@@ -91,6 +91,9 @@ import fullmag as fm
 study = fm.study("free_tetrahedral_reference")
 study.engine("fem")
 body = study.geometry(fm.Box(size=(80e-9, 40e-9, 20e-9)), name="body")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 body.mesh(
     mesh_strategy="free_tetrahedral",
     maximum_element_size=8e-9,

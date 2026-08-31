@@ -69,6 +69,7 @@ disqualifies the element.
 ```python
 # %% Imported FEM mesh at study level
 import fullmag as fm
+from pathlib import Path
 
 nm = 1.0e-9
 
@@ -76,10 +77,7 @@ study = fm.study("imported_mesh_example")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-
-# Prebuilt shared-domain mesh asset (validated at extraction)
-study.mesh_defaults = None  # study-level defaults are ignored when a mesh is imported
-study.fem(mesh="run_output/prebuilt_domain_mesh.fmsh")
+study.objects.mesh.defaults(order=1, maximum_element_size=5 * nm)
 
 film = study.geometry(fm.Box(300 * nm, 100 * nm, 5 * nm), name="film")
 film.Ms = 800.0e3
@@ -87,9 +85,19 @@ film.Aex = 13.0e-12
 film.alpha = 0.02
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 
+# Import only an existing, validated Gmsh/COMSOL domain mesh. The fallback keeps
+# this public example executable when the optional artifact is not present.
+mesh_path = Path("run_output/prebuilt_domain_mesh.msh")
+if mesh_path.is_file():
+    study.mesh.import_(mesh_path)
+else:
+    study.universe(mode="manual", size=(800 * nm, 400 * nm, 300 * nm))
+    study.universe.mesh(maximum_element_size=100 * nm)
+
 study.exchange()
 study.demag(model="airbox", variant="robin")
-study.build_domain_mesh()
+if not mesh_path.is_file():
+    study.build_domain_mesh()
 study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 ```
 

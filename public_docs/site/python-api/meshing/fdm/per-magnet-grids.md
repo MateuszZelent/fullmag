@@ -81,7 +81,7 @@ for body in (free, reference):
     body.Ms = 800.0e3
     body.Aex = 13.0e-12
     body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", max_steps=100)
+study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5e-13, max_steps=100)
 ```
 
 ## 4. Exact API

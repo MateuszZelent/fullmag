@@ -132,7 +132,7 @@ body.Ku1 = 4.7e5
 body.anisU = (0.0, 0.0, 1.0)
 body.dind = 3.0e-3  # J/m^2
 study.demag(realization="poisson_robin")
-study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", max_steps=500, tolT=1.0e-6)
+study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", dt=5.0e-13, max_steps=500, tolT=1.0e-6)
 ```
 
 The study facade already supports material-owned interfacial DMI. It must not be documented as

@@ -114,10 +114,9 @@ film.mesh(
     topology="prismatic",
     through_thickness_elements=2,
     through_thickness_distribution="fixed",
-    through_thickness_element_ratio=1.0,
     through_thickness_symmetric=False,
     sweep_face_meshing="triangular",
-    sweep_direction="z",
+    sweep_direction="auto",
     element_family="prism",
     transition_policy="pyramid_to_tetrahedra",
     exact_layer_count=True,
@@ -325,14 +324,6 @@ film.mesh(
     transition_policy="pyramid_to_tetrahedra",
     exact_layer_count=True,
     order=1,
-    algorithm_2d=6,
-    algorithm_3d=1,
-    maximum_element_growth_rate=1.2,
-    smoothing_steps=4,
-    optimize="Netgen",
-    optimize_iterations=4,
-    compute_quality=True,
-    per_element_quality=True,
 )
 film.Ms = 800.0e3
 film.Aex = 13.0e-12

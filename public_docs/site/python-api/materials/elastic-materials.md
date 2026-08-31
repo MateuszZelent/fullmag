@@ -66,10 +66,13 @@ fm.ElasticMaterial(name, C11, C12, C44, rho, eta_mech=None)
 import fullmag as fm
 
 study = fm.study("public-api-example")
-study.mesh(hmax=5e-9)
-body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
-study.add(body)
-study.stages.add_relax(stage_id="api-example", max_steps=1)
+study.objects.mesh.defaults(maximum_element_size=5e-9)
+body = study.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.stages.add_relax(stage_id="api-example", dt=5e-13, max_steps=1)
 # Author the documented object after the stage exists.
 value = fm.ElasticMaterial(name="substrate", C11=2.0e11, C12=1.0e11, C44=8.0e10, rho=7800.0)
 canonical_ir = value.to_ir()

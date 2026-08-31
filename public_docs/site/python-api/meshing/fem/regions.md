@@ -60,7 +60,7 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 body = study.geometry(fm.Box(80 * nm, 40 * nm, 4 * nm), name="film")
-region = body.regions.add_box("core", size=(40 * nm, 20 * nm, 4 * nm))
+region = body.add_region("core", fm.Box(40 * nm, 20 * nm, 4 * nm))
 region.mesh(maximum_element_size=3 * nm, minimum_element_size=1.5 * nm,
             transition_distance=5 * nm, order=1)
 body.Ms = 800.0e3

@@ -71,10 +71,16 @@ builder configure requested execution.
 # %%
 import fullmag as fm
 
+nm = 1.0e-9
 study = fm.study("units_reference")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.stages.add_relax(
     stage_id="equilibrium",
     algorithm="llg_overdamped",
@@ -83,8 +89,7 @@ study.stages.add_relax(
 )
 ```
 
-This stage-first capture fragment also needs geometry, material, and magnetization state for
-an actual solve.
+The example supplies a complete minimal geometry, material, mesh, and magnetization state.
 
 | Python entry point | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|

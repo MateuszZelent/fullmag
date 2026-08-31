@@ -54,6 +54,10 @@ nm = 1e-9
 study = fm.study("periodic-grid")
 study.engine("fdm")
 study.fdm(default_cell=(2 * nm, 2 * nm, 5 * nm))
+film = study.geometry(fm.Box(100 * nm, 40 * nm, 5 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.pbc(x=True, y=True, z=False, demag="truncated_images", images=(4, 4, 0))
 study.demag()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)

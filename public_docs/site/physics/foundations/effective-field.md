@@ -70,10 +70,16 @@ execution boundary without inventing a top-level Problem constructor.
 import fullmag as fm
 from fullmag.model.energy import Exchange, Zeeman
 
+nm = 1.0e-9
 study = fm.study("effective_field_reference")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 exchange_ir = Exchange().to_ir()
 zeeman_ir = Zeeman(B=(0.0, 0.0, 1.0e-3)).to_ir()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)

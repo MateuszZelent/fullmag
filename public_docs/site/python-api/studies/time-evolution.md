@@ -66,14 +66,22 @@ request-time intent. Study-level intent is passed to planner/runtime conversion 
 ### Implementacja w Pythonie (bezpośrednio)
 
 ```python
+import fullmag as fm
+
 study = fm.study("te_source")
 study.engine("fem")
 study.device("cpu", precision="double")
+study.universe(mode="manual", size=(800e-9, 400e-9, 300e-9))
+study.universe.mesh(maximum_element_size=100e-9)
+film = study.geometry(fm.Box(300e-9, 100e-9, 5e-9), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.solver(integrator="rk45", fix_dt=1e-15)
 study.stages.add_run(stage_id="run", until=1e-12)
 
 te = fm.TimeEvolution(
-    dynamics=study.dynamics,
+    dynamics=fm.LLG(integrator="rk45", fixed_timestep=1e-15),
     outputs=(),
     constraints=(),
     table_autosave=None,
@@ -82,9 +90,27 @@ te = fm.TimeEvolution(
 
 ```python
 # Canonical method call to add autosave:
+import fullmag as fm
+
+study = fm.study("te_autosave_source")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 2e-9))
+film = study.geometry(fm.Box(40e-9, 20e-9, 4e-9), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.solver(integrator="rk45", fix_dt=1e-15)
+study.stages.add_run(stage_id="run", until=1e-12)
+te = fm.TimeEvolution(
+    dynamics=fm.LLG(),
+    outputs=(),
+    constraints=(),
+    table_autosave=None,
+)
 te = te.table_autosave(
     t_sampl=1e-12,
-    quantities=("M", "E"),
+    quantities=("e_total",),
     extra_quantities=("mx", "my", "mz"),
     table_id="primary",
 )

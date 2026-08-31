@@ -61,11 +61,11 @@
     "parameters": [
       {
         "python": "current_density",
-        "type": "float or None",
+        "type": "tuple[float, float, float] or None",
         "default": "None",
         "si_unit": "A/m^2",
-        "validation": "finite; exclusive with current_source",
-        "meaning": "direct current density",
+        "validation": "finite vector; exclusive with current_source",
+        "meaning": "direct current density vector",
         "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
         "problem_ir": "current_density"
       },
@@ -150,6 +150,6 @@
         "problem_ir": "lande_g"
       }
     ],
-    "returns": "typed ProblemIR record at to_ir()"
+    "returns": "typed ProblemIR record at to_ir_module()"
   }
 }

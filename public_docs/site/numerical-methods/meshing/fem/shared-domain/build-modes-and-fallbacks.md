@@ -267,7 +267,6 @@ film.mesh(
     minimum_element_size=4 * nm,
     maximum_element_size=8 * nm,
     order=1,
-    compute_quality=True,
 )
 film.Ms = 800.0e3
 film.Aex = 13.0e-12

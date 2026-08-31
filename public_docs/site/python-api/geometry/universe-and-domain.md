@@ -68,12 +68,17 @@ fm.pbc(...) and StudyUniverseHandle.mesh(...)
 import fullmag as fm
 
 study = fm.study("public-api-example")
-study.mesh(hmax=5e-9)
-body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
-study.add(body)
-study.stages.add_relax(stage_id="api-example", max_steps=1)
-# Author the documented object after the stage exists.
-value = fm.pbc(x=True, y=False, z=False, demag="open")
+study.objects.mesh.defaults(maximum_element_size=5e-9)
+body = study.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.stages.add_relax(stage_id="api-example", dt=5e-13, max_steps=1)
+# `pbc` mutates the active study defaults and returns None. Construct the
+# typed value separately when the canonical ProblemIR is needed.
+fm.pbc(x=True, y=False, z=False, demag="open")
+value = fm.FdmPbc(axes=(True, False, False), demag="open")
 canonical_ir = value.to_ir()
 ```
 

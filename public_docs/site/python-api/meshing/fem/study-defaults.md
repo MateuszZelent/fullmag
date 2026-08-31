@@ -64,8 +64,7 @@ study = fm.study("fem_study_defaults")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fem_order(1)
-study.hmax(20 * nm)
+study.objects.mesh.defaults(order=1, maximum_element_size=20 * nm)
 body = study.geometry(fm.Box(80 * nm, 40 * nm, 4 * nm), name="film")
 body.Ms = 800.0e3
 body.Aex = 13.0e-12

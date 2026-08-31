@@ -56,14 +56,32 @@ The table is exhaustive for this public family entry point. Alias rows are alter
 ```python
 # %% imports
 import fullmag as fm
+from pathlib import Path
+
+nm = 1.0e-9
 
 # %% stage-first study-level imported mesh hint
 study = fm.study("imported_mesh_reference")
 study.engine("fem")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.universe(mode="manual", size=(800 * nm, 400 * nm, 300 * nm))
+study.universe.mesh(maximum_element_size=100 * nm)
+
+body = study.geometry(fm.Box(300 * nm, 100 * nm, 5 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+mesh_path = Path("meshes/ferromagnet.json")
+mesh_kwargs = {
+    "order": 1,
+    "maximum_element_size": 2e-9,
+}
+if mesh_path.is_file():
+    mesh_kwargs["source"] = str(mesh_path)
 study.objects.mesh.defaults(
-    order=1,
-    maximum_element_size=2e-9,
-    source="meshes/ferromagnet.json",
+    **mesh_kwargs,
 )
 
 # The typed FEM value is the same study-level contract in isolation.

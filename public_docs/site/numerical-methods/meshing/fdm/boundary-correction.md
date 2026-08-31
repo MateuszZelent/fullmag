@@ -61,6 +61,10 @@ study.fdm(
     boundary_phi_floor=0.1,
     boundary_delta_min=0.2 * nm,
 )
+film = study.geometry(fm.Box(100 * nm, 40 * nm, 4 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.demag()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```

@@ -74,10 +74,16 @@ The exact dynamics objects are in fullmag.model.dynamics.
 import fullmag as fm
 from fullmag.model.dynamics import AdaptiveTimestep, LLG
 
+nm = 1.0e-9
 study = fm.study("llg_reference")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 dynamics = LLG(
     gamma=2.211e5,
     integrator="rk45",
@@ -173,4 +179,3 @@ define STT or SOT torque equations.
 | refresh policy | packages/fullmag-py/src/fullmag/model/dynamics.py | class FieldRefreshPolicy | validates refresh cadence | lane-dependent | source-backed |
 | FEM CPU RHS | backends/fem/cpu/mfem/integrators/llg_rhs.cpp | llg_rhs_aos | evaluates Gilbert RHS | FEM CPU | source-backed |
 | FEM GPU RHS | backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu | fullmag_cuda_llg_rhs_fused | evaluates fused RHS | FEM GPU | source-backed |
-

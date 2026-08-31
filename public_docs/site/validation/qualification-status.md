@@ -72,8 +72,21 @@ combinations fail closed.
 ### 3) Implementacja w Pythonie (bezpośredni wzorzec)
 
 ```python
+import fullmag as fm
 from fullmag.model.constraints import FrozenSpins
 from fullmag.model.selection import in_region_selection
+
+nm = 1.0e-9
+study = fm.study("frozen_constructor_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.stages.add_run(stage_id="run", until=1.0e-12)
 
 # Direct constructor (public source class contract)
 frozen = FrozenSpins(
@@ -87,13 +100,26 @@ frozen = FrozenSpins(
 ```
 
 ```python
-film_region = ...  # fullmag.model.structure.ObjectRegion instance
+import fullmag as fm
+
+nm = 1.0e-9
+study = fm.study("frozen_region_example")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+film = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
+film_region = film.add_region("core", fm.Box(20 * nm, 20 * nm, 4 * nm))
 frozen_region = film_region.freeze_spins(
     id="film_frozen_region",
     reference="capture_current_at_activation",
-    membership="dynamic",
+    membership="snapshot_at_activation",
     stage_ids=("run",),
 )
+study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 ### 4) Funkcje i argumenty (z kodu źródłowego)

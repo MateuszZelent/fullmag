@@ -115,7 +115,6 @@ film.mesh.thin_film(
     layers=4,
     topology="tetrahedral",
     order=1,
-    compute_quality=True,
 )
 
 study.exchange()

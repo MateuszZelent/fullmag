@@ -76,6 +76,9 @@ Dla trasy mesh:
 ### 3) Jak to zaszyć w Pythonie (bezpośrednio)
 
 ```python
+import fullmag as fm
+from fullmag.select import in_object
+
 study = fm.study("sp4_strict")
 study.engine("fem")
 study.device("cpu", precision="double")
@@ -87,12 +90,21 @@ study.universe(
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
+study.universe.mesh(maximum_element_size=100e-9)
 
-film = study.geometry(fm.Box(500e-9, 125e-9, 3e-9), name="film")
+film = study.geometry(
+    fm.Box(500e-9, 125e-9, 3e-9),
+    name="film",
+    object_id="film",
+)
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.mesh(
     topology="prismatic",
     exact_layer_count=True,
     through_thickness_elements=1,
+    through_thickness_distribution="fixed",
     transition_policy="pyramid_to_tetrahedra",
     order=1,
     mesh_strategy="swept_prism",
@@ -101,7 +113,17 @@ film.mesh(
     element_family="prism",
 )
 
-film.freeze_spins(id="sp4_init_fixed", stage_ids=("relax",))
+frozen = fm.FrozenSpins(
+    id="sp4_init_fixed",
+    selector=in_object("film"),
+    stage_ids=("relax",),
+)
+study.stages.add_relax(
+    stage_id="relax",
+    dt=5.0e-13,
+    max_steps=1,
+    constraints=(frozen,),
+)
 ```
 
 ### 4) Funkcje i argumenty (użyte bezpośrednio)

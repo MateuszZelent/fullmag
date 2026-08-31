@@ -67,6 +67,9 @@ film = study.geometry(
     fm.Box(size=(80e-9, 40e-9, 8e-9), name="film"),
     name="film",
 )
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.mesh(
     maximum_element_size=6e-9,
     boundary_layer_count=3,

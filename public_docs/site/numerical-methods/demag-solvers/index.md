@@ -277,7 +277,7 @@ study.fem_demag_solver(
     rtol=1.0e-10,
     max_iterations=500,
 )
-study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, tolT=1.0e-6)
 ```
 
 | Public value | Meaning | Validation consequence |

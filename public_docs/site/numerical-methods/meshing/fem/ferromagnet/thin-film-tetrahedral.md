@@ -80,6 +80,9 @@ import fullmag as fm
 study = fm.study("thin_film_tetrahedral_reference")
 study.engine("fem")
 film = study.geometry(fm.Box(size=(100e-9, 50e-9, 6e-9)), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.mesh.thin_film(
     maximum_element_size=5e-9,
     minimum_element_size=2e-9,

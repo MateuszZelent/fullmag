@@ -163,7 +163,7 @@ film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.m = wall
 # To initialize a three-dimensional object instead, assign compact_hopfion.
-study.demag(realization="fdm_convolution")
+study.demag(realization="auto")
 study.stages.add_save_state(
     artifact_name="initial-m.zarr",
     format="zarr",

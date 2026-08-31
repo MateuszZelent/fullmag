@@ -15,7 +15,7 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 
 The STT classes retain legacy object-level authoring and canonical module contracts; mutually exclusive current definitions fail closed.
 
-This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while `to_ir_module()` is the object-level lowering boundary consumed by the study/script pipeline.
 
 (python-api-interactions-spin-transfer-torque-governing-equations)=
 ## Governing equations
@@ -53,7 +53,7 @@ fm.SlonczewskiSTT(...), fm.ZhangLiSTT(...), fm.InterfaceCppSTT(...)
 
 | Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| ```current_density``` | ```float or None``` | ```None``` | ```A/m^2``` | finite; exclusive with current_source | direct current density | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_density``` |
+| ```current_density``` | ```tuple[float, float, float] or None``` | ```None``` | ```A/m^2``` | finite vector; exclusive with current_source | direct current density vector | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_density``` |
 | ```current_source``` | ```str or None``` | ```None``` | ```1``` | exclusive with current_density | named current source | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_source``` |
 | ```spin_polarization``` | ```tuple[float,float,float]``` | ```(0,0,1)``` | ```1``` | finite non-zero; normalized | polarization direction | FEM/FDM CPU/GPU: IR; resolver-specific | ```spin_polarization``` |
 | ```degree``` | ```float``` | ```0.4``` | ```1``` | finite | polarization degree | FEM/FDM CPU/GPU: IR; resolver-specific | ```degree``` |
@@ -70,13 +70,16 @@ fm.SlonczewskiSTT(...), fm.ZhangLiSTT(...), fm.InterfaceCppSTT(...)
 import fullmag as fm
 
 study = fm.study("public-api-example")
-study.mesh(hmax=5e-9)
-body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
-study.add(body)
-study.stages.add_relax(stage_id="api-example", max_steps=1)
+study.objects.mesh.defaults(maximum_element_size=5e-9)
+body = study.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.alpha = 0.02
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+study.stages.add_relax(stage_id="api-example", dt=5e-13, max_steps=1)
 # Author the documented object after the stage exists.
-value = fm.SlonczewskiSTT(current_density=1.0e10, spin_polarization=(0.0, 0.0, 1.0))
-canonical_ir = value.to_ir()
+value = fm.SlonczewskiSTT(current_density=(0.0, 0.0, 1.0e10), spin_polarization=(0.0, 0.0, 1.0))
+canonical_ir = value.to_ir_module()
 ```
 
 The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
@@ -84,7 +87,7 @@ The example intentionally exposes the object-level boundary. In a full stage, at
 (python-api-interactions-spin-transfer-torque-problem-ir)=
 ## ProblemIR
 
-value.to_ir() is the canonical serialization boundary. It emits a typed spin_transfer_torque record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+value.to_ir_module() is the canonical serialization boundary. It emits a typed spin_transfer_torque record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
 
 (python-api-interactions-spin-transfer-torque-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
@@ -101,7 +104,7 @@ The FEM/FDM realization selects its own mesh, stencil or element operator, bound
 (python-api-interactions-spin-transfer-torque-implementation-mapping)=
 ## Implementation mapping
 
-The authoritative implementation is packages/fullmag-py/src/fullmag/model/spin_torque.py symbol class SlonczewskiSTT. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/spin_torque.py symbol class SlonczewskiSTT. The public constructor signature, validation branches, defaults, and to_ir_module() field names are derived from that source, not from a historical example.
 
 (python-api-interactions-spin-transfer-torque-validation)=
 ## Validation
@@ -128,4 +131,4 @@ Control Room route: no dedicated route is claimed for this low-level authoring o
 
 - Implementation: packages/fullmag-py/src/fullmag/model/spin_torque.py::class SlonczewskiSTT
 - Source-map: interactions/spin-transfer-torque.source-map.json
-- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.
+- Contract status: current constructor and to_ir_module() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

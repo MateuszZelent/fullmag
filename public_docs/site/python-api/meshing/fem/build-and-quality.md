@@ -66,6 +66,7 @@ study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.universe(mode="manual", size=(200 * nm, 100 * nm, 100 * nm))
+study.universe.mesh(maximum_element_size=100 * nm)
 body = study.geometry(fm.Box(80 * nm, 40 * nm, 4 * nm), name="film")
 body.mesh(maximum_element_size=4 * nm, minimum_element_size=2 * nm,
           compute_quality=True, per_element_quality=True)

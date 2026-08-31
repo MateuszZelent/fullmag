@@ -57,6 +57,11 @@ study = fm.study("api_contract_probe")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2e-9, 2e-9, 2e-9))
+body = study.geometry(fm.Box(40e-9, 20e-9, 4e-9), name="film")
+body.Ms = 800.0e3
+body.Aex = 13.0e-12
+body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.stages.add_run(stage_id="probe", until=1.0e-12)
 ```
 

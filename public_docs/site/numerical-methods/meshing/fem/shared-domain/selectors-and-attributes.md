@@ -73,7 +73,7 @@ The following rows are the exhaustive public-signature contract for this page; e
 import fullmag as fm
 
 # %%
-selector = fm.mesh.nearest_surface_to_point(point=(0, "0.0", 2.5e-9), geometry=" film ", count="1")
+selector = fm.mesh.nearest_surface_to_point(point=(0, 0.0, 2.5e-9), geometry=" film ", count=1)
 study = fm.study("selector_contract")
 study.engine("fem")
 study.device("cpu", precision="double")

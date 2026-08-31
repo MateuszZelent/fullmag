@@ -79,6 +79,7 @@ study.device("cpu", precision="double")
 study.mode("strict")
 
 study.universe(mode="manual", size=(800 * nm, 400 * nm, 300 * nm))
+study.universe.mesh(maximum_element_size=100 * nm)
 film = study.geometry(fm.Box(300 * nm, 100 * nm, 5 * nm), name="film")
 film.Ms = 800.0e3
 film.Aex = 13.0e-12

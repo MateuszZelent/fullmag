@@ -73,6 +73,20 @@ study.fdm(
         fft_backend="rustfft",
     ),
 )
+free = study.geometry(
+    fm.Box(60 * nm, 40 * nm, nm).translate((-40 * nm, 0.0, 0.0)),
+    name="free",
+)
+free.Ms = 800.0e3
+free.Aex = 13.0e-12
+free.m = fm.texture.uniform(1.0, 0.0, 0.0)
+reference = study.geometry(
+    fm.Box(60 * nm, 40 * nm, nm).translate((40 * nm, 0.0, 0.0)),
+    name="reference",
+)
+reference.Ms = 800.0e3
+reference.Aex = 13.0e-12
+reference.m = fm.texture.uniform(1.0, 0.0, 0.0)
 study.demag()
 study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
