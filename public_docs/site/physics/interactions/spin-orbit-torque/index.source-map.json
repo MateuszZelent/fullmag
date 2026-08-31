@@ -16,7 +16,6 @@
     {"id": "python-scalar-drive", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class SignedScalarDrive", "responsibility": "Preserve signed scalar current, normalize sigma, and validate canonical envelopes."},
     {"id": "python-vector-drive", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class VectorCurrentDrive", "responsibility": "Validate geometric axes and emit a named vector-current binding."},
     {"id": "problem-ir", "path": "crates/fullmag-ir/src/study.rs", "symbol": "PrescribedSotV1DriveIR", "responsibility": "Own canonical tagged drive variants and prescribed-SOT formula fields."},
-    {"id": "problem-validation", "path": "crates/fullmag-ir/src/validation.rs", "symbol": "prescribed_sot", "responsibility": "Reject invalid targets, axes, coefficients, thickness, and source bindings."},
     {"id": "planner", "path": "crates/fullmag-plan/src/spin_torque.rs", "symbol": "resolve_sot_fields", "responsibility": "Resolve signed current projection, polarization axis, target, envelope, and executable fields."},
     {"id": "fdm-cpu", "path": "crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs", "symbol": "build_sot", "responsibility": "Map canonical plan fields into the FDM CPU evaluator configuration."},
     {"id": "fdm-gpu", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "ffi_prescribed_sot_formula", "responsibility": "Select canonical versus legacy formula for native CUDA execution."},
@@ -25,7 +24,7 @@
     {"id": "python-tests", "path": "packages/fullmag-py/tests/test_prescribed_sot.py", "symbol": "class TestPrescribedSpinOrbitTorque", "responsibility": "Check exact canonical JSON, constructor validation, compatibility migration, and duplicate IDs."},
     {"id": "planner-vector-test", "path": "crates/fullmag-plan/src/spin_torque.rs", "symbol": "canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection", "responsibility": "Check normalized geometry, signed current projection, and fixed polarization under reversal."},
     {"id": "fdm-gpu-test", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Check bounded native FDM CUDA parity against the CPU reference."},
-    {"id": "fem-gpu-test", "path": "backends/fem/tests/cuda_sot_contract.cpp", "symbol": "canonical_prescribed_sot_matches_cpu_and_independent_oracle", "responsibility": "Check the SI prefactor, Gilbert conversion, mask, CPU parity, and CUDA output."},
+    {"id": "fem-gpu-test", "path": "backends/fem/tests/cuda_sot_contract.cpp", "symbol": "main", "responsibility": "Run the independent SI oracle and CPU/CUDA prescribed-SOT contract."},
     {"id": "control-room", "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx", "symbol": "SpinAuthoringInspector", "responsibility": "Expose prescribed SOT and the damping-like and field-like efficiencies."}
   ],
   "symbols": [
