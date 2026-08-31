@@ -1,0 +1,118 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/geometry-and-materials.md",
+    "reviewed_revision": "f3a4e9e3d4bb868f5d092817c7119e6e202083ee",
+    "title": "Geometry, regions, materials and meshes"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "The page documents structured cells, active masks, and the Python-to-ProblemIR boundary; executed FDM qualification is separate."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "The page documents the authored contract only; device materialization and precision require executed evidence."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "The page documents shared-domain elements, markers, and mesh intent; mesh and solver qualification are separate."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "The page documents the typed authoring boundary only; device residency, precision, and runtime support require executed evidence."
+    }
+  ],
+  "sources": [
+    {
+      "id": "geometry-primitives",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Box",
+      "responsibility": "Typed primitive geometry and object-level IR lowering."
+    },
+    {
+      "id": "geometry-import",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class ImportedGeometry",
+      "responsibility": "Imported source, scale, units, volume, and IR validation."
+    },
+    {
+      "id": "geometry-object-handle",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class MagnetHandle",
+      "responsibility": "High-level magnetic object properties, regions, and scoped fields."
+    },
+    {
+      "id": "material",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class Material",
+      "responsibility": "SI material validation and canonical material IR."
+    },
+    {
+      "id": "material-fields",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class MaterialParameterField",
+      "responsibility": "Constant, linear, radial, and sampled field payloads."
+    },
+    {
+      "id": "object-regions",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class ObjectRegion",
+      "responsibility": "Region identity, material proxy, transition, and local mesh policy."
+    },
+    {
+      "id": "problem-lowering",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "ProblemIR collection and optional geometry asset requests."
+    }
+  ],
+  "symbols": [
+    {
+      "id": "OmegaMag",
+      "latex": "$\\Omega_{\\mathrm{mag}}$",
+      "meaning": "resolved magnetic domain",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "OmegaI",
+      "latex": "$\\Omega_i$",
+      "meaning": "authored magnetic region",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "p",
+      "latex": "$p$",
+      "meaning": "material parameter",
+      "si_unit": "parameter-dependent"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-geometry-material-domain-partition",
+      "symbols": ["OmegaMag", "OmegaI"],
+      "sources": ["geometry-primitives", "object-regions"]
+    }
+  ],
+  "public_api": {
+    "owner": "study.geometry, fm.geometry, ObjectRegion, Material, and MaterialParameterField",
+    "constructors": [
+      "fullmag.Box",
+      "fullmag.Cylinder",
+      "fullmag.Ellipsoid",
+      "fullmag.Sphere",
+      "fullmag.Ellipse",
+      "fullmag.ImportedGeometry",
+      "fullmag.Material",
+      "fullmag.MaterialParameterField"
+    ],
+    "parameters": []
+  }
+}

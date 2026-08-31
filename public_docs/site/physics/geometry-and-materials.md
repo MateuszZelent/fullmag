@@ -4,7 +4,7 @@ status: partial
 audience: user
 owner: fullmag-public-docs
 last_updated: 2026-08-31
-source_of_truth: packages/fullmag-py/src/fullmag/model/geometry.py and structure.py
+source_of_truth: packages/fullmag-py/src/fullmag/model/geometry.py, structure.py, and fields.py
 ---
 
 # Geometry, regions, materials and meshes
@@ -24,11 +24,13 @@ geometry object -> magnetic object -> object-owned region -> material assignment
 The Python terminal pages linked below are the authoritative reference for each constructor. This
 page explains how those contracts compose and records the physical assumptions and current limits.
 
+(geometry-and-materials-problem-statement)=
 ## Physical model
 
 Let `Omega` be the magnetic domain and `Omega_i` its authored regions. A valid realization preserves
 the intended membership relation:
 
+(geometry-and-materials-governing-equations)=
 ```{math}
 :label: eq-geometry-material-domain-partition
 
@@ -48,6 +50,25 @@ operator consumes the material value at its own cells, nodes, elements, or quadr
 Python field declaration does not by itself prove that a particular backend, interpolation rule,
 precision, or device can materialize it.
 
+(geometry-and-materials-symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| `$\Omega_{\mathrm{mag}}$` | resolved magnetic domain | `$\mathrm{m^3}$` |
+| `$\Omega_i$` | authored magnetic region | `$\mathrm{m^3}$` |
+| `$p$` | material parameter | parameter-dependent |
+
+(geometry-and-materials-assumptions-and-validity)=
+## Assumptions and validity
+
+All dimensional values in this page are authored in SI units. Geometry lengths and coordinates are
+finite metres; positive dimensions and radii are required by the corresponding constructors.
+Material scalar values are validated by their source constructors, while unit strings on spatial
+fields are preserved metadata rather than a conversion request. Backend capability, asset loading,
+mesh conformity, and solver qualification remain separate checks.
+
+(geometry-and-materials-python-api)=
 ## Authoring layers
 
 ### 1. Geometry object
@@ -325,6 +346,7 @@ material_transition(*, cells=None, width=None,
 authoring policy for `Ms`, `Aex`, or another supported parameter; it is not an automatic smoothing
 pass and does not create an RKKY or inter-object coupling.
 
+(geometry-and-materials-problem-ir)=
 ## ProblemIR and realization
 
 `Problem.to_ir(...)` is the canonical problem serialization boundary. The relevant output sections
@@ -341,6 +363,17 @@ are:
 Requested intent and resolved assets are separate. A changed geometry, region membership, mesh
 policy, imported source, or material-field definition invalidates dependent mesh and materialized
 field provenance. A change to magnetization alone does not change mesh identity.
+
+(geometry-and-materials-round-trip-and-failure-semantics)=
+### Round-trip and failure semantics
+
+Requested intent preserves typed geometry, region identity, field kind, units, frame, and conflict
+policy before execution. Resolved execution adds backend assets, mesh locations, interpolation, and
+provenance. Validation errors identify invalid authored values; unsupported combinations fail closed
+at construction, planning, or materialization rather than silently changing backend or device.
+
+(geometry-and-materials-discrete-realization)=
+## Discrete realization
 
 ### FDM realization
 
@@ -422,6 +455,7 @@ Backend or Python availability must not be interpreted as UI availability.
 
 See {doc}`/frontend/capability-register` for the current support matrix.
 
+(geometry-and-materials-validation)=
 ## Validation strategy and known limits
 
 Construction and serialization tests are evidence for the typed authoring boundary. They do not
@@ -440,6 +474,13 @@ boolean/import format, every periodic boundary combination, sampled material-fie
 or every mixed FEM topology. Unsupported combinations must fail explicitly rather than silently
 fall back to another backend or device.
 
+(geometry-and-materials-limitations)=
+## Known limits
+
+The current public contract does not qualify adaptive refinement, arbitrary Python geometry
+callables, every boolean or import format, every periodic boundary combination, sampled
+material-field materialization, or every mixed FEM topology.
+
 ## Terminal API pages
 
 - {doc}`/python-api/geometry/primitives`
@@ -452,6 +493,7 @@ fall back to another backend or device.
 - {doc}`/python-api/meshing/fem/regions`
 - {doc}`/python-api/problem/problem-ir`
 
+(geometry-and-materials-scientific-bibliography)=
 ## Bibliography
 
 1. W. F. Brown Jr., *Micromagnetics*, Wiley, 1963.
@@ -463,16 +505,26 @@ fall back to another backend or device.
    *International Journal for Numerical Methods in Engineering* **79**, 1309-1331 (2009),
    [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
+(geometry-and-materials-source-code-index)=
+(geometry-and-materials-implementation-mapping)=
+## Implementation mapping
+
+The Python authoring classes build typed records first. `Problem.to_ir` collects those records, and
+`build_geometry_assets_for_request` is the boundary where optional FDM/FEM geometry assets are
+requested. Backend planners and runners own materialization, marker assignment, topology, and
+device-specific support.
+
+(geometry-and-materials-source-code-index)=
 ## Source-code index
 
 | Claim or API | Repository path | Stable symbol | Responsibility |
 |---|---|---|---|
-| primitives, imports, booleans, transforms | `packages/fullmag-py/src/fullmag/model/geometry.py` | `Box`, `Cylinder`, `Ellipsoid`, `Sphere`, `Ellipse`, `ImportedGeometry`, `Difference`, `Union`, `Intersection`, `Translate` | typed geometry and `to_ir()` |
+| primitives, imports, booleans, transforms | `packages/fullmag-py/src/fullmag/model/geometry.py` | `class Box`, `class Cylinder`, `class Ellipsoid`, `class ImportedGeometry`, `class Difference`, `class Union`, `class Intersection`, `class Translate` | typed geometry and `to_ir()` |
 | high-level geometry handle | `packages/fullmag-py/src/fullmag/world.py` | `MagnetHandle`, `StudyBuilder.geometry` | object creation and base material properties |
 | object regions and overrides | `packages/fullmag-py/src/fullmag/model/structure.py` | `ObjectRegion` | region identity, material proxy, transitions, local mesh policy |
 | base material | `packages/fullmag-py/src/fullmag/model/structure.py` | `Material` | SI validation and material IR |
 | analytic and sampled fields | `packages/fullmag-py/src/fullmag/model/structure.py` | `MaterialParameterField`, `MaterialParameterAssignment` | field payload and scoped assignment |
-| full problem lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `Problem.to_ir`, `build_geometry_assets_for_request` | ProblemIR and optional geometry assets |
+| full problem lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem`, `build_geometry_assets_for_request` | ProblemIR and optional geometry assets |
 | shared-domain mesh policy | `packages/fullmag-py/src/fullmag/model/structure.py` and `world.py` | `ObjectRegion.mesh`, `GeometryMeshHandle` | mesh intent before backend realization |
 
 Focused public API evidence includes the region-lowering, boolean-difference, centered-shape,
