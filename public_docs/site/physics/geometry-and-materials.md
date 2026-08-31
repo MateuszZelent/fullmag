@@ -505,7 +505,7 @@ material-field materialization, or every mixed FEM topology.
    *International Journal for Numerical Methods in Engineering* **79**, 1309-1331 (2009),
    [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
-(geometry-and-materials-source-code-index)=
+(fullmag-geometry-and-materials-source-code-index)=
 (geometry-and-materials-implementation-mapping)=
 ## Implementation mapping
 
