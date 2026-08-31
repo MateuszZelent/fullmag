@@ -819,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn rotated_dmi_quantities_are_plan_gated_and_not_advertised_before_materializers_exist() {
+    fn rotated_dmi_quantities_are_plan_gated_and_exposed_only_by_materialized_lanes() {
         let quantities = ["H_rotated_dmi", "eden_rotated_dmi"];
 
         let mut fdm = fdm_plan();
@@ -827,8 +827,9 @@ mod tests {
         fdm.rotated_interfacial_dmi = Some(3.0e-3);
         assert!(fdm_plan_enables_quantity(&fdm, QuantityId::HDmiRotated));
         assert!(fdm_plan_enables_quantity(&fdm, QuantityId::EdenRotatedDmi));
-        assert!(
-            active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &quantities).is_empty()
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &quantities),
+            vec!["H_rotated_dmi", "eden_rotated_dmi"]
         );
         assert!(active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities).is_empty());
 

@@ -4584,6 +4584,7 @@ pub(crate) struct StateObservables {
     // PH-02: extended vector observables
     pub anisotropy_field: Vec<[f64; 3]>,
     pub dmi_field: Vec<[f64; 3]>,
+    pub rotated_dmi_field: Vec<[f64; 3]>,
     pub magnetoelastic_field: Vec<[f64; 3]>,
     pub cubic_anisotropy_field: Vec<[f64; 3]>,
     pub bulk_dmi_field: Vec<[f64; 3]>,
@@ -4595,6 +4596,7 @@ pub(crate) struct StateObservables {
     pub drive_energy: f64,
     pub anisotropy_energy: f64,
     pub dmi_energy: f64,
+    pub rotated_dmi_energy: f64,
     pub total_energy: f64,
     pub max_dm_dt: f64,
     pub max_rhs_all_norm_per_s: f64,
