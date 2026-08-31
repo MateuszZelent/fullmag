@@ -777,6 +777,8 @@ pub struct fullmag_fem_plan_desc {
     pub frozen_mask_len: u64,
     pub frozen_reference_xyz: *const f64,
     pub frozen_reference_len: u64,
+    pub has_rotated_interfacial_dmi: i32,
+    pub rotated_interfacial_dmi_constant: f64,
 }
 
 #[repr(C)]
@@ -3506,6 +3508,15 @@ mod tests {
         assert!(
             std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len)
                 > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_xyz)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, has_rotated_interfacial_dmi)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len),
+            "rotated-interfacial DMI must remain an append-only plan extension"
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, rotated_interfacial_dmi_constant)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, has_rotated_interfacial_dmi)
         );
     }
 

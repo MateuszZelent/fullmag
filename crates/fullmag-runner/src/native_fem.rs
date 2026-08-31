@@ -2785,6 +2785,12 @@ impl NativeFemBackend {
             } else {
                 0
             },
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            rotated_interfacial_dmi_constant: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),

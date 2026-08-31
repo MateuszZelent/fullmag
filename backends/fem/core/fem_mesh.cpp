@@ -769,7 +769,8 @@ bool validate_periodic_plan_compatibility(Context &ctx, std::string &error)
             return false;
         }
     }
-    if (ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled) {
+    if (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||
+        ctx.dmi.bulk_enabled) {
         if (!validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Dind_field, "Dind_field", error) ||
             !validate_periodic_scalar_field_classes(ctx, ctx.material_fields.Dbulk_field, "Dbulk_field", error)) {
             return false;

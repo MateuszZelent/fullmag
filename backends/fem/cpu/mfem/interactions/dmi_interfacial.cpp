@@ -1,10 +1,12 @@
 /*
  * Interfacial DMI source contract.
  *
- * This source owns the interfacial weak-residual element loop, no-MFEM active
- * error, lumped-mass H_DMI projection, and joule energy accumulation for the
- * configured interface normal. It does not own bulk DMI, shared scratch
- * lifetime, top-level plan import, or LLG torque conversion.
+ * This source owns the conventional and rotated interfacial weak-residual
+ * element loop, no-MFEM active error, lumped-mass H_DMI projection, and joule
+ * energy accumulation. The configured interface normal applies only to the
+ * conventional invariant; the rotated invariant is the fixed Göbel D21=D32
+ * form. It does not own bulk DMI, shared scratch lifetime, top-level plan
+ * import, or LLG torque conversion.
  */
 #include "cpu/mfem/interactions/dmi_interfacial.hpp"
 
@@ -34,7 +36,11 @@ bool compute_interfacial_dmi_field(
 {
     const size_t n = ctx.mesh.n_nodes;
     h_dmi_xyz.assign(n * 3u, 0.0);
-    if (!ctx.dmi.interfacial_enabled || (ctx.dmi.interfacial_D == 0.0 && ctx.material_fields.Dind_field.empty())) {
+    const bool conventional_active = ctx.dmi.interfacial_enabled &&
+        (ctx.dmi.interfacial_D != 0.0 || !ctx.material_fields.Dind_field.empty());
+    const bool rotated_active = ctx.dmi.rotated_interfacial_enabled &&
+        ctx.dmi.rotated_interfacial_D != 0.0;
+    if (!conventional_active && !rotated_active) {
         if (dmi_energy != nullptr) {
             *dmi_energy = 0.0;
         }
@@ -55,6 +61,7 @@ bool compute_interfacial_dmi_field(
     }
 
     const double uniform_D = ctx.dmi.interfacial_D;
+    const double uniform_rotated_D = ctx.dmi.rotated_interfacial_D;
     const double uniform_Ms = ctx.material_fields.material.saturation_magnetisation;
     double energy = 0.0;
 
@@ -190,11 +197,19 @@ bool compute_interfacial_dmi_field(
                     data.grad_shape[dir] = sign * dshape(i, dir);
                 }
                 const double n_hat[3] = {nx, ny, nz};
-                dmi_accumulate_interfacial_residual(
-                    data,
-                    n_hat,
-                    elem_D,
-                    &thread_residual[static_cast<size_t>(gdof) * 3u]);
+                if (conventional_active) {
+                    dmi_accumulate_interfacial_residual(
+                        data,
+                        n_hat,
+                        elem_D,
+                        &thread_residual[static_cast<size_t>(gdof) * 3u]);
+                }
+                if (rotated_active) {
+                    dmi_accumulate_rotated_interfacial_residual(
+                        data,
+                        uniform_rotated_D,
+                        &thread_residual[static_cast<size_t>(gdof) * 3u]);
+                }
             }
 
             if (dmi_energy != nullptr) {
@@ -206,10 +221,17 @@ bool compute_interfacial_dmi_field(
                     my_q += my_elem(i) * shape(i);
                     mz_q += mz_elem(i) * shape(i);
                 }
-                const double m_dot_n = mx_q * nx + my_q * ny + mz_q * nz;
-                const double m_grad_mn =
-                    mx_q * grad_mn[0] + my_q * grad_mn[1] + mz_q * grad_mn[2];
-                thread_energy += elem_D * (m_dot_n * div_m - m_grad_mn) * w;
+                if (conventional_active) {
+                    const double m_dot_n = mx_q * nx + my_q * ny + mz_q * nz;
+                    const double m_grad_mn =
+                        mx_q * grad_mn[0] + my_q * grad_mn[1] + mz_q * grad_mn[2];
+                    thread_energy += elem_D * (m_dot_n * div_m - m_grad_mn) * w;
+                }
+                if (rotated_active) {
+                    thread_energy += uniform_rotated_D *
+                        (mz_q * dm[0][0] - mx_q * dm[2][0] +
+                         mx_q * dm[1][1] - my_q * dm[0][1]) * w;
+                }
             }
         }
     };

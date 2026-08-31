@@ -704,6 +704,9 @@ typedef struct {
     uint64_t frozen_mask_len;
     const double *frozen_reference_xyz;
     uint64_t frozen_reference_len;
+    /* Append-only Göbel rotated interfacial DMI extension (D_21 = D_32). */
+    int has_rotated_interfacial_dmi;
+    double rotated_interfacial_dmi_constant;
 } fullmag_fem_plan_desc;
 
 /*

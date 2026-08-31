@@ -3397,8 +3397,12 @@ impl FemLlgProblem {
             .terms
             .interfacial_dmi
             .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
         let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
-        if interfacial_d.is_none() && bulk_d.is_none() {
+        if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;
         }
 
@@ -3472,6 +3476,32 @@ impl FemLlgProblem {
                 }
             }
 
+            if let Some(d) = rotated_d {
+                const X: usize = 0;
+                const Y: usize = 1;
+                const Z: usize = 2;
+                let dw_dm = [
+                    d * (-grad_m[Z][X] + grad_m[Y][Y]),
+                    -d * grad_m[X][Y],
+                    d * grad_m[X][X],
+                ];
+                for local_index in 0..4 {
+                    let node = element[local_index] as usize;
+                    let grad_shape = gradients[local_index];
+                    let gradient_action = [
+                        d * (m_centroid[Z] * grad_shape[X] - m_centroid[Y] * grad_shape[Y]),
+                        d * m_centroid[X] * grad_shape[Y],
+                        -d * m_centroid[X] * grad_shape[X],
+                    ];
+                    let residual = [
+                        volume * (0.25 * dw_dm[X] + gradient_action[X]),
+                        volume * (0.25 * dw_dm[Y] + gradient_action[Y]),
+                        volume * (0.25 * dw_dm[Z] + gradient_action[Z]),
+                    ];
+                    interfacial_field[node] = add(interfacial_field[node], residual);
+                }
+            }
+
             if let Some(d) = bulk_d {
                 let curl_m = [
                     grad_m[2][1] - grad_m[1][2],
@@ -3502,7 +3532,7 @@ impl FemLlgProblem {
             let lumped_mass = self.topology.magnetic_node_volumes[node];
             if lumped_mass > ZERO_THRESHOLD {
                 let inv_projection_mass = -(MU0 * ms * lumped_mass).recip();
-                if interfacial_d.is_some() {
+                if interfacial_d.is_some() || rotated_d.is_some() {
                     interfacial_field[node] = scale(interfacial_field[node], inv_projection_mass);
                 }
                 if bulk_d.is_some() {
@@ -3518,7 +3548,7 @@ impl FemLlgProblem {
                 .map(|i| dof_map.reduced_node(i))
                 .collect();
             let reduced_n = dof_map.reduced_node_count;
-            if interfacial_d.is_some() {
+            if interfacial_d.is_some() || rotated_d.is_some() {
                 project_vector_field_by_periodic_classes(
                     interfacial_field,
                     &full_to_red,
@@ -3545,8 +3575,12 @@ impl FemLlgProblem {
             .terms
             .interfacial_dmi
             .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
         let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
-        if interfacial_d.is_none() && bulk_d.is_none() {
+        if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return 0.0;
         }
 
@@ -3597,6 +3631,14 @@ impl FemLlgProblem {
                     d * volume * (dot(m_centroid, n_hat) * div_m - dot(m_centroid, grad_m_dot_n));
             }
 
+            if let Some(d) = rotated_d {
+                energy += d
+                    * volume
+                    * (m_centroid[2] * grad_m[0][0] - m_centroid[0] * grad_m[2][0]
+                        + m_centroid[0] * grad_m[1][1]
+                        - m_centroid[1] * grad_m[0][1]);
+            }
+
             if let Some(d) = bulk_d {
                 let curl_m = [
                     grad_m[2][1] - grad_m[1][2],
@@ -3625,14 +3667,18 @@ impl FemLlgProblem {
             .terms
             .interfacial_dmi
             .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
         let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
-        if interfacial_d.is_none() && bulk_d.is_none() {
+        if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;
         }
 
         self.dmi_fields_compute_into(magnetization, interfacial_tmp, bulk_tmp);
         for node in 0..n_nodes {
-            if interfacial_d.is_some() {
+            if interfacial_d.is_some() || rotated_d.is_some() {
                 h_eff[node] = add(h_eff[node], interfacial_tmp[node]);
             }
             if bulk_d.is_some() {
@@ -5340,6 +5386,44 @@ mod tests {
         assert!(
             relative_error <= 1e-9,
             "interfacial DMI field action must match dE/deps on the proof tet: \
+             derivative={derivative:.6e}, field_action={field_action:.6e}, \
+             rel_error={relative_error:.6e}"
+        );
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_field_action_matches_energy_directional_derivative() {
+        let mut problem = unit_tet_problem();
+        problem.terms.exchange = false;
+        problem.terms.interfacial_dmi = None;
+        problem.terms.rotated_interfacial_dmi = Some(3.0e-3);
+        problem.terms.bulk_dmi = None;
+        let magnetization = vec![
+            normalized([1.0, 0.1, 0.2]).expect("nonzero m0"),
+            normalized([0.7, 0.4, 0.1]).expect("nonzero m1"),
+            normalized([0.2, 0.9, 0.3]).expect("nonzero m2"),
+            normalized([0.1, 0.3, 0.95]).expect("nonzero m3"),
+        ];
+        let perturbation = vec![
+            [0.10, -0.03, 0.02],
+            [-0.04, 0.08, 0.03],
+            [0.05, 0.02, -0.07],
+            [-0.02, -0.06, 0.09],
+        ];
+        let eps = 1.0e-4;
+        let plus = add_scaled_field(&magnetization, &perturbation, eps);
+        let minus = add_scaled_field(&magnetization, &perturbation, -eps);
+        let derivative = (problem.dmi_energy_from_vectors(&plus)
+            - problem.dmi_energy_from_vectors(&minus))
+            / (2.0 * eps);
+        let field_action =
+            dmi_projected_field_action(&problem, &magnetization, &perturbation, true);
+        let denominator = derivative.abs().max(field_action.abs()).max(1e-30);
+        let relative_error = (derivative - field_action).abs() / denominator;
+
+        assert!(
+            relative_error <= 1e-9,
+            "rotated interfacial DMI field action must match dE/deps on the proof tet: \
              derivative={derivative:.6e}, field_action={field_action:.6e}, \
              rel_error={relative_error:.6e}"
         );

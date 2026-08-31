@@ -2642,7 +2642,9 @@ void cuda_dmi_absolute_scale_survives_polarized_subterm_cancellation()
             d_delta,
             d_absolute,
             1.0,
+            0.0,
             0.0, 0.0, 1.0,
+            false,
             false,
             bulk_mode,
             kElementCount,
@@ -2720,8 +2722,8 @@ void cuda_dmi_prefactor_paths_bound_cancellation()
             d_m0, d_m0, d_m0,
             d_m1x, d_m1y, d_m1z,
             d_d, d_delta, d_scale,
-            uniform_d, 0.0, 0.0, 1.0,
-            use_d_field, false, 1, nullptr);
+            uniform_d, 0.0, 0.0, 0.0, 1.0,
+            use_d_field, false, false, 1, nullptr);
         check_cuda(cudaGetLastError(), "CUDA DMI prefactor-path launch");
         check_cuda(cudaDeviceSynchronize(), "CUDA DMI prefactor-path synchronize");
         const std::pair<double, double> result{
@@ -2767,6 +2769,72 @@ void cuda_dmi_prefactor_paths_bound_cancellation()
         std::isfinite(conditioned.first) && std::isfinite(conditioned.second) &&
             conditioned.second > uniform.second,
         "CUDA DMI geometry scale must grow for a permitted shifted ill-conditioned tetrahedron");
+}
+
+void cuda_rotated_interfacial_dmi_energy_difference_matches_tetra_oracle()
+{
+    constexpr double kD = 2.75;
+    const std::vector<double> nodes = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    };
+    const std::vector<double> zero(4u, 0.0);
+    const std::vector<double> mx = {0.20, 0.70, -0.10, 0.30};
+    const std::vector<double> my = {-0.40, 0.10, 0.80, -0.20};
+    const std::vector<double> mz = {0.60, -0.30, 0.20, 0.90};
+
+    double *d_nodes = copy_to_device(nodes);
+    uint32_t *d_elements =
+        copy_to_device(std::vector<uint32_t>{0u, 1u, 2u, 3u});
+    uint8_t *d_mask = copy_to_device(std::vector<uint8_t>{1u});
+    double *d_zero = copy_to_device(zero);
+    double *d_mx = copy_to_device(mx);
+    double *d_my = copy_to_device(my);
+    double *d_mz = copy_to_device(mz);
+    double *d_delta = copy_to_device(std::vector<double>{0.0});
+    double *d_scale = copy_to_device(std::vector<double>{0.0});
+
+    fullmag::fem::fullmag_cuda_dmi_energy_difference(
+        d_nodes, d_elements, d_mask,
+        d_zero, d_zero, d_zero,
+        d_mx, d_my, d_mz,
+        d_zero, d_delta, d_scale,
+        0.0, kD, 0.0, 0.0, 1.0,
+        false, true, false, 1, nullptr);
+    check_cuda(cudaGetLastError(), "CUDA rotated interfacial DMI oracle launch");
+    check_cuda(
+        cudaDeviceSynchronize(),
+        "CUDA rotated interfacial DMI oracle synchronize");
+
+    const double mx_q = 0.25 * (mx[0] + mx[1] + mx[2] + mx[3]);
+    const double my_q = 0.25 * (my[0] + my[1] + my[2] + my[3]);
+    const double mz_q = 0.25 * (mz[0] + mz[1] + mz[2] + mz[3]);
+    const double dx_mx = mx[1] - mx[0];
+    const double dy_mx = mx[2] - mx[0];
+    const double dy_my = my[2] - my[0];
+    const double dx_mz = mz[1] - mz[0];
+    const double expected = (kD / 6.0) *
+        (mz_q * dx_mx - mx_q * dx_mz +
+         mx_q * dy_my - my_q * dy_mx);
+    const double actual = copy_scalar_from_device(d_delta);
+    const double scale = copy_scalar_from_device(d_scale);
+    const double tolerance =
+        32.0 * std::numeric_limits<double>::epsilon() *
+        std::max(1.0, scale);
+    check(
+        scale >= std::abs(actual) && std::abs(actual - expected) <= tolerance,
+        "CUDA rotated interfacial DMI energy difference must match the canonical tetrahedron oracle");
+
+    for (void *pointer : {
+             static_cast<void *>(d_nodes), static_cast<void *>(d_elements),
+             static_cast<void *>(d_mask), static_cast<void *>(d_zero),
+             static_cast<void *>(d_mx), static_cast<void *>(d_my),
+             static_cast<void *>(d_mz), static_cast<void *>(d_delta),
+             static_cast<void *>(d_scale)}) {
+        cudaFree(pointer);
+    }
 }
 
 void cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs()
@@ -3438,6 +3506,7 @@ int main()
     cuda_exchange_csr_cancellation_interval_contains_reference();
     cuda_dmi_absolute_scale_survives_polarized_subterm_cancellation();
     cuda_dmi_prefactor_paths_bound_cancellation();
+    cuda_rotated_interfacial_dmi_energy_difference_matches_tetra_oracle();
     cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs();
     cuda_pgbb_stationary_reduces_every_active_trial_without_trial_readback();
     cuda_pgbb_reuses_accepted_h_eff_across_backtracks();
