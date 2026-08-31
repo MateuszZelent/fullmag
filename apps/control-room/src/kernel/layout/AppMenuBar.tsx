@@ -410,6 +410,33 @@ function NoSessionAppMenuBar({
           </span>
         </div>
       </div>
+      {APP_DROPDOWN_ITEMS.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              className="fm-header__app-trigger"
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              Fullmag
+              <ChevronDown size={12} aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuLabel>Application</DropdownMenuLabel>
+            {APP_DROPDOWN_ITEMS.map((item) => (
+              <DropdownMenuItem
+                disabled={isCommandDisabled(item.id)}
+                key={item.id}
+                onSelect={() => runCommand(item.id)}
+              >
+                {item.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
       <nav className="fm-header__nav" aria-label="Main menu">
         {MAIN_MENUS.map((menu) => (
           <HeaderDropdown
@@ -421,6 +448,34 @@ function NoSessionAppMenuBar({
           />
         ))}
       </nav>
+      <button
+        className="fm-header__search"
+        title="Command search (Ctrl+Shift+P)"
+        type="button"
+        onClick={() => runCommand("workspace.command-palette")}
+      >
+        <Search size={13} aria-hidden="true" />
+        <span>Command search</span>
+      </button>
+      <div className="fm-header__separator" />
+      <div className="fm-header__run-controls" aria-label="Runtime controls">
+        {RUN_CONTROLS.map((action) => (
+          <Button
+            key={action.id}
+            className="fm-header__run-btn"
+            data-run-control={action.id}
+            disabled={(action.disabled || isCommandDisabled(action.id)) || undefined}
+            aria-label={action.label}
+            size="icon"
+            title={action.label}
+            type="button"
+            variant="ghost"
+            onClick={() => runCommand(action.id)}
+          >
+            {action.icon}
+          </Button>
+        ))}
+      </div>
       <div className="fm-header__actions">
         <ThemeSwitcher theme={theme} onThemeChange={setTheme} />
       </div>

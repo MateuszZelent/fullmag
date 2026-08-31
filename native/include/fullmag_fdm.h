@@ -187,7 +187,9 @@ static_assert(sizeof(fullmag_fdm_stats_policy_v1) == 24,
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1 UINT32_C(1)
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V2 UINT32_C(2)
 #define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3 UINT32_C(3)
+#define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4 UINT32_C(4)
 #define FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3 UINT32_C(3)
+#define FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1 UINT32_C(1)
 #define FULLMAG_FDM_CHECKPOINT_BACKEND_FDM UINT32_C(1)
 #define FULLMAG_FDM_CHECKPOINT_BACKEND_AUTO UINT32_C(2)
 #define FULLMAG_FDM_CHECKPOINT_POLICY_GPU_REQUIRED UINT32_C(1)
@@ -290,6 +292,28 @@ typedef struct {
 } fullmag_fdm_checkpoint_execution_identity_v3;
 
 typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t grid_nx;
+    uint32_t grid_ny;
+    uint32_t grid_nz;
+    uint32_t fft_nx;
+    uint32_t fft_ny;
+    uint32_t fft_nz;
+    uint32_t precision;
+    uint32_t integrator;
+    uint32_t periodic_axis_mask;
+    uint32_t reserved0;
+    double grid_dx;
+    double grid_dy;
+    double grid_dz;
+    uint8_t mask_topology_sha256[32];
+    uint8_t material_layout_sha256[32];
+    uint8_t spectra_sha256[32];
+    uint8_t dependency_sha256[32];
+} fullmag_fdm_workspace_dependency_identity_v1;
+
+typedef struct {
     uint32_t schema_version;
     uint32_t struct_size;
     fullmag_fdm_checkpoint_execution_identity_v3 execution_identity;
@@ -327,6 +351,46 @@ typedef struct {
     uint32_t fsal_integrator_identity;
     uint32_t fsal_precision_identity;
 } fullmag_fdm_llg_checkpoint_info_v3;
+
+typedef struct {
+    uint32_t schema_version;
+    uint32_t struct_size;
+    fullmag_fdm_checkpoint_execution_identity_v3 execution_identity;
+    fullmag_fdm_workspace_dependency_identity_v1 workspace_dependency_identity;
+    uint32_t array_mask;
+    uint32_t reserved0;
+    uint64_t cell_count;
+    uint64_t payload_bytes;
+    uint64_t step_count;
+    uint64_t accepted_step_index;
+    uint64_t accepted_state_revision;
+    double current_time;
+    double current_dt;
+    uint64_t thermal_seed;
+    uint32_t rng_algorithm;
+    uint32_t rng_realization;
+    uint64_t transport_attempt_generation;
+    uint64_t rhs_source_revision;
+    uint64_t rhs_field_revision;
+    uint64_t rhs_transport_revision;
+    uint64_t projection_policy_identity;
+    uint32_t fsal_valid;
+    uint32_t abm_startup;
+    double abm_last_dt;
+    uint32_t adaptive_enabled;
+    uint32_t adaptive_has_previous_error;
+    double adaptive_previous_error;
+    uint64_t fsal_accepted_state_revision;
+    uint64_t fsal_accepted_time_bits;
+    uint64_t fsal_accepted_dt_bits;
+    uint64_t fsal_source_revision;
+    uint64_t fsal_field_revision;
+    uint64_t fsal_transport_revision;
+    uint64_t fsal_transport_state_identity;
+    uint64_t fsal_projection_policy_identity;
+    uint32_t fsal_integrator_identity;
+    uint32_t fsal_precision_identity;
+} fullmag_fdm_llg_checkpoint_info_v4;
 
 typedef int (*fullmag_fdm_interrupt_poll_fn)(void *user_data);
 
@@ -897,6 +961,145 @@ static_assert(sizeof(fullmag_fdm_adaptive_execution_telemetry_v1) == 64,
               "adaptive execution telemetry v1 ABI size changed");
 #endif
 
+#define FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE = 1,
+    FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION = 2,
+} fullmag_fdm_precision_policy_realization_v1;
+
+#define FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY (UINT64_C(1) << 0)
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t accounting_valid;
+    fullmag_fdm_precision storage_precision;
+    fullmag_fdm_precision compute_precision;
+    fullmag_fdm_precision fft_precision;
+    fullmag_fdm_precision reduction_precision;
+    fullmag_fdm_precision_policy_realization_v1 realization;
+    uint64_t metric_valid_mask;
+} fullmag_fdm_precision_policy_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_precision_policy_telemetry_v1) == 40,
+              "precision policy telemetry v1 ABI size changed");
+#endif
+
+#define FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1 1u
+
+typedef enum {
+    FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE = 1,
+} fullmag_fdm_local_pipeline_policy_v1;
+
+typedef enum {
+    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE = 0,
+    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED = 1,
+    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED = 2,
+    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_FUSED = 3,
+    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_UNFUSED = 4,
+    FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED = 5,
+} fullmag_fdm_local_pipeline_realization_v1;
+
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_IDENTITY (UINT64_C(1) << 0)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_DIRECT_SUBMISSIONS (UINT64_C(1) << 1)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES (UINT64_C(1) << 2)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE (UINT64_C(1) << 3)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS (UINT64_C(1) << 4)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_DRAM_BYTES (UINT64_C(1) << 5)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_LAUNCH_TIME (UINT64_C(1) << 6)
+#define FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_OCCUPANCY (UINT64_C(1) << 7)
+
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_EXCHANGE_INPUT (UINT64_C(1) << 0)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_DEMAG_INPUT (UINT64_C(1) << 1)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_UNIFORM_ZEEMAN (UINT64_C(1) << 2)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_STATIC_FIELD_PROFILE (UINT64_C(1) << 3)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_OERSTED (UINT64_C(1) << 4)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_ANISOTROPY (UINT64_C(1) << 5)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_MAGNETOELASTIC (UINT64_C(1) << 6)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_THERMAL (UINT64_C(1) << 7)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_ZHANG_LI_STT (UINT64_C(1) << 8)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SLONCZEWSKI_STT (UINT64_C(1) << 9)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SOT (UINT64_C(1) << 10)
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fdm_local_pipeline_policy_v1 requested_policy;
+    fullmag_fdm_local_pipeline_realization_v1 resolved_realization;
+    fullmag_fdm_local_pipeline_realization_v1 executed_realization;
+    uint32_t accounting_valid;
+    fullmag_fdm_precision precision;
+    fullmag_fdm_integrator integrator;
+    uint64_t metric_valid_mask;
+    uint64_t required_operator_mask;
+    uint64_t active_feature_mask;
+    uint64_t source_revision;
+    uint64_t field_revision;
+    uint64_t direct_fused_field_rhs_launch_count;
+    uint64_t direct_unfused_effective_field_launch_count;
+    uint64_t direct_unfused_rhs_launch_count;
+    uint64_t captured_fused_field_rhs_node_count;
+    uint64_t captured_unfused_effective_field_node_count;
+    uint64_t captured_unfused_rhs_node_count;
+    uint64_t graph_build_count;
+    uint64_t graph_replay_count;
+    uint64_t graph_recapture_count;
+    uint64_t graph_attempt_execution_count;
+    uint64_t graph_fused_field_rhs_execution_count;
+    uint64_t graph_unfused_effective_field_execution_count;
+    uint64_t graph_unfused_rhs_execution_count;
+    uint64_t profiled_dram_read_bytes;
+    uint64_t profiled_dram_write_bytes;
+    uint64_t profiled_launch_time_ns;
+    uint64_t profiled_achieved_occupancy_permyriad;
+} fullmag_fdm_local_pipeline_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_local_pipeline_telemetry_v1) == 208,
+              "local pipeline telemetry v1 ABI size changed");
+#endif
+
+#define FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1 1u
+
+#define FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY (UINT64_C(1) << 0)
+#define FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS (UINT64_C(1) << 1)
+#define FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS (UINT64_C(1) << 2)
+#define FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT (UINT64_C(1) << 3)
+#define FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS (UINT64_C(1) << 4)
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t accounting_valid;
+    uint32_t setup_complete;
+    fullmag_fdm_precision precision;
+    fullmag_fdm_integrator integrator;
+    uint64_t metric_valid_mask;
+    uint64_t workspace_revision;
+    uint64_t source_revision;
+    uint64_t field_revision;
+    uint64_t setup_device_allocation_count;
+    uint64_t setup_device_allocation_bytes;
+    uint64_t total_device_allocation_count;
+    uint64_t total_device_allocation_bytes;
+    uint64_t step_device_allocation_count;
+    uint64_t step_device_allocation_bytes;
+    uint64_t setup_fft_plan_creation_count;
+    uint64_t total_fft_plan_creation_count;
+    uint64_t step_fft_plan_creation_count;
+    uint64_t prepared_fft_workspace_count;
+    uint64_t workspace_bytes;
+    uint64_t peak_vram_bytes;
+    uint64_t observed_step_count;
+} fullmag_fdm_gpu_workspace_telemetry_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_gpu_workspace_telemetry_v1) == 160,
+              "GPU workspace telemetry v1 ABI size changed");
+#endif
+
 #define FULLMAG_FDM_ADAPTIVE_NUMERICS_TELEMETRY_ABI_V1 1u
 
 typedef enum {
@@ -1188,6 +1391,18 @@ int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_adaptive_execution_telemetry_v1 *out_telemetry);
 
+int fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_precision_policy_telemetry_v1 *out_telemetry);
+
+int fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_local_pipeline_telemetry_v1 *out_telemetry);
+
+int fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_gpu_workspace_telemetry_v1 *out_telemetry);
+
 int fullmag_fdm_backend_get_adaptive_numerics_telemetry_v1(
     fullmag_fdm_backend *handle,
     fullmag_fdm_adaptive_numerics_telemetry_v1 *out_telemetry);
@@ -1448,6 +1663,10 @@ int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
     fullmag_fdm_backend *handle,
     const fullmag_fdm_checkpoint_execution_identity_v3 *identity);
 
+int fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_workspace_dependency_identity_v1 *out_identity);
+
 int fullmag_fdm_backend_llg_checkpoint_query_size_v3(
     fullmag_fdm_backend *handle,
     uint64_t *out_required_bytes);
@@ -1463,6 +1682,22 @@ int fullmag_fdm_backend_llg_checkpoint_import_v3(
     const void *source,
     uint64_t exact_bytes,
     const fullmag_fdm_llg_checkpoint_info_v3 *expected_info);
+
+int fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes);
+
+int fullmag_fdm_backend_llg_checkpoint_export_v4(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v4 *out_info);
+
+int fullmag_fdm_backend_llg_checkpoint_import_v4(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v4 *expected_info);
 
 /**
  * Replace one v2 multilayer layer magnetization from host-side f64 AoS storage.

@@ -1468,10 +1468,40 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
         "2,2e-12,1e-12,1,2,3,4,5,15,6,7,8,9,10\n",
         encoding="utf-8",
     )
-    (tmp_path / "solver_steps.csv").write_text(
+    final_dir = tmp_path / "final"
+    final_dir.mkdir()
+    (final_dir / "solver_steps.csv").write_text(
         "step,rejected_attempts,rhs_evals,demag_solves\n"
         "1,1,2,3\n"
         "2,0,3,4\n",
+        encoding="utf-8",
+    )
+    (final_dir / "solver").mkdir()
+    (final_dir / "solver" / "accepted_steps.v1.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "LLG-TD-ACCEPTED-TRACE-V1",
+                "steps": [
+                    {
+                        "step": 2,
+                        "fem_representation_receipt": {
+                            "schema_version": 1,
+                            "state_space": "local_node_aos",
+                            "ms_location": "element_dg0",
+                            "a_location": "element_dg0",
+                            "local_node_count": 8,
+                            "true_node_count": 7,
+                            "periodic_map_revision": 23,
+                            "representation_copy_count": 11,
+                            "gather_scatter_bytes": 1056,
+                            "invalid_space_assertion_count": 0,
+                            "hot_loop_representation_copy_count": 7,
+                            "hot_loop_gather_scatter_bytes": 672,
+                        },
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -1501,7 +1531,169 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
             "demag_solves": 7,
             "cumulative_demag_solves": 7,
             "rejected_attempts": 1,
+            "fem_representation_schema_version": 1,
+            "fem_state_space": "local_node_aos",
+            "fem_ms_location": "element_dg0",
+            "fem_a_location": "element_dg0",
+            "fem_local_node_count": 8,
+            "fem_true_node_count": 7,
+            "fem_periodic_map_revision": 23,
+            "fem_representation_copy_count": 11,
+            "fem_gather_scatter_bytes": 1056,
+            "fem_invalid_space_assertion_count": 0,
+            "fem_hot_loop_representation_copy_count": 7,
+            "fem_hot_loop_gather_scatter_bytes": 672,
         }
+
+
+def test_zero_step_direct_minimizer_reads_representation_receipt_from_solver_csv(
+    tmp_path,
+) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 1,
+                "execution_provenance": {"precision": "double"},
+                "fem_cpu_relaxation_qualification": {"executed_steps": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,time,solver_dt,E_total,max_torque_Apm\n"
+        "0,0,0,1e-20,1e-9\n",
+        encoding="utf-8",
+    )
+    final_dir = tmp_path / "final"
+    final_dir.mkdir()
+    (final_dir / "solver_steps.csv").write_text(
+        "step,rejected_attempts,rhs_evals,demag_solves,accepted,"
+        "fem_representation_schema_version,fem_state_space,fem_ms_location,"
+        "fem_a_location,fem_local_node_count,fem_true_node_count,"
+        "fem_periodic_map_revision,fem_representation_copy_count,"
+        "fem_gather_scatter_bytes,fem_invalid_space_assertion_count,"
+        "fem_hot_loop_representation_copy_count,"
+        "fem_hot_loop_gather_scatter_bytes\n"
+        "0,0,0,0,false,1,local_node_aos,scalar,element_dg0,52,52,0,4,9984,0,0,0\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload is not None
+    assert payload["accepted_steps"] == 0
+    assert {
+        field: payload[field]
+        for field in (
+            *benchmark.REPRESENTATION_IDENTITY_FIELDS,
+            *benchmark.REPRESENTATION_COUNTER_FIELDS,
+        )
+    } == {
+        "fem_representation_schema_version": 1,
+        "fem_state_space": "local_node_aos",
+        "fem_ms_location": "scalar",
+        "fem_a_location": "element_dg0",
+        "fem_local_node_count": 52,
+        "fem_true_node_count": 52,
+        "fem_periodic_map_revision": 0,
+        "fem_representation_copy_count": 4,
+        "fem_gather_scatter_bytes": 9984,
+        "fem_invalid_space_assertion_count": 0,
+        "fem_hot_loop_representation_copy_count": 0,
+        "fem_hot_loop_gather_scatter_bytes": 0,
+    }
+
+
+def test_representation_parity_is_fail_closed_and_allows_lane_specific_traffic() -> None:
+    benchmark = load_benchmark_module()
+    common = {
+        "scenario": "box500_airbox_exchange_only",
+        "integrator": "heun",
+        "relaxation_algorithm": "llg_overdamped",
+        "reported_relaxation_algorithm": "llg_overdamped",
+        "timestep_policy": "fixed",
+        "dt_s": 1.0e-13,
+        "steps": 2,
+        "reported_precision": "double",
+        "solver_mesh_signature": "mesh-a",
+        "status": "ok",
+        "fem_representation_schema_version": 1,
+        "fem_state_space": "local_node_aos",
+        "fem_ms_location": "element_dg0",
+        "fem_a_location": "element_dg0",
+        "fem_local_node_count": 8,
+        "fem_true_node_count": 7,
+        "fem_periodic_map_revision": 23,
+        "fem_invalid_space_assertion_count": 0,
+        "fem_representation_copy_count": 11,
+        "fem_gather_scatter_bytes": 1056,
+        "fem_hot_loop_representation_copy_count": 7,
+        "fem_hot_loop_gather_scatter_bytes": 672,
+    }
+    cpu = {
+        **common,
+        "backend": "fem_cpu",
+        "execution_engine": "fem_cpu_native",
+        "fem_execution_mode": "cpu_native",
+        "mfem_device": "cpu",
+        "uses_cuda_kernels": False,
+    }
+    gpu = {
+        **common,
+        "backend": "fem_gpu",
+        "execution_engine": "fem_native_gpu",
+        "fem_execution_mode": "all_in_gpu_legacy_sparse",
+        "mfem_device": "cuda",
+        "uses_cuda_kernels": True,
+        "fem_representation_copy_count": 3,
+        "fem_gather_scatter_bytes": 288,
+        "fem_hot_loop_representation_copy_count": 0,
+        "fem_hot_loop_gather_scatter_bytes": 0,
+    }
+
+    assert benchmark.representation_parity_failures([cpu, gpu]) == []
+
+    mismatched = {**gpu, "fem_true_node_count": 8}
+    failures = benchmark.representation_parity_failures([cpu, mismatched])
+    assert any("fem_true_node_count mismatch" in failure for failure in failures)
+
+    missing = dict(gpu)
+    del missing["fem_state_space"]
+    failures = benchmark.representation_parity_failures([cpu, missing])
+    assert any("missing fem_state_space" in failure for failure in failures)
+
+
+def test_representation_payload_fields_are_projected_to_benchmark_row() -> None:
+    benchmark = load_benchmark_module()
+    fields = (
+        *benchmark.REPRESENTATION_IDENTITY_FIELDS,
+        *benchmark.REPRESENTATION_COUNTER_FIELDS,
+    )
+    payload = {field: index for index, field in enumerate(fields)}
+
+    assert benchmark.representation_row_evidence(payload) == payload
+
+
+def test_direct_minimizers_do_not_request_an_rk_execution_receipt() -> None:
+    dispatch = (REPO_ROOT / "crates" / "fullmag-runner" / "src" / "dispatch.rs").read_text(
+        encoding="utf-8"
+    )
+    finalize = (
+        REPO_ROOT
+        / "crates"
+        / "fullmag-runner"
+        / "src"
+        / "fem"
+        / "relax"
+        / "finalize.rs"
+    ).read_text(encoding="utf-8")
+
+    assert "pub(crate) fem_gpu_receipt_request: Option<String>" in finalize
+    assert "requires_gpu_rk_execution_receipt = native_relaxation_step.is_none()" in dispatch
+    assert "fem_gpu_receipt_request: requires_gpu_rk_execution_receipt.then(||" in dispatch
+    assert "finalization.fem_gpu_receipt_request.as_deref()" in finalize
 
 
 def test_native_direct_minimizer_accepted_armijo_proof_is_plumbed_to_solver_steps() -> None:
@@ -2909,6 +3101,30 @@ def test_zhang_li_gate_preserves_each_run_in_a_distinct_explicit_bundle() -> Non
     assert "zip(dt_runs, (32, 64, 128), strict=True)" in validator
 
 
+def test_cpu_gpu_smoke_mounts_resolved_managed_runtime_read_only() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(
+        justfile,
+        "verify-fem-relaxation-cpu-gpu-consistency-smoke",
+    )
+
+    assert (
+        '-v "$(readlink -f .fullmag/runtimes/fem-gpu-host):'
+        '/workspace/.fullmag/runtimes/fem-gpu-host:ro"'
+        in recipe
+    )
+    assert "-e FULLMAG_PYTHON=/usr/local/bin/python3" in recipe
+    assert "-e FULLMAG_PYTHON=/usr/bin/python3" not in recipe
+    assert (
+        '-e FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T="${FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T:-1e-4}"'
+        in recipe
+    )
+    assert (
+        '--relax-torque-tolerance-t "$FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE_T"'
+        in recipe
+    )
+
+
 def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> None:
     verify_source = VERIFY_RUNTIME.read_text(encoding="utf-8")
     justfile = JUSTFILE.read_text(encoding="utf-8")
@@ -3087,7 +3303,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "`just verify-fem-relaxation-production-benchmark`" in physics_note
     assert "FULLMAG_FEM_RELAXATION_KEEP_LOGS=1" in physics_note
 
-    assert "Current production-executable subset" in physics_note
+    assert "Current executable subset" in physics_note
     assert 'algorithm = "llg_overdamped"' in normalized_physics_note
     assert 'algorithm = "projected_gradient_bb"' in normalized_physics_note
     assert 'algorithm = "nonlinear_cg"' in normalized_physics_note
@@ -3098,11 +3314,11 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
     assert "- [x] FEM backend (`tangent_plane_implicit` native CPU/MFEM" in physics_note
     assert "- [ ] FEM backend (`tangent_plane_implicit` full GPU/libCEED" in physics_note
     assert (
-        "- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG production lanes"
+        "- [x] Broader interaction-matrix CPU/GPU benchmark gate is wired for current LLG/PG-BB/NCG executable lanes"
         in physics_note
     )
     assert (
-        "- [x] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes"
+        "- [ ] Broader interaction-matrix CPU/GPU qualification pass with source-bound receipt"
         in physics_note
     )
 

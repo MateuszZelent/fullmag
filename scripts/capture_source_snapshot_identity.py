@@ -68,12 +68,13 @@ NON_RUNTIME_EXACT_PATHS = {
 }
 NON_RUNTIME_SUFFIXES = (".md", ".rst", ".source-map.json")
 
-# Worktree administration and local agent metadata are intentionally excluded
-# from the immutable source snapshot even when Git records them in the
-# committed tree.  These paths are not runtime inputs; in particular, the
-# checked-in `.claude/skills/*` entries are empty symlinks on the Windows
-# checkout, and GNU tar cannot materialize a symlink with an empty target.
-EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset({".worktrees", ".claude"})
+# Agent metadata and worktree administration are intentionally excluded from
+# the immutable native-runtime source snapshot. They are non-runtime inputs and
+# may contain host-specific or empty symlinks that cannot be materialized on
+# the Linux build filesystem.
+EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset(
+    {".agents", ".claude", ".codex", ".worktrees"}
+)
 
 
 class SourceIdentityError(RuntimeError):

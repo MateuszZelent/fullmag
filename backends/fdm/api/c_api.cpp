@@ -156,12 +156,21 @@ void context_record_adaptive_numerics_terminal(
 
 namespace {
 
+bool reject_step_transaction_mutation(Context &ctx, const char *operation)
+{
+    if (!ctx.gpu_workspace_step_active) return false;
+    ctx.last_error = std::string(operation) + "_during_step_transaction";
+    return true;
+}
+
 class ReceiptSolverPhaseGuard {
 public:
     explicit ReceiptSolverPhaseGuard(Context &context)
         : context_(context), previous_(fullmag_fdm_set_solver_phase_active(
-              *context.execution_receipt, true))
+              *context.execution_receipt, true)),
+          previous_local_pipeline_phase_(context.local_pipeline_solver_phase_active)
     {
+        context_.local_pipeline_solver_phase_active = true;
         fullmag_fdm_begin_operator_execution_attempt(*context.execution_receipt);
     }
 
@@ -171,6 +180,8 @@ public:
                 *context_.execution_receipt);
         }
         fullmag_fdm_accumulate_execution_receipt_audit(context_);
+        context_.local_pipeline_solver_phase_active =
+            previous_local_pipeline_phase_;
         fullmag_fdm_set_solver_phase_active(*context_.execution_receipt, previous_);
     }
 
@@ -185,6 +196,7 @@ public:
 private:
     Context &context_;
     bool previous_;
+    bool previous_local_pipeline_phase_;
     bool committed_ = false;
 };
 
@@ -513,14 +525,47 @@ bool refresh_multilayer_demag(Context &ctx) {
 }
 #endif
 
-uint64_t grid_cell_count(const fullmag_fdm_grid_desc &grid) {
-    return static_cast<uint64_t>(grid.nx) * grid.ny * grid.nz;
+bool checked_product3(
+    uint64_t first,
+    uint64_t second,
+    uint64_t third,
+    uint64_t &result)
+{
+    if (second != 0 && first > std::numeric_limits<uint64_t>::max() / second) {
+        return false;
+    }
+    const uint64_t first_second = first * second;
+    if (third != 0 && first_second > std::numeric_limits<uint64_t>::max() / third) {
+        return false;
+    }
+    result = first_second * third;
+    return true;
+}
+
+bool checked_grid_cell_count(
+    const fullmag_fdm_grid_desc &grid,
+    uint64_t &cell_count)
+{
+    return checked_product3(grid.nx, grid.ny, grid.nz, cell_count);
+}
+
+bool checked_scaled_product3(
+    uint64_t first,
+    uint64_t second,
+    uint64_t third,
+    uint64_t scale,
+    uint64_t &result)
+{
+    uint64_t product = 0;
+    return checked_product3(first, second, third, product) &&
+        fullmag_fdm_checked_transfer_bytes(product, scale, result);
 }
 
 bool validate_grid_desc(
     const fullmag_fdm_grid_desc &grid,
     const char *name,
-    std::string &error)
+    std::string &error,
+    uint64_t *cell_count = nullptr)
 {
     if (grid.nx == 0 || grid.ny == 0 || grid.nz == 0) {
         error = std::string(name) + " must have non-zero dimensions";
@@ -529,6 +574,14 @@ bool validate_grid_desc(
     if (grid.dx <= 0.0 || grid.dy <= 0.0 || grid.dz <= 0.0) {
         error = std::string(name) + " must have positive cell sizes";
         return false;
+    }
+    uint64_t checked_cell_count = 0;
+    if (!checked_grid_cell_count(grid, checked_cell_count)) {
+        error = std::string(name) + " cell count overflows uint64_t";
+        return false;
+    }
+    if (cell_count != nullptr) {
+        *cell_count = checked_cell_count;
     }
     return true;
 }
@@ -579,11 +632,16 @@ bool validate_multilayer_plan_v2(
 
     for (uint32_t i = 0; i < plan.layer_count; ++i) {
         const fullmag_fdm_layer_desc_v2 &layer = plan.layers[i];
+        uint64_t native_cell_count = 0;
         if (layer.layer_index != i) {
             error = "layer_index must match layer table order";
             return false;
         }
-        if (!validate_grid_desc(layer.native_grid, "layer native_grid", error) ||
+        if (!validate_grid_desc(
+                layer.native_grid,
+                "layer native_grid",
+                error,
+                &native_cell_count) ||
             !validate_grid_desc(layer.convolution_grid, "layer convolution_grid", error))
         {
             return false;
@@ -608,7 +666,12 @@ bool validate_multilayer_plan_v2(
             error = "layer material gyromagnetic_ratio must be positive";
             return false;
         }
-        const uint64_t expected_m_len = grid_cell_count(layer.native_grid) * 3u;
+        uint64_t expected_m_len = 0;
+        if (!fullmag_fdm_checked_vector_bytes(
+                native_cell_count, 1, expected_m_len)) {
+            error = "layer initial_magnetization length overflows uint64_t";
+            return false;
+        }
         if (layer.initial_magnetization_xyz == nullptr) {
             error = "layer initial_magnetization_xyz must be present";
             return false;
@@ -620,10 +683,10 @@ bool validate_multilayer_plan_v2(
             return false;
         }
         if (layer.active_mask != nullptr &&
-            layer.active_mask_len != grid_cell_count(layer.native_grid))
+            layer.active_mask_len != native_cell_count)
         {
             error = "layer active_mask_len mismatch: expected "
-                + std::to_string(grid_cell_count(layer.native_grid))
+                + std::to_string(native_cell_count)
                 + ", got " + std::to_string(layer.active_mask_len);
             return false;
         }
@@ -644,11 +707,16 @@ bool validate_multilayer_plan_v2(
         }
         for (uint32_t i = 0; i < plan.kernel_count; ++i) {
             const fullmag_fdm_tensor_kernel_desc_v2 &kernel = plan.kernels[i];
+            uint64_t expected_len = 0;
             if (kernel.dst_layer >= plan.layer_count || kernel.src_layer >= plan.layer_count) {
                 error = "kernel layer index out of range";
                 return false;
             }
-            if (!validate_grid_desc(kernel.fft_grid, "kernel fft_grid", error)) {
+            if (!validate_grid_desc(
+                    kernel.fft_grid,
+                    "kernel fft_grid",
+                    error,
+                    &expected_len)) {
                 return false;
             }
             if (!kernel.kernel_xx || !kernel.kernel_yy || !kernel.kernel_zz ||
@@ -657,7 +725,6 @@ bool validate_multilayer_plan_v2(
                 error = "kernel tensor spectra pointers must all be present";
                 return false;
             }
-            const uint64_t expected_len = grid_cell_count(kernel.fft_grid);
             if (kernel.kernel_len != expected_len) {
                 error = "kernel_len mismatch: expected "
                     + std::to_string(expected_len)
@@ -707,15 +774,22 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!plan) return nullptr;
 
     auto *ctx = new (std::nothrow) Context();
+    if (!ctx) return nullptr;
     const bool has_frozen_spins = (plan->frozen_mask != nullptr
         || plan->frozen_mask_len != 0
         || plan->frozen_reference_xyz != nullptr
         || plan->frozen_reference_len != 0);
     if (has_frozen_spins) {
-        const uint64_t cell_count = grid_cell_count(plan->grid);
+        uint64_t cell_count = 0;
+        uint64_t reference_len = 0;
+        if (!checked_grid_cell_count(plan->grid, cell_count) ||
+            !fullmag_fdm_checked_vector_bytes(cell_count, 1, reference_len)) {
+            ctx->last_error = "frozen_spins_cuda_abi_invalid: grid size overflows uint64_t";
+            return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+        }
         if (plan->frozen_mask == nullptr || plan->frozen_reference_xyz == nullptr
             || plan->frozen_mask_len != cell_count
-            || plan->frozen_reference_len != 3 * cell_count)
+            || plan->frozen_reference_len != reference_len)
         {
             ctx->last_error =
                 "frozen_spins_cuda_abi_invalid: expected dense mask[cell_count] and f64 reference[3*cell_count]";
@@ -748,7 +822,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     ctx->nx = plan->grid.nx;
     ctx->ny = plan->grid.ny;
     ctx->nz = plan->grid.nz;
-    ctx->cell_count = static_cast<uint64_t>(ctx->nx) * ctx->ny * ctx->nz;
+    if (!checked_grid_cell_count(plan->grid, ctx->cell_count)) {
+        ctx->last_error = "grid cell count overflows uint64_t";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     ctx->dx = plan->grid.dx;
     ctx->dy = plan->grid.dy;
     ctx->dz = plan->grid.dz;
@@ -1130,11 +1207,19 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
                 ctx->last_error = "demag FFT dimensions must either all be zero or all be non-zero";
                 return reinterpret_cast<fullmag_fdm_backend *>(ctx);
             }
-            uint64_t expected_fft_cell_count =
-                static_cast<uint64_t>(plan->demag_fft_nx) * plan->demag_fft_ny * plan->demag_fft_nz;
-            if (plan->demag_kernel_spectrum_len != expected_fft_cell_count * 2) {
+            uint64_t expected_spectrum_len = 0;
+            if (!checked_scaled_product3(
+                    plan->demag_fft_nx,
+                    plan->demag_fft_ny,
+                    plan->demag_fft_nz,
+                    2,
+                    expected_spectrum_len)) {
+                ctx->last_error = "demag FFT spectrum length overflows uint64_t";
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+            if (plan->demag_kernel_spectrum_len != expected_spectrum_len) {
                 ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
-                    + std::to_string(expected_fft_cell_count * 2)
+                    + std::to_string(expected_spectrum_len)
                     + " for explicit FFT dimensions "
                     + std::to_string(plan->demag_fft_nx) + "x"
                     + std::to_string(plan->demag_fft_ny) + "x"
@@ -1147,25 +1232,45 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             ctx->fft_nz = plan->demag_fft_nz;
             ctx->thin_film_2d_demag = ctx->fft_nz == 1;
         } else {
-            uint64_t expected_fft_cell_count_3d =
-                static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2) * (ctx->nz * 2);
-            uint64_t expected_fft_cell_count_2d =
-                static_cast<uint64_t>(ctx->nx * 2) * (ctx->ny * 2);
-            if (ctx->nz == 1 && plan->demag_kernel_spectrum_len == expected_fft_cell_count_2d * 2) {
+            const uint64_t padded_nx = static_cast<uint64_t>(ctx->nx) * 2;
+            const uint64_t padded_ny = static_cast<uint64_t>(ctx->ny) * 2;
+            const uint64_t padded_nz = static_cast<uint64_t>(ctx->nz) * 2;
+            uint64_t expected_spectrum_len_3d = 0;
+            uint64_t expected_spectrum_len_2d = 0;
+            if (!checked_scaled_product3(
+                    padded_nx,
+                    padded_ny,
+                    padded_nz,
+                    2,
+                    expected_spectrum_len_3d) ||
+                !checked_scaled_product3(
+                    padded_nx,
+                    padded_ny,
+                    1,
+                    2,
+                    expected_spectrum_len_2d)) {
+                ctx->last_error = "implicit demag FFT spectrum length overflows uint64_t";
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+            if (ctx->nz == 1 && plan->demag_kernel_spectrum_len == expected_spectrum_len_2d) {
                 ctx->thin_film_2d_demag = true;
-            } else if (plan->demag_kernel_spectrum_len == expected_fft_cell_count_3d * 2) {
+            } else if (plan->demag_kernel_spectrum_len == expected_spectrum_len_3d) {
                 ctx->thin_film_2d_demag = false;
             } else {
                 ctx->last_error = "demag_kernel_spectrum_len mismatch: expected "
-                    + std::to_string(expected_fft_cell_count_3d * 2)
+                    + std::to_string(expected_spectrum_len_3d)
                     + " (3D)"
                     + (ctx->nz == 1
-                        ? " or " + std::to_string(expected_fft_cell_count_2d * 2) + " (thin-film 2D)"
+                        ? " or " + std::to_string(expected_spectrum_len_2d) + " (thin-film 2D)"
                         : std::string())
                     + ", got " + std::to_string(plan->demag_kernel_spectrum_len);
                 return reinterpret_cast<fullmag_fdm_backend *>(ctx);
             }
         }
+    }
+
+    if (!context_preflight_single_grid_workspace(*ctx, *plan)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
 
     // Allocate device buffers
@@ -1266,6 +1371,7 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
         if (!context_upload_exchange_lut(*ctx, lut_host.data(), N * N)) {
             return reinterpret_cast<fullmag_fdm_backend *>(ctx);
         }
+        ctx->exchange_lut_host = std::move(lut_host);
     }
     if (plan->demag_kernel_spectrum_len != 0 &&
         !context_upload_demag_kernel_spectra(
@@ -1363,9 +1469,13 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     if (!context_refresh_observables(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (!context_build_workspace_dependency_identity_v1(*ctx, *plan)) {
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
 
     // Query device info
     context_query_device_info(*ctx);
+    context_mark_gpu_workspace_setup_complete(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
 
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
@@ -1544,7 +1654,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->last_error =
         "uploaded " + std::to_string(ctx->multilayer_layers.size())
         + " layers and " + std::to_string(ctx->multilayer_kernels.size())
-        + " tensor kernels; prepared initial FFT workspace; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
+        + " tensor kernels; prepared all FFT workspaces; native Heun/RK4/fixed-step RK23 timestep with optional demag and layer-local exchange is available for v2 multilayer handles";
+    context_mark_gpu_workspace_setup_complete(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
 #else
@@ -1570,6 +1681,9 @@ int fullmag_fdm_backend_set_stats_policy_v1(
     }
     if (ctx->accepted_step_pending) {
         ctx->last_error = "stats_policy_change_during_step_transaction";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (reject_step_transaction_mutation(*ctx, "stats_policy_change")) {
         return FULLMAG_FDM_ERR_INVALID;
     }
     if ((policy->quantity_mask & ~FULLMAG_FDM_STATS_QUANTITY_ALL) != 0) {
@@ -1649,6 +1763,7 @@ int fullmag_fdm_backend_step(
         ctx->last_error = "FDM step requires dt_seconds > 0";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    GpuWorkspaceStepAccountingGuard workspace_step_accounting(*ctx);
     fullmag_fdm_step_stats trial_stats{};
     // A rejected or failed attempt is retryable. Its diagnostic remains
     // observable until the next explicit public step begins, but must not
@@ -1720,6 +1835,7 @@ int fullmag_fdm_backend_step_adaptive_batch_v1(
     }
     if (poll_interrupt(*ctx)) return FULLMAG_FDM_ERR_INTERRUPTED;
 
+    GpuWorkspaceStepAccountingGuard workspace_step_accounting(*ctx);
     ctx->last_error.clear();
     context_record_adaptive_execution_counter(
         *ctx, ctx->adaptive_public_batch_call_count);
@@ -1835,6 +1951,9 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr || binding == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "gpu_transport_bind")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if (ctx->has_multilayer_plan_v2) {
         ctx->last_error =
             "spin transport is unsupported for v2 multilayer handles";
@@ -1888,6 +2007,9 @@ int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "gpu_transport_unbind")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     if (!context_unbind_gpu_transport_rhs(*ctx)) return FULLMAG_FDM_ERR_INVALID;
     context_note_transport_revision_change(*ctx);
     fullmag_fdm_commit_operator_residency(*ctx);
@@ -2320,6 +2442,9 @@ int fullmag_fdm_backend_upload_magnetization_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (len != ctx->cell_count * 3) {
         ctx->last_error = "magnetization length mismatch";
@@ -2345,6 +2470,9 @@ int fullmag_fdm_backend_upload_magnetization_f32(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (len != ctx->cell_count * 3) {
         ctx->last_error = "magnetization length mismatch";
@@ -2402,6 +2530,9 @@ int fullmag_fdm_backend_llg_checkpoint_import_v1(
 #if FULLMAG_HAS_CUDA
     if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_llg_checkpoint_import_v1(
         *ctx, source, exact_bytes, *expected_info);
 #else
@@ -2419,6 +2550,9 @@ int fullmag_fdm_backend_upload_layer_magnetization_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "layer_magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (!context_upload_layer_magnetization_f64(*ctx, layer_index, m_xyz, len)) {
         return FULLMAG_FDM_ERR_CUDA;
@@ -2440,6 +2574,9 @@ int fullmag_fdm_backend_upload_layer_magnetization_f32(
 #if FULLMAG_HAS_CUDA
     if (!handle || !m_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "layer_magnetization_upload")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
 
     if (!context_upload_layer_magnetization_f32(*ctx, layer_index, m_xyz, len)) {
         return FULLMAG_FDM_ERR_CUDA;
@@ -2605,6 +2742,9 @@ int fullmag_fdm_backend_llg_checkpoint_import_v2(
 #if FULLMAG_HAS_CUDA
     if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_llg_checkpoint_import_v2(
         *ctx, source, exact_bytes, *expected_info);
 #else
@@ -2620,10 +2760,35 @@ int fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
 #if FULLMAG_HAS_CUDA
     if (!handle || !identity) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_execution_identity_change")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_set_checkpoint_execution_identity_v3(*ctx, *identity)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 #else
     (void)handle; (void)identity;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_workspace_dependency_identity_v1 *out_identity)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_identity) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (out_identity->abi_version !=
+            FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1 ||
+        out_identity->struct_size != sizeof(*out_identity) ||
+        !ctx->workspace_dependency_identity_v1_valid) {
+        ctx->last_error = "workspace dependency identity v1 is unavailable or ABI-incompatible";
+        return FULLMAG_FDM_ERR_ABI;
+    }
+    *out_identity = ctx->workspace_dependency_identity_v1;
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)out_identity;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }
@@ -2668,7 +2833,61 @@ int fullmag_fdm_backend_llg_checkpoint_import_v3(
 #if FULLMAG_HAS_CUDA
     if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
     return context_llg_checkpoint_import_v3(
+        *ctx, source, exact_bytes, *expected_info);
+#else
+    (void)handle; (void)source; (void)exact_bytes; (void)expected_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_required_bytes) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_query_size_v4(*ctx, *out_required_bytes);
+#else
+    (void)handle; (void)out_required_bytes;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_export_v4(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v4 *out_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !destination || !out_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_export_v4(
+        *ctx, destination, exact_capacity, *out_info);
+#else
+    (void)handle; (void)destination; (void)exact_capacity; (void)out_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_import_v4(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v4 *expected_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "checkpoint_import")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    return context_llg_checkpoint_import_v4(
         *ctx, source, exact_bytes, *expected_info);
 #else
     (void)handle; (void)source; (void)exact_bytes; (void)expected_info;
@@ -2771,6 +2990,48 @@ int fullmag_fdm_backend_get_adaptive_execution_telemetry_v1(
 #if FULLMAG_HAS_CUDA
     auto *ctx = reinterpret_cast<Context *>(handle);
     return context_get_adaptive_execution_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_precision_policy_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    const auto *ctx = reinterpret_cast<const Context *>(handle);
+    return context_get_precision_policy_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_local_pipeline_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_get_local_pipeline_telemetry_v1(*ctx, out_telemetry)
+        ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
+#else
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+    fullmag_fdm_backend *handle,
+    fullmag_fdm_gpu_workspace_telemetry_v1 *out_telemetry)
+{
+    if (!handle || !out_telemetry) return FULLMAG_FDM_ERR_INVALID;
+#if FULLMAG_HAS_CUDA
+    const auto *ctx = reinterpret_cast<const Context *>(handle);
+    return context_get_gpu_workspace_telemetry_v1(*ctx, out_telemetry)
         ? FULLMAG_FDM_OK : FULLMAG_FDM_ERR_ABI;
 #else
     return FULLMAG_FDM_ERR_CUDA;
@@ -2905,10 +3166,52 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #if FULLMAG_HAS_CUDA
     if (!handle || !field_xyz) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "static_external_field_change")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    const bool extends_setup_workspace =
+        ctx->h_oe_static.x == nullptr && ctx->h_oe_static.y == nullptr &&
+        ctx->h_oe_static.z == nullptr;
+    const uint64_t allocation_count_before =
+        ctx->gpu_workspace_total_device_allocation_count;
+    const uint64_t allocation_bytes_before =
+        ctx->gpu_workspace_total_device_allocation_bytes;
     if (!context_mark_static_external_field_profile(*ctx, field_xyz, field_len)) {
         return FULLMAG_FDM_ERR_INVALID;
     }
+    if (extends_setup_workspace && ctx->gpu_workspace_setup_complete) {
+        uint64_t expected_bytes = 0;
+        const uint64_t scalar_bytes =
+            ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? sizeof(double) : sizeof(float);
+        const bool baseline_was_current =
+            allocation_count_before ==
+                ctx->gpu_workspace_setup_device_allocation_count &&
+            allocation_bytes_before ==
+                ctx->gpu_workspace_setup_device_allocation_bytes;
+        const bool expected_extension =
+            ctx->gpu_workspace_total_device_allocation_count -
+                    allocation_count_before ==
+                3 &&
+            fullmag_fdm_checked_vector_bytes(
+                ctx->cell_count, scalar_bytes, expected_bytes) &&
+            ctx->gpu_workspace_total_device_allocation_bytes -
+                    allocation_bytes_before ==
+                expected_bytes;
+        if (!baseline_was_current || !expected_extension ||
+            ctx->gpu_workspace_observed_step_count != 0) {
+            ctx->gpu_workspace_accounting_valid = false;
+            ctx->last_error =
+                "static external field profile workspace extension violated setup accounting";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        ctx->gpu_workspace_setup_device_allocation_count =
+            ctx->gpu_workspace_total_device_allocation_count;
+        ctx->gpu_workspace_setup_device_allocation_bytes =
+            ctx->gpu_workspace_total_device_allocation_bytes;
+    }
     context_note_field_source_revision_change(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
     return FULLMAG_FDM_OK;
 #else
     (void)handle;

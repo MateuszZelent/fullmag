@@ -1198,6 +1198,34 @@ class ExecutionPrecision(str, Enum):
     DOUBLE = "double"
 
 
+class FdmPrecisionPolicy(str, Enum):
+    FULL_DOUBLE = "full_double"
+    SINGLE_STORAGE_FP64_REDUCTION = "single_storage_fp64_reduction"
+
+    @property
+    def execution_precision(self) -> ExecutionPrecision:
+        if self is FdmPrecisionPolicy.FULL_DOUBLE:
+            return ExecutionPrecision.DOUBLE
+        return ExecutionPrecision.SINGLE
+
+    def to_ir(self) -> dict[str, str]:
+        if self is FdmPrecisionPolicy.FULL_DOUBLE:
+            return {
+                "storage": "double",
+                "compute": "double",
+                "fft": "double",
+                "reduction": "double",
+                "realization_id": "fullmag.fdm.cuda.precision.full_double.v1",
+            }
+        return {
+            "storage": "single",
+            "compute": "single",
+            "fft": "single",
+            "reduction": "double",
+            "realization_id": "fullmag.fdm.cuda.precision.single_storage_fp64_reduction.v1",
+        }
+
+
 class DeviceTarget(str, Enum):
     AUTO = "auto"
     CPU = "cpu"
@@ -1214,12 +1242,20 @@ class RuntimeSelection:
     cpu_threads: int | None = None
     execution_mode: ExecutionMode = ExecutionMode.STRICT
     execution_precision: ExecutionPrecision = ExecutionPrecision.DOUBLE
+    fdm_precision_policy: FdmPrecisionPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "backend_target", BackendTarget(self.backend_target))
         object.__setattr__(self, "device_target", DeviceTarget(self.device_target))
         object.__setattr__(self, "execution_mode", ExecutionMode(self.execution_mode))
         object.__setattr__(self, "execution_precision", ExecutionPrecision(self.execution_precision))
+        if self.fdm_precision_policy is not None:
+            policy = FdmPrecisionPolicy(self.fdm_precision_policy)
+            object.__setattr__(self, "fdm_precision_policy", policy)
+            if policy.execution_precision is not self.execution_precision:
+                raise ValueError(
+                    "fdm_precision_policy conflicts with execution_precision"
+                )
         if self.gpu_count < 0:
             raise ValueError("gpu_count must be >= 0")
         if self.gpu_count > 1:
@@ -1252,6 +1288,7 @@ class RuntimeSelection:
             cpu_threads=self.cpu_threads,
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
         )
 
     def device(self, index: int) -> "RuntimeSelection":
@@ -1265,6 +1302,7 @@ class RuntimeSelection:
             cpu_threads=self.cpu_threads,
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
         )
 
     def cpu(self) -> "RuntimeSelection":
@@ -1276,6 +1314,7 @@ class RuntimeSelection:
             cpu_threads=self.cpu_threads,
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
         )
 
     def cuda(self, gpu_count: int = 1) -> "RuntimeSelection":
@@ -1287,6 +1326,7 @@ class RuntimeSelection:
             cpu_threads=self.cpu_threads,
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
         )
 
     def gpu(self, gpu_count: int = 1) -> "RuntimeSelection":
@@ -1308,6 +1348,7 @@ class RuntimeSelection:
             cpu_threads=cpu_threads,
             execution_mode=self.execution_mode,
             execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
         )
 
     def mode(self, execution_mode: ExecutionMode | str) -> "RuntimeSelection":
@@ -1322,6 +1363,7 @@ class RuntimeSelection:
             cpu_threads=self.cpu_threads,
             execution_mode=ExecutionMode(normalized_mode),
             execution_precision=self.execution_precision,
+            fdm_precision_policy=self.fdm_precision_policy,
         )
 
     def precision(self, execution_precision: ExecutionPrecision | str) -> "RuntimeSelection":
@@ -1340,6 +1382,21 @@ class RuntimeSelection:
             execution_precision=ExecutionPrecision(normalized_precision),
         )
 
+    def precision_policy(
+        self, policy: FdmPrecisionPolicy | str
+    ) -> "RuntimeSelection":
+        resolved_policy = FdmPrecisionPolicy(policy)
+        return RuntimeSelection(
+            backend_target=self.backend_target,
+            device_target=self.device_target,
+            gpu_count=self.gpu_count,
+            device_index=self.device_index,
+            cpu_threads=self.cpu_threads,
+            execution_mode=self.execution_mode,
+            execution_precision=resolved_policy.execution_precision,
+            fdm_precision_policy=resolved_policy,
+        )
+
     def resolved(
         self,
         *,
@@ -1353,11 +1410,13 @@ class RuntimeSelection:
         if mode is not None:
             resolved = resolved.mode(mode)
         if precision is not None:
-            resolved = resolved.precision(precision)
+            normalized_precision = ExecutionPrecision(precision)
+            if normalized_precision is not resolved.execution_precision:
+                resolved = resolved.precision(normalized_precision)
         return resolved
 
     def to_runtime_metadata(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "backend": self.backend_target.value,
             "device": self.device_target.value,
             "gpu_count": self.gpu_count,
@@ -1366,6 +1425,9 @@ class RuntimeSelection:
             "execution_mode": self.execution_mode.value,
             "execution_precision": self.execution_precision.value,
         }
+        if self.fdm_precision_policy is not None:
+            result["fdm_precision_policy"] = self.fdm_precision_policy.to_ir()
+        return result
 
 
 backend = RuntimeSelection()
@@ -2249,10 +2311,11 @@ class Problem:
         script_source: str | None = None,
         source_root: str | Path | None = None,
         entrypoint_kind: str = "direct",
-        asset_cache: dict[str, dict[str, Any] | None] | None = None,
-        include_geometry_assets: bool = True,
-        study_pipeline: dict[str, object] | None = None,
-        _copy_cached_geometry_assets: bool = True,
+          asset_cache: dict[str, dict[str, Any] | None] | None = None,
+          include_geometry_assets: bool = True,
+          study_pipeline: dict[str, object] | None = None,
+          runtime_device_override: str | None = None,
+          _copy_cached_geometry_assets: bool = True,
     ) -> dict[str, object]:
         runtime = self.runtime.resolved(
             backend=requested_backend,
@@ -2296,8 +2359,14 @@ class Problem:
         mesh_workflow = runtime_metadata.get("mesh_workflow")
         if not isinstance(mesh_workflow, dict):
             mesh_workflow = None
+        authored_runtime_selection = runtime_metadata["runtime_selection"]
+        if runtime_device_override in {"cpu", "gpu"}:
+            authored_runtime_selection = {
+                **authored_runtime_selection,
+                "device": runtime_device_override,
+            }
         _validate_authored_mixed_p1_scope(
-            runtime_selection=runtime_metadata["runtime_selection"],
+            runtime_selection=authored_runtime_selection,
             mesh_workflow=mesh_workflow,
             materials=materials,
             energy_terms=self.energy,
@@ -2430,6 +2499,11 @@ class Problem:
             "backend_policy": {
                 "requested_backend": runtime.backend_target.value,
                 "execution_precision": runtime.execution_precision.value,
+                **(
+                    {"fdm_precision_policy": runtime.fdm_precision_policy.to_ir()}
+                    if runtime.fdm_precision_policy is not None
+                    else {}
+                ),
                 "discretization_hints": discretization.to_ir() if discretization else None,
             },
             "validation_profile": {"execution_mode": runtime.execution_mode.value},

@@ -1,4 +1,4 @@
-ARG FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:12.4.1-devel-ubuntu22.04"
+ARG FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:12.4.1-devel-ubuntu20.04"
 
 FROM ${FULLMAG_CUDA_BASE_IMAGE} AS cuda-base-normalized
 
@@ -174,6 +174,8 @@ ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG NODE_VERSION=24.18.0
 ARG NODE_SHA256_AMD64=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
 ARG NODE_SHA256_ARM64=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
+ARG PYTHON_VERSION=3.10.21
+ARG PYTHON_SHA256=a0da1e72132e950154eca0f6f47d5db828454700de20e5113667940d81e0db04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PNPM_HOME=/pnpm
@@ -193,7 +195,12 @@ ENV FULLMAG_USE_MFEM_STACK=ON
 ENV FULLMAG_FEM_REQUIRE_GPU=1
 ENV FULLMAG_FEM_REQUIRE_CEED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && \
+    slepc_dev_package=libslepc-real-dev && \
+    if ! apt-cache show "${slepc_dev_package}" >/dev/null 2>&1; then \
+      slepc_dev_package=libslepc-real3.12-dev; \
+    fi && \
+    apt-get install -y --no-install-recommends \
     bash \
     build-essential \
     ca-certificates \
@@ -201,12 +208,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     libboost-dev \
+    libbz2-dev \
+    libffi-dev \
     libgl1 \
     libglu1-mesa \
+    liblzma-dev \
     libopenmpi-dev \
     libpetsc-real-dev \
-    libslepc-real-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    "${slepc_dev_package}" \
     libsm6 \
+    libssl-dev \
     libx11-6 \
     libxcursor1 \
     libxext6 \
@@ -220,6 +233,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-venv \
     xz-utils \
+    zlib1g-dev \
     && architecture="$(dpkg --print-architecture)" \
     && case "${architecture}" in \
          amd64) node_arch="x64"; node_sha256="${NODE_SHA256_AMD64}" ;; \
@@ -233,19 +247,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f "/tmp/${node_archive}" \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir cmake==3.30.5
-RUN pip3 install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
+RUN python_archive="Python-${PYTHON_VERSION}.tar.xz" && \
+    curl -fsSLo "/tmp/${python_archive}" \
+      "https://www.python.org/ftp/python/${PYTHON_VERSION}/${python_archive}" && \
+    echo "${PYTHON_SHA256}  /tmp/${python_archive}" | sha256sum -c - && \
+    mkdir -p /tmp/python-build && \
+    tar -xJf "/tmp/${python_archive}" -C /tmp/python-build --strip-components=1 && \
+    cd /tmp/python-build && \
+    ./configure --prefix=/usr/local --enable-shared --with-ensurepip=install && \
+    make -j"$(nproc)" && \
+    make altinstall && \
+    ldconfig && \
+    ln -sfn /usr/local/bin/python3.10 /usr/local/bin/python3 && \
+    ln -sfn /usr/local/bin/pip3.10 /usr/local/bin/pip3 && \
+    python3 --version && \
+    rm -rf /tmp/python-build "/tmp/${python_archive}"
+
+RUN python3 -m pip install --no-cache-dir cmake==3.30.5
+RUN python3 -m pip install --no-cache-dir numpy gmsh meshio trimesh scipy h5py zarr
 RUN curl https://sh.rustup.rs -sSf | bash -s -- -y --default-toolchain nightly
 RUN corepack enable && corepack prepare pnpm@10.8.1 --activate
 
 COPY --from=deps /opt/fullmag-deps /opt/fullmag-deps
 
-ENV FULLMAG_NSIGHT_SYSTEMS_ROOT=/opt/nvidia
-RUN if command -v nsys >/dev/null 2>&1 && command -v ncu >/dev/null 2>&1; then \
-      nsys --version && ncu --version; \
-    else \
-      echo "Nsight Systems/Compute not present in this CUDA image; profiler tools are optional."; \
-    fi
+ENV FULLMAG_NSIGHT_SYSTEMS_ROOT=/opt/nvidia/nsight-compute/2024.1.1/host/target-linux-x64
+ENV PATH=${FULLMAG_NSIGHT_SYSTEMS_ROOT}:${PATH}
+RUN nsys --version && ncu --version
 
 ARG FULLMAG_HYPRE_MEMORY_VARIANT="baseline"
 ENV FULLMAG_HYPRE_MEMORY_VARIANT=${FULLMAG_HYPRE_MEMORY_VARIANT}

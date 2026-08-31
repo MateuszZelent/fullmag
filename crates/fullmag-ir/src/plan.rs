@@ -3,15 +3,16 @@ use crate::{
     AdaptiveTimeStepIR, AntennaSpatialProfileIR, BackendTarget, CurrentModuleIR, DomainFrameIR,
     EigenDampingPolicyIR, EigenNormalizationIR, EigenOperatorConfigIR, EigenTargetIR,
     EquilibriumSourceIR, ExchangeBoundaryCondition, ExecutionMode, ExecutionPrecision,
-    FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmProjectionPolicyIR,
-    FemDomainMeshAssetIR, FemLinearSolverPolicy, FemSharedDomainBuildReportIR,
-    FieldRefreshPolicyIR, FrequencyExcitationIR, FrequencyResponseNormalizationIR,
-    FrequencySweepIR, GeometryEntryIR, IntegratorChoice, KSamplingIR, MagnetostrictionLawIR,
-    MaterialFieldLocationIR, MaterialIR, MaterialParameterNameIR, MechanicalBoundaryConditionIR,
-    MechanicalLoadIR, MeshIR, ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR,
-    RegionRefIR, RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR,
-    ResolvedFdmGpuChargeTransportIR, ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR,
-    SeedPolicy, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
+    FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FdmPrecisionPolicyIR,
+    FdmProjectionPolicyIR, FemDomainMeshAssetIR, FemLinearSolverPolicy,
+    FemSharedDomainBuildReportIR, FieldRefreshPolicyIR, FrequencyExcitationIR,
+    FrequencyResponseNormalizationIR, FrequencySweepIR, GeometryEntryIR, IntegratorChoice,
+    KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, PrescribedSotV1DriveIR, RegionRefIR,
+    RegionalFieldDriveIR, RelaxStopIR, RelaxationAlgorithmIR, ResolvedFdmGpuChargeTransportIR,
+    ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR,
+    ThermalSeedConfig, TimeDependenceIR, TimeEnvelopeIR,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -715,6 +716,9 @@ pub struct FdmPlanIR {
     pub inter_region_exchange: Vec<(u32, u32, f64)>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
+    /// Planner-resolved storage/compute/FFT/reduction precision contract.
+    #[serde(default)]
+    pub precision_policy: FdmPrecisionPolicyIR,
     pub exchange_bc: ExchangeBoundaryCondition,
     /// Periodic boundary conditions configuration.
     /// `None` means fully open (no PBC), equivalent to `axes: [Open, Open, Open]`.
@@ -2101,6 +2105,40 @@ mod tests {
             policy.realization_version(),
             crate::FdmProjectionPolicyIR::UNIT_SPHERE_REALIZATION_VERSION
         );
+    }
+
+    #[test]
+    fn fdm_single_precision_plan_serializes_complete_numeric_policy() {
+        let mut plan = FdmPlanIR::default();
+        plan.precision = ExecutionPrecision::Single;
+        plan.precision_policy = crate::FdmPrecisionPolicyIR::resolve(ExecutionPrecision::Single);
+        let encoded = serde_json::to_value(&plan).expect("FDM plan serializes");
+
+        assert_eq!(encoded["precision_policy"]["storage"], "single");
+        assert_eq!(encoded["precision_policy"]["compute"], "single");
+        assert_eq!(encoded["precision_policy"]["fft"], "single");
+        assert_eq!(encoded["precision_policy"]["reduction"], "double");
+        assert_eq!(
+            encoded["precision_policy"]["realization_id"],
+            "fullmag.fdm.cuda.precision.single_storage_fp64_reduction.v1"
+        );
+
+        let decoded: FdmPlanIR =
+            serde_json::from_value(encoded).expect("precision policy round-trips");
+        decoded
+            .precision_policy
+            .validate_for(decoded.precision)
+            .expect("round-tripped policy remains coherent");
+    }
+
+    #[test]
+    fn fdm_precision_policy_rejects_unqualified_mixed_combination() {
+        let mut policy = crate::FdmPrecisionPolicyIR::resolve(ExecutionPrecision::Single);
+        policy.fft = ExecutionPrecision::Double;
+        let error = policy
+            .validate_for(ExecutionPrecision::Single)
+            .expect_err("arbitrary mixed precision must fail closed");
+        assert!(error.contains("fdm_precision_policy_mismatch"));
     }
 
     #[test]

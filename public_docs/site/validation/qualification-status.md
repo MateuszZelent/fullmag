@@ -4,6 +4,7 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+source_of_truth: "Frozen-spins qualification contract and evidence gates"
 ---
 
 (public-docs-validation-qualification-status)=

@@ -204,19 +204,20 @@ void launch_newell_compute_spectra_fp32(Context &ctx) {
     int flen = fsx * fsy * fsz;
 
     float *d_fg = nullptr;
-    cudaError_t err = cudaMalloc(&d_fg, static_cast<size_t>(flen) * 6 * sizeof(float));
+    cudaError_t err = context_gpu_workspace_cuda_malloc(
+        ctx, &d_fg, static_cast<size_t>(flen) * 6 * sizeof(float));
     if (err != cudaSuccess) { set_cuda_error(ctx, "newell_fp32: cudaMalloc(fg)", err); return; }
 
     float *d_nxx = nullptr, *d_nyy = nullptr, *d_nzz = nullptr;
     float *d_nxy = nullptr, *d_nxz = nullptr, *d_nyz = nullptr;
     size_t padded_bytes = static_cast<size_t>(padded_len) * sizeof(float);
 
-    err = cudaMalloc(&d_nxx, padded_bytes); if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(&d_nyy, padded_bytes); if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(&d_nzz, padded_bytes); if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(&d_nxy, padded_bytes); if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(&d_nxz, padded_bytes); if (err != cudaSuccess) goto cleanup;
-    err = cudaMalloc(&d_nyz, padded_bytes); if (err != cudaSuccess) goto cleanup;
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxx, padded_bytes); if (err != cudaSuccess) goto cleanup;
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nyy, padded_bytes); if (err != cudaSuccess) goto cleanup;
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nzz, padded_bytes); if (err != cudaSuccess) goto cleanup;
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxy, padded_bytes); if (err != cudaSuccess) goto cleanup;
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nxz, padded_bytes); if (err != cudaSuccess) goto cleanup;
+    err = context_gpu_workspace_cuda_malloc(ctx, &d_nyz, padded_bytes); if (err != cudaSuccess) goto cleanup;
 
     cudaMemset(d_nxx, 0, padded_bytes); cudaMemset(d_nyy, 0, padded_bytes); cudaMemset(d_nzz, 0, padded_bytes);
     cudaMemset(d_nxy, 0, padded_bytes); cudaMemset(d_nxz, 0, padded_bytes); cudaMemset(d_nyz, 0, padded_bytes);
@@ -241,9 +242,13 @@ void launch_newell_compute_spectra_fp32(Context &ctx) {
     ctx.last_error = "";
 
 cleanup:
-    if (d_fg) cudaFree(d_fg);
-    if (d_nxx) cudaFree(d_nxx); if (d_nyy) cudaFree(d_nyy); if (d_nzz) cudaFree(d_nzz);
-    if (d_nxy) cudaFree(d_nxy); if (d_nxz) cudaFree(d_nxz); if (d_nyz) cudaFree(d_nyz);
+    if (d_fg) context_gpu_workspace_cuda_free(ctx, d_fg);
+    if (d_nxx) context_gpu_workspace_cuda_free(ctx, d_nxx);
+    if (d_nyy) context_gpu_workspace_cuda_free(ctx, d_nyy);
+    if (d_nzz) context_gpu_workspace_cuda_free(ctx, d_nzz);
+    if (d_nxy) context_gpu_workspace_cuda_free(ctx, d_nxy);
+    if (d_nxz) context_gpu_workspace_cuda_free(ctx, d_nxz);
+    if (d_nyz) context_gpu_workspace_cuda_free(ctx, d_nyz);
 }
 
 } // namespace fdm

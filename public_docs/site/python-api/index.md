@@ -12,9 +12,8 @@ owner: fullmag-public-docs
 FullMag's public authoring surface is the embedded stage-first Python DSL
 (`import fullmag as fm`). The tree is organized by authoring owner.
 
-Every terminal API page follows the public entry contract in
-{doc}`../python-api/meshing/PAGE_TEMPLATE` and must include a Control Room
-crosswalk. Frontend coverage and explicit missing-UI TODOs are centralized in
+Every terminal API page follows the public entry contract and must include a
+Control Room crosswalk. Frontend coverage and explicit missing-UI notes are centralized in
 {doc}`../frontend/capability-register`.
 
 Meshing is a dedicated family with separate FDM and FEM branches. Within FEM, ferromagnet and

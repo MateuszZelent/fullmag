@@ -859,12 +859,34 @@ function makeFemTopologyBuffer(partCount) {
 }
 
 async function installFemFixtureApi(page, fixture) {
-  await page.route("**/v2/sessions/current/**", async (route) => {
+  await page.route("**/v2/**", async (route) => {
     const request = route.request();
     const requestUrl = new URL(request.url());
     const requestPath = requestUrl.pathname;
     fixture.requests.push(requestPath);
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    if (requestPath === "/v2/sessions") {
+      return fulfillJson(route, {
+        schema_version: "session-list.v1",
+        sessions: [{
+          current: true,
+          name: "FEM topology upload fixture",
+          session_id: "fem-topology-upload-fixture",
+          status: "running",
+        }],
+      });
+    }
+    if (requestPath === "/v2/platform/health") {
+      return fulfillJson(route, {
+        active_session: true,
+        api_contract_version: "v2",
+        status: "ok",
+        uptime_seconds: 1,
+      });
+    }
+    if (requestPath === "/v2/platform/capabilities") {
+      return fulfillJson(route, { engines: [], profile_version: "fixture.v1" });
+    }
     if (requestPath === "/v2/sessions/current/status") return fulfillJson(route, femStatusFixture());
     if (requestPath === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualizationState);
     if (requestPath === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, fixture.domainMeta ?? femDomainMetaFixture());

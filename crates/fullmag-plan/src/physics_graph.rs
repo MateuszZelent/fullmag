@@ -1643,6 +1643,7 @@ mod tests {
             bulk_dmi: None,
             gyromagnetic_ratio: 1.0,
             precision: fullmag_ir::ExecutionPrecision::Double,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,
             periodicity: None,
             resolved_periodic_images: None,

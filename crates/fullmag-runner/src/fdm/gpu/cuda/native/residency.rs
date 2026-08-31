@@ -4,8 +4,10 @@ use crate::types::{FdmGpuExecutionReceipt, RunError};
 use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
 use crate::types::{
-    FdmGpuAdaptiveExecutionTelemetry, FdmGpuAdaptiveNumericsTelemetry, FdmGpuOperatorResidency,
-    FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts,
+    FdmGpuAdaptiveExecutionTelemetry, FdmGpuAdaptiveNumericsTelemetry,
+    FdmGpuLocalPipelineTelemetry, FdmGpuOperatorResidency, FdmGpuPrecisionComponents,
+    FdmGpuPrecisionPolicyReceipt, FdmGpuStepTransactionTelemetry, FdmGpuTransferCounts,
+    FdmGpuWorkspaceTelemetry,
 };
 
 fn preflight_error(detail: impl AsRef<str>) -> RunError {
@@ -191,6 +193,22 @@ pub(super) fn validate_strict_preflight(receipt: &FdmGpuExecutionReceipt) -> Res
     if receipt.operator_residency.is_empty() {
         return Err(preflight_error("native receipt has no required operators"));
     }
+    let precision_policy = receipt.precision_policy.as_ref().ok_or_else(|| {
+        preflight_error("native receipt has no executed precision policy telemetry")
+    })?;
+    if !precision_policy.accounting_valid
+        || precision_policy.requested != receipt.precision
+        || precision_policy.resolved != precision_policy.executed
+    {
+        return Err(preflight_error(format!(
+            "precision policy requested={} receipt_precision={} accounting_valid={} resolved={:?} executed={:?}",
+            precision_policy.requested,
+            receipt.precision,
+            precision_policy.accounting_valid,
+            precision_policy.resolved,
+            precision_policy.executed
+        )));
+    }
     if let Some(operator) = receipt.operator_residency.iter().find(|operator| {
         operator.location != "device"
             && !(operator.operator == "control" && operator.location == "host_scalar")
@@ -298,6 +316,139 @@ fn precision_name(value: u32) -> Result<&'static str, RunError> {
             "unknown precision discriminant={other}"
         ))),
     }
+}
+
+#[cfg(feature = "cuda")]
+fn precision_policy_telemetry_v1_request() -> ffi::fullmag_fdm_precision_policy_telemetry_v1 {
+    ffi::fullmag_fdm_precision_policy_telemetry_v1 {
+        abi_version: ffi::FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_precision_policy_telemetry_v1>() as u32,
+        accounting_valid: 0,
+        storage_precision: 0,
+        compute_precision: 0,
+        fft_precision: 0,
+        reduction_precision: 0,
+        realization: 0,
+        metric_valid_mask: 0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn precision_components_from_ir(
+    policy: &fullmag_ir::FdmPrecisionPolicyIR,
+) -> FdmGpuPrecisionComponents {
+    let name = |precision| match precision {
+        fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
+        fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
+    };
+    FdmGpuPrecisionComponents {
+        storage: name(policy.storage),
+        compute: name(policy.compute),
+        fft: name(policy.fft),
+        reduction: name(policy.reduction),
+        realization_id: policy.realization_id.clone(),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn precision_policy_from_native(
+    native: ffi::fullmag_fdm_precision_policy_telemetry_v1,
+    requested: fullmag_ir::ExecutionPrecision,
+    resolved: &fullmag_ir::FdmPrecisionPolicyIR,
+) -> Result<FdmGpuPrecisionPolicyReceipt, RunError> {
+    if native.abi_version != ffi::FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1
+        || native.struct_size
+            != std::mem::size_of::<ffi::fullmag_fdm_precision_policy_telemetry_v1>() as u32
+    {
+        return Err(preflight_error(format!(
+            "precision policy ABI identity mismatch: version={} size={}",
+            native.abi_version, native.struct_size
+        )));
+    }
+    if native.accounting_valid != 1 {
+        return Err(preflight_error(format!(
+            "precision policy accounting_valid={} expected=1",
+            native.accounting_valid
+        )));
+    }
+    if native.metric_valid_mask != ffi::FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY {
+        return Err(preflight_error(format!(
+            "precision policy metric_valid_mask={:#x} expected={:#x}",
+            native.metric_valid_mask,
+            ffi::FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY
+        )));
+    }
+
+    let realization_id = match native.realization {
+        ffi::FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE => {
+            fullmag_ir::FdmPrecisionPolicyIR::FULL_DOUBLE_REALIZATION_ID
+        }
+        ffi::FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION => {
+            fullmag_ir::FdmPrecisionPolicyIR::SINGLE_STORAGE_FP64_REDUCTION_REALIZATION_ID
+        }
+        other => {
+            return Err(preflight_error(format!(
+                "unknown precision policy realization={other}"
+            )))
+        }
+    };
+    let executed = FdmGpuPrecisionComponents {
+        storage: precision_name(native.storage_precision)?.to_string(),
+        compute: precision_name(native.compute_precision)?.to_string(),
+        fft: precision_name(native.fft_precision)?.to_string(),
+        reduction: precision_name(native.reduction_precision)?.to_string(),
+        realization_id: realization_id.to_string(),
+    };
+    let realization_precision = match native.realization {
+        ffi::FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE => fullmag_ir::ExecutionPrecision::Double,
+        ffi::FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION => {
+            fullmag_ir::ExecutionPrecision::Single
+        }
+        _ => unreachable!("realization validated above"),
+    };
+    let realization_components = precision_components_from_ir(
+        &fullmag_ir::FdmPrecisionPolicyIR::resolve(realization_precision),
+    );
+    if executed != realization_components {
+        return Err(preflight_error(format!(
+            "precision policy fields disagree with realization: executed={executed:?} expected={realization_components:?}"
+        )));
+    }
+    resolved.validate_for(requested).map_err(preflight_error)?;
+    let resolved_components = precision_components_from_ir(resolved);
+    if executed != resolved_components {
+        return Err(preflight_error(format!(
+            "executed precision policy differs from plan: executed={executed:?} resolved={resolved_components:?}"
+        )));
+    }
+
+    Ok(FdmGpuPrecisionPolicyReceipt {
+        schema_version: "fullmag.fdm.cuda.precision-policy.v1".to_string(),
+        requested: match requested {
+            fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
+            fullmag_ir::ExecutionPrecision::Double => "double".to_string(),
+        },
+        resolved: resolved_components,
+        executed,
+        accounting_valid: true,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn query_precision_policy_telemetry(
+    backend: &NativeFdmBackend,
+) -> Result<FdmGpuPrecisionPolicyReceipt, RunError> {
+    let mut native = precision_policy_telemetry_v1_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_get_precision_policy_telemetry_v1(
+            backend.handle as *mut _,
+            &mut native,
+        )
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(backend.last_error_or("FDM CUDA precision policy telemetry query failed"));
+    }
+    precision_policy_from_native(native, backend.precision, &backend.precision_policy)
 }
 
 #[cfg(feature = "cuda")]
@@ -471,6 +622,369 @@ fn query_adaptive_execution_telemetry(
         });
     }
     adaptive_execution_telemetry_from_native(native)
+}
+
+#[cfg(feature = "cuda")]
+fn local_pipeline_telemetry_v1_request() -> ffi::fullmag_fdm_local_pipeline_telemetry_v1 {
+    ffi::fullmag_fdm_local_pipeline_telemetry_v1 {
+        abi_version: ffi::FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_local_pipeline_telemetry_v1>() as u32,
+        requested_policy: ffi::FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE,
+        resolved_realization: ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE,
+        executed_realization: ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE,
+        accounting_valid: 0,
+        precision: ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE,
+        integrator: ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN,
+        metric_valid_mask: 0,
+        required_operator_mask: 0,
+        active_feature_mask: 0,
+        source_revision: 0,
+        field_revision: 0,
+        direct_fused_field_rhs_launch_count: 0,
+        direct_unfused_effective_field_launch_count: 0,
+        direct_unfused_rhs_launch_count: 0,
+        captured_fused_field_rhs_node_count: 0,
+        captured_unfused_effective_field_node_count: 0,
+        captured_unfused_rhs_node_count: 0,
+        graph_build_count: 0,
+        graph_replay_count: 0,
+        graph_recapture_count: 0,
+        graph_attempt_execution_count: 0,
+        graph_fused_field_rhs_execution_count: 0,
+        graph_unfused_effective_field_execution_count: 0,
+        graph_unfused_rhs_execution_count: 0,
+        profiled_dram_read_bytes: 0,
+        profiled_dram_write_bytes: 0,
+        profiled_launch_time_ns: 0,
+        profiled_achieved_occupancy_permyriad: 0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn local_pipeline_realization_name(realization: u32) -> Result<&'static str, RunError> {
+    match realization {
+        ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE => Ok("none"),
+        ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED => Ok("direct_fused_v1"),
+        ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED => Ok("direct_unfused_v1"),
+        ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_FUSED => Ok("cuda_graph_fused_v1"),
+        ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_CUDA_GRAPH_UNFUSED => {
+            Ok("cuda_graph_unfused_v1")
+        }
+        ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED => Ok("mixed_v1"),
+        other => Err(preflight_error(format!(
+            "unknown local pipeline realization={other}"
+        ))),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn local_pipeline_telemetry_from_native(
+    native: ffi::fullmag_fdm_local_pipeline_telemetry_v1,
+) -> Result<FdmGpuLocalPipelineTelemetry, RunError> {
+    if native.accounting_valid > 1 {
+        return Err(preflight_error(format!(
+            "invalid local pipeline accounting flag={}",
+            native.accounting_valid
+        )));
+    }
+    if native.requested_policy != ffi::FULLMAG_FDM_LOCAL_PIPELINE_POLICY_AUTO_SAFE {
+        return Err(preflight_error(format!(
+            "unknown local pipeline policy={}",
+            native.requested_policy
+        )));
+    }
+    let known_metric_mask = ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_IDENTITY
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_DIRECT_SUBMISSIONS
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_DRAM_BYTES
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_LAUNCH_TIME
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_OCCUPANCY;
+    let required_runtime_metrics = ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_IDENTITY
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_DIRECT_SUBMISSIONS
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE
+        | ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS;
+    if native.metric_valid_mask & !known_metric_mask != 0
+        || native.metric_valid_mask & required_runtime_metrics != required_runtime_metrics
+    {
+        return Err(preflight_error(format!(
+            "invalid local pipeline metric mask={:#x}",
+            native.metric_valid_mask
+        )));
+    }
+    let dram_valid =
+        native.metric_valid_mask & ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_DRAM_BYTES != 0;
+    let launch_time_valid =
+        native.metric_valid_mask & ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_LAUNCH_TIME != 0;
+    let occupancy_valid =
+        native.metric_valid_mask & ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_PROFILED_OCCUPANCY != 0;
+    if (!dram_valid
+        && (native.profiled_dram_read_bytes != 0 || native.profiled_dram_write_bytes != 0))
+        || (!launch_time_valid && native.profiled_launch_time_ns != 0)
+        || (!occupancy_valid && native.profiled_achieved_occupancy_permyriad != 0)
+        || (occupancy_valid && native.profiled_achieved_occupancy_permyriad > 10_000)
+    {
+        return Err(preflight_error(
+            "local pipeline profiler values disagree with metric validity",
+        ));
+    }
+    let precision = match native.precision {
+        ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE => "single",
+        ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE => "double",
+    };
+    let integrator = match native.integrator {
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN => "heun",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_DP45 => "dp45",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_ABM3 => "abm3",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4 => "rk4",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK23 => "rk23",
+    };
+    let resolved_realization =
+        local_pipeline_realization_name(native.resolved_realization)?.to_string();
+    let executed_realization =
+        local_pipeline_realization_name(native.executed_realization)?.to_string();
+    if native.executed_realization != ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE
+        && native.executed_realization != ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED
+        && native.executed_realization != native.resolved_realization
+    {
+        return Err(preflight_error(format!(
+            "local pipeline resolved/executed mismatch={}/{}",
+            native.resolved_realization, native.executed_realization
+        )));
+    }
+    let execution_categories = u32::from(native.direct_fused_field_rhs_launch_count != 0)
+        + u32::from(
+            native.direct_unfused_effective_field_launch_count != 0
+                || native.direct_unfused_rhs_launch_count != 0,
+        )
+        + u32::from(native.graph_fused_field_rhs_execution_count != 0)
+        + u32::from(
+            native.graph_unfused_effective_field_execution_count != 0
+                || native.graph_unfused_rhs_execution_count != 0,
+        );
+    if (native.executed_realization == ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE
+        && execution_categories != 0)
+        || (native.executed_realization == ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED
+            && execution_categories < 2)
+        || (native.executed_realization != ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_NONE
+            && native.executed_realization != ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_MIXED
+            && execution_categories != 1)
+    {
+        return Err(preflight_error(format!(
+            "local pipeline execution counters contradict realization={} categories={execution_categories}",
+            native.executed_realization
+        )));
+    }
+    Ok(FdmGpuLocalPipelineTelemetry {
+        requested_policy: "auto_safe_v1".to_string(),
+        resolved_realization,
+        executed_realization,
+        accounting_valid: native.accounting_valid == 1,
+        precision: precision.to_string(),
+        integrator: integrator.to_string(),
+        metric_valid_mask: native.metric_valid_mask,
+        required_operator_mask: native.required_operator_mask,
+        active_feature_mask: native.active_feature_mask,
+        source_revision: native.source_revision,
+        field_revision: native.field_revision,
+        direct_fused_field_rhs_launch_count: native.direct_fused_field_rhs_launch_count,
+        direct_unfused_effective_field_launch_count: native
+            .direct_unfused_effective_field_launch_count,
+        direct_unfused_rhs_launch_count: native.direct_unfused_rhs_launch_count,
+        captured_fused_field_rhs_node_count: native.captured_fused_field_rhs_node_count,
+        captured_unfused_effective_field_node_count: native
+            .captured_unfused_effective_field_node_count,
+        captured_unfused_rhs_node_count: native.captured_unfused_rhs_node_count,
+        graph_build_count: native.graph_build_count,
+        graph_replay_count: native.graph_replay_count,
+        graph_recapture_count: native.graph_recapture_count,
+        graph_attempt_execution_count: native.graph_attempt_execution_count,
+        graph_fused_field_rhs_execution_count: native.graph_fused_field_rhs_execution_count,
+        graph_unfused_effective_field_execution_count: native
+            .graph_unfused_effective_field_execution_count,
+        graph_unfused_rhs_execution_count: native.graph_unfused_rhs_execution_count,
+        profiled_dram_read_bytes: native.profiled_dram_read_bytes,
+        profiled_dram_write_bytes: native.profiled_dram_write_bytes,
+        profiled_launch_time_ns: native.profiled_launch_time_ns,
+        profiled_achieved_occupancy_permyriad: native.profiled_achieved_occupancy_permyriad,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn query_local_pipeline_telemetry(
+    backend: &NativeFdmBackend,
+) -> Result<FdmGpuLocalPipelineTelemetry, RunError> {
+    let mut native = local_pipeline_telemetry_v1_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_get_local_pipeline_telemetry_v1(
+            backend.handle as *mut _,
+            &mut native,
+        )
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(RunError {
+            message: "fdm_gpu_local_pipeline_telemetry_query_failed".to_string(),
+        });
+    }
+    if native.abi_version != ffi::FULLMAG_FDM_LOCAL_PIPELINE_TELEMETRY_ABI_V1
+        || native.struct_size
+            != std::mem::size_of::<ffi::fullmag_fdm_local_pipeline_telemetry_v1>() as u32
+    {
+        return Err(RunError {
+            message: "fdm_gpu_local_pipeline_telemetry_abi_mismatch".to_string(),
+        });
+    }
+    local_pipeline_telemetry_from_native(native)
+}
+
+#[cfg(feature = "cuda")]
+fn gpu_workspace_telemetry_v1_request() -> ffi::fullmag_fdm_gpu_workspace_telemetry_v1 {
+    ffi::fullmag_fdm_gpu_workspace_telemetry_v1 {
+        abi_version: ffi::FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1,
+        struct_size: std::mem::size_of::<ffi::fullmag_fdm_gpu_workspace_telemetry_v1>() as u32,
+        accounting_valid: 0,
+        setup_complete: 0,
+        precision: ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE,
+        integrator: ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN,
+        metric_valid_mask: 0,
+        workspace_revision: 0,
+        source_revision: 0,
+        field_revision: 0,
+        setup_device_allocation_count: 0,
+        setup_device_allocation_bytes: 0,
+        total_device_allocation_count: 0,
+        total_device_allocation_bytes: 0,
+        step_device_allocation_count: 0,
+        step_device_allocation_bytes: 0,
+        setup_fft_plan_creation_count: 0,
+        total_fft_plan_creation_count: 0,
+        step_fft_plan_creation_count: 0,
+        prepared_fft_workspace_count: 0,
+        workspace_bytes: 0,
+        peak_vram_bytes: 0,
+        observed_step_count: 0,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn gpu_workspace_telemetry_from_native(
+    native: ffi::fullmag_fdm_gpu_workspace_telemetry_v1,
+) -> Result<FdmGpuWorkspaceTelemetry, RunError> {
+    if native.accounting_valid > 1 || native.setup_complete > 1 {
+        return Err(preflight_error(format!(
+            "invalid GPU workspace flags accounting={} setup_complete={}",
+            native.accounting_valid, native.setup_complete
+        )));
+    }
+    if native.setup_complete != 1 {
+        return Err(preflight_error("GPU workspace setup is incomplete"));
+    }
+    let known_metric_mask = ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY
+        | ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS
+        | ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS
+        | ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT
+        | ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS;
+    let identity_metrics = ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY
+        | ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS;
+    if native.metric_valid_mask & !known_metric_mask != 0
+        || native.metric_valid_mask & identity_metrics != identity_metrics
+    {
+        return Err(preflight_error(format!(
+            "invalid GPU workspace metric mask={:#x}",
+            native.metric_valid_mask
+        )));
+    }
+    if native.accounting_valid == 1 {
+        if native.metric_valid_mask != known_metric_mask {
+            return Err(preflight_error(format!(
+                "complete GPU workspace accounting requires all metrics, got={:#x}",
+                native.metric_valid_mask
+            )));
+        }
+        if native.setup_device_allocation_count == 0
+            || native.setup_device_allocation_bytes == 0
+            || native.total_device_allocation_count != native.setup_device_allocation_count
+            || native.total_device_allocation_bytes != native.setup_device_allocation_bytes
+            || native.total_fft_plan_creation_count != native.setup_fft_plan_creation_count
+            || native.step_device_allocation_count != 0
+            || native.step_device_allocation_bytes != 0
+            || native.step_fft_plan_creation_count != 0
+            || native.workspace_bytes > native.peak_vram_bytes
+            || native.prepared_fft_workspace_count > native.total_fft_plan_creation_count
+        {
+            return Err(preflight_error(
+                "GPU workspace counters violate setup-only allocation/plan invariants",
+            ));
+        }
+    }
+    if native.workspace_revision == 0 || native.source_revision == 0 || native.field_revision == 0 {
+        return Err(preflight_error(
+            "GPU workspace/source/field revisions must be non-zero",
+        ));
+    }
+    let precision = match native.precision {
+        ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE => "single",
+        ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE => "double",
+    };
+    let integrator = match native.integrator {
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_HEUN => "heun",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_DP45 => "dp45",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_ABM3 => "abm3",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4 => "rk4",
+        ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK23 => "rk23",
+    };
+    Ok(FdmGpuWorkspaceTelemetry {
+        accounting_valid: native.accounting_valid == 1,
+        setup_complete: true,
+        precision: precision.to_string(),
+        integrator: integrator.to_string(),
+        metric_valid_mask: native.metric_valid_mask,
+        workspace_revision: native.workspace_revision,
+        source_revision: native.source_revision,
+        field_revision: native.field_revision,
+        setup_device_allocation_count: native.setup_device_allocation_count,
+        setup_device_allocation_bytes: native.setup_device_allocation_bytes,
+        total_device_allocation_count: native.total_device_allocation_count,
+        total_device_allocation_bytes: native.total_device_allocation_bytes,
+        step_device_allocation_count: native.step_device_allocation_count,
+        step_device_allocation_bytes: native.step_device_allocation_bytes,
+        setup_fft_plan_creation_count: native.setup_fft_plan_creation_count,
+        total_fft_plan_creation_count: native.total_fft_plan_creation_count,
+        step_fft_plan_creation_count: native.step_fft_plan_creation_count,
+        prepared_fft_workspace_count: native.prepared_fft_workspace_count,
+        workspace_bytes: native.workspace_bytes,
+        peak_vram_bytes: native.peak_vram_bytes,
+        observed_step_count: native.observed_step_count,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn query_gpu_workspace_telemetry(
+    backend: &NativeFdmBackend,
+) -> Result<FdmGpuWorkspaceTelemetry, RunError> {
+    let mut native = gpu_workspace_telemetry_v1_request();
+    let status = unsafe {
+        ffi::fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+            backend.handle as *mut _,
+            &mut native,
+        )
+    };
+    if status != ffi::FULLMAG_FDM_OK {
+        return Err(RunError {
+            message: "fdm_gpu_workspace_telemetry_query_failed".to_string(),
+        });
+    }
+    if native.abi_version != ffi::FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1
+        || native.struct_size
+            != std::mem::size_of::<ffi::fullmag_fdm_gpu_workspace_telemetry_v1>() as u32
+    {
+        return Err(RunError {
+            message: "fdm_gpu_workspace_telemetry_abi_mismatch".to_string(),
+        });
+    }
+    gpu_workspace_telemetry_from_native(native)
 }
 
 #[cfg(feature = "cuda")]
@@ -839,9 +1353,40 @@ pub(super) fn query_execution_receipt(
 
     let adaptive_execution = query_adaptive_execution_telemetry(backend)?;
     let adaptive_numerics = query_adaptive_numerics_telemetry(backend)?;
+    let precision_policy = query_precision_policy_telemetry(backend)?;
+    let local_pipeline = query_local_pipeline_telemetry(backend)?;
+    let gpu_workspace = query_gpu_workspace_telemetry(backend)?;
+    if local_pipeline.required_operator_mask != native.required_operator_mask
+        || local_pipeline.precision != precision
+    {
+        return Err(preflight_error(format!(
+            "local pipeline identity mismatch: operators={:#x}/{:#x} precision={}/{}",
+            local_pipeline.required_operator_mask,
+            native.required_operator_mask,
+            local_pipeline.precision,
+            precision
+        )));
+    }
+    if gpu_workspace.precision != precision
+        || gpu_workspace.source_revision != local_pipeline.source_revision
+        || gpu_workspace.field_revision != local_pipeline.field_revision
+    {
+        return Err(preflight_error(format!(
+            "GPU workspace identity mismatch: precision={}/{} source={}/{} field={}/{}",
+            gpu_workspace.precision,
+            precision,
+            gpu_workspace.source_revision,
+            local_pipeline.source_revision,
+            gpu_workspace.field_revision,
+            local_pipeline.field_revision
+        )));
+    }
     let accounting_valid = native.accounting_valid == 1
         && adaptive_execution.accounting_valid
         && adaptive_numerics.accounting_valid
+        && precision_policy.accounting_valid
+        && local_pipeline.accounting_valid
+        && gpu_workspace.accounting_valid
         && adaptive_numerics.decision_divergence_count == 0;
     let receipt = FdmGpuExecutionReceipt {
         requested: requested_device_name(requested_device)?.to_string(),
@@ -878,6 +1423,9 @@ pub(super) fn query_execution_receipt(
         },
         adaptive_execution: Some(adaptive_execution),
         adaptive_numerics: Some(adaptive_numerics),
+        local_pipeline: Some(local_pipeline),
+        gpu_workspace: Some(gpu_workspace),
+        precision_policy: Some(precision_policy),
         validation_state: "unvalidated".to_string(),
         accounting_valid,
     };
@@ -887,7 +1435,97 @@ pub(super) fn query_execution_receipt(
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{FdmGpuExecutionReceipt, FdmGpuOperatorResidency, FdmGpuTransferCounts};
+    use crate::types::{
+        FdmGpuExecutionReceipt, FdmGpuOperatorResidency, FdmGpuPrecisionComponents,
+        FdmGpuPrecisionPolicyReceipt, FdmGpuTransferCounts,
+    };
+
+    #[cfg(feature = "cuda")]
+    fn native_precision_policy(
+        realization: u32,
+        storage: u32,
+        compute: u32,
+        fft: u32,
+        reduction: u32,
+    ) -> super::ffi::fullmag_fdm_precision_policy_telemetry_v1 {
+        super::ffi::fullmag_fdm_precision_policy_telemetry_v1 {
+            abi_version: super::ffi::FULLMAG_FDM_PRECISION_POLICY_TELEMETRY_ABI_V1,
+            struct_size: std::mem::size_of::<super::ffi::fullmag_fdm_precision_policy_telemetry_v1>(
+            ) as u32,
+            accounting_valid: 1,
+            storage_precision: storage,
+            compute_precision: compute,
+            fft_precision: fft,
+            reduction_precision: reduction,
+            realization,
+            metric_valid_mask: super::ffi::FULLMAG_FDM_PRECISION_POLICY_METRIC_IDENTITY,
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn native_precision_policy_maps_supported_fp32_and_fp64_realizations() {
+        let single = super::ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE as u32;
+        let double = super::ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE as u32;
+        let fp32 = super::precision_policy_from_native(
+            native_precision_policy(
+                super::ffi::FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION,
+                single,
+                single,
+                single,
+                double,
+            ),
+            fullmag_ir::ExecutionPrecision::Single,
+            &fullmag_ir::FdmPrecisionPolicyIR::resolve(fullmag_ir::ExecutionPrecision::Single),
+        )
+        .expect("qualified FP32 policy");
+        assert_eq!(fp32.executed.storage, "single");
+        assert_eq!(fp32.executed.reduction, "double");
+
+        let fp64 = super::precision_policy_from_native(
+            native_precision_policy(
+                super::ffi::FULLMAG_FDM_PRECISION_POLICY_FULL_DOUBLE,
+                double,
+                double,
+                double,
+                double,
+            ),
+            fullmag_ir::ExecutionPrecision::Double,
+            &fullmag_ir::FdmPrecisionPolicyIR::default(),
+        )
+        .expect("qualified FP64 policy");
+        assert_eq!(fp64.resolved, fp64.executed);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn native_precision_policy_rejects_unknown_or_inconsistent_execution() {
+        let single = super::ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE as u32;
+        let double = super::ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE as u32;
+        let expected =
+            fullmag_ir::FdmPrecisionPolicyIR::resolve(fullmag_ir::ExecutionPrecision::Single);
+        let inconsistent = native_precision_policy(
+            super::ffi::FULLMAG_FDM_PRECISION_POLICY_SINGLE_STORAGE_FP64_REDUCTION,
+            single,
+            single,
+            double,
+            double,
+        );
+        assert!(super::precision_policy_from_native(
+            inconsistent,
+            fullmag_ir::ExecutionPrecision::Single,
+            &expected,
+        )
+        .is_err());
+
+        let unknown = native_precision_policy(u32::MAX, single, single, single, double);
+        assert!(super::precision_policy_from_native(
+            unknown,
+            fullmag_ir::ExecutionPrecision::Single,
+            &expected,
+        )
+        .is_err());
+    }
 
     #[cfg(feature = "cuda")]
     #[test]
@@ -925,6 +1563,132 @@ mod tests {
         )
         .expect("batched realization must map");
         assert_eq!(batched.realization, "cuda_conditional_graph_batched_v1");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn local_pipeline_telemetry_maps_all_runtime_evidence_and_fails_closed() {
+        let mut native = super::local_pipeline_telemetry_v1_request();
+        native.accounting_valid = 1;
+        native.precision = super::ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE;
+        native.integrator = super::ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4;
+        native.resolved_realization =
+            super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED;
+        native.executed_realization =
+            super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_FUSED;
+        native.metric_valid_mask = super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_IDENTITY
+            | super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_DIRECT_SUBMISSIONS
+            | super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_CAPTURED_NODES
+            | super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_LIFECYCLE
+            | super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_METRIC_GRAPH_EXECUTIONS;
+        native.required_operator_mask = 0x41;
+        native.active_feature_mask = 0x2d;
+        native.source_revision = 7;
+        native.field_revision = 11;
+        native.direct_fused_field_rhs_launch_count = 4;
+
+        let telemetry = super::local_pipeline_telemetry_from_native(native)
+            .expect("valid local pipeline telemetry must map");
+        assert_eq!(telemetry.requested_policy, "auto_safe_v1");
+        assert_eq!(telemetry.resolved_realization, "direct_fused_v1");
+        assert_eq!(telemetry.executed_realization, "direct_fused_v1");
+        assert_eq!(telemetry.precision, "double");
+        assert_eq!(telemetry.integrator, "rk4");
+        assert_eq!(telemetry.required_operator_mask, 0x41);
+        assert_eq!(telemetry.active_feature_mask, 0x2d);
+        assert_eq!(telemetry.direct_fused_field_rhs_launch_count, 4);
+
+        let unknown_realization = super::local_pipeline_telemetry_from_native(
+            super::ffi::fullmag_fdm_local_pipeline_telemetry_v1 {
+                executed_realization: u32::MAX,
+                ..native
+            },
+        );
+        assert!(unknown_realization.is_err());
+
+        let invalid_profile_metric = super::local_pipeline_telemetry_from_native(
+            super::ffi::fullmag_fdm_local_pipeline_telemetry_v1 {
+                profiled_launch_time_ns: 1,
+                ..native
+            },
+        );
+        assert!(invalid_profile_metric.is_err());
+
+        let contradictory_execution = super::local_pipeline_telemetry_from_native(
+            super::ffi::fullmag_fdm_local_pipeline_telemetry_v1 {
+                executed_realization:
+                    super::ffi::FULLMAG_FDM_LOCAL_PIPELINE_REALIZATION_DIRECT_UNFUSED,
+                ..native
+            },
+        );
+        assert!(contradictory_execution.is_err());
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gpu_workspace_telemetry_maps_setup_evidence_and_rejects_hot_loop_allocation() {
+        let mut native = super::gpu_workspace_telemetry_v1_request();
+        native.accounting_valid = 1;
+        native.setup_complete = 1;
+        native.precision = super::ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_DOUBLE;
+        native.integrator = super::ffi::fullmag_fdm_integrator::FULLMAG_FDM_INTEGRATOR_RK4;
+        native.metric_valid_mask = super::ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_IDENTITY
+            | super::ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_ALLOCATIONS
+            | super::ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_FFT_PLANS
+            | super::ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_FOOTPRINT
+            | super::ffi::FULLMAG_FDM_GPU_WORKSPACE_METRIC_REVISIONS;
+        native.workspace_revision = 3;
+        native.source_revision = 4;
+        native.field_revision = 5;
+        native.setup_device_allocation_count = 10;
+        native.setup_device_allocation_bytes = 1_000;
+        native.total_device_allocation_count = 10;
+        native.total_device_allocation_bytes = 1_000;
+        native.setup_fft_plan_creation_count = 2;
+        native.total_fft_plan_creation_count = 2;
+        native.prepared_fft_workspace_count = 2;
+        native.workspace_bytes = 800;
+        native.peak_vram_bytes = 1_200;
+        native.observed_step_count = 7;
+
+        let telemetry = super::gpu_workspace_telemetry_from_native(native)
+            .expect("consistent setup-only workspace telemetry must map");
+        assert_eq!(telemetry.precision, "double");
+        assert_eq!(telemetry.integrator, "rk4");
+        assert_eq!(telemetry.prepared_fft_workspace_count, 2);
+        assert_eq!(telemetry.observed_step_count, 7);
+
+        let step_allocation = super::gpu_workspace_telemetry_from_native(
+            super::ffi::fullmag_fdm_gpu_workspace_telemetry_v1 {
+                step_device_allocation_count: 1,
+                ..native
+            },
+        );
+        assert!(step_allocation.is_err());
+
+        let late_plan = super::gpu_workspace_telemetry_from_native(
+            super::ffi::fullmag_fdm_gpu_workspace_telemetry_v1 {
+                total_fft_plan_creation_count: 3,
+                ..native
+            },
+        );
+        assert!(late_plan.is_err());
+
+        let incomplete_setup = super::gpu_workspace_telemetry_from_native(
+            super::ffi::fullmag_fdm_gpu_workspace_telemetry_v1 {
+                setup_complete: 0,
+                ..native
+            },
+        );
+        assert!(incomplete_setup.is_err());
+
+        let unknown_metric = super::gpu_workspace_telemetry_from_native(
+            super::ffi::fullmag_fdm_gpu_workspace_telemetry_v1 {
+                metric_valid_mask: native.metric_valid_mask | (1_u64 << 63),
+                ..native
+            },
+        );
+        assert!(unknown_metric.is_err());
     }
 
     #[cfg(feature = "cuda")]
@@ -1249,6 +2013,20 @@ mod tests {
         receipt.executed_device_operator_mask = 1;
         receipt.executed_unknown_operator_mask = 0;
         receipt.accounting_valid = true;
+        let components = FdmGpuPrecisionComponents {
+            storage: "double".into(),
+            compute: "double".into(),
+            fft: "double".into(),
+            reduction: "double".into(),
+            realization_id: "fullmag.fdm.cuda.precision.full_double.v1".into(),
+        };
+        receipt.precision_policy = Some(FdmGpuPrecisionPolicyReceipt {
+            schema_version: "fullmag.fdm.cuda.precision-policy.v1".into(),
+            requested: "double".into(),
+            resolved: components.clone(),
+            executed: components,
+            accounting_valid: true,
+        });
         receipt.operator_residency = vec![FdmGpuOperatorResidency {
             operator: "llg_integrator".into(),
             realization: "cuda_dp45_fp64".into(),

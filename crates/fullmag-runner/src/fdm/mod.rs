@@ -119,6 +119,11 @@ fn validate_single_grid_budget_with_policy(
     plan: &fullmag_ir::FdmPlanIR,
     allow_legacy_fixture: bool,
 ) -> Result<u64, RunError> {
+    plan.precision_policy
+        .validate_for(plan.precision)
+        .map_err(|message| RunError {
+            message: format!("FDM precision policy rejected before allocation: {message}"),
+        })?;
     if plan.origin_m.iter().any(|component| !component.is_finite()) {
         return Err(RunError {
             message: format!(
@@ -650,6 +655,7 @@ mod tests {
             bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             periodicity: None,
             resolved_periodic_images: None,

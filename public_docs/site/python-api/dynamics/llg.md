@@ -115,15 +115,15 @@ No physical model is introduced. Primary references belong to consuming interact
 
 ## Control Room crosswalk
 
-Status: Common solver/stage fields are partial; backend-specific options without editor fields remain TODO.
+Status: Common solver/stage fields are partial; backend-specific options without editor fields remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Solver` | `partial` | Apply stage draft; solver request and result resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for dynamics parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+frontend support is not implemented for dynamics parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index

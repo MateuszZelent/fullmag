@@ -129,13 +129,17 @@ void context_destroy_adaptive_step_graph(Context &ctx) {
     ctx.adaptive_graph_field_revision = 0;
     ctx.adaptive_graph_transport_revision = 0;
     ctx.adaptive_graph_projection_policy_identity = 0;
+    ctx.adaptive_graph_build_is_recapture = false;
+    context_clear_local_pipeline_graph_template(ctx);
 }
 
 bool context_begin_adaptive_step_graph_build(
     Context &ctx,
     cudaGraph_t &conditional_body)
 {
+    const bool is_recapture = ctx.adaptive_step_graph_exec != nullptr;
     context_destroy_adaptive_step_graph(ctx);
+    ctx.adaptive_graph_build_is_recapture = is_recapture;
     if (!graph_ok(
             ctx,
             "cudaGraphCreate(adaptive_step)",
@@ -292,6 +296,7 @@ bool context_begin_adaptive_step_graph_body_capture(
         context_destroy_adaptive_step_graph(ctx);
         return false;
     }
+    context_begin_local_pipeline_graph_capture(ctx);
     ctx.adaptive_graph_capture_active = true;
     return true;
 }
@@ -310,6 +315,13 @@ bool context_finish_adaptive_step_graph_body_capture(
             set_cuda_error(ctx, "cudaStreamEndCapture(adaptive_step)", error);
         } else if (ctx.last_error.empty()) {
             ctx.last_error = "adaptive_step_graph_body_capture_failed";
+        }
+        context_destroy_adaptive_step_graph(ctx);
+        return false;
+    }
+    if (!context_finish_local_pipeline_graph_capture(ctx)) {
+        if (ctx.last_error.empty()) {
+            ctx.last_error = "adaptive_step_graph_local_pipeline_accounting_failed";
         }
         context_destroy_adaptive_step_graph(ctx);
         return false;
@@ -382,6 +394,12 @@ bool context_finish_adaptive_step_graph_build(Context &ctx) {
     }
     context_record_adaptive_execution_counter(
         ctx, ctx.adaptive_graph_build_count);
+    if (ctx.adaptive_graph_build_is_recapture) {
+        context_record_adaptive_execution_counter(
+            ctx, ctx.adaptive_graph_recapture_count);
+    }
+    context_commit_local_pipeline_graph_template(ctx);
+    ctx.adaptive_graph_build_is_recapture = false;
     return true;
 }
 
@@ -528,6 +546,28 @@ bool context_launch_adaptive_step_graph_batch(
     if (ctx.stats_mode != FULLMAG_FDM_STATS_FULL) {
         context_record_adaptive_execution_counter(
             ctx, ctx.adaptive_stats_none_host_sync_count);
+    }
+    uint64_t graph_attempt_executions = 0;
+    const uint64_t record_count =
+        static_cast<uint64_t>(terminal_batch.accepted_count) +
+        (terminal_batch.failed != 0 ? UINT64_C(1) : UINT64_C(0));
+    if (record_count <= max_steps && record_count <= accepted_steps_capacity) {
+        for (uint64_t index = 0; index < record_count; ++index) {
+            const uint64_t attempts =
+                static_cast<uint64_t>(accepted_steps[index].attempt_index) + 1;
+            if (graph_attempt_executions > UINT64_MAX - attempts) {
+                ctx.local_pipeline_accounting_valid = false;
+                graph_attempt_executions = 0;
+                break;
+            }
+            graph_attempt_executions += attempts;
+        }
+    } else {
+        ctx.local_pipeline_accounting_valid = false;
+    }
+    if (graph_attempt_executions != 0) {
+        context_record_local_pipeline_graph_attempts(
+            ctx, graph_attempt_executions);
     }
     accepted_step_count = terminal_batch.accepted_count;
     if (terminal_batch.failed != 0) {

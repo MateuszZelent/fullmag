@@ -2274,6 +2274,50 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
 
+    def test_fdm_precision_policy_round_trips_through_public_authoring(self) -> None:
+        problem = self._build_problem()
+        problem = fm.Problem(
+            name=problem.name,
+            magnets=problem.magnets,
+            energy=problem.energy,
+            study=problem.study,
+            discretization=problem.discretization,
+            runtime=(
+                fm.backend.cuda(1)
+                .engine("fdm")
+                .precision_policy("single_storage_fp64_reduction")
+            ),
+        )
+
+        ir = fm.Simulation(problem).to_ir()
+        expected = {
+            "storage": "single",
+            "compute": "single",
+            "fft": "single",
+            "reduction": "double",
+            "realization_id": (
+                "fullmag.fdm.cuda.precision."
+                "single_storage_fp64_reduction.v1"
+            ),
+        }
+        self.assertEqual(ir["backend_policy"]["execution_precision"], "single")
+        self.assertEqual(ir["backend_policy"]["fdm_precision_policy"], expected)
+        self.assertEqual(
+            ir["problem_meta"]["runtime_metadata"]["runtime_selection"][
+                "fdm_precision_policy"
+            ],
+            expected,
+        )
+
+    def test_fdm_precision_policy_rejects_conflicting_scalar_precision(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError, "fdm_precision_policy conflicts with execution_precision"
+        ):
+            fm.RuntimeSelection(
+                execution_precision="double",
+                fdm_precision_policy="single_storage_fp64_reduction",
+            )
+
     def test_runtime_selection_rejects_unimplemented_multi_gpu_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "multi-GPU execution is not implemented"):
             fm.backend.cuda(2)
@@ -7955,6 +7999,7 @@ class ProblemApiTests(unittest.TestCase):
         fm.reset()
         study = fm.study("mixed-p1-layers")
         study.engine("fem")
+        study.device("cpu", precision="double")
         study.mode("strict")
         study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
         film = study.geometry(

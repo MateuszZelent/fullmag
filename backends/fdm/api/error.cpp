@@ -12,6 +12,11 @@ namespace fdm {
 #if FULLMAG_HAS_CUDA
 
 void set_cuda_error(Context &ctx, const char *operation, cudaError_t err) {
+    // The allocation wrapper already records the measured memory budget.  Do
+    // not replace that root cause with a generic cudaErrorMemoryAllocation.
+    if (ctx.last_error.rfind("fdm_gpu_workspace_", 0) == 0) {
+        return;
+    }
     char buf[512];
     std::snprintf(buf, sizeof(buf), "CUDA error in %s: %s (%d)",
                   operation, cudaGetErrorString(err), static_cast<int>(err));

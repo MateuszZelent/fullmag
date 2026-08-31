@@ -13972,6 +13972,46 @@ fn fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity() {
 }
 
 #[test]
+fn fdm_cuda_fp32_resolves_complete_numeric_policy() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+
+    let planned = plan(&ir).expect("bounded CUDA FP32 plan should resolve");
+    let BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("expected a single-grid FDM plan");
+    };
+    assert_eq!(fdm.precision_policy.storage, ExecutionPrecision::Single);
+    assert_eq!(fdm.precision_policy.compute, ExecutionPrecision::Single);
+    assert_eq!(fdm.precision_policy.fft, ExecutionPrecision::Single);
+    assert_eq!(fdm.precision_policy.reduction, ExecutionPrecision::Double);
+    assert_eq!(
+        fdm.precision_policy.realization_id,
+        fullmag_ir::FdmPrecisionPolicyIR::SINGLE_STORAGE_FP64_REDUCTION_REALIZATION_ID
+    );
+}
+
+#[test]
+fn fdm_cuda_rejects_authored_precision_policy_that_conflicts_with_precision() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+    ir.backend_policy.fdm_precision_policy = Some(fullmag_ir::FdmPrecisionPolicyIR::default());
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+
+    let error = plan(&ir).expect_err("conflicting authored precision policy must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("not a qualified realization")
+            && reason.contains("fdm_precision_policy_mismatch")
+    }));
+}
+
+#[test]
 fn fdm_cuda_fp32_subcell_boundary_is_capability_gated_until_field_energy_parity() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.geometry.entries = vec![GeometryEntryIR::Cylinder {

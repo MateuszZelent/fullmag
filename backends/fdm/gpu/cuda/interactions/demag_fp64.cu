@@ -9,10 +9,12 @@
 
 #include "context.hpp"
 #include "dmi_boundary.cuh"
+#include "kernels.hpp"
 
 #include <cuda_runtime.h>
 #include <cufft.h>
 #include <curand_kernel.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -290,7 +292,21 @@ __global__ void combine_effective_field_fp64_kernel(
     double mel_b1,
     double mel_b2,
     double mel_e11, double mel_e22, double mel_e33,
-    double mel_e23, double mel_e13, double mel_e12)
+    double mel_e23, double mel_e13, double mel_e12,
+    const double * __restrict__ profile_x,
+    const double * __restrict__ profile_y,
+    const double * __restrict__ profile_z,
+    int has_profile,
+    double profile_scale,
+    const uint8_t * __restrict__ frozen_mask,
+    int has_frozen_mask,
+    double * __restrict__ rhs_x,
+    double * __restrict__ rhs_y,
+    double * __restrict__ rhs_z,
+    double gamma_bar,
+    double alpha,
+    int disable_precession,
+    int write_rhs)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
@@ -299,6 +315,11 @@ __global__ void combine_effective_field_fp64_kernel(
         h_eff_x[idx] = 0.0;
         h_eff_y[idx] = 0.0;
         h_eff_z[idx] = 0.0;
+        if (write_rhs) {
+            rhs_x[idx] = 0.0;
+            rhs_y[idx] = 0.0;
+            rhs_z[idx] = 0.0;
+        }
         return;
     }
 
@@ -464,9 +485,34 @@ __global__ void combine_effective_field_fp64_kernel(
         hz += thermal_sigma * curand_normal_double(&state);
     }
 
+    if (has_profile) {
+        hx += profile_scale * profile_x[idx];
+        hy += profile_scale * profile_y[idx];
+        hz += profile_scale * profile_z[idx];
+    }
+
     h_eff_x[idx] = hx;
     h_eff_y[idx] = hy;
     h_eff_z[idx] = hz;
+
+    if (write_rhs) {
+        const double px = my * hz - mz * hy;
+        const double py = mz * hx - mx * hz;
+        const double pz = mx * hy - my * hx;
+        const double dx = my * pz - mz * py;
+        const double dy = mz * px - mx * pz;
+        const double dz = mx * py - my * px;
+        const double precession_scale = disable_precession ? 0.0 : 1.0;
+        if (has_frozen_mask && frozen_mask[idx] != 0) {
+            rhs_x[idx] = 0.0;
+            rhs_y[idx] = 0.0;
+            rhs_z[idx] = 0.0;
+        } else {
+            rhs_x[idx] = -gamma_bar * (precession_scale * px + alpha * dx);
+            rhs_y[idx] = -gamma_bar * (precession_scale * py + alpha * dy);
+            rhs_z[idx] = -gamma_bar * (precession_scale * pz + alpha * dz);
+        }
+    }
 }
 
 __global__ void anisotropy_field_fp64_kernel(
@@ -724,26 +770,11 @@ void launch_demag_field_fp64(Context &ctx) {
 }
 
 /* ── Axpy kernel: dst += scale * src  (for Oersted field addition) ── */
-__global__ void add_scaled_field_fp64_kernel(
-    double *dst_x, double *dst_y, double *dst_z,
-    const double *src_x, const double *src_y, const double *src_z,
-    double scale,
-    const uint8_t *active_mask,
-    int has_active_mask,
-    int n)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    if (has_active_mask && active_mask[i] == 0) return;
-    dst_x[i] += scale * src_x[i];
-    dst_y[i] += scale * src_y[i];
-    dst_z[i] += scale * src_z[i];
-}
-
-void launch_effective_field_fp64(
+static void launch_effective_field_fp64_impl(
     Context &ctx,
     double evaluation_time,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    DeviceVectorField *rhs_out) {
     int n = static_cast<int>(ctx.cell_count);
     int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -758,6 +789,14 @@ void launch_effective_field_fp64(
         ctx.thermal_sigma = 0.0;
     }
     if (ctx.thermal_sigma > 0.0) ctx.thermal_rng_draws += 3 * ctx.cell_count;
+
+    const bool has_profile =
+        ctx.has_static_external_field_profile || ctx.has_oersted_field;
+    const double profile_scale = ctx.has_static_external_field_profile
+        ? 1.0
+        : (ctx.has_oersted_field ? oersted_field_scale(ctx, evaluation_time) : 0.0);
+    const bool write_rhs = rhs_out != nullptr;
+    const double gamma_bar = ctx.gamma / (1.0 + ctx.alpha * ctx.alpha);
 
     combine_effective_field_fp64_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
         static_cast<const double*>(ctx.m.x),
@@ -814,40 +853,30 @@ void launch_effective_field_fp64(
         ctx.mel_b1,
         ctx.mel_b2,
         ctx.mel_strain[0], ctx.mel_strain[1], ctx.mel_strain[2],  // e11, e22, e33
-        ctx.mel_strain[3] * 0.5, ctx.mel_strain[4] * 0.5, ctx.mel_strain[5] * 0.5); // e23, e13, e12 (tensor)
-
-    // ── Add a static external profile directly, or scale a dynamic Oersted profile by I(t). ──
-    if (ctx.has_static_external_field_profile) {
-        add_scaled_field_fp64_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
-            static_cast<double*>(ctx.work.x),
-            static_cast<double*>(ctx.work.y),
-            static_cast<double*>(ctx.work.z),
-            static_cast<const double*>(ctx.h_oe_static.x),
-            static_cast<const double*>(ctx.h_oe_static.y),
-            static_cast<const double*>(ctx.h_oe_static.z),
-            1.0,
-            ctx.active_mask,
-            ctx.has_active_mask ? 1 : 0,
-            n);
-    } else if (ctx.has_oersted_field) {
-        const double I_scale = oersted_field_scale(ctx, evaluation_time);
-        // Simple axpy: work += I_scale * h_oe_static
-        add_scaled_field_fp64_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(
-            static_cast<double*>(ctx.work.x),
-            static_cast<double*>(ctx.work.y),
-            static_cast<double*>(ctx.work.z),
-            static_cast<const double*>(ctx.h_oe_static.x),
-            static_cast<const double*>(ctx.h_oe_static.y),
-            static_cast<const double*>(ctx.h_oe_static.z),
-            I_scale,
-            ctx.active_mask,
-            ctx.has_active_mask ? 1 : 0,
-            n);
-    }
+        ctx.mel_strain[3] * 0.5, ctx.mel_strain[4] * 0.5, ctx.mel_strain[5] * 0.5,
+        static_cast<const double*>(ctx.h_oe_static.x),
+        static_cast<const double*>(ctx.h_oe_static.y),
+        static_cast<const double*>(ctx.h_oe_static.z),
+        has_profile ? 1 : 0,
+        profile_scale,
+        ctx.frozen_mask,
+        ctx.has_frozen_mask ? 1 : 0,
+        write_rhs ? static_cast<double*>(rhs_out->x) : nullptr,
+        write_rhs ? static_cast<double*>(rhs_out->y) : nullptr,
+        write_rhs ? static_cast<double*>(rhs_out->z) : nullptr,
+        gamma_bar,
+        ctx.alpha,
+        ctx.disable_precession ? 1 : 0,
+        write_rhs ? 1 : 0);
     const cudaError_t launch_error = cudaGetLastError();
     if (launch_error != cudaSuccess) {
         set_cuda_error(ctx, "launch_effective_field_fp64", launch_error);
         return;
+    }
+    if (write_rhs) {
+        context_note_local_pipeline_fused_field_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "fused local field/RHS fp64 launch");
     }
     ++ctx.endpoint_field_cache.effective_field_evaluation_count;
     if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
@@ -877,8 +906,78 @@ void launch_effective_field_fp64(
     }
 }
 
+void launch_effective_field_fp64(
+    Context &ctx,
+    double evaluation_time,
+    cudaStream_t stream) {
+    launch_effective_field_fp64_impl(ctx, evaluation_time, stream, nullptr);
+}
+
+bool launch_effective_field_and_base_llg_rhs_fp64(
+    Context &ctx,
+    double evaluation_time,
+    DeviceVectorField &rhs_out,
+    cudaStream_t stream) {
+    if (ctx.has_zhang_li_stt || ctx.has_slonczewski_stt || ctx.has_sot) {
+        return false;
+    }
+    launch_effective_field_fp64_impl(ctx, evaluation_time, stream, &rhs_out);
+    return ctx.last_error.empty();
+}
+
 void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
     launch_effective_field_fp64(ctx, evaluation_time, nullptr);
+}
+
+cudaError_t query_local_pipeline_kernel_resources_fp64(
+    LocalPipelineKernelResources *out_resources) {
+    if (out_resources == nullptr) return cudaErrorInvalidValue;
+    cudaFuncAttributes attributes{};
+    cudaError_t status = cudaFuncGetAttributes(
+        &attributes, combine_effective_field_fp64_kernel);
+    if (status != cudaSuccess) return status;
+    int device = 0;
+    status = cudaGetDevice(&device);
+    if (status != cudaSuccess) return status;
+    int max_threads_per_sm = 0;
+    status = cudaDeviceGetAttribute(
+        &max_threads_per_sm, cudaDevAttrMaxThreadsPerMultiProcessor, device);
+    if (status != cudaSuccess) return status;
+    int multiprocessor_count = 0;
+    status = cudaDeviceGetAttribute(
+        &multiprocessor_count, cudaDevAttrMultiProcessorCount, device);
+    if (status != cudaSuccess) return status;
+    int max_active_blocks_per_sm = 0;
+    status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_active_blocks_per_sm,
+        combine_effective_field_fp64_kernel,
+        BLOCK_SIZE,
+        0);
+    if (status != cudaSuccess) return status;
+    if (max_threads_per_sm <= 0 || max_active_blocks_per_sm <= 0 ||
+        attributes.numRegs < 0) {
+        return cudaErrorInvalidConfiguration;
+    }
+    LocalPipelineKernelResources resources{};
+    resources.block_threads = BLOCK_SIZE;
+    resources.registers_per_thread =
+        static_cast<uint32_t>(attributes.numRegs);
+    resources.static_shared_bytes = attributes.sharedSizeBytes;
+    resources.local_bytes_per_thread = attributes.localSizeBytes;
+    resources.max_active_blocks_per_sm =
+        static_cast<uint32_t>(max_active_blocks_per_sm);
+    resources.max_threads_per_sm = static_cast<uint32_t>(max_threads_per_sm);
+    resources.multiprocessor_count =
+        static_cast<uint32_t>(multiprocessor_count);
+    const uint64_t resident_threads =
+        static_cast<uint64_t>(max_active_blocks_per_sm) * BLOCK_SIZE;
+    resources.theoretical_occupancy_permyriad = static_cast<uint32_t>(
+        std::min<uint64_t>(
+            10000,
+            resident_threads * 10000 /
+                static_cast<uint64_t>(max_threads_per_sm)));
+    *out_resources = resources;
+    return cudaSuccess;
 }
 
 void launch_anisotropy_field_fp64(Context &ctx) {

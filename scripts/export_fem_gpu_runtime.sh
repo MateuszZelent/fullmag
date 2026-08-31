@@ -462,6 +462,7 @@ docker_build_ref_marker="$(mktemp -d "${TMPDIR:-/tmp}/fullmag-fem-gpu-runtime-ex
 docker_build_ref="fullmag/fem-gpu:$(basename "${docker_build_ref_marker}")"
 build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"
 docker_image_id="${MANAGED_FEM_BUILT_IMAGE_ID}"
+docker_build_cache_key="${MANAGED_FEM_BUILD_CACHE_KEY}"
 
 FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run --rm -T \
   -v "${SOURCE_SNAPSHOT_ROOT}:/workspace:ro" \
@@ -471,6 +472,7 @@ FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run 
   -e FULLMAG_ENABLE_NVTX="${FULLMAG_ENABLE_NVTX}" \
   -e FULLMAG_NATIVE_BUILD_SOURCE_SHA256="${FULLMAG_NATIVE_BUILD_SOURCE_SHA256}" \
   -e FULLMAG_MANAGED_FEM_IMAGE_ID="${docker_image_id}" \
+  -e FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY="${docker_build_cache_key}" \
   -e FULLMAG_HOST_UID="${FULLMAG_HOST_UID}" \
   -e FULLMAG_HOST_GID="${FULLMAG_HOST_GID}" \
   -e FULLMAG_SOURCE_GIT_COMMIT="${FULLMAG_SOURCE_GIT_COMMIT}" \
@@ -483,15 +485,21 @@ FULLMAG_FEM_GPU_IMAGE="${docker_image_id}" docker compose --profile fem-gpu run 
   fem-gpu bash -lc '
 set -euo pipefail
 runtime_root="${FULLMAG_RUNTIME_EXPORT_STAGING:?missing managed FEM runtime staging directory}"
+cargo_target_dir="/workspace/target/cargo-targets/${FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY:?missing managed FEM build cache key}"
+export CARGO_TARGET_DIR="${cargo_target_dir}"
 native_build_stamp="/workspace/target/.fullmag-managed-fem-native-build-v1"
 native_build_stamp_tmp="${native_build_stamp}.tmp.$$"
-native_build_fingerprint="fullmag-managed-fem-native-build.v1|source=${FULLMAG_NATIVE_BUILD_SOURCE_SHA256:?missing native build source digest}|image=${FULLMAG_MANAGED_FEM_IMAGE_ID:?missing managed FEM image ID}|cuda=${FULLMAG_CUDA_ARCHITECTURES:?missing CUDA architectures}|nvtx=${FULLMAG_ENABLE_NVTX:?missing NVTX policy}"
+native_build_fingerprint="fullmag-managed-fem-native-build.v1|source=${FULLMAG_NATIVE_BUILD_SOURCE_SHA256:?missing native build source digest}|build_cache=${FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY}|cuda=${FULLMAG_CUDA_ARCHITECTURES:?missing CUDA architectures}|nvtx=${FULLMAG_ENABLE_NVTX:?missing NVTX policy}"
 if ! [[ "${FULLMAG_NATIVE_BUILD_SOURCE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
   echo "[export_fem_gpu_runtime] native build source digest is invalid inside the build container" >&2
   exit 2
 fi
+if ! [[ "${FULLMAG_MANAGED_FEM_BUILD_CACHE_KEY}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[export_fem_gpu_runtime] managed FEM build cache key is invalid inside the build container" >&2
+  exit 2
+fi
 rm -f -- "${native_build_stamp_tmp}"
-mkdir -p "${TMPDIR}" "${CARGO_HOME}"
+mkdir -p "${TMPDIR}" "${CARGO_HOME}" "${CARGO_TARGET_DIR}"
 restore_staging_owner() {
   local status="$?"
   trap - EXIT
@@ -529,7 +537,7 @@ if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then
   echo "[export_fem_gpu_runtime] clearing release artifacts before a clean rebuild"
   cargo +nightly clean --workspace --release
   mapfile -t stale_fem_native_artifacts < <(
-    find target/release/build \
+    find "${CARGO_TARGET_DIR}/release/build" \
       -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
       -print 2>/dev/null
   )
@@ -572,17 +580,17 @@ copy_runtime_binary() {
   cp --remove-destination "$src" "$dest"
   chmod 755 "$dest"
 }
-copy_runtime_binary target/release/fullmag ${runtime_root}/bin/fullmag-fem-gpu-bin
-copy_runtime_binary target/release/fullmag-api ${runtime_root}/bin/fullmag-api
-if [ ! -f target/release/lib_fullmag_core.so ]; then
-  echo "[export_fem_gpu_runtime] failed to locate PyO3 module: target/release/lib_fullmag_core.so" >&2
+copy_runtime_binary "${CARGO_TARGET_DIR}/release/fullmag" ${runtime_root}/bin/fullmag-fem-gpu-bin
+copy_runtime_binary "${CARGO_TARGET_DIR}/release/fullmag-api" ${runtime_root}/bin/fullmag-api
+if [ ! -f "${CARGO_TARGET_DIR}/release/lib_fullmag_core.so" ]; then
+  echo "[export_fem_gpu_runtime] failed to locate PyO3 module: ${CARGO_TARGET_DIR}/release/lib_fullmag_core.so" >&2
   exit 1
 fi
-install -m 755 target/release/lib_fullmag_core.so ${runtime_root}/_fullmag_core.so
+install -m 755 "${CARGO_TARGET_DIR}/release/lib_fullmag_core.so" ${runtime_root}/_fullmag_core.so
 latest_native_lib_dir() {
   local pattern="$1"
   local selected
-  selected="$(find target/release/build -path "$pattern" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"
+  selected="$(find "${CARGO_TARGET_DIR}/release/build" -path "$pattern" -printf "%T@ %p\n" | sort -nr | head -n1 | cut -d" " -f2-)"
   if [ -z "$selected" ]; then
     echo "[export_fem_gpu_runtime] failed to locate native library matching pattern: $pattern" >&2
     exit 1
@@ -592,7 +600,7 @@ latest_native_lib_dir() {
 only_native_lib_dir() {
   local pattern="$1"
   local matches=()
-  mapfile -t matches < <(find target/release/build -path "$pattern" -print)
+  mapfile -t matches < <(find "${CARGO_TARGET_DIR}/release/build" -path "$pattern" -print)
   if [ "${#matches[@]}" -ne 1 ]; then
     echo "[export_fem_gpu_runtime] expected exactly one native library matching pattern: $pattern" >&2
     printf "  %s\n" "${matches[@]}" >&2
@@ -895,15 +903,27 @@ echo "[export_fem_gpu_runtime] bundling OpenMPI/PMIx runtime components"
 if [ -x /usr/bin/orted ]; then
   copy_runtime_entry_replace /usr/bin/orted ${runtime_root}/openmpi/bin
 fi
-if [ -d /usr/lib/x86_64-linux-gnu/pmix2/lib ]; then
-  mkdir -p ${runtime_root}/lib/pmix2
-  cp -a /usr/lib/x86_64-linux-gnu/pmix2/lib \
-    ${runtime_root}/lib/pmix2/
+pmix_source_root=""
+for candidate in \
+  /usr/lib/x86_64-linux-gnu/pmix2 \
+  /usr/lib/x86_64-linux-gnu/pmix; do
+  if [ -d "${candidate}/lib/pmix" ]; then
+    pmix_source_root="${candidate}"
+    break
+  fi
+done
+if [ -z "${pmix_source_root}" ]; then
+  echo "[export_fem_gpu_runtime] missing supported PMIx component layout" >&2
+  exit 1
 fi
-if [ -d /usr/lib/x86_64-linux-gnu/pmix2/share ]; then
-  mkdir -p ${runtime_root}/lib/pmix2
-  cp -a /usr/lib/x86_64-linux-gnu/pmix2/share \
-    ${runtime_root}/lib/pmix2/
+mkdir -p ${runtime_root}/lib/pmix2/lib \
+  ${runtime_root}/lib/pmix2/share/pmix
+cp -a "${pmix_source_root}/lib"/. ${runtime_root}/lib/pmix2/lib/
+if [ -d "${pmix_source_root}/share" ]; then
+  cp -a "${pmix_source_root}/share"/. ${runtime_root}/lib/pmix2/share/
+fi
+if [ -d /usr/share/pmix ]; then
+  cp -a /usr/share/pmix/. ${runtime_root}/lib/pmix2/share/pmix/
 fi
 if [ -d /usr/lib/x86_64-linux-gnu/openmpi/lib/openmpi3 ]; then
   mkdir -p ${runtime_root}/openmpi/lib
@@ -929,7 +949,7 @@ require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_ess_singleton.so 
 require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_plm_isolated.so "OpenMPI isolated PLM component"
 require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_pmix_isolated.so "OpenMPI isolated PMIx component"
 require_exported_path ${runtime_root}/openmpi/lib/openmpi3/mca_btl_self.so "OpenMPI self BTL component"
-require_exported_path ${runtime_root}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so "PMIx compression component"
+require_exported_path ${runtime_root}/lib/pmix2/lib/pmix/mca_gds_hash.so "PMIx hash datastore component"
 require_exported_path ${runtime_root}/lib/pmix2/share/pmix/help-pmix-runtime.txt "PMIx help data"
 require_exported_path ${runtime_root}/lib/libpetsc_real.so "PETSc shared library"
 require_exported_path ${runtime_root}/lib/libslepc_real.so "SLEPc shared library"
@@ -1078,7 +1098,7 @@ fi
 if [ -e "${RUNTIME_ROOT}/lib/libmpi.so.40" ]; then
   missing_pmix=0
   for required in \
-    "${RUNTIME_ROOT}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so" \
+    "${RUNTIME_ROOT}/lib/pmix2/lib/pmix/mca_gds_hash.so" \
     "${RUNTIME_ROOT}/lib/pmix2/share/pmix/help-pmix-runtime.txt"; do
     if [ ! -e "${required}" ]; then
       echo "managed FEM runtime is missing PMIx runtime component: ${required}" >&2
@@ -1097,7 +1117,9 @@ if [ -d "${RUNTIME_ROOT}/lib/pmix2/share/pmix" ]; then
   export PMIX_PKGDATADIR="${RUNTIME_ROOT}/lib/pmix2/share/pmix"
   export PMIX_LIBDIR="${RUNTIME_ROOT}/lib/pmix2/lib"
   export PMIX_MCA_mca_base_component_path="${RUNTIME_ROOT}/lib/pmix2/lib/pmix"
-  export PMIX_MCA_pcompress_base_silence_warning="${PMIX_MCA_pcompress_base_silence_warning:-1}"
+  if [ -e "${RUNTIME_ROOT}/lib/pmix2/lib/pmix/mca_pcompress_zlib.so" ]; then
+    export PMIX_MCA_pcompress_base_silence_warning="${PMIX_MCA_pcompress_base_silence_warning:-1}"
+  fi
   if [ -z "${PMIX_MCA_ptl_tcp_if_include:-}" ] && [ -z "${PMIX_MCA_ptl_tcp_if_exclude:-}" ]; then
     export PMIX_MCA_ptl_tcp_if_include=lo
   fi

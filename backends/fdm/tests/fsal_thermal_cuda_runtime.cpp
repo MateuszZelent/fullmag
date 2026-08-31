@@ -134,6 +134,317 @@ fullmag_fdm_execution_receipt_v2 execution_receipt(fullmag_fdm_backend *backend)
     return receipt;
 }
 
+fullmag_fdm_gpu_workspace_telemetry_v1 workspace_telemetry(
+    fullmag_fdm_backend *backend)
+{
+    fullmag_fdm_gpu_workspace_telemetry_v1 telemetry{};
+    telemetry.abi_version = FULLMAG_FDM_GPU_WORKSPACE_TELEMETRY_ABI_V1;
+    telemetry.struct_size = sizeof(telemetry);
+    check(fullmag_fdm_backend_get_gpu_workspace_telemetry_v1(
+              backend, &telemetry) == FULLMAG_FDM_OK,
+          "GPU workspace telemetry query failed");
+    return telemetry;
+}
+
+void set_checkpoint_identity(
+    fullmag_fdm_backend *backend,
+    fullmag_fdm_integrator integrator)
+{
+    fullmag_fdm_execution_receipt_v2 receipt{};
+    receipt.abi_version = FULLMAG_FDM_EXECUTION_RECEIPT_ABI_V2;
+    receipt.struct_size = sizeof(receipt);
+    check(fullmag_fdm_backend_execution_receipt_v2(backend, &receipt) ==
+              FULLMAG_FDM_OK,
+          "checkpoint device receipt query failed");
+    check(receipt.device_ordinal >= 0,
+          "checkpoint device receipt has no CUDA ordinal");
+    fullmag_fdm_checkpoint_execution_identity_v3 identity{};
+    identity.abi_version = FULLMAG_FDM_CHECKPOINT_EXECUTION_IDENTITY_ABI_V3;
+    identity.struct_size = sizeof(identity);
+    identity.requested_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.resolved_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.executed_backend = FULLMAG_FDM_CHECKPOINT_BACKEND_FDM;
+    identity.requested_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.resolved_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.executed_policy = FULLMAG_FDM_CHECKPOINT_POLICY_STRICT;
+    identity.requested_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.resolved_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.executed_realization = FULLMAG_FDM_CHECKPOINT_REALIZATION_CUDA_FDM;
+    identity.requested_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.resolved_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.executed_device = FULLMAG_FDM_CHECKPOINT_DEVICE_GPU;
+    identity.requested_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.resolved_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.executed_precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    identity.requested_integrator = integrator;
+    identity.resolved_integrator = integrator;
+    identity.executed_integrator = integrator;
+    identity.device_ordinal = receipt.device_ordinal;
+    check(fullmag_fdm_backend_set_checkpoint_execution_identity_v3(
+              backend, &identity) == FULLMAG_FDM_OK,
+          "checkpoint execution identity setup failed");
+}
+
+void verify_checkpoint_import_keeps_setup_workspace_stable(
+    fullmag_fdm_integrator integrator)
+{
+    auto plan = base_plan(FULLMAG_FDM_PRECISION_DOUBLE, integrator);
+    auto *source = create_backend(plan);
+    set_checkpoint_identity(source, integrator);
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(source, kDt, &stats) == FULLMAG_FDM_OK,
+          "checkpoint source step failed");
+
+    uint64_t checkpoint_bytes = 0;
+    check(fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+              source, &checkpoint_bytes) == FULLMAG_FDM_OK,
+          "checkpoint size query failed");
+    std::vector<unsigned char> checkpoint(
+        static_cast<std::size_t>(checkpoint_bytes));
+    fullmag_fdm_llg_checkpoint_info_v4 info{};
+    check(fullmag_fdm_backend_llg_checkpoint_export_v4(
+              source, checkpoint.data(), checkpoint_bytes, &info) ==
+              FULLMAG_FDM_OK,
+          "checkpoint export failed");
+
+    auto *destination = create_backend(plan);
+    set_checkpoint_identity(destination, integrator);
+    const auto before = workspace_telemetry(destination);
+    check(fullmag_fdm_backend_llg_checkpoint_import_v4(
+              destination, checkpoint.data(), checkpoint_bytes, &info) ==
+              FULLMAG_FDM_OK,
+          "checkpoint import failed");
+    const auto after = workspace_telemetry(destination);
+    check(after.accounting_valid == 1 && after.setup_complete == 1,
+          "checkpoint import invalidated workspace accounting");
+    const bool stable_workspace =
+        after.workspace_revision == before.workspace_revision &&
+        after.total_device_allocation_count ==
+            before.total_device_allocation_count &&
+        after.total_device_allocation_bytes ==
+            before.total_device_allocation_bytes &&
+        after.total_fft_plan_creation_count ==
+            before.total_fft_plan_creation_count;
+    if (!stable_workspace) {
+        std::fprintf(
+            stderr,
+            "checkpoint import workspace delta integrator=%s revision=%lld allocations=%lld bytes=%lld fft_plans=%lld\n",
+            integrator_name(integrator),
+            static_cast<long long>(after.workspace_revision) -
+                static_cast<long long>(before.workspace_revision),
+            static_cast<long long>(after.total_device_allocation_count) -
+                static_cast<long long>(before.total_device_allocation_count),
+            static_cast<long long>(after.total_device_allocation_bytes) -
+                static_cast<long long>(before.total_device_allocation_bytes),
+            static_cast<long long>(after.total_fft_plan_creation_count) -
+                static_cast<long long>(before.total_fft_plan_creation_count));
+    }
+    check(stable_workspace,
+          "checkpoint import allocated or rebuilt setup-owned GPU workspace");
+    check(after.setup_device_allocation_count ==
+                  after.total_device_allocation_count &&
+              after.setup_device_allocation_bytes ==
+                  after.total_device_allocation_bytes &&
+              after.setup_fft_plan_creation_count ==
+                  after.total_fft_plan_creation_count,
+          "checkpoint import escaped the setup workspace baseline");
+
+    fullmag_fdm_backend_destroy(destination);
+    fullmag_fdm_backend_destroy(source);
+}
+
+void verify_checkpoint_rejects_grid_identity_collision() {
+    static const double initial_m[6] = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    static const uint8_t active_mask[2] = {1, 1};
+    auto source_plan = base_plan(
+        FULLMAG_FDM_PRECISION_DOUBLE, FULLMAG_FDM_INTEGRATOR_RK23);
+    source_plan.grid = {1, 2, 1, 5.0e-9, 5.0e-9, 5.0e-9};
+    source_plan.initial_magnetization_xyz = initial_m;
+    source_plan.initial_magnetization_len = 6;
+    source_plan.active_mask = active_mask;
+    source_plan.active_mask_len = 2;
+
+    auto *source = create_backend(source_plan);
+    set_checkpoint_identity(source, FULLMAG_FDM_INTEGRATOR_RK23);
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(source, kDt, &stats) == FULLMAG_FDM_OK,
+          "grid-identity checkpoint source step failed");
+    uint64_t checkpoint_bytes = 0;
+    uint64_t legacy_bytes = 0;
+    check(fullmag_fdm_backend_llg_checkpoint_query_size_v3(
+              source, &legacy_bytes) == FULLMAG_FDM_ERR_ABI,
+          "legacy checkpoint v3 export was not rejected");
+    const char *legacy_error = fullmag_fdm_backend_last_error(source);
+    check(legacy_error != nullptr &&
+              std::string(legacy_error).find("schema v4") != std::string::npos,
+          "legacy checkpoint v3 rejection did not name schema v4 migration");
+    check(fullmag_fdm_backend_llg_checkpoint_query_size_v4(
+              source, &checkpoint_bytes) == FULLMAG_FDM_OK,
+          "grid-identity checkpoint size query failed");
+    std::vector<unsigned char> checkpoint(
+        static_cast<std::size_t>(checkpoint_bytes));
+    fullmag_fdm_llg_checkpoint_info_v4 info{};
+    check(fullmag_fdm_backend_llg_checkpoint_export_v4(
+              source, checkpoint.data(), checkpoint_bytes, &info) ==
+              FULLMAG_FDM_OK,
+          "grid-identity checkpoint export failed");
+
+    auto destination_plan = source_plan;
+    destination_plan.grid = {2, 1, 1, 5.0e-9, 5.0e-9, 5.0e-9};
+    auto *destination = create_backend(destination_plan);
+    set_checkpoint_identity(destination, FULLMAG_FDM_INTEGRATOR_RK23);
+    const int import_status = fullmag_fdm_backend_llg_checkpoint_import_v4(
+        destination, checkpoint.data(), checkpoint_bytes, &info);
+    check(import_status == FULLMAG_FDM_ERR_ABI,
+          "checkpoint accepted a different grid with the same cell count");
+    const char *error = fullmag_fdm_backend_last_error(destination);
+    check(error != nullptr &&
+              std::string(error).find("identity") != std::string::npos,
+          "grid-identity rejection did not publish a precise diagnostic");
+
+    fullmag_fdm_backend_destroy(destination);
+    fullmag_fdm_backend_destroy(source);
+}
+
+void verify_workspace_dependency_identity_matrix() {
+    static const uint8_t active_all[2] = {1, 1};
+    static const uint8_t active_partial[2] = {1, 0};
+    static const double initial_m[6] = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+
+    const auto identity_for = [](const fullmag_fdm_plan_desc &plan) {
+        auto *backend = create_backend(plan);
+        fullmag_fdm_workspace_dependency_identity_v1 identity{};
+        identity.abi_version =
+            FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1;
+        identity.struct_size = sizeof(identity);
+        check(fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+                  backend, &identity) == FULLMAG_FDM_OK,
+              "workspace dependency identity query failed");
+        fullmag_fdm_backend_destroy(backend);
+        return identity;
+    };
+
+    auto plan = base_plan(
+        FULLMAG_FDM_PRECISION_DOUBLE, FULLMAG_FDM_INTEGRATOR_RK23);
+    plan.grid = {2, 1, 1, 5.0e-9, 5.0e-9, 5.0e-9};
+    plan.initial_magnetization_xyz = initial_m;
+    plan.initial_magnetization_len = 6;
+    plan.active_mask = active_all;
+    plan.active_mask_len = 2;
+
+    auto *abi_backend = create_backend(plan);
+    fullmag_fdm_workspace_dependency_identity_v1 incompatible_identity{};
+    incompatible_identity.abi_version =
+        FULLMAG_FDM_WORKSPACE_DEPENDENCY_IDENTITY_ABI_V1 + 1;
+    incompatible_identity.struct_size = sizeof(incompatible_identity);
+    std::fill(
+        std::begin(incompatible_identity.dependency_sha256),
+        std::end(incompatible_identity.dependency_sha256), UINT8_C(0xa5));
+    const auto incompatible_before = incompatible_identity;
+    check(fullmag_fdm_backend_get_workspace_dependency_identity_v1(
+              abi_backend, &incompatible_identity) == FULLMAG_FDM_ERR_ABI &&
+              std::memcmp(
+                  &incompatible_identity, &incompatible_before,
+                  sizeof(incompatible_identity)) == 0,
+          "workspace dependency getter modified an ABI-incompatible output");
+    fullmag_fdm_backend_destroy(abi_backend);
+
+    const auto baseline = identity_for(plan);
+    check(std::any_of(
+              std::begin(baseline.dependency_sha256),
+              std::end(baseline.dependency_sha256),
+              [](uint8_t value) { return value != 0; }),
+          "workspace dependency digest is empty");
+    const auto repeated = identity_for(plan);
+    check(std::memcmp(&baseline, &repeated, sizeof(baseline)) == 0,
+          "workspace dependency identity is not deterministic");
+
+    const auto differs = [&](const auto &candidate) {
+        return std::memcmp(
+                   baseline.dependency_sha256,
+                   candidate.dependency_sha256,
+                   sizeof(baseline.dependency_sha256)) != 0;
+    };
+
+    auto variant = plan;
+    variant.grid = {1, 2, 1, 5.0e-9, 5.0e-9, 5.0e-9};
+    check(differs(identity_for(variant)),
+          "grid shape is absent from the dependency key");
+
+    variant = plan;
+    variant.precision = FULLMAG_FDM_PRECISION_SINGLE;
+    check(differs(identity_for(variant)),
+          "precision is absent from the dependency key");
+
+    variant = plan;
+    variant.periodic_x = 1;
+    check(differs(identity_for(variant)),
+          "PBC is absent from the dependency key");
+
+    variant = plan;
+    variant.active_mask = active_partial;
+    const auto mask_variant = identity_for(variant);
+    check(differs(mask_variant) &&
+              std::memcmp(
+                  baseline.mask_topology_sha256,
+                  mask_variant.mask_topology_sha256,
+                  sizeof(baseline.mask_topology_sha256)) != 0,
+          "mask topology is absent from the dependency key");
+
+    variant = plan;
+    variant.material.saturation_magnetisation = 7.5e5;
+    const auto material_variant = identity_for(variant);
+    check(differs(material_variant) &&
+              std::memcmp(
+                  baseline.material_layout_sha256,
+                  material_variant.material_layout_sha256,
+                  sizeof(baseline.material_layout_sha256)) != 0,
+          "material layout is absent from the dependency key");
+
+    variant = plan;
+    variant.integrator = FULLMAG_FDM_INTEGRATOR_DP45;
+    check(differs(identity_for(variant)),
+          "integrator is absent from the dependency key");
+
+    std::array<double, 16> spectra_a{};
+    auto spectra_b = spectra_a;
+    spectra_b[0] = 1.0;
+    auto demag_plan = plan;
+    demag_plan.enable_demag = 1;
+    demag_plan.demag_fft_nx = 4;
+    demag_plan.demag_fft_ny = 2;
+    demag_plan.demag_fft_nz = 1;
+    demag_plan.demag_kernel_spectrum_len = spectra_a.size();
+    demag_plan.demag_kernel_xx_spectrum = spectra_a.data();
+    demag_plan.demag_kernel_yy_spectrum = spectra_a.data();
+    demag_plan.demag_kernel_zz_spectrum = spectra_a.data();
+    demag_plan.demag_kernel_xy_spectrum = spectra_a.data();
+    demag_plan.demag_kernel_xz_spectrum = spectra_a.data();
+    demag_plan.demag_kernel_yz_spectrum = spectra_a.data();
+    const auto demag_baseline = identity_for(demag_plan);
+    const auto demag_differs = [&](const auto &candidate) {
+        return std::memcmp(
+                   demag_baseline.dependency_sha256,
+                   candidate.dependency_sha256,
+                   sizeof(demag_baseline.dependency_sha256)) != 0;
+    };
+    auto fft_variant = demag_plan;
+    fft_variant.demag_fft_nx = 2;
+    fft_variant.demag_fft_ny = 4;
+    check(demag_differs(identity_for(fft_variant)),
+          "FFT padding is absent from the dependency key");
+    fft_variant = demag_plan;
+    fft_variant.demag_kernel_xx_spectrum = spectra_b.data();
+    check(demag_differs(identity_for(fft_variant)),
+          "FFT spectra content is absent from the dependency key");
+}
+
 std::array<double, 3> copy_m(
     fullmag_fdm_backend *backend,
     fullmag_fdm_precision precision)
@@ -511,6 +822,14 @@ int main() {
             }
         }
     }
+    verify_checkpoint_import_keeps_setup_workspace_stable(
+        FULLMAG_FDM_INTEGRATOR_RK23);
+    verify_checkpoint_import_keeps_setup_workspace_stable(
+        FULLMAG_FDM_INTEGRATOR_DP45);
+    verify_checkpoint_rejects_grid_identity_collision();
+    const auto verify_dependency_identity =
+        &verify_workspace_dependency_identity_matrix;
+    verify_dependency_identity();
     const char *evidence_path =
         std::getenv("FULLMAG_FDM_FSAL_CUDA_EVIDENCE_PATH");
     if (evidence_path != nullptr && *evidence_path != '\0') {

@@ -62,15 +62,15 @@
   "sources": [
     {
       "id": "mumax3-vortex-wall",
-      "path": "external_solvers/3/engine/config.go",
-      "symbol": "func VortexWall",
-      "responsibility": "immutable upstream VortexWall definition at submodule revision f656494b29516bead825b444b1f0b38c6e6c7dbf"
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "vortex_wall",
+      "responsibility": "tracked public compatibility factory and its source-backed validation"
     },
     {
       "id": "mumax3-compact-hopfion",
-      "path": "external_solvers/3/engine/config.go",
-      "symbol": "func HopfionCompactSupport",
-      "responsibility": "immutable upstream compact-hopfion definition at submodule revision f656494b29516bead825b444b1f0b38c6e6c7dbf"
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "hopfion_compact_support",
+      "responsibility": "tracked public compatibility factory and its source-backed validation"
     },
     {
       "id": "rust-vortex-wall",

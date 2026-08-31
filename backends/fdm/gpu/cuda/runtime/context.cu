@@ -85,6 +85,332 @@ cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
     return status;
 }
 
+cudaError_t context_gpu_workspace_cuda_malloc_raw(
+    Context &ctx,
+    void **destination,
+    size_t bytes)
+{
+    size_t free_device_bytes = 0;
+    size_t total_device_bytes = 0;
+    const cudaError_t query_status =
+        ::cudaMemGetInfo(&free_device_bytes, &total_device_bytes);
+    if (query_status != cudaSuccess) {
+        ctx.last_error =
+            "fdm_gpu_workspace_memory_query_failed: cuda_error=" +
+            std::to_string(static_cast<int>(query_status));
+        return query_status;
+    }
+    // Match the production transport solvers: keep either 256 MiB or 5% of
+    // device capacity outside this workspace allocation, whichever is larger.
+    constexpr uint64_t minimum_safety_reserve =
+        uint64_t{256} * 1024 * 1024;
+    const uint64_t proportional_reserve =
+        static_cast<uint64_t>(total_device_bytes) / 20;
+    const uint64_t safety_reserve =
+        std::max(minimum_safety_reserve, proportional_reserve);
+    const uint64_t free_bytes = static_cast<uint64_t>(free_device_bytes);
+    const uint64_t usable_device_bytes =
+        free_bytes > safety_reserve ? free_bytes - safety_reserve : 0;
+    const uint64_t required_new_bytes = static_cast<uint64_t>(bytes);
+    if (required_new_bytes > usable_device_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: required_new_bytes=" +
+            std::to_string(required_new_bytes) +
+            " usable_device_bytes=" + std::to_string(usable_device_bytes) +
+            " free_device_bytes=" + std::to_string(free_bytes) +
+            " total_device_bytes=" +
+            std::to_string(static_cast<uint64_t>(total_device_bytes)) +
+            " safety_reserve_bytes=" + std::to_string(safety_reserve);
+        return cudaErrorMemoryAllocation;
+    }
+    const cudaError_t status = ::cudaMalloc(destination, bytes);
+    if (status == cudaSuccess) {
+        context_note_gpu_workspace_allocation(ctx, *destination, bytes);
+    }
+    return status;
+}
+
+bool context_preflight_single_grid_workspace(
+    Context &ctx, const fullmag_fdm_plan_desc &plan)
+{
+    constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    uint64_t required_aggregate_workspace_bytes = 0;
+    auto overflow = [&]() -> bool {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: aggregate workspace byte count overflows uint64_t";
+        return false;
+    };
+    auto add_bytes = [&](uint64_t bytes) -> bool {
+        if (required_aggregate_workspace_bytes > maximum - bytes) {
+            return overflow();
+        }
+        required_aggregate_workspace_bytes += bytes;
+        return true;
+    };
+    auto add_product = [&](uint64_t count, uint64_t element_bytes) -> bool {
+        if (count != 0 && element_bytes > maximum / count) {
+            return overflow();
+        }
+        return add_bytes(count * element_bytes);
+    };
+
+    const uint64_t scalar_bytes =
+        ctx.precision == FULLMAG_FDM_PRECISION_SINGLE
+            ? sizeof(float) : sizeof(double);
+    if (ctx.cell_count > maximum / scalar_bytes) return overflow();
+    const uint64_t component_bytes = ctx.cell_count * scalar_bytes;
+
+    uint64_t vector_field_count = 10;
+    if (ctx.has_frozen_mask) ++vector_field_count;
+    switch (ctx.integrator) {
+    case FULLMAG_FDM_INTEGRATOR_DP45:
+        vector_field_count += 7;
+        break;
+    case FULLMAG_FDM_INTEGRATOR_RK23:
+        vector_field_count += 4;
+        break;
+    case FULLMAG_FDM_INTEGRATOR_RK4:
+        vector_field_count += 3;
+        break;
+    case FULLMAG_FDM_INTEGRATOR_ABM3:
+        vector_field_count += 6;
+        break;
+    default:
+        break;
+    }
+    if (ctx.has_oersted_field) ++vector_field_count;
+
+    // Base solver fields, scalar energy density, and both four-slot snapshot
+    // pools are mandatory setup-owned device storage.
+    constexpr uint64_t snapshot_vector_fields =
+        kFdmAsyncFieldSnapshotPoolCapacity +
+        kFdmAsyncPreviewSnapshotPoolCapacity;
+    const uint64_t scalar_component_count =
+        3 * (vector_field_count + snapshot_vector_fields) + 1;
+    if (!add_product(scalar_component_count, component_bytes)) return false;
+
+    // Synchronous preview accepts FP64 output even for an FP32 context. Keep
+    // its maximum downsample target setup-owned so observation never extends
+    // the device workspace after the setup baseline has been sealed.
+    if (!add_product(ctx.cell_count, uint64_t{3} * sizeof(double))) {
+        return false;
+    }
+
+    // Reduction arrays are always FP64. Fixed control, accepted-batch, and
+    // attempt-trace records are allocated in the same setup transaction.
+    if (ctx.cell_count > maximum - 255ULL) return overflow();
+    const uint64_t adaptive_metric_blocks = (ctx.cell_count + 255ULL) / 256ULL;
+    if (adaptive_metric_blocks > maximum / 3) return overflow();
+    const uint64_t scratch_len = std::max<uint64_t>(
+        ctx.cell_count, uint64_t{3} * adaptive_metric_blocks);
+    if (!add_product(scratch_len, uint64_t{2} * sizeof(double)) ||
+        !add_bytes(sizeof(AdaptiveDeviceControl)) ||
+        !add_bytes(sizeof(AdaptiveDeviceBatchState)) ||
+        !add_product(
+            ADAPTIVE_ACCEPTED_BATCH_CAPACITY,
+            sizeof(AdaptiveDeviceControl)) ||
+        !add_product(
+            FULLMAG_FDM_ADAPTIVE_ATTEMPT_CAPACITY_V1,
+            sizeof(fullmag_fdm_adaptive_attempt_v1))) {
+        return false;
+    }
+
+    uint64_t mask_bytes_per_cell = 0;
+    if (ctx.has_active_mask) ++mask_bytes_per_cell;
+    if (ctx.has_frozen_mask) ++mask_bytes_per_cell;
+    if (ctx.has_sot_active_mask) ++mask_bytes_per_cell;
+    if (ctx.has_slonczewski_active_mask) ++mask_bytes_per_cell;
+    if (!add_product(ctx.cell_count, mask_bytes_per_cell)) return false;
+    if (ctx.has_region_mask &&
+        !add_product(ctx.cell_count, sizeof(uint32_t))) {
+        return false;
+    }
+    if (ctx.has_exchange_lut &&
+        !add_product(
+            uint64_t{FULLMAG_FDM_MAX_EXCHANGE_REGIONS} *
+                FULLMAG_FDM_MAX_EXCHANGE_REGIONS,
+            sizeof(double))) {
+        return false;
+    }
+
+    if (ctx.enable_demag) {
+        uint64_t fft_nx = ctx.fft_nx;
+        uint64_t fft_ny = ctx.fft_ny;
+        uint64_t fft_nz = ctx.fft_nz;
+        if (fft_nx == 0 || fft_ny == 0 || fft_nz == 0) {
+            fft_nx = uint64_t{2} * ctx.nx;
+            fft_ny = uint64_t{2} * ctx.ny;
+            fft_nz = ctx.thin_film_2d_demag ? 1 : uint64_t{2} * ctx.nz;
+        }
+        if (fft_nx > UINT32_MAX || fft_ny > UINT32_MAX ||
+            fft_nz > UINT32_MAX || fft_nx == 0 || fft_ny == 0 ||
+            fft_nz == 0 || fft_nx > maximum / fft_ny ||
+            fft_nx * fft_ny > maximum / fft_nz) {
+            return overflow();
+        }
+        const uint64_t fft_cell_count = fft_nx * fft_ny * fft_nz;
+        if (fft_cell_count >
+            static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+            ctx.last_error =
+                "demag FFT component stride exceeds cuFFT PlanMany limit";
+            return false;
+        }
+        ctx.fft_nx = static_cast<uint32_t>(fft_nx);
+        ctx.fft_ny = static_cast<uint32_t>(fft_ny);
+        ctx.fft_nz = static_cast<uint32_t>(fft_nz);
+
+        const uint64_t complex_bytes =
+            ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? sizeof(cufftDoubleComplex) : sizeof(cufftComplex);
+        if (fft_cell_count > maximum / 6 ||
+            !add_product(uint64_t{3} * fft_cell_count, complex_bytes) ||
+            !add_product(uint64_t{6} * fft_cell_count, complex_bytes)) {
+            return false;
+        }
+
+        const int rank = ctx.thin_film_2d_demag ? 2 : 3;
+        int dims[3] = {};
+        if (ctx.thin_film_2d_demag) {
+            dims[0] = static_cast<int>(fft_ny);
+            dims[1] = static_cast<int>(fft_nx);
+        } else {
+            dims[0] = static_cast<int>(fft_nz);
+            dims[1] = static_cast<int>(fft_ny);
+            dims[2] = static_cast<int>(fft_nx);
+        }
+        int inembed[3] = {dims[0], dims[1], dims[2]};
+        int onembed[3] = {dims[0], dims[1], dims[2]};
+        const int component_stride = static_cast<int>(fft_cell_count);
+        size_t estimated_work_area_bytes = 0;
+        const cufftResult estimate_status = cufftEstimateMany(
+            rank,
+            dims,
+            inembed,
+            1,
+            component_stride,
+            onembed,
+            1,
+            component_stride,
+            ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? CUFFT_Z2Z : CUFFT_C2C,
+            3,
+            &estimated_work_area_bytes);
+        if (estimate_status != CUFFT_SUCCESS) {
+            set_cufft_error(ctx, "cufftEstimateMany(demag, batch=3)", estimate_status);
+            return false;
+        }
+        if (!add_bytes(static_cast<uint64_t>(estimated_work_area_bytes))) {
+            return false;
+        }
+    }
+
+    uint64_t optional_f64_fields = 0;
+    if (ctx.has_uniaxial_anisotropy) {
+        if (plan.ku1_field != nullptr) ++optional_f64_fields;
+        if (plan.ku2_field != nullptr) ++optional_f64_fields;
+    }
+    if (ctx.has_cubic_anisotropy) {
+        if (plan.kc1_field != nullptr) ++optional_f64_fields;
+        if (plan.kc2_field != nullptr) ++optional_f64_fields;
+        if (plan.kc3_field != nullptr) ++optional_f64_fields;
+    }
+    const bool uploads_boundary =
+        plan.boundary_correction != FULLMAG_FDM_BOUNDARY_NONE &&
+        plan.volume_fraction != nullptr &&
+        plan.volume_fraction_len == ctx.cell_count;
+    if (uploads_boundary) {
+        ++optional_f64_fields;
+        if (plan.face_link_xp && plan.face_link_xm &&
+            plan.face_link_yp && plan.face_link_ym &&
+            plan.face_link_zp && plan.face_link_zm) {
+            optional_f64_fields += 6;
+        }
+        if (plan.boundary_correction == FULLMAG_FDM_BOUNDARY_FULL &&
+            plan.delta_xp && plan.delta_xm &&
+            plan.delta_yp && plan.delta_ym &&
+            plan.delta_zp && plan.delta_zm) {
+            optional_f64_fields += 6;
+        }
+    }
+    if (optional_f64_fields != 0) {
+        if (ctx.cell_count > maximum / optional_f64_fields) return overflow();
+        const uint64_t optional_f64_values =
+            optional_f64_fields * ctx.cell_count;
+        if (!add_product(optional_f64_values, sizeof(double))) return false;
+    }
+
+    if (uploads_boundary && plan.has_demag_boundary_corr &&
+        plan.demag_corr_target_idx && plan.demag_corr_source_idx &&
+        plan.demag_corr_tensor && plan.demag_corr_target_count != 0 &&
+        plan.demag_corr_stencil_size != 0) {
+        const uint64_t targets = plan.demag_corr_target_count;
+        const uint64_t stencil = plan.demag_corr_stencil_size;
+        if (targets > maximum / stencil) return overflow();
+        const uint64_t pairs = targets * stencil;
+        if (!add_product(targets, sizeof(int32_t)) ||
+            !add_product(pairs, sizeof(int32_t)) ||
+            pairs > maximum / 6 ||
+            !add_product(6 * pairs, sizeof(double))) {
+            return false;
+        }
+    }
+
+    size_t free_device_bytes = 0;
+    size_t total_device_bytes = 0;
+    const cudaError_t query_status =
+        ::cudaMemGetInfo(&free_device_bytes, &total_device_bytes);
+    if (query_status != cudaSuccess) {
+        ctx.last_error =
+            "fdm_gpu_workspace_memory_query_failed: cuda_error=" +
+            std::to_string(static_cast<int>(query_status));
+        return false;
+    }
+    constexpr uint64_t minimum_safety_reserve =
+        uint64_t{256} * 1024 * 1024;
+    const uint64_t proportional_reserve =
+        static_cast<uint64_t>(total_device_bytes) / 20;
+    const uint64_t safety_reserve =
+        std::max(minimum_safety_reserve, proportional_reserve);
+    const uint64_t free_bytes = static_cast<uint64_t>(free_device_bytes);
+    const uint64_t usable_device_bytes =
+        free_bytes > safety_reserve ? free_bytes - safety_reserve : 0;
+    if (required_aggregate_workspace_bytes > usable_device_bytes) {
+        ctx.last_error =
+            "fdm_gpu_workspace_oom_preflight: required_aggregate_workspace_bytes=" +
+            std::to_string(required_aggregate_workspace_bytes) +
+            " usable_device_bytes=" + std::to_string(usable_device_bytes) +
+            " free_device_bytes=" + std::to_string(free_bytes) +
+            " total_device_bytes=" +
+            std::to_string(static_cast<uint64_t>(total_device_bytes)) +
+            " safety_reserve_bytes=" + std::to_string(safety_reserve);
+        return false;
+    }
+    return true;
+}
+
+cudaError_t context_gpu_workspace_cuda_free(Context &ctx, void *pointer) {
+    const cudaError_t status = ::cudaFree(pointer);
+    if (status == cudaSuccess) {
+        context_note_gpu_workspace_free(ctx, pointer);
+    }
+    return status;
+}
+
+cufftResult context_gpu_workspace_cufft_create(
+    Context &ctx,
+    cufftHandle *plan)
+{
+    const cufftResult status = ::cufftCreate(plan);
+    if (status == CUFFT_SUCCESS) {
+        context_note_gpu_workspace_fft_plan_creation(ctx);
+    }
+    return status;
+}
+
+static cudaError_t fullmag_fdm_untracked_cuda_free(void *pointer) {
+    return ::cudaFree(pointer);
+}
+
 // Every host-boundary copy in this translation unit is routed through the
 // allocation-free receipt hook. Device-internal copies are intentionally not
 // classified as host transfers.
@@ -94,6 +420,13 @@ cudaError_t fullmag_fdm_receipt_cuda_memcpy_async(
 #define cudaMemcpyAsync(destination, source, bytes, kind, stream) \
     fullmag_fdm_receipt_cuda_memcpy_async( \
         const_cast<Context &>(ctx), destination, source, bytes, kind, stream)
+#define cudaMalloc(destination, bytes) \
+    context_gpu_workspace_cuda_malloc( \
+        const_cast<Context &>(ctx), destination, bytes)
+#define cudaFree(pointer) \
+    context_gpu_workspace_cuda_free(const_cast<Context &>(ctx), pointer)
+#define cufftCreate(plan) \
+    context_gpu_workspace_cufft_create(const_cast<Context &>(ctx), plan)
 
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
@@ -227,9 +560,9 @@ static void free_energy_density(Context &ctx) {
 }
 
 static void free_vector_field(DeviceVectorField &field) {
-    if (field.x) { cudaFree(field.x); field.x = nullptr; }
-    if (field.y) { cudaFree(field.y); field.y = nullptr; }
-    if (field.z) { cudaFree(field.z); field.z = nullptr; }
+    if (field.x) { fullmag_fdm_untracked_cuda_free(field.x); field.x = nullptr; }
+    if (field.y) { fullmag_fdm_untracked_cuda_free(field.y); field.y = nullptr; }
+    if (field.z) { fullmag_fdm_untracked_cuda_free(field.z); field.z = nullptr; }
 }
 
 static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &pool)
@@ -419,7 +752,7 @@ static void destroy_async_preview_snapshot_pool_resources(AsyncPreviewSnapshotPo
             slot.host_xyz = nullptr;
         }
         if (slot.device_xyz) {
-            cudaFree(slot.device_xyz);
+            fullmag_fdm_untracked_cuda_free(slot.device_xyz);
             slot.device_xyz = nullptr;
         }
     }
@@ -760,7 +1093,7 @@ static bool alloc_tensor_kernel_cells(
         alloc_component(&kernel.yz, "yz");
 }
 
-static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
+static void free_device_demag_kernel(Context &ctx, DeviceDemagKernel &kernel) {
     if (kernel.xx) { cudaFree(kernel.xx); kernel.xx = nullptr; }
     if (kernel.yy) { cudaFree(kernel.yy); kernel.yy = nullptr; }
     if (kernel.zz) { cudaFree(kernel.zz); kernel.zz = nullptr; }
@@ -769,7 +1102,7 @@ static void free_device_demag_kernel(DeviceDemagKernel &kernel) {
     if (kernel.yz) { cudaFree(kernel.yz); kernel.yz = nullptr; }
 }
 
-static void free_device_push_map(DeviceMultilayerPushMap &map) {
+static void free_device_push_map(Context &ctx, DeviceMultilayerPushMap &map) {
     if (map.offsets) {
         cudaFree(map.offsets);
         map.offsets = nullptr;
@@ -786,7 +1119,7 @@ static void free_device_push_map(DeviceMultilayerPushMap &map) {
     map.entry_count = 0;
 }
 
-static void free_device_pull_map(DeviceMultilayerPullMap &map) {
+static void free_device_pull_map(Context &ctx, DeviceMultilayerPullMap &map) {
     if (map.indices) {
         cudaFree(map.indices);
         map.indices = nullptr;
@@ -818,7 +1151,10 @@ static void unbind_multilayer_fft_workspace(Context &ctx) {
     ctx.fft_workspace_bound_to_multilayer_cache = false;
 }
 
-static void free_multilayer_fft_workspace(DeviceMultilayerFftWorkspace &workspace) {
+static void free_multilayer_fft_workspace(
+    Context &ctx,
+    DeviceMultilayerFftWorkspace &workspace)
+{
     if (workspace.plan_valid) {
         cufftDestroy(workspace.plan);
         workspace.plan = 0;
@@ -876,7 +1212,7 @@ static void free_multilayer_fft_workspaces(Context &ctx) {
     unbind_multilayer_fft_workspace(ctx);
     free_multilayer_batch_fft_buffers(ctx);
     for (DeviceMultilayerFftWorkspace &workspace : ctx.multilayer_fft_workspaces) {
-        free_multilayer_fft_workspace(workspace);
+        free_multilayer_fft_workspace(ctx, workspace);
     }
     ctx.multilayer_fft_workspaces.clear();
 }
@@ -1174,15 +1510,15 @@ static void free_multilayer_plan_v2(Context &ctx) {
         free_vector_field(layer.k2);
         free_vector_field(layer.k3);
         free_vector_field(layer.k4);
-        free_device_push_map(layer.push_map);
+        free_device_push_map(ctx, layer.push_map);
         if (layer.active_mask) {
             cudaFree(layer.active_mask);
             layer.active_mask = nullptr;
         }
     }
     for (DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
-        free_device_demag_kernel(kernel.tensor);
-        free_device_pull_map(kernel.dst_pull_map);
+        free_device_demag_kernel(ctx, kernel.tensor);
+        free_device_pull_map(ctx, kernel.dst_pull_map);
     }
     ctx.multilayer_layers.clear();
     ctx.multilayer_kernels.clear();
@@ -1439,6 +1775,11 @@ static bool ensure_preview_download_scratch(Context &ctx, size_t required_bytes)
     {
         return true;
     }
+    if (ctx.gpu_workspace_setup_complete) {
+        ctx.last_error =
+            "synchronous preview exceeds the setup-owned download workspace";
+        return false;
+    }
     if (ctx.preview_download_scratch) {
         cudaFree(ctx.preview_download_scratch);
         ctx.preview_download_scratch = nullptr;
@@ -1555,7 +1896,7 @@ static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
             cudaFreeHost(snapshot.host_xyz);
         }
         if (snapshot.device_xyz) {
-            cudaFree(snapshot.device_xyz);
+            fullmag_fdm_untracked_cuda_free(snapshot.device_xyz);
         }
     }
     snapshot.pool.reset();
@@ -2026,7 +2367,7 @@ static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
     ctx.multilayer_fft_workspaces.emplace_back();
     DeviceMultilayerFftWorkspace &workspace = ctx.multilayer_fft_workspaces.back();
     if (!alloc_multilayer_fft_workspace(ctx, workspace, grid)) {
-        free_multilayer_fft_workspace(workspace);
+        free_multilayer_fft_workspace(ctx, workspace);
         ctx.multilayer_fft_workspaces.pop_back();
         return nullptr;
     }
@@ -2054,6 +2395,10 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_energy_density(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
+    // Every public step captures accepted magnetization before entering the
+    // trial. This transaction buffer is therefore part of the setup-owned
+    // workspace, never a first-step allocation.
+    if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
 
     // DP45 / RK23 / RK4: allocate extra stage buffers as needed.
@@ -2076,6 +2421,12 @@ bool context_alloc_device(Context &ctx) {
     if (ctx.integrator == FULLMAG_FDM_INTEGRATOR_DP45
         || ctx.integrator == FULLMAG_FDM_INTEGRATOR_RK23) {
         if (!alloc_vector_field(ctx, ctx.k_fsal)) return false;
+        // Checkpoint import swaps the accepted FSAL derivative atomically.
+        // Its peer buffer is setup-owned so restore never allocates after
+        // workspace accounting has been sealed.
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+            return false;
+        }
         ctx.fsal_valid = false;
     }
 
@@ -2084,6 +2435,15 @@ bool context_alloc_device(Context &ctx) {
         if (!alloc_vector_field(ctx, ctx.abm_f_n))  return false;
         if (!alloc_vector_field(ctx, ctx.abm_f_n1)) return false;
         if (!alloc_vector_field(ctx, ctx.abm_f_n2)) return false;
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+            return false;
+        }
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) {
+            return false;
+        }
+        if (!alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2)) {
+            return false;
+        }
         ctx.abm_startup = 0;
         ctx.abm_last_dt = 0.0;
     }
@@ -2131,6 +2491,12 @@ bool context_alloc_device(Context &ctx) {
 
     if (!initialize_async_field_snapshot_pool(ctx)) return false;
     if (!initialize_async_preview_snapshot_pool(ctx)) {
+        destroy_async_field_snapshot_pool(ctx);
+        return false;
+    }
+    if (!ensure_preview_download_scratch(
+            ctx, ctx.cell_count * 3u * sizeof(double))) {
+        destroy_async_preview_snapshot_pool(ctx);
         destroy_async_field_snapshot_pool(ctx);
         return false;
     }
@@ -2405,20 +2771,25 @@ void context_discard_pre_step_state(Context &ctx) {
 bool context_prepare_checkpoint_import_staging(
     Context &ctx, bool include_fsal, bool include_abm_history)
 {
-    if (ctx.gpu_transport_pre_step_m.x == nullptr &&
-        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m)) {
+    const auto field_is_complete = [](const DeviceVectorField &field) {
+        return field.x != nullptr && field.y != nullptr && field.z != nullptr;
+    };
+    if (!field_is_complete(ctx.gpu_transport_pre_step_m)) {
+        ctx.last_error =
+            "checkpoint import magnetization staging is unavailable after setup";
         return false;
     }
     if ((include_fsal || include_abm_history) &&
-        ctx.gpu_transport_pre_step_abm_f_n.x == nullptr &&
-        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n)) {
+        !field_is_complete(ctx.gpu_transport_pre_step_abm_f_n)) {
+        ctx.last_error =
+            "checkpoint import derivative staging is unavailable after setup";
         return false;
     }
     if (include_abm_history &&
-        ((ctx.gpu_transport_pre_step_abm_f_n1.x == nullptr &&
-          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n1)) ||
-         (ctx.gpu_transport_pre_step_abm_f_n2.x == nullptr &&
-          !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_abm_f_n2)))) {
+        (!field_is_complete(ctx.gpu_transport_pre_step_abm_f_n1) ||
+         !field_is_complete(ctx.gpu_transport_pre_step_abm_f_n2))) {
+        ctx.last_error =
+            "checkpoint import ABM history staging is unavailable after setup";
         return false;
     }
     return true;
@@ -2943,6 +3314,12 @@ bool context_prepare_multilayer_fft_workspace_v2(Context &ctx) {
         return false;
     }
 
+    for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels) {
+        if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, kernel)) {
+            return false;
+        }
+    }
+
     const DeviceMultilayerTensorKernel &first = ctx.multilayer_kernels.front();
     if (!context_prepare_multilayer_fft_workspace_for_kernel(ctx, first)) {
         return false;
@@ -3146,7 +3523,7 @@ bool context_prepare_multilayer_fft_workspace_for_kernel(
 /* ── Boundary correction upload ── */
 
 static void free_anisotropy_fields(Context &ctx) {
-    auto free_f64 = [](double *&ptr) {
+    auto free_f64 = [&ctx](double *&ptr) {
         if (ptr) { cudaFree(ptr); ptr = nullptr; }
     };
     free_f64(ctx.ku1_field);
@@ -3167,7 +3544,7 @@ bool context_upload_anisotropy_fields(Context &ctx, const double *ku1, const dou
 }
 
 static void free_cubic_anisotropy_fields(Context &ctx) {
-    auto free_f64 = [](double *&ptr) {
+    auto free_f64 = [&ctx](double *&ptr) {
         if (ptr) { cudaFree(ptr); ptr = nullptr; }
     };
     free_f64(ctx.kc1_field);
@@ -3192,7 +3569,7 @@ bool context_upload_cubic_anisotropy_fields(Context &ctx, const double *kc1, con
 }
 
 static void free_boundary_correction(Context &ctx) {
-    auto free_f64 = [](double *&ptr) {
+    auto free_f64 = [&ctx](double *&ptr) {
         if (ptr) { cudaFree(ptr); ptr = nullptr; }
     };
     free_f64(ctx.volume_fraction);
@@ -3479,6 +3856,20 @@ bool context_mark_static_external_field_profile(
     }
     if (!field_xyz || len != ctx.cell_count * 3u) {
         ctx.last_error = "static external field profile requires a cell-wise field";
+        return false;
+    }
+    const bool has_any_storage = ctx.h_oe_static.x != nullptr ||
+        ctx.h_oe_static.y != nullptr || ctx.h_oe_static.z != nullptr;
+    const bool has_complete_storage = ctx.h_oe_static.x != nullptr &&
+        ctx.h_oe_static.y != nullptr && ctx.h_oe_static.z != nullptr;
+    if (has_any_storage != has_complete_storage) {
+        ctx.last_error = "static external field profile workspace is partially initialized";
+        return false;
+    }
+    if (!has_complete_storage && ctx.gpu_workspace_setup_complete &&
+        ctx.gpu_workspace_observed_step_count != 0) {
+        ctx.last_error =
+            "static external field profile requires setup-owned workspace before the first step";
         return false;
     }
     if (!upload_cell_profile(ctx, field_xyz, len, "static external field profile")) {

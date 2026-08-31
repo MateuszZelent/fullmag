@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-28",
+  "updated_at": "2026-08-30",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -275,11 +275,35 @@
         "fem_cpu_public": "implemented",
         "fem_gpu_public": "implemented"
       },
-      "validated_workloads": [],
+      "validated_workloads": [
+        "FDM CUDA single-grid fixed Heun/RK4/RK23/DP45/ABM3, FP64 full_double and FP32 single_storage_fp64_reduction, field/RHS/stage/step parity for exchange, interfacial+bulk DMI, and synthetic demag-FFT precision fixture",
+        "FDM CUDA single-grid fixed Heun 8x8x4 for 256 steps, exchange + synthetic demag-FFT precision fixture + uniform Zeeman + interfacial DMI + bulk DMI, trajectory/energy/norm/VRAM/time-to-accuracy",
+        "FDM CUDA FP64 Newell thin-film and periodic truncated-images CPU/GPU physical oracles on source commit a8ced10bc56ad35d65c7549ef6574488def2fc8e"
+      ],
       "qualification_binding": {
         "id": "source_bound_execution_receipt",
         "fdm_gpu_status": "implemented/unvalidated",
         "fdm_gpu_artifact_schema": "fdm_gpu_execution_receipt_evidence.v2",
+        "fdm_gpu_precision_policy_status": "physics_validated/exact_workloads",
+        "fdm_gpu_precision_policy_artifact_schema": "precision-policy-qualification-v1",
+        "fdm_gpu_precision_policy_source_commit": "a8ced10bc56ad35d65c7549ef6574488def2fc8e",
+        "fdm_gpu_precision_policy_source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "fdm_gpu_precision_policy_device": "NVIDIA GeForce RTX 3070 Laptop GPU; compute capability 8.6; CUDA runtime 12040; driver 13020",
+        "fdm_gpu_precision_policy_external_receipt": "/mnt/fullmag-zfn2-native-num002/fdm-gpu-precision-policy-contract/precision-policy-qualification-v1.json",
+        "fdm_gpu_precision_policy_realizations": [
+          "fullmag.fdm.cuda.precision.full_double.v1",
+          "fullmag.fdm.cuda.precision.single_storage_fp64_reduction.v1"
+        ],
+        "fdm_gpu_precision_policy_requires_exact_storage_compute_fft_reduction": true,
+        "fdm_gpu_precision_policy_requires_current_source_newell_oracles": true,
+        "fdm_gpu_precision_policy_current_source_newell_status": "passed_on_clean_source_commit",
+        "fdm_gpu_precision_policy_excluded_scopes": [
+          "periodic_exchange_fp32",
+          "subcell_boundary_correction_fp32",
+          "thermal_fp32",
+          "heterogeneous_material_fields_fp32",
+          "multilayer_fp32"
+        ],
         "fdm_gpu_require_source_commit": true,
         "fdm_gpu_require_source_diff_sha256": true,
         "fem_gpu_status": "implemented/unvalidated",
@@ -299,8 +323,8 @@
         "require_complete_operator_ids": true,
         "hybrid_cpu_poisson_satisfies_strict": false
       },
-    "notes": "Klucz rejestru fail-closed obejmuje capability ID, qualification ID, backend, device, precision, integrator i timestep policy. FDM CPU adaptive RK23/RK45 ma bounded retry/failure telemetry, oracle stałego pola, dokładne księgowanie RHS oraz bounded steady-state allocation/work-to-accuracy gate dla AoS, buffer-SoA i persistent-SoA. FDM CUDA ma managed checked-v2 ABI gate, rzeczywisty oracle FP64 Heun i receipt bez fallbacku. Managed RK23/RK45 FP32/FP64 potwierdza także FSAL invalidation, analityczny oracle Gilberta na publicznej ścieżce headless conditional-graph batch, atomowy rollback, parity tego samego czasu i pola, zero hot-loop control-scalar D2H oraz co najmniej dziesięciokrotnie mniej synchronizacji terminalnych. Te ograniczone bramki nie promują szerszych lane'ów bez czystego end-to-end artefaktu dla dokładnego tuple interakcji i time-to-accuracy. Lane'y pozostają unvalidated do czasu powiązania czystego hash-bound artefaktu. Kwalifikacja FEM GPU dodatkowo wymaga dokładnego wersjonowanego schematu artefaktu i projekcji Rust, native ABI-v1 handshake, requested/resolved/executed identity, poprawnego accounting, attempt counts, dowodu urządzenia, kompletnych operator IDs oraz zgodnych snapshotów CPU/GPU. Brakujące, hybrydowe, stare, malformed, unknown lub niepełne dowody kończą się fail-closed. Promotion wymaga także dokładnego hasha artefaktu, czystego runtime-source-input hash, validated scope, czasu walidacji, schematu walidatora i wszystkich prerequisite gates. Bieżące wpisy pozostają unvalidated, dopóki świeże artefakty schema-v3 nie spełnią tych powiązań; rejestr nie może promować FEM single precision.",
-      "validation_state": "unvalidated"
+    "notes": "Klucz rejestru fail-closed obejmuje capability ID, qualification ID, backend, device, precision, integrator i timestep policy. NUM-002 kwalifikuje wyłącznie wymienione workloady dwóch polityk single-grid CUDA: full_double oraz single_storage_fp64_reduction (FP32 storage/compute/FFT i FP64 reductions). Czysty source-bound receipt a8ced10bc obejmuje pięć integratorów, field/RHS/stage/step parity, długą trajektorię, energie, norm drift, VRAM i time-to-accuracy. Aktualne orakle fizycznego tensora Newella — thin-film i periodic truncated-images CPU↔GPU — przeszły na tym samym czystym commicie po naprawie wyroczni testowej bez zmiany tolerancji. Periodic exchange FP32, boundary correction FP32, thermal FP32, heterogeneous material fields FP32 i multilayer FP32 pozostają poza zakresem i fail-closed. Szersze fixed/adaptive lane'y nie dziedziczą tej kwalifikacji. Pozostałe wpisy FDM CPU/GPU i FEM CPU/GPU zachowują własny status oraz własne wymagania receiptów. Brakujące, hybrydowe, stare, malformed, unknown lub niepełne dowody kończą się fail-closed; rejestr nie promuje FEM single precision.",
+      "validation_state": "physics_validated"
     },
     {
       "id": "relaxation_projected_gradient_bb",

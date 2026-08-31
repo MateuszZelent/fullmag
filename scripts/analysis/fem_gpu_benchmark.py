@@ -4680,6 +4680,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-representation-parity",
+        action="store_true",
+        help=(
+            "Fail unless paired FEM CPU/GPU rows publish matching state/material "
+            "representation receipts with valid lane-specific traffic counters"
+        ),
+    )
+    parser.add_argument(
         "--require-gpu-strict-residency",
         action="store_true",
         help="Fail unless completed FEM GPU rows report device source-of-truth and zero hot-loop compute host transfers/syncs",
@@ -5148,6 +5156,7 @@ def apply_box500_airbox_exchange_only_preset(args: argparse.Namespace) -> None:
     args.require_mfem_stack = True
     args.require_stable_solver_mesh = True
     args.require_cpu_gpu_consistency = True
+    args.require_representation_parity = True
 
 
 def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace) -> None:
@@ -5164,6 +5173,7 @@ def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace)
     args.require_stable_solver_mesh = True
     args.require_demag_converged = True
     args.require_cpu_gpu_consistency = True
+    args.require_representation_parity = True
     args.require_gpu_strict_residency = True
 
 
@@ -5445,7 +5455,11 @@ def benchmark_mesh_env(args: argparse.Namespace) -> dict[str, str]:
     }
     if args.gmsh_threads is not None:
         env["FULLMAG_GMSH_THREADS"] = str(args.gmsh_threads)
-    elif args.require_stable_solver_mesh or args.require_cpu_gpu_consistency:
+    elif (
+        args.require_stable_solver_mesh
+        or args.require_cpu_gpu_consistency
+        or args.require_representation_parity
+    ):
         env["FULLMAG_GMSH_THREADS"] = "1"
     return env
 
@@ -6703,6 +6717,24 @@ def solver_time_to_tolerance_from_diagnostics(
     return None, accepted_steps, demag_solves
 
 
+def representation_receipt_evidence_from_solver_row(
+    row: Mapping[str, object],
+) -> dict[str, object]:
+    evidence: dict[str, object] = {}
+    string_fields = {"fem_state_space", "fem_ms_location", "fem_a_location"}
+    for field in REPRESENTATION_IDENTITY_FIELDS + REPRESENTATION_COUNTER_FIELDS:
+        raw = row.get(field)
+        if raw is None or str(raw).strip() == "":
+            continue
+        if field in string_fields:
+            evidence[field] = str(raw).strip()
+        else:
+            value = as_int(raw)
+            if value is not None:
+                evidence[field] = value
+    return evidence
+
+
 def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, object] | None:
     artifact_dir = Path(run_dir)
     metadata = load_run_metadata(str(artifact_dir))
@@ -6773,6 +6805,7 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
         if source in final_scalar:
             payload[target] = final_scalar[source]
 
+    final_solver_step: int | None = None
     step_files = sorted(artifact_dir.rglob("solver_steps.csv"))
     if step_files:
         with step_files[-1].open(newline="", encoding="utf-8") as handle:
@@ -6781,6 +6814,7 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
             accepted_rows = _accepted_solver_step_rows(step_rows)
             payload["accepted_steps"] = len(accepted_rows)
             last_accepted_row = accepted_rows[-1] if accepted_rows else step_rows[-1]
+            final_solver_step = as_int(last_accepted_row.get("step"))
             payload["rhs_evals"] = as_int(last_accepted_row.get("rhs_evals"))
             for source, target in (
                 ("rhs_evals", "total_rhs_evals"),
@@ -6793,6 +6827,9 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
             if "cumulative_demag_solves" in payload:
                 payload["demag_solves"] = payload["cumulative_demag_solves"]
             accepted_row = last_accepted_row
+            payload.update(
+                representation_receipt_evidence_from_solver_row(accepted_row)
+            )
             tolerance = as_float(qualification.get("stop_threshold"))
             if tolerance is not None:
                 (
@@ -6879,6 +6916,51 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
                     invalid_details
                 )
                 payload["accepted_energy_proof_invalid_details"] = invalid_details
+    trace_parent = step_files[-1].parent if step_files else artifact_dir
+    trace_path = trace_parent / "solver" / "accepted_steps.v1.json"
+    try:
+        trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        trace = None
+    if (
+        isinstance(trace, Mapping)
+        and trace.get("schema_version") == "LLG-TD-ACCEPTED-TRACE-V1"
+        and isinstance(trace.get("steps"), list)
+        and trace["steps"]
+        and isinstance(trace["steps"][-1], Mapping)
+        and as_int(trace["steps"][-1].get("step")) == final_solver_step
+    ):
+        final_trace_step = trace["steps"][-1]
+        receipt = final_trace_step.get("fem_representation_receipt")
+        if isinstance(receipt, Mapping):
+            for source, target in (
+                ("schema_version", "fem_representation_schema_version"),
+                ("state_space", "fem_state_space"),
+                ("ms_location", "fem_ms_location"),
+                ("a_location", "fem_a_location"),
+                ("local_node_count", "fem_local_node_count"),
+                ("true_node_count", "fem_true_node_count"),
+                ("periodic_map_revision", "fem_periodic_map_revision"),
+                ("representation_copy_count", "fem_representation_copy_count"),
+                ("gather_scatter_bytes", "fem_gather_scatter_bytes"),
+                ("invalid_space_assertion_count", "fem_invalid_space_assertion_count"),
+                (
+                    "hot_loop_representation_copy_count",
+                    "fem_hot_loop_representation_copy_count",
+                ),
+                (
+                    "hot_loop_gather_scatter_bytes",
+                    "fem_hot_loop_gather_scatter_bytes",
+                ),
+            ):
+                if source in receipt:
+                    value = receipt[source]
+                    if target in payload and payload[target] != value:
+                        raise ValueError(
+                            "solver CSV and accepted-step trace disagree on "
+                            f"{target}: csv={payload[target]!r} trace={value!r}"
+                        )
+                    payload[target] = value
     if "demag_solves" not in payload:
         demag_operator_mode = first_present(
             provenance.get("fem_demag_operator_mode"),
@@ -8077,6 +8159,7 @@ def run_backend(
             {
                 **task11_cumulative_relaxation_evidence(payload),
                 **task12_exact_runtime_evidence(payload),
+                **representation_row_evidence(payload),
                 "executed_problem_ir_sha256": first_present(
                     row.get("executed_problem_ir_sha256"),
                     payload.get("executed_problem_ir_sha256"),
@@ -9113,6 +9196,160 @@ def compare_cpu_gpu_step_count(
         )
 
 
+REPRESENTATION_IDENTITY_FIELDS = (
+    "fem_representation_schema_version",
+    "fem_state_space",
+    "fem_ms_location",
+    "fem_a_location",
+    "fem_local_node_count",
+    "fem_true_node_count",
+    "fem_periodic_map_revision",
+)
+
+REPRESENTATION_COUNTER_FIELDS = (
+    "fem_representation_copy_count",
+    "fem_gather_scatter_bytes",
+    "fem_invalid_space_assertion_count",
+    "fem_hot_loop_representation_copy_count",
+    "fem_hot_loop_gather_scatter_bytes",
+)
+
+
+def representation_row_evidence(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        field: payload.get(field)
+        for field in REPRESENTATION_IDENTITY_FIELDS + REPRESENTATION_COUNTER_FIELDS
+    }
+
+
+def representation_parity_failures(
+    results: Sequence[Mapping[str, object]],
+) -> list[str]:
+    failures: list[str] = []
+    grouped: dict[tuple[object, ...], dict[str, list[Mapping[str, object]]]] = {}
+    for row in results:
+        backend = row.get("backend")
+        if backend not in {"fem_cpu", "fem_gpu"} or row.get("status") != "ok":
+            continue
+        case = cpu_gpu_consistency_case_key(row)
+        if not case:
+            failures.append(
+                f"case={repeated_case_key(row)} backend={backend} "
+                "representation parity is missing solver_mesh_signature"
+            )
+            continue
+        grouped.setdefault(case, {}).setdefault(str(backend), []).append(row)
+
+    if not grouped:
+        return ["representation parity has no completed FEM CPU/GPU rows"]
+
+    for case, by_backend in sorted(grouped.items(), key=lambda item: str(item[0])):
+        cpu_rows = by_backend.get("fem_cpu", [])
+        gpu_rows = by_backend.get("fem_gpu", [])
+        if not cpu_rows:
+            failures.append(f"case={case} representation parity is missing fem_cpu")
+            continue
+        if not gpu_rows:
+            failures.append(f"case={case} representation parity is missing fem_gpu")
+            continue
+
+        for backend, rows in (("fem_cpu", cpu_rows), ("fem_gpu", gpu_rows)):
+            for row in rows:
+                for field in REPRESENTATION_IDENTITY_FIELDS + REPRESENTATION_COUNTER_FIELDS:
+                    if row.get(field) is None or row.get(field) == "":
+                        failures.append(
+                            f"case={case} backend={backend} missing {field}"
+                        )
+                schema_version = as_int(row.get("fem_representation_schema_version"))
+                if schema_version is not None and schema_version != 1:
+                    failures.append(
+                        f"case={case} backend={backend} unsupported "
+                        f"fem_representation_schema_version={schema_version}"
+                    )
+                if row.get("fem_state_space") not in {None, "", "local_node_aos"}:
+                    failures.append(
+                        f"case={case} backend={backend} unsupported "
+                        f"fem_state_space={row.get('fem_state_space')!r}"
+                    )
+                local_nodes = as_int(row.get("fem_local_node_count"))
+                true_nodes = as_int(row.get("fem_true_node_count"))
+                if local_nodes is not None and local_nodes <= 0:
+                    failures.append(
+                        f"case={case} backend={backend} fem_local_node_count must be positive"
+                    )
+                if (
+                    true_nodes is not None
+                    and local_nodes is not None
+                    and (true_nodes <= 0 or true_nodes > local_nodes)
+                ):
+                    failures.append(
+                        f"case={case} backend={backend} invalid true/local node extents "
+                        f"true={true_nodes} local={local_nodes}"
+                    )
+                for field in REPRESENTATION_COUNTER_FIELDS:
+                    value = as_int(row.get(field))
+                    if value is not None and value < 0:
+                        failures.append(
+                            f"case={case} backend={backend} {field} must be non-negative"
+                        )
+                invalid_assertions = as_int(
+                    row.get("fem_invalid_space_assertion_count")
+                )
+                if invalid_assertions is not None and invalid_assertions != 0:
+                    failures.append(
+                        f"case={case} backend={backend} "
+                        f"fem_invalid_space_assertion_count={invalid_assertions}"
+                    )
+                total_copies = as_int(row.get("fem_representation_copy_count"))
+                hot_copies = as_int(
+                    row.get("fem_hot_loop_representation_copy_count")
+                )
+                if (
+                    total_copies is not None
+                    and hot_copies is not None
+                    and hot_copies > total_copies
+                ):
+                    failures.append(
+                        f"case={case} backend={backend} hot-loop representation copies "
+                        "exceed total copies"
+                    )
+                total_bytes = as_int(row.get("fem_gather_scatter_bytes"))
+                hot_bytes = as_int(row.get("fem_hot_loop_gather_scatter_bytes"))
+                if (
+                    total_bytes is not None
+                    and hot_bytes is not None
+                    and hot_bytes > total_bytes
+                ):
+                    failures.append(
+                        f"case={case} backend={backend} hot-loop gather/scatter bytes "
+                        "exceed total bytes"
+                    )
+
+        for cpu_row in cpu_rows:
+            for gpu_row in gpu_rows:
+                for field in REPRESENTATION_IDENTITY_FIELDS:
+                    cpu_value = cpu_row.get(field)
+                    gpu_value = gpu_row.get(field)
+                    if cpu_value is None or gpu_value is None:
+                        continue
+                    if field in {
+                        "fem_representation_schema_version",
+                        "fem_local_node_count",
+                        "fem_true_node_count",
+                        "fem_periodic_map_revision",
+                    }:
+                        cpu_value = as_int(cpu_value)
+                        gpu_value = as_int(gpu_value)
+                    if cpu_value != gpu_value:
+                        failures.append(
+                            f"case={case} {field} mismatch: "
+                            f"cpu={cpu_row.get(field)!r} gpu={gpu_row.get(field)!r}"
+                        )
+    return failures
+
+
 def row_has_resolved_cpu_execution(row: Mapping[str, object]) -> bool:
     return (
         row.get("execution_engine") == "fem_cpu_native"
@@ -9764,6 +10001,7 @@ def cpu_gpu_consistency_summary(
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
     allow_coverage_only: bool = True,
     require_equilibrium_parity: bool = False,
+    require_representation_parity: bool = False,
 ) -> dict[str, object]:
     pairs = cpu_gpu_consistency_pair_summaries(results)
     assessment = assess_cpu_gpu_consistency(
@@ -9779,6 +10017,18 @@ def cpu_gpu_consistency_summary(
         allow_coverage_only=allow_coverage_only and not require_equilibrium_parity,
     )
     failures = list(assessment.failures)
+    representation_failures = (
+        representation_parity_failures(results)
+        if require_representation_parity
+        else []
+    )
+    for failure in representation_failures:
+        if failure not in failures:
+            failures.append(failure)
+    if representation_failures:
+        assessment = ConsistencyAssessment(
+            "failed", assessment.scope, tuple(failures)
+        )
     case_coverage = case_coverage_with_consistency_failures(
         cpu_gpu_required_case_coverage(
             results,
@@ -9835,6 +10085,12 @@ def cpu_gpu_consistency_summary(
         "consistency_status": assessment.status,
         "consistency_scope": assessment.scope,
         "equilibrium_parity_status": equilibrium_parity_status,
+        "representation_parity_status": (
+            "failed"
+            if representation_failures
+            else "checked" if require_representation_parity else "not_requested"
+        ),
+        "require_representation_parity": require_representation_parity,
     }
 
 
@@ -9851,6 +10107,7 @@ def emit_cpu_gpu_consistency_summary(
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
     allow_coverage_only: bool = True,
     require_equilibrium_parity: bool = False,
+    require_representation_parity: bool = False,
 ) -> None:
     print(
         "FEM_CPU_GPU_CONSISTENCY_SUMMARY="
@@ -9867,6 +10124,7 @@ def emit_cpu_gpu_consistency_summary(
                 max_step_delta=max_step_delta,
                 allow_coverage_only=allow_coverage_only,
                 require_equilibrium_parity=require_equilibrium_parity,
+                require_representation_parity=require_representation_parity,
             ),
             sort_keys=True,
         )
@@ -9887,6 +10145,7 @@ def write_cpu_gpu_consistency_summary(
     max_step_delta: int = DEFAULT_CPU_GPU_MAX_STEP_DELTA,
     allow_coverage_only: bool = True,
     require_equilibrium_parity: bool = False,
+    require_representation_parity: bool = False,
 ) -> dict[str, object]:
     summary = cpu_gpu_consistency_summary(
         results,
@@ -9900,6 +10159,7 @@ def write_cpu_gpu_consistency_summary(
         max_step_delta=max_step_delta,
         allow_coverage_only=allow_coverage_only,
         require_equilibrium_parity=require_equilibrium_parity,
+        require_representation_parity=require_representation_parity,
     )
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -11935,7 +12195,9 @@ def main() -> None:
                     "current GPU differs from the pinned Task 11 environment: "
                     + ", ".join(gpu_failures)
                 )
-    if args.require_cpu_gpu_consistency and "fem_gpu" in backends:
+    if (
+        args.require_cpu_gpu_consistency or args.require_representation_parity
+    ) and "fem_gpu" in backends:
         gpu_failure = runtime_gpu_availability_failure(FULLMAG_GPU)
         if gpu_failure is not None:
             print(f"FEM_PREFLIGHT_ERROR={gpu_failure}", file=sys.stderr)
@@ -12494,6 +12756,7 @@ def main() -> None:
             require_equilibrium_parity=(
                 args.require_equilibrium_parity and equilibrium_summary is None
             ),
+            require_representation_parity=args.require_representation_parity,
         )
         cpu_gpu_summary_for_report["performance_distributions"] = (
             performance_distribution_summary(results)
@@ -12619,7 +12882,11 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 5
-    if args.require_cpu_gpu_consistency or args.require_equilibrium_parity:
+    if (
+        args.require_cpu_gpu_consistency
+        or args.require_equilibrium_parity
+        or args.require_representation_parity
+    ):
         if cpu_gpu_summary_for_report is None:
             cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
                 results,
@@ -12634,6 +12901,7 @@ def main() -> None:
                 require_equilibrium_parity=(
                     args.require_equilibrium_parity and equilibrium_summary is None
                 ),
+                require_representation_parity=args.require_representation_parity,
             )
         if equilibrium_summary is not None:
             cpu_gpu_summary_for_report["equilibrium_parity"] = equilibrium_summary
@@ -12705,6 +12973,7 @@ def main() -> None:
                 require_equilibrium_parity=(
                     args.require_equilibrium_parity and equilibrium_summary is None
                 ),
+                require_representation_parity=args.require_representation_parity,
             )
         failures = gpu_demag_total_speedup_failures(
             cpu_gpu_summary_for_report,
@@ -12767,7 +13036,10 @@ def main() -> None:
         if cpu_gpu_summary_for_report is None:
             if benchmark_report_needs_cpu_gpu_summary(
                 backends,
-                require_cpu_gpu_consistency=args.require_cpu_gpu_consistency,
+                require_cpu_gpu_consistency=(
+                    args.require_cpu_gpu_consistency
+                    or args.require_representation_parity
+                ),
                 cpu_gpu_summary_output=args.cpu_gpu_summary_output,
             ):
                 cpu_gpu_summary_for_report = cpu_gpu_consistency_summary(
@@ -12783,6 +13055,7 @@ def main() -> None:
                     require_equilibrium_parity=(
                         args.require_equilibrium_parity and equilibrium_summary is None
                     ),
+                    require_representation_parity=args.require_representation_parity,
                 )
             else:
                 cpu_gpu_summary_for_report = cpu_gpu_not_requested_summary(results)

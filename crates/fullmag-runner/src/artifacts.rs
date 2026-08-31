@@ -2048,6 +2048,24 @@ fn should_write_solver_diagnostics(
         )
 }
 
+fn fem_state_representation_name(
+    value: fullmag_quantities::FemStateRepresentation,
+) -> &'static str {
+    match value {
+        fullmag_quantities::FemStateRepresentation::LocalNodeAos => "local_node_aos",
+    }
+}
+
+fn fem_material_field_location_name(
+    value: fullmag_quantities::FemMaterialFieldLocation,
+) -> &'static str {
+    match value {
+        fullmag_quantities::FemMaterialFieldLocation::Scalar => "scalar",
+        fullmag_quantities::FemMaterialFieldLocation::NodalP1 => "nodal_p1",
+        fullmag_quantities::FemMaterialFieldLocation::ElementDg0 => "element_dg0",
+    }
+}
+
 fn write_solver_diagnostics_artifacts(
     output_dir: &Path,
     plan: &fullmag_ir::ExecutionPlanIR,
@@ -2151,16 +2169,17 @@ fn write_solver_diagnostics_artifacts(
     }
 
     let mut accepted = fs::File::create(output_dir.join("solver_steps.csv"))?;
-    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j,wall_time_ns,accepted")?;
+    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm,accepted_energy_proof_available,accepted_energy_delta_j,accepted_energy_roundoff_bound_j,accepted_energy_delta_upper_j,armijo_increment_rhs_j,wall_time_ns,accepted,fem_representation_schema_version,fem_state_space,fem_ms_location,fem_a_location,fem_local_node_count,fem_true_node_count,fem_periodic_map_revision,fem_representation_copy_count,fem_gather_scatter_bytes,fem_invalid_space_assertion_count,fem_hot_loop_representation_copy_count,fem_hot_loop_gather_scatter_bytes")?;
     let mut previous_step = None;
     for step in steps {
         let accepted_step = previous_step
             .map(|previous| step.step > previous)
             .unwrap_or(step.step > 0);
         previous_step = Some(step.step);
+        let representation = step.fem_representation_receipt.as_ref();
         writeln!(
             accepted,
-            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{},{},{}",
+            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             step.step,
             step.time,
             step.dt,
@@ -2188,6 +2207,18 @@ fn write_solver_diagnostics_artifacts(
             step.armijo_increment_rhs_j.map(|value| format!("{value:.17e}")).unwrap_or_default(),
             step.wall_time_ns,
             accepted_step,
+            representation.map(|receipt| receipt.schema_version.to_string()).unwrap_or_default(),
+            representation.map(|receipt| fem_state_representation_name(receipt.state_space)).unwrap_or_default(),
+            representation.map(|receipt| fem_material_field_location_name(receipt.ms_location)).unwrap_or_default(),
+            representation.map(|receipt| fem_material_field_location_name(receipt.a_location)).unwrap_or_default(),
+            representation.map(|receipt| receipt.local_node_count.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.true_node_count.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.periodic_map_revision.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.representation_copy_count.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.gather_scatter_bytes.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.invalid_space_assertion_count.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.hot_loop_representation_copy_count.to_string()).unwrap_or_default(),
+            representation.map(|receipt| receipt.hot_loop_gather_scatter_bytes.to_string()).unwrap_or_default(),
         )?;
     }
 
@@ -5375,6 +5406,7 @@ mod tests {
                 external_field: None,
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
+                precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 integrator: Some(IntegratorChoice::Heun),
                 fixed_timestep: Some(1e-13),
@@ -5774,6 +5806,7 @@ mod tests {
                 bulk_dmi: None,
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
+                precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
                 periodicity: None,
                 integrator: IntegratorChoice::Heun,
@@ -7018,6 +7051,20 @@ mod tests {
             max_error: Some(1.0e-6),
             dt_suggested: Some(2.0e-15),
             rejected_attempts: 1,
+            fem_representation_receipt: Some(fullmag_quantities::FemRepresentationReceipt {
+                schema_version: 1,
+                state_space: fullmag_quantities::FemStateRepresentation::LocalNodeAos,
+                ms_location: fullmag_quantities::FemMaterialFieldLocation::Scalar,
+                a_location: fullmag_quantities::FemMaterialFieldLocation::ElementDg0,
+                local_node_count: 52,
+                true_node_count: 52,
+                periodic_map_revision: 0,
+                representation_copy_count: 4,
+                gather_scatter_bytes: 9_984,
+                invalid_space_assertion_count: 0,
+                hot_loop_representation_copy_count: 0,
+                hot_loop_gather_scatter_bytes: 0,
+            }),
             ..StepStats::default()
         };
         let rejected_attempt = SolverAttemptRecord {
@@ -7102,9 +7149,27 @@ mod tests {
         let rhs: f64 = proof[24].parse().unwrap();
         assert_eq!(upper, delta + bound);
         assert!(upper <= rhs && rhs <= 0.0);
+        assert_eq!(
+            &proof[27..=38],
+            [
+                "1",
+                "local_node_aos",
+                "scalar",
+                "element_dg0",
+                "52",
+                "52",
+                "0",
+                "4",
+                "9984",
+                "0",
+                "0",
+                "0",
+            ]
+        );
         let unavailable = accepted_rows[2].split(',').collect::<Vec<_>>();
         assert_eq!(unavailable[20], "false");
         assert!(unavailable[21..=24].iter().all(|value| value.is_empty()));
+        assert!(unavailable[27..=38].iter().all(|value| value.is_empty()));
         let max_error: f64 = accepted
             .lines()
             .nth(1)

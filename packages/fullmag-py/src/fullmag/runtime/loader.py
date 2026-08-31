@@ -43,10 +43,11 @@ class LoadedStage:
             script_source=script_source,
             source_root=source_root,
             entrypoint_kind=self.entrypoint_kind,
-            asset_cache=asset_cache,
-            include_geometry_assets=include_geometry_assets,
-            study_pipeline=study_pipeline,
-            _copy_cached_geometry_assets=_copy_cached_geometry_assets,
+              asset_cache=asset_cache,
+              include_geometry_assets=include_geometry_assets,
+              study_pipeline=study_pipeline,
+              runtime_device_override=runtime_device_override,
+              _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
         study = ir.get("study")
         sampling = study.get("sampling") if isinstance(study, dict) else None
@@ -211,10 +212,11 @@ class LoadedProblem:
             script_source=self.script_source,
             source_root=self.source_path.parent,
             entrypoint_kind=self.entrypoint_kind,
-            asset_cache=asset_cache,
-            include_geometry_assets=include_geometry_assets,
-            study_pipeline=study_pipeline,
-            _copy_cached_geometry_assets=_copy_cached_geometry_assets,
+              asset_cache=asset_cache,
+              include_geometry_assets=include_geometry_assets,
+              study_pipeline=study_pipeline,
+              runtime_device_override=runtime_device_override,
+              _copy_cached_geometry_assets=_copy_cached_geometry_assets,
         )
         workspace_problem = (
             self.pipeline_base_problem(self.workspace_problem)

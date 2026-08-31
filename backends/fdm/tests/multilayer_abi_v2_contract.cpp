@@ -300,6 +300,15 @@ void native_sources_prepare_multilayer_fft_workspace() {
                 std::string::npos,
         "Context must cache and bind per-grid multilayer FFT workspaces instead of reallocating for every grid switch");
     check(
+        context_source.find(
+            "for (const DeviceMultilayerTensorKernel &kernel : ctx.multilayer_kernels)") !=
+                std::string::npos &&
+            context_source.find(
+                "context_prepare_multilayer_fft_workspace_for_kernel(ctx, kernel)") !=
+                std::string::npos &&
+            c_api.find("prepared all FFT workspaces") != std::string::npos,
+        "create_v2 must preallocate every distinct multilayer FFT workspace before the first stage");
+    check(
         context_source.find("bool context_prepare_multilayer_fft_workspace_for_kernel(") !=
                 std::string::npos &&
             context_source.find("ensure_multilayer_fft_workspace(ctx, kernel.fft_grid") !=
@@ -326,8 +335,8 @@ void native_sources_prepare_multilayer_fft_workspace() {
     check(
         c_api.find("context_prepare_multilayer_fft_workspace_v2(*ctx)") !=
                 std::string::npos &&
-            c_api.find("prepared initial FFT workspace") != std::string::npos,
-        "create_v2 must prepare the initial multilayer FFT workspace before reporting native timestep execution");
+            c_api.find("prepared all FFT workspaces") != std::string::npos,
+        "create_v2 must prepare all multilayer FFT workspaces before reporting native timestep execution");
 }
 
 void native_sources_expose_multilayer_cuda_demag_boundary() {
@@ -510,10 +519,12 @@ void native_multilayer_push_pull_transfer_uses_staged_maps() {
                 std::string::npos,
         "native v2 upload must build layer push maps and per-kernel pull maps for push_pull transfer");
     check(
-        context_source.find("free_device_push_map") != std::string::npos &&
-            context_source.find("free_device_pull_map(kernel.dst_pull_map)") !=
+        context_source.find("free_device_push_map(ctx, layer.push_map)") !=
+                std::string::npos &&
+            context_source.find(
+                "free_device_pull_map(ctx, kernel.dst_pull_map)") !=
                 std::string::npos,
-        "Context cleanup must free staged layer push maps and per-kernel pull maps");
+        "Context cleanup must account for and free staged layer push maps and per-kernel pull maps");
     check(
         multilayer_source.find("src.push_map.offsets") != std::string::npos &&
             multilayer_source.find("kernel.dst_pull_map.indices") != std::string::npos,
@@ -555,8 +566,10 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
     const std::size_t step_entry = c_api.find("int fullmag_fdm_backend_step(");
     const std::size_t multilayer_step =
         c_api.find("if (ctx->has_multilayer_plan_v2)", step_entry);
-    const std::size_t transport_begin =
-        c_api.find("context_begin_gpu_transport_step(*ctx, transport_attempt_id)", step_entry);
+    const std::size_t multilayer_transaction =
+        c_api.find("return execute_multilayer_step_transaction(", step_entry);
+    const std::size_t single_grid_transaction =
+        c_api.find("return execute_single_grid_step_transaction(", step_entry);
 
     check(
         create_v2 != std::string::npos &&
@@ -566,25 +579,27 @@ void native_c_api_keeps_v2_handles_out_of_legacy_step_path() {
         "create_v2 must honor the same explicit CUDA device selection as create");
     check(
         c_api.find("if (ctx->has_multilayer_plan_v2)") != std::string::npos &&
-            c_api.find("launch_multilayer_heun_step_fp64(*ctx, dt_seconds, out_stats)") !=
+            c_api.find("launch_multilayer_heun_step_fp64(ctx, dt_seconds, &trial_stats)") !=
                 std::string::npos &&
-            c_api.find("launch_multilayer_heun_step_fp32(*ctx, dt_seconds, out_stats)") !=
+            c_api.find("launch_multilayer_heun_step_fp32(ctx, dt_seconds, &trial_stats)") !=
                 std::string::npos &&
-            c_api.find("launch_multilayer_rk4_step_fp64(*ctx, dt_seconds, out_stats)") !=
+            c_api.find("launch_multilayer_rk4_step_fp64(ctx, dt_seconds, &trial_stats)") !=
                 std::string::npos &&
-            c_api.find("launch_multilayer_rk4_step_fp32(*ctx, dt_seconds, out_stats)") !=
+            c_api.find("launch_multilayer_rk4_step_fp32(ctx, dt_seconds, &trial_stats)") !=
                 std::string::npos &&
-            c_api.find("launch_multilayer_rk23_step_fp64(*ctx, dt_seconds, out_stats)") !=
+            c_api.find("launch_multilayer_rk23_step_fp64(ctx, dt_seconds, &trial_stats)") !=
                 std::string::npos &&
-            c_api.find("launch_multilayer_rk23_step_fp32(*ctx, dt_seconds, out_stats)") !=
+            c_api.find("launch_multilayer_rk23_step_fp32(ctx, dt_seconds, &trial_stats)") !=
                 std::string::npos,
-        "step must route staged v2 multilayer handles through native timestep launchers");
+        "step must route staged v2 multilayer handles through transactional native timestep launchers");
     check(
         step_entry != std::string::npos &&
             multilayer_step != std::string::npos &&
-            transport_begin != std::string::npos &&
-            multilayer_step < transport_begin,
-        "multilayer stepping must branch before starting the unsupported transport transaction");
+            multilayer_transaction != std::string::npos &&
+            single_grid_transaction != std::string::npos &&
+            multilayer_step < multilayer_transaction &&
+            multilayer_transaction < single_grid_transaction,
+        "multilayer stepping must commit to its transaction before entering the single-grid transaction");
     check(
         c_api.find("spin transport is unsupported for v2 multilayer handles") !=
             std::string::npos,

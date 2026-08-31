@@ -576,6 +576,7 @@ pub(crate) struct NativeFdmBackend {
     active_mask: Option<Vec<bool>>,
     frozen_mask: Option<Vec<bool>>,
     precision: fullmag_ir::ExecutionPrecision,
+    precision_policy: fullmag_ir::FdmPrecisionPolicyIR,
     damping: f64,
     precession_enabled: bool,
     gpu_transport_bound: bool,
@@ -700,8 +701,8 @@ pub(crate) use device::DeviceInfo;
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub(crate) struct NativeLlgCheckpointV3 {
-    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v3,
+pub(crate) struct NativeLlgCheckpointV4 {
+    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v4,
     pub payload_sha256: [u8; 32],
     pub payload: Vec<u8>,
 }
@@ -1063,6 +1064,7 @@ impl NativeFdmBackend {
             active_mask,
             frozen_mask: None,
             precision: plan.precision,
+            precision_policy: plan.precision_policy.clone(),
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
@@ -1749,6 +1751,7 @@ impl NativeFdmBackend {
                 .as_ref()
                 .map(|frozen_spins| frozen_spins.frozen_mask.clone()),
             precision: plan.precision,
+            precision_policy: plan.precision_policy.clone(),
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
             gpu_transport_bound: false,
@@ -2198,10 +2201,10 @@ impl NativeFdmBackend {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV3, RunError> {
+    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV4, RunError> {
         let mut required_bytes = 0u64;
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v3(self.handle, &mut required_bytes)
+            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v4(self.handle, &mut required_bytes)
         };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint size query failed"));
@@ -2216,9 +2219,9 @@ impl NativeFdmBackend {
                 message: format!("failed to allocate {required_bytes} bytes for LLG checkpoint"),
             })?;
         payload.resize(payload_len, 0);
-        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v3::default();
+        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v4::default();
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_export_v3(
+            ffi::fullmag_fdm_backend_llg_checkpoint_export_v4(
                 self.handle,
                 payload.as_mut_ptr().cast(),
                 required_bytes,
@@ -2228,7 +2231,7 @@ impl NativeFdmBackend {
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint export failed"));
         }
-        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3
+        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4
             || info.payload_bytes != required_bytes
             || info.cell_count != self.cell_count as u64
         {
@@ -2236,7 +2239,7 @@ impl NativeFdmBackend {
                 message: "native LLG checkpoint metadata does not match the backend".to_string(),
             });
         }
-        Ok(NativeLlgCheckpointV3 {
+        Ok(NativeLlgCheckpointV4 {
             info,
             payload_sha256: Sha256::digest(&payload).into(),
             payload,
@@ -2246,13 +2249,13 @@ impl NativeFdmBackend {
     #[allow(dead_code)]
     pub(crate) fn restore_llg_checkpoint(
         &mut self,
-        checkpoint: &NativeLlgCheckpointV3,
+        checkpoint: &NativeLlgCheckpointV4,
     ) -> Result<(), RunError> {
         let payload_bytes = u64::try_from(checkpoint.payload.len()).map_err(|_| RunError {
             message: "LLG checkpoint payload exceeds u64".to_string(),
         })?;
         let payload_sha256: [u8; 32] = Sha256::digest(&checkpoint.payload).into();
-        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V3
+        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V4
             || checkpoint.info.payload_bytes != payload_bytes
             || checkpoint.info.cell_count != self.cell_count as u64
             || checkpoint.payload_sha256 != payload_sha256
@@ -2262,7 +2265,7 @@ impl NativeFdmBackend {
             });
         }
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_import_v3(
+            ffi::fullmag_fdm_backend_llg_checkpoint_import_v4(
                 self.handle,
                 checkpoint.payload.as_ptr().cast(),
                 payload_bytes,
@@ -3634,6 +3637,7 @@ mod tests {
             active_mask: None,
             frozen_mask: Some(vec![true, false, false, true]),
             precision: ExecutionPrecision::Double,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::default(),
             damping: 0.01,
             precession_enabled: true,
             gpu_transport_bound: false,
@@ -4080,6 +4084,7 @@ mod tests {
             },
             gyromagnetic_ratio: 2.211e5,
             precision,
+            precision_policy: fullmag_ir::FdmPrecisionPolicyIR::resolve(precision),
             exchange_bc: ExchangeBoundaryCondition::Neumann,
             integrator: Some(IntegratorChoice::Heun),
             fixed_timestep: Some(2.5e-13),
@@ -4481,7 +4486,7 @@ mod tests {
         let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
             .expect("dynamics")
             .with_precession_enabled(!llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()));
-        ExchangeLlgProblem::with_terms_and_mask(
+        let mut problem = ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
             material,
@@ -4526,7 +4531,33 @@ mod tests {
             },
             plan.active_mask.clone(),
         )
-        .expect("problem")
+        .expect("problem");
+        if let Some(periodicity) = plan.periodicity.as_ref() {
+            let map_axis = |axis: &fullmag_ir::AxisBoundary| match axis {
+                fullmag_ir::AxisBoundary::Periodic => fullmag_engine::AxisBoundary::Periodic,
+                fullmag_ir::AxisBoundary::Open => fullmag_engine::AxisBoundary::Open,
+            };
+            problem.boundary_policy = fullmag_engine::FdmBoundaryPolicy {
+                x: map_axis(&periodicity.axes[0]),
+                y: map_axis(&periodicity.axes[1]),
+                z: map_axis(&periodicity.axes[2]),
+            };
+            if let Some(image_counts) = periodicity.image_counts {
+                problem.demag_image_counts = image_counts;
+            }
+        }
+        problem.set_demag_boundary(
+            crate::fdm::resolve_fdm_demag_boundary(plan).expect("resolved demag boundary"),
+        );
+        problem.set_resolved_periodic_workspace(plan.resolved_periodic_images.as_ref().map(
+            |resolved| fullmag_engine::ResolvedFdmPeriodicWorkspace {
+                image_counts: resolved.resolved_image_counts,
+                padded_counts: resolved.padded_counts,
+                image_terms: resolved.image_terms,
+                estimated_bytes: resolved.estimated_bytes,
+            },
+        ));
+        problem
     }
 
     fn cpu_reference_single_step(
@@ -5389,6 +5420,23 @@ mod tests {
         let cell_count = plan.initial_magnetization.len();
 
         let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        let receipt = backend
+            .execution_receipt("gpu", fullmag_ir::ExecutionMode::Strict)
+            .expect("static profile construction receipt");
+        let workspace = receipt
+            .gpu_workspace
+            .expect("static profile GPU workspace receipt");
+        assert!(workspace.accounting_valid);
+        assert!(workspace.setup_complete);
+        assert_eq!(
+            workspace.total_device_allocation_count,
+            workspace.setup_device_allocation_count
+        );
+        assert_eq!(
+            workspace.total_device_allocation_bytes,
+            workspace.setup_device_allocation_bytes
+        );
+        assert_eq!(workspace.observed_step_count, 0);
         backend
             .step(plan.fixed_timestep.expect("fixed dt"))
             .expect("native fdm static profile step");
@@ -5963,6 +6011,12 @@ mod tests {
             demag: FdmDemagPeriodicityIR::TruncatedImages,
             image_counts: Some([2, 2, 0]),
         });
+        plan.resolved_periodic_images = plan
+            .periodicity
+            .as_ref()
+            .expect("periodic request")
+            .resolve_periodic_images(plan.grid.cells, plan.precision)
+            .expect("valid periodic image request");
         let cell_count = plan.initial_magnetization.len();
         let (
             expected_m,

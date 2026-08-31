@@ -7,10 +7,22 @@ import type {
   Viewport3DPrimitiveRenderModel,
   Viewport3DPrimitiveObject,
 } from "./viewport3dPrimitiveModel";
+import type { Viewport3DColors } from "./viewport3dTypes";
+import { useViewport3DColors } from "./hooks/useViewport3DColors";
 export { PROBLEM_IR_03_RIGID_TRANSFORM_REASON } from "@/kernel/authoring/objectTranslationMutation";
 
 export type MoveAxis = "x" | "y" | "z";
 export type Translation3 = [number, number, number];
+
+const FALLBACK_MOVE_GIZMO_COLORS: Viewport3DColors = {
+  accent: 0x89b4fa,
+  background: 0x11111b,
+  danger: 0xf38ba8,
+  field: 0xa6e3a1,
+  mesh: 0x313244,
+  success: 0xa6e3a1,
+  wire: 0x6c7086,
+};
 
 export interface MoveDraft {
   objectId: string;
@@ -119,6 +131,8 @@ export function MoveObjectGizmo({
   onDraftChange?: (draft: MoveDraft | null) => void;
   onGestureActiveChange?: (active: boolean) => void;
 }) {
+  const { colors: themeColors } = useViewport3DColors();
+  const colors = themeColors ?? FALLBACK_MOVE_GIZMO_COLORS;
   const origin = object.translation ?? object.bounds.center;
   const [originX, originY, originZ] = origin;
   const [draft, setDraft] = useState<MoveDraft | null>(null);
@@ -168,7 +182,7 @@ export function MoveObjectGizmo({
     >
       <mesh userData={{ draftPreview: true }}>
         <boxGeometry args={object.bounds.size} />
-        <meshBasicMaterial color="#89b4fa" opacity={0.22} transparent wireframe />
+        <meshBasicMaterial color={colors.accent} opacity={0.22} transparent wireframe />
       </mesh>
       {(["x", "y", "z"] as const).map((axis, index) => (
         <mesh
@@ -180,7 +194,7 @@ export function MoveObjectGizmo({
           userData={{ axis, gizmo: "move-axis", objectId: object.objectId }}
         >
           <cylinderGeometry args={[length * 0.035, length * 0.035, length, 10]} />
-          <meshBasicMaterial color={["#f38ba8", "#a6e3a1", "#89b4fa"][index]} depthTest={false} />
+          <meshBasicMaterial color={[colors.danger, colors.success, colors.accent][index]} depthTest={false} />
         </mesh>
       ))}
     </group>

@@ -24,6 +24,7 @@ export type CommandDetailResource = components["schemas"]["CommandDetailResource
 export type CommandQueueStatusResource =
   components["schemas"]["CommandQueueStatusResource"];
 export type CommandResponse = components["schemas"]["CommandResponse"];
+export type CommandFailureRequest = components["schemas"]["CommandFailureRequest"];
 export type CheckpointCreateRequest =
   components["schemas"]["CheckpointCreateRequest"];
 export type CheckpointCreateResponse =

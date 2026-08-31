@@ -244,15 +244,15 @@ No physical model is introduced; primary references belong to consuming interact
 
 ## Control Room crosswalk
 
-Status: Basic object/shape fields are partial; advanced boolean, imported, auxiliary, and transform parameters remain TODO.
+Status: Basic object/shape fields are partial; advanced boolean, imported, auxiliary, and transform parameters remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Geometry` | `partial` | Apply geometry draft; object resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Geometry` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Geometry` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for every geometry parameter not rendered by GeometryObjectPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+frontend support is not implemented for every geometry parameter not rendered by GeometryObjectPanel.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx (GeometryObjectPanel)`.
 
 ## Source-code index

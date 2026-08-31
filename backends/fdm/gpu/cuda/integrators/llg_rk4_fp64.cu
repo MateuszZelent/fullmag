@@ -26,6 +26,9 @@ namespace fdm {
 extern void launch_exchange_field_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
+extern bool launch_effective_field_and_base_llg_rhs_fp64(
+    Context &ctx, double evaluation_time, DeviceVectorField &rhs_out,
+    cudaStream_t stream);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
@@ -122,28 +125,40 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             return false;
         }
     }
-    launch_effective_field_fp64(ctx, evaluation_time);
-    if (poll_interrupt(ctx)) {
-        abort_step_after_interrupt(ctx, false);
-        return false;
+    const bool fuse_local_pipeline =
+        !ctx.local_pipeline_force_unfused_for_testing &&
+        !ctx.has_zhang_li_stt && !ctx.has_slonczewski_stt && !ctx.has_sot;
+    if (fuse_local_pipeline) {
+        if (!launch_effective_field_and_base_llg_rhs_fp64(
+                ctx, evaluation_time, rhs_out, nullptr)) return false;
+    } else {
+        launch_effective_field_fp64(ctx, evaluation_time);
+        if (poll_interrupt(ctx)) {
+            abort_step_after_interrupt(ctx, false);
+            return false;
+        }
     }
     if (!context_evaluate_gpu_transport_rhs(
             ctx, ctx.m, evaluation_time,
             ctx.gpu_transport_active_attempt_id, stage_id)) return false;
 
-    llg_rhs_fp64_kernel<<<grid, 256>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(rhs_out.x),
-        static_cast<double*>(rhs_out.y),
-        static_cast<double*>(rhs_out.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    fullmag_fdm_note_llg_rhs_torque_device_launch(ctx, "RK4 fp64 LLG RHS launch");
+    if (!fuse_local_pipeline) {
+        llg_rhs_fp64_kernel<<<grid, 256>>>(
+            static_cast<const double*>(ctx.m.x),
+            static_cast<const double*>(ctx.m.y),
+            static_cast<const double*>(ctx.m.z),
+            static_cast<const double*>(ctx.work.x),
+            static_cast<const double*>(ctx.work.y),
+            static_cast<const double*>(ctx.work.z),
+            static_cast<double*>(rhs_out.x),
+            static_cast<double*>(rhs_out.y),
+            static_cast<double*>(rhs_out.z),
+            n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+            stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        context_note_local_pipeline_unfused_rhs(ctx);
+        fullmag_fdm_note_llg_rhs_torque_device_launch(
+            ctx, "RK4 fp64 LLG RHS launch");
+    }
     if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) return false;
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx, false);
