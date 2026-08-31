@@ -11,7 +11,7 @@ source_of_truth: docs/physics/0800-fem-static-pbc-demag.md
 # Periodic demagnetization solvers
 
 (numerical-methods-periodic-demag-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 The canonical interaction is owned by {doc}`../../physics/interactions/demagnetization/periodic-demag`.
 Periodic demagnetization is a different Green-function problem from open-boundary demagnetization:
@@ -22,7 +22,7 @@ periodic Poisson system for FEM. Neither is silently substituted for the other o
 kernel.
 
 (numerical-methods-periodic-demag-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 For FEM, let $P$ lift one value per periodic representative to all equivalent mesh degrees of
 freedom. The reduced stiffness system is
@@ -150,6 +150,8 @@ study.stages.add_relax(
 constructor is useful when inspecting or testing the Python contract, while the documented script
 should keep study construction and stage ordering visible.
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `FdmPbc.axes` | `tuple[bool,bool,bool]` | required | $1$ | exactly three Boolean values | periodic status of x, y, z | FDM planner; FEM mesh planner consumes the same intent | `pbc.axes` |
@@ -182,7 +184,7 @@ zero-mode treatment, solver residuals, field recovery and energy reduction. Requ
 resolved execution are not interchangeable provenance fields.
 
 (numerical-methods-periodic-demag-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves the stage-first study, periodic axes and demagnetization policy. Validation
 errors include a wrong axis tuple length, invalid image counts, image counts without
@@ -207,7 +209,7 @@ side. CPU/GPU results are comparable only after the same policy, mesh/cell topol
 zero-mode handling and tolerances are recorded.
 
 (numerical-methods-periodic-demag-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
@@ -241,7 +243,7 @@ every periodic policy.
 
 (numerical-methods-periodic-demag-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

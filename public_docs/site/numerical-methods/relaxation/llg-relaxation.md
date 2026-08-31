@@ -4,11 +4,22 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md, docs/physics/0580-canonical-relaxation-equilibrium-contract.md
 ---
 
 (public-docs-numerical-methods-relaxation-llg-relaxation)=
 # Overdamped LLG relaxation
+
+## Scope and purpose
+
+This page documents the source-backed overdamped LLG relaxation stage, its accepted-step
+integrators, adaptive error policy and independent equilibrium stop contract.
+
+## Scientific and numerical model
+
+The implemented model is pure damping of the LLG right-hand side with the complete active effective
+field; adaptive acceptance and accepted-state torque completion remain separate predicates.
 
 (numerical-methods-relaxation-llg-problem-statement)=
 ## Physical problem
@@ -330,6 +341,12 @@ The convenience `max_err`/`max_error` form creates an `AdaptiveTimestep` with `a
 policy. The serialized `tolerance_mode` preserves this distinction.
 
 (numerical-methods-relaxation-llg-problem-ir)=
+## Parameters
+
+The executable controls are the stage algorithm, integrator, fixed or adaptive timestep, damping
+override, stop criteria and work or time ceilings. The Python-to-ProblemIR table above is the
+authoritative parameter list.
+
 ## ProblemIR
 
 The stage request lowers to the existing relaxation payload. The numeric values below are
@@ -366,6 +383,12 @@ The resolved execution record additionally identifies FEM/FDM, CPU/GPU, precisio
 integrator, adaptive policy, and actual device. The serialized request alone is not runtime proof.
 
 (numerical-methods-relaxation-llg-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+Record attempted and accepted steps, local-error ratios, rejection causes, field refreshes,
+accepted-state torque confirmation, completion reason and executed backend/device. A failed solve,
+non-finite state or exhausted adaptive floor cannot be published as converged.
+
 ## Round-trip and failure semantics
 
 The script exporter emits the stage-first `study.stages.add_relax(...)` call and preserves the
@@ -428,9 +451,21 @@ and their line-search contracts are described separately.
 
 (numerical-methods-relaxation-llg-source-code-index)=
 
+## Control Room workflow
+
+Use the stage editor to select overdamped LLG and expose only integrator, timestep, adaptive, stop
+and field-refresh controls present in the current stage draft. Inspect resolved execution and
+completion telemetry before treating the stage as converged.
+
 ## Control Room crosswalk
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
+## Where this is implemented
+
+The source-code index below records public validation, stage lowering, adaptive controllers, backend
+execution and completion semantics. Each sidecar entry names a stable declaration rather than a
+line range.
 
 ## Source-code index
 

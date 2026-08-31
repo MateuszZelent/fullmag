@@ -198,3 +198,29 @@ The direct generator input is axis IDs, not descriptors. This is static k=0 sema
 | pair-count provenance in assets | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _periodic_pair_counts_by_id` | source-backed |
 | `crates/fullmag-plan/src/fem.rs` | `fem_frequency_response_production_slice_rejection_reason` | Frequency-response-only planner gate requiring shared-domain air, demag, `spin_wave_bc=periodic`, `k=0`, magnetic `delta_m` periodic constraints, and magnetostatic-with-air `delta_phi` periodic constraints. |
 | `packages/fullmag-py/src/fullmag/world.py` | `class StudyBuilder` | Public `StudyBuilder.pbc` delegates to `world.pbc`; `world.pbc` owns axis bool coercion and `FdmPbc` creation. |
+
+## Scope and purpose
+
+This page defines the public contract for periodic FEM airbox meshes. It is an authoring and implementation reference: the Python example, the serialized ProblemIR description, the implementation mapping, and the adjacent source map are the source-backed contract. A capability marked partial or not evaluated is not presented as a production guarantee.
+
+## Scientific and numerical model
+
+The mesh or grid is a discrete approximation of the continuous domain. For a Cartesian partition, each spacing satisfies `Delta_i = L_i / N_i`; for a geometry-dependent FEM mesh, the requested local target is bounded by the active bulk, interface, boundary, and topology constraints. In compact form, `h_target(x) = min(h_bulk(x), h_interface(x), h_boundary(x))`. Length quantities use SI metres (`m`); counts, orders, and topology labels are dimensionless.
+
+The equations and assumptions in the earlier physical-problem and governing-equations sections state the model-specific specialization. This section does not introduce a conversion from FEM to FDM, a hidden topology conversion, or a silent CPU fallback.
+
+## Parameters
+
+The exact callable and argument names are the ones shown in the `## Python API` section above. For this page the parameter family is periodic pair identifiers, wave-vector or phase data, and mesh controls. Use the documented defaults, validation rules, and ProblemIR lowering exactly as shown; do not replace a canonical argument with an unlisted alias. Numerical lengths must be supplied in metres, and invalid positive-length, count, order, periodicity, or topology constraints must fail closed rather than being silently repaired.
+
+## Control Room workflow
+
+In Control Room, select the engine and mesh workflow, enter the same values as the Python authoring example, inspect the planned mesh or grid report, and only then submit the run. The UI is a projection of the public contract: a missing control is not evidence that the backend accepts the option, and a visible control is not evidence that a production lane is enabled. When the page or capability register marks a field partial or not evaluated, keep the workflow explicitly bounded to the implemented path.
+
+## Diagnostics and failure semantics
+
+A valid request must preserve the declared geometry, units, element or cell topology, and backend lane. Reject non-finite or non-positive lengths, invalid counts and orders, incompatible periodic or shared-boundary data, and unsupported topology combinations at the owning validation layer. Reports should retain requested and resolved values, source identity, and any capability gate. No diagnostic may hide a failed mesh realization by substituting another discretization.
+
+## Where this is implemented
+
+The existing implementation-mapping and source-code-index sections identify the exact public authoring, ProblemIR, planner, realization, and runtime owners for this topic. The adjacent `.source-map.json` file is the machine-readable source of truth for those paths, symbols, responsibilities, backend matrix, and reviewed revision. Claims in this page must be updated together with that map when an owner moves.

@@ -10,7 +10,7 @@ owner: fullmag-public-docs
 # FEM Poisson airbox solver
 
 (numerical-methods-demag-poisson-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 The canonical physical demagnetization definition is owned by
 {doc}`../../physics/interactions/demagnetization/index`. This page describes the shared-domain
@@ -23,7 +23,7 @@ operator approximating open decay. They are not two names for one solver setting
 record the selected closure.
 
 (numerical-methods-demag-poisson-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 The magnetostatic scalar-potential field is recovered as
 
@@ -152,6 +152,8 @@ study.stages.add_relax(
 )
 ```
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Demag.model` | `str \| None` | `None` | $1$ | `airbox`, `bem`, `fredkin_koehler`, or `fmm` | realization family | FEM planner | `energy[].realization` |
@@ -197,7 +199,7 @@ remains distinct. Resolved mesh topology, boundary marker, essential DOFs, solve
 iteration count, precision, CPU/GPU lane and actual device are provenance, not inferred defaults.
 
 (numerical-methods-demag-poisson-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves the stage-first workflow and separate airbox/solver policies. Validation
 errors include conflicting `model` and legacy `realization`, invalid variant, missing conforming
@@ -223,7 +225,7 @@ The weak form is shared by CPU/GPU. The assembled operator, sparse solver librar
 boundary-DOF preparation, reductions and telemetry are separate lane contracts.
 
 (numerical-methods-demag-poisson-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
@@ -233,6 +235,7 @@ boundary-DOF preparation, reductions and telemetry are separate lane contracts.
 | Boundary operator | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `initialize_demag_poisson_boundary_operator` | Dirichlet/Robin construction | FEM CPU |
 | Linear solve | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | solver and telemetry | FEM CPU |
 | Field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | gradient, mask and field handoff | FEM CPU |
+| Energy reduction | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | demagnetization energy reduction | FEM CPU |
 | Device RHS/recovery | `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `demag_rhs_csr_kernel` | device CSR RHS and recovery kernels | FEM GPU |
 
 (numerical-methods-demag-poisson-validation)=
@@ -259,7 +262,7 @@ equivalence between the two closures.
 
 (numerical-methods-demag-poisson-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 
@@ -273,4 +276,5 @@ Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level cont
 | Boundary closure | `backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp` | `initialize_demag_poisson_boundary_operator` | Dirichlet and Robin operators | FEM CPU | boundary contracts |
 | CPU solve | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp` | `solve_demag_poisson_hypre` | Hypre/MFEM solve and telemetry | FEM CPU | managed runtime evidence |
 | Field recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp` | `recover_demag_poisson_field` | recovered field | FEM CPU | recovery contracts |
+| Energy reduction | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_from_field` | energy reduction | FEM CPU | reduction contracts |
 | GPU RHS | `backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu` | `demag_rhs_csr_kernel` | device RHS | FEM GPU | CUDA/source contract |

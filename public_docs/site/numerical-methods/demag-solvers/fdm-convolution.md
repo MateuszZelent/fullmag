@@ -10,7 +10,7 @@ owner: fullmag-public-docs
 # FDM tensor convolution and FFT demagnetization
 
 (numerical-methods-demag-fdm-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 The canonical demagnetizing interaction is documented in
 {doc}`../../physics/interactions/demagnetization/fdm-convolution`. This page owns the FDM
@@ -19,7 +19,7 @@ convolution, and a field/energy reduction with one shared physical convention. P
 FDM CPU or GPU request, but execution and qualification remain separate per device lane.
 
 (numerical-methods-demag-fdm-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 The cell-averaged field is the tensor convolution
 
@@ -124,6 +124,8 @@ study.stages.add_relax(
 )
 ```
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `body.mesh(cell_size=...)` | `Sequence[float]` | required unless a default exists | $\mathrm{m}$ | exactly three finite positive values; object extents must divide exactly | native Cartesian cell size of one magnetic object | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.per_magnet.<object>.cell` |
@@ -165,7 +167,7 @@ mask, precision and memory budget; those resolved values belong to provenance an
 inferred from `auto` after the run.
 
 (numerical-methods-demag-fdm-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves the stage-first study and object-owned discretization policy. The round
 trip reports validation errors for invalid cell sizes and malformed common grids. The unsupported combinations
@@ -189,11 +191,14 @@ CPU and GPU must share the tensor convention, sign and energy definition. They m
 library, storage layout, precision, reductions and residency.
 
 (numerical-methods-demag-fdm-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
 | Python policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | strategy, mode and common-grid validation | public API |
+| Mesh authoring | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | canonical object-owned cell-size authoring | public API |
+| CPU kernel spectra | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | CPU FFT kernel spectra | CPU/reference |
+| Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `relax_stage` | stage-first example lowering | public API |
 | Newell tensor | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | cell-averaged tensor construction | CPU/reference |
 | Tensor convolution | `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | symmetric tensor-vector product | CPU/reference |
 | CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_from_vectors` | CPU field realization | FDM CPU |
@@ -223,7 +228,7 @@ and validation-dependent.
 
 (numerical-methods-demag-fdm-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 
@@ -232,6 +237,9 @@ Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level cont
 | Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence |
 |---|---|---|---|---|---|
 | FDM policy | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMDemag` | public strategy and grid controls | public API | Python tests |
+| Mesh authoring | `packages/fullmag-py/src/fullmag/world.py` | `class GeometryMeshHandle` | object-owned cell-size authoring | public API | Python tests |
+| CPU kernel spectra | `crates/fullmag-engine/src/fdm/cpu/fft.rs` | `compute_newell_kernel_spectra` | FFT kernel spectra | CPU/reference | Rust tests |
+| Stage lowering | `packages/fullmag-py/src/fullmag/world.py` | `relax_stage` | stage-first lowering | public API | Python tests |
 | Newell kernel | `crates/fullmag-fdm-demag/src/newell.rs` | `compute_newell_kernels` | cell-averaged demag tensor | CPU/reference | Rust tests |
 | FFT product | `crates/fullmag-fdm-demag/src/multiply.rs` | `accumulate_tensor_convolution` | tensor-vector product | CPU/reference | Rust tests |
 | CPU field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `demag_field_from_vectors` | CPU field calculation | FDM CPU | engine tests |

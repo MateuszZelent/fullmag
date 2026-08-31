@@ -4,11 +4,22 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 source_of_truth: docs/physics/0580-canonical-relaxation-equilibrium-contract.md
 ---
 
 (public-docs-numerical-methods-relaxation-stopping-criteria)=
 # Relaxation stopping criteria and completion
+
+## Scope and purpose
+
+This page defines the shared accepted-state completion contract for relaxation and separates torque,
+optional energy, work budgets, failure states and output cadence.
+
+## Scientific and numerical model
+
+Completion is evaluated after an accepted state and field refresh. Torque is mandatory; an energy
+plateau is an additional conjunction rather than a replacement criterion.
 
 (numerical-methods-relaxation-stopping-problem-statement)=
 ## Completion problem
@@ -149,6 +160,12 @@ always emits the single canonical `max_relaxation_time_s` key. Supplying two ali
 values is a validation error rather than a precedence rule.
 
 (numerical-methods-relaxation-stopping-problem-ir)=
+## Parameters
+
+The executable controls are the grouped `RelaxStop` fields and scalar stage aliases listed in the
+Python table. The canonical payload stores torque, optional energy, step and LLG-only time criteria;
+budgets never imply convergence.
+
 ## ProblemIR
 
 The grouped stop object lowers to a canonical payload:
@@ -168,6 +185,12 @@ remain provenance metadata; resolved execution stores the canonical A/m threshol
 completion reason.
 
 (numerical-methods-relaxation-stopping-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+Record accepted-state torque, energy-window samples, confirmation count, field-refresh policy,
+budget counters, stop reason and failure or cancellation status. Non-finite metrics, invalid state,
+failed field solves and failed line searches cannot satisfy completion.
+
 ## Round-trip and failure semantics
 
 Script export preserves the grouped `RelaxStop` values or the equivalent scalar stage arguments.
@@ -239,9 +262,20 @@ that the continuous functional has reached its global minimum.
 
 (numerical-methods-relaxation-stopping-source-code-index)=
 
+## Control Room workflow
+
+Use the stage editor to configure torque, optional energy and work-budget fields, then inspect the
+resolved completion reason and metrics. A direct minimizer must not receive an LLG physical-time
+limit.
+
 ## Control Room crosswalk
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
+## Where this is implemented
+
+The source-code index below records the public stop object, flat-stage normalization and shared
+accepted-state completion declarations used by this contract.
 
 ## Source-code index
 

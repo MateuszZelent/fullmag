@@ -4,11 +4,22 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md
 ---
 
 (public-docs-numerical-methods-relaxation-projected-gradient)=
 # Projected gradient with Barzilai–Borwein steps
+
+## Scope and purpose
+
+This page documents the source-backed projected-gradient minimizer with Barzilai–Borwein step
+selection for normalized magnetization, including retraction, line search and completion semantics.
+
+## Scientific and numerical model
+
+The method minimizes the resolved micromagnetic energy on the unit-spin manifold using a bounded BB
+step and normalized retraction; rejected trials are rolled back.
 
 (numerical-methods-relaxation-pgbb-problem-statement)=
 ## Physical and numerical problem
@@ -224,6 +235,12 @@ No public parameter controls $c_1$, the BB bounds, or the maximum number of Armi
 those are implementation policy constants and must not be presented as user controls.
 
 (numerical-methods-relaxation-pgbb-problem-ir)=
+## Parameters
+
+The executable controls are the `projected_gradient_bb` algorithm identifier, torque and optional
+energy stop criteria, and accepted-step budget. LLG dynamics, timestep and damping controls are
+rejected for this direct minimizer.
+
 ## ProblemIR
 
 The stage lowers to a relaxation study without a `dynamics` object:
@@ -249,6 +266,12 @@ physical-time stage. The resolved runtime publishes `accepted_step_m_per_A`, `ti
 `pseudo_time_s=null`, torque in A/m and T, and final energy/plateau metrics.
 
 (numerical-methods-relaxation-pgbb-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+Record tangent orthogonality, BB curvature guards, Armijo trials and rollback, accepted energy,
+accepted-state torque completion, failure status and resolved lane. Invalid curvature, a failed
+line search or a non-finite metric is a failure, not convergence.
+
 ## Round-trip and failure semantics
 
 Script export preserves the algorithm and stop fields in `study.stages.add_relax(...)`. Validation errors
@@ -308,9 +331,20 @@ qualification. It has no physical-time interpretation.
 
 (numerical-methods-relaxation-pgbb-source-code-index)=
 
+## Control Room workflow
+
+Use the stage editor to select `projected_gradient_bb` and configure direct-minimizer stop controls.
+Inspect resolved algorithm, lane and completion telemetry; LLG integrator and physical-time fields
+are not authorable controls for this stage.
+
 ## Control Room crosswalk
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
+## Where this is implemented
+
+The source-code index below records the shared policy, FDM reference path, native FEM CPU/GPU steps,
+Python stage lowering and completion policy used by this page.
 
 ## Source-code index
 

@@ -10,7 +10,7 @@ owner: fullmag-public-docs
 # Modal validation and qualification
 
 (numerical-methods-modal-validation-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 Modal validation compares computed eigenfrequencies and mode branches with an independent physical
 reference. It is not a plot-only step: the equilibrium, field units, $\mathbf k$ sampling, branch
@@ -19,7 +19,7 @@ supports thin-film Damon–Eshbach/backward-volume dispersion checks and zero-wa
 sweeps as explicit validation intent attached to the study.
 
 (numerical-methods-modal-validation-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 For each matched mode sample $j$, the relative frequency error is
 
@@ -113,6 +113,8 @@ study.k0_kittel_validation(
 study.stages.add_eigenmodes(count=8, target="lowest", equilibrium_source="provided")
 ```
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `ThinFilmDEBVDispersionValidation.film_thickness_m` | `float` | required | $\mathrm{m}$ | positive | film thickness | FEM validation | `runtime_metadata.dispersion_validation.film_thickness_m` |
@@ -138,7 +140,7 @@ request. Provenance records the validation schema, canonicalized units, case ID,
 sample mapping, analytical model, tolerance, solver diagnostics and the exact resolved execution.
 
 (numerical-methods-modal-validation-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves validation objects and stage ordering. Requested intent and resolved execution
 are stored separately. Validation errors include missing geometries, too few samples, duplicate sample
@@ -157,7 +159,7 @@ qualified.
 | FDM | GPU | unsupported for this modal validation contract | no native CUDA modal lane is claimed |
 
 (numerical-methods-modal-validation-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
@@ -189,7 +191,7 @@ bounded by the Python validators and does not represent arbitrary multilayer dis
 
 (numerical-methods-modal-validation-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

@@ -10,7 +10,7 @@ owner: fullmag-public-docs
 # Linearized LLG eigensolver
 
 (numerical-methods-eigensolver-linearized-llg-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 The canonical dynamical model is owned by {doc}`../../physics/foundations/llg-equation`. This page
 documents the numerical modal realization: first obtain or provide a static equilibrium
@@ -19,7 +19,7 @@ The mode problem is not a time-integration shortcut. Its equilibrium, damping po
 operator, boundary condition, normalization and target-selection policy are all part of the request.
 
 (numerical-methods-eigensolver-linearized-llg-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 Let $\mathbf m=\mathbf m_0+\delta\mathbf m$ with $|\mathbf m_0|=1$. The first-order constraint is
 
@@ -109,6 +109,8 @@ study.stages.add_eigenmodes(
 )
 ```
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `EigenmodesStageSpec.count` | `int` | `10` | $1$ | positive integer | number of modes | FEM planner | `study.count` |
@@ -135,7 +137,7 @@ the resolved FEM device/precision, equilibrium artifact digest, tangent DOF coun
 eigensolver diagnostics, mode normalization, phase convention and validation results.
 
 (numerical-methods-eigensolver-linearized-llg-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves stage order and all modal parameters. Requested intent is preserved before validation. Validation errors include invalid target
 windows, missing artifact paths, unsupported operators, inconsistent equilibrium sources, invalid
@@ -155,7 +157,7 @@ availability.
 | FDM | GPU | unsupported for this native modal page | no public CUDA modal claim |
 
 (numerical-methods-eigensolver-linearized-llg-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
@@ -187,7 +189,7 @@ runtime qualification condition, not a mathematical assumption.
 
 (numerical-methods-eigensolver-linearized-llg-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

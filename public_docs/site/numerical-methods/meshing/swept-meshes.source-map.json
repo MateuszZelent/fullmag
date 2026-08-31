@@ -1,5 +1,5 @@
 {
-  "document":{"path":"public_docs/site/numerical-methods/meshing/swept-meshes.md","reviewed_revision":"969efa0941905825ac569d525f4bdaefc059e2af"},
+  "document":{"path":"public_docs/site/numerical-methods/meshing/swept-meshes.md","reviewed_revision":"a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
   "backend_matrix":[{"solver":"FEM","device":"CPU","status":"source-backed"},{"solver":"FEM","device":"GPU","status":"source-backed-capability-gated"},{"solver":"FDM","device":"CPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."},{"solver":"FDM","device":"GPU","status":"not-applicable","reason":"This page documents FEM meshing semantics."}],
   "sources":[
     {"id":"swept_mesh","path":"packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py","symbol":"generate_swept_mesh","responsibility":"Layered mesh dispatch and fail-closed restrictions."},

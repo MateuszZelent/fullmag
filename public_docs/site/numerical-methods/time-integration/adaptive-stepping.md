@@ -4,6 +4,9 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
+source_of_truth: "AdaptiveTimestep and LLG validation, ProblemIR lowering, and lane-specific error reductions"
 ---
 
 (public-docs-numerical-methods-time-integration-adaptive-stepping)=
@@ -13,8 +16,14 @@ Adaptive stepping changes $Δt$ from one accepted step to the next using an embe
 estimate. It controls temporal truncation error; it does not estimate spatial error, certify
 physical accuracy, or remove the stability restriction imposed by the fastest resolved field.
 
+## Scope and purpose
+
+This page documents the public adaptive-step policy for accepted physical-time LLG stages. It
+specifies temporal error control and its provenance boundary; spatial discretization and executed
+device qualification remain separate concerns.
+
 (time-integration-adaptive-stepping-problem-statement)=
-## Numerical problem
+## Scientific and numerical model
 
 For an embedded pair, two approximations of different order are computed from the same stage
 right-hand sides. The difference controls acceptance and the next proposed step. Rejected steps
@@ -111,6 +120,11 @@ The `study.solver(...)` call is the only user-facing solver configuration shown 
 workflow. It lowers the adaptive policy into the canonical `llg` dynamics node; the resolved
 integrator, bounds, tolerances, and device remain part of execution provenance.
 
+## Parameters
+
+The following rows are the public constructor and solver arguments used by the example. Defaults,
+validation and ProblemIR keys are mirrored by the adjacent source map.
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `AdaptiveTimestep.atol` | `float` | `1e-6` | $1$ | non-negative; not both tolerances zero | absolute error component | RK23/RK45 lanes | `adaptive_timestep.atol` |
@@ -131,7 +145,7 @@ and norm controls remain `null`/absent according to the serializer. `rk23` and `
 only explicit adaptive method names accepted by the current `LLG` validator.
 
 (time-integration-adaptive-stepping-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Round-trip export preserves requested intent, requested tolerances, and bounds, then records resolved execution
 separately. Validation errors cover both zero tolerances, invalid bounds, invalid safety or
@@ -154,7 +168,7 @@ whereas the CPU reference uses host-visible state. These are two realizations of
 accept/reject semantics, not two different tolerance meanings.
 
 (time-integration-adaptive-stepping-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 `AdaptiveTimestep` owns public validation and IR serialization. FDM CUDA reductions provide the
 device-side error scalar and the integrator consumes it. FEM integrator modules own stage
@@ -183,7 +197,7 @@ Tolerances are dimensionless state tolerances, not SI field tolerances.
 
 (time-integration-adaptive-stepping-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

@@ -1,5 +1,5 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/relaxation/stopping-criteria.md"},
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/stopping-criteria.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "source-backed"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native reductions exist; executed-device qualification is separate."},

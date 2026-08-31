@@ -4,6 +4,9 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
+source_of_truth: "Relaxation validation, relax-stage lowering, and planner capability status"
 ---
 
 (public-docs-numerical-methods-time-integration-tangent-plane-methods)=
@@ -15,8 +18,14 @@ sphere. In the current public Fullmag model this method family is exposed as the
 choice for a physical-time `run` stage. That distinction is intentional and prevents a
 relaxation minimizer from being presented as a dynamic time integrator.
 
+## Scope and purpose
+
+This page documents the tangent-plane relaxation contract and its boundary with physical-time
+integration. The current public API exposes `tangent_plane_implicit` as a relaxation algorithm;
+it does not expose a general tangent-plane `LLG.integrator`.
+
 (time-integration-tangent-plane-methods-problem-statement)=
-## Numerical problem
+## Scientific and numerical model
 
 At a normalized magnetization $μ_i$, admissible first-order variations satisfy
 $\mu_i\cdot\delta\mu_i=0$. A tangent-plane relaxation method solves for an increment in this
@@ -97,6 +106,11 @@ study.stages.add_relax(
 | `RelaxStop.torque_tolerance_apm` | `float \| None` | `0.7957747154594767` | $\mathrm{A\,m^{-1}}$ | positive when set | torque stopping threshold | FEM/FDM relaxation stop contract | `study.relaxation.stop.torque_tolerance_apm` |
 | `RelaxStop.max_steps` | `int \| None` | `50000` | $1$ | positive integer when set | iteration limit | FEM/FDM relaxation stop contract | `study.relaxation.stop.max_steps` |
 
+## Parameters
+
+The following rows are the public relaxation and stopping parameters used by the example. The
+FDM rows remain explicitly unsupported for this algorithm, as recorded in the source map.
+
 (time-integration-tangent-plane-methods-problem-ir)=
 ## ProblemIR
 
@@ -110,7 +124,7 @@ The planner resolves whether the selected FEM lane can execute it. The JSON requ
 that a native tangent-plane solve was run.
 
 (time-integration-tangent-plane-methods-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Round-trip preserves requested intent, the algorithm request, and stop policy. Validation errors cover unknown
 algorithm names, non-positive stop values, and incompatible time-limit parameters. Unsupported combinations
@@ -129,7 +143,7 @@ provenance.
 | FDM GPU | unsupported | current algorithm contract is FEM-only |
 
 (time-integration-tangent-plane-methods-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 The public algorithm set and validation live in `Relaxation`; the stage builder lowers the
 request through `relax_stage`. Backend implementation status is resolved by planner capabilities,
@@ -158,7 +172,7 @@ preconditioner controls must be added only when their public and native contract
 
 (time-integration-tangent-plane-methods-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

@@ -4,10 +4,21 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 ---
 
 (public-docs-numerical-methods-interpolation-and-state-transfer-fem-to-fdm)=
 # FEM → FDM state transfer
+
+## Scope and purpose
+
+This page specifies the source-backed continuation from a FEM nodal state to target FDM cell
+centres, including element location, interpolation, normalization and failure reporting.
+
+## Scientific and numerical model
+
+The target grid is sampled geometrically from the source FEM topology; this operation does not
+claim equivalence of the FEM and FDM operators or trajectories.
 
 (numerical-methods-fem-to-fdm-problem-statement)=
 ## Physical and numerical problem
@@ -92,6 +103,12 @@ study.stages.add_relax(stage_id="continue", algorithm="nonlinear_cg", tolT=1.0e-
 | `FEM → FDM continuation` | automatic runtime operation | automatic | $1$ | source and target artifacts must be compatible | evaluates FEM field on FDM cell centres | FEM source → FDM target | runtime continuation metadata |
 
 (numerical-methods-fem-to-fdm-problem-ir)=
+## Parameters
+
+The resolved parameters are the source FEM topology, target FDM grid, outside-domain policy and
+normalization policy recorded by the continuation operation; there is no separate public transfer
+constructor.
+
 ## ProblemIR and provenance
 
 The transfer is represented in runtime continuation metadata, not as a new energy term. Record source
@@ -99,6 +116,12 @@ mesh digest, target grid origin/cell size/dimensions, interpolated/outside count
 policy, fallback count and source/target backend identity.
 
 (numerical-methods-fem-to-fdm-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+Diagnostics must distinguish located and outside target points, interpolation failures,
+normalization changes, field-length mismatches and source/target artifact identities. Missing
+topology or invalid grid metadata is a validation error rather than an implicit fallback.
+
 ## Round-trip and failure semantics
 
 Requested intent is the requested continuation backend sequence; resolved execution is the actual
@@ -144,9 +167,20 @@ prove that FEM and FDM discretizations have identical energy or demagnetizing fi
 
 (numerical-methods-fem-to-fdm-source-code-index)=
 
+## Control Room workflow
+
+Author the target FDM grid and continuation stage in Control Room, then inspect the resolved grid
+and transfer counters before execution. Only controls surfaced by the current stage draft are
+authorable.
+
 ## Control Room crosswalk
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
+## Where this is implemented
+
+The source-code index below records the stable routing and interpolation declarations used by this
+page and its sidecar map.
 
 ## Source-code index
 

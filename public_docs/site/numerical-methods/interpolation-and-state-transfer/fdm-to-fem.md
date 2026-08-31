@@ -4,10 +4,21 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 ---
 
 (public-docs-numerical-methods-interpolation-and-state-transfer-fdm-to-fem)=
 # FDM → FEM state transfer
+
+## Scope and purpose
+
+This page specifies the source-backed continuation from a Cartesian FDM state to a target FEM
+state, including interpolation, normalization, provenance and explicit failure reporting.
+
+## Scientific and numerical model
+
+The transfer samples the source grid at target FEM points and does not transfer solver operators or
+derived fields between discretizations.
 
 (numerical-methods-fdm-to-fem-problem-statement)=
 ## Physical and numerical problem
@@ -82,6 +93,12 @@ study.stages.add_relax(stage_id="continue", algorithm="nonlinear_cg", tolT=1.0e-
 | `FDM → FEM continuation` | automatic runtime operation | automatic | $1$ | source grid and target FEM topology required | evaluates FDM state on FEM target | FDM source → FEM target | runtime continuation metadata |
 
 (numerical-methods-fdm-to-fem-problem-ir)=
+## Parameters
+
+The resolved parameters are the source-grid metadata, target FEM topology, coverage policy and
+normalization policy recorded by the continuation operation; there is no separate public transfer
+constructor.
+
 ## ProblemIR and provenance
 
 Record source FDM grid metadata, target FEM mesh digest, target-point coverage, fallback/error policy,
@@ -89,6 +106,12 @@ normalization, transfer counters and source/target backend identity. The transfe
 new physical interaction and must not alter the requested energy terms.
 
 (numerical-methods-fdm-to-fem-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+Diagnostics must distinguish interpolated points, outside-domain points, fallback or error
+decisions, normalization changes and source/target artifact mismatches. Missing grid metadata or
+target topology is a validation failure, not an implicit default.
+
 ## Round-trip and failure semantics
 
 Requested intent and resolved execution are recorded separately. Validation errors include missing
@@ -133,9 +156,20 @@ operators. After transfer the target backend must rebuild all derived fields.
 
 (numerical-methods-fdm-to-fem-source-code-index)=
 
+## Control Room workflow
+
+Author the target FEM stage in Control Room and inspect the resolved continuation resource before
+execution. Only controls surfaced by the current stage draft are authorable; transfer counters and
+artifact provenance remain runtime evidence.
+
 ## Control Room crosswalk
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
+## Where this is implemented
+
+The source-code index below records the stable routing and interpolation declarations used by this
+page and its sidecar map.
 
 ## Source-code index
 

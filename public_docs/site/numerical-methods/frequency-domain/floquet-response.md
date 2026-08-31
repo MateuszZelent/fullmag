@@ -10,7 +10,7 @@ owner: fullmag-public-docs
 # Floquet/Bloch frequency response
 
 (numerical-methods-floquet-response-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 Floquet response imposes a phase relation between corresponding periodic boundary faces. It is a
 boundary-value condition on the dynamic magnetization, not merely a nonzero `k_vector` field. The
@@ -18,7 +18,7 @@ pair IDs, translation vectors, phase convention, k sampling, demagnetization pol
 must all be resolved before a response is executable.
 
 (numerical-methods-floquet-response-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 For a periodic pair separated by $\Delta\mathbf r$, the dynamic field satisfies
 
@@ -95,6 +95,8 @@ study.stages.add_frequency_response(
 )
 ```
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `FloquetBC.pair_ids` | `Sequence[str]` | required | $1$ | at least one nonempty pair ID | periodic face pair identities | FEM mesh/planner | `study.spin_wave_bc.pair_ids` |
@@ -112,7 +114,7 @@ policy. Resolved provenance records periodic mesh certificate, translation vecto
 loop diagnostics, dynamic-demag status, solver lane, precision and rejection/qualification reason.
 
 (numerical-methods-floquet-response-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves pair IDs, phase convention and k sampling. Validation errors include missing
 pair metadata, invalid phase convention, nonzero-k Floquet requests without periodic mesh pairs and
@@ -130,7 +132,7 @@ they cannot silently become free boundaries or open demagnetization. Requested i
 | FDM | GPU | unsupported | no public FDM CUDA Floquet response lane |
 
 (numerical-methods-floquet-response-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
@@ -162,7 +164,7 @@ magnetostatic response solver.
 
 (numerical-methods-floquet-response-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

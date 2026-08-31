@@ -1,5 +1,5 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md"},
+  "document": {"path": "public_docs/site/numerical-methods/time-integration/explicit-runge-kutta.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "documented"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "The source-facade lane is present, but universal executed-device qualification is not claimed."},

@@ -1,5 +1,9 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md"},
+  "document": {
+    "path": "public_docs/site/numerical-methods/demag-solvers/periodic-demag.md",
+    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
+    "source_of_truth": "Current repository source declarations and public Python API contracts."
+  },
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "source-backed"},
     {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "The periodic CUDA lane requires policy-specific qualification."},

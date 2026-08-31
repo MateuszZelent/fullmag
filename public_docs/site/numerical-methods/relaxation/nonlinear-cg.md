@@ -4,11 +4,22 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 source_of_truth: docs/physics/0500-fdm-relaxation-algorithms.md, docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md, docs/physics/0580-canonical-relaxation-equilibrium-contract.md
 ---
 
 (public-docs-numerical-methods-relaxation-nonlinear-cg)=
 # Nonlinear conjugate-gradient relaxation
+
+## Scope and purpose
+
+This page documents the source-backed nonlinear conjugate-gradient direct minimizer for normalized
+magnetization, including tangent directions, retraction, line search and completion semantics.
+
+## Scientific and numerical model
+
+The method minimizes the resolved micromagnetic energy on the unit-spin manifold; rejected trials
+leave the accepted state and completion history unchanged.
 
 (numerical-methods-relaxation-ncg-problem-statement)=
 ## Physical and numerical problem
@@ -243,6 +254,12 @@ implementation policy, not user parameters. They must be included in resolved pr
 they affect qualification.
 
 (numerical-methods-relaxation-ncg-problem-ir)=
+## Parameters
+
+The executable controls are the algorithm identifier, torque and optional energy stop criteria, and
+the accepted-step budget. LLG timestep, adaptive and damping controls are explicitly rejected for
+this direct minimizer, as shown by the Python-to-ProblemIR table.
+
 ## ProblemIR
 
 The request lowers to this direct-minimizer payload:
@@ -267,6 +284,12 @@ planner adds the requested FEM/FDM lane, CPU/GPU device, precision, field realiz
 resolved policy as execution/provenance data.
 
 (numerical-methods-relaxation-ncg-round-trip-and-failure-semantics)=
+## Diagnostics and failure semantics
+
+Record tangent-gradient norms, direction updates, Armijo trials and backtracks, accepted-step
+energy, torque completion, failure or cancellation status and resolved lane. A non-finite metric,
+invalid curvature or failed line search is not convergence.
+
 ## Round-trip and failure semantics
 
 The requested intent is preserved separately from the resolved execution record.
@@ -336,9 +359,20 @@ has no physical-time interpretation.
 
 (numerical-methods-relaxation-ncg-source-code-index)=
 
+## Control Room workflow
+
+Use the stage editor to select `nonlinear_cg` and configure only direct-minimizer stop controls.
+Inspect the resolved algorithm and completion telemetry; LLG integrator and physical-time controls
+are not valid controls for this stage.
+
 ## Control Room crosswalk
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
+
+## Where this is implemented
+
+The source-code index below records the Python contract, reference loop, direction and line-search
+policy, native FEM lanes and completion policy used by this page.
 
 ## Source-code index
 

@@ -1,5 +1,5 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/relaxation/nonlinear-cg.md"},
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/nonlinear-cg.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "source-backed"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native CUDA step source exists; executed-device qualification is separate."},
@@ -47,7 +47,7 @@
   ],
   "public_api": {
     "parameters": [
-      {"python": "StudyStagesBuilder.add_relax(algorithm=\"nonlinear_cg\")", "type": "str", "default": "\"llg_overdamped\"", "si_unit": "$1$", "validation": "supported identifier", "meaning": "selects NCG", "backend_support": "FDM reference; FEM CPU/GPU native lanes", "problem_ir": "study.algorithm"},
+      {"python": "StudyStagesBuilder.add_relax(algorithm=\"nonlinear_cg\")", "type": "str", "default": "\"nonlinear_cg\"", "si_unit": "$1$", "validation": "supported identifier", "meaning": "selects NCG", "backend_support": "FDM reference; FEM CPU/GPU native lanes", "problem_ir": "study.algorithm"},
       {"python": "StudyStagesBuilder.add_relax(tolT=...)", "type": "float", "default": "$10^{-6}$", "si_unit": "$\\mathrm{T}$", "validation": "finite, positive", "meaning": "public torque threshold converted to A/m", "backend_support": "FDM/FEM", "problem_ir": "study.stop.torque_tolerance_apm"},
       {"python": "StudyStagesBuilder.add_relax(tolA=...)", "type": "float", "default": "equivalent", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite, positive", "meaning": "canonical torque threshold", "backend_support": "FDM/FEM", "problem_ir": "study.stop.torque_tolerance_apm"},
       {"python": "StudyStagesBuilder.add_relax(max_steps=...)", "type": "int", "default": "$50{,}000$", "si_unit": "$1$", "validation": "positive integer", "meaning": "accepted-step budget", "backend_support": "FDM/FEM", "problem_ir": "study.stop.max_steps"},

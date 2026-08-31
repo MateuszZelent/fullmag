@@ -1,5 +1,5 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md"},
+  "document": {"path": "public_docs/site/numerical-methods/relaxation/llg-relaxation.md", "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99"},
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "source-backed"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Native GPU sources exist; executed-device qualification is reported separately."},

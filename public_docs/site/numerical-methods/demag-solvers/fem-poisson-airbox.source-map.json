@@ -1,5 +1,9 @@
 {
-  "document": {"path": "public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md"},
+  "document": {
+    "path": "public_docs/site/numerical-methods/demag-solvers/fem-poisson-airbox.md",
+    "reviewed_revision": "a1de38b4d7dad275dccbdbfd937b757d6ca7ee99",
+    "source_of_truth": "Current repository source declarations and public Python API contracts."
+  },
   "backend_matrix": [
     {"solver": "FEM", "device": "CPU", "status": "implemented"},
     {"solver": "FEM", "device": "GPU", "status": "source-backed", "reason": "Device Poisson sources exist; executed-device qualification remains separate."},

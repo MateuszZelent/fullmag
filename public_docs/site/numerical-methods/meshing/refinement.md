@@ -7,7 +7,7 @@ doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 last_updated: 2026-08-24
-reviewed_revision: 5db00ccf0113b9756fec2d46feb36ade762b12c2
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
 source_of_truth: "Mesh-size resolution pipeline, semantic size fields, Control Room object/airbox policies and quality resources"
 ---
 
@@ -165,6 +165,12 @@ study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
 ```
 
 (refinement-problem-ir)=
+## Parameters
+
+The complete parameter matrix in the Python API section is the public mesh-authoring contract.
+Defaults, validation, ProblemIR lowering and capability-gated lanes are listed there and mirrored
+by the adjacent source map.
+
 ## ProblemIR
 
 Mesh-policy and size-field descriptors are normalized to per-geometry and region-owned records; the resulting field stack is resolved execution data, not a user-authored IR literal.

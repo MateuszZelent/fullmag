@@ -180,3 +180,29 @@ Current code bounds `g` and resolves the grading vocabulary, but has no universa
 | `auto` to `geometric` realization | `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py` | `def _study_universe_airbox_options` | source-backed |
 | Gmsh application | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _apply_mesh_options` | source-backed |
 | airbox-safe refinement | `packages/fullmag-py/src/fullmag/meshing/_gmsh_fields.py` | `def _add_narrow_region_field` | source-backed |
+
+## Scope and purpose
+
+This page defines the public contract for FEM airbox mesh grading. It is an authoring and implementation reference: the Python example, the serialized ProblemIR description, the implementation mapping, and the adjacent source map are the source-backed contract. A capability marked partial or not evaluated is not presented as a production guarantee.
+
+## Scientific and numerical model
+
+The mesh or grid is a discrete approximation of the continuous domain. For a Cartesian partition, each spacing satisfies `Delta_i = L_i / N_i`; for a geometry-dependent FEM mesh, the requested local target is bounded by the active bulk, interface, boundary, and topology constraints. In compact form, `h_target(x) = min(h_bulk(x), h_interface(x), h_boundary(x))`. Length quantities use SI metres (`m`); counts, orders, and topology labels are dimensionless.
+
+The equations and assumptions in the earlier physical-problem and governing-equations sections state the model-specific specialization. This section does not introduce a conversion from FEM to FDM, a hidden topology conversion, or a silent CPU fallback.
+
+## Parameters
+
+The exact callable and argument names are the ones shown in the `## Python API` section above. For this page the parameter family is cell_size, grading factors, and size-transition controls. Use the documented defaults, validation rules, and ProblemIR lowering exactly as shown; do not replace a canonical argument with an unlisted alias. Numerical lengths must be supplied in metres, and invalid positive-length, count, order, periodicity, or topology constraints must fail closed rather than being silently repaired.
+
+## Control Room workflow
+
+In Control Room, select the engine and mesh workflow, enter the same values as the Python authoring example, inspect the planned mesh or grid report, and only then submit the run. The UI is a projection of the public contract: a missing control is not evidence that the backend accepts the option, and a visible control is not evidence that a production lane is enabled. When the page or capability register marks a field partial or not evaluated, keep the workflow explicitly bounded to the implemented path.
+
+## Diagnostics and failure semantics
+
+A valid request must preserve the declared geometry, units, element or cell topology, and backend lane. Reject non-finite or non-positive lengths, invalid counts and orders, incompatible periodic or shared-boundary data, and unsupported topology combinations at the owning validation layer. Reports should retain requested and resolved values, source identity, and any capability gate. No diagnostic may hide a failed mesh realization by substituting another discretization.
+
+## Where this is implemented
+
+The existing implementation-mapping and source-code-index sections identify the exact public authoring, ProblemIR, planner, realization, and runtime owners for this topic. The adjacent `.source-map.json` file is the machine-readable source of truth for those paths, symbols, responsibilities, backend matrix, and reviewed revision. Claims in this page must be updated together with that map when an owner moves.

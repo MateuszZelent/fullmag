@@ -4,6 +4,9 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: a1de38b4d7dad275dccbdbfd937b757d6ca7ee99
+source_of_truth: "LLG and AdaptiveTimestep validation, ProblemIR lowering, and explicit RK lane implementations"
 ---
 
 (public-docs-numerical-methods-time-integration-explicit-runge-kutta)=
@@ -13,8 +16,14 @@ This page describes explicit Runge--Kutta (RK) stepping of the semi-discrete LLG
 equation. The method is temporal only: exchange, demagnetization, anisotropy, and applied
 fields still come from the selected spatial realization.
 
+## Scope and purpose
+
+This page documents explicit Runge--Kutta stepping after FDM or FEM spatial discretization. It
+defines the temporal update contract and its qualification boundary; it does not make a universal
+CPU/GPU or method-availability claim.
+
 (time-integration-explicit-runge-kutta-problem-statement)=
-## Physical and numerical problem
+## Scientific and numerical model
 
 After FDM or FEM spatial discretization, the magnetization state is represented by a vector
 $y(t)$ and the backend exposes a right-hand side $F(y,t)$. The integrator must advance this
@@ -129,6 +138,11 @@ study.stages.add_run(until=1.0e-9)
 lowers the requested method and adaptive policy into the canonical `llg` dynamics node. There
 is no second object-constructor workflow in this page.
 
+## Parameters
+
+The following rows are the public solver and adaptive-policy arguments used by the example.
+Defaults, validation and ProblemIR keys are mirrored by the adjacent source map.
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | finite and $>0$ | gyromagnetic ratio | FEM/FDM CPU/GPU | `study.dynamics.gyromagnetic_ratio` |
@@ -170,7 +184,7 @@ requested intent until planner resolution; the resolved execution records the se
 device, precision, and field-refresh policy as provenance.
 
 (time-integration-explicit-runge-kutta-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 The canonical export preserves requested intent separately from resolved execution. Validation errors
 are raised before execution for unknown integrators, non-positive `gamma`, non-positive
@@ -194,7 +208,7 @@ source can disable reuse. A final field refresh is part of reported work when ex
 observables are requested.
 
 (time-integration-explicit-runge-kutta-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 The public model is lowered by `LLG.to_ir`; the stage builder captures ordered run stages. FEM
 keeps RK workspace and stage RHS evaluation in integrator modules rather than embedding them in
@@ -227,7 +241,7 @@ separately and must not be inferred from the explicit RK page.
 
 (time-integration-explicit-runge-kutta-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 

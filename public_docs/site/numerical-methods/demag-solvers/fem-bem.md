@@ -10,7 +10,7 @@ owner: fullmag-public-docs
 # FEM/BEM Fredkin–Koehler demagnetization
 
 (numerical-methods-demag-bem-problem-statement)=
-## Physical and numerical problem
+## Scope and purpose
 
 The canonical interaction is owned by {doc}`../../physics/interactions/demagnetization/index`.
 Fredkin–Koehler is a body-only FEM realization: the magnetic volume is meshed with FEM, while the
@@ -18,7 +18,7 @@ open exterior is represented by a dense boundary operator on the closed magnetic
 not the airbox Poisson problem and it has no production GPU BEM lane in the current public contract.
 
 (numerical-methods-demag-bem-governing-equations)=
-## Governing equations
+## Scientific and numerical model
 
 The total potential is decomposed into an interior source potential and a harmonic correction:
 
@@ -127,6 +127,8 @@ study.stages.add_relax(
 )
 ```
 
+## Parameters
+
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Demag.model` | `str \| None` | `None` | $1$ | `fredkin_koehler` selects body-only FEM/BEM | realization family | FEM CPU; GPU unsupported | `energy[].realization` |
@@ -160,7 +162,7 @@ surface topology, triangle quadrature, gauge DOF, both sparse solves, residuals,
 precision and energy reduction.
 
 (numerical-methods-demag-bem-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
+## Diagnostics and failure semantics
 
 Script export preserves the stage-first study and BEM realization. Validation errors include an
 unsupported model, non-airbox variant, invalid surface topology, gauge failure, invalid sparse
@@ -180,7 +182,7 @@ surface quadrature or physical open-boundary convergence.
 | FDM | GPU | not applicable | use FDM convolution CUDA |
 
 (numerical-methods-demag-bem-implementation-mapping)=
-## Implementation mapping
+## Where this is implemented
 
 | Claim | Repository path | Stable symbol | Responsibility | Lane |
 |---|---|---|---|---|
@@ -214,7 +216,7 @@ page does not claim equivalence with an airbox truncation or universal geometry 
 
 (numerical-methods-demag-bem-source-code-index)=
 
-## Control Room crosswalk
+## Control Room workflow
 
 Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level controls when the terminal page identifies a matching field. The current editor is partial: only fields surfaced by the stage draft are authorable. Numerical parameters without a matching control are not implemented in the frontend. Do not infer frontend support from Python or backend availability. See {doc}/frontend/capability-register for the current register and exact source owner.
 
