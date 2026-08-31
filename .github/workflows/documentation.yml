@@ -158,7 +158,9 @@ jobs:
           test -s "$changes_dir/changes.html"
           mkdir -p "$published_dir"
           cp -a "$changes_dir/." "$published_dir/"
+          cp "$changes_dir/changes.html" "$published_dir/index.html"
           grep --fixed-strings --quiet "development" "$published_dir/changes.html"
+          grep --fixed-strings --quiet "Automatically generated list of changes" "$published_dir/index.html"
 
       - name: Validate rendered scientific documentation
         env:

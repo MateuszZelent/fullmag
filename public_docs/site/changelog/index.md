@@ -15,6 +15,10 @@ orphan: true
 This public page and the accompanying Sphinx version-change index were added to make documentation evolution directly inspectable.
 ```
 
+```{versionchanged} development
+The version-change report is published at the directory entry point and retains the full generated report at `changes.html`.
+```
+
 FullMag exposes two complementary change records:
 
 1. **Documentation history** below is generated from the repository's first-parent Git history and
@@ -28,7 +32,7 @@ The Git-backed list answers “what changed in the documentation and when?”. T
 release notes for solver binaries or scientific qualification receipts.
 
 <div class="fm-changelog-page-links">
-  <a class="fm-changelog-page-link" href="../version-changes/index.html">Open Sphinx version-change index</a>
+  <a class="fm-changelog-page-link" href="../version-changes/changes.html">Open Sphinx version-change index</a>
   <a class="fm-changelog-page-link" href="https://github.com/MateuszZelent/fullmag/commits/master/public_docs/site">Open complete documentation history on GitHub</a>
 </div>
 

@@ -33,6 +33,7 @@ source_of_truth: readme.md
     <a class="fm-home-action" href="backend/index.html">Backend</a>
     <a class="fm-home-action" href="python-api/index.html">Python API</a>
     <a class="fm-home-action" href="validation/index.html">Validation</a>
+    <a class="fm-home-action" href="changelog/index.html">Changelog</a>
   </div>
 </div>
 
