@@ -562,6 +562,7 @@ def setup(app: Sphinx) -> dict[str, object]:
             ":(exclude)scripts/public_docs_information_architecture.py",
             ":(exclude)scripts/check_public_docs_information_architecture.py",
             ":(exclude)scripts/check_public_doc_examples.py",
+            ":(exclude)scripts/test_documentation_changelog_tabs.py",
         ),
         "html",
     )
