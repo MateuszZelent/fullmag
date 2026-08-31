@@ -26,7 +26,7 @@ The canonical physical model is defined once on this page. The FDM, FEM, CPU, an
 realizations are documented below, including their different discretizations, precision,
 support, validation, and qualification status.
 
-(problem-statement)=
+(physics-interactions-exchange-index-problem-statement)=
 ## Physical problem
 
 The exchange interaction penalizes spatial variation of the reduced magnetization
@@ -40,7 +40,7 @@ This page describes only bulk exchange on conforming magnetic domains. It does n
 surface exchange, RKKY/interlayer exchange, atomistic exchange, or nonconforming contact coupling
 into the bulk coefficient $A$.
 
-(governing-equations)=
+(physics-interactions-exchange-index-governing-equations)=
 ## Governing equations
 
 For magnetic domain $\Omega_m$, the implemented continuum energy is
@@ -98,7 +98,7 @@ A(\nabla\mathbf m)\mathbf n
 \qquad\text{on }\partial\Omega_m.
 ```
 
-(symbols-and-si-units)=
+(physics-interactions-exchange-index-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Definition | SI unit |
@@ -133,7 +133,7 @@ A(\nabla\mathbf m)\mathbf n
 | $\mathbf q$ | consistent-mass projected exchange residual | $\mathrm{T}$ |
 | $V_i^{\mathrm{lump}}$ | lumped nodal FEM volume | $\mathrm{m^3}$ |
 
-(assumptions-and-validity)=
+(physics-interactions-exchange-index-assumptions-and-validity)=
 ## Assumptions and validity
 
 - Continuum micromagnetics is assumed; the mesh must resolve the relevant exchange length and
@@ -150,7 +150,7 @@ A(\nabla\mathbf m)\mathbf n
   for the CPU reference lane or FP32 CUDA lane.
 
 (python-authoring)=
-(python-api)=
+(physics-interactions-exchange-index-python-api)=
 ## Python authoring and canonical ProblemIR
 
 Exchange has no numerical parameter on `Exchange()` itself. The physical coefficient belongs to
@@ -282,7 +282,7 @@ The constructors used by the executable example are documented in their canonica
 {doc}`../../../python-api/problem/problem`. General lowering and canonical-model framing live in
 {doc}`../../../python-api/problem/problem-ir`.
 
-(problem-ir)=
+(physics-interactions-exchange-index-problem-ir)=
 ### Canonical ProblemIR excerpt
 
 The example lowers the Exchange-relevant sections exactly as follows (JSON numbers are SI):
@@ -333,7 +333,7 @@ The example lowers the Exchange-relevant sections exactly as follows (JSON numbe
 The excerpt intentionally omits unrelated `null` material fields and geometry detail; it is not a
 replacement schema. The complete object printed by the Python block is the authoritative payload.
 
-(round-trip-and-failure-semantics)=
+(physics-interactions-exchange-index-round-trip-and-failure-semantics)=
 ### Python-to-IR mapping and failure semantics
 
 | Python authoring value | Canonical IR location | Planner/runtime consequence |
@@ -355,7 +355,7 @@ There is no silent CPU fallback promised by `Exchange()`: an unsupported request
 an error. Likewise, adding `A` without `Exchange()` stores a material property but does not enable
 or output exchange physics.
 
-(discrete-realization)=
+(physics-interactions-exchange-index-discrete-realization)=
 ## Discrete realization by solver and device
 
 ### FDM / CPU — double-precision reference lane
@@ -541,7 +541,7 @@ The CUDA operator is
 `backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` —
 `gpu_rk_compute_legacy_sparse_exchange`.
 
-(implementation-mapping)=
+(physics-interactions-exchange-index-implementation-mapping)=
 ## Implementation mapping
 
 The stable identity of each citation is repository path plus symbol. Links below are pinned to the
@@ -572,7 +572,7 @@ be regenerated from the symbol when the code moves.
 | FEM GPU | RK dispatch | [`backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` — `gpu_rk_compute_legacy_sparse_exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu#L40) |
 | FEM GPU | execution plan | [`backends/fem/gpu/cuda/exchange/exchange_plan.cpp` — `gpu_exchange_plan_stage_exchange`](https://github.com/MateuszZelent/fullmag/blob/a1f4dc0be9f53ece258b881d756db6f727ad5ecc/backends/fem/gpu/cuda/exchange/exchange_plan.cpp#L16) |
 
-(validation)=
+(physics-interactions-exchange-index-validation)=
 ## Validation status
 
 | Lane | Evidence present in repository | Honest status for this revision |
@@ -586,7 +586,7 @@ The authoritative FEM runtime gate is `just verify-fem-exchange-runtime`. No com
 while preparing this review page because the existing recipe rewrites checked-in validation-result
 files and the shared worktree contains unrelated user changes.
 
-(limitations)=
+(physics-interactions-exchange-index-limitations)=
 ## Known limitations and unresolved qualification
 
 - FDM CPU is a double-precision reference engine, not a native production backend.
@@ -604,7 +604,7 @@ files and the shared worktree contains unrelated user changes.
   mixed-P1 FEM GPU Exchange. This page therefore separates implementation availability from
   scientific qualification.
 
-(scientific-bibliography)=
+(physics-interactions-exchange-index-scientific-bibliography)=
 ## Scientific bibliography
 
 1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
@@ -619,7 +619,7 @@ files and the shared worktree contains unrelated user changes.
    micromagnetics (finite element method),” in *Handbook of Magnetism and Advanced Magnetic
    Materials*, Wiley, 2007.
 
-(source-code-index)=
+(physics-interactions-exchange-index-source-code-index)=
 ## Source-code and test index
 
 | Topic | Implementation symbol | Test or evidence symbol | Status |

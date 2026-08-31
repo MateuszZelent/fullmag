@@ -11,14 +11,13 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 # Spin-transfer torque
 
 (stt-api-problem-statement)=
-(problem-statement)=
 ## Problem statement
 
 The STT classes retain legacy object-level authoring and canonical module contracts; mutually exclusive current definitions fail closed.
 
 This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
 
-(governing-equations)=
+(python-api-interactions-spin-transfer-torque-governing-equations)=
 ## Governing equations
 
 ```{math}
@@ -29,7 +28,7 @@ q_{\mathrm{IR}} = \mathrm{spin_transfer_torque}(\text{qualified inputs})
 
 The physical term or constraint is represented by the canonical IR object spin_transfer_torque. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
 
-(symbols-and-si-units)=
+(python-api-interactions-spin-transfer-torque-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -38,12 +37,12 @@ The physical term or constraint is represented by the canonical IR object spin_t
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
-(assumptions-and-validity)=
+(python-api-interactions-spin-transfer-torque-assumptions-and-validity)=
 ## Assumptions and validity
 
 Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
 
-(python-api)=
+(python-api-interactions-spin-transfer-torque-python-api)=
 ## Python API
 
 ### Constructor or function
@@ -82,45 +81,45 @@ canonical_ir = value.to_ir()
 
 The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
 
-(problem-ir)=
+(python-api-interactions-spin-transfer-torque-problem-ir)=
 ## ProblemIR
 
 value.to_ir() is the canonical serialization boundary. It emits a typed spin_transfer_torque record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
 
-(round-trip-and-failure-semantics)=
+(python-api-interactions-spin-transfer-torque-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
 
 A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
 
-(discrete-realization)=
+(python-api-interactions-spin-transfer-torque-discrete-realization)=
 ## Discrete realization
 
 The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
 
-(implementation-mapping)=
+(python-api-interactions-spin-transfer-torque-implementation-mapping)=
 ## Implementation mapping
 
 The authoritative implementation is packages/fullmag-py/src/fullmag/model/spin_torque.py symbol class SlonczewskiSTT. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
 
-(validation)=
+(python-api-interactions-spin-transfer-torque-validation)=
 ## Validation
 
 Focused repository tests covering this contract include: test_slonczewski_canonical_defaults_and_legacy_fields, test_zhang_li_canonical_contract_and_alias_validation, test_interface_cpp_stt_serializes_to_ir. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(limitations)=
+(python-api-interactions-spin-transfer-torque-limitations)=
 ## Limitations and Control Room
 
 Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
 
-(scientific-bibliography)=
+(python-api-interactions-spin-transfer-torque-scientific-bibliography)=
 ## Scientific bibliography
 
 - J. C. Slonczewski, Current-driven excitation of magnetic multilayers, Phys. Rev. B 54 (1996), DOI: https://doi.org/10.1103/PhysRevB.54.9353
 - S. Zhang and Z. Li, Roles of nonequilibrium conduction electrons, Phys. Rev. Lett. 93 (2004), DOI: https://doi.org/10.1103/PhysRevLett.93.127204
 
-(source-code-index)=
+(python-api-interactions-spin-transfer-torque-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |

@@ -53,7 +53,6 @@ preset.
 `preset_version` still defaults to version 1 so that old studies are not silently reinterpreted.
 
 (python-api-magnets-and-textures-preset-textures-governing-equations)=
-(governing-equations)=
 ## Governing equations
 
 ```{math}
@@ -553,7 +552,6 @@ of version 2.
 | Bimeron | same radial ansatz, legacy transform and validation semantics | strict signs/plane/transform semantics and right-handed output embedding |
 
 (python-api-magnets-and-textures-preset-textures-symbols-and-si-units)=
-(symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -613,7 +611,6 @@ of version 2.
 | $\ell$ | shortest physical profile length used in a resolution study | $\mathrm{m}$ |
 
 (python-api-magnets-and-textures-preset-textures-assumptions-and-validity)=
-(assumptions-and-validity)=
 ## Assumptions and validity
 
 1. Every preset defines reduced magnetization, so its output is dimensionless. Length parameters and
@@ -638,7 +635,6 @@ of version 2.
    and partial clamp behavior. Planner execution should be treated as canonical for FDM/FEM studies.
 
 (python-api-magnets-and-textures-preset-textures-python-api)=
-(python-api)=
 ## Python API
 
 ### Complete factory parameter inventory
@@ -826,7 +822,6 @@ print(json.dumps(initial.to_ir(), indent=2))
 ```
 
 (python-api-magnets-and-textures-preset-textures-problem-ir)=
-(problem-ir)=
 ## ProblemIR
 
 The object-level result of the preceding construction has this canonical shape:
@@ -871,7 +866,6 @@ version 1 and `clamp`, respectively. This asymmetry is deliberate compatibility 
 preserved in provenance.
 
 (python-api-magnets-and-textures-preset-textures-round-trip-and-failure-semantics)=
-(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 **Requested intent** consists of the authored preset kind, exact version, parameter payload,
@@ -901,7 +895,6 @@ boundaries are:
   solver.
 
 (python-api-magnets-and-textures-preset-textures-discrete-realization)=
-(discrete-realization)=
 ## Discrete realization
 
 ### FDM
@@ -961,7 +954,6 @@ $\Delta$ and use the exact $r_\mathrm{core}$ above rather than assuming that the
 $r=R$.
 
 (python-api-magnets-and-textures-preset-textures-implementation-mapping)=
-(implementation-mapping)=
 ## Implementation mapping
 
 The public Python layer owns ergonomic construction and early validation. `ProblemIR` owns the
@@ -974,7 +966,6 @@ The profile formulas are evaluated in double precision during planning. Device s
 the subsequent solver, not the formula used to create the initial vector.
 
 (python-api-magnets-and-textures-preset-textures-validation)=
-(validation)=
 ## Validation
 
 Current automated evidence includes:
@@ -1013,7 +1004,6 @@ discretization study.
   field, boundary condition, or relaxation protocol.
 
 (python-api-magnets-and-textures-preset-textures-scientific-bibliography)=
-(scientific-bibliography)=
 ## Scientific bibliography
 
 1. B. Göbel, A. Mook, J. Henk, I. Mertig, and O. A. Tretiakov,

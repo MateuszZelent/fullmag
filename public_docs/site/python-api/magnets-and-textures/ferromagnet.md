@@ -17,7 +17,6 @@ mesh/region data, and object-scoped constraints. The stage-first `study.geometry
 the normal user workflow; the constructor remains the canonical class API and serialization owner.
 
 (python-api-magnets-and-textures-ferromagnet-governing-equations)=
-(governing-equations)=
 ## Governing equations
 
 ```{math}
@@ -30,7 +29,6 @@ This object introduces no independent field equation. It defines ownership and i
 magnetic domain consumed by interactions and dynamics.
 
 (python-api-magnets-and-textures-ferromagnet-symbols-and-si-units)=
-(symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -41,7 +39,6 @@ Geometry lengths use metres. Material parameters retain their interaction-specif
 Magnetization textures and region/constraint identities are dimensionless semantic data.
 
 (python-api-magnets-and-textures-ferromagnet-assumptions-and-validity)=
-(assumptions-and-validity)=
 ## Assumptions and validity
 
 Names and optional `object_id` values are non-empty. A supplied `Region` must refer to the same
@@ -49,7 +46,6 @@ geometry. When `m0` is omitted, the constructor installs uniform $+x$ magnetizat
 validation owns mesh, region, material-field, and constraint realization.
 
 (python-api-magnets-and-textures-ferromagnet-python-api)=
-(python-api)=
 ## Python API
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -89,7 +85,6 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 (python-api-magnets-and-textures-ferromagnet-problem-ir)=
-(problem-ir)=
 ## ProblemIR
 
 The magnet record preserves object identity, material binding, region, initial magnetization,
@@ -97,7 +92,6 @@ mesh recipe, and absorbing-boundary data. Object regions, fields, and constraint
 typed ownership rather than being flattened into the magnet name.
 
 (python-api-magnets-and-textures-ferromagnet-round-trip-and-failure-semantics)=
-(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 Requested intent preserves object IDs, region ownership, material bindings, texture versions,
@@ -107,21 +101,18 @@ Validation errors reject unknown references, duplicate identities, mismatched re
 malformed data. Unsupported combinations fail closed and are not silently omitted or converted.
 
 (python-api-magnets-and-textures-ferromagnet-discrete-realization)=
-(discrete-realization)=
 ## Discrete realization
 
 FDM realizes the object as active cells; FEM realizes it as marked magnetic elements/nodes. The
 constructor does not prove either mesh or device lane executable.
 
 (python-api-magnets-and-textures-ferromagnet-implementation-mapping)=
-(implementation-mapping)=
 ## Implementation mapping
 
 `packages/fullmag-py/src/fullmag/model/structure.py`, `class Ferromagnet`, owns construction,
 default state, object identity, constraint accumulation, and magnet-record lowering.
 
 (python-api-magnets-and-textures-ferromagnet-validation)=
-(validation)=
 ## Validation
 
 Tests compare this complete parameter inventory with `inspect.signature(Ferromagnet)` and validate
@@ -134,7 +125,6 @@ The underscore-prefixed accumulator is exposed by the dataclass signature but is
 user API. Use typed constraint helpers and stage/problem authoring rather than mutating it directly.
 
 (python-api-magnets-and-textures-ferromagnet-scientific-bibliography)=
-(scientific-bibliography)=
 ## Scientific bibliography
 
 No new physical model is introduced; references belong to the interactions consuming the magnet.

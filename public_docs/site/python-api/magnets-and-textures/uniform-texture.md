@@ -16,11 +16,10 @@ owner: fullmag-public-docs
 2 rejects a zero or non-finite direction; version 1 is retained only for compatibility.
 
 (python-api-magnets-and-textures-uniform-texture-governing-equations)=
-(governing-equations)=
 ## Governing equations
 
 ```{math}
-:label: eq-record
+:label: eq-record-2
 
 q_{\mathrm{IR}} = \mathrm{record}(\text{qualified inputs})
 ```
@@ -29,7 +28,6 @@ The preset evaluates $\mathbf m(\mathbf x)=\mathbf m_0$ at every active sample p
 normalization policy belongs to the initial-state evaluator.
 
 (python-api-magnets-and-textures-uniform-texture-symbols-and-si-units)=
-(symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -39,14 +37,12 @@ normalization policy belongs to the initial-state evaluator.
 All direction components and `preset_version` are dimensionless.
 
 (python-api-magnets-and-textures-uniform-texture-assumptions-and-validity)=
-(assumptions-and-validity)=
 ## Assumptions and validity
 
 Use either one three-component sequence or three scalar components. `preset_version` must be the
 integer `1` or `2`; booleans and other values are rejected by `PresetTexture`.
 
 (python-api-magnets-and-textures-uniform-texture-python-api)=
-(python-api)=
 ## Python API
 
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
@@ -73,14 +69,12 @@ study.stages.add_run(stage_id="run", until=1e-12)
 ```
 
 (python-api-magnets-and-textures-uniform-texture-problem-ir)=
-(problem-ir)=
 ## ProblemIR
 
 Version 2 lowers as a `preset_texture` with `preset_kind="uniform"`, explicit
 `preset_version=2`, direction parameters, mapping, and texture transform.
 
 (python-api-magnets-and-textures-uniform-texture-round-trip-and-failure-semantics)=
-(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 Requested intent preserves the authored direction, mapping, transform, and preset version.
@@ -90,20 +84,17 @@ zero version-2 directions, and invalid versions. Unsupported combinations fail c
 silently converted to another texture.
 
 (python-api-magnets-and-textures-uniform-texture-discrete-realization)=
-(discrete-realization)=
 ## Discrete realization
 
 The analytic preset is sampled at FDM cell centres or FEM nodes after final geometry/mesh ordering.
 
 (python-api-magnets-and-textures-uniform-texture-implementation-mapping)=
-(implementation-mapping)=
 ## Implementation mapping
 
 `packages/fullmag-py/src/fullmag/init/textures.py`, `texture.uniform` and `PresetTexture`, own
 validation and serialization.
 
 (python-api-magnets-and-textures-uniform-texture-validation)=
-(validation)=
 ## Validation
 
 Tests compare this inventory with the live function signature and verify v1/v2 evaluation and
@@ -115,7 +106,6 @@ round-trip behavior.
 A uniform preset is an initial condition, not a persistent magnetization constraint.
 
 (python-api-magnets-and-textures-uniform-texture-scientific-bibliography)=
-(scientific-bibliography)=
 ## Scientific bibliography
 
 No independent interaction is introduced.

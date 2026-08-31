@@ -11,14 +11,14 @@ reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 # Magnetic material
 
 (public-docs-python-api-materials-material)=
-(problem-statement)=
+(python-api-materials-material-problem-statement)=
 ## Problem statement
 
 Material is the typed source of magnetic coefficients.
 
 This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
 
-(governing-equations)=
+(python-api-materials-material-governing-equations)=
 ## Governing equations
 
 ```{math}
@@ -29,7 +29,7 @@ q_{\mathrm{IR}} = \mathrm{material}(\text{qualified inputs})
 
 The physical term or constraint is represented by the canonical IR object material. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
 
-(symbols-and-si-units)=
+(python-api-materials-material-symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -38,12 +38,12 @@ The physical term or constraint is represented by the canonical IR object materi
 
 All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
 
-(assumptions-and-validity)=
+(python-api-materials-material-assumptions-and-validity)=
 ## Assumptions and validity
 
 Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
 
-(python-api)=
+(python-api-materials-material-python-api)=
 ## Python API
 
 ### Constructor or function
@@ -110,44 +110,44 @@ The example intentionally exposes the object-level boundary. In a full stage, at
 | ```Material.Dind_field``` | ```field or None``` | ```None``` | ```J/m^2``` | typed when supplied | spatial interfacial DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dind_field``` |
 | ```Material.Dbulk_field``` | ```field or None``` | ```None``` | ```J/m^2``` | typed when supplied | spatial bulk DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dbulk_field``` |
 
-(problem-ir)=
+(python-api-materials-material-problem-ir)=
 ## ProblemIR
 
 value.to_ir() is the canonical serialization boundary. It emits a typed material record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
 
-(round-trip-and-failure-semantics)=
+(python-api-materials-material-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
 
 A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
 
-(discrete-realization)=
+(python-api-materials-material-discrete-realization)=
 ## Discrete realization
 
 The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
 
-(implementation-mapping)=
+(python-api-materials-material-implementation-mapping)=
 ## Implementation mapping
 
 The authoritative implementation is packages/fullmag-py/src/fullmag/model/structure.py symbol class Material. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
 
-(validation)=
+(python-api-materials-material-validation)=
 ## Validation
 
 Focused repository tests covering this contract include: test_material_constructor_and_field_overrides_round_trip, test_material_rejects_invalid_required_parameters. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(limitations)=
+(python-api-materials-material-limitations)=
 ## Limitations and Control Room
 
 Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
 
-(scientific-bibliography)=
+(python-api-materials-material-scientific-bibliography)=
 ## Scientific bibliography
 
 - W. F. Brown, Jr., Thermal Fluctuations of a Single-Domain Particle, Phys. Rev. 130 (1963), DOI: https://doi.org/10.1103/PhysRev.130.1677
 
-(source-code-index)=
+(python-api-materials-material-source-code-index)=
 ## Source code index
 
 | Source path | Symbol | Responsibility |
