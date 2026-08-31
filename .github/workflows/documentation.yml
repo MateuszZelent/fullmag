@@ -6,6 +6,7 @@ on:
     branches: [master, main]
     paths:
       - "public_docs/site/**"
+      - "public_docs/site/python-api/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
       - "docs/physics/**"
       - "packages/fullmag-py/**"
@@ -21,6 +22,7 @@ on:
   pull_request:
     paths:
       - "public_docs/site/**"
+      - "public_docs/site/python-api/**"
       - "public_docs/fullmag_profesjonalna_dokumentacja_architektura.md"
       - "docs/physics/**"
       - "packages/fullmag-py/**"
