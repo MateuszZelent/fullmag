@@ -1,0 +1,85 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/geometry/boolean-operations.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-geometry_boolean",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_geometry_boolean"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_geometry_boolean",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class Difference",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.Difference(base, tool, name=\"difference\"), fm.Union(a, b), fm.Intersection(a, b)",
+    "parameters": [
+      {
+        "python": "base/tool or a/b",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "typed geometry operands",
+        "meaning": "boolean operands",
+        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "problem_ir": "operands"
+      },
+      {
+        "python": "name",
+        "type": "str",
+        "default": "operation default",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "result name",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

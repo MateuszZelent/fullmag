@@ -1,0 +1,264 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/ferromagnet/free-tetrahedral.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Free-tetrahedral object policy and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "maximum_element_size",
+        "type": "`float | str | None`",
+        "default": "`None` (inherits study)",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive",
+        "meaning": "maximum element size",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "hmax",
+        "type": "`float | str | None`",
+        "default": "`None` (inherits study)",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive",
+        "meaning": "maximum element size",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "minimum_element_size",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive",
+        "meaning": "minimum element size",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "hmin",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive",
+        "meaning": "minimum element size",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "order",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`>= 1`",
+        "meaning": "element order",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "growth_rate",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "maximum size growth rate",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "maximum_element_growth_rate",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "maximum size growth rate",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "curvature_factor",
+        "type": "`float | int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "curvature fitting",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "size_from_curvature",
+        "type": "`float | int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "curvature fitting",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "narrow_regions",
+        "type": "`int | float | None`",
+        "default": "`None`",
+        "si_unit": "1/\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "narrow-region resolution",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "narrow_region_resolution",
+        "type": "`int | float | None`",
+        "default": "`None`",
+        "si_unit": "1/\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "narrow-region resolution",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "algorithm_2d",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Gmsh algorithm numbers",
+        "meaning": "mesher algorithm selection",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "algorithm_3d",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Gmsh algorithm numbers",
+        "meaning": "mesher algorithm selection",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "optimize",
+        "type": "`str | int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Gmsh optimizer name",
+        "meaning": "mesh post-optimization",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "optimize_iterations",
+        "type": "`str | int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Gmsh optimizer name",
+        "meaning": "mesh post-optimization",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "smoothing_steps",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "non-negative",
+        "meaning": "node smoothing",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "calibrate_for",
+        "type": "`str | float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "preset names",
+        "meaning": "calibrated size presets",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "size_preset",
+        "type": "`str | float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "preset names",
+        "meaning": "calibrated size presets",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "size_factor",
+        "type": "`str | float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "preset names",
+        "meaning": "calibrated size presets",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "source",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "import a prebuilt object mesh",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "compute_quality",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "bool",
+        "meaning": "quality statistics request",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "per_element_quality",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "bool",
+        "meaning": "quality statistics request",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

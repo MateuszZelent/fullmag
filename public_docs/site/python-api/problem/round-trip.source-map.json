@@ -1,0 +1,88 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/problem/round-trip.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class Problem",
+      "responsibility": "Canonical problem lowering entrypoint."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/problem.py",
+      "symbol": "class RuntimeSelection",
+      "responsibility": "Requested runtime descriptor normalization."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Problem.to_ir.requested_backend",
+        "type": "BackendTarget | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional override; normalized by `Problem.to_ir`.",
+        "meaning": "Requested solver-family intent.",
+        "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
+        "problem_ir": "`backend_policy.requested_backend`"
+      },
+      {
+        "python": "Problem.to_ir.execution_mode",
+        "type": "ExecutionMode | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional override; normalized by `Problem.to_ir`.",
+        "meaning": "Requested execution-mode intent.",
+        "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
+        "problem_ir": "`backend_policy.execution_mode`"
+      },
+      {
+        "python": "Problem.to_ir.execution_precision",
+        "type": "ExecutionPrecision | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Optional override; normalized by `Problem.to_ir`.",
+        "meaning": "Requested precision intent.",
+        "backend_support": "FEM/FDM CPU/GPU authoring; planner resolves capability.",
+        "problem_ir": "`backend_policy.execution_precision`"
+      },
+      {
+        "python": "RuntimeSelection.resolved(...)",
+        "type": "method",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "Backend/mode/precision values are normalized against the selection.",
+        "meaning": "Resolved runtime descriptor.",
+        "backend_support": "FEM/FDM CPU/GPU; capability checks remain authoritative.",
+        "problem_ir": "`backend_policy`"
+      }
+    ]
+  }
+}

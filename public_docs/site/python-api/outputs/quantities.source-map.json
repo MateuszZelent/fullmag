@@ -1,0 +1,92 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/outputs/quantities.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveQuantity",
+      "responsibility": "Generic quantity output validation and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "---",
+        "type": "---",
+        "default": "---",
+        "si_unit": "1",
+        "validation": "---",
+        "meaning": "---",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "---"
+      },
+      {
+        "python": "SaveQuantity.quantity_id",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "Canonical id; uppercase `M` normalizes to `m`",
+        "meaning": "Quantity to save",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "quantity id"
+      },
+      {
+        "python": "SaveQuantity.every",
+        "type": "`float`",
+        "default": "`required`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Positive",
+        "meaning": "Save interval",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "cadence"
+      },
+      {
+        "python": "SaveQuantity.reduction",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`average`, `sum`, `min`, `max`, or `magnitude`",
+        "meaning": "Spatial reduction",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "reduction"
+      },
+      {
+        "python": "SaveQuantity.component",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`x`, `y`, `z`, `magnitude`, or `3D`",
+        "meaning": "Component selector",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "component"
+      }
+    ]
+  }
+}

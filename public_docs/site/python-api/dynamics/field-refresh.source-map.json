@@ -1,0 +1,72 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/dynamics/field-refresh.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class FieldRefreshPolicy",
+      "responsibility": "Demagnetization refresh policy validation and IR lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "---",
+        "type": "---",
+        "default": "---",
+        "si_unit": "1",
+        "validation": "---",
+        "meaning": "---",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "---"
+      },
+      {
+        "python": "FieldRefreshPolicy.demag_interval_s",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Positive",
+        "meaning": "Demag refresh cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`field_refresh.demag_interval_s`"
+      },
+      {
+        "python": "LLG.field_refresh",
+        "type": "`FieldRefreshPolicy | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Valid policy",
+        "meaning": "Attach refresh cadence to dynamics",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dynamics.field_refresh`"
+      }
+    ]
+  }
+}

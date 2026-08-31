@@ -1,0 +1,125 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/geometry/auxiliary-geometry.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-waveguide_geometry",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_waveguide_geometry"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_waveguide_geometry",
+      "path": "packages/fullmag-py/src/fullmag/model/geometry.py",
+      "symbol": "class SinWaveguide",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.SinWaveguide(...) and fm.ArchWaveguide(...)",
+    "parameters": [
+      {
+        "python": "length/width/height/period",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "positive",
+        "meaning": "waveguide dimensions and period",
+        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "problem_ir": "parameters"
+      },
+      {
+        "python": "amplitude",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "finite",
+        "meaning": "sinusoidal amplitude",
+        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "problem_ir": "amplitude"
+      },
+      {
+        "python": "phase",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "rad",
+        "validation": "finite",
+        "meaning": "phase offset",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "phase"
+      },
+      {
+        "python": "z0",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "m",
+        "validation": "finite",
+        "meaning": "vertical offset",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "z0"
+      },
+      {
+        "python": "arch_height",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "finite for ArchWaveguide",
+        "meaning": "arch height",
+        "backend_support": "FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific",
+        "problem_ir": "arch_height"
+      },
+      {
+        "python": "name",
+        "type": "str",
+        "default": "sin_waveguide/arch_waveguide",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "stable name",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

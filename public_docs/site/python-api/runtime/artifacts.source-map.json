@@ -1,0 +1,128 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/runtime/artifacts.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/runtime/simulation.py",
+      "symbol": "class Result",
+      "responsibility": "Runtime artifact access and state persistence entrypoint."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/init/state_io.py",
+      "symbol": "save_magnetization",
+      "responsibility": "Magnetization artifact serialization."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "---",
+        "type": "---",
+        "default": "---",
+        "si_unit": "1",
+        "validation": "---",
+        "meaning": "---",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "---"
+      },
+      {
+        "python": "Result.output_dir",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Directory path",
+        "meaning": "Directory for run artifacts",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "output dir"
+      },
+      {
+        "python": "Result.save_state(path",
+        "type": "method",
+        "default": "`format=\"auto\"`, `dataset=\"values\"`",
+        "si_unit": "1",
+        "validation": "Requires `final_magnetization`",
+        "meaning": "Persist final state",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "n/a (runtime output)"
+      },
+      {
+        "python": "format=...",
+        "type": "method",
+        "default": "`format=\"auto\"`, `dataset=\"values\"`",
+        "si_unit": "1",
+        "validation": "Requires `final_magnetization`",
+        "meaning": "Persist final state",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "n/a (runtime output)"
+      },
+      {
+        "python": "dataset=...)",
+        "type": "method",
+        "default": "`format=\"auto\"`, `dataset=\"values\"`",
+        "si_unit": "1",
+        "validation": "Requires `final_magnetization`",
+        "meaning": "Persist final state",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "n/a (runtime output)"
+      },
+      {
+        "python": "save_magnetization(path",
+        "type": "function",
+        "default": "`format=\"auto\"`",
+        "si_unit": "1",
+        "validation": "`json`, `zarr`, or `h5`",
+        "meaning": "Low-level state writer",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "n/a"
+      },
+      {
+        "python": "values",
+        "type": "function",
+        "default": "`format=\"auto\"`",
+        "si_unit": "1",
+        "validation": "`json`, `zarr`, or `h5`",
+        "meaning": "Low-level state writer",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "n/a"
+      },
+      {
+        "python": "...)",
+        "type": "function",
+        "default": "`format=\"auto\"`",
+        "si_unit": "1",
+        "validation": "`json`, `zarr`, or `h5`",
+        "meaning": "Low-level state writer",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "n/a"
+      }
+    ]
+  }
+}

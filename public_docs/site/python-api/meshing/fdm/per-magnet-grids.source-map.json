@@ -1,0 +1,90 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fdm/per-magnet-grids.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FEM uses an unstructured mesh, not this Cartesian-grid policy."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM uses an unstructured mesh, not this Cartesian-grid policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "Per-magnet grid policy and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMGrid",
+      "responsibility": "Per-magnet cell-size validation."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FDMGrid.cell",
+        "type": "`Sequence[float]`",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly three positive values",
+        "meaning": "one native object grid",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet[].cell`"
+      },
+      {
+        "python": "FDM.per_magnet",
+        "type": "`dict[str, FDMGrid] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "non-empty string keys and `FDMGrid` values",
+        "meaning": "object-name keyed overrides",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"
+      },
+      {
+        "python": "FDM.default_cell",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "required when the map is incomplete",
+        "meaning": "fallback grid",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
+      },
+      {
+        "python": "FDMDemag",
+        "type": "`FDMDemag | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "planner validates strategy/mode/grid policy",
+        "meaning": "nonlocal coupling policy",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

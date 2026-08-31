@@ -1,0 +1,84 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/ferromagnet/swept-hex.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Swept-hex object policy and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "mesh_strategy",
+        "type": "`str`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`\"auto\" | \"free_tetrahedral\" | \"swept_prism\" | \"swept_hex\"`",
+        "meaning": "local recipe topology",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "sweep_face_meshing",
+        "type": "`Literal[\"triangular\",\"quadrilateral\"]`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "consistent with strategy",
+        "meaning": "source faces (`quadrilateral` for hex)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "element_family",
+        "type": "`Literal[\"prism\",\"hex\"]`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "consistent with strategy",
+        "meaning": "element family (`hex`)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "transition_policy",
+        "type": "`Literal[\"pyramid_to_tetrahedra\",\"reject\"]`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "prism\u2192pyramid contradicts hex \u2192 rejected",
+        "meaning": "transition policy",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

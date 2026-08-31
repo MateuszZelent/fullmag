@@ -1,0 +1,94 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/airbox/geometry.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "class AirboxOptions",
+      "responsibility": "Airbox option schema and validation."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "mode",
+        "type": "`str`",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "e.g. `\"manual\"`",
+        "meaning": "universe definition mode",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "size",
+        "type": "`Sequence[float]`",
+        "default": "required in manual",
+        "si_unit": "\\mathrm{m}",
+        "validation": "three positive values",
+        "meaning": "dimensions $(L_x, L_y, L_z)$",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "padding",
+        "type": "advanced resource policy",
+        "default": "resource-specific",
+        "si_unit": "\\mathrm{m}$ / $1",
+        "validation": "resource validation",
+        "meaning": "additional generation options (Control Room/API)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "center",
+        "type": "advanced resource policy",
+        "default": "resource-specific",
+        "si_unit": "\\mathrm{m}$ / $1",
+        "validation": "resource validation",
+        "meaning": "additional generation options (Control Room/API)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "shape options",
+        "type": "advanced resource policy",
+        "default": "resource-specific",
+        "si_unit": "\\mathrm{m}$ / $1",
+        "validation": "resource validation",
+        "meaning": "additional generation options (Control Room/API)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

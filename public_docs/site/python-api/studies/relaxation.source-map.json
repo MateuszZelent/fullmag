@@ -1,0 +1,128 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/studies/relaxation.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Relaxation",
+      "responsibility": "Relaxation study and algorithm policy lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class RelaxStop",
+      "responsibility": "Relaxation stop criteria normalization."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Relaxation.outputs",
+        "type": "`Sequence[TimeOutputSpec]`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "Field/scalar outputs; an empty sequence is valid",
+        "meaning": "Output requests recorded during relaxation",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks materialization",
+        "problem_ir": "`sampling.outputs`"
+      },
+      {
+        "python": "Relaxation.algorithm",
+        "type": "`str`",
+        "default": "`\"llg_overdamped\"`",
+        "si_unit": "1",
+        "validation": "One of `llg_overdamped`, `projected_gradient_bb`, `nonlinear_cg`, `tangent_plane_implicit`",
+        "meaning": "Relaxation algorithm identifier",
+        "backend_support": "See algorithm lanes below; `tangent_plane_implicit` is FEM-only and not yet executable",
+        "problem_ir": "`algorithm`"
+      },
+      {
+        "python": "Relaxation.stop",
+        "type": "`RelaxStop`",
+        "default": "`RelaxStop()`",
+        "si_unit": "mixed",
+        "validation": "Positive tolerances and step counts; one time bound at most",
+        "meaning": "Canonical stop contract",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop`"
+      },
+      {
+        "python": "Relaxation.torque_tolerance",
+        "type": "`float | None`",
+        "default": "`1e-5` (legacy alias)",
+        "si_unit": "\\mathrm{T}",
+        "validation": "Positive; conflicts with `stop.torque_tolerance_apm` are rejected",
+        "meaning": "Convergence threshold on torque",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.torque_tolerance_apm`"
+      },
+      {
+        "python": "Relaxation.energy_tolerance",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{J}",
+        "validation": "Positive when set",
+        "meaning": "Energy-delta stop bound",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.energy_tolerance_j`"
+      },
+      {
+        "python": "Relaxation.max_steps",
+        "type": "`int | None`",
+        "default": "`50000` (legacy alias)",
+        "si_unit": "1",
+        "validation": "Positive integer",
+        "meaning": "Maximum relaxation iterations",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`stop.max_steps`"
+      },
+      {
+        "python": "Relaxation.dynamics",
+        "type": "`LLG | None`",
+        "default": "`None`",
+        "si_unit": "mixed",
+        "validation": "Required by `llg_overdamped` only; direct minimizers reject it",
+        "meaning": "LLG parameters for the overdamped lane",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "`dynamics`"
+      },
+      {
+        "python": "Relaxation.table_autosave",
+        "type": "`TableAutosave | None`",
+        "default": "`None`",
+        "si_unit": "mixed",
+        "validation": "See {doc}`../outputs/autosave`",
+        "meaning": "Tabular autosave policy",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`sampling.table_autosave`"
+      }
+    ]
+  }
+}

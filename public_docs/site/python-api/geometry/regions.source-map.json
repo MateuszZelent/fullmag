@@ -1,0 +1,155 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/geometry/regions.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-object_region",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_object_region"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_object_region",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class ObjectRegion",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.Region(name, geometry) and fm.ObjectRegion(...)",
+    "parameters": [
+      {
+        "python": "Region.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "region name",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      },
+      {
+        "python": "Region.geometry",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "typed geometry",
+        "meaning": "region shape",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "shape"
+      },
+      {
+        "python": "ObjectRegion.owner_object",
+        "type": "str or object",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "owner-scoped",
+        "meaning": "owning object",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "owner"
+      },
+      {
+        "python": "ObjectRegion.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "region name",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      },
+      {
+        "python": "ObjectRegion.region_id",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "stable when supplied",
+        "meaning": "region identifier",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "region_id"
+      },
+      {
+        "python": "ObjectRegion.frame",
+        "type": "str",
+        "default": "object",
+        "si_unit": "1",
+        "validation": "supported frame",
+        "meaning": "coordinate frame",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "frame"
+      },
+      {
+        "python": "ObjectRegion.enabled",
+        "type": "bool",
+        "default": "True",
+        "si_unit": "1",
+        "validation": "boolean",
+        "meaning": "activation flag",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "enabled"
+      },
+      {
+        "python": "ObjectRegion.priority",
+        "type": "int",
+        "default": "0",
+        "si_unit": "1",
+        "validation": "integer",
+        "meaning": "overlap precedence",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "priority"
+      },
+      {
+        "python": "ObjectRegion.realization_policy",
+        "type": "str",
+        "default": "inherit",
+        "si_unit": "1",
+        "validation": "supported policy",
+        "meaning": "mesh/realization inheritance",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "realization_policy"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

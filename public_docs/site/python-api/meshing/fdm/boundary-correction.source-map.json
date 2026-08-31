@@ -1,0 +1,74 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fdm/boundary-correction.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FEM uses an unstructured mesh, not this Cartesian-grid policy."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM uses an unstructured mesh, not this Cartesian-grid policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDM",
+      "responsibility": "FDM boundary-correction authoring and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "boundary_correction",
+        "type": "`str | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`none`, `volume`, or `full`",
+        "meaning": "embedded-boundary policy",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_phi_floor",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`0 < value < 1`",
+        "meaning": "minimum occupied-volume fraction",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_delta_min",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "non-negative",
+        "meaning": "minimum T1 stencil distance",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/current-and-excitations/current-transport.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-current_transport",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_current_transport"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_current_transport",
+      "path": "packages/fullmag-py/src/fullmag/model/current_transport.py",
+      "symbol": "class CurrentTransport",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.CurrentTransport(...)",
+    "parameters": [
+      {
+        "python": "name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "module identifier",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      },
+      {
+        "python": "model",
+        "type": "str",
+        "default": "prescribed_density",
+        "si_unit": "1",
+        "validation": "prescribed_density, ohmic_poisson, or magnetoresistive_poisson",
+        "meaning": "transport equation family",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "model"
+      },
+      {
+        "python": "current_density",
+        "type": "tuple[float,float,float] or None",
+        "default": "None",
+        "si_unit": "A/m^2",
+        "validation": "required by prescribed; forbidden by ohmic",
+        "meaning": "prescribed density",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "current_density"
+      },
+      {
+        "python": "solve_region",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty when supplied",
+        "meaning": "solution region",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "solve_region"
+      },
+      {
+        "python": "conductivity_s_per_m",
+        "type": "float or field",
+        "default": "None",
+        "si_unit": "S/m",
+        "validation": "positive when supplied",
+        "meaning": "conductivity",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "conductivity"
+      },
+      {
+        "python": "coupling",
+        "type": "str",
+        "default": "one_way",
+        "si_unit": "1",
+        "validation": "one_way or bidirectional; bidirectional requires ohmic",
+        "meaning": "coupling direction",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "coupling"
+      },
+      {
+        "python": "domain/materials/boundaries/gauge/solver",
+        "type": "typed values",
+        "default": "empty/None",
+        "si_unit": "various",
+        "validation": "complete for ohmic_poisson",
+        "meaning": "Poisson charge contract",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved module",
+        "problem_ir": "transport"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

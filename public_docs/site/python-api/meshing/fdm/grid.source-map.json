@@ -1,0 +1,74 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fdm/grid.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FEM uses an unstructured mesh, not this Cartesian-grid policy."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM uses an unstructured mesh, not this Cartesian-grid policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class FDMGrid",
+      "responsibility": "Per-magnet Cartesian grid contract."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.objects.mesh.defaults(cell_size=...)",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly three positive values",
+        "meaning": "stage-first default cell",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "FDM.default_cell",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly three positive values",
+        "meaning": "low-level default cell",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
+      },
+      {
+        "python": "FDM.cell",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "legacy alias; cannot coexist with `default_cell`",
+        "meaning": "compatibility spelling",
+        "backend_support": "FDM CPU/GPU; FEM not applicable to Cartesian grid authoring",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.cell`"
+      }
+    ]
+  }
+}

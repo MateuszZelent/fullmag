@@ -1,0 +1,194 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/outputs/autosave.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class TableAutosave",
+      "responsibility": "Table cadence and quantity selection."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FieldAutosave",
+      "responsibility": "Field cadence and field selection."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class StageAutosave",
+      "responsibility": "Stage output format, layout, and target."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "TableAutosave.t_sampl",
+        "type": "`SamplingPeriod | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Exactly one of `t_sampl` and `every_steps`; normalized by the source helper",
+        "meaning": "Time-based scalar-table cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "table_autosave.sample_period_s` or `sample_period_policy"
+      },
+      {
+        "python": "TableAutosave.every_steps",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "step",
+        "validation": "Exactly one of `t_sampl` and `every_steps`; positive integer",
+        "meaning": "Step-based scalar-table cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "table_autosave.every_steps"
+      },
+      {
+        "python": "TableAutosave.quantities",
+        "type": "`Sequence[str] | None`",
+        "default": "default set",
+        "si_unit": "1",
+        "validation": "Supported quantity ids",
+        "meaning": "Table columns",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "table_autosave.quantities"
+      },
+      {
+        "python": "TableAutosave.extra_quantities",
+        "type": "`Sequence[str]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "Supported quantity ids; normalized and de-duplicated",
+        "meaning": "Additional scalar-table columns",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "table_autosave.quantities"
+      },
+      {
+        "python": "TableAutosave.expressions",
+        "type": "`Sequence[str]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "Expressions are normalized by the source helper",
+        "meaning": "Additional scalar-table expressions",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "table_autosave.expressions"
+      },
+      {
+        "python": "TableAutosave.table_id",
+        "type": "`str`",
+        "default": "`\"default\"`",
+        "si_unit": "1",
+        "validation": "Non-empty",
+        "meaning": "Table identity",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "table_autosave.table_id"
+      },
+      {
+        "python": "FieldAutosave.quantity",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "Known field id",
+        "meaning": "Field cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "field_autosave.quantity"
+      },
+      {
+        "python": "FieldAutosave.every",
+        "type": "`SamplingPeriod | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Exactly one of `every` and `every_steps`; normalized by the source helper",
+        "meaning": "Time-based field cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "field_autosave.every_seconds` or `sample_period_policy"
+      },
+      {
+        "python": "FieldAutosave.every_steps",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "step",
+        "validation": "Exactly one of `every` and `every_steps`; positive integer",
+        "meaning": "Step-based field cadence",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "field_autosave.every_steps"
+      },
+      {
+        "python": "StageAutosave.target",
+        "type": "`str`",
+        "default": "`\"main\"`",
+        "si_unit": "1",
+        "validation": "`[A-Za-z0-9][A-Za-z0-9._-]*`",
+        "meaning": "Save target",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "stage_autosave.target"
+      },
+      {
+        "python": "StageAutosave.table",
+        "type": "`TableAutosave | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`TableAutosave` or `None`; at least one table/field policy is required",
+        "meaning": "Scalar-table autosave policy",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "stage_autosave.table"
+      },
+      {
+        "python": "StageAutosave.fields",
+        "type": "`Sequence[FieldAutosave]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "Every item must be `FieldAutosave`; at least one table/field policy is required",
+        "meaning": "Field autosave policies",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "stage_autosave.fields"
+      },
+      {
+        "python": "StageAutosave.format",
+        "type": "`str`",
+        "default": "`\"zarr\"`",
+        "si_unit": "1",
+        "validation": "`zarr`, `hdf5`, or `txt`",
+        "meaning": "Persistence format",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "stage_autosave.format"
+      },
+      {
+        "python": "StageAutosave.layout",
+        "type": "`str`",
+        "default": "`\"continuous\"`",
+        "si_unit": "1",
+        "validation": "`continuous` or `separate`",
+        "meaning": "Layout policy",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "stage_autosave.layout"
+      }
+    ]
+  }
+}

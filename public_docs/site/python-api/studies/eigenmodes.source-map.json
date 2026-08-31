@@ -1,0 +1,172 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/studies/eigenmodes.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Eigenmodes",
+      "responsibility": "Eigenmode study parameters and IR lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Eigenmodes.outputs",
+        "type": "`Sequence[EigenOutputSpec]`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "At least one; `SaveResponse` is rejected",
+        "meaning": "Mode/spectrum/dispersion/diagnostic outputs",
+        "backend_support": "FDM/FEM CPU/GPU; planner checks materialization",
+        "problem_ir": "sampling.outputs"
+      },
+      {
+        "python": "Eigenmodes.count",
+        "type": "`int`",
+        "default": "`20`",
+        "si_unit": "1",
+        "validation": "Positive",
+        "meaning": "Number of eigenvectors requested",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "count"
+      },
+      {
+        "python": "Eigenmodes.target",
+        "type": "`str`",
+        "default": "`\"lowest\"`",
+        "si_unit": "1",
+        "validation": "`lowest`, `nearest`, or `frequency_window`",
+        "meaning": "Eigenvalue selection policy",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "target"
+      },
+      {
+        "python": "Eigenmodes.target_frequency",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{Hz}",
+        "validation": "Positive; required for `nearest`",
+        "meaning": "Frequency target for nearest modes",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "target.frequency_hz"
+      },
+      {
+        "python": "Eigenmodes.frequency_min",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{Hz}",
+        "validation": "Positive lower bound; required with `frequency_window`",
+        "meaning": "Lower frequency-window bound",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "target.frequency_min_hz"
+      },
+      {
+        "python": "Eigenmodes.frequency_max",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{Hz}",
+        "validation": "Positive upper bound; `min < max`; required with `frequency_window`",
+        "meaning": "Upper frequency-window bound",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "target.frequency_max_hz"
+      },
+      {
+        "python": "Eigenmodes.operator",
+        "type": "`str`",
+        "default": "`\"linearized_llg\"`",
+        "si_unit": "1",
+        "validation": "`linearized_llg` or `full_2x2`",
+        "meaning": "Linearized operator",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "operator.kind"
+      },
+      {
+        "python": "Eigenmodes.include_demag",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "1",
+        "validation": "Boolean",
+        "meaning": "Include the dynamic demagnetization term",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "operator.include_demag"
+      },
+      {
+        "python": "Eigenmodes.equilibrium_source",
+        "type": "`str`",
+        "default": "`\"relax\"` (stage entry default)",
+        "si_unit": "1",
+        "validation": "`provided`, `relax`, or `artifact`",
+        "meaning": "Equilibrium acquisition",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "equilibrium"
+      },
+      {
+        "python": "Eigenmodes.k_sampling",
+        "type": "`object | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m^{-1}}",
+        "validation": "Valid k sampling or k vector",
+        "meaning": "Wave-vector sampling",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "k_sampling"
+      },
+      {
+        "python": "Eigenmodes.normalization",
+        "type": "`str`",
+        "default": "`\"unit_l2\"`",
+        "si_unit": "1",
+        "validation": "`unit_l2` or `unit_max_amplitude`",
+        "meaning": "Mode normalization",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "normalization"
+      },
+      {
+        "python": "Eigenmodes.damping_policy",
+        "type": "`str`",
+        "default": "`\"ignore\"`",
+        "si_unit": "1",
+        "validation": "`ignore` or `include`",
+        "meaning": "Damping treatment",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "damping_policy"
+      },
+      {
+        "python": "Eigenmodes.spin_wave_bc",
+        "type": "`str | mapping | PeriodicBC | FloquetBC`",
+        "default": "`\"free\"`",
+        "si_unit": "1",
+        "validation": "One of `free`, `pinned`, `periodic`, `floquet`, `surface_anisotropy`",
+        "meaning": "Spin-wave boundary condition",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "spin_wave_bc"
+      }
+    ]
+  }
+}

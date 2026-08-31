@@ -1,0 +1,114 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/ferromagnet/boundary-layers.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Object boundary-layer policy and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "boundary_layer_count",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "layer count",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_layer_thickness",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "total package thickness",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_layer_stretching",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "in $(1, 2]$",
+        "meaning": "thickness growth between layers",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_layer_target_surface_selectors",
+        "type": "`Sequence[Mapping] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "semantic selectors",
+        "meaning": "target surfaces",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_layer_target_curve_selectors",
+        "type": "`Sequence[Mapping] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "semantic selectors",
+        "meaning": "target edges",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "boundary_layer_target_surface_tags",
+        "type": "`Sequence[int] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Gmsh tags",
+        "meaning": "raw numeric targets",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "_curve_tags",
+        "type": "`Sequence[int] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Gmsh tags",
+        "meaning": "raw numeric targets",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

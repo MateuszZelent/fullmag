@@ -1,0 +1,100 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/build-and-quality.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "class MeshData",
+      "responsibility": "Realized mesh data, validation, and quality channels."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py",
+      "symbol": "class MeshRealizationReport",
+      "responsibility": "Mesh realization and provenance report."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "StudyBuilder.build_domain_mesh",
+        "type": "`build_domain_mesh() -> StudyBuilder`",
+        "default": "n/a",
+        "si_unit": "1",
+        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "meaning": "materializes shared domain mesh",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "build_domain_mesh",
+        "type": "`build_domain_mesh() -> None`",
+        "default": "n/a",
+        "si_unit": "1",
+        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "meaning": "module-level materialization",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.build`"
+      },
+      {
+        "python": "PerObjectMeshRecipe.compute_quality",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "meaning": "aggregate quality request",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.per_geometry[]`"
+      },
+      {
+        "python": "PerObjectMeshRecipe.per_element_quality",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "meaning": "per-element quality request",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow.per_geometry[]`"
+      },
+      {
+        "python": "MagnetHandle.mesh",
+        "type": "`mesh(**kwargs) -> MagnetHandle`",
+        "default": "inherited",
+        "si_unit": "1",
+        "validation": "Current facade signature; invalid paths or stale fingerprints are rejected",
+        "meaning": "authors object mesh policy",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}

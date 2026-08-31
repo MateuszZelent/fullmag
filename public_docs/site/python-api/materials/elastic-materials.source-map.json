@@ -1,0 +1,105 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/materials/elastic-materials.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-elastic_material",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_elastic_material"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_elastic_material",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class ElasticMaterial",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.ElasticMaterial(name, C11, C12, C44, rho, eta_mech=None)",
+    "parameters": [
+      {
+        "python": "name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "material identifier",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "name"
+      },
+      {
+        "python": "C11/C12/C44",
+        "type": "float",
+        "default": "required",
+        "si_unit": "Pa",
+        "validation": "positive",
+        "meaning": "cubic elastic constants",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "c11/c12/c44"
+      },
+      {
+        "python": "rho",
+        "type": "float",
+        "default": "required",
+        "si_unit": "kg/m^3",
+        "validation": "positive",
+        "meaning": "mass density",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "density"
+      },
+      {
+        "python": "eta_mech",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "Pa s or model-specific",
+        "validation": "non-negative when supplied",
+        "meaning": "mechanical damping",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "mechanical_damping"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

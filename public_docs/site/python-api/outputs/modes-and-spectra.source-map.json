@@ -1,0 +1,134 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/outputs/modes-and-spectra.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveMode",
+      "responsibility": "Mode-field output selection and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveSpectrum",
+      "responsibility": "Spectrum output selection and lowering."
+    },
+    {
+      "id": "source-3",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveEigenDiagnostics",
+      "responsibility": "Eigen-solver diagnostic output selection and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "SaveMode.field",
+        "type": "`str`",
+        "default": "`\"mode\"`",
+        "si_unit": "1",
+        "validation": "Non-empty",
+        "meaning": "Mode field name",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_mode.field"
+      },
+      {
+        "python": "SaveMode.indices",
+        "type": "`Sequence[int]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "Non-negative unique",
+        "meaning": "Raw mode indices",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_mode.indices"
+      },
+      {
+        "python": "SaveMode.branches",
+        "type": "`Sequence[int]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "Non-negative unique",
+        "meaning": "Tracked branch indices",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_mode.branches"
+      },
+      {
+        "python": "SaveMode.sample_indices",
+        "type": "`Sequence[int] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Non-negative unique sample indices",
+        "meaning": "Select samples by numeric index",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_mode.sample_indices"
+      },
+      {
+        "python": "SaveMode.sample_labels",
+        "type": "`Sequence[str] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Non-empty sample labels",
+        "meaning": "Select samples by label",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_mode.sample_labels"
+      },
+      {
+        "python": "SaveSpectrum.quantity",
+        "type": "`str`",
+        "default": "`\"eigenfrequency\"`",
+        "si_unit": "1",
+        "validation": "Non-empty",
+        "meaning": "Spectrum quantity",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_spectrum.quantity"
+      },
+      {
+        "python": "SaveSpectrum.scope",
+        "type": "`str`",
+        "default": "`\"per_sample\"`",
+        "si_unit": "1",
+        "validation": "`global` or `per_sample`",
+        "meaning": "Spectrum scope",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_spectrum.scope"
+      },
+      {
+        "python": "SaveEigenDiagnostics.*",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "1",
+        "validation": "Boolean",
+        "meaning": "Diagnostic flags",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "eigen_diagnostics"
+      }
+    ]
+  }
+}

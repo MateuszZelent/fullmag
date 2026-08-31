@@ -1,0 +1,75 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/boundary-conditions/periodic-boundary-conditions.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-periodic",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_periodic"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_periodic",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class PeriodicBC",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.PeriodicBC(pair_ids)",
+    "parameters": [
+      {
+        "python": "pair_ids",
+        "type": "Sequence[str]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty sequence; IDs non-empty",
+        "meaning": "paired boundary identifiers",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "problem_ir": "pair_ids"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

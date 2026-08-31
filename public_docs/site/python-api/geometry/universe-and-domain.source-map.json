@@ -1,0 +1,125 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/geometry/universe-and-domain.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-universe_domain",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_universe_domain"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_universe_domain",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.pbc(...) and StudyUniverseHandle.mesh(...)",
+    "parameters": [
+      {
+        "python": "pbc.x/y/z",
+        "type": "bool",
+        "default": "False",
+        "si_unit": "1",
+        "validation": "boolean",
+        "meaning": "periodic axis flags",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "periodic axes"
+      },
+      {
+        "python": "pbc.demag",
+        "type": "str",
+        "default": "open",
+        "si_unit": "1",
+        "validation": "supported demag mode",
+        "meaning": "open-domain demag choice",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "demag"
+      },
+      {
+        "python": "pbc.images",
+        "type": "int or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive when supplied",
+        "meaning": "periodic image count",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "images"
+      },
+      {
+        "python": "mesh.cell_size",
+        "type": "tuple[float,float,float] or None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive components",
+        "meaning": "structured cell size",
+        "backend_support": "FDM CPU/GPU: IR; FEM resolver-specific",
+        "problem_ir": "cell_size"
+      },
+      {
+        "python": "mesh.hmax/hmin",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive when supplied; hmin <= hmax",
+        "meaning": "unstructured size bounds",
+        "backend_support": "FEM CPU/GPU: IR; FDM resolver-specific",
+        "problem_ir": "hmax/hmin"
+      },
+      {
+        "python": "mesh.growth_rate",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive when supplied",
+        "meaning": "mesh grading growth",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "growth_rate"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

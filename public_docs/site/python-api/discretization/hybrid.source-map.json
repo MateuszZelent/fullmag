@@ -1,0 +1,88 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/discretization/hybrid.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class Hybrid",
+      "responsibility": "Hybrid discretization policy validation and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class DiscretizationHints",
+      "responsibility": "Composite discretization-hint ownership and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Hybrid.demag",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "Non-empty",
+        "meaning": "Hybrid demag strategy",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "demag"
+      },
+      {
+        "python": "DiscretizationHints.fdm",
+        "type": "`FDM | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`FDM` instance or `None`",
+        "meaning": "FDM-lane discretization hints",
+        "backend_support": "FDM CPU/GPU; FEM lanes are not applicable",
+        "problem_ir": "discretization_hints.fdm"
+      },
+      {
+        "python": "DiscretizationHints.fem",
+        "type": "`FEM | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`FEM` instance or `None`",
+        "meaning": "FEM-lane discretization hints",
+        "backend_support": "FEM CPU/GPU; FDM lanes are not applicable",
+        "problem_ir": "discretization_hints.fem"
+      },
+      {
+        "python": "DiscretizationHints.hybrid",
+        "type": "`Hybrid | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`Hybrid` instance or `None`",
+        "meaning": "Mixed-lane discretization hints",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "discretization_hints.hybrid"
+      }
+    ]
+  }
+}

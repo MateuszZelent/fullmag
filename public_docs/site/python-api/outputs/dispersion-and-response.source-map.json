@@ -1,0 +1,88 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/outputs/dispersion-and-response.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveDispersion",
+      "responsibility": "Dispersion output request validation and lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/outputs.py",
+      "symbol": "class SaveResponse",
+      "responsibility": "Response output request validation and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "---",
+        "type": "---",
+        "default": "---",
+        "si_unit": "1",
+        "validation": "---",
+        "meaning": "---",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "---"
+      },
+      {
+        "python": "SaveDispersion.name",
+        "type": "`str`",
+        "default": "`\"dispersion\"`",
+        "si_unit": "1",
+        "validation": "Non-empty",
+        "meaning": "Curve name",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dispersion_curve.name`"
+      },
+      {
+        "python": "SaveDispersion.include_branch_table",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "1",
+        "validation": "Boolean",
+        "meaning": "Include branch table",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dispersion_curve.include_branch_table`"
+      },
+      {
+        "python": "SaveResponse.observable",
+        "type": "`str`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "One of the supported response observables",
+        "meaning": "Response output",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`frequency_response_output.observable`"
+      }
+    ]
+  }
+}

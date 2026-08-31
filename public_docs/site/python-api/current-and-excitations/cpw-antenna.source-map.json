@@ -1,0 +1,125 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/current-and-excitations/cpw-antenna.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-cpw_antenna",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_cpw_antenna"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_cpw_antenna",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class CPWAntenna",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.CPWAntenna(...)",
+    "parameters": [
+      {
+        "python": "signal_width/gap/ground_width",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "positive",
+        "meaning": "CPW transverse dimensions",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "dimensions"
+      },
+      {
+        "python": "thickness",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "positive",
+        "meaning": "conductor thickness",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "thickness"
+      },
+      {
+        "python": "height_above_magnet",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "non-negative",
+        "meaning": "height over magnet",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "height_above_magnet"
+      },
+      {
+        "python": "preview_length",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "positive",
+        "meaning": "preview length",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "preview_length"
+      },
+      {
+        "python": "center_x/center_y",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "m",
+        "validation": "finite",
+        "meaning": "in-plane position",
+        "backend_support": "FEM/FDM CPU/GPU: IR; preview/resolver-specific",
+        "problem_ir": "center"
+      },
+      {
+        "python": "current_distribution",
+        "type": "str",
+        "default": "uniform",
+        "si_unit": "1",
+        "validation": "only uniform currently accepted",
+        "meaning": "current distribution",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "current_distribution"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

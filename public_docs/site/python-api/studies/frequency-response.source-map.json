@@ -1,0 +1,138 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/studies/frequency-response.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponse",
+      "responsibility": "Frequency-response study parameters and IR lowering."
+    },
+    {
+      "id": "source-2",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class FrequencyResponseSolverPolicy",
+      "responsibility": "Frequency-response solver policy validation and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "FrequencyResponse.outputs",
+        "type": "`Sequence[FrequencyOutputSpec]`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "At least one",
+        "meaning": "Response observables",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks materialization",
+        "problem_ir": "`sampling.outputs`"
+      },
+      {
+        "python": "FrequencyResponse.frequencies_hz",
+        "type": "`Sequence[float]`",
+        "default": "`required`",
+        "si_unit": "\\mathrm{Hz}",
+        "validation": "Non-empty, finite, positive",
+        "meaning": "Sweep frequencies",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`frequencies_hz.values_hz`"
+      },
+      {
+        "python": "FrequencyResponse.excitation_field_au_per_m",
+        "type": "`tuple[float, float, float]`",
+        "default": "`(0,0,1)`",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "Length-3 finite vector",
+        "meaning": "Small transverse excitation field",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`excitation.field_au_per_m`"
+      },
+      {
+        "python": "FrequencyResponse.excitation_phase_rad",
+        "type": "`float`",
+        "default": "`0.0`",
+        "si_unit": "\\mathrm{rad}",
+        "validation": "Finite",
+        "meaning": "Excitation phase",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`excitation.phase_rad`"
+      },
+      {
+        "python": "FrequencyResponse.operator",
+        "type": "`str`",
+        "default": "`\"linearized_llg\"`",
+        "si_unit": "1",
+        "validation": "`linearized_llg` or `full_2x2`",
+        "meaning": "Linearized operator",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`operator.kind`"
+      },
+      {
+        "python": "FrequencyResponse.include_demag",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "1",
+        "validation": "Boolean",
+        "meaning": "Include dynamic demagnetization",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`operator.include_demag`"
+      },
+      {
+        "python": "FrequencyResponse.equilibrium_source",
+        "type": "`str`",
+        "default": "`\"provided\"`",
+        "si_unit": "1",
+        "validation": "`provided`, `relax`, or `artifact`",
+        "meaning": "Equilibrium acquisition",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`equilibrium`"
+      },
+      {
+        "python": "FrequencyResponse.magnetostatic_bc",
+        "type": "`str`",
+        "default": "`\"open\"`",
+        "si_unit": "1",
+        "validation": "`open`, `periodic_airbox_k0`, or `floquet_airbox`",
+        "meaning": "Magnetostatic boundary condition",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "`magnetostatic_bc`"
+      },
+      {
+        "python": "FrequencyResponse.solver_policy",
+        "type": "`FrequencyResponseSolverPolicy | None`",
+        "default": "`None`",
+        "si_unit": "mixed",
+        "validation": "Valid method/preconditioner/tolerance/iteration values",
+        "meaning": "Solver method and preconditioner overrides",
+        "backend_support": "FEM/FDM CPU/GPU; several methods are planned",
+        "problem_ir": "`solver_policy`"
+      }
+    ]
+  }
+}

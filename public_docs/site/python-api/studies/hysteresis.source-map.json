@@ -1,0 +1,152 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/studies/hysteresis.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class Hysteresis",
+      "responsibility": "Hysteresis study schedule, settle, and storage lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Hysteresis.outputs",
+        "type": "`Sequence[TimeOutputSpec]`",
+        "default": "`required`",
+        "si_unit": "1",
+        "validation": "Field/scalar outputs",
+        "meaning": "Per-point sampling",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "sampling.outputs"
+      },
+      {
+        "python": "Hysteresis.field_min_mT",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{mT}",
+        "validation": "Finite; required for a uniform sweep",
+        "meaning": "Lower uniform-sweep field bound",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "field_min_mT"
+      },
+      {
+        "python": "Hysteresis.field_max_mT",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{mT}",
+        "validation": "Finite; required for a uniform sweep",
+        "meaning": "Upper uniform-sweep field bound",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "field_max_mT"
+      },
+      {
+        "python": "Hysteresis.field_step_mT",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{mT}",
+        "validation": "Finite and nonzero; required for a uniform sweep",
+        "meaning": "Uniform-sweep field increment",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "field_step_mT"
+      },
+      {
+        "python": "Hysteresis.field_values_mT",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{mT}",
+        "validation": "Non-empty, finite",
+        "meaning": "Explicit field-point schedule",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "field_values_mT"
+      },
+      {
+        "python": "Hysteresis.direction",
+        "type": "`tuple[float,float,float] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Non-zero length-3 vector",
+        "meaning": "Field sweep direction",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "direction"
+      },
+      {
+        "python": "Hysteresis.measurement_axis",
+        "type": "`str | MeasurementAxis`",
+        "default": "`\"field_axis\"`",
+        "si_unit": "1",
+        "validation": "`field_axis`, `sample_normal`, `easy_axis`, or custom",
+        "meaning": "Projection axis for the loop",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "measurement_axis"
+      },
+      {
+        "python": "Hysteresis.initial_protocol",
+        "type": "`str`",
+        "default": "`\"positive_saturation\"`",
+        "si_unit": "1",
+        "validation": "One of `as_authored`, `zero_field_relaxed`, `positive_saturation`, `negative_saturation`, `checkpoint`",
+        "meaning": "Initial-state preparation",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "initial_protocol"
+      },
+      {
+        "python": "Hysteresis.branch_mode",
+        "type": "`str`",
+        "default": "`\"major_loop\"`",
+        "si_unit": "1",
+        "validation": "`major_loop`, `major_with_minor_loops`, `virgin_curve`, `virgin_then_major_loop`",
+        "meaning": "Loop topology",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "branch_mode"
+      },
+      {
+        "python": "Hysteresis.settle_pipeline",
+        "type": "`SettlePipeline | SettleTree | None`",
+        "default": "`None`",
+        "si_unit": "mixed",
+        "validation": "At least one step; `run_next_algorithm` needs a successor",
+        "meaning": "Per-point settle program",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "settle_pipeline"
+      },
+      {
+        "python": "Hysteresis.storage",
+        "type": "`HysteresisStorage | None`",
+        "default": "`None`",
+        "si_unit": "mixed",
+        "validation": "Valid magnetization storage mode",
+        "meaning": "Storage policy",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "storage"
+      }
+    ]
+  }
+}

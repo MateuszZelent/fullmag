@@ -1,0 +1,105 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/current-and-excitations/rf-drive.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-rf_drive",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_rf_drive"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_rf_drive",
+      "path": "packages/fullmag-py/src/fullmag/model/antenna.py",
+      "symbol": "class RfDrive",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.RfDrive(current_a, frequency_hz=None, phase_rad=0.0, waveform=None)",
+    "parameters": [
+      {
+        "python": "current_a",
+        "type": "float",
+        "default": "required",
+        "si_unit": "A",
+        "validation": "finite",
+        "meaning": "drive current",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "current"
+      },
+      {
+        "python": "frequency_hz",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "Hz",
+        "validation": "positive when supplied",
+        "meaning": "frequency for convenience waveform",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "waveform.frequency"
+      },
+      {
+        "python": "phase_rad",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "rad",
+        "validation": "finite",
+        "meaning": "phase offset",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "waveform.phase"
+      },
+      {
+        "python": "waveform",
+        "type": "Waveform or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "typed when supplied",
+        "meaning": "explicit waveform override",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "waveform"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

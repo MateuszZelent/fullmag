@@ -1,0 +1,92 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/dynamics/integrators.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
+      "symbol": "class LLG",
+      "responsibility": "Integrator selection, validation, and dynamics IR lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "---",
+        "type": "---",
+        "default": "---",
+        "si_unit": "1",
+        "validation": "---",
+        "meaning": "---",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "---"
+      },
+      {
+        "python": "LLG.integrator",
+        "type": "`str`",
+        "default": "`\"auto\"`",
+        "si_unit": "1",
+        "validation": "One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto`",
+        "meaning": "Time integration scheme",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dynamics.integrator`"
+      },
+      {
+        "python": "LLG.gamma",
+        "type": "`float`",
+        "default": "`2.211e5`",
+        "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}",
+        "validation": "Positive",
+        "meaning": "Gyromagnetic ratio",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dynamics.gyromagnetic_ratio`"
+      },
+      {
+        "python": "LLG.fixed_timestep",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Positive; exclusive with adaptive step",
+        "meaning": "Fixed step size",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dynamics.fixed_timestep`"
+      },
+      {
+        "python": "LLG.adaptive_timestep",
+        "type": "`AdaptiveTimestep | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{s}",
+        "validation": "Adaptive integrator required",
+        "meaning": "Embedded error control",
+        "backend_support": "FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative",
+        "problem_ir": "`dynamics.adaptive_timestep`"
+      }
+    ]
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/materials/magnetostriction-laws.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-magnetostriction_law",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_magnetostriction_law"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_magnetostriction_law",
+      "path": "packages/fullmag-py/src/fullmag/model/mechanics.py",
+      "symbol": "class MagnetostrictionLaw",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.MagnetostrictionLaw(name, kind=\"cubic\", B1=None, B2=None, lambda_s=None)",
+    "parameters": [
+      {
+        "python": "name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "law identifier",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "name"
+      },
+      {
+        "python": "kind",
+        "type": "str",
+        "default": "cubic",
+        "si_unit": "1",
+        "validation": "cubic or isotropic",
+        "meaning": "law family",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "kind"
+      },
+      {
+        "python": "B1/B2",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "Pa",
+        "validation": "both required for cubic; finite",
+        "meaning": "cubic coefficients",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "B1/B2"
+      },
+      {
+        "python": "lambda_s",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "required for isotropic; finite",
+        "meaning": "saturation magnetostriction",
+        "backend_support": "FEM CPU/GPU: IR; FDM not currently resolved",
+        "problem_ir": "lambda_s"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

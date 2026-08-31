@@ -1,0 +1,105 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/magnets-and-textures/initial-magnetization.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-initial_magnetization",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_initial_magnetization"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
+    }
+  ],
+  "sources": [
+    {
+      "id": "source_initial_magnetization",
+      "path": "packages/fullmag-py/src/fullmag/init/magnetization.py",
+      "symbol": "class UniformMagnetization",
+      "responsibility": "public constructor and IR lowering"
+    }
+  ],
+  "public_api": {
+    "owner": "fm.init.UniformMagnetization, fm.init.RandomMagnetization, fm.init.SampledMagnetization",
+    "parameters": [
+      {
+        "python": "UniformMagnetization.value",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite three-vector",
+        "meaning": "uniform direction/value",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "value"
+      },
+      {
+        "python": "RandomMagnetization.seed",
+        "type": "int",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "integer",
+        "meaning": "reproducible random seed",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "seed"
+      },
+      {
+        "python": "SampledMagnetization.values",
+        "type": "Sequence[Sequence[float]]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "typed sampled vectors",
+        "meaning": "sampled initial field",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "values"
+      },
+      {
+        "python": "SampledMagnetization.source_path/source_format/dataset/sample_index",
+        "type": "optional",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "typed when supplied",
+        "meaning": "sample provenance and selection",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "source metadata"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
+  }
+}

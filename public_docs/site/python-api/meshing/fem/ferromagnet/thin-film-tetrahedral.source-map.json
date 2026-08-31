@@ -1,0 +1,274 @@
+{
+  "document": {
+    "path": "public_docs/site/python-api/meshing/fem/ferromagnet/thin-film-tetrahedral.md",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM uses per-magnet Cartesian grids, not this FEM policy."
+    }
+  ],
+  "equations": [],
+  "symbols": [],
+  "sources": [
+    {
+      "id": "source-1",
+      "path": "packages/fullmag-py/src/fullmag/model/discretization.py",
+      "symbol": "class PerObjectMeshRecipe",
+      "responsibility": "Thin-film tetrahedral object policy and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "maximum_element_size",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive; aliases must agree",
+        "meaning": "maximum element size",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "hmax",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive; aliases must agree",
+        "meaning": "maximum element size",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "minimum_element_size",
+        "type": "`float | str | None`",
+        "default": "`None`; when absent \u2014 derived from thickness and `layers`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive",
+        "meaning": "minimum element size (through-thickness target)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "hmin",
+        "type": "`float | str | None`",
+        "default": "`None`; when absent \u2014 derived from thickness and `layers`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite positive",
+        "meaning": "minimum element size (through-thickness target)",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "order",
+        "type": "`int | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`>= 1`; prismatic forces `1`",
+        "meaning": "element order",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "curvature_factor",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "curvature fitting control",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "narrow_region_resolution",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "narrow-region resolution",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "layers",
+        "type": "`int`",
+        "default": "`1`",
+        "si_unit": "1",
+        "validation": "positive",
+        "meaning": "requested layer count through the thickness",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "topology",
+        "type": "`\"tetrahedral\" | \"prismatic\" | None`",
+        "default": "`None` (= legacy tetrahedral)",
+        "si_unit": "1",
+        "validation": "only these names",
+        "meaning": "through-thickness topology",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "exact_layers",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "only with `topology=\"prismatic\"`",
+        "meaning": "require the exact layer count",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "transition",
+        "type": "`\"pyramid_to_tetrahedra\" | \"reject\" | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "only with `topology=\"prismatic\"`",
+        "meaning": "transition to surrounding tetrahedra",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "interface_maximum_element_size",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "refinement at interfaces/surfaces",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "surface_maximum_element_size",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "refinement at interfaces/surfaces",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "interface_thickness",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "interface/surface zone thickness",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "surface_thickness",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive",
+        "meaning": "interface/surface zone thickness",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "transition_distance",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "non-negative",
+        "meaning": "size-transition distance",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "surface_transition_distance",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "non-negative",
+        "meaning": "size-transition distance",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "edge_maximum_element_size",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive/non-negative",
+        "meaning": "edge refinement",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "edge_thickness",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive/non-negative",
+        "meaning": "edge refinement",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "edge_transition_distance",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive/non-negative",
+        "meaning": "edge refinement",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "corner_maximum_element_size",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive/non-negative",
+        "meaning": "corner refinement",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "corner_extent",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive/non-negative",
+        "meaning": "corner refinement",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      },
+      {
+        "python": "corner_transition_distance",
+        "type": "`float | str | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "positive/non-negative",
+        "meaning": "corner refinement",
+        "backend_support": "FEM CPU/GPU; FDM not applicable to this mesh policy",
+        "problem_ir": "`mesh_workflow`"
+      }
+    ]
+  }
+}
