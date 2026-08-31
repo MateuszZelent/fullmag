@@ -550,3 +550,27 @@ Use `Model Explorer -> Stages -> Add stage -> <stage kind>` for stage-level cont
 | v1 artifact writer | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `build_field_driven_response_sweep_artifact` | response artifact assembly | source audit |
 | v1 unit map | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `response_sweep_si_units` | serialized SI labels | source audit |
 | v1 derived point | `crates/fullmag-runner/src/eigen/response_block_real.rs` | `field_driven_response_point` | derived response scalars | source audit |
+
+## Scope and purpose
+
+This page defines the public frequency-domain response contract: the stage authoring call, the linearized operator, solver-policy lowering, response observables, and the boundary between planned solver-tree capability and the currently executable lane. The Python API, ProblemIR, implementation mapping, and adjacent source map are the source-backed contract.
+
+## Scientific and numerical model
+
+For a harmonic perturbation, the response is evaluated at prescribed frequency samples using the linearized Landau-Lifshitz-Gilbert operator and the declared magnetostatic and dynamic boundary conditions. The reported quantity must preserve the numerator, drive normalization, phase convention, and SI unit. The page's governing-equation section gives the model-specific equations; this contract does not silently change normalization or boundary conditions.
+
+## Parameters
+
+Use exactly the callable names, defaults, and validation rules in the `## Python API` section: frequency samples, excitation amplitude and phase, observable, equilibrium source, damping and magnetostatic policies, boundary data, wave-vector sampling, and solver policy. Frequencies are in hertz (`Hz`), excitation field in amperes per metre (`A m^-1`), phase in radians (`rad`), and wave vectors in inverse metres (`m^-1`). Unsupported combinations must remain explicitly gated.
+
+## Control Room workflow
+
+Select the frequency-response study in Control Room, configure the same fields as the Python stage, inspect the resolved solver policy and response-output metadata, and submit only when the capability register marks the lane executable. A visible editor field is not proof of backend support; planned, validation-only, and runtime-gated states remain distinct.
+
+## Diagnostics and failure semantics
+
+Reject empty or non-finite frequency samples, invalid excitation and boundary data, mutually exclusive wave-vector specifications, and solver policies outside the declared runtime subset. Preserve requested and resolved method names, per-frequency status, residual and artifact unit metadata. Never present a planned solver-tree route as an executed production solve.
+
+## Where this is implemented
+
+The implementation mapping and source-code index above identify the public stage, ProblemIR, native validation, runtime resolver, response solve, artifact writer, and planned planner owners. The adjacent `response-solver.source-map.json` records the exact paths, declarations, backend matrix, and reviewed revision. The four `DOC-ANCHOR` declarations in this page are documentation-only contract anchors and are marked `planned_contract` in the map.
