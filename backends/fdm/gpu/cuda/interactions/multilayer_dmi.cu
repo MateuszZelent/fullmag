@@ -31,16 +31,24 @@ __global__ void multilayer_dmi_field_kernel(
     Scalar *__restrict__ hx,
     Scalar *__restrict__ hy,
     Scalar *__restrict__ hz,
+    Scalar *__restrict__ rotated_hx,
+    Scalar *__restrict__ rotated_hy,
+    Scalar *__restrict__ rotated_hz,
     uint64_t n,
     uint32_t nx,
     uint32_t ny,
     uint32_t nz,
+    int periodic_x,
+    int periodic_y,
+    int periodic_z,
     double inv_2dx,
     double inv_2dy,
     double inv_2dz,
     double ms,
     int has_interfacial_dmi,
     double dmi_d_interfacial,
+    int has_rotated_interfacial_dmi,
+    double dmi_d_rotated_interfacial,
     int has_bulk_dmi,
     double dmi_d_bulk)
 {
@@ -49,11 +57,14 @@ __global__ void multilayer_dmi_field_kernel(
 
     if ((active_mask && active_mask[idx] == 0) ||
         ms <= 0.0 ||
-        (!has_interfacial_dmi && !has_bulk_dmi))
+        (!has_interfacial_dmi && !has_rotated_interfacial_dmi && !has_bulk_dmi))
     {
         hx[idx] = static_cast<Scalar>(0);
         hy[idx] = static_cast<Scalar>(0);
         hz[idx] = static_cast<Scalar>(0);
+        rotated_hx[idx] = static_cast<Scalar>(0);
+        rotated_hy[idx] = static_cast<Scalar>(0);
+        rotated_hz[idx] = static_cast<Scalar>(0);
         return;
     }
 
@@ -63,19 +74,19 @@ __global__ void multilayer_dmi_field_kernel(
     const uint32_t iy = static_cast<uint32_t>(rem / nx);
     const uint32_t ix = static_cast<uint32_t>(rem - static_cast<uint64_t>(iy) * nx);
 
-    uint64_t xm = ix > 0 ? idx - 1 : idx;
-    uint64_t xp = ix + 1 < nx ? idx + 1 : idx;
-    uint64_t ym = iy > 0 ? idx - nx : idx;
-    uint64_t yp = iy + 1 < ny ? idx + nx : idx;
-    uint64_t zm = iz > 0 ? idx - plane : idx;
-    uint64_t zp = iz + 1 < nz ? idx + plane : idx;
+    uint64_t xm = ix > 0 ? idx - 1 : (periodic_x && nx > 1 ? idx + nx - 1 : idx);
+    uint64_t xp = ix + 1 < nx ? idx + 1 : (periodic_x && nx > 1 ? idx - nx + 1 : idx);
+    uint64_t ym = iy > 0 ? idx - nx : (periodic_y && ny > 1 ? idx + plane - nx : idx);
+    uint64_t yp = iy + 1 < ny ? idx + nx : (periodic_y && ny > 1 ? idx - plane + nx : idx);
+    uint64_t zm = iz > 0 ? idx - plane : (periodic_z && nz > 1 ? idx + plane * (nz - 1) : idx);
+    uint64_t zp = iz + 1 < nz ? idx + plane : (periodic_z && nz > 1 ? idx - plane * (nz - 1) : idx);
 
-    bool missing_xm = ix == 0;
-    bool missing_xp = ix + 1 == nx;
-    bool missing_ym = iy == 0;
-    bool missing_yp = iy + 1 == ny;
-    bool missing_zm = iz == 0;
-    bool missing_zp = iz + 1 == nz;
+    bool missing_xm = ix == 0 && !periodic_x;
+    bool missing_xp = ix + 1 == nx && !periodic_x;
+    bool missing_ym = iy == 0 && !periodic_y;
+    bool missing_yp = iy + 1 == ny && !periodic_y;
+    bool missing_zm = iz == 0 && !periodic_z;
+    bool missing_zp = iz + 1 == nz && !periodic_z;
 
     if (active_mask) {
         missing_xm = missing_xm || active_mask[xm] == 0;
@@ -95,6 +106,9 @@ __global__ void multilayer_dmi_field_kernel(
     double h0 = 0.0;
     double h1 = 0.0;
     double h2 = 0.0;
+    double rotated_h0 = 0.0;
+    double rotated_h1 = 0.0;
+    double rotated_h2 = 0.0;
     const double dmi_pf = 2.0 / (MU0 * ms);
     const DmiMissingFaces missing{
         missing_xp, missing_xm, missing_yp, missing_ym, missing_zp, missing_zm};
@@ -123,6 +137,39 @@ __global__ void multilayer_dmi_field_kernel(
             h0,
             h1,
             h2);
+    }
+
+
+    if (has_rotated_interfacial_dmi) {
+        const double h0_before_rotated = h0;
+        const double h1_before_rotated = h1;
+        const double h2_before_rotated = h2;
+        const double dmz_dx =
+            (static_cast<double>(mz[xp]) - static_cast<double>(mz[xm])) * inv_2dx;
+        const double dmy_dy =
+            (static_cast<double>(my[yp]) - static_cast<double>(my[ym])) * inv_2dy;
+        const double dmx_dy =
+            (static_cast<double>(mx[yp]) - static_cast<double>(mx[ym])) * inv_2dy;
+        const double dmx_dx =
+            (static_cast<double>(mx[xp]) - static_cast<double>(mx[xm])) * inv_2dx;
+        h0 += dmi_pf * dmi_d_rotated_interfacial * (dmz_dx - dmy_dy);
+        h1 += dmi_pf * dmi_d_rotated_interfacial * dmx_dy;
+        h2 -= dmi_pf * dmi_d_rotated_interfacial * dmx_dx;
+        add_rotated_interfacial_dmi_boundary_correction(
+            static_cast<double>(mx[idx]),
+            static_cast<double>(my[idx]),
+            static_cast<double>(mz[idx]),
+            dmi_pf,
+            dmi_d_rotated_interfacial,
+            inv_2dx,
+            inv_2dy,
+            missing,
+            h0,
+            h1,
+            h2);
+        rotated_h0 = h0 - h0_before_rotated;
+        rotated_h1 = h1 - h1_before_rotated;
+        rotated_h2 = h2 - h2_before_rotated;
     }
 
     if (has_bulk_dmi) {
@@ -159,6 +206,9 @@ __global__ void multilayer_dmi_field_kernel(
     hx[idx] = static_cast<Scalar>(h0);
     hy[idx] = static_cast<Scalar>(h1);
     hz[idx] = static_cast<Scalar>(h2);
+    rotated_hx[idx] = static_cast<Scalar>(rotated_h0);
+    rotated_hy[idx] = static_cast<Scalar>(rotated_h1);
+    rotated_hz[idx] = static_cast<Scalar>(rotated_h2);
 }
 
 bool layer_launch_grid(Context &ctx, uint64_t n, const char *operation, int &grid)
@@ -199,16 +249,24 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
             static_cast<Scalar *>(layer.h_dmi.x),
             static_cast<Scalar *>(layer.h_dmi.y),
             static_cast<Scalar *>(layer.h_dmi.z),
+            static_cast<Scalar *>(layer.h_rotated_dmi.x),
+            static_cast<Scalar *>(layer.h_rotated_dmi.y),
+            static_cast<Scalar *>(layer.h_rotated_dmi.z),
             layer.cell_count,
             layer.native_grid.nx,
             layer.native_grid.ny,
             layer.native_grid.nz,
+            ctx.periodic_x ? 1 : 0,
+            ctx.periodic_y ? 1 : 0,
+            ctx.periodic_z ? 1 : 0,
             0.5 / layer.native_grid.dx,
             0.5 / layer.native_grid.dy,
             0.5 / layer.native_grid.dz,
             layer.material.saturation_magnetisation,
             ctx.has_interfacial_dmi ? 1 : 0,
             ctx.D_interfacial,
+            ctx.has_rotated_interfacial_dmi ? 1 : 0,
+            ctx.D_rotated_interfacial,
             ctx.has_bulk_dmi ? 1 : 0,
             ctx.D_bulk);
     }
@@ -220,10 +278,50 @@ bool launch_multilayer_dmi_field_impl(Context &ctx, const char *operation)
         return false;
     }
     if (!context_end_compute_stream_work(ctx, operation)) return false;
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         fullmag_fdm_note_operator_device_execution(ctx, FULLMAG_FDM_OPERATOR_DMI);
     }
     return true;
+}
+
+template <typename Scalar>
+bool launch_rotated_interfacial_dmi_field_impl(Context &ctx, const char *operation)
+{
+    if (!context_begin_compute_stream_work(ctx, operation)) return false;
+    int grid = 0;
+    if (!layer_launch_grid(ctx, ctx.cell_count, operation, grid)) {
+        context_end_compute_stream_work(ctx, operation);
+        return false;
+    }
+    multilayer_dmi_field_kernel<Scalar><<<grid, BLOCK_SIZE, 0, context_compute_stream(ctx)>>>(
+        static_cast<const Scalar *>(ctx.m.x),
+        static_cast<const Scalar *>(ctx.m.y),
+        static_cast<const Scalar *>(ctx.m.z),
+        ctx.active_mask,
+        static_cast<Scalar *>(ctx.h_rotated_dmi.x),
+        static_cast<Scalar *>(ctx.h_rotated_dmi.y),
+        static_cast<Scalar *>(ctx.h_rotated_dmi.z),
+        static_cast<Scalar *>(ctx.h_rotated_dmi.x),
+        static_cast<Scalar *>(ctx.h_rotated_dmi.y),
+        static_cast<Scalar *>(ctx.h_rotated_dmi.z),
+        ctx.cell_count,
+        ctx.nx, ctx.ny, ctx.nz,
+        ctx.periodic_x ? 1 : 0,
+        ctx.periodic_y ? 1 : 0,
+        ctx.periodic_z ? 1 : 0,
+        0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
+        ctx.Ms,
+        0, 0.0,
+        ctx.has_rotated_interfacial_dmi ? 1 : 0,
+        ctx.D_rotated_interfacial,
+        0, 0.0);
+    const cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, operation, err);
+        context_end_compute_stream_work(ctx, operation);
+        return false;
+    }
+    return context_end_compute_stream_work(ctx, operation);
 }
 
 } // namespace
@@ -236,6 +334,18 @@ bool launch_multilayer_dmi_field_fp64(Context &ctx)
 bool launch_multilayer_dmi_field_fp32(Context &ctx)
 {
     return launch_multilayer_dmi_field_impl<float>(ctx, "launch_multilayer_dmi_field_fp32");
+}
+
+bool launch_rotated_interfacial_dmi_field_fp64(Context &ctx)
+{
+    return launch_rotated_interfacial_dmi_field_impl<double>(
+        ctx, "launch_rotated_interfacial_dmi_field_fp64");
+}
+
+bool launch_rotated_interfacial_dmi_field_fp32(Context &ctx)
+{
+    return launch_rotated_interfacial_dmi_field_impl<float>(
+        ctx, "launch_rotated_interfacial_dmi_field_fp32");
 }
 
 } // namespace fdm

@@ -72,6 +72,8 @@ __global__ void multilayer_llg_rhs_kernel(
     double cubic_axis2_z,
     int has_interfacial_dmi,
     double dmi_d_interfacial,
+    int has_rotated_interfacial_dmi,
+    double dmi_d_rotated_interfacial,
     int has_bulk_dmi,
     double dmi_d_bulk,
     uint32_t nx,
@@ -141,7 +143,7 @@ __global__ void multilayer_llg_rhs_kernel(
         h1 += g1 * cubic_axis1_y + g2 * cubic_axis2_y + g3 * c3y;
         h2 += g1 * cubic_axis1_z + g2 * cubic_axis2_z + g3 * c3z;
     }
-    if ((has_interfacial_dmi || has_bulk_dmi) && ms > 0.0) {
+    if ((has_interfacial_dmi || has_rotated_interfacial_dmi || has_bulk_dmi) && ms > 0.0) {
         const uint64_t plane = static_cast<uint64_t>(nx) * ny;
         const uint32_t iz = static_cast<uint32_t>(idx / plane);
         const uint64_t rem = idx - static_cast<uint64_t>(iz) * plane;
@@ -194,6 +196,22 @@ __global__ void multilayer_llg_rhs_kernel(
             h2 -= dmi_pf * dmi_d_interfacial * (dmx_dx + dmy_dy);
             add_interfacial_dmi_boundary_correction(
                 m0, m1, m2, dmi_pf, dmi_d_interfacial, inv_2dx, inv_2dy,
+                missing, h0, h1, h2);
+        }
+        if (has_rotated_interfacial_dmi) {
+            const double dmz_dx =
+                (static_cast<double>(mz[xp]) - static_cast<double>(mz[xm])) * inv_2dx;
+            const double dmy_dy =
+                (static_cast<double>(my[yp]) - static_cast<double>(my[ym])) * inv_2dy;
+            const double dmx_dy =
+                (static_cast<double>(mx[yp]) - static_cast<double>(mx[ym])) * inv_2dy;
+            const double dmx_dx =
+                (static_cast<double>(mx[xp]) - static_cast<double>(mx[xm])) * inv_2dx;
+            h0 += dmi_pf * dmi_d_rotated_interfacial * (dmz_dx - dmy_dy);
+            h1 += dmi_pf * dmi_d_rotated_interfacial * dmx_dy;
+            h2 -= dmi_pf * dmi_d_rotated_interfacial * dmx_dx;
+            add_rotated_interfacial_dmi_boundary_correction(
+                m0, m1, m2, dmi_pf, dmi_d_rotated_interfacial, inv_2dx, inv_2dy,
                 missing, h0, h1, h2);
         }
         if (has_bulk_dmi) {
@@ -489,6 +507,8 @@ bool compute_rhs_into(
             layer.cubic_axis2[2],
             ctx.has_interfacial_dmi ? 1 : 0,
             ctx.D_interfacial,
+            ctx.has_rotated_interfacial_dmi ? 1 : 0,
+            ctx.D_rotated_interfacial,
             ctx.has_bulk_dmi ? 1 : 0,
             ctx.D_bulk,
             layer.native_grid.nx,

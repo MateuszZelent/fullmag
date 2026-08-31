@@ -338,7 +338,7 @@ fn generate_plan_desc_layout_assertions() {
         aggregate_fields, 2,
         "v2 layout manifest aggregate field count drift"
     );
-    assert_eq!(base_fields, 140, "base plan descriptor field count drift");
+    assert_eq!(base_fields, 142, "base plan descriptor field count drift");
     assert_eq!(grid_fields, 6, "grid descriptor field count drift");
     assert_eq!(material_fields, 4, "material descriptor field count drift");
     assert_eq!(time_fields, 13, "time policy descriptor field count drift");

@@ -248,7 +248,7 @@ bool refresh_multilayer_transaction_observables(Context &ctx)
         }
         if (!ctx.last_error.empty()) return false;
     }
-    if (ctx.has_interfacial_dmi || ctx.has_bulk_dmi) {
+    if (ctx.has_interfacial_dmi || ctx.has_rotated_interfacial_dmi || ctx.has_bulk_dmi) {
         const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
             ? launch_multilayer_dmi_field_fp64(ctx)
             : launch_multilayer_dmi_field_fp32(ctx);
@@ -892,6 +892,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     // DMI
     ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0;
     ctx->D_interfacial = plan->dmi_D_interfacial;
+    ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
+    ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
     ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
     ctx->D_bulk = plan->dmi_D_bulk;
 
@@ -1644,6 +1646,8 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     ctx->external_field[2] = plan->external_field_am[2];
     ctx->has_interfacial_dmi = plan->has_interfacial_dmi != 0;
     ctx->D_interfacial = plan->dmi_D_interfacial;
+    ctx->has_rotated_interfacial_dmi = plan->has_rotated_interfacial_dmi != 0;
+    ctx->D_rotated_interfacial = plan->dmi_D_rotated_interfacial;
     ctx->has_bulk_dmi = plan->has_bulk_dmi != 0;
     ctx->D_bulk = plan->dmi_D_bulk;
     if (!context_preflight_multilayer_workspace_v2(*ctx, *plan)) {

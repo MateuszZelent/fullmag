@@ -96,6 +96,8 @@ typedef enum {
     FULLMAG_FDM_OBSERVABLE_EDEN_ANI   = 13,
     FULLMAG_FDM_OBSERVABLE_EDEN_DMI   = 14,
     FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL = 15,
+    FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI = 16,
+    FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI = 17,
 } fullmag_fdm_observable;
 
 typedef enum {
@@ -483,6 +485,8 @@ typedef struct {
     double                     adaptive_headroom;
     fullmag_fdm_stats_mode     stats_mode;
     uint32_t                   stats_stride;
+    int                        has_rotated_interfacial_dmi;
+    double                     dmi_D_rotated_interfacial; /* append-only: D_21 = D_32 (J/m^2) */
 } fullmag_fdm_multilayer_plan_desc_v2;
 
 typedef struct {
@@ -712,6 +716,8 @@ typedef struct {
     uint64_t                   frozen_mask_len;
     const double              *frozen_reference_xyz;
     uint64_t                   frozen_reference_len;
+    int                        has_rotated_interfacial_dmi;
+    double                     dmi_D_rotated_interfacial; /* append-only: D_21 = D_32 (J/m^2) */
 } fullmag_fdm_plan_desc;
 
 typedef enum {

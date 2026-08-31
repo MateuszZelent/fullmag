@@ -6,9 +6,9 @@ use fullmag_fdm_sys::{
 #[test]
 fn plan_descriptor_has_versioned_complete_layout() {
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc>(), 8);
-    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc>(), 1280);
+    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc>(), 1296);
     assert_eq!(std::mem::align_of::<fullmag_fdm_plan_desc_v2>(), 8);
-    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1384);
+    assert_eq!(std::mem::size_of::<fullmag_fdm_plan_desc_v2>(), 1400);
 
     include!(concat!(
         env!("OUT_DIR"),

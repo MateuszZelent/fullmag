@@ -53,6 +53,7 @@ enum CudaSnapshotObservable {
     HExt,
     HOe,
     HAni,
+    HRotatedDmi,
     HEff,
     EdenEx,
     EdenDemag,
@@ -60,6 +61,7 @@ enum CudaSnapshotObservable {
     EdenDrive,
     EdenAni,
     EdenDmi,
+    EdenRotatedDmi,
     EdenTotal,
 }
 
@@ -72,6 +74,7 @@ impl CudaSnapshotObservable {
             QuantityId::HExt => Self::HExt,
             QuantityId::HOe => Self::HOe,
             QuantityId::HAni => Self::HAni,
+            QuantityId::HDmiRotated => Self::HRotatedDmi,
             QuantityId::HEff => Self::HEff,
             QuantityId::EdenEx => Self::EdenEx,
             QuantityId::EdenDemag => Self::EdenDemag,
@@ -79,6 +82,7 @@ impl CudaSnapshotObservable {
             QuantityId::EdenDrive => Self::EdenDrive,
             QuantityId::EdenAni => Self::EdenAni,
             QuantityId::EdenDmi => Self::EdenDmi,
+            QuantityId::EdenRotatedDmi => Self::EdenRotatedDmi,
             QuantityId::EdenTotal => Self::EdenTotal,
             _ => return None,
         })
@@ -94,6 +98,7 @@ impl CudaSnapshotObservable {
                 | Self::EdenDrive
                 | Self::EdenAni
                 | Self::EdenDmi
+                | Self::EdenRotatedDmi
                 | Self::EdenTotal
         )
     }
@@ -1203,6 +1208,12 @@ impl NativeFdmBackend {
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
             dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            dmi_d_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
             layers: layer_descs.as_ptr(),
@@ -1645,6 +1656,12 @@ impl NativeFdmBackend {
 
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
             dmi_D_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_D_bulk: plan.bulk_dmi.unwrap_or(0.0),
             dind_field: plan
@@ -2813,6 +2830,18 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn copy_layer_h_rotated_dmi(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+            cell_count,
+        )
+    }
+
     #[allow(dead_code)]
     pub fn copy_layer_h_dmi_f32(
         &self,
@@ -2822,6 +2851,18 @@ impl NativeFdmBackend {
         self.copy_layer_field_f32(
             layer_index,
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DMI,
+            cell_count,
+        )
+    }
+
+    pub fn copy_layer_h_rotated_dmi_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
             cell_count,
         )
     }
@@ -3684,6 +3725,9 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         CudaSnapshotObservable::HExt => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
         CudaSnapshotObservable::HOe => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
         CudaSnapshotObservable::HAni => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+        CudaSnapshotObservable::HRotatedDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI
+        }
         CudaSnapshotObservable::HEff => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
         CudaSnapshotObservable::EdenEx => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX
@@ -3702,6 +3746,9 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         }
         CudaSnapshotObservable::EdenDmi => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI
+        }
+        CudaSnapshotObservable::EdenRotatedDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI
         }
         CudaSnapshotObservable::EdenTotal => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL

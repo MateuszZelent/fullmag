@@ -11,9 +11,9 @@
 namespace {
 
 static_assert(alignof(fullmag_fdm_plan_desc) == 8);
-static_assert(sizeof(fullmag_fdm_plan_desc) == 1280);
+static_assert(sizeof(fullmag_fdm_plan_desc) == 1296);
 static_assert(alignof(fullmag_fdm_plan_desc_v2) == 8);
-static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1384);
+static_assert(sizeof(fullmag_fdm_plan_desc_v2) == 1400);
 #define FULLMAG_FDM_PLAN_V2_HEADER_FIELD(field, expected) \
     static_assert(offsetof(fullmag_fdm_plan_desc_v2, field) == expected);
 #define FULLMAG_FDM_PLAN_V2_AGGREGATE_FIELD(field, expected) \

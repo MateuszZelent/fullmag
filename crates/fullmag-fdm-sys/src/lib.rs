@@ -84,6 +84,8 @@ pub enum fullmag_fdm_observable {
     FULLMAG_FDM_OBSERVABLE_EDEN_ANI = 13,
     FULLMAG_FDM_OBSERVABLE_EDEN_DMI = 14,
     FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL = 15,
+    FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI = 16,
+    FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI = 17,
 }
 
 #[repr(C)]
@@ -308,6 +310,8 @@ pub struct fullmag_fdm_multilayer_plan_desc_v2 {
     pub adaptive_headroom: f64,
     pub stats_mode: fullmag_fdm_stats_mode,
     pub stats_stride: u32,
+    pub has_rotated_interfacial_dmi: i32,
+    pub dmi_d_rotated_interfacial: f64,
 }
 
 #[repr(C)]
@@ -478,6 +482,8 @@ pub struct fullmag_fdm_plan_desc {
     pub frozen_mask_len: u64,
     pub frozen_reference_xyz: *const f64,
     pub frozen_reference_len: u64,
+    pub has_rotated_interfacial_dmi: i32,
+    pub dmi_D_rotated_interfacial: f64,
 }
 
 #[repr(C)]
