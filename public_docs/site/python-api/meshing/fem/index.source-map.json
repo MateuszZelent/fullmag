@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fem/index.md",
-    "reviewed_revision": "79b66a75b250e508743aca478eb20b5f62c93878"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
@@ -61,53 +61,53 @@
     "parameters": [
       {
         "python": "FEM.order",
-        "type": "int",
+        "type": "`int`",
         "default": "required",
         "si_unit": "1",
         "validation": "Integer greater than or equal to one.",
         "meaning": "Study-level finite-element field order.",
         "backend_support": "FEM CPU; GPU element/order capability-gated",
-        "problem_ir": "backend_policy.discretization_hints.fem.order"
+        "problem_ir": "`backend_policy.discretization_hints.fem.order`"
       },
       {
         "python": "FEM.maximum_element_size",
-        "type": "float | None",
-        "default": "None",
+        "type": "`float | None`",
+        "default": "`None`",
         "si_unit": "m",
         "validation": "Finite and positive; required unless hmax is supplied.",
         "meaning": "Canonical study-level maximum-size target.",
         "backend_support": "FEM",
-        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+        "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"
       },
       {
         "python": "FEM.hmax",
-        "type": "float | None",
-        "default": "None",
+        "type": "`float | None`",
+        "default": "`None`",
         "si_unit": "m",
         "validation": "Finite positive alias; equal to maximum_element_size when both are supplied.",
         "meaning": "Compatibility spelling of the same target.",
         "backend_support": "FEM",
-        "problem_ir": "backend_policy.discretization_hints.fem.hmax"
+        "problem_ir": "`backend_policy.discretization_hints.fem.hmax`"
       },
       {
         "python": "FEM.mesh",
-        "type": "str | None",
-        "default": "None",
+        "type": "`str | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Nonempty when present; asset is revalidated during extraction.",
         "meaning": "Imported or prebuilt FEM mesh reference.",
         "backend_support": "FEM import/extraction path",
-        "problem_ir": "backend_policy.discretization_hints.fem.mesh"
+        "problem_ir": "`backend_policy.discretization_hints.fem.mesh`"
       },
       {
         "python": "FEM.demag_solver_policy",
-        "type": "FemLinearSolverPolicy | None",
-        "default": "None",
+        "type": "`FemLinearSolverPolicy | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Typed solver policy.",
         "meaning": "Algebraic Poisson/demag solver request; not mesh geometry.",
         "backend_support": "FEM demagnetization lanes",
-        "problem_ir": "backend_policy.discretization_hints.fem.demag_solver_policy"
+        "problem_ir": "`backend_policy.discretization_hints.fem.demag_solver_policy`"
       }
     ]
   }

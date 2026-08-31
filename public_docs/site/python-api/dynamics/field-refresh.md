@@ -32,10 +32,11 @@ The demagnetization refresh interval must be positive when set.
 (python-api-dynamics-field-refresh-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `FieldRefreshPolicy.demag_interval_s` | `float \| None` | `None` | Positive | Demag refresh cadence | `field_refresh.demag_interval_s` |
-| `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | Valid policy | Attach refresh cadence to dynamics | `dynamics.field_refresh` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `FieldRefreshPolicy.demag_interval_s` | `float \| None` | `None` | $\mathrm{s}$ | Positive | Demag refresh cadence | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `field_refresh.demag_interval_s` |
+| `LLG.field_refresh` | `FieldRefreshPolicy \| None` | `None` | $1$ | Valid policy | Attach refresh cadence to dynamics | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.field_refresh` |
 
 The stage-first builder spells the same cadence as `study.solver(..., demag_interval_s=...)`;
 `FieldRefreshPolicy` is the underlying model object lowered into the LLG dynamics record.
@@ -78,6 +79,9 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-dynamics-field-refresh-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Non-positive intervals fail immediately. Unavailable caveats still require executed evidence from
 the selected backend.
 
@@ -111,18 +115,24 @@ No physical model is introduced.
 
 ## Control Room crosswalk
 
-Status: Common solver/stage fields are partial; backend-specific options without editor fields remain TODO.
+Status: Common solver/stage fields are partial; backend-specific options without editor fields remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Solver` | `partial` | Apply stage draft; solver request and result resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for dynamics parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for dynamics parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Refresh policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class FieldRefreshPolicy` | Cadence lowering | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Demagnetization refresh policy validation and IR lowering. | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class FieldRefreshPolicy` | Demagnetization refresh policy validation and IR lowering. | Source-map validator and focused API tests |

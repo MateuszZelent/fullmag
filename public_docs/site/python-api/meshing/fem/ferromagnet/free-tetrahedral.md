@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-free-tetrahedral)=
 # Free-Tetrahedral API
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -99,20 +115,20 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 Signature: `object.mesh(**kwargs)` — `GeometryMeshHandle.__call__`
 (`packages/fullmag-py/src/fullmag/world.py`). The most common arguments:
 
-| Parameter | Type | Default | Unit | Validation | Meaning |
-|---|---|---|---|---|---|
-| `maximum_element_size` / `hmax` | `float \| str \| None` | `None` (inherits study) | $\mathrm{m}$ | finite positive | maximum element size |
-| `minimum_element_size` / `hmin` | `float \| str \| None` | `None` | $\mathrm{m}$ | finite positive | minimum element size |
-| `order` | `int \| None` | `None` | $1$ | `>= 1` | element order |
-| `growth_rate` / `maximum_element_growth_rate` | `float \| None` | `None` | $1$ | positive | maximum size growth rate |
-| `curvature_factor`, `size_from_curvature` | `float \| int \| None` | `None` | $1$ | positive | curvature fitting |
-| `narrow_regions`, `narrow_region_resolution` | `int \| float \| None` | `None` | $1/\mathrm{m}$ | positive | narrow-region resolution |
-| `algorithm_2d`, `algorithm_3d` | `int \| None` | `None` | $1$ | Gmsh algorithm numbers | mesher algorithm selection |
-| `optimize`, `optimize_iterations` | `str \| int \| None` | `None` | $1$ | Gmsh optimizer name | mesh post-optimization |
-| `smoothing_steps` | `int \| None` | `None` | $1$ | non-negative | node smoothing |
-| `calibrate_for`, `size_preset`, `size_factor` | `str \| float \| None` | `None` | $1$ | preset names | calibrated size presets |
-| `source` | `str \| None` | `None` | $1$ | non-empty | import a prebuilt object mesh |
-| `compute_quality`, `per_element_quality` | `bool \| None` | `None` | $1$ | bool | quality statistics request |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `maximum_element_size` / `hmax` | `float \| str \| None` | `None` (inherits study) | $\mathrm{m}$ | finite positive | maximum element size | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `minimum_element_size` / `hmin` | `float \| str \| None` | `None` | $\mathrm{m}$ | finite positive | minimum element size | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `order` | `int \| None` | `None` | $1$ | `>= 1` | element order | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `growth_rate` / `maximum_element_growth_rate` | `float \| None` | `None` | $1$ | positive | maximum size growth rate | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `curvature_factor`, `size_from_curvature` | `float \| int \| None` | `None` | $1$ | positive | curvature fitting | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `narrow_regions`, `narrow_region_resolution` | `int \| float \| None` | `None` | $1/\mathrm{m}$ | positive | narrow-region resolution | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `algorithm_2d`, `algorithm_3d` | `int \| None` | `None` | $1$ | Gmsh algorithm numbers | mesher algorithm selection | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `optimize`, `optimize_iterations` | `str \| int \| None` | `None` | $1$ | Gmsh optimizer name | mesh post-optimization | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `smoothing_steps` | `int \| None` | `None` | $1$ | non-negative | node smoothing | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `calibrate_for`, `size_preset`, `size_factor` | `str \| float \| None` | `None` | $1$ | preset names | calibrated size presets | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `source` | `str \| None` | `None` | $1$ | non-empty | import a prebuilt object mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `compute_quality`, `per_element_quality` | `bool \| None` | `None` | $1$ | bool | quality statistics request | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 Advanced recipes (`PerObjectMeshRecipe`) additionally expose
 `mesh_strategy="free_tetrahedral"`, Gmsh algorithms, size fields (`size_field`),
@@ -124,6 +140,21 @@ Failure behavior: non-positive sizes, `order < 1`, and contradictory aliases rai
 
 ProblemIR mapping: fields land in the canonical object recipe
 (`PerObjectMeshRecipe`) and then in the mesh workflow metadata.
+
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
 ## 5. How to set it in Control Room
 
@@ -148,6 +179,13 @@ recipe; **Build Mesh** materializes it. Full description:
 | FEM | GPU | capability-gated | identical content-addressed mesh; coverage gated |
 | FDM | CPU/GPU | not applicable | use the FDM meshing API ({doc}`../../fdm/index`) |
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Tetrahedra do not guarantee through-thickness layers — for films with strong
@@ -155,11 +193,17 @@ recipe; **Build Mesh** materializes it. Full description:
 - `maximum_element_size` is a target, not a local guarantee; realized extrema are
   in the build report.
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 2. A. Hubert and R. Schäfer, *Magnetic Domains*, Springer, 1998.
 
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-ferromagnet-free-tetrahedral-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -171,3 +215,9 @@ recipe; **Build Mesh** materializes it. Full description:
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Free-tetrahedral object policy and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Free-tetrahedral object policy and lowering. | Source-map validator and focused API tests |

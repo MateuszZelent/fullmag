@@ -34,14 +34,15 @@ fails capability checks when the request cannot be satisfied.
 (python-api-runtime-runtime-selection-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | Backend support | ProblemIR |
-|---|---|---|---|---|---|---|
-| `study.engine(backend)` | `str` | `"auto"` | One of `auto`, `fdm`, `fem`, `hybrid` | Requested backend target | planner-resolved | `runtime.backend_target` |
-| `study.device(spec, precision=...)` | `str` | `"auto"` | `cpu`, `cuda[:i]`, `gpu`, or a known device id | Requested device target and optional precision | planner-resolved | `runtime.device_target`, `runtime.execution_precision` |
-| `study.mode(execution_mode)` | `str` | `"strict"` | `strict`, `extended`, or `hybrid` | Execution policy | planner-resolved | `runtime.execution_mode` |
-| `study.threads(cpu_threads)` | `int` | not set | `>= 1` | Requested CPU thread count | CPU lanes | `runtime.cpu_threads` |
-| `RuntimeSelection.gpu_count` | `int` | `0` | `0` or `1`; `> 1` rejected as unimplemented | Requested GPU count | CUDA lanes | `runtime.gpu_count` |
-| `RuntimeSelection.device_index` | `int \| None` | `None` | Requires `cuda`/`gpu` | Device ordinal | CUDA lanes | `runtime.device_index` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | --- | --- |
+| `study.engine(backend)` | `str` | `"auto"` | $1$ | One of `auto`, `fdm`, `fem`, `hybrid` | Requested backend target | planner-resolved | `runtime.backend_target` |
+| `study.device(spec, precision=...)` | `str` | `"auto"` | $1$ | `cpu`, `cuda[:i]`, `gpu`, or a known device id | Requested device target and optional precision | planner-resolved | `runtime.device_target`, `runtime.execution_precision` |
+| `study.mode(execution_mode)` | `str` | `"strict"` | $1$ | `strict`, `extended`, or `hybrid` | Execution policy | planner-resolved | `runtime.execution_mode` |
+| `study.threads(cpu_threads)` | `int` | not set | $1$ | `>= 1` | Requested CPU thread count | CPU lanes | `runtime.cpu_threads` |
+| `RuntimeSelection.gpu_count` | `int` | `0` | $1$ | `0` or `1`; `> 1` rejected as unimplemented | Requested GPU count | CUDA lanes | `runtime.gpu_count` |
+| `RuntimeSelection.device_index` | `int \| None` | `None` | $1$ | Requires `cuda`/`gpu` | Device ordinal | CUDA lanes | `runtime.device_index` |
 
 ### Complete stage-first example
 
@@ -77,6 +78,9 @@ The runtime descriptor lowers into the `runtime` block carrying `backend_target`
 (python-api-runtime-runtime-selection-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Requested intent is preserved verbatim. Resolved execution is the planner's capability result and
 must be recorded separately in provenance. Invalid values fail immediately; unsatisfiable lanes
 fail capability checks without silent fallback.
@@ -118,10 +122,10 @@ Status: Runtime and provenance data are inspection-only; they are not standalone
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for runtime-selection and artifact-publication parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
 
 ## Source-code index
@@ -129,3 +133,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 |---|---|---|---|---|
 | Runtime descriptor | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Canonical runtime selection | Ownership test |
 | Selection helpers | `packages/fullmag-py/src/fullmag/world.py` | `engine`, `device`, `mode`, `threads` | Study-builder selection surface | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Runtime selection state, validation, and resolution. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Runtime selection state, validation, and resolution. | Source-map validator and focused API tests |

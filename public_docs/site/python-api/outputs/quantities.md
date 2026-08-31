@@ -35,12 +35,13 @@ Quantity ids and optional reductions/components are validated immediately agains
 (python-api-outputs-quantities-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `SaveQuantity.quantity_id` | `str` | `required` | Canonical id; uppercase `M` normalizes to `m` | Quantity to save | quantity id |
-| `SaveQuantity.every` | `float` | `required` | Positive | Save interval | cadence |
-| `SaveQuantity.reduction` | `str \| None` | `None` | `average`, `sum`, `min`, `max`, or `magnitude` | Spatial reduction | reduction |
-| `SaveQuantity.component` | `str \| None` | `None` | `x`, `y`, `z`, `magnitude`, or `3D` | Component selector | component |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `SaveQuantity.quantity_id` | `str` | `required` | $1$ | Canonical id; uppercase `M` normalizes to `m` | Quantity to save | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | quantity id |
+| `SaveQuantity.every` | `float` | `required` | $\mathrm{s}$ | Positive | Save interval | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | cadence |
+| `SaveQuantity.reduction` | `str \| None` | `None` | $1$ | `average`, `sum`, `min`, `max`, or `magnitude` | Spatial reduction | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | reduction |
+| `SaveQuantity.component` | `str \| None` | `None` | $1$ | `x`, `y`, `z`, `magnitude`, or `3D` | Component selector | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | component |
 
 Canonical ids include magnetization and effective-field vectors, energy scalars, and transport
 fields (`V_electric`, `J_charge`, `spin_potential`, `spin_current_tensor` among others).
@@ -77,6 +78,9 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-outputs-quantities-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Unknown ids and invalid reductions/components fail immediately; legacy `M` is normalized, never
 silently reinterpreted.
 
@@ -112,18 +116,24 @@ No physical model is introduced.
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain TODO.
+Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | Submit autosave draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Quantity output | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveQuantity` | Id-driven output | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Generic quantity output validation and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveQuantity` | Generic quantity output validation and lowering. | Source-map validator and focused API tests |

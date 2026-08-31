@@ -4,157 +4,151 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/units.md
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
+source_of_truth: packages/fullmag-py/src/fullmag/model/dynamics.py and crates/fullmag-ir/src/lib.rs
 ---
 
 (public-docs-physics-foundations-conventions-and-units)=
+(foundation-conventions-problem-statement)=
 # Conventions and units
 
-FullMag uses SI units throughout, with no implicit unit conversion. Every solver backend
-(FDM CPU, FDM GPU, FEM CPU, FEM GPU) shares the same physical contract. This page defines
-the canonical quantities, their symbols, SI units, and the solver field names used to store
-them.
+Fullmag's public authoring layer uses SI-valued quantities and lowers them into one typed
+ProblemIR. This page defines shared symbols and units; interaction-specific parameters and
+equations remain on their canonical interaction pages.
 
-## Reduced magnetization
-
-The solver state variable is the reduced (normalised) magnetization
+(foundation-conventions-governing-equations)=
+## Governing equations
 
 ```{math}
-:label: eq-reduced-magnetization
-\mathbf{m} = \frac{\mathbf{M}}{M_s},
-\qquad |\mathbf{m}| = 1
+:label: eq-foundation-reduced-magnetization
+\mathbf{m}(\mathbf{x},t)=\frac{\mathbf{M}(\mathbf{x},t)}{M_s(\mathbf{x})},
+\qquad |\mathbf{m}(\mathbf{x},t)|=1.
 ```
-
-on every magnetic degree of freedom after each accepted integration step. $\mathbf{M}$ is
-the magnetization in $\mathrm{A\,m^{-1}}$ and $M_s$ is the saturation magnetization in
-$\mathrm{A\,m^{-1}}$. Non-magnetic nodes (FEM airbox, visualization padding) may carry
-auxiliary values, but they must not contribute to the magnetic right-hand side unless an
-interaction explicitly documents that behaviour.
-
-## Gyromagnetic ratio
-
-FullMag internally stores the *reduced* gyromagnetic constant
 
 ```{math}
-:label: eq-gamma-mu0
-\gamma_{\mu_0}
-= \mu_0\,|\gamma_e|
-\approx 2.211\times10^{5}\;\mathrm{m\,(A\,s)^{-1}},
+:label: eq-foundation-energy-field
+\delta E_k[\mathbf{m};\boldsymbol{\eta}]
+=-\mu_0\int_{\Omega_m}M_s\,\mathbf{H}_k\cdot\boldsymbol{\eta}\,\mathrm{d}V.
 ```
-
-where $|\gamma_e| \approx 1.761\times10^{11}\;\mathrm{rad\,(T\,s)^{-1}}$ is the magnitude
-of the electron gyromagnetic ratio and
-$\mu_0 = 4\pi\times10^{-7}\;\mathrm{N\,A^{-2}}$ is the vacuum permeability.
-
-:::{admonition} Legacy field name
-:class: note
-
-The native FEM ABI field `gyromagnetic_ratio` carries $\gamma_{\mu_0}$ in
-$\mathrm{m\,(A\,s)^{-1}}$, **not** the electron gyromagnetic ratio in
-$\mathrm{rad\,(T\,s)^{-1}}$. New code and documentation should prefer the explanatory name
-$\gamma_{\mu_0}$.
-:::
-
-## Canonical quantity table
-
-| Quantity | Symbol | SI unit | Solver field | Contract |
-|---|---|---:|---|---|
-| Vacuum permeability | $\mu_0$ | $\mathrm{N\,A^{-2}}$ | constant | exactly $4\pi\times10^{-7}$ |
-| Boltzmann constant | $k_B$ | $\mathrm{J\,K^{-1}}$ | constant | exactly $1.380649\times10^{-23}$ |
-| Reduced magnetization | $\mathbf{m}$ | $1$ | `m_xyz` | $|\mathbf{m}|=1$ on magnetic DOFs |
-| Saturation magnetization | $M_s$ | $\mathrm{A\,m^{-1}}$ | `saturation_magnetisation` | positive on magnetic nodes/cells |
-| Exchange stiffness | $A$ | $\mathrm{J\,m^{-1}}$ | `exchange_stiffness` | non-negative |
-| Gilbert damping | $\alpha$ | $1$ | `damping`, `alpha_field` | non-negative |
-| Reduced gyromagnetic constant | $\gamma_{\mu_0}$ | $\mathrm{m\,(A\,s)^{-1}}$ | `gyromagnetic_ratio` | $\mu_0|\gamma_e|$ |
-| Uniaxial anisotropy constants | $K_{u1},K_{u2}$ | $\mathrm{J\,m^{-3}}$ | `ku1`, `ku2` | sign distinguishes easy-axis from easy-plane |
-| Cubic anisotropy constants | $K_{c1},K_{c2},K_{c3}$ | $\mathrm{J\,m^{-3}}$ | `kc1`, `kc2`, `kc3` | crystal axes finite, normalised, mutually orthogonal |
-| Interfacial DMI constant | $D_i$ | $\mathrm{J\,m^{-2}}$ | `D` | module documents thin-film-effective or surface-boundary realization |
-| Bulk DMI constant | $D_b$ | $\mathrm{J\,m^{-2}}$ | `D` | module documents unit conversion used by discretization |
-| Current density | $\mathbf{J}$ | $\mathrm{A\,m^{-2}}$ | `current_density` | STT / Oersted inputs |
-| Free-layer thickness | $t_F$ | $\mathrm{m}$ | `stt_thickness` | Slonczewski STT scaling |
-| Temperature | $T$ | $\mathrm{K}$ | `temperature` | thermal field disabled at $T=0$ |
-| Time step | $\Delta t$ | $\mathrm{s}$ | `dt` | accepted step size |
-| Effective field terms | $\mathbf{H}_{\ast}$ | $\mathrm{A\,m^{-1}}$ | `h_eff_xyz`, `H_ex`, … | field observables |
-| Energy terms | $E_{\ast}$ | $\mathrm{J}$ | `E_ex`, `E_d`, … | global scalar unless documented otherwise |
-| Direct torque terms | $\boldsymbol{\tau}_{\ast}$ | $\mathrm{s^{-1}}$ | torque RHS buffers | added directly to $\mathrm{d}\mathbf{m}/\mathrm{d}t$ |
-
-## Energy–field variational relation
-
-For any magnetic energy functional $E[\mathbf{m}]$ reported in joules, the associated
-effective-field contribution must satisfy the variational identity
 
 ```{math}
-:label: eq-energy-field-relation
-\delta E[\mathbf{m};\boldsymbol{\eta}]
-=
--\mu_0\int_{\Omega_m}M_s\,\mathbf{H}_{\mathrm{term}}\cdot\boldsymbol{\eta}\,\mathrm{d}V
+:label: eq-foundation-gamma
+\gamma_{\mu_0}=\mu_0|\gamma_e|\approx2.211\times10^5\;\mathrm{m\,(A\,s)^{-1}}.
 ```
 
-for all tangent perturbations $\boldsymbol{\eta}$ with
-$\boldsymbol{\eta}\cdot\mathbf{m}=0$.
+(foundation-conventions-symbols-and-si-units)=
+## Symbols and SI units
 
-FEM and FDM implementations may discretize the integral differently (lumped mass, quadrature
-rules, mass-matrix projection), but every validation test must state the mass, lumping,
-projection, and boundary policy used for the comparison.
+| Symbol | Meaning | SI unit |
+|---|---|---:|
+| $\mathbf{m}$ | reduced magnetization | $1$ |
+| $\mathbf{M}$ | magnetization | $\mathrm{A\,m^{-1}}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $\gamma_{\mu_0}$ | reduced gyromagnetic constant | $\mathrm{m\,(A\,s)^{-1}}$ |
+| $\mathbf{H}_k$ | effective field contribution of term k | $\mathrm{A\,m^{-1}}$ |
+| $E_k$ | energy contribution of term k | $\mathrm{J}$ |
+| $\boldsymbol{\eta}$ | tangent magnetization variation | $1$ |
+| $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
 
-## Field vs. direct-torque convention
+(foundation-conventions-assumptions-and-validity)=
+## Assumptions and validity
 
-FullMag distinguishes two paths for physical contributions:
+Coordinates and mesh lengths are metres. Fields at the solver boundary are A/m; a
+user-facing induction in tesla is converted by its owning API. Dimensionless quantities use
+unit 1. Magnetic normalization applies only to magnetic degrees of freedom. FDM weighting,
+FEM quadrature, mass projection, precision, and memory placement are realization-specific.
 
-1. **Field-form** interactions contribute additively to $\mathbf{H}_{\mathrm{eff}}$
-   in $\mathrm{A\,m^{-1}}$. The LLG integrator converts them to
-   $\mathrm{d}\mathbf{m}/\mathrm{d}t$ through the cross-product form.
+(foundation-conventions-python-api)=
+## Python API
 
-2. **Direct-torque** interactions write $\boldsymbol{\tau}$ in $\mathrm{s^{-1}}$
-   directly to the right-hand side. They are **not** re-interpreted as fields.
+This foundation owns no interaction constructor. The shared authoring entry point is
+fullmag.study; StudyBuilder.engine, StudyBuilder.device, StudyBuilder.mode, and the stage
+builder configure requested execution.
 
-Mixing a direct RHS torque with a field-scale prefactor is forbidden. Each interaction
-module documents which path it uses.
+```python
+# %%
+import fullmag as fm
 
-## Geometry coordinates
+study = fm.study("units_reference")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.stages.add_relax(
+    stage_id="equilibrium",
+    algorithm="llg_overdamped",
+    dt=5.0e-13,
+    max_steps=1,
+)
+```
 
-All geometry coordinates are interpreted in metres. The Python authoring path emits SI
-geometry natively. The native FEM mesh importer does not independently attach a unit tag to
-coordinates, so the authoring contract is the source of truth for coordinate scale.
+This stage-first capture fragment also needs geometry, material, and magnetization state for
+an actual solve.
 
-## Backend universality
+| Python entry point | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| fm.study(problem_name) | callable | None | $1$ | problem_name is None or a valid name accepted by study | creates the stage-first authoring builder | public authoring surface; runtime is lane-specific | problem_meta and captured study state |
 
-FDM CPU, FDM GPU, FEM CPU, and FEM GPU share this physical contract. Their differences are
-limited to:
+(foundation-conventions-problem-ir)=
+## ProblemIR
 
-- spatial discretization (structured grid vs. unstructured mesh),
-- operator application (stencil vs. sparse matrix vs. partial assembly),
-- linear-solver realization (direct, iterative, Hypre, libCEED),
-- floating-point precision (FP64 mandatory for reference; FP32 available on select GPU lanes),
-- memory residency and transfer policy,
-- performance telemetry.
+ProblemIR is the typed container in crates/fullmag-ir/src/lib.rs. Lowering preserves SI
+intent in materials, magnets, energy_terms, study, and backend_policy; the planner records
+resolved execution and provenance. The complete serialized object is produced by repository
+lowering rather than a hand-written fixture.
 
-The planner and native create paths must reject unsupported combinations before the solver
-starts.
+(foundation-conventions-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
 
+Requested intent contains authored values and requested engine, device, and mode. Resolved
+execution contains selected lane, precision, discretization, and capability decision.
+Validation errors reject non-finite or contradictory values. Unsupported combinations fail
+closed; no backend silently changes units or interaction type.
+
+(foundation-conventions-discrete-realization)=
+## Discrete realization
+
+| Lane | Representation | Status |
+|---|---|---|
+| FDM CPU | structured cells and cell-weighted fields | partial; qualification is separate |
+| FDM GPU | structured cells and device fields | partial; device and precision evidence are required |
+| FEM CPU | unstructured mesh degrees of freedom and FEM weights | partial; quadrature is lane-specific |
+| FEM GPU | unstructured mesh state and device kernels | partial; compilation is not runtime qualification |
+
+(foundation-conventions-implementation-mapping)=
+## Implementation mapping
+
+fullmag.study owns stage-first authoring, LLG owns dynamics-unit validation, and ProblemIR
+owns the canonical typed container. Physical interaction claims are mapped on owner pages.
+
+(foundation-conventions-validation)=
+## Validation
+
+The adjacent source map is checked against the current source tree by
+validate_scientific_docs.py. The Python example is parsed by the public-example guard. These
+checks establish provenance and parsing, not numerical equivalence or GPU parity.
+
+(foundation-conventions-limitations)=
+## Limitations
+
+This page does not certify a solver lane, material model, or numerical error bound. It does
+not own conversion policy for an individual interaction.
+
+(foundation-conventions-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
-   [Bibliographic record](https://search.worldcat.org/title/536451).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
+   [WorldCat record](https://search.worldcat.org/title/536451).
 2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
    Physical Journal B* **92**, 120 (2019).
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-3. M. J. Donahue and D. G. Porter, *OOMMF User's Guide, Version 1.0*, NISTIR 6376,
-   National Institute of Standards and Technology, 1999.
-   [doi:10.6028/NIST.IR.6376](https://doi.org/10.6028/NIST.IR.6376).
-## Control Room crosswalk
 
-No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+(foundation-conventions-source-code-index)=
 ## Source-code index
 
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
-
+| Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
+|---|---|---|---|---|---|
+| LLG units and IR | packages/fullmag-py/src/fullmag/model/dynamics.py | class LLG | validates gamma and serializes dynamics | all authoring lanes | source-backed |
+| study authoring | packages/fullmag-py/src/fullmag/world.py | study | creates the public builder | all authoring lanes | source-backed |
+| canonical container | crates/fullmag-ir/src/lib.rs | ProblemIR | stores normalized problem intent | all lanes | source-backed |

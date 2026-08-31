@@ -1,46 +1,155 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/spin-transfer-torque.md",
-    "title": "Spin-Transfer Torque Python API",
-    "interaction": "spin transfer torque"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
-    },
-    {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-spin_transfer_torque",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_spin_transfer_torque"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "source_spin_transfer_torque",
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
       "symbol": "class SlonczewskiSTT",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "public constructor and IR lowering"
     }
   ],
-  "symbols": [],
-  "equations": [],
   "public_api": {
-    "parameters": []
+    "owner": "fm.SlonczewskiSTT(...), fm.ZhangLiSTT(...), fm.InterfaceCppSTT(...)",
+    "parameters": [
+      {
+        "python": "current_density",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "A/m^2",
+        "validation": "finite; exclusive with current_source",
+        "meaning": "direct current density",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "current_density"
+      },
+      {
+        "python": "current_source",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "exclusive with current_density",
+        "meaning": "named current source",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "current_source"
+      },
+      {
+        "python": "spin_polarization",
+        "type": "tuple[float,float,float]",
+        "default": "(0,0,1)",
+        "si_unit": "1",
+        "validation": "finite non-zero; normalized",
+        "meaning": "polarization direction",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "spin_polarization"
+      },
+      {
+        "python": "degree",
+        "type": "float",
+        "default": "0.4",
+        "si_unit": "1",
+        "validation": "finite",
+        "meaning": "polarization degree",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "degree"
+      },
+      {
+        "python": "lambda_asymmetry",
+        "type": "float",
+        "default": "1.0",
+        "si_unit": "1",
+        "validation": "finite",
+        "meaning": "Slonczewski asymmetry",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "lambda_asymmetry"
+      },
+      {
+        "python": "epsilon_prime",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "1",
+        "validation": "finite",
+        "meaning": "field-like efficiency",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "epsilon_prime"
+      },
+      {
+        "python": "free_layer_thickness_m",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "m",
+        "validation": "positive in canonical thin-layer mode",
+        "meaning": "free-layer thickness",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "free_layer_thickness_m"
+      },
+      {
+        "python": "beta",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "1",
+        "validation": "finite for ZhangLiSTT",
+        "meaning": "nonadiabaticity parameter",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "beta"
+      },
+      {
+        "python": "lande_g",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "positive in ZhangLi canonical mode",
+        "meaning": "Land\u00e9 factor",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "lande_g"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
   }
 }

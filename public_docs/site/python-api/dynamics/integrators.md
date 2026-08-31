@@ -35,12 +35,13 @@ adaptive integrator.
 (python-api-dynamics-integrators-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `LLG.integrator` | `str` | `"auto"` | One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto` | Time integration scheme | `dynamics.integrator` |
-| `LLG.gamma` | `float` | `2.211e5` | Positive | Gyromagnetic ratio | `dynamics.gyromagnetic_ratio` |
-| `LLG.fixed_timestep` | `float \| None` | `None` | Positive; exclusive with adaptive step | Fixed step size | `dynamics.fixed_timestep` |
-| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | Adaptive integrator required | Embedded error control | `dynamics.adaptive_timestep` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `LLG.integrator` | `str` | `"auto"` | $1$ | One of `heun`, `rk4`, `rk23`, `rk45`, `abm3`, `coupled_imex_ark2`, `auto` | Time integration scheme | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.integrator` |
+| `LLG.gamma` | `float` | `2.211e5` | $\mathrm{m\,A^{-1}\,s^{-1}}$ | Positive | Gyromagnetic ratio | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.gyromagnetic_ratio` |
+| `LLG.fixed_timestep` | `float \| None` | `None` | $\mathrm{m}$ | Positive; exclusive with adaptive step | Fixed step size | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.fixed_timestep` |
+| `LLG.adaptive_timestep` | `AdaptiveTimestep \| None` | `None` | $\mathrm{s}$ | Adaptive integrator required | Embedded error control | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dynamics.adaptive_timestep` |
 
 ### Integrator lanes
 
@@ -89,6 +90,9 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-dynamics-integrators-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Aliases are normalized before validation. Fixed and adaptive timesteps are mutually exclusive.
 Adaptive step requests with a non-adaptive integrator fail immediately.
 
@@ -123,15 +127,15 @@ Scheme references belong to the time-integration numerical pages.
 
 ## Control Room crosswalk
 
-Status: Common solver/stage fields are partial; backend-specific options without editor fields remain TODO.
+Status: Common solver/stage fields are partial; backend-specific options without editor fields remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Solver` | `partial` | Apply stage draft; solver request and result resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for dynamics parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for dynamics parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
@@ -139,3 +143,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 |---|---|---|---|---|
 | LLG dynamics | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | Integrator/step policy | Ownership test |
 | Integrator vocabulary | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `SUPPORTED_INTEGRATORS`, `ADAPTIVE_INTEGRATORS` | Valid set | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Integrator selection, validation, and dynamics IR lowering. | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class LLG` | Integrator selection, validation, and dynamics IR lowering. | Source-map validator and focused API tests |

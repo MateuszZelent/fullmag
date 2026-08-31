@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-geometry)=
 # Airbox Geometry API
 
+(python-api-meshing-fem-airbox-geometry-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-airbox-geometry-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-airbox-geometry-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-airbox-geometry-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-airbox-geometry-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -75,17 +91,32 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 `study.universe(**kwargs)` (`StudyBuilder.universe`, `world.py`):
 
-| Parameter | Type | Default | Unit | Validation | Meaning |
-|---|---|---|---|---|---|
-| `mode` | `str` | required | $1$ | e.g. `"manual"` | universe definition mode |
-| `size` | `Sequence[float]` | required in manual | $\mathrm{m}$ | three positive values | dimensions $(L_x, L_y, L_z)$ |
-| `padding` / `center` / shape options | advanced resource policy | resource-specific | $\mathrm{m}$ / $1$ | resource validation | additional generation options (Control Room/API) |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `mode` | `str` | required | $1$ | e.g. `"manual"` | universe definition mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `size` | `Sequence[float]` | required in manual | $\mathrm{m}$ | three positive values | dimensions $(L_x, L_y, L_z)$ | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `padding` / `center` / shape options | advanced resource policy | resource-specific | $\mathrm{m}$ / $1$ | resource validation | additional generation options (Control Room/API) | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 Failure behavior: an invalid size vector → `ValueError`. Realized clearances and
 shape are recorded in the build report.
 
 ProblemIR mapping: universe policy in mesh workflow metadata; realization in the
 report/provenance.
+
+(python-api-meshing-fem-airbox-geometry-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-airbox-geometry-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-airbox-geometry-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
 ## 5. How to set it in Control Room
 
@@ -107,16 +138,29 @@ panels; air sizing lives in **Airbox Mesh Parameters**
 | FEM | GPU | capability-gated | identical content-addressed mesh |
 | FDM | CPU/GPU | not applicable | FDM defines the domain through its grid |
 
+(python-api-meshing-fem-airbox-geometry-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-airbox-geometry-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Changing universe geometry invalidates a built mesh (invalidation).
 - Clearances are a physical decision: verify demag convergence with respect to
   airbox size instead of assuming one "good" size.
 
+(python-api-meshing-fem-airbox-geometry-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. J. D. Jackson, *Classical Electrodynamics*, 3rd ed., Wiley, 1999.
 
+(python-api-meshing-fem-airbox-geometry-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-airbox-geometry-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -127,3 +171,9 @@ panels; air sizing lives in **Airbox Mesh Parameters**
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Airbox option schema and validation. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class AirboxOptions` | Airbox option schema and validation. | Source-map validator and focused API tests |

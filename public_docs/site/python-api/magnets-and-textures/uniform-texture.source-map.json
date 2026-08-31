@@ -1,18 +1,82 @@
 {
-  "document": {"path": "public_docs/site/python-api/magnets-and-textures/uniform-texture.md"},
+  "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "path": "public_docs/site/python-api/magnets-and-textures/uniform-texture.md"
+  },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "documented"}
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
   ],
   "equations": [],
   "symbols": [],
-  "sources": [{"id": "owner", "path": "packages/fullmag-py/src/fullmag/init/textures.py", "symbol": "uniform", "responsibility": "Owns uniform preset validation, version identity, and lowering."}],
-  "public_api": {"parameters": [
-    {"python": "texture.uniform.direction_or_x", "type": "Sequence[float] | float", "default": "(1,0,0)", "si_unit": "$1$", "validation": "sequence of three values or first scalar component", "meaning": "uniform direction input", "backend_support": "all authoring lanes", "problem_ir": "preset params `direction`"},
-    {"python": "texture.uniform.y", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "required with scalar `x,z` form", "meaning": "second component", "backend_support": "all authoring lanes", "problem_ir": "preset params `direction`"},
-    {"python": "texture.uniform.z", "type": "float | None", "default": "None", "si_unit": "$1$", "validation": "required with scalar `x,y` form", "meaning": "third component", "backend_support": "all authoring lanes", "problem_ir": "preset params `direction`"},
-    {"python": "texture.uniform.preset_version", "type": "int", "default": "2", "si_unit": "$1$", "validation": "exactly `1` or `2`; not `bool`", "meaning": "serialized texture formula/version identity", "backend_support": "all authoring lanes; evaluator supports declared versions", "problem_ir": "initial_magnetization.preset_version"}
-  ]}
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "uniform",
+      "responsibility": "Owns uniform preset validation, version identity, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "texture.uniform.direction_or_x",
+        "type": "Sequence[float] | float",
+        "default": "(1,0,0)",
+        "si_unit": "$1$",
+        "validation": "sequence of three values or first scalar component",
+        "meaning": "uniform direction input",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "preset params `direction`"
+      },
+      {
+        "python": "texture.uniform.y",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required with scalar `x,z` form",
+        "meaning": "second component",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "preset params `direction`"
+      },
+      {
+        "python": "texture.uniform.z",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "required with scalar `x,y` form",
+        "meaning": "third component",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "preset params `direction`"
+      },
+      {
+        "python": "texture.uniform.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "$1$",
+        "validation": "exactly `1` or `2`; not `bool`",
+        "meaning": "serialized texture formula/version identity",
+        "backend_support": "all authoring lanes; evaluator supports declared versions",
+        "problem_ir": "initial_magnetization.preset_version"
+      }
+    ]
+  }
 }

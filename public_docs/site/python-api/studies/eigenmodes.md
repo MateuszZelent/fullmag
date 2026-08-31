@@ -44,7 +44,8 @@ validity, operator/target constraints, mesh cardinality, capability, and backend
 | `Eigenmodes.count` | `int` | `20` | $1$ | Positive | Number of eigenvectors requested | FEM/FDM CPU/GPU | `count` |
 | `Eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | Eigenvalue selection policy | FEM/FDM CPU/GPU | `target` |
 | `Eigenmodes.target_frequency` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive; required for `nearest` | Frequency target for nearest modes | FEM/FDM CPU/GPU | `target.frequency_hz` |
-| `Eigenmodes.frequency_min` / `frequency_max` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive, `min < max`; `frequency_window` only | Window bounds | FEM/FDM CPU/GPU | `target.frequency_min_hz/max_hz` |
+| `Eigenmodes.frequency_min` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive lower bound; required with `frequency_window` | Lower frequency-window bound | FEM/FDM CPU/GPU | `target.frequency_min_hz` |
+| `Eigenmodes.frequency_max` | `float \| None` | `None` | $\mathrm{Hz}$ | Positive upper bound; `min < max`; required with `frequency_window` | Upper frequency-window bound | FEM/FDM CPU/GPU | `target.frequency_max_hz` |
 | `Eigenmodes.operator` | `str` | `"linearized_llg"` | $1$ | `linearized_llg` or `full_2x2` | Linearized operator | FEM/FDM CPU/GPU | `operator.kind` |
 | `Eigenmodes.include_demag` | `bool` | `True` | $1$ | Boolean | Include the dynamic demagnetization term | FEM/FDM CPU/GPU | `operator.include_demag` |
 | `Eigenmodes.equilibrium_source` | `str` | `"relax"` (stage entry default) | $1$ | `provided`, `relax`, or `artifact` | Equilibrium acquisition | FEM/FDM CPU/GPU | `equilibrium` |
@@ -144,10 +145,10 @@ Status: Stage authoring and inspection are partial; the stage editor exposes onl
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for study parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
@@ -156,3 +157,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 | Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Canonical Python API behavior | Ownership test and source-map validator |
 | k-vector normalization | `packages/fullmag-py/src/fullmag/model/eigen.py` | `coerce_k_sampling` | k sampling alias resolution | Ownership test |
 | Stage surface | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder.add_eigenmodes` | Stage-first authoring entrypoint | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Eigenmode study parameters and IR lowering. | `packages/fullmag-py/src/fullmag/model/study.py` | `class Eigenmodes` | Eigenmode study parameters and IR lowering. | Source-map validator and focused API tests |

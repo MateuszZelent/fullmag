@@ -25,9 +25,25 @@ Keys are nonempty object names. Values must be `FDMGrid` instances with positive
 Local interactions remain native-grid owned. Any nonlocal communication grid and transfer is
 configured separately by `FDMDemag`.
 
+(python-api-meshing-fdm-per-magnet-grids-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fdm-per-magnet-grids-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fdm-per-magnet-grids-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fdm-per-magnet-grids-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fdm-per-magnet-grids-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -70,22 +86,37 @@ study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped", max_steps=1
 
 ## 4. Exact API
 
-| Parameter | Type | Default | SI unit | Validation | Meaning |
-|---|---|---|---|---|---|
-| `FDMGrid.cell` | `Sequence[float]` | required | $\mathrm{m}$ | exactly three positive values | one native object grid |
-| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $1$ | non-empty string keys and `FDMGrid` values | object-name keyed overrides |
-| `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | required when the map is incomplete | fallback grid |
-| `FDMDemag` | `FDMDemag \| None` | `None` | $1$ | planner validates strategy/mode/grid policy | nonlocal coupling policy |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `FDMGrid.cell` | `Sequence[float]` | required | $\mathrm{m}$ | exactly three positive values | one native object grid | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.per_magnet[].cell` |
+| `FDM.per_magnet` | `dict[str, FDMGrid] \| None` | `None` | $1$ | non-empty string keys and `FDMGrid` values | object-name keyed overrides | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.per_magnet` |
+| `FDM.default_cell` | `Sequence[float] \| None` | `None` | $\mathrm{m}$ | required when the map is incomplete | fallback grid | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `backend_policy.discretization_hints.fdm.default_cell` |
+| `FDMDemag` | `FDMDemag \| None` | `None` | $1$ | planner validates strategy/mode/grid policy | nonlocal coupling policy | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
 
 `FDMGrid.__init__(cell)` rejects malformed or non-positive triples. `FDM.__init__`
 rejects empty names, non-`FDMGrid` values, and a missing default when no
 per-magnet grid can cover the authored objects.
 
+(python-api-meshing-fdm-per-magnet-grids-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fdm-per-magnet-grids-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fdm-per-magnet-grids-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+
 ## 5. How to set it in Control Room
 
 Route: `Model Explorer -> Study -> Discretization -> FDM per-magnet grids`.
 The route is partial and keyed by canonical geometry names. Apply the global
-study draft, then inspect the resolved grid resource. `TODO: frontend support`
+study draft, then inspect the resolved grid resource. `not implemented: frontend support`
 for a dedicated typed editor when only advanced JSON is available. See
 [Control Room capability register](/frontend/capability-register).
 
@@ -97,18 +128,31 @@ for a dedicated typed editor when only advanced JSON is available. See
 | FEM CPU/GPU | not applicable | This is an FDM grid contract. |
 | Control Room | partial | Global/per-magnet draft support is not the full low-level surface. |
 
+(python-api-meshing-fdm-per-magnet-grids-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fdm-per-magnet-grids-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Mapping keys must equal authored geometry names.
 - A local grid does not define the nonlocal demagnetization communication grid.
 - Per-magnet authoring is not runtime or CPU/GPU parity evidence.
 
+(python-api-meshing-fdm-per-magnet-grids-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Abert, “Micromagnetics and spintronics: models and numerical methods,”
    *European Physical Journal B* **92**, 120 (2019),
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
+(python-api-meshing-fdm-per-magnet-grids-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fdm-per-magnet-grids-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Repository path | Stable symbol | Evidence |
@@ -119,3 +163,10 @@ for a dedicated typed editor when only advanced JSON is available. See
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Per-magnet grid policy and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | Per-magnet grid policy and lowering. | Source-map validator and focused API tests |
+| Per-magnet cell-size validation. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDMGrid` | Per-magnet cell-size validation. | Source-map validator and focused API tests |

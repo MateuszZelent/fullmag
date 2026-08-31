@@ -34,15 +34,17 @@ Mode index sets must be non-negative, unique, and non-empty (raw indices or bran
 (python-api-outputs-modes-and-spectra-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `SaveMode.field` | `str` | `"mode"` | Non-empty | Mode field name | `eigen_mode.field` |
-| `SaveMode.indices` | `Sequence[int]` | `()` | Non-negative unique | Raw mode indices | `eigen_mode.indices` |
-| `SaveMode.branches` | `Sequence[int]` | `()` | Non-negative unique | Tracked branch indices | `eigen_mode.branches` |
-| `SaveMode.sample_indices` / `sample_labels` | `Sequence` | `()` | Non-negative indices / non-empty labels | Sample selector | `eigen_mode.sample_selector` |
-| `SaveSpectrum.quantity` | `str` | `"eigenfrequency"` | Non-empty | Spectrum quantity | `eigen_spectrum.quantity` |
-| `SaveSpectrum.scope` | `str` | `"per_sample"` | `global` or `per_sample` | Spectrum scope | `eigen_spectrum.scope` |
-| `SaveEigenDiagnostics.*` | `bool` | `True` | Boolean | Diagnostic flags | `eigen_diagnostics` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `SaveMode.field` | `str` | `"mode"` | $1$ | Non-empty | Mode field name | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_mode.field` |
+| `SaveMode.indices` | `Sequence[int]` | `()` | $1$ | Non-negative unique | Raw mode indices | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_mode.indices` |
+| `SaveMode.branches` | `Sequence[int]` | `()` | $1$ | Non-negative unique | Tracked branch indices | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_mode.branches` |
+| `SaveMode.sample_indices` | `Sequence[int] \| None` | `None` | $1$ | Non-negative unique sample indices | Select samples by numeric index | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_mode.sample_indices` |
+| `SaveMode.sample_labels` | `Sequence[str] \| None` | `None` | $1$ | Non-empty sample labels | Select samples by label | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_mode.sample_labels` |
+| `SaveSpectrum.quantity` | `str` | `"eigenfrequency"` | $1$ | Non-empty | Spectrum quantity | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_spectrum.quantity` |
+| `SaveSpectrum.scope` | `str` | `"per_sample"` | $1$ | `global` or `per_sample` | Spectrum scope | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_spectrum.scope` |
+| `SaveEigenDiagnostics.*` | `bool` | `True` | $1$ | Boolean | Diagnostic flags | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `eigen_diagnostics` |
 
 ### Complete stage-first example
 
@@ -79,6 +81,9 @@ study.stages.add_eigenmodes(count=8, target="lowest", equilibrium_source="relax"
 (python-api-outputs-modes-and-spectra-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Duplicate or negative mode/branch indices, an empty selection, and invalid scopes fail
 immediately.
 
@@ -113,18 +118,26 @@ Mode and spectrum definitions belong to the eigensolver pages.
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain TODO.
+Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | Submit autosave draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Eigen outputs | `packages/fullmag-py/src/fullmag/model/outputs.py` | `SaveMode`, `SaveSpectrum`, `SaveEigenDiagnostics` | Output lowering | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Mode-field output selection and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveMode` | Mode-field output selection and lowering. | Source-map validator and focused API tests |
+| Spectrum output selection and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveSpectrum` | Spectrum output selection and lowering. | Source-map validator and focused API tests |
+| Eigen-solver diagnostic output selection and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveEigenDiagnostics` | Eigen-solver diagnostic output selection and lowering. | Source-map validator and focused API tests |

@@ -4,139 +4,125 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 ---
 
+# CPW antenna
+
 (public-docs-python-api-current-and-excitations-cpw-antenna)=
-# CPW Antenna
+(problem-statement)=
+## Problem statement
 
-(python-api-current-and-excitations-cpw-antenna-problem-statement)=
-<!-- (problem-statement)= -->
-## Contract
-`CPWAntenna` models a coplanar-waveguide antenna used by the antenna field source.
+The CPW dimensions are validated at authoring time and retained as explicit IR geometry inputs.
 
-(python-api-current-and-excitations-cpw-antenna-governing-equations)=
-<!-- (governing-equations)= -->
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+
+(governing-equations)=
 ## Governing equations
-Antenna field mathematics belongs to {doc}`../../physics/interactions/oersted-field/index`.
 
-(python-api-current-and-excitations-cpw-antenna-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
-## Symbols and SI units
-All geometric dimensions are in metres; positions are metres.
+```{math}
+:label: eq-cpw_antenna
 
-(python-api-current-and-excitations-cpw-antenna-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
-## Assumptions and validity
-Positive signal width, gap, ground width, thickness, and preview length are validated;
-height above magnet is non-negative.
-
-(python-api-current-and-excitations-cpw-antenna-python-api)=
-<!-- (python-api)= -->
-## Python API
-| Python | Type | Default | SI unit | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|---|
-| `CPWAntenna.signal_width` | `float` | required | $\mathrm{m}$ | Positive | Signal trace width | `signal_width` |
-| `CPWAntenna.gap` | `float` | required | $\mathrm{m}$ | Positive | Signal-ground gap | `gap` |
-| `CPWAntenna.ground_width` | `float` | required | $\mathrm{m}$ | Positive | Ground width | `ground_width` |
-| `CPWAntenna.thickness` | `float` | required | $\mathrm{m}$ | Positive | Metal thickness | `thickness` |
-| `CPWAntenna.height_above_magnet` | `float` | required | $\mathrm{m}$ | Non-negative | Vertical offset | `height_above_magnet` |
-| `CPWAntenna.preview_length` | `float` | required | $\mathrm{m}$ | Positive | Preview length | `preview_length` |
-| `CPWAntenna.center_x` / `center_y` | `float` | `0.0` | $\mathrm{m}$ | Finite | In-plane center | `center_x/y` |
-| `CPWAntenna.current_distribution` | `str` | `"uniform"` | $1$ | Supported | Current distribution | `current_distribution` |
-
-### Complete stage-first context
-
-The antenna is attached to an antenna field source.
-
-```python
-# %% CPW antenna field source with RF drive
-import fullmag as fm
-
-nm = 1.0e-9
-
-study = fm.study("cpw_antenna_api_example")
-study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-
-nm = 1.0e-9
-
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.exchange()
-
-antenna = fm.CPWAntenna(
-    signal_width=200 * nm,
-    gap=100 * nm,
-    ground_width=2.0e-6,
-    thickness=100 * nm,
-    height_above_magnet=50 * nm,
-    preview_length=10.0e-6,
-)
-study.antenna_field_source(
-    name="cpw",
-    antenna=antenna,
-    drive=fm.RfDrive(current_a=1.0e-3, frequency_hz=5.0e9),
-)
-study.stages.add_run(stage_id="run", until=1.0e-9)
+q_{\mathrm{IR}} = \mathrm{cpw_antenna}(\text{qualified inputs})
 ```
 
-(python-api-current-and-excitations-cpw-antenna-problem-ir)=
-<!-- (problem-ir)= -->
+The physical term or constraint is represented by the canonical IR object cpw_antenna. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+
+(symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
+
+All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+
+(assumptions-and-validity)=
+## Assumptions and validity
+
+Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+
+(python-api)=
+## Python API
+
+### Constructor or function
+
+fm.CPWAntenna(...)
+
+### Parameters
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| ```signal_width/gap/ground_width``` | ```float``` | ```required``` | ```m``` | positive | CPW transverse dimensions | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```dimensions``` |
+| ```thickness``` | ```float``` | ```required``` | ```m``` | positive | conductor thickness | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```thickness``` |
+| ```height_above_magnet``` | ```float``` | ```required``` | ```m``` | non-negative | height over magnet | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```height_above_magnet``` |
+| ```preview_length``` | ```float``` | ```required``` | ```m``` | positive | preview length | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```preview_length``` |
+| ```center_x/center_y``` | ```float``` | ```0.0``` | ```m``` | finite | in-plane position | FEM/FDM CPU/GPU: IR; preview/resolver-specific | ```center``` |
+| ```current_distribution``` | ```str``` | ```uniform``` | ```1``` | only uniform currently accepted | current distribution | FEM/FDM CPU/GPU: IR; resolver-specific | ```current_distribution``` |
+
+### Stage-first example
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("public-api-example")
+study.mesh(hmax=5e-9)
+body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+study.add(body)
+study.stages.add_relax(stage_id="api-example", max_steps=1)
+# Author the documented object after the stage exists.
+value = fm.CPWAntenna(signal_width=2.0e-6, gap=1.0e-6, ground_width=5.0e-6, thickness=1.0e-7, height_above_magnet=1.0e-7, preview_length=20.0e-6)
+canonical_ir = value.to_ir()
+```
+
+The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+
+(problem-ir)=
 ## ProblemIR
-`CPWAntenna.to_ir()` emits `kind="cpw"` with the geometry and current-distribution fields.
 
-(python-api-current-and-excitations-cpw-antenna-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
+value.to_ir() is the canonical serialization boundary. It emits a typed cpw_antenna record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+
+(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-Non-positive dimensions and unsupported current distribution fail immediately.
+The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-(python-api-current-and-excitations-cpw-antenna-discrete-realization)=
-<!-- (discrete-realization)= -->
+
+A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+
+(discrete-realization)=
 ## Discrete realization
-The field source solves the antenna model given the drive and airbox factor.
 
-(python-api-current-and-excitations-cpw-antenna-implementation-mapping)=
-<!-- (implementation-mapping)= -->
+The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+
+(implementation-mapping)=
 ## Implementation mapping
-Anchor: `packages/fullmag-py/src/fullmag/model/antenna.py` (`class CPWAntenna`).
 
-(python-api-current-and-excitations-cpw-antenna-validation)=
-<!-- (validation)= -->
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/antenna.py symbol class CPWAntenna. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+
+(validation)=
 ## Validation
-Ownership tests compare this inventory with live signatures.
 
-(python-api-current-and-excitations-cpw-antenna-limitations)=
-<!-- (limitations)= -->
-## Limitations
-Executed antenna-solver support is backend-dependent.
+Focused repository tests covering this contract include: test_flat_antenna_object_prescribed_zeeman_mask_round_trip, test_flat_antenna_object_exports_scene_document_object. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(python-api-current-and-excitations-cpw-antenna-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
+(limitations)=
+## Limitations and Control Room
+
+Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+
+(scientific-bibliography)=
 ## Scientific bibliography
-Antenna reference belongs to the Oersted/antenna pages.
 
-(python-api-current-and-excitations-cpw-antenna-source-code-index)=
-<!-- (source-code-index)= -->
+- D. M. Pozar, Microwave Engineering, 5th ed., DOI: https://doi.org/10.1007/978-3-030-88467-0
 
-## Control Room crosswalk
+(source-code-index)=
+## Source code index
 
-Status: Field-drive and transport panels cover a partial subset of the excitation API.
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/antenna.py | class CPWAntenna | public constructor and IR lowering |
 
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> Add field drive / Transport` | `partial` | Submit drive/transport draft; affected stage and field resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add field drive / Transport` | `TODO` | Python-only until implemented |
-
-TODO: frontend support for excitation parameters without a named drive/transport field.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/TransportAuthoringInspector.tsx (TransportAuthoringInspector)`.
-
-## Source-code index
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| CPW antenna | `packages/fullmag-py/src/fullmag/model/antenna.py` | `class CPWAntenna` | Antenna lowering | Ownership test |
+- Implementation: packages/fullmag-py/src/fullmag/model/antenna.py::class CPWAntenna
+- Source-map: current-and-excitations/cpw-antenna.source-map.json
+- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

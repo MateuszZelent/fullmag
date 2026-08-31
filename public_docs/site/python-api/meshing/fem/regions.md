@@ -16,9 +16,25 @@ Region policy participates in the same shared-domain mesh; it does not create an
 overlapping submesh. Conflicts are resolved by explicit priority/conflict policy and recorded in the
 realization report.
 
+(python-api-meshing-fem-regions-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-regions-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-regions-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-regions-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-regions-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -75,6 +91,21 @@ study.stages.add_relax(
 invalid positive-value constraints. The policy is serialized into the owning
 object's region mesh specification.
 
+(python-api-meshing-fem-regions-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-regions-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-regions-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+
 ## 5. How to set it in Control Room
 
 Route: `Model Explorer -> Objects -> <object> -> Regions -> <region> -> Mesh`.
@@ -88,14 +119,23 @@ conforming result and refreshes region resources. See [Control Room capability r
 |---|---|---|
 | FEM CPU/GPU | partial/planner-gated | Region policy is shared-domain input. |
 | FDM CPU/GPU | not applicable | FDM regions are structured-cell membership. |
-| Control Room | partial | Typed region fields are exposed; advanced conflict policies remain TODO. |
+| Control Room | partial | Typed region fields are exposed; advanced conflict policies remain not implemented. |
 
+(python-api-meshing-fem-regions-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-regions-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - A region policy cannot create an overlapping independent submesh.
 - Selector and native marker resolution must succeed before it affects elements.
 - Final conformity and values belong to the build report.
 
+(python-api-meshing-fem-regions-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
@@ -103,6 +143,10 @@ conforming result and refreshes region resources. See [Control Room capability r
    mesh generator,” *International Journal for Numerical Methods in Engineering*
    **79**, 1309-1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
+(python-api-meshing-fem-regions-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-regions-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Repository path | Stable symbol | Evidence |
@@ -114,3 +158,9 @@ conforming result and refreshes region resources. See [Control Room capability r
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Region markers and typed mesh realization. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshData` | Region markers and typed mesh realization. | Source-map validator and focused API tests |

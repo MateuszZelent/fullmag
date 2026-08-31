@@ -43,7 +43,9 @@ legality.
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Hysteresis.outputs` | `Sequence[TimeOutputSpec]` | `required` | $1$ | Field/scalar outputs | Per-point sampling | FEM/FDM CPU/GPU | `sampling.outputs` |
-| `Hysteresis.field_min_mT` / `field_max_mT` / `field_step_mT` | `float \| None` | `None` | $\mathrm{mT}$ | Finite; nonzero step | Uniform sweep definition | FEM/FDM CPU/GPU | `field_min_mT/max_mT/step_mT` |
+| `Hysteresis.field_min_mT` | `float \| None` | `None` | $\mathrm{mT}$ | Finite; required for a uniform sweep | Lower uniform-sweep field bound | FEM/FDM CPU/GPU | `field_min_mT` |
+| `Hysteresis.field_max_mT` | `float \| None` | `None` | $\mathrm{mT}$ | Finite; required for a uniform sweep | Upper uniform-sweep field bound | FEM/FDM CPU/GPU | `field_max_mT` |
+| `Hysteresis.field_step_mT` | `float \| None` | `None` | $\mathrm{mT}$ | Finite and nonzero; required for a uniform sweep | Uniform-sweep field increment | FEM/FDM CPU/GPU | `field_step_mT` |
 | `Hysteresis.field_values_mT` | `Sequence[float] \| None` | `None` | $\mathrm{mT}$ | Non-empty, finite | Explicit field-point schedule | FEM/FDM CPU/GPU | `field_values_mT` |
 | `Hysteresis.direction` | `tuple[float,float,float] \| None` | `None` | $1$ | Non-zero length-3 vector | Field sweep direction | FEM/FDM CPU/GPU | `direction` |
 | `Hysteresis.measurement_axis` | `str \| MeasurementAxis` | `"field_axis"` | $1$ | `field_axis`, `sample_normal`, `easy_axis`, or custom | Projection axis for the loop | FEM/FDM CPU/GPU | `measurement_axis` |
@@ -144,10 +146,10 @@ Status: Stage authoring and inspection are partial; the stage editor exposes onl
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for study parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
@@ -156,3 +158,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 | Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class Hysteresis` | Canonical Python API behavior | Ownership test and source-map validator |
 | Settle policy | `packages/fullmag-py/src/fullmag/model/study.py` | `SettlePipeline`, `SettleTree`, `RelaxStep`, `MinimizeStep` | Per-point settle program | Ownership test |
 | Stage surface | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder.add_hysteresis_sweep` | Stage-first authoring entrypoint | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Hysteresis study schedule, settle, and storage lowering. | `packages/fullmag-py/src/fullmag/model/study.py` | `class Hysteresis` | Hysteresis study schedule, settle, and storage lowering. | Source-map validator and focused API tests |

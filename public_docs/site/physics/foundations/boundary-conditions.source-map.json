@@ -1,5 +1,6 @@
 {
   "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
     "path": "public_docs/site/physics/foundations/boundary-conditions.md",
     "title": "Boundary-condition contracts",
     "scope": "exchange, DMI, periodic, demagnetization, and mechanical boundary laws"

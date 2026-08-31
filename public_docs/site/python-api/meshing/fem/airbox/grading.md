@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-grading)=
 # Airbox Grading API
 
+(python-api-meshing-fem-airbox-grading-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-airbox-grading-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-airbox-grading-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-airbox-grading-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-airbox-grading-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -88,12 +104,12 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 `study.universe.mesh(**kwargs)`:
 
-| Parameter | Type | Default | Unit | Validation | Meaning |
-|---|---|---|---|---|---|
-| `minimum_element_size` / `hmin` | `float \| None` | `None` | $\mathrm{m}$ | positive | size near bodies |
-| `maximum_element_size` / `hmax` | `float \| None` | `None` | $\mathrm{m}$ | positive | size far from bodies |
-| `maximum_element_growth_rate` / `growth_rate` | `float \| None` | `None` | $1$ | positive | maximum growth rate |
-| `grading` | `str \| None` | `None` | $1$ | `"geometric"`, `"linear"` | grading type |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `minimum_element_size` / `hmin` | `float \| None` | `None` | $\mathrm{m}$ | positive | size near bodies | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `maximum_element_size` / `hmax` | `float \| None` | `None` | $\mathrm{m}$ | positive | size far from bodies | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `maximum_element_growth_rate` / `growth_rate` | `float \| None` | `None` | $1$ | positive | maximum growth rate | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `grading` | `str \| None` | `None` | $1$ | `"geometric"`, `"linear"` | grading type | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 The advanced universe resource policy adds curvature and narrow-region resolution.
 All values are **targets**, not guaranteed extrema.
@@ -103,6 +119,21 @@ Failure behavior: non-positive values → `ValueError`; mixing FDM controls
 
 ProblemIR mapping: airbox hmin/hmax/growth/grading in mesh workflow metadata;
 realization in the build report.
+
+(python-api-meshing-fem-airbox-grading-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-airbox-grading-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-airbox-grading-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
 ## 5. How to set it in Control Room
 
@@ -122,17 +153,30 @@ Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 | FEM | GPU | capability-gated | identical content-addressed mesh |
 | FDM | CPU/GPU | not applicable | constant Cartesian step |
 
+(python-api-meshing-fem-airbox-grading-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-airbox-grading-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Growth rates well above $1.5$ usually degrade transition element quality; check
   quality statistics after the build.
 - Realized extrema may deviate from the request — the report is authoritative.
 
+(python-api-meshing-fem-airbox-grading-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. J. D. Jackson, *Classical Electrodynamics*, 3rd ed., Wiley, 1999.
 2. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
+(python-api-meshing-fem-airbox-grading-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-airbox-grading-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -143,3 +187,9 @@ Full description: {doc}`../../../../frontend/meshing/airbox-mesh`.
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Gmsh mesh sizing and grading options. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py` | `class MeshOptions` | Gmsh mesh sizing and grading options. | Source-map validator and focused API tests |

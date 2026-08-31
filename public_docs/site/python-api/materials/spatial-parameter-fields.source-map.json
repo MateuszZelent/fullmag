@@ -1,5 +1,6 @@
 {
   "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
     "path": "public_docs/site/python-api/materials/spatial-parameter-fields.md"
   },
   "backend_matrix": [
@@ -28,23 +29,50 @@
   "equations": [
     {
       "id": "eq-material-spatial-effective",
-      "symbols": ["p_eff", "p0", "pa", "w"],
-      "sources": ["field-assignment", "material-resolution", "transition-resolution"]
+      "symbols": [
+        "p_eff",
+        "p0",
+        "pa",
+        "w"
+      ],
+      "sources": [
+        "field-assignment",
+        "material-resolution",
+        "transition-resolution"
+      ]
     },
     {
       "id": "eq-material-spatial-constant",
-      "symbols": ["pc"],
-      "sources": ["field-factories"]
+      "symbols": [
+        "pc"
+      ],
+      "sources": [
+        "field-factories"
+      ]
     },
     {
       "id": "eq-material-spatial-linear",
-      "symbols": ["pb", "g", "xf"],
-      "sources": ["field-factories"]
+      "symbols": [
+        "pb",
+        "g",
+        "xf"
+      ],
+      "sources": [
+        "field-factories"
+      ]
     },
     {
       "id": "eq-material-spatial-radial",
-      "symbols": ["pin", "pout", "xf", "c", "r"],
-      "sources": ["field-factories"]
+      "symbols": [
+        "pin",
+        "pout",
+        "xf",
+        "c",
+        "r"
+      ],
+      "sources": [
+        "field-factories"
+      ]
     }
   ],
   "symbols": [

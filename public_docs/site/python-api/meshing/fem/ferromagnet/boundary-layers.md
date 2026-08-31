@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-boundary-layers)=
 # Boundary-Layer API
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-ferromagnet-boundary-layers-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-ferromagnet-boundary-layers-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-ferromagnet-boundary-layers-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-ferromagnet-boundary-layers-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -89,14 +105,14 @@ Two equivalent authoring levels:
 
 **Recipe fields** (`object.mesh(...)` / `PerObjectMeshRecipe`):
 
-| Parameter | Type | Default | Unit | Validation | Meaning |
-|---|---|---|---|---|---|
-| `boundary_layer_count` | `int \| None` | `None` | $1$ | positive | layer count |
-| `boundary_layer_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive | total package thickness |
-| `boundary_layer_stretching` | `float \| None` | `None` | $1$ | in $(1, 2]$ | thickness growth between layers |
-| `boundary_layer_target_surface_selectors` | `Sequence[Mapping] \| None` | `None` | $1$ | semantic selectors | target surfaces |
-| `boundary_layer_target_curve_selectors` | `Sequence[Mapping] \| None` | `None` | $1$ | semantic selectors | target edges |
-| `boundary_layer_target_surface_tags` / `_curve_tags` | `Sequence[int] \| None` | `None` | $1$ | Gmsh tags | raw numeric targets |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `boundary_layer_count` | `int \| None` | `None` | $1$ | positive | layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `boundary_layer_thickness` | `float \| None` | `None` | $\mathrm{m}$ | positive | total package thickness | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `boundary_layer_stretching` | `float \| None` | `None` | $1$ | in $(1, 2]$ | thickness growth between layers | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `boundary_layer_target_surface_selectors` | `Sequence[Mapping] \| None` | `None` | $1$ | semantic selectors | target surfaces | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `boundary_layer_target_curve_selectors` | `Sequence[Mapping] \| None` | `None` | $1$ | semantic selectors | target edges | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `boundary_layer_target_surface_tags` / `_curve_tags` | `Sequence[int] \| None` | `None` | $1$ | Gmsh tags | raw numeric targets | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 **Ordered operation**: `MeshOperation(kind="boundary_layers", params=...)`
 inside `PerObjectMeshRecipe.operations`; `params` keys cover count, total
@@ -110,6 +126,21 @@ Failure behavior: non-positive count/thickness, stretching outside $(1,2]$ →
 
 ProblemIR mapping: fields land in the object recipe (`PerObjectMeshRecipe`) and in
 the ordered mesh-operation list.
+
+(python-api-meshing-fem-ferromagnet-boundary-layers-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-ferromagnet-boundary-layers-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-ferromagnet-boundary-layers-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
 ## 5. How to set it in Control Room
 
@@ -133,6 +164,13 @@ recipe payload (including `operations`). Full panel description:
 | FEM | GPU | capability-gated | identical content-addressed mesh |
 | FDM | CPU/GPU | not applicable | no boundary-layer concept on a Cartesian grid |
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-ferromagnet-boundary-layers-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Numeric Gmsh tags are unstable across geometry rebuilds — use semantic
@@ -140,10 +178,16 @@ recipe payload (including `operations`). Full panel description:
 - Stretching close to $2$ can produce poor-Jacobian elements; check quality
   statistics after the build.
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
+(python-api-meshing-fem-ferromagnet-boundary-layers-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-ferromagnet-boundary-layers-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -155,3 +199,9 @@ recipe payload (including `operations`). Full panel description:
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Object boundary-layer policy and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Object boundary-layer policy and lowering. | Source-map validator and focused API tests |

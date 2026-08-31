@@ -34,11 +34,12 @@ Response observable identifiers and dispersion names are validated immediately.
 (python-api-outputs-dispersion-and-response-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `SaveDispersion.name` | `str` | `"dispersion"` | Non-empty | Curve name | `dispersion_curve.name` |
-| `SaveDispersion.include_branch_table` | `bool` | `True` | Boolean | Include branch table | `dispersion_curve.include_branch_table` |
-| `SaveResponse.observable` | `str` | `required` | One of the supported response observables | Response output | `frequency_response_output.observable` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `SaveDispersion.name` | `str` | `"dispersion"` | $1$ | Non-empty | Curve name | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dispersion_curve.name` |
+| `SaveDispersion.include_branch_table` | `bool` | `True` | $1$ | Boolean | Include branch table | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `dispersion_curve.include_branch_table` |
+| `SaveResponse.observable` | `str` | `required` | $1$ | One of the supported response observables | Response output | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `frequency_response_output.observable` |
 
 Supported response observables include `susceptibility_tensor`, `m_complex`, `u_complex`,
 `strain_complex`, `stress_complex`, `absorbed_power_density`, `response_amplitude`,
@@ -82,6 +83,9 @@ study.stages.add_frequency_response(
 (python-api-outputs-dispersion-and-response-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Unknown response observables fail immediately; dispersion names are preserved without
 interpretation.
 
@@ -116,18 +120,25 @@ Definitions belong to the frequency-domain and eigensolver pages.
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain TODO.
+Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | Submit autosave draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Dispersion/response outputs | `packages/fullmag-py/src/fullmag/model/outputs.py` | `SaveDispersion`, `SaveResponse` | Output lowering | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Dispersion output request validation and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveDispersion` | Dispersion output request validation and lowering. | Source-map validator and focused API tests |
+| Response output request validation and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class SaveResponse` | Response output request validation and lowering. | Source-map validator and focused API tests |

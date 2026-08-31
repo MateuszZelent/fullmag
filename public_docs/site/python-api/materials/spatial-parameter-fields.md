@@ -33,7 +33,15 @@ The field is an override of the corresponding base material value. It is not add
 and it does not implicitly create another magnetic object, interface coupling, or exchange break.
 
 (python-api-materials-spatial-parameter-fields-governing-equations)=
+(governing-equations)=
+(governing-equations)=
 ## Governing equations
+
+```{math}
+:label: eq-material-spatial-effective
+
+q_{\mathrm{IR}} = \mathrm{material-spatial-effective}(\text{qualified inputs})
+```
 
 For a scalar material parameter $p$, the base material supplies $p_0$. An active field assignment
 $a$ supplies $p_a(\mathbf x)$. After ownership, region membership, priority, and conflict resolution,
@@ -78,7 +86,13 @@ references an immutable asset and declares its component count, mesh location, a
 sampled material-field materialization is currently authoring-only and is rejected by the planner.
 
 (python-api-materials-spatial-parameter-fields-symbols-and-si-units)=
+(symbols-and-si-units)=
+(symbols-and-si-units)=
 ## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
 
 | Symbol | Meaning | SI unit |
 |---|---|---:|
@@ -104,6 +118,8 @@ its dimensional consistency; the gradient unit follows from the spatial derivati
 second free choice.
 
 (python-api-materials-spatial-parameter-fields-assumptions-and-validity)=
+(assumptions-and-validity)=
+(assumptions-and-validity)=
 ## Assumptions and validity
 
 - Field values must be finite. The `unit` string is preserved as non-empty metadata when supplied;
@@ -142,6 +158,8 @@ Aliases such as `A`, `Aex`, `alpha`, `anisU`, and case variants are normalized b
 The serialized form always uses the canonical ProblemIR name.
 
 (python-api-materials-spatial-parameter-fields-python-api)=
+(python-api)=
+(python-api)=
 ## Python API
 
 ### Typed field factories and parameters
@@ -235,6 +253,8 @@ base value `800e3 A/m`. Because the region belongs to the same object, ordinary 
 intra-object interaction; no inter-object coupling is created.
 
 (python-api-materials-spatial-parameter-fields-problem-ir)=
+(problem-ir)=
+(problem-ir)=
 ## ProblemIR
 
 The field remains typed in `material_parameter_fields`; it is not flattened to mesh arrays before
@@ -263,6 +283,8 @@ serialization. The resolved mesh-aligned array belongs to execution provenance, 
 intent.
 
 (python-api-materials-spatial-parameter-fields-round-trip-and-failure-semantics)=
+(round-trip-and-failure-semantics)=
+(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
 **Requested intent** preserves the factory kind, authored values, coordinate frame, asset identity,
@@ -283,6 +305,8 @@ invalidates the corresponding resolved field provenance. Reusing an old material
 such a change is not a legal round-trip.
 
 (python-api-materials-spatial-parameter-fields-discrete-realization)=
+(discrete-realization)=
+(discrete-realization)=
 ## Discrete realization
 
 | Solver | Device | Realization contract | Qualification boundary |
@@ -309,6 +333,8 @@ the consuming interaction's interface contract. In particular:
   smoothing pass.
 
 (python-api-materials-spatial-parameter-fields-implementation-mapping)=
+(implementation-mapping)=
+(implementation-mapping)=
 ## Implementation mapping
 
 - `MaterialParameterField` owns constant, linear, radial, and sampled field payloads.
@@ -323,6 +349,8 @@ the consuming interaction's interface contract. In particular:
 - `crates/fullmag-plan/src/material_transition.rs` resolves the default `Ms`/`Aex` transition.
 
 (python-api-materials-spatial-parameter-fields-validation)=
+(validation)=
+(validation)=
 ## Validation
 
 The minimum validation suite is:
@@ -356,6 +384,8 @@ requires interaction-specific observables, convergence, and device evidence.
   scale; convergence remains the user's and validator's responsibility.
 
 (python-api-materials-spatial-parameter-fields-scientific-bibliography)=
+(scientific-bibliography)=
+(scientific-bibliography)=
 ## Scientific bibliography
 
 - W. F. Brown Jr., *Micromagnetics*, Wiley, 1963.

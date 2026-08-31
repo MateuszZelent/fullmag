@@ -34,6 +34,13 @@ without changing requested intent. Validation failures happen at authoring or pl
 (python-api-problem-round-trip-python-api)=
 <!-- (python-api)= -->
 ## Python API
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `Problem.to_ir.requested_backend` | `BackendTarget | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested solver-family intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.requested_backend` |
+| `Problem.to_ir.execution_mode` | `ExecutionMode | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested execution-mode intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_mode` |
+| `Problem.to_ir.execution_precision` | `ExecutionPrecision | None` | `None` | $1$ | Optional override; normalized by `Problem.to_ir`. | Requested precision intent. | FEM/FDM CPU/GPU authoring; planner resolves capability. | `backend_policy.execution_precision` |
+| `RuntimeSelection.resolved(...)` | method | required | $1$ | Backend/mode/precision values are normalized against the selection. | Resolved runtime descriptor. | FEM/FDM CPU/GPU; capability checks remain authoritative. | `backend_policy` |
 | Python | Meaning |
 |---|---|
 | `Problem.to_ir(requested_backend=..., execution_mode=..., execution_precision=...)` | Canonical lowering with explicit runtime intent |
@@ -74,6 +81,9 @@ study pipeline, and builder/script-sync manifests while preserving script-source
 (python-api-problem-round-trip-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Requested and resolved descriptors remain distinct. An FDM selection with FEM-only policy such as
 `pbc.demag="periodic_airbox_k0"` fails lowering rather than being silently converted.
 
@@ -113,11 +123,11 @@ Status: The Control Room authors a study and lowers it to ProblemIR; direct Prob
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `No standalone Control Room route` | `TODO` | No supported frontend transaction |
-| Parameters without a named UI field | `No standalone Control Room route` | `TODO` | Python-only until implemented |
+| Parameters documented on this page | `No standalone Control Room route` | `not implemented` | No supported frontend transaction |
+| Parameters without a named UI field | `No standalone Control Room route` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for standalone Problem/ProblemIR authoring.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for standalone Problem/ProblemIR authoring.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`.
 
 ## Source-code index
@@ -125,3 +135,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInsp
 |---|---|---|---|---|
 | Canonical lowering | `packages/fullmag-py/src/fullmag/model/problem.py` | `Problem.to_ir` | Authoring-to-IR mapping | Round-trip tests |
 | Runtime resolution | `packages/fullmag-py/src/fullmag/model/problem.py` | `RuntimeSelection.resolved` | Requested-vs-resolved | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Canonical problem lowering entrypoint. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Canonical problem lowering entrypoint. | Source-map validator and focused API tests |
+| Requested runtime descriptor normalization. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested runtime descriptor normalization. | Source-map validator and focused API tests |

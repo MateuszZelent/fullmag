@@ -1,5 +1,5 @@
 {
-  "document": {"path": "public_docs/site/physics/interactions/dmi/validation.md", "title": "DMI validation", "interaction": "Dzyaloshinskii-Moriya interaction validation"},
+  "document": {"reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367", "path": "public_docs/site/physics/interactions/dmi/validation.md", "title": "DMI validation", "interaction": "Dzyaloshinskii-Moriya interaction validation"},
   "backend_matrix": [
     {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Analytic and stencil tests exist; refreshed full qualification is not claimed."},
     {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Device-capable tests exist; executed-device identity is required."},

@@ -44,6 +44,18 @@ still be rejected when its requested lane cannot execute it.
 
 ### Complete stage-first context
 
+```python
+# %% Validation/provenance stage-first probe
+import fullmag as fm
+
+study = fm.study("api_contract_probe")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.stages.add_run(stage_id="probe", until=1.0e-12)
+```
+
+
 Validation runs through the same study scenario as every other page; a rejected combination is
 reported by the planner rather than rewritten.
 
@@ -56,6 +68,9 @@ records capability decisions.
 (python-api-problem-validation-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Each rejection carries the failing constraint; nothing is silently converted to another
 interaction, backend, device, or precision.
 
@@ -95,11 +110,11 @@ Status: The Control Room authors a study and lowers it to ProblemIR; direct Prob
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
-| Parameters documented on this page | `No standalone Control Room route` | `TODO` | No supported frontend transaction |
-| Parameters without a named UI field | `No standalone Control Room route` | `TODO` | Python-only until implemented |
+| Parameters documented on this page | `No standalone Control Room route` | `not implemented` | No supported frontend transaction |
+| Parameters without a named UI field | `No standalone Control Room route` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for standalone Problem/ProblemIR authoring.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for standalone Problem/ProblemIR authoring.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInspectorPanel.tsx (StudyInspectorPanel)`.
 
 ## Source-code index
@@ -107,3 +122,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyInsp
 |---|---|---|---|---|
 | Problem validation | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Authoring/lowering validation | Validation tests |
 | Shared checks | `packages/fullmag-py/src/fullmag/_validation.py` | `require_non_empty`, `require_positive` | Reusable domain checks | Unit tests |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Constructor and lowering validation boundary. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class Problem` | Constructor and lowering validation boundary. | Source-map validator and focused API tests |

@@ -149,10 +149,10 @@ Status: Stage authoring and inspection are partial; the stage editor exposes onl
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for study parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
@@ -161,3 +161,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 | Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponse` | Canonical Python API behavior | Ownership test and source-map validator |
 | Solver policy | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponseSolverPolicy` | Solver method/preconditioner normalization | Ownership test |
 | Stage surface | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder.add_frequency_response` | Stage-first authoring entrypoint | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Frequency-response study parameters and IR lowering. | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponse` | Frequency-response study parameters and IR lowering. | Source-map validator and focused API tests |
+| Frequency-response solver policy validation and lowering. | `packages/fullmag-py/src/fullmag/model/study.py` | `class FrequencyResponseSolverPolicy` | Frequency-response solver policy validation and lowering. | Source-map validator and focused API tests |

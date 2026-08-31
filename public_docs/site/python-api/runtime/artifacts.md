@@ -35,11 +35,12 @@ from the path extension when `"auto"` is requested.
 (python-api-runtime-artifacts-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `Result.output_dir` | `str \| None` | `None` | Directory path | Directory for run artifacts | output dir |
-| `Result.save_state(path, format=..., dataset=...)` | method | `format="auto"`, `dataset="values"` | Requires `final_magnetization` | Persist final state | n/a (runtime output) |
-| `save_magnetization(path, values, ...)` | function | `format="auto"` | `json`, `zarr`, or `h5` | Low-level state writer | n/a |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `Result.output_dir` | `str \| None` | `None` | $1$ | Directory path | Directory for run artifacts | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | output dir |
+| `Result.save_state(path, format=..., dataset=...)` | method | `format="auto"`, `dataset="values"` | $1$ | Requires `final_magnetization` | Persist final state | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | n/a (runtime output) |
+| `save_magnetization(path, values, ...)` | function | `format="auto"` | $1$ | `json`, `zarr`, or `h5` | Low-level state writer | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | n/a |
 
 ### Complete stage-first context
 
@@ -75,6 +76,9 @@ Artifacts are runtime outputs; they are not authoring inputs and have no lowerin
 (python-api-runtime-artifacts-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Saving without `final_magnetization` raises immediately. Unsupported formats raise rather than
 writing a best-effort file.
 
@@ -115,10 +119,10 @@ Status: Runtime and provenance data are inspection-only; they are not standalone
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for runtime-selection and artifact-publication parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
 
 ## Source-code index
@@ -126,3 +130,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 |---|---|---|---|---|
 | State persistence | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.save_state` | Public save entrypoint | Ownership test |
 | Serialization formats | `packages/fullmag-py/src/fullmag/init/state_io.py` | `save_magnetization`, `load_magnetization` | JSON/Zarr/HDF5 round-trip | Read/write tests |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Runtime artifact access and state persistence entrypoint. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Runtime artifact access and state persistence entrypoint. | Source-map validator and focused API tests |
+| Magnetization artifact serialization. | `packages/fullmag-py/src/fullmag/init/state_io.py` | `save_magnetization` | Magnetization artifact serialization. | Source-map validator and focused API tests |

@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-airbox-build)=
 # Airbox Build API
 
+(python-api-meshing-fem-airbox-build-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-airbox-build-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-airbox-build-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-airbox-build-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-airbox-build-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -83,13 +99,13 @@ study.stages.add_relax(stage_id="equilibrium", tolT=1.0e-6)
 
 ## 4. Exact API
 
-| Method | Signature | Meaning |
-|---|---|---|
-| `study.build_domain_mesh()` | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh |
-| `study.build_mesh()` | `StudyBuilder.build_mesh()` | legacy mesh build entry point |
-| `study.mesh.save(path)` | `StudyMeshHandle.save` | save the mesh artifact |
-| `study.mesh.load(path)` | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation |
-| `study.mesh.save_or_load(path)` | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `study.build_domain_mesh()` | str | None | None | $1$ | `StudyBuilder.build_domain_mesh()` | materializes the shared domain mesh | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.build_mesh()` | str | None | None | $1$ | `StudyBuilder.build_mesh()` | legacy mesh build entry point | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.save(path)` | str | None | None | $1$ | `StudyMeshHandle.save` | save the mesh artifact | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.load(path)` | str | None | None | $1$ | `StudyMeshHandle.load` | load the artifact; authoring-consistency validation | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
+| `study.mesh.save_or_load(path)` | str | None | None | $1$ | `StudyMeshHandle.save_or_load` | cache: load when consistent, otherwise save | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow.build` |
 
 Failure behavior / invalidation:
 
@@ -101,6 +117,21 @@ Failure behavior / invalidation:
 
 ProblemIR mapping: realization and the build report land in provenance; requested
 intent stays separate from resolved execution.
+
+(python-api-meshing-fem-airbox-build-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-airbox-build-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-airbox-build-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
 ## 5. How to set it in Control Room
 
@@ -124,6 +155,13 @@ the Quality/History tabs show the realized report. In the object panel,
 | FEM | GPU | capability-gated | identical content-addressed mesh |
 | FDM | CPU/GPU | not applicable | the FDM grid is built without an explicit build step |
 
+(python-api-meshing-fem-airbox-build-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-airbox-build-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Build success ≠ scientific qualification: always inspect the report and quality
@@ -131,10 +169,16 @@ the Quality/History tabs show the realized report. In the object panel,
 - Do not reconstruct the realized mesh from the Python request after the run —
   retain the generated asset and provenance.
 
+(python-api-meshing-fem-airbox-build-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 No page-specific physical claims; airbox physics: {doc}`index`.
 
+(python-api-meshing-fem-airbox-build-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-airbox-build-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -146,3 +190,9 @@ No page-specific physical claims; airbox physics: {doc}`index`.
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Airbox geometry construction and mesh extraction boundary. | `packages/fullmag-py/src/fullmag/meshing/_gmsh_airbox.py` | `add_air_box` | Airbox geometry construction and mesh extraction boundary. | Source-map validator and focused API tests |

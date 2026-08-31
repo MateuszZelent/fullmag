@@ -21,9 +21,25 @@ These values request a policy. The result provenance must state the resolved int
 coverage. Do not infer that every CUDA or DMI kernel applied the correction from successful Python
 construction alone.
 
+(python-api-meshing-fdm-boundary-correction-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fdm-boundary-correction-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fdm-boundary-correction-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fdm-boundary-correction-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fdm-boundary-correction-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -67,23 +83,38 @@ ordinary uniform sizing should use `study.objects.mesh.defaults(...)`.
 
 ## 4. Exact API
 
-| Parameter | Type | Default | SI unit | Validation | Meaning |
-|---|---|---|---|---|---|
-| `boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | embedded-boundary policy |
-| `boundary_phi_floor` | `float \| None` | `None` | $1$ | `0 < value < 1` | minimum occupied-volume fraction |
-| `boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | non-negative | minimum T1 stencil distance |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | embedded-boundary policy | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
+| `boundary_phi_floor` | `float \| None` | `None` | $1$ | `0 < value < 1` | minimum occupied-volume fraction | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
+| `boundary_delta_min` | `float \| None` | `None` | $\mathrm{m}$ | non-negative | minimum T1 stencil distance | FDM CPU/GPU; FEM not applicable to Cartesian grid authoring | `mesh_workflow` |
 
 `FDM.__init__(*, cell=None, default_cell=None, per_magnet=None, demag=None,
 projection_policy=None, boundary_correction=None, boundary_phi_floor=None,
 boundary_delta_min=None)` rejects conflicting cell aliases, invalid modes,
 non-positive cells, out-of-range phi floors, and negative delta minima.
 
+(python-api-meshing-fdm-boundary-correction-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fdm-boundary-correction-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fdm-boundary-correction-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+
 ## 5. How to set it in Control Room
 
 Route: `Model Explorer -> Study -> Discretization -> FDM`. The current global
 authoring route is partial. Apply the FDM policy only where the draft exposes
 the correction keys; mesh and dependent solver resources then become stale.
-`TODO: frontend support` for a dedicated typed editor for
+`not implemented: frontend support` for a dedicated typed editor for
 `boundary_phi_floor` and `boundary_delta_min` when they are absent from the
 current draft. See [Control Room capability register](/frontend/capability-register).
 
@@ -94,20 +125,33 @@ current draft. See [Control Room capability register](/frontend/capability-regis
 | FDM CPU | planner-gated | Source policy exists; execution requires lane qualification. |
 | FDM GPU | planner-gated | Source presence is not CUDA qualification. |
 | FEM CPU/GPU | not applicable | This policy belongs to FDM discretization. |
-| Control Room | partial | Global FDM authoring exists; correction subfields may be TODO. |
+| Control Room | partial | Global FDM authoring exists; correction subfields may be not implemented. |
 
+(python-api-meshing-fdm-boundary-correction-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fdm-boundary-correction-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Construction does not prove that a correction kernel executed.
 - `full` may be rejected by interaction, geometry, precision, or device capability.
 - A rejected correction must not silently become `none` or a CPU fallback.
 
+(python-api-meshing-fdm-boundary-correction-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Abert, “Micromagnetics and spintronics: models and numerical methods,”
    *European Physical Journal B* **92**, 120 (2019),
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
 
+(python-api-meshing-fdm-boundary-correction-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fdm-boundary-correction-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Repository path | Stable symbol | Evidence |
@@ -119,3 +163,9 @@ current draft. See [Control Room capability register](/frontend/capability-regis
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| FDM boundary-correction authoring and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FDM` | FDM boundary-correction authoring and lowering. | Source-map validator and focused API tests |

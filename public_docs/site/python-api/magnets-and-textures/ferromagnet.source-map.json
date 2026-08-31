@@ -1,26 +1,162 @@
 {
-  "document": {"path": "public_docs/site/python-api/magnets-and-textures/ferromagnet.md"},
+  "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "path": "public_docs/site/python-api/magnets-and-textures/ferromagnet.md"
+  },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "documented"}
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
   ],
   "equations": [],
   "symbols": [],
-  "sources": [{"id": "owner", "path": "packages/fullmag-py/src/fullmag/model/structure.py", "symbol": "class Ferromagnet", "responsibility": "Owns the documented public API, validation, object constraints, and lowering."}],
-  "public_api": {"parameters": [
-    {"python": "Ferromagnet.name", "type": "str", "default": "required", "si_unit": "$1$", "validation": "non-empty", "meaning": "magnetic object name", "backend_support": "all authoring lanes", "problem_ir": "magnets[].name"},
-    {"python": "Ferromagnet.geometry", "type": "Geometry", "default": "required", "si_unit": "mixed", "validation": "valid geometry object", "meaning": "occupied magnetic geometry", "backend_support": "all authoring lanes", "problem_ir": "magnets[].geometry"},
-    {"python": "Ferromagnet.material", "type": "Material", "default": "required", "si_unit": "mixed", "validation": "valid material object", "meaning": "magnetic coefficients", "backend_support": "all authoring lanes", "problem_ir": "magnets[].material"},
-    {"python": "Ferromagnet.object_id", "type": "str | None", "default": "None", "si_unit": "$1$", "validation": "non-empty when supplied", "meaning": "stable object identity used by selections and constraints", "backend_support": "all authoring lanes; planner resolves", "problem_ir": "magnets[].object_id"},
-    {"python": "Ferromagnet.region", "type": "Region | None", "default": "None", "si_unit": "$1$", "validation": "geometry must match magnet geometry", "meaning": "optional canonical magnet region", "backend_support": "all authoring lanes", "problem_ir": "magnets[].region"},
-    {"python": "Ferromagnet.m0", "type": "InitialMagnetization | None", "default": "None", "si_unit": "$1$", "validation": "typed initial state; defaults to uniform $+x$", "meaning": "initial reduced magnetization", "backend_support": "all authoring lanes", "problem_ir": "magnets[].initial_magnetization"},
-    {"python": "Ferromagnet.mesh", "type": "PerObjectMeshRecipe | None", "default": "None", "si_unit": "mixed", "validation": "typed mesh recipe", "meaning": "object-local meshing intent", "backend_support": "planner-dependent", "problem_ir": "magnets[].mesh_recipe"},
-    {"python": "Ferromagnet.object_regions", "type": "tuple[ObjectRegion, ...]", "default": "()", "si_unit": "$1$", "validation": "unique object-owned identities", "meaning": "authored subregions", "backend_support": "planner-dependent", "problem_ir": "object_regions"},
-    {"python": "Ferromagnet.allocated_region_ids", "type": "tuple[str, ...]", "default": "()", "si_unit": "$1$", "validation": "unique reserved IDs", "meaning": "builder/round-trip region ownership", "backend_support": "authoring metadata", "problem_ir": "region identity registry"},
-    {"python": "Ferromagnet.material_parameter_fields", "type": "tuple[MaterialParameterAssignment, ...]", "default": "()", "si_unit": "parameter-dependent", "validation": "typed, finite, cardinality checked later", "meaning": "spatial material fields", "backend_support": "planner-dependent", "problem_ir": "material_parameter_fields"},
-    {"python": "Ferromagnet.absorbing_boundary", "type": "AbsorbingBoundaryLayer | None", "default": "None", "si_unit": "mixed", "validation": "typed profile and valid faces", "meaning": "object-scoped damping layer", "backend_support": "capability-gated", "problem_ir": "magnets[].absorbing_boundary"},
-    {"python": "Ferromagnet._magnetization_constraints", "type": "list[object]", "default": "empty list factory", "si_unit": "$1$", "validation": "populated by typed helpers such as `freeze_spins`; direct mutation is not public workflow", "meaning": "object-scoped constraint accumulator", "backend_support": "collected by problem/study lowering", "problem_ir": "canonical magnetization constraints"}
-  ]}
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/structure.py",
+      "symbol": "class Ferromagnet",
+      "responsibility": "Owns the documented public API, validation, object constraints, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Ferromagnet.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "non-empty",
+        "meaning": "magnetic object name",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "magnets[].name"
+      },
+      {
+        "python": "Ferromagnet.geometry",
+        "type": "Geometry",
+        "default": "required",
+        "si_unit": "mixed",
+        "validation": "valid geometry object",
+        "meaning": "occupied magnetic geometry",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "magnets[].geometry"
+      },
+      {
+        "python": "Ferromagnet.material",
+        "type": "Material",
+        "default": "required",
+        "si_unit": "mixed",
+        "validation": "valid material object",
+        "meaning": "magnetic coefficients",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "magnets[].material"
+      },
+      {
+        "python": "Ferromagnet.object_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "non-empty when supplied",
+        "meaning": "stable object identity used by selections and constraints",
+        "backend_support": "all authoring lanes; planner resolves",
+        "problem_ir": "magnets[].object_id"
+      },
+      {
+        "python": "Ferromagnet.region",
+        "type": "Region | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "geometry must match magnet geometry",
+        "meaning": "optional canonical magnet region",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "magnets[].region"
+      },
+      {
+        "python": "Ferromagnet.m0",
+        "type": "InitialMagnetization | None",
+        "default": "None",
+        "si_unit": "$1$",
+        "validation": "typed initial state; defaults to uniform $+x$",
+        "meaning": "initial reduced magnetization",
+        "backend_support": "all authoring lanes",
+        "problem_ir": "magnets[].initial_magnetization"
+      },
+      {
+        "python": "Ferromagnet.mesh",
+        "type": "PerObjectMeshRecipe | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "typed mesh recipe",
+        "meaning": "object-local meshing intent",
+        "backend_support": "planner-dependent",
+        "problem_ir": "magnets[].mesh_recipe"
+      },
+      {
+        "python": "Ferromagnet.object_regions",
+        "type": "tuple[ObjectRegion, ...]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "unique object-owned identities",
+        "meaning": "authored subregions",
+        "backend_support": "planner-dependent",
+        "problem_ir": "object_regions"
+      },
+      {
+        "python": "Ferromagnet.allocated_region_ids",
+        "type": "tuple[str, ...]",
+        "default": "()",
+        "si_unit": "$1$",
+        "validation": "unique reserved IDs",
+        "meaning": "builder/round-trip region ownership",
+        "backend_support": "authoring metadata",
+        "problem_ir": "region identity registry"
+      },
+      {
+        "python": "Ferromagnet.material_parameter_fields",
+        "type": "tuple[MaterialParameterAssignment, ...]",
+        "default": "()",
+        "si_unit": "parameter-dependent",
+        "validation": "typed, finite, cardinality checked later",
+        "meaning": "spatial material fields",
+        "backend_support": "planner-dependent",
+        "problem_ir": "material_parameter_fields"
+      },
+      {
+        "python": "Ferromagnet.absorbing_boundary",
+        "type": "AbsorbingBoundaryLayer | None",
+        "default": "None",
+        "si_unit": "mixed",
+        "validation": "typed profile and valid faces",
+        "meaning": "object-scoped damping layer",
+        "backend_support": "capability-gated",
+        "problem_ir": "magnets[].absorbing_boundary"
+      },
+      {
+        "python": "Ferromagnet._magnetization_constraints",
+        "type": "list[object]",
+        "default": "empty list factory",
+        "si_unit": "$1$",
+        "validation": "populated by typed helpers such as `freeze_spins`; direct mutation is not public workflow",
+        "meaning": "object-scoped constraint accumulator",
+        "backend_support": "collected by problem/study lowering",
+        "problem_ir": "canonical magnetization constraints"
+      }
+    ]
+  }
 }

@@ -41,7 +41,14 @@ and a stereographic `hopfion` initializer. These are Fullmag extensions rather t
 Mumax3 `Config` constructors.
 
 (mumax3-governing-equations)=
+(governing-equations)=
 ## Governing equations
+
+```{math}
+:label: eq-mumax3-vortex-wall-profile
+
+q_{\mathrm{IR}} = \mathrm{mumax3-vortex-wall-profile}(\text{qualified inputs})
+```
 
 ## Mumax3-compatible vortex wall
 
@@ -93,6 +100,7 @@ the magnetization is $-\hat{\mathbf z}$. The profile is three-dimensional and th
 requires `mapping.projection="object_local"`.
 
 (mumax3-symbols-and-si-units)=
+(symbols-and-si-units)=
 ## Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -113,6 +121,7 @@ requires `mapping.projection="object_local"`.
 | $\Theta$ | hopfion polar profile | $\mathrm{rad}$ |
 
 (mumax3-assumptions-and-validity)=
+(assumptions-and-validity)=
 ## Assumptions and validity
 
 Both profiles define reduced initial magnetization, not an energy term, equilibrium
@@ -123,6 +132,7 @@ The compact-hopfion denominator is evaluated only for $\rho<r$; the support boun
 belongs to the exact uniform exterior.
 
 (mumax3-python-api)=
+(python-api)=
 ## Python API and parameters
 
 ```python
@@ -180,6 +190,7 @@ study.stages.add_save_state(
 | `texture.hopfion_compact_support.preset_version` | int | 2 | $1$ | exactly 2 | selects the version-2 profile | FDM/FEM via planner materialization | preset_version |
 
 (mumax3-problem-ir)=
+(problem-ir)=
 ## ProblemIR lowering
 
 Both factories lower to `kind="preset_texture"`, `preset_version=2`, the listed
@@ -203,6 +214,7 @@ uniform magnetization. Python, UI, ProblemIR, session state, and exported Python
 round-trip every authored parameter unchanged.
 
 (mumax3-discrete-realization)=
+(discrete-realization)=
 ## Discrete realization and backend semantics
 
 | Solver | Device | Realization | Qualification status |
@@ -225,6 +237,7 @@ state transfer rather than an analytic preset because its value depends on a res
 mesh and session state.
 
 (mumax3-implementation-mapping)=
+(implementation-mapping)=
 ## Implementation mapping
 
 - Rust evaluator: `crates/fullmag-plan/src/magnetization_textures_v2.rs`, symbols
@@ -245,6 +258,7 @@ wall half-width with explicit SI parameters; this is a deliberate reproducibilit
 adaptation, not bitwise sampling parity.
 
 (mumax3-validation)=
+(validation)=
 ## Validation
 
 Rust contract tests check both uniform wall domains, the central vortex core, exact
@@ -264,6 +278,7 @@ solver trajectory. The profiles are initial conditions and require an independen
 relaxation or dynamics qualification for a scientific study.
 
 (mumax3-scientific-bibliography)=
+(scientific-bibliography)=
 ## Scientific bibliography
 
 1. Mumax3, `engine/config.go`, `VortexWall` and `HopfionCompactSupport`,

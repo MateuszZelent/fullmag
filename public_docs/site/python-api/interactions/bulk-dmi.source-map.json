@@ -1,46 +1,75 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/bulk-dmi.md",
-    "title": "Bulk DMI Python API",
-    "interaction": "bulk dmi"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
-    },
-    {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-bulk_dmi",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_bulk_dmi"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "source_bulk_dmi",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class BulkDMI",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "public constructor and IR lowering"
     }
   ],
-  "symbols": [],
-  "equations": [],
   "public_api": {
-    "parameters": []
+    "owner": "fm.BulkDMI(D)",
+    "parameters": [
+      {
+        "python": "fm.BulkDMI.D",
+        "type": "float",
+        "default": "required",
+        "si_unit": "J/m^2",
+        "validation": "finite; sign preserved",
+        "meaning": "bulk DMI constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "problem_ir": "D"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
   }
 }

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/meshing/fdm/index.md",
-    "reviewed_revision": "79b66a75b250e508743aca478eb20b5f62c93878"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
@@ -55,83 +55,83 @@
     "parameters": [
       {
         "python": "FDM.cell",
-        "type": "Sequence[float] | None",
-        "default": "None",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
         "si_unit": "m",
         "validation": "Three finite positive values; cannot be combined with default_cell.",
         "meaning": "Legacy alias for the default native cell size.",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "backend_policy.discretization_hints.fdm.cell"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.cell`"
       },
       {
         "python": "FDM.default_cell",
-        "type": "Sequence[float] | None",
-        "default": "None",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
         "si_unit": "m",
         "validation": "Three finite positive values.",
         "meaning": "Default native cell size inherited by magnets without an override.",
         "backend_support": "FDM CPU/GPU",
-        "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.default_cell`"
       },
       {
         "python": "FDM.per_magnet",
-        "type": "dict[str, FDMGrid] | None",
-        "default": "None",
+        "type": "`dict[str, FDMGrid] | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Nonempty names and FDMGrid values.",
         "meaning": "Object-owned native grid overrides.",
         "backend_support": "FDM CPU/GPU; multilayer capability-gated",
-        "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"
       },
       {
         "python": "FDM.demag",
-        "type": "FDMDemag | None",
-        "default": "None",
+        "type": "`FDMDemag | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Typed, internally consistent demag policy.",
         "meaning": "Single-grid or multilayer common-grid request.",
         "backend_support": "FDM demagnetization lanes",
-        "problem_ir": "backend_policy.discretization_hints.fdm.demag"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"
       },
       {
         "python": "FDM.projection_policy",
-        "type": "str | None",
-        "default": "None",
+        "type": "`str | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "`None` or the supported `unit_sphere` policy.",
         "meaning": "Projected-RK state constraint policy; `None` selects the qualified default.",
         "backend_support": "FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "backend_policy.discretization_hints.fdm.projection_policy"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.projection_policy`"
       },
       {
         "python": "FDM.boundary_correction",
-        "type": "str | None",
-        "default": "None",
+        "type": "`str | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "`none`, `volume`, or `full`.",
         "meaning": "Requested embedded-boundary correction.",
         "backend_support": "Interaction/device capability-gated",
-        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"
       },
       {
         "python": "FDM.boundary_phi_floor",
-        "type": "float | None",
-        "default": "None",
+        "type": "`float | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Strictly between zero and one.",
         "meaning": "Minimum stable partial-cell volume fraction.",
         "backend_support": "Boundary-correction lanes",
-        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_phi_floor`"
       },
       {
         "python": "FDM.boundary_delta_min",
-        "type": "float | None",
-        "default": "None",
+        "type": "`float | None`",
+        "default": "`None`",
         "si_unit": "m",
         "validation": "Finite and nonnegative.",
         "meaning": "Minimum geometric distance used by full correction.",
         "backend_support": "Boundary-correction lanes",
-        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
+        "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_delta_min`"
       }
     ]
   }

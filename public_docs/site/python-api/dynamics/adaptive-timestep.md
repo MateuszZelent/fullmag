@@ -34,18 +34,19 @@ At least one of `atol`/`rtol` must be positive; step bounds must satisfy
 (python-api-dynamics-adaptive-timestep-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `AdaptiveTimestep.atol` | `float` | `1e-6` | Non-negative; one of atol/rtol positive | Absolute tolerance | `adaptive_timestep.atol` |
-| `AdaptiveTimestep.rtol` | `float` | `1e-3` | Non-negative | Relative tolerance | `adaptive_timestep.rtol` |
-| `AdaptiveTimestep.dt_initial` | `float \| None` | `None` | Within `[dt_min, dt_max]` | Initial step | `adaptive_timestep.dt_initial` |
-| `AdaptiveTimestep.dt_min` | `float` | `1e-15` | Positive | Minimum step | `adaptive_timestep.dt_min` |
-| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | `>= dt_min` | Maximum step | `adaptive_timestep.dt_max` |
-| `AdaptiveTimestep.safety` | `float` | `0.9` | `(0, 1]` | Step safety factor | `adaptive_timestep.safety` |
-| `AdaptiveTimestep.growth_limit` | `float` | `2.0` | `> 1` | Growth limit | `adaptive_timestep.growth_limit` |
-| `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | `(0, 1)` | Shrink limit | `adaptive_timestep.shrink_limit` |
-| `AdaptiveTimestep.max_spin_rotation` | `float \| None` | `None` | Positive | Spin-rotation cap | `adaptive_timestep.max_spin_rotation` |
-| `AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | Positive | Norm tolerance | `adaptive_timestep.norm_tolerance` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `AdaptiveTimestep.atol` | `float` | `1e-6` | $\mathrm{s}$ | Non-negative; one of atol/rtol positive | Absolute tolerance | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.atol` |
+| `AdaptiveTimestep.rtol` | `float` | `1e-3` | $\mathrm{s}$ | Non-negative | Relative tolerance | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.rtol` |
+| `AdaptiveTimestep.dt_initial` | `float \| None` | `None` | $\mathrm{s}$ | Within `[dt_min, dt_max]` | Initial step | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.dt_initial` |
+| `AdaptiveTimestep.dt_min` | `float` | `1e-15` | $\mathrm{s}$ | Positive | Minimum step | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.dt_min` |
+| `AdaptiveTimestep.dt_max` | `float \| None` | `None` | $\mathrm{s}$ | `>= dt_min` | Maximum step | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.dt_max` |
+| `AdaptiveTimestep.safety` | `float` | `0.9` | $\mathrm{s}$ | `(0, 1]` | Step safety factor | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.safety` |
+| `AdaptiveTimestep.growth_limit` | `float` | `2.0` | $\mathrm{s}$ | `> 1` | Growth limit | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.growth_limit` |
+| `AdaptiveTimestep.shrink_limit` | `float` | `0.2` | $\mathrm{s}$ | `(0, 1)` | Shrink limit | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.shrink_limit` |
+| `AdaptiveTimestep.max_spin_rotation` | `float \| None` | `None` | $\mathrm{s}$ | Positive | Spin-rotation cap | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.max_spin_rotation` |
+| `AdaptiveTimestep.norm_tolerance` | `float \| None` | `None` | $\mathrm{s}$ | Positive | Norm tolerance | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `adaptive_timestep.norm_tolerance` |
 
 A `max_error` convenience mode sets `rtol=0` and records `tolerance_mode="max_error"`.
 
@@ -92,6 +93,9 @@ study.stages.add_run(stage_id="run", until=1.0e-9)
 (python-api-dynamics-adaptive-timestep-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Bound violations and zero tolerance pairs fail immediately. A `_from_max_error` policy is a
 compatibility normalization, not a distinct physics.
 
@@ -125,18 +129,24 @@ Error-control references belong to the time-integration numerical pages.
 
 ## Control Room crosswalk
 
-Status: Common solver/stage fields are partial; backend-specific options without editor fields remain TODO.
+Status: Common solver/stage fields are partial; backend-specific options without editor fields remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Solver` | `partial` | Apply stage draft; solver request and result resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Solver` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for dynamics parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for dynamics parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Adaptive policy | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | Step control lowering | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Adaptive-step parameters, validation, and IR lowering. | `packages/fullmag-py/src/fullmag/model/dynamics.py` | `class AdaptiveTimestep` | Adaptive-step parameters, validation, and IR lowering. | Source-map validator and focused API tests |

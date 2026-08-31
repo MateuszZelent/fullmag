@@ -1,46 +1,95 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/magnetoelastic.md",
-    "title": "Magnetoelastic Python API",
-    "interaction": "magnetoelastic"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
-    },
-    {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-magnetoelastic",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_magnetoelastic"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "source_magnetoelastic",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class Magnetoelastic",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "public constructor and IR lowering"
     }
   ],
-  "symbols": [],
-  "equations": [],
   "public_api": {
-    "parameters": []
+    "owner": "fm.Magnetoelastic(magnet, body, law)",
+    "parameters": [
+      {
+        "python": "magnet",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty magnet link",
+        "meaning": "magnetic object link",
+        "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
+        "problem_ir": "magnet"
+      },
+      {
+        "python": "body",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty body link",
+        "meaning": "mechanical body link",
+        "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
+        "problem_ir": "body"
+      },
+      {
+        "python": "law",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty law link",
+        "meaning": "magnetostriction law link",
+        "backend_support": "FEM CPU/GPU: IR; coupled mechanics runtime required",
+        "problem_ir": "law"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
   }
 }

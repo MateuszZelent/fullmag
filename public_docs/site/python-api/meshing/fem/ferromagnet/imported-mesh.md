@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-imported-mesh)=
 # Imported-Mesh API
 
+(python-api-meshing-fem-ferromagnet-imported-mesh-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-ferromagnet-imported-mesh-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-ferromagnet-imported-mesh-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-ferromagnet-imported-mesh-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-ferromagnet-imported-mesh-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -99,6 +115,21 @@ Failure behavior: a missing/unreadable asset → extraction error; any failed ch
 ProblemIR mapping: `backend_policy.discretization_hints.fem.mesh` (study level) /
 the object-recipe `source` field.
 
+(python-api-meshing-fem-ferromagnet-imported-mesh-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-ferromagnet-imported-mesh-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-ferromagnet-imported-mesh-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+
 ## 5. How to set it in Control Room
 
 ```
@@ -122,6 +153,13 @@ respect to generation parameters; quality and history inspection remain availabl
 | FEM | GPU | capability-gated | identical content-addressed mesh |
 | FDM | CPU/GPU | not applicable | FDM does not consume unstructured meshes |
 
+(python-api-meshing-fem-ferromagnet-imported-mesh-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-ferromagnet-imported-mesh-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Import does not waive shared-domain rules: the mesh must cover the universe and
@@ -129,10 +167,16 @@ respect to generation parameters; quality and history inspection remain availabl
 - Changing geometry after importing invalidates the match; the authoring
   fingerprint detects the drift.
 
+(python-api-meshing-fem-ferromagnet-imported-mesh-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
+(python-api-meshing-fem-ferromagnet-imported-mesh-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-ferromagnet-imported-mesh-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -144,3 +188,9 @@ respect to generation parameters; quality and history inspection remain availabl
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Imported FEM mesh request and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Imported FEM mesh request and lowering. | Source-map validator and focused API tests |

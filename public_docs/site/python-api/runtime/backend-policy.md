@@ -34,12 +34,13 @@ together; any other pairing is rejected.
 (python-api-runtime-backend-policy-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `BackendTarget` | `str` enum | `"auto"` | `auto`, `fdm`, `fem`, `hybrid` | Solver backend family | `runtime.backend_target` |
-| `DeviceTarget` | `str` enum | `"auto"` | `auto`, `cpu`, `cuda`, `gpu` | Execution device | `runtime.device_target` |
-| `ExecutionMode` | `str` enum | `"strict"` | `strict`, `extended`, `hybrid` | Execution policy | `runtime.execution_mode` |
-| `ExecutionPrecision` | `str` enum | `"double"` | `single`, `double` | Floating-point precision | `runtime.execution_precision` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `BackendTarget` | `str` enum | `"auto"` | $\mathrm{s}$ | `auto`, `fdm`, `fem`, `hybrid` | Solver backend family | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `runtime.backend_target` |
+| `DeviceTarget` | `str` enum | `"auto"` | $1$ | `auto`, `cpu`, `cuda`, `gpu` | Execution device | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `runtime.device_target` |
+| `ExecutionMode` | `str` enum | `"strict"` | $1$ | `strict`, `extended`, `hybrid` | Execution policy | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `runtime.execution_mode` |
+| `ExecutionPrecision` | `str` enum | `"double"` | $1$ | `single`, `double` | Floating-point precision | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `runtime.execution_precision` |
 
 ### Mode semantics
 
@@ -78,6 +79,9 @@ The enum values serialize as their lowercase strings inside the `runtime` block.
 (python-api-runtime-backend-policy-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Requested policy is preserved verbatim. Resolution is reported independently. Invalid identifiers
 and hybrid/non-hybrid mismatches fail immediately.
 
@@ -118,13 +122,20 @@ Status: Runtime and provenance data are inspection-only; they are not standalone
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for runtime-selection and artifact-publication parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Policy enums | `packages/fullmag-py/src/fullmag/model/problem.py` | `BackendTarget`, `DeviceTarget`, `ExecutionMode`, `ExecutionPrecision` | Canonical policy vocabulary | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Backend-family policy vocabulary. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class BackendTarget` | Backend-family policy vocabulary. | Source-map validator and focused API tests |
+| Runtime policy state and lowering. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Runtime policy state and lowering. | Source-map validator and focused API tests |

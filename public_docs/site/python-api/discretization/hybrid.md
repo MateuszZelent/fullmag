@@ -32,10 +32,13 @@ The hybrid demag selector must be non-empty; hybrid backend and mode must be sel
 (python-api-discretization-hybrid-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `Hybrid.demag` | `str` | `required` | Non-empty | Hybrid demag strategy | `demag` |
-| `DiscretizationHints.fdm` / `fem` / `hybrid` | `FDM \| FEM \| Hybrid \| None` | `None` | Valid per-lane objects | Composite hints | `discretization_hints` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `Hybrid.demag` | `str` | `required` | $1$ | Non-empty | Hybrid demag strategy | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `demag` |
+| `DiscretizationHints.fdm` | `FDM \| None` | `None` | $1$ | `FDM` instance or `None` | FDM-lane discretization hints | FDM CPU/GPU; FEM lanes are not applicable | `discretization_hints.fdm` |
+| `DiscretizationHints.fem` | `FEM \| None` | `None` | $1$ | `FEM` instance or `None` | FEM-lane discretization hints | FEM CPU/GPU; FDM lanes are not applicable | `discretization_hints.fem` |
+| `DiscretizationHints.hybrid` | `Hybrid \| None` | `None` | $1$ | `Hybrid` instance or `None` | Mixed-lane discretization hints | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `discretization_hints.hybrid` |
 
 ### Complete stage-first context
 
@@ -72,6 +75,9 @@ non-null.
 (python-api-discretization-hybrid-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Empty hybrid demag and hybrid/non-hybrid mismatch fail immediately.
 
 (python-api-discretization-hybrid-discrete-realization)=
@@ -105,18 +111,25 @@ No physical model is introduced.
 
 ## Control Room crosswalk
 
-Status: Advertised global/object mesh controls are partial; compatibility-only fields remain TODO.
+Status: Advertised global/object mesh controls are partial; compatibility-only fields remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `partial` | Apply mesh policy or Build Mesh; mesh resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Study or Objects -> <object> -> Mesh` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for discretization parameters not represented by the mesh panels.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for discretization parameters not represented by the mesh panels.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx (ObjectMeshPolicyPanel)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Hybrid hints | `packages/fullmag-py/src/fullmag/model/discretization.py` | `Hybrid`, `DiscretizationHints` | Hybrid lowering | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Hybrid discretization policy validation and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class Hybrid` | Hybrid discretization policy validation and lowering. | Source-map validator and focused API tests |
+| Composite discretization-hint ownership and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class DiscretizationHints` | Composite discretization-hint ownership and lowering. | Source-map validator and focused API tests |

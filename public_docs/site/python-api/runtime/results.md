@@ -35,15 +35,16 @@ Energy scalars are in joules; measure-like maxima `max_h_eff`, `max_h_demag` in 
 (python-api-runtime-results-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Meaning | ProblemIR |
-|---|---|---|---|---|
-| `Result.status` | `str` | `required` | `completed`, `planned`, or `not-executable` | run status |
-| `Result.backend` | `BackendTarget` | `required` | Resolved backend | `requested_backend` |
-| `Result.mode` | `ExecutionMode` | `required` | Resolved execution mode | `execution_mode` |
-| `Result.precision` | `ExecutionPrecision` | `required` | Resolved precision | `execution_precision` |
-| `Result.steps` | `Sequence[StepStats]` | empty | Per-step statistics | steps array |
-| `Result.final_magnetization` | `list[list[float]] \| None` | `None` | Final vector samples | final magnetization |
-| `Result.output_dir` | `str \| None` | `None` | Artifact directory | output dir |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `Result.status` | `str` | `required` | $1$ | `completed`, `planned`, or `not-executable` | `completed`, `planned`, or `not-executable` | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | run status |
+| `Result.backend` | `BackendTarget` | `required` | $1$ | Resolved backend | Resolved backend | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `requested_backend` |
+| `Result.mode` | `ExecutionMode` | `required` | $1$ | Resolved execution mode | Resolved execution mode | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `execution_mode` |
+| `Result.precision` | `ExecutionPrecision` | `required` | $1$ | Resolved precision | Resolved precision | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `execution_precision` |
+| `Result.steps` | `Sequence[StepStats]` | empty | $1$ | Per-step statistics | Per-step statistics | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | steps array |
+| `Result.final_magnetization` | `list[list[float]] \| None` | `None` | $1$ | Final vector samples | Final vector samples | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | final magnetization |
+| `Result.output_dir` | `str \| None` | `None` | $1$ | Artifact directory | Artifact directory | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | output dir |
 
 ### Read access
 
@@ -89,6 +90,9 @@ mode, and precision fields echo the resolved execution record.
 (python-api-runtime-results-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 An unknown scalar quantity or a missing region raises immediately. `save_state()` on a result
 without `final_magnetization` raises an explanatory error.
 
@@ -128,10 +132,10 @@ Status: Runtime and provenance data are inspection-only; they are not standalone
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for runtime-selection and artifact-publication parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
 
 ## Source-code index
@@ -139,3 +143,9 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 |---|---|---|---|---|
 | Result and step stats | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result`, `StepStats` | Executed outcome mapping | Ownership test |
 | Scalar access | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `Result.series`, `Result.last` | Series/point read | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Resolved result record and scalar accessors. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved result record and scalar accessors. | Source-map validator and focused API tests |

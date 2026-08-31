@@ -4,118 +4,121 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 ---
 
+# Boolean geometry operations
+
 (public-docs-python-api-geometry-boolean-operations)=
-# Boolean Operations
+(problem-statement)=
+## Problem statement
 
-(python-api-geometry-boolean-operations-problem-statement)=
-<!-- (problem-statement)= -->
-## Contract
-Boolean operations combine two geometries into CSG difference, union, or intersection.
+Boolean operations preserve operand structure in IR and do not perform hidden meshing at construction.
 
-(python-api-geometry-boolean-operations-governing-equations)=
-<!-- (governing-equations)= -->
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+
+(governing-equations)=
 ## Governing equations
-No physical equation is introduced; booleans are boundary-representation semantics.
 
-(python-api-geometry-boolean-operations-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
-## Symbols and SI units
-All fields are geometry references or names.
+```{math}
+:label: eq-geometry_boolean
 
-(python-api-geometry-boolean-operations-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
-## Assumptions and validity
-Names must be non-empty; operand geometries are validated independently.
-
-(python-api-geometry-boolean-operations-python-api)=
-<!-- (python-api)= -->
-## Python API
-| Python | Type | Default | Meaning | ProblemIR |
-|---|---|---|---|---|
-| `A - B` | `Difference` | base `A`, tool `B` | CSG difference | `kind="difference"` |
-| `A + B` | `Union` | operands `a`, `b` | CSG union | `kind="union"` |
-| `A & B` | `Intersection` | operands `a`, `b` | CSG intersection | `kind="intersection"` |
-
-### Complete stage-first example
-
-```python
-# %% Box with a cylindrical hole
-import fullmag as fm
-
-nm = 1.0e-9
-
-study = fm.study("boolean_operations_api_example")
-study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-body = fm.Box(100 * nm, 100 * nm, 20 * nm) - fm.Cylinder(radius=30 * nm, height=20 * nm)
-film = study.geometry(body, name="perforated_film")
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.exchange()
-study.stages.add_run(stage_id="run", until=1.0e-12)
+q_{\mathrm{IR}} = \mathrm{geometry_boolean}(\text{qualified inputs})
 ```
 
-(python-api-geometry-boolean-operations-problem-ir)=
-<!-- (problem-ir)= -->
+The physical term or constraint is represented by the canonical IR object geometry_boolean. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+
+(symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
+
+All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+
+(assumptions-and-validity)=
+## Assumptions and validity
+
+Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+
+(python-api)=
+## Python API
+
+### Constructor or function
+
+fm.Difference(base, tool, name="difference"), fm.Union(a, b), fm.Intersection(a, b)
+
+### Parameters
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| ```base/tool or a/b``` | ```Geometry``` | ```required``` | ```1``` | typed geometry operands | boolean operands | FEM CPU/GPU: IR; FDM CPU/GPU: resolver-specific | ```operands``` |
+| ```name``` | ```str``` | ```operation default``` | ```1``` | non-empty | result name | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
+
+### Stage-first example
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("public-api-example")
+study.mesh(hmax=5e-9)
+body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+study.add(body)
+study.stages.add_relax(stage_id="api-example", max_steps=1)
+# Author the documented object after the stage exists.
+value = fm.Difference(fm.Box(size=(100e-9, 20e-9, 5e-9)), fm.Cylinder(radius=5e-9, height=5e-9))
+canonical_ir = value.to_ir()
+```
+
+The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+
+(problem-ir)=
 ## ProblemIR
-Each operation emits its `kind` plus the operand IR trees (`base`/`tool` or `a`/`b`).
 
-(python-api-geometry-boolean-operations-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
+value.to_ir() is the canonical serialization boundary. It emits a typed geometry_boolean record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+
+(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-Malformed operand names fail immediately; degenerate boolean results are resolved at mesh time.
+The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-(python-api-geometry-boolean-operations-discrete-realization)=
-<!-- (discrete-realization)= -->
+
+A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+
+(discrete-realization)=
 ## Discrete realization
-FDM voxelization and FEM meshing both consume the same CSG tree.
 
-(python-api-geometry-boolean-operations-implementation-mapping)=
-<!-- (implementation-mapping)= -->
+The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+
+(implementation-mapping)=
 ## Implementation mapping
-Anchor: `packages/fullmag-py/src/fullmag/model/geometry.py` (`Difference`, `Union`,
-`Intersection`).
 
-(python-api-geometry-boolean-operations-validation)=
-<!-- (validation)= -->
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/geometry.py symbol class Difference. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+
+(validation)=
 ## Validation
-Ownership tests compare this inventory with live signatures.
 
-(python-api-geometry-boolean-operations-limitations)=
-<!-- (limitations)= -->
-## Limitations
-Boolean topology must be waterproof for FEM meshing; FDM voxelization applies its own
-discretization boundary.
+Focused repository tests covering this contract include: test_boolean_geometry_exports_nested_ir. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(python-api-geometry-boolean-operations-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
+(limitations)=
+## Limitations and Control Room
+
+Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+
+(scientific-bibliography)=
 ## Scientific bibliography
-No physical model is introduced.
 
-(python-api-geometry-boolean-operations-source-code-index)=
-<!-- (source-code-index)= -->
+- C. Geuzaine and J.-F. Remacle, Gmsh: a three-dimensional finite element mesh generator, Int. J. Numer. Meth. Eng. 79 (2009), DOI: https://doi.org/10.1002/nme.2579
 
-## Control Room crosswalk
+(source-code-index)=
+## Source code index
 
-Status: Basic object/shape fields are partial; advanced boolean, imported, auxiliary, and transform parameters remain TODO.
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/geometry.py | class Difference | public constructor and IR lowering |
 
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Geometry` | `partial` | Apply geometry draft; object resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Geometry` | `TODO` | Python-only until implemented |
-
-TODO: frontend support for every geometry parameter not rendered by GeometryObjectPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/GeometryObjectPanel.tsx (GeometryObjectPanel)`.
-
-## Source-code index
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| CSG operations | `packages/fullmag-py/src/fullmag/model/geometry.py` | `Difference`, `Union`, `Intersection` | Boolean geometry lowering | Ownership test |
+- Implementation: packages/fullmag-py/src/fullmag/model/geometry.py::class Difference
+- Source-map: geometry/boolean-operations.source-map.json
+- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

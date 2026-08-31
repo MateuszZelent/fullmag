@@ -1,0 +1,40 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/foundations/conventions-and-units.md",
+    "title": "Conventions and units",
+    "scope": "shared SI quantities, reduced magnetization, and field-energy units",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Structured-cell realization is source-backed but numerical qualification is separate."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Device field realization exists, but executed-device evidence is required."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Mesh-weighted realization is source-backed; quadrature and runtime evidence remain lane-specific."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Device realization exists, but compilation is not runtime qualification."}
+  ],
+  "sources": [
+    {"id": "conventions-python-llg", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Defines the reduced gyromagnetic constant and dynamics IR boundary."},
+    {"id": "conventions-python-study", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "study", "responsibility": "Creates the stage-first public study builder."},
+    {"id": "conventions-ir", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "ProblemIR", "responsibility": "Defines the canonical typed problem container."}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "M", "latex": "$\\mathbf{M}$", "meaning": "magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "gamma", "latex": "$\\gamma_{\\mu_0}$", "meaning": "reduced gyromagnetic constant", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$"},
+    {"id": "Hk", "latex": "$\\mathbf{H}_k$", "meaning": "effective field contribution of term k", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Ek", "latex": "$E_k$", "meaning": "energy contribution of term k", "si_unit": "$\\mathrm{J}$"},
+    {"id": "eta", "latex": "$\\boldsymbol{\\eta}$", "meaning": "tangent magnetization variation", "si_unit": "$1$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {"id": "eq-foundation-reduced-magnetization", "symbols": ["m", "M", "Ms"], "sources": ["conventions-python-llg"]},
+    {"id": "eq-foundation-energy-field", "symbols": ["Ek", "mu0", "Ms", "Hk", "eta", "Omega"], "sources": ["conventions-ir"]},
+    {"id": "eq-foundation-gamma", "symbols": ["gamma", "mu0"], "sources": ["conventions-python-llg"]}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "fm.study(problem_name)", "type": "callable", "default": "None", "si_unit": "$1$", "validation": "problem_name is None or a valid name accepted by study", "meaning": "creates the stage-first authoring builder", "backend_support": "public authoring surface; runtime is lane-specific", "problem_ir": "problem_meta and captured study state"}
+    ]
+  }
+}

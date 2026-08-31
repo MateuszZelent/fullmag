@@ -4,123 +4,125 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 ---
 
+# Mechanical boundary conditions and loads
+
 (public-docs-python-api-boundary-conditions-mechanical-boundary-conditions)=
-# Mechanical Boundary Conditions
+(problem-statement)=
+## Problem statement
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-problem-statement)=
-<!-- (problem-statement)= -->
-## Contract
-Mechanical boundary conditions prescribe displacement or traction on surfaces for
-magnetoelastic bodies.
+Mechanical authoring makes boundary kind and required payload explicit.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-governing-equations)=
-<!-- (governing-equations)= -->
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+
+(governing-equations)=
 ## Governing equations
-Mechanics equations belong to {doc}`../../physics/interactions/magnetoelastic/index`.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
-## Symbols and SI units
-Prescribed displacement is in metres; prescribed traction is in pascals.
+```{math}
+:label: eq-mechanical_boundary
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
-## Assumptions and validity
-Keyword-required vectors are validated; the surface name must be non-empty.
-
-(python-api-boundary-conditions-mechanical-boundary-conditions-python-api)=
-<!-- (python-api)= -->
-## Python API
-| Python | Type | Default | SI unit | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|---|
-| `MechanicalBoundaryCondition.kind` | `str` | `required` | $1$ | `traction_free`, `clamped`, `prescribed_displacement`, `prescribed_traction` | BC type | `kind` |
-| `MechanicalBoundaryCondition.surface` | `str` | `required` | $1$ | Non-empty | Boundary surface | `surface` |
-| `MechanicalBoundaryCondition.u` | `tuple \| None` | `None` | $\mathrm{m}$ | Required for displacement | Displacement vector | `u` |
-| `MechanicalBoundaryCondition.t` | `tuple \| None` | `None` | $\mathrm{Pa}$ | Required for traction | Traction vector | `t` |
-
-### Complete stage-first context
-
-Mechanical boundary conditions are mechanical models attached to elastic bodies; the stage-first
-study declares them through the problem model.
-
-```python
-# %% Clamped mechanical boundary condition
-import fullmag as fm
-
-study = fm.study("mechanical_bc_api_example")
-study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-
-nm = 1.0e-9
-
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.exchange()
-
-bc = fm.MechanicalBoundaryCondition(kind="clamped", surface="bottom")
-study.stages.add_run(stage_id="run", until=1.0e-12)
+q_{\mathrm{IR}} = \mathrm{mechanical_boundary}(\text{qualified inputs})
 ```
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-problem-ir)=
-<!-- (problem-ir)= -->
+The physical term or constraint is represented by the canonical IR object mechanical_boundary. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+
+(symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
+
+All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+
+(assumptions-and-validity)=
+## Assumptions and validity
+
+Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+
+(python-api)=
+## Python API
+
+### Constructor or function
+
+fm.MechanicalBoundaryCondition(...) and fm.MechanicalLoad(...)
+
+### Parameters
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| ```MechanicalBoundaryCondition.kind``` | ```Literal[str]``` | ```required``` | ```1``` | prescribed_displacement or prescribed_traction | boundary data family | FEM CPU/GPU: IR; FDM not currently resolved | ```kind``` |
+| ```MechanicalBoundaryCondition.surface``` | ```str``` | ```required``` | ```1``` | non-empty | surface selector | FEM CPU/GPU: IR; FDM not currently resolved | ```surface``` |
+| ```MechanicalBoundaryCondition.u``` | ```tuple[float,float,float]``` | ```None``` | ```m``` | required for displacement; finite | displacement vector | FEM CPU/GPU: IR; FDM not currently resolved | ```u``` |
+| ```MechanicalBoundaryCondition.t``` | ```tuple[float,float,float]``` | ```None``` | ```Pa``` | required for traction; finite | traction vector | FEM CPU/GPU: IR; FDM not currently resolved | ```t``` |
+| ```MechanicalLoad.kind``` | ```Literal[str]``` | ```required``` | ```1``` | body_force, prescribed_strain, or prescribed_stress | volume load family | FEM CPU/GPU: IR; FDM not currently resolved | ```kind``` |
+| ```MechanicalLoad.f/strain/stress``` | ```tuple[float,...]``` | ```None``` | ```N/m^3, 1, or Pa``` | payload required by kind; strain/stress six Voigt values | body force, strain, or stress | FEM CPU/GPU: IR; FDM not currently resolved | ```payload``` |
+
+### Stage-first example
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("public-api-example")
+study.mesh(hmax=5e-9)
+body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+study.add(body)
+study.stages.add_relax(stage_id="api-example", max_steps=1)
+# Author the documented object after the stage exists.
+value = fm.MechanicalBoundaryCondition("prescribed_displacement", "clamp", u=(0.0, 0.0, 0.0))
+canonical_ir = value.to_ir()
+```
+
+The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+
+(problem-ir)=
 ## ProblemIR
-`MechanicalBoundaryCondition.to_ir()` emits `kind`, `surface`, and optional `u`/`t`.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
+value.to_ir() is the canonical serialization boundary. It emits a typed mechanical_boundary record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+
+(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-Unknown kinds and missing required vectors fail immediately.
+The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-discrete-realization)=
-<!-- (discrete-realization)= -->
+
+A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+
+(discrete-realization)=
 ## Discrete realization
-Mechanical BCs are applied by the mechanics solver assembly on the named surfaces.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-implementation-mapping)=
-<!-- (implementation-mapping)= -->
+The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+
+(implementation-mapping)=
 ## Implementation mapping
-Anchor: `packages/fullmag-py/src/fullmag/model/mechanics.py`
-(`class MechanicalBoundaryCondition`).
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-validation)=
-<!-- (validation)= -->
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/mechanics.py symbol class MechanicalBoundaryCondition. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+
+(validation)=
 ## Validation
-Ownership tests compare this inventory with live signatures.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-limitations)=
-<!-- (limitations)= -->
-## Limitations
-The model object is public; wiring into the stage builder may lag the model surface.
+Focused repository tests covering this contract include: test_mechanical_boundary_condition_validation, test_mechanical_load_validation. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
+(limitations)=
+## Limitations and Control Room
+
+Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+
+(scientific-bibliography)=
 ## Scientific bibliography
-Mechanics references belong to the magnetoelastic page.
 
-(python-api-boundary-conditions-mechanical-boundary-conditions-source-code-index)=
-<!-- (source-code-index)= -->
+- L. D. Landau and E. M. Lifshitz, Theory of Elasticity, 3rd ed., DOI: https://doi.org/10.1016/C2013-0-03754-0
 
-## Control Room crosswalk
+(source-code-index)=
+## Source code index
 
-Status: No complete authoring route is established for this API surface.
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/mechanics.py | class MechanicalBoundaryCondition | public constructor and IR lowering |
 
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Boundary` | `TODO` | No supported frontend transaction |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Boundary` | `TODO` | Python-only until implemented |
-
-TODO: frontend support for this boundary-condition API and its parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
-
-## Source-code index
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Mechanical BC | `packages/fullmag-py/src/fullmag/model/mechanics.py` | `class MechanicalBoundaryCondition` | BC lowering | Ownership test |
+- Implementation: packages/fullmag-py/src/fullmag/model/mechanics.py::class MechanicalBoundaryCondition
+- Source-map: boundary-conditions/mechanical-boundary-conditions.source-map.json
+- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

@@ -1,7 +1,7 @@
 {
   "document": {
     "path": "public_docs/site/python-api/discretization/mesh-controls.md",
-    "reviewed_revision": "043201a94f769307c6b6e0db971da9a8a5eec57c"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
@@ -32,8 +32,13 @@
   "equations": [
     {
       "id": "eq-python-api-mesh-controls-min-field",
-      "symbols": ["h_target", "size_fields"],
-      "sources": ["size_field_plan"]
+      "symbols": [
+        "h_target",
+        "size_fields"
+      ],
+      "sources": [
+        "size_field_plan"
+      ]
     }
   ],
   "symbols": [
@@ -130,7 +135,7 @@
         "python": "MeshSizeControls.calibrate_for",
         "type": "str | None",
         "default": "None",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
         "meaning": "Recorded calibration-family data.",
         "backend_support": "Unattached",
@@ -140,7 +145,7 @@
         "python": "MeshSizeControls.size_preset",
         "type": "str | None",
         "default": "None",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Standalone compatibility payload; no authoring facade attaches it to ProblemIR.",
         "meaning": "Named size-policy data.",
         "backend_support": "Unattached",
@@ -150,7 +155,7 @@
         "python": "MeshSizeControls.maximum_element_size",
         "type": "float | None",
         "default": "None",
-        "si_unit": "$\\mathrm{m}$",
+        "si_unit": "\\mathrm{m}",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Upper element-size data.",
         "backend_support": "Unattached",
@@ -160,7 +165,7 @@
         "python": "MeshSizeControls.minimum_element_size",
         "type": "float | None",
         "default": "None",
-        "si_unit": "$\\mathrm{m}$",
+        "si_unit": "\\mathrm{m}",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Lower element-size data.",
         "backend_support": "Unattached",
@@ -170,7 +175,7 @@
         "python": "MeshSizeControls.maximum_element_growth_rate",
         "type": "float | None",
         "default": "None",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Element-growth data.",
         "backend_support": "Unattached",
@@ -180,7 +185,7 @@
         "python": "MeshSizeControls.curvature_factor",
         "type": "float | None",
         "default": "None",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Curvature-sizing data.",
         "backend_support": "Unattached",
@@ -190,7 +195,7 @@
         "python": "MeshSizeControls.narrow_region_resolution",
         "type": "float | None",
         "default": "None",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Standalone compatibility payload; constructor does not validate it.",
         "meaning": "Narrow-region data.",
         "backend_support": "Unattached",
@@ -200,7 +205,7 @@
         "python": "SharedMeshAssemblyPolicy.interface_hmax_factor",
         "type": "float",
         "default": "0.5",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Strictly greater than zero and no greater than one.",
         "meaning": "Preserved compatibility value; not consumed by the current builder.",
         "backend_support": "Inert compatibility data",
@@ -210,7 +215,7 @@
         "python": "SharedMeshAssemblyPolicy.enforce_conforming",
         "type": "bool",
         "default": "True",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Boolean.",
         "meaning": "Preserved compatibility value; not consumed by the current builder.",
         "backend_support": "Inert compatibility data",
@@ -220,7 +225,7 @@
         "python": "SharedMeshAssemblyPolicy.airbox_hmax_factor",
         "type": "float",
         "default": "3.0",
-        "si_unit": "$1$",
+        "si_unit": "1",
         "validation": "Finite and positive.",
         "meaning": "Preserved compatibility value; not consumed by the current builder.",
         "backend_support": "Inert compatibility data",

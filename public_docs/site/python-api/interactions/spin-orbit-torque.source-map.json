@@ -1,46 +1,125 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/spin-orbit-torque.md",
-    "title": "Spin-Orbit Torque Python API",
-    "interaction": "spin orbit torque"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
-    },
-    {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-spin_orbit_torque",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_spin_orbit_torque"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "source_spin_orbit_torque",
       "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
       "symbol": "class PrescribedSpinOrbitTorque",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "public constructor and IR lowering"
     }
   ],
-  "symbols": [],
-  "equations": [],
   "public_api": {
-    "parameters": []
+    "owner": "fm.PrescribedSpinOrbitTorque(name, target, drive, ..., free_layer_thickness_m)",
+    "parameters": [
+      {
+        "python": "name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty",
+        "meaning": "torque module identifier",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "name"
+      },
+      {
+        "python": "target",
+        "type": "RegionRef",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "typed region reference",
+        "meaning": "free-layer target",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "target"
+      },
+      {
+        "python": "drive",
+        "type": "SignedScalarDrive or VectorCurrentDrive",
+        "default": "required",
+        "si_unit": "A/m^2 or source",
+        "validation": "typed drive",
+        "meaning": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "backend_support": "drive",
+        "problem_ir": "see_constructor_to_ir"
+      },
+      {
+        "python": "xi_dl",
+        "type": "float",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite",
+        "meaning": "damping-like efficiency",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "xi_dl"
+      },
+      {
+        "python": "xi_fl",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "1",
+        "validation": "finite",
+        "meaning": "field-like efficiency",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "xi_fl"
+      },
+      {
+        "python": "free_layer_thickness_m",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "positive",
+        "meaning": "free-layer thickness",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolver-specific",
+        "problem_ir": "free_layer_thickness_m"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
   }
 }

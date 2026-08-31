@@ -761,7 +761,7 @@ def write_pages(specs: Iterable[PageSpec], root: Path) -> None:
             continue
         rendered = render_page(spec, root)
         if path.exists():
-            if path.read_text() != rendered:
+            if path.read_text(encoding="utf-8") != rendered:
                 raise FileExistsError(f"{path}: existing scaffold would need replacement")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -769,7 +769,7 @@ def write_pages(specs: Iterable[PageSpec], root: Path) -> None:
 
 
 def _front_matter(path: Path) -> dict[str, str] | None:
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != "---":
         return None
     metadata: dict[str, str] = {}
@@ -817,7 +817,7 @@ def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
             errors.append(f"missing page: {spec.path}")
             continue
         if spec.doc_kind == "scaffold":
-            if path.read_text() != render_page(spec, root):
+            if path.read_text(encoding="utf-8") != render_page(spec, root):
                 errors.append(f"scaffold does not match manifest: {spec.path}")
             continue
         metadata = _front_matter(path)
@@ -831,7 +831,7 @@ def check_pages(specs: Iterable[PageSpec], root: Path) -> list[str]:
         }.items():
             if metadata.get(key) != expected:
                 errors.append(f"reference metadata {key!r} does not match manifest: {spec.path}")
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if f"({spec.label})=" not in text:
             errors.append(f"reference label does not match manifest: {spec.path}")
         if spec.children:

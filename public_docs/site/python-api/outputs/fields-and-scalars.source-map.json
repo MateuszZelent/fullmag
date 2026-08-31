@@ -1,5 +1,6 @@
 {
   "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
     "path": "public_docs/site/python-api/outputs/fields-and-scalars.md"
   },
   "backend_matrix": [
@@ -44,43 +45,43 @@
     "parameters": [
       {
         "python": "SaveField.field",
-        "type": "str",
-        "default": "required",
+        "type": "`str`",
+        "default": "`required`",
         "si_unit": "1",
         "validation": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
         "meaning": "Canonical field ID. For example, `H_ex` requires `Exchange()`.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs[].field"
+        "problem_ir": "`study.sampling.outputs[].field`"
       },
       {
         "python": "SaveField.every",
-        "type": "positive float or \"auto\"",
-        "default": "required",
+        "type": "`positive float or \"auto\"`",
+        "default": "`required`",
         "si_unit": "\\mathrm{s}",
         "validation": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
         "meaning": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs[].every"
+        "problem_ir": "`study.sampling.outputs[].every`"
       },
       {
         "python": "SaveScalar.scalar",
-        "type": "str",
-        "default": "required",
+        "type": "`str`",
+        "default": "`required`",
         "si_unit": "1",
         "validation": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
         "meaning": "Canonical scalar ID. For example, `E_ex` requires `Exchange()`.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs[].scalar"
+        "problem_ir": "`study.sampling.outputs[].scalar`"
       },
       {
         "python": "SaveScalar.every",
-        "type": "positive float or \"auto\"",
-        "default": "required",
+        "type": "`positive float or \"auto\"`",
+        "default": "`required`",
         "si_unit": "\\mathrm{s}",
         "validation": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
         "meaning": "Finite positive sampling period in seconds, or `\"auto\"`; step-count sampling is not accepted here.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.sampling.outputs[].every"
+        "problem_ir": "`study.sampling.outputs[].every`"
       }
     ]
   }

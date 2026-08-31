@@ -21,9 +21,25 @@ explicit object recipes and mesh-workflow overrides.
 
 `demag_solver_policy` configures the algebraic Poisson solve; it does not change element geometry.
 
+(python-api-meshing-fem-study-defaults-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-study-defaults-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-study-defaults-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-study-defaults-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-study-defaults-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -80,12 +96,27 @@ Supplying both size aliases requires equal values; missing size, booleans, or
 invalid order fail during construction. Solver policy is serialized separately
 from mesh geometry.
 
+(python-api-meshing-fem-study-defaults-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-study-defaults-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-study-defaults-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
+
 ## 5. How to set it in Control Room
 
 Route: `Model Explorer -> Study -> Discretization -> FEM defaults`. Set global
 order and maximum element size, press **Apply**, then **Build Shared-Domain
 Mesh**. Object and airbox overrides are edited in their own Mesh panels.
-`TODO: frontend support` for low-level `FEM(mesh=...)` or solver-policy fields
+`not implemented: frontend support` for low-level `FEM(mesh=...)` or solver-policy fields
 not rendered by the study editor. See [Control Room capability register](/frontend/capability-register).
 
 ## 6. Backend and frontend support
@@ -96,12 +127,21 @@ not rendered by the study editor. See [Control Room capability register](/fronte
 | FDM CPU/GPU | not applicable | Use FDM cell policies. |
 | Control Room | partial | Core order/size fields are exposed; all aliases are not guaranteed. |
 
+(python-api-meshing-fem-study-defaults-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-study-defaults-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - Study defaults have lower precedence than explicit object/workflow policies.
 - `hmax` is an alias, not a second independent value.
 - A policy object does not materialize or qualify a mesh by itself.
 
+(python-api-meshing-fem-study-defaults-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. P. G. Ciarlet, *The Finite Element Method for Elliptic Problems*, SIAM, 2002.
@@ -109,6 +149,10 @@ not rendered by the study editor. See [Control Room capability register](/fronte
    mesh generator,” *International Journal for Numerical Methods in Engineering*
    **79**, 1309-1331 (2009), [doi:10.1002/nme.2579](https://doi.org/10.1002/nme.2579).
 
+(python-api-meshing-fem-study-defaults-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-study-defaults-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Repository path | Stable symbol | Evidence |
@@ -120,3 +164,10 @@ not rendered by the study editor. See [Control Room capability register](/fronte
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Study-level FEM mesh policy. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class FEM` | Study-level FEM mesh policy. | Source-map validator and focused API tests |
+| Shared-domain assembly defaults. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class SharedMeshAssemblyPolicy` | Shared-domain assembly defaults. | Source-map validator and focused API tests |

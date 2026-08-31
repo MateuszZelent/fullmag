@@ -1,7 +1,8 @@
 {
   "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
     "path": "public_docs/site/python-api/discretization/fdm-multilayer-convolution.md",
-    "title": "FDM multilayer convolution — Python, ProblemIR, and UI"
+    "title": "FDM multilayer convolution \u2014 Python, ProblemIR, and UI"
   },
   "backend_matrix": [
     {
@@ -155,60 +156,323 @@
     }
   ],
   "symbols": [
-    {"id": "ellm", "latex": "$\\ell,m$", "meaning": "destination and source layer indices", "si_unit": "$1$"},
-    {"id": "xli", "latex": "$\\mathbf{x}_{\\ell,\\mathbf{i}}$", "meaning": "center of native cell $\\mathbf{i}$ in layer $\\ell$", "si_unit": "$\\mathrm{m}$"},
-    {"id": "i", "latex": "$\\mathbf{i}$", "meaning": "three-dimensional integer cell index", "si_unit": "$1$"},
-    {"id": "ol", "latex": "$\\mathbf{o}_{\\ell}$", "meaning": "world-space origin of the native grid for layer $\\ell$", "si_unit": "$\\mathrm{m}$"},
-    {"id": "hl", "latex": "$\\mathbf{h}_{\\ell}$", "meaning": "authored native cell-edge lengths of layer $\\ell$", "si_unit": "$\\mathrm{m}$"},
-    {"id": "one", "latex": "$\\mathbf{1}$", "meaning": "three-component vector of ones", "si_unit": "$1$"},
-    {"id": "hadamard", "latex": "$\\odot$", "meaning": "component-wise multiplication", "si_unit": "$1$"},
-    {"id": "C", "latex": "$\\mathbf{C}$", "meaning": "resolved common convolution-grid cell counts", "si_unit": "$1$"},
-    {"id": "Cxy", "latex": "$C_x,C_y$", "meaning": "resolved common in-plane cell counts", "si_unit": "$1$"},
-    {"id": "Nxy", "latex": "$N_x^{\\mathrm{common}},N_y^{\\mathrm{common}}$", "meaning": "authored `common_cells_xy` components", "si_unit": "$1$"},
-    {"id": "L", "latex": "$L$", "meaning": "number of magnetic layers", "si_unit": "$1$"},
-    {"id": "odz", "latex": "$o_{d,z},o_{s,z}$", "meaning": "destination and source native-grid origins along $z$", "si_unit": "$\\mathrm{m}$"},
-    {"id": "hcz", "latex": "$h_{c,z}$", "meaning": "resolved convolution-cell thickness", "si_unit": "$\\mathrm{m}$"},
-    {"id": "Q", "latex": "$Q$", "meaning": "picometre quantizer used in the reuse key", "si_unit": "$\\mathrm{m^{-1}}$"},
-    {"id": "Kpair", "latex": "$K_{\\mathrm{pair}}$", "meaning": "number of ordered layer pairs", "si_unit": "$1$"},
-    {"id": "Kunique", "latex": "$K_{\\mathrm{unique}}$", "meaning": "number of distinct reuse keys, not merely distinct physical separations", "si_unit": "$1$"}
+    {
+      "id": "ellm",
+      "latex": "$\\ell,m$",
+      "meaning": "destination and source layer indices",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "xli",
+      "latex": "$\\mathbf{x}_{\\ell,\\mathbf{i}}$",
+      "meaning": "center of native cell $\\mathbf{i}$ in layer $\\ell$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "i",
+      "latex": "$\\mathbf{i}$",
+      "meaning": "three-dimensional integer cell index",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "ol",
+      "latex": "$\\mathbf{o}_{\\ell}$",
+      "meaning": "world-space origin of the native grid for layer $\\ell$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "hl",
+      "latex": "$\\mathbf{h}_{\\ell}$",
+      "meaning": "authored native cell-edge lengths of layer $\\ell$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "one",
+      "latex": "$\\mathbf{1}$",
+      "meaning": "three-component vector of ones",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "hadamard",
+      "latex": "$\\odot$",
+      "meaning": "component-wise multiplication",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "C",
+      "latex": "$\\mathbf{C}$",
+      "meaning": "resolved common convolution-grid cell counts",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Cxy",
+      "latex": "$C_x,C_y$",
+      "meaning": "resolved common in-plane cell counts",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Nxy",
+      "latex": "$N_x^{\\mathrm{common}},N_y^{\\mathrm{common}}$",
+      "meaning": "authored `common_cells_xy` components",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "L",
+      "latex": "$L$",
+      "meaning": "number of magnetic layers",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "odz",
+      "latex": "$o_{d,z},o_{s,z}$",
+      "meaning": "destination and source native-grid origins along $z$",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "hcz",
+      "latex": "$h_{c,z}$",
+      "meaning": "resolved convolution-cell thickness",
+      "si_unit": "$\\mathrm{m}$"
+    },
+    {
+      "id": "Q",
+      "latex": "$Q$",
+      "meaning": "picometre quantizer used in the reuse key",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "Kpair",
+      "latex": "$K_{\\mathrm{pair}}$",
+      "meaning": "number of ordered layer pairs",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Kunique",
+      "latex": "$K_{\\mathrm{unique}}$",
+      "meaning": "number of distinct reuse keys, not merely distinct physical separations",
+      "si_unit": "$1$"
+    }
   ],
   "equations": [
     {
       "id": "eq-python-fdm-multilayer-native-centers",
-      "symbols": ["xli", "i", "ol", "hl", "one", "hadamard"],
-      "sources": ["planner"]
+      "symbols": [
+        "xli",
+        "i",
+        "ol",
+        "hl",
+        "one",
+        "hadamard"
+      ],
+      "sources": [
+        "planner"
+      ]
     },
     {
       "id": "eq-python-fdm-multilayer-common-2d",
-      "symbols": ["C", "Cxy", "Nxy"],
-      "sources": ["python-demag", "planner"]
+      "symbols": [
+        "C",
+        "Cxy",
+        "Nxy"
+      ],
+      "sources": [
+        "python-demag",
+        "planner"
+      ]
     },
     {
       "id": "eq-python-fdm-multilayer-pair-count",
-      "symbols": ["ellm", "L", "odz", "hcz", "Q", "Kpair", "Kunique"],
-      "sources": ["planner"]
+      "symbols": [
+        "ellm",
+        "L",
+        "odz",
+        "hcz",
+        "Q",
+        "Kpair",
+        "Kunique"
+      ],
+      "sources": [
+        "planner"
+      ]
     }
   ],
   "public_api": {
-    "constructors": ["fullmag.FDMGrid", "fullmag.FDMDemag", "fullmag.FDM"],
+    "constructors": [
+      "fullmag.FDMGrid",
+      "fullmag.FDMDemag",
+      "fullmag.FDM"
+    ],
     "parameters": [
-      {"python": "body.mesh(cell_size=...)", "type": "Sequence[float] of length 3", "default": "required unless a default exists", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values; each object extent must be exactly divisible.", "meaning": "Native Cartesian cell size for that magnetic object.", "backend_support": "FDM CPU/GPU subject to planner capability gates.", "problem_ir": "`.fdm.per_magnet[object_name].cell`"},
-      {"python": "study.objects.mesh.defaults(cell_size=...)", "type": "Sequence[float] of length 3", "default": "`None`", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values.", "meaning": "Default native cell size for objects without an override.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`.fdm.default_cell`"},
-      {"python": "study.universe.mesh(cell_size=...)", "type": "Sequence[float] of length 3", "default": "inferred only for compatible grids", "si_unit": "$\\mathrm{m}$", "validation": "Three finite positive values; must divide the common envelope exactly.", "meaning": "Requested common convolution-grid resolution.", "backend_support": "FDM multilayer CPU/GPU subject to lane qualification.", "problem_ir": "`.fdm.demag.common_cell_size`"},
-      {"python": "FDMGrid.cell", "type": "Sequence[float] of length 3", "default": "required", "si_unit": "$\\mathrm{m}$ per component", "validation": "Exactly three finite, strictly positive components.", "meaning": "Native Cartesian cell size for one named magnet.", "backend_support": "FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane.", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell`"},
-      {"python": "FDMDemag.strategy", "type": "Literal[\"auto\", \"single_grid\", \"multilayer_convolution\"]", "default": "`\"auto\"`", "si_unit": "$1$", "validation": "Must be one of the three literal values.", "meaning": "Requested demagnetization topology; use `\"multilayer_convolution\"` to force this path.", "backend_support": "FDM CPU/GPU; multi-body `single_grid` is currently rejected by the planner.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"},
-      {"python": "FDMDemag.mode", "type": "Literal[\"auto\", \"two_d_stack\", \"three_d\"]", "default": "`\"auto\"`", "si_unit": "$1$", "validation": "Must be one of the three literal values.", "meaning": "Requested thin-film stack or full 3-D convolution mode.", "backend_support": "FDM CPU/GPU subject to geometry and native-Z constraints.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"},
-      {"python": "FDMDemag.common_cells", "type": "tuple[int, int, int] | None", "default": "`None`", "si_unit": "$1$", "validation": "Exactly three positive non-Boolean integers; mutually exclusive with `common_cells_xy`; invalid with `mode=\"two_d_stack\"`.", "meaning": "Explicit 3-D common convolution-grid cell counts.", "backend_support": "FDM CPU/GPU subject to planner memory and runtime capability.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells`"},
-      {"python": "FDMDemag.common_cells_xy", "type": "tuple[int, int] | None", "default": "`None`", "si_unit": "$1$", "validation": "Exactly two positive non-Boolean integers; mutually exclusive with `common_cells`; valid only with `mode=\"auto\"` or `mode=\"two_d_stack\"`.", "meaning": "Explicit in-plane common-grid counts; planner resolves the Z count to one for a 2-D stack.", "backend_support": "FDM CPU/GPU two-dimensional stack path.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells_xy`"},
-      {"python": "FDMDemag.allow_single_grid_fallback", "type": "bool | None", "default": "`None`", "si_unit": "$1$", "validation": "Every non-`None` value raises `ValueError`.", "meaning": "Removed compatibility input; silent fallback is forbidden.", "backend_support": "Unsupported on every lane.", "problem_ir": "Not serialized"},
-      {"python": "FDMDemag.explain", "type": "bool", "default": "`True`", "si_unit": "$1$", "validation": "The raw script builder requires a Boolean; the constructor itself does not type-check it.", "meaning": "Requests a human-readable plan explanation; it is not physical intent.", "backend_support": "Python/UI authoring helper only.", "problem_ir": "Not serialized"},
-      {"python": "FDM.cell", "type": "Sequence[float] | None", "default": "`None`", "si_unit": "$\\mathrm{m}$ per component", "validation": "Legacy alias; cannot be supplied together with `default_cell`; when present, exactly three finite positive components.", "meaning": "Backward-compatible default Cartesian cell size.", "backend_support": "FDM CPU/GPU; prefer `default_cell`.", "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"},
-      {"python": "FDM.default_cell", "type": "Sequence[float] | None", "default": "`None`", "si_unit": "$\\mathrm{m}$ per component", "validation": "Exactly three finite positive components when supplied; either this or a non-empty `per_magnet` mapping is required.", "meaning": "Default grid for magnets without an explicit native-grid override and basis for an inferred common grid.", "backend_support": "FDM CPU/GPU.", "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"},
-      {"python": "FDM.per_magnet", "type": "dict[str, FDMGrid] | None", "default": "`None`", "si_unit": "$1$", "validation": "Keys are non-empty strings and values are `FDMGrid`; without `default_cell`, every authored magnet must have a matching key.", "meaning": "Native grid overrides keyed by canonical magnet name.", "backend_support": "FDM multilayer paths.", "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"},
-      {"python": "FDM.demag", "type": "FDMDemag | None", "default": "`None`", "si_unit": "$1$", "validation": "`FDM.__init__` has no explicit type check; a valid `FDMDemag` is required during lowering.", "meaning": "Attaches requested demagnetization topology and common-grid policy.", "backend_support": "FDM CPU/GPU.", "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"},
-      {"python": "FDM.boundary_correction", "type": "Literal[\"none\", \"volume\", \"full\"] | None", "default": "`None`", "si_unit": "$1$", "validation": "When supplied, must be `\"none\"`, `\"volume\"`, or `\"full\"`.", "meaning": "Selects binary, T0 volume-fraction, or T1 full sub-cell boundary policy.", "backend_support": "Lane and precision dependent; this page does not qualify all combinations.", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"},
-      {"python": "FDM.boundary_phi_floor", "type": "float | None", "default": "`None`", "si_unit": "$1$", "validation": "Strictly $0<\\varphi_{\\mathrm{floor}}<1$ when supplied.", "meaning": "Lower volume-fraction bound used by boundary-correction stability logic.", "backend_support": "Boundary-correction lanes only.", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_phi_floor`"},
-      {"python": "FDM.boundary_delta_min", "type": "float | None", "default": "`None`", "si_unit": "$\\mathrm{m}$", "validation": "Values less than zero raise `ValueError`; the Python constructor currently performs no separate finiteness check.", "meaning": "Lower intersection-distance bound used by the T1 stencil.", "backend_support": "Boundary-correction lanes only.", "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_delta_min`"}
+      {
+        "python": "body.mesh(cell_size=...)",
+        "type": "`Sequence[float] of length 3`",
+        "default": "required unless a default exists",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Three finite positive values; each object extent must be exactly divisible.",
+        "meaning": "Native Cartesian cell size for that magnetic object.",
+        "backend_support": "FDM CPU/GPU subject to planner capability gates.",
+        "problem_ir": "`.fdm.per_magnet[object_name].cell`"
+      },
+      {
+        "python": "study.objects.mesh.defaults(cell_size=...)",
+        "type": "`Sequence[float] of length 3`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Three finite positive values.",
+        "meaning": "Default native cell size for objects without an override.",
+        "backend_support": "FDM CPU/GPU.",
+        "problem_ir": "`.fdm.default_cell`"
+      },
+      {
+        "python": "study.universe.mesh(cell_size=...)",
+        "type": "`Sequence[float] of length 3`",
+        "default": "inferred only for compatible grids",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Three finite positive values; must divide the common envelope exactly.",
+        "meaning": "Requested common convolution-grid resolution.",
+        "backend_support": "FDM multilayer CPU/GPU subject to lane qualification.",
+        "problem_ir": "`.fdm.demag.common_cell_size`"
+      },
+      {
+        "python": "FDMGrid.cell",
+        "type": "`Sequence[float] of length 3`",
+        "default": "required",
+        "si_unit": "\\mathrm{m}$ per component",
+        "validation": "Exactly three finite, strictly positive components.",
+        "meaning": "Native Cartesian cell size for one named magnet.",
+        "backend_support": "FDM CPU/GPU multilayer authoring; planner and runtime still capability-gate the resolved lane.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet[magnet_name].cell`"
+      },
+      {
+        "python": "FDMDemag.strategy",
+        "type": "`Literal[\"auto\", \"single_grid\", \"multilayer_convolution\"]`",
+        "default": "`\"auto\"`",
+        "si_unit": "1",
+        "validation": "Must be one of the three literal values.",
+        "meaning": "Requested demagnetization topology; use `\"multilayer_convolution\"` to force this path.",
+        "backend_support": "FDM CPU/GPU; multi-body `single_grid` is currently rejected by the planner.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.strategy`"
+      },
+      {
+        "python": "FDMDemag.mode",
+        "type": "`Literal[\"auto\", \"two_d_stack\", \"three_d\"]`",
+        "default": "`\"auto\"`",
+        "si_unit": "1",
+        "validation": "Must be one of the three literal values.",
+        "meaning": "Requested thin-film stack or full 3-D convolution mode.",
+        "backend_support": "FDM CPU/GPU subject to geometry and native-Z constraints.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.mode`"
+      },
+      {
+        "python": "FDMDemag.common_cells",
+        "type": "`tuple[int, int, int] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Exactly three positive non-Boolean integers; mutually exclusive with `common_cells_xy`; invalid with `mode=\"two_d_stack\"`.",
+        "meaning": "Explicit 3-D common convolution-grid cell counts.",
+        "backend_support": "FDM CPU/GPU subject to planner memory and runtime capability.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells`"
+      },
+      {
+        "python": "FDMDemag.common_cells_xy",
+        "type": "`tuple[int, int] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Exactly two positive non-Boolean integers; mutually exclusive with `common_cells`; valid only with `mode=\"auto\"` or `mode=\"two_d_stack\"`.",
+        "meaning": "Explicit in-plane common-grid counts; planner resolves the Z count to one for a 2-D stack.",
+        "backend_support": "FDM CPU/GPU two-dimensional stack path.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag.common_cells_xy`"
+      },
+      {
+        "python": "FDMDemag.allow_single_grid_fallback",
+        "type": "`bool | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Every non-`None` value raises `ValueError`.",
+        "meaning": "Removed compatibility input; silent fallback is forbidden.",
+        "backend_support": "Unsupported on every lane.",
+        "problem_ir": "Not serialized"
+      },
+      {
+        "python": "FDMDemag.explain",
+        "type": "`bool`",
+        "default": "`True`",
+        "si_unit": "1",
+        "validation": "The raw script builder requires a Boolean; the constructor itself does not type-check it.",
+        "meaning": "Requests a human-readable plan explanation; it is not physical intent.",
+        "backend_support": "Python/UI authoring helper only.",
+        "problem_ir": "Not serialized"
+      },
+      {
+        "python": "FDM.cell",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}$ per component",
+        "validation": "Legacy alias; cannot be supplied together with `default_cell`; when present, exactly three finite positive components.",
+        "meaning": "Backward-compatible default Cartesian cell size.",
+        "backend_support": "FDM CPU/GPU; prefer `default_cell`.",
+        "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"
+      },
+      {
+        "python": "FDM.default_cell",
+        "type": "`Sequence[float] | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}$ per component",
+        "validation": "Exactly three finite positive components when supplied; either this or a non-empty `per_magnet` mapping is required.",
+        "meaning": "Default grid for magnets without an explicit native-grid override and basis for an inferred common grid.",
+        "backend_support": "FDM CPU/GPU.",
+        "problem_ir": "Both `backend_policy.discretization_hints.fdm.cell` and `.default_cell`"
+      },
+      {
+        "python": "FDM.per_magnet",
+        "type": "`dict[str, FDMGrid] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Keys are non-empty strings and values are `FDMGrid`; without `default_cell`, every authored magnet must have a matching key.",
+        "meaning": "Native grid overrides keyed by canonical magnet name.",
+        "backend_support": "FDM multilayer paths.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.per_magnet`"
+      },
+      {
+        "python": "FDM.demag",
+        "type": "`FDMDemag | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "`FDM.__init__` has no explicit type check; a valid `FDMDemag` is required during lowering.",
+        "meaning": "Attaches requested demagnetization topology and common-grid policy.",
+        "backend_support": "FDM CPU/GPU.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.demag`"
+      },
+      {
+        "python": "FDM.boundary_correction",
+        "type": "`Literal[\"none\", \"volume\", \"full\"] | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "When supplied, must be `\"none\"`, `\"volume\"`, or `\"full\"`.",
+        "meaning": "Selects binary, T0 volume-fraction, or T1 full sub-cell boundary policy.",
+        "backend_support": "Lane and precision dependent; this page does not qualify all combinations.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_correction`"
+      },
+      {
+        "python": "FDM.boundary_phi_floor",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "1",
+        "validation": "Strictly $0<\\varphi_{\\mathrm{floor}}<1$ when supplied.",
+        "meaning": "Lower volume-fraction bound used by boundary-correction stability logic.",
+        "backend_support": "Boundary-correction lanes only.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_phi_floor`"
+      },
+      {
+        "python": "FDM.boundary_delta_min",
+        "type": "`float | None`",
+        "default": "`None`",
+        "si_unit": "\\mathrm{m}",
+        "validation": "Values less than zero raise `ValueError`; the Python constructor currently performs no separate finiteness check.",
+        "meaning": "Lower intersection-distance bound used by the T1 stencil.",
+        "backend_support": "Boundary-correction lanes only.",
+        "problem_ir": "`backend_policy.discretization_hints.fdm.boundary_delta_min`"
+      }
     ]
   }
 }

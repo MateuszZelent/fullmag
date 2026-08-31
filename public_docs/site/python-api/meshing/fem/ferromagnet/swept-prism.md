@@ -9,9 +9,25 @@ owner: fullmag-public-docs
 (public-docs-python-api-meshing-fem-ferromagnet-swept-prism)=
 # Swept-Prism API
 
+(python-api-meshing-fem-ferromagnet-swept-prism-python-api)=
+<!-- (python-api)= -->
 ## Python API
 
 The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+
+(python-api-meshing-fem-ferromagnet-swept-prism-problem-statement)=
+<!-- (problem-statement)= -->
+(python-api-meshing-fem-ferromagnet-swept-prism-governing-equations)=
+<!-- (governing-equations)= -->
+(python-api-meshing-fem-ferromagnet-swept-prism-symbols-and-si-units)=
+<!-- (symbols-and-si-units)= -->
+## Symbols and SI units
+All geometric lengths use $\mathrm{m}$; dimensionless selectors use $1$.
+
+(python-api-meshing-fem-ferromagnet-swept-prism-assumptions-and-validity)=
+<!-- (assumptions-and-validity)= -->
+## Assumptions and validity
+Authoring validation does not prove mesh generation or solver qualification; the realized report is authoritative.
 
 ## 1. What it is and when to use it
 
@@ -101,13 +117,13 @@ Canonical path: `object.mesh.thin_film(topology="prismatic", ...)`
 (`GeometryMeshHandle.thin_film`, prismatic branch). Full parameter table:
 {doc}`thin-film-tetrahedral` (section 4). Mode-specific fields:
 
-| Parameter | Enforced values | Meaning |
-|---|---|---|
-| `topology` | `"prismatic"` | selects the prism mode |
-| `order` | `1` (P1) | linear order only |
-| `exact_layers` | `True` in strict (`False` only in extended) | require the exact layer count |
-| `transition` | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra |
-| `layers` | positive integer | prism layer count |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `topology` | str | None | None | $1$ | `"prismatic"` | selects the prism mode | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `order` | str | None | None | $1$ | `1` (P1) | linear order only | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `exact_layers` | bool | None | None | $1$ | `True` in strict (`False` only in extended) | require the exact layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `transition` | str | None | None | $1$ | `"pyramid_to_tetrahedra"` | transition into domain tetrahedra | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
+| `layers` | str | None | None | $1$ | positive integer | prism layer count | FEM CPU/GPU; FDM not applicable to this mesh policy | `mesh_workflow` |
 
 The equivalent advanced recipe (`PerObjectMeshRecipe`) must set consistently:
 `mesh_strategy="swept_prism"`, `through_thickness_elements=layers`,
@@ -122,6 +138,21 @@ recipe → recipe validation `ValueError`.
 
 ProblemIR mapping: canonicalization happens inside the helper (section 9); the IR
 already sees a consistent `swept_prism` recipe.
+
+(python-api-meshing-fem-ferromagnet-swept-prism-problem-ir)=
+<!-- (problem-ir)= -->
+## ProblemIR
+The request lowers to the mesh-workflow or discretization subtree; requested intent remains distinct from the resolved mesh asset and provenance report.
+
+(python-api-meshing-fem-ferromagnet-swept-prism-round-trip-and-failure-semantics)=
+<!-- (round-trip-and-failure-semantics)= -->
+## Round-trip and failure semantics
+Requested intent is the Python policy; resolved execution is the realized mesh report. Validation errors identify the violated domain rule, and unsupported combinations fail explicitly without silent fallback.
+
+(python-api-meshing-fem-ferromagnet-swept-prism-discrete-realization)=
+<!-- (discrete-realization)= -->
+## Discrete realization
+The backend consumes the realized Cartesian or finite-element asset, including topology, markers, quality, and provenance where available.
 
 ## 5. How to set it in Control Room
 
@@ -149,6 +180,13 @@ Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 | FEM | GPU | capability-gated | identical content-addressed mesh |
 | FDM | CPU/GPU | not applicable | use the FDM meshing API ({doc}`../../fdm/index`) |
 
+(python-api-meshing-fem-ferromagnet-swept-prism-validation)=
+<!-- (validation)= -->
+## Validation
+Focused constructor, lowering, and mesh-report tests are the evidence boundary for this page.
+
+(python-api-meshing-fem-ferromagnet-swept-prism-limitations)=
+<!-- (limitations)= -->
 ## 7. Limitations and known pitfalls
 
 - The mode requires sweepable geometry (opposite source/target faces); complex
@@ -158,10 +196,16 @@ Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 - `exact_layers=False` is available only in extended mode and should never appear
   in production scripts.
 
+(python-api-meshing-fem-ferromagnet-swept-prism-scientific-bibliography)=
+<!-- (scientific-bibliography)= -->
 ## 8. Scientific bibliography
 
 1. C. Geuzaine and J.-F. Remacle, “Gmsh,” *Int. J. Numer. Methods Eng.* **79**, 1309–1331 (2009).
 
+(python-api-meshing-fem-ferromagnet-swept-prism-implementation-mapping)=
+<!-- (implementation-mapping)= -->
+(python-api-meshing-fem-ferromagnet-swept-prism-source-code-index)=
+<!-- (source-code-index)= -->
 ## 9. Source-code index
 
 | Claim | Path | Symbol | Evidence |
@@ -174,3 +218,9 @@ Full panel description: {doc}`../../../../frontend/meshing/object-mesh`.
 
 - Python contract source: `packages/fullmag-py/src/fullmag/model/discretization.py` and `packages/fullmag-py/src/fullmag/world.py`, where applicable. Backend realization is in the relevant `backends/fdm` or `backends/fem` lane named by the page.
 
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Swept-prism object policy and lowering. | `packages/fullmag-py/src/fullmag/model/discretization.py` | `class PerObjectMeshRecipe` | Swept-prism object policy and lowering. | Source-map validator and focused API tests |

@@ -32,12 +32,13 @@ Field, component, and positive cadence are validated immediately.
 (python-api-outputs-snapshots-python-api)=
 <!-- (python-api)= -->
 ## Python API
-| Python | Type | Default | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|
-| `Snapshot.field` | `str` | `required` | Known field id | Base field | `snapshot.field` |
-| `Snapshot.component` | `str` | `required` | `x`, `y`, `z`, or `3D` | Component selector | `snapshot.component` |
-| `Snapshot.every` | `float` | `required` | Positive | Save interval | `snapshot.every_seconds` |
-| `Snapshot.layer` | `str \| None` | `None` | Non-empty when set | Layer/region scope | `snapshot.layer` |
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| --- | --- | --- | $1$ | --- | --- | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | --- |
+| `Snapshot.field` | `str` | `required` | $1$ | Known field id | Base field | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `snapshot.field` |
+| `Snapshot.component` | `str` | `required` | $1$ | `x`, `y`, `z`, or `3D` | Component selector | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `snapshot.component` |
+| `Snapshot.every` | `float` | `required` | $\mathrm{s}$ | Positive | Save interval | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `snapshot.every_seconds` |
+| `Snapshot.layer` | `str \| None` | `None` | $1$ | Non-empty when set | Layer/region scope | FEM/FDM CPU/GPU; planner and runtime capability checks remain authoritative | `snapshot.layer` |
 
 ### Complete stage-first example
 
@@ -72,6 +73,9 @@ study.stages.add_run(stage_id="run", until=1.0e-12)
 (python-api-outputs-snapshots-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Unknown fields, invalid components, and non-positive cadences fail immediately.
 
 (python-api-outputs-snapshots-discrete-realization)=
@@ -106,18 +110,24 @@ No physical model is introduced.
 
 ## Control Room crosswalk
 
-Status: Table/field autosave and result inspection are partial; unsupported output formats remain TODO.
+Status: Table/field autosave and result inspection are partial; unsupported output formats remain not implemented.
 
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> <stage> -> Autosave` | `partial` | Submit autosave draft; output resources are revised after execution |
-| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> <stage> -> Autosave` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for output parameters not rendered by the autosave/result inspectors.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for output parameters not rendered by the autosave/result inspectors.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/stages/AutosaveStageInspector.tsx (AutosaveStageInspector)`.
 
 ## Source-code index
 | Claim | Path | Stable symbol | Responsibility | Evidence |
 |---|---|---|---|---|
 | Snapshot output | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class Snapshot` | Field-component output | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Snapshot field/component selection and lowering. | `packages/fullmag-py/src/fullmag/model/outputs.py` | `class Snapshot` | Snapshot field/component selection and lowering. | Source-map validator and focused API tests |

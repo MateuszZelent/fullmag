@@ -1,0 +1,44 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/foundations/effective-field.md",
+    "title": "Effective field",
+    "scope": "field-form composition and direct-torque separation",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "CPU field composition is term- and qualification-dependent."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "CUDA field composition requires executed-device and precision evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "The FEM CPU composition function is implemented, but numerical qualification is separate."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "The FEM GPU composition function is implemented, but runtime parity is not inferred."}
+  ],
+  "sources": [
+    {"id": "effective-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Owns exchange term authoring and IR serialization."},
+    {"id": "effective-zeeman", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Zeeman", "responsibility": "Owns external-field term authoring and vector validation."},
+    {"id": "effective-ir", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "ProblemIR", "responsibility": "Stores canonical energy terms and execution policy."},
+    {"id": "effective-fem-cpu", "path": "backends/fem/cpu/mfem/interactions/effective_field.cpp", "symbol": "compute_effective_fields_for_magnetization", "responsibility": "Composes FEM CPU field contributions."},
+    {"id": "effective-fem-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu", "symbol": "gpu_rk_accumulate_effective_field", "responsibility": "Accumulates FEM GPU RK effective-field contributions."},
+    {"id": "effective-fem-cpu-rhs", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Consumes the composed field in the FEM CPU field-driven RHS."},
+    {"id": "effective-fem-gpu-rhs", "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu", "symbol": "fullmag_cuda_llg_rhs_fused", "responsibility": "Consumes the composed field in the FEM GPU fused RHS."}
+  ],
+  "symbols": [
+    {"id": "Heff", "latex": "$\\mathbf{H}_{\\mathrm{eff}}$", "meaning": "composed field-form effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hk", "latex": "$\\mathbf{H}_k$", "meaning": "field contribution of interaction k", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Kfield", "latex": "$\\mathcal{K}_{\\mathrm{field}}$", "meaning": "enabled field-form interaction set", "si_unit": "$1$"},
+    {"id": "tau", "latex": "$\\boldsymbol{\\tau}_{\\mathrm{direct}}$", "meaning": "direct RHS torque", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "eta", "latex": "$\\boldsymbol{\\eta}$", "meaning": "tangent variation", "si_unit": "$1$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {"id": "eq-foundation-effective-field-sum", "symbols": ["Heff", "Hk", "Kfield"], "sources": ["effective-fem-cpu", "effective-fem-gpu"]},
+    {"id": "eq-foundation-effective-field-variation", "symbols": ["Hk", "mu0", "Ms", "eta", "Omega"], "sources": ["effective-ir"]},
+    {"id": "eq-foundation-effective-field-direct-torque", "symbols": ["m", "Heff", "tau"], "sources": ["effective-fem-cpu-rhs", "effective-fem-gpu-rhs"]}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "Zeeman.B", "type": "Sequence[float]", "default": "required", "si_unit": "$\\mathrm{T}$", "validation": "exactly three finite components", "meaning": "external induction vector", "backend_support": "FDM/FEM authoring; executable lane is planner-gated", "problem_ir": "energy_terms[].B"}
+    ]
+  }
+}

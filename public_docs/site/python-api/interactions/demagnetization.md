@@ -4,145 +4,122 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 ---
 
-(public-docs-python-api-interactions-demagnetization)=
 # Demagnetization
 
-This page owns the Python authoring, validation, and `ProblemIR` boundary. The scientific
-equations and backend interpretation are owned by {doc}`../../physics/interactions/demagnetization/index`.
+(public-docs-python-api-interactions-demagnetization)=
+(problem-statement)=
+## Problem statement
 
-(api-demagnetization-problem-statement)=
-## Physical problem
+Demag records the requested realization and rejects ambiguous model/realization combinations.
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
 
-(api-demagnetization-python-api)=
-## Python API and stage-first example
-
-```python
-# %% Study, execution lane, and magnetic body
-import fullmag as fm
-
-nm = 1.0e-9
-study = fm.study("demag_reference")
-study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
-body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
-body.Ms = 8.0e5
-body.Aex = 13.0e-12
-body.alpha = 0.02
-body.m = fm.texture.uniform(1.0, 0.0, 0.0)
-
-study.stages.add_run(stage_id="sample", until=1.0e-12)
-```
-
-`exchange` and `demag` are active by default. Use `study.demag(realization=...)` only to
-configure a non-default realization and `study.disable_demag()` only for an intentional
-demag-free model. The compatibility form `study.demag(enabled=False)` remains accepted.
-`model` and `realization` are mutually exclusive. `variant` is legal only for `model="airbox"`.
-
-## Core parameters
-
-| Parameter | Type | Default | Meaning | Validation |
-|---|---|---|---|---|
-| `model` | `str or None` | `None` | requested family: `airbox`, `bem`, `fredkin_koehler`, `fmm` | enum; capability later |
-| `variant` | `str or None` | `None` | `auto`, `robin`, or `dirichlet` for airbox | rejected for other models |
-| `realization` | `str or None` | `None` | legacy explicit realization/alias | cannot accompany `model` |
-| no demag control call | authoring default | active | include demagnetization | none |
-| `study.disable_demag()` | method | not called | explicitly remove demagnetization | no parameters |
-
-FDM grids, multilayer convolution, periodicity, boundary correction, and FEM linear-solver policy
-belong to discretization objects. Do not duplicate their full parameter tables on this interaction
-page.
-
-(api-demagnetization-problem-ir)=
-## Lowering
-
-```json
-{"kind": "demag", "realization": "auto"}
-```
-
-The planner must preserve requested and resolved realization separately.
-
-## Capability warning
-
-Python accepts vocabulary that is not executable on every solver/device. `bem` or `fmm` acceptance
-must never be documented as universal runtime support. Invalid model/variant combinations and
-unsupported planners fail closed.
-
-## Required tests
-
-Alias normalization, round trip, planner rejection, analytic ellipsoid/Newell oracles, mesh/airbox
-convergence, periodic zero-mode policy, and device-resident parity.
-
-(api-demagnetization-round-trip-and-failure-semantics)=
-## Round-trip and failure semantics
-
-Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
-
-(api-demagnetization-governing-equations)=
+(governing-equations)=
 ## Governing equations
 
-The equations and sign conventions owned by this interaction are stated in the preceding scientific description.
+```{math}
+:label: eq-demag
 
-(api-demagnetization-symbols-and-si-units)=
+q_{\mathrm{IR}} = \mathrm{demag}(\text{qualified inputs})
+```
+
+The physical term or constraint is represented by the canonical IR object demag. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+
+(symbols-and-si-units)=
 ## Symbols and SI units
 
-All physical inputs use SI units. Dimensionless axes and reduced magnetization are normalized according to the stated contract.
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
 
-(api-demagnetization-assumptions-and-validity)=
+All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+
+(assumptions-and-validity)=
 ## Assumptions and validity
 
-The authored model is valid only within the continuum, discretization, boundary, and capability limits stated on this page.
+Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
 
-(api-demagnetization-discrete-realization)=
-## Discrete realization
-
-FDM and FEM, and CPU and GPU, are distinct numerical realizations. Their availability and qualification are reported separately in the capability tables above.
-
-(api-demagnetization-implementation-mapping)=
-## Implementation mapping
-
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
-
-(api-demagnetization-validation)=
-## Validation
-
-Validation must cover units, signs, energy/field or torque consistency, discretization convergence, boundary behavior, and lane-specific CPU/GPU evidence.
-
-(api-demagnetization-limitations)=
-## Limitations
-
-Capabilities not listed as executable must fail closed. Source presence alone is not runtime or scientific qualification.
-
-(api-demagnetization-scientific-bibliography)=
-## Scientific bibliography
-
-The principal references are listed in the interaction-specific bibliography above.
-
-(api-demagnetization-source-code-index)=
-
-## Control Room crosswalk
-
-Status: Interaction selection is partial; only fields advertised by the current physics panel are UI-supported.
-
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Physics` | `partial` | Apply physics draft; solver/stage resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Physics` | `not implemented` | Python-only until implemented |
-
-Frontend support is not implemented for interaction-specific parameters absent from `PhysicsInteractionPanel`.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and explicit not-implemented status.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx (PhysicsInteractionPanel)`.
-
+(python-api)=
 ## Python API
 
-The complete runnable example is in the numbered example section below; the exact callable fields and arguments are in the numbered API section. These values are copied from the current Python contract, not inferred from the UI.
+### Constructor or function
 
-## Source-code index
+fm.Demag(model=None, variant=None, realization=None)
 
-The implementation owners are listed in the interaction-specific source table above.
+### Parameters
 
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| ```fm.Demag.model``` | ```str or None``` | ```None``` | ```1``` | airbox, bem, fredkin_koehler, or fmm when supplied | demagnetization model | FEM/FDM CPU/GPU: IR; resolved support required | ```realization``` |
+| ```fm.Demag.variant``` | ```str or None``` | ```None``` | ```1``` | airbox variant auto, dirichlet, or robin; only with model=airbox | airbox boundary variant | FEM/FDM CPU/GPU: IR; resolved support required | ```realization.variant``` |
+| ```fm.Demag.realization``` | ```str or None``` | ```None``` | ```1``` | mutually exclusive with model | pre-resolved realization label | FEM/FDM CPU/GPU: IR; resolved support required | ```realization``` |
+
+### Stage-first example
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("public-api-example")
+study.mesh(hmax=5e-9)
+body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+study.add(body)
+study.stages.add_relax(stage_id="api-example", max_steps=1)
+# Author the documented object after the stage exists.
+value = fm.Demag(model="airbox", variant="auto")
+canonical_ir = value.to_ir()
+```
+
+The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+
+(problem-ir)=
+## ProblemIR
+
+value.to_ir() is the canonical serialization boundary. It emits a typed demag record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+
+(round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
+
+
+A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+
+(discrete-realization)=
+## Discrete realization
+
+The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+
+(implementation-mapping)=
+## Implementation mapping
+
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/energy.py symbol class Demag. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+
+(validation)=
+## Validation
+
+Focused repository tests covering this contract include: test_demag_authoring_rejects_ambiguous_realization, test_problem_to_ir_rejects_periodic_airbox_demag_for_fdm. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
+
+(limitations)=
+## Limitations and Control Room
+
+Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+
+(scientific-bibliography)=
+## Scientific bibliography
+
+- W. F. Brown, Jr., Thermal Fluctuations of a Single-Domain Particle, Phys. Rev. 130 (1963), DOI: https://doi.org/10.1103/PhysRev.130.1677
+
+(source-code-index)=
+## Source code index
+
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/energy.py | class Demag | public constructor and IR lowering |
+
+- Implementation: packages/fullmag-py/src/fullmag/model/energy.py::class Demag
+- Source-map: interactions/demagnetization.source-map.json
+- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

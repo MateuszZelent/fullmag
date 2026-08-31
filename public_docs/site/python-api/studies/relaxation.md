@@ -115,6 +115,9 @@ destination.
 (python-api-studies-relaxation-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 Requested intent (algorithm choice, authored tolerances, time bound) is preserved in Python and
 IR. Resolved execution (backend, device, precision, solver) is selected by the planner. Validation
 errors reject unsupported algorithms, non-positive tolerances/step counts, conflicting legacy and
@@ -163,10 +166,10 @@ Status: Stage authoring and inspection are partial; the stage editor exposes onl
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `partial` | Submit stage draft; stage and downstream result resources are invalidated |
-| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Stages -> Add stage -> <stage kind>` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for study parameters not rendered by the stage editor.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for study parameters not rendered by the stage editor.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStageDraftEditor.tsx (StudyStageDraftEditor)`.
 
 ## Source-code index
@@ -175,3 +178,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/StudyStag
 | Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/study.py` | `class Relaxation` | Canonical Python API behavior | Ownership test and source-map validator |
 | Stop contract | `packages/fullmag-py/src/fullmag/model/study.py` | `class RelaxStop` | Tolerance and step normalization | Ownership test |
 | Stage surface | `packages/fullmag-py/src/fullmag/world.py` | `StudyStagesBuilder.add_relax` | Stage-first authoring entrypoint | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Relaxation study and algorithm policy lowering. | `packages/fullmag-py/src/fullmag/model/study.py` | `class Relaxation` | Relaxation study and algorithm policy lowering. | Source-map validator and focused API tests |
+| Relaxation stop criteria normalization. | `packages/fullmag-py/src/fullmag/model/study.py` | `class RelaxStop` | Relaxation stop criteria normalization. | Source-map validator and focused API tests |

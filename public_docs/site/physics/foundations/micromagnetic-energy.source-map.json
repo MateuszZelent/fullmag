@@ -1,0 +1,41 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/foundations/micromagnetic-energy.md",
+    "title": "Micromagnetic energy",
+    "scope": "typed energy-term composition and variational field convention",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Cell-based term evaluation is term-specific and requires numerical qualification."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Device term kernels require executed-device and precision evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Mesh-weighted term evaluation is term-specific and quadrature-dependent."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Device term realization is source-backed but runtime parity is not inferred."}
+  ],
+  "sources": [
+    {"id": "energy-exchange", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Exchange", "responsibility": "Owns exchange term authoring and IR serialization."},
+    {"id": "energy-demag", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Demag", "responsibility": "Owns demagnetization model and variant validation."},
+    {"id": "energy-zeeman", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class Zeeman", "responsibility": "Owns external-field term authoring."},
+    {"id": "energy-uniaxial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class UniaxialAnisotropy", "responsibility": "Owns uniaxial coefficients and axis serialization."},
+    {"id": "energy-cubic", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class CubicAnisotropy", "responsibility": "Owns cubic coefficients and axis serialization."},
+    {"id": "energy-dmi-interfacial", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class InterfacialDMI", "responsibility": "Owns interfacial DMI authoring."},
+    {"id": "energy-dmi-bulk", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class BulkDMI", "responsibility": "Owns bulk DMI authoring."},
+    {"id": "energy-assembly", "path": "packages/fullmag-py/src/fullmag/world.py", "symbol": "_build_problem", "responsibility": "Assembles enabled energy objects into a problem."},
+    {"id": "energy-ir", "path": "crates/fullmag-ir/src/lib.rs", "symbol": "ProblemIR", "responsibility": "Stores canonical energy_terms in ProblemIR."}
+  ],
+  "symbols": [
+    {"id": "E", "latex": "$E$", "meaning": "total magnetic energy", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Ek", "latex": "$E_k$", "meaning": "energy of term k", "si_unit": "$\\mathrm{J}$"},
+    {"id": "K", "latex": "$\\mathcal{K}$", "meaning": "enabled energy-term index set", "si_unit": "$1$"},
+    {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Hk", "latex": "$\\mathbf{H}_k$", "meaning": "field derived from term k", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "eta", "latex": "$\\boldsymbol{\\eta}$", "meaning": "tangent variation", "si_unit": "$1$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "vacuum permeability", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Omega", "latex": "$\\Omega_m$", "meaning": "magnetic domain", "si_unit": "$\\mathrm{m^3}$"}
+  ],
+  "equations": [
+    {"id": "eq-foundation-energy-sum", "symbols": ["E", "Ek", "K", "m"], "sources": ["energy-assembly", "energy-ir"]},
+    {"id": "eq-foundation-energy-variation", "symbols": ["Ek", "m", "eta", "mu0", "Ms", "Hk", "Omega"], "sources": ["energy-ir"]}
+  ],
+  "public_api": {"parameters": []}
+}

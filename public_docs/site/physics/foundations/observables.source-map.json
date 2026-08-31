@@ -1,5 +1,6 @@
 {
   "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
     "path": "public_docs/site/physics/foundations/observables.md",
     "title": "Observable contracts",
     "scope": "field and scalar observables, sampling, materialisation, and reductions"

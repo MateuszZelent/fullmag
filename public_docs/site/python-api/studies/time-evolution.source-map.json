@@ -1,18 +1,82 @@
 {
-  "document": {"path": "public_docs/site/python-api/studies/time-evolution.md"},
+  "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "path": "public_docs/site/python-api/studies/time-evolution.md"
+  },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "documented"}
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
   ],
   "equations": [],
   "symbols": [],
-  "sources": [{"id": "owner", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TimeEvolution", "responsibility": "Owns dynamics, outputs, frozen-spin constraints, autosave, and lowering."}],
-  "public_api": {"parameters": [
-    {"python": "TimeEvolution.dynamics", "type": "LLG", "default": "required", "si_unit": "mixed", "validation": "typed dynamics policy", "meaning": "time-domain equation and integrator", "backend_support": "planner-dependent", "problem_ir": "study.dynamics"},
-    {"python": "TimeEvolution.outputs", "type": "Sequence[TimeOutputSpec]", "default": "required", "si_unit": "mixed", "validation": "typed outputs; empty sequence legal", "meaning": "requested field/scalar/snapshot sampling", "backend_support": "planner-dependent", "problem_ir": "study.sampling.outputs"},
-    {"python": "TimeEvolution.constraints", "type": "Sequence[FrozenSpins]", "default": "()", "si_unit": "$1$", "validation": "typed frozen-spin constraints; references resolved at problem/planner boundary", "meaning": "stage-applicable magnetization constraints", "backend_support": "capability-gated by target and lane", "problem_ir": "canonical magnetization constraints associated with the study"},
-    {"python": "TimeEvolution.table_autosave", "type": "TableAutosave | None", "default": "None", "si_unit": "mixed", "validation": "typed autosave policy", "meaning": "optional scalar-table sampling", "backend_support": "planner/runtime-dependent", "problem_ir": "study.sampling.table_autosave"}
-  ]}
+  "sources": [
+    {
+      "id": "owner",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class TimeEvolution",
+      "responsibility": "Owns dynamics, outputs, frozen-spin constraints, autosave, and lowering."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "TimeEvolution.dynamics",
+        "type": "`LLG`",
+        "default": "required",
+        "si_unit": "mixed",
+        "validation": "typed dynamics policy",
+        "meaning": "time-domain equation and integrator",
+        "backend_support": "planner-dependent",
+        "problem_ir": "`study.dynamics`"
+      },
+      {
+        "python": "TimeEvolution.outputs",
+        "type": "`Sequence[TimeOutputSpec]`",
+        "default": "required",
+        "si_unit": "mixed",
+        "validation": "typed outputs; empty sequence legal",
+        "meaning": "requested field/scalar/snapshot sampling",
+        "backend_support": "planner-dependent",
+        "problem_ir": "`study.sampling.outputs`"
+      },
+      {
+        "python": "TimeEvolution.constraints",
+        "type": "`Sequence[FrozenSpins]`",
+        "default": "`()`",
+        "si_unit": "1",
+        "validation": "typed frozen-spin constraints; references resolved at problem/planner boundary",
+        "meaning": "stage-applicable magnetization constraints",
+        "backend_support": "capability-gated by target and lane",
+        "problem_ir": "canonical magnetization constraints associated with the study"
+      },
+      {
+        "python": "TimeEvolution.table_autosave",
+        "type": "`TableAutosave | None`",
+        "default": "`None`",
+        "si_unit": "mixed",
+        "validation": "typed autosave policy",
+        "meaning": "optional scalar-table sampling",
+        "backend_support": "planner/runtime-dependent",
+        "problem_ir": "`study.sampling.table_autosave`"
+      }
+    ]
+  }
 }

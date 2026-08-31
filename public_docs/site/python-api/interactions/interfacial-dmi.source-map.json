@@ -1,46 +1,85 @@
 {
   "document": {
     "path": "public_docs/site/python-api/interactions/interfacial-dmi.md",
-    "title": "Interfacial DMI Python API",
-    "interaction": "interfacial dmi"
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
   },
   "backend_matrix": [
     {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
-    },
-    {
       "solver": "FEM",
       "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented",
+      "reason": "authoring and IR documented; runtime qualification separate"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-interfacial_dmi",
+      "symbols": [
+        "q"
+      ],
+      "sources": [
+        "source_interfacial_dmi"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "q",
+      "latex": "q",
+      "meaning": "canonical typed authoring quantity",
+      "si_unit": "\\mathrm{1}"
     }
   ],
   "sources": [
     {
-      "id": "python-owner",
+      "id": "source_interfacial_dmi",
       "path": "packages/fullmag-py/src/fullmag/model/energy.py",
       "symbol": "class InterfacialDMI",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
+      "responsibility": "public constructor and IR lowering"
     }
   ],
-  "symbols": [],
-  "equations": [],
   "public_api": {
-    "parameters": []
+    "owner": "fm.InterfacialDMI(D, interface_normal=None)",
+    "parameters": [
+      {
+        "python": "fm.InterfacialDMI.D",
+        "type": "float",
+        "default": "required",
+        "si_unit": "J/m^2",
+        "validation": "finite; sign preserved",
+        "meaning": "interfacial DMI constant",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "problem_ir": "D"
+      },
+      {
+        "python": "fm.InterfacialDMI.interface_normal",
+        "type": "tuple[float,float,float] or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "finite non-zero when supplied; normalized",
+        "meaning": "interface normal",
+        "backend_support": "FEM/FDM CPU/GPU: IR; resolved support required",
+        "problem_ir": "interface_normal"
+      }
+    ],
+    "returns": "typed ProblemIR record at to_ir()"
   }
 }

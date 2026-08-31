@@ -1,5 +1,6 @@
 {
   "document": {
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
     "path": "public_docs/site/python-api/dynamics/llg.md"
   },
   "backend_matrix": [
@@ -38,53 +39,53 @@
     "parameters": [
       {
         "python": "LLG.gamma",
-        "type": "float",
-        "default": "221100.0",
+        "type": "`float`",
+        "default": "`221100.0`",
         "si_unit": "\\mathrm{m\\,A^{-1}\\,s^{-1}}",
         "validation": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
         "meaning": "Positive finite gyromagnetic ratio used by the H-field LLG convention.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics.gamma"
+        "problem_ir": "`study.dynamics.gamma`"
       },
       {
         "python": "LLG.integrator",
-        "type": "str",
-        "default": "\"auto\"",
+        "type": "`str`",
+        "default": "`\"auto\"`",
         "si_unit": "1",
         "validation": "Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly.",
         "meaning": "Canonical supported integrator identifier or `auto`; planner and runtime legality are validated explicitly.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics.integrator"
+        "problem_ir": "`study.dynamics.integrator`"
       },
       {
         "python": "LLG.fixed_timestep",
-        "type": "float | None",
-        "default": "None",
+        "type": "`float | None`",
+        "default": "`None`",
         "si_unit": "\\mathrm{s}",
         "validation": "Positive fixed step when supplied; mutually constrained with adaptive stepping.",
         "meaning": "Positive fixed step when supplied; mutually constrained with adaptive stepping.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics.fixed_timestep"
+        "problem_ir": "`study.dynamics.fixed_timestep`"
       },
       {
         "python": "LLG.adaptive_timestep",
-        "type": "AdaptiveTimestep | None",
-        "default": "None",
+        "type": "`AdaptiveTimestep | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Optional adaptive-step contract.",
         "meaning": "Optional adaptive-step contract.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics.adaptive_timestep"
+        "problem_ir": "`study.dynamics.adaptive_timestep`"
       },
       {
         "python": "LLG.field_refresh",
-        "type": "FieldRefreshPolicy | None",
-        "default": "None",
+        "type": "`FieldRefreshPolicy | None`",
+        "default": "`None`",
         "si_unit": "1",
         "validation": "Optional field-refresh policy.",
         "meaning": "Optional field-refresh policy.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
-        "problem_ir": "study.dynamics.field_refresh"
+        "problem_ir": "`study.dynamics.field_refresh`"
       }
     ]
   }

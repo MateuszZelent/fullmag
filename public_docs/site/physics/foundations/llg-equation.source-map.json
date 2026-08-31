@@ -1,0 +1,49 @@
+{
+  "document": {
+    "path": "public_docs/site/physics/foundations/llg-equation.md",
+    "title": "Landau-Lifshitz-Gilbert equation",
+    "scope": "reduced-magnetization Gilbert RHS, pure damping, and timestep policy",
+    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367"
+  },
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "CPU integrator source exists; numerical qualification is separate."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "CUDA execution requires device and precision evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Native CPU RHS is source-backed; runtime parity remains separate."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "Native GPU RHS is source-backed; device qualification remains separate."}
+  ],
+  "sources": [
+    {"id": "llg-python", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class LLG", "responsibility": "Validates and serializes the public LLG dynamics object."},
+    {"id": "llg-adaptive", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class AdaptiveTimestep", "responsibility": "Validates and serializes adaptive step controls."},
+    {"id": "llg-refresh", "path": "packages/fullmag-py/src/fullmag/model/dynamics.py", "symbol": "class FieldRefreshPolicy", "responsibility": "Validates optional field refresh cadence."},
+    {"id": "llg-fem-cpu", "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp", "symbol": "llg_rhs_aos", "responsibility": "Evaluates the FEM CPU Gilbert RHS and precession flag."},
+    {"id": "llg-fem-gpu", "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu", "symbol": "fullmag_cuda_llg_rhs_fused", "responsibility": "Evaluates the FEM GPU fused Gilbert RHS."}
+  ],
+  "symbols": [
+    {"id": "m", "latex": "$\\mathbf{m}$", "meaning": "reduced magnetization", "si_unit": "$1$"},
+    {"id": "Heff", "latex": "$\\mathbf{H}_{\\mathrm{eff}}$", "meaning": "composed effective field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "gamma", "latex": "$\\gamma_{\\mu_0}$", "meaning": "reduced gyromagnetic constant", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$"},
+    {"id": "alpha", "latex": "$\\alpha$", "meaning": "Gilbert damping parameter", "si_unit": "$1$"},
+    {"id": "mi", "latex": "$\\mathbf{m}_i$", "meaning": "magnetization at discrete location i", "si_unit": "$1$"},
+    {"id": "t", "latex": "$t$", "meaning": "physical time", "si_unit": "$\\mathrm{s}$"},
+    {"id": "i", "latex": "$i$", "meaning": "discrete location index", "si_unit": "$1$"}
+  ],
+  "equations": [
+    {"id": "eq-foundation-llg-gilbert", "symbols": ["m", "gamma", "alpha", "Heff"], "sources": ["llg-fem-cpu", "llg-fem-gpu"]},
+    {"id": "eq-foundation-llg-pure-damping", "symbols": ["m", "gamma", "alpha", "Heff"], "sources": ["llg-fem-cpu", "llg-fem-gpu"]},
+    {"id": "eq-foundation-llg-normalization", "symbols": ["mi", "i"], "sources": ["llg-fem-cpu"]}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "LLG.gamma", "type": "float", "default": "2.211e5", "si_unit": "$\\mathrm{m\\,(A\\,s)^{-1}}$", "validation": "finite and positive", "meaning": "reduced gyromagnetic constant", "backend_support": "FDM/FEM CPU/GPU authoring; qualification is lane-specific", "problem_ir": "study.dynamics.gyromagnetic_ratio"},
+      {"python": "LLG.integrator", "type": "str", "default": "auto", "si_unit": "$1$", "validation": "one of heun, rk4, rk23, rk45, abm3, coupled_imex_ark2, auto or aliases", "meaning": "requested integration family", "backend_support": "planner-gated per lane", "problem_ir": "study.dynamics.integrator"},
+      {"python": "LLG.fixed_timestep", "type": "float", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "None or positive", "meaning": "fixed physical step", "backend_support": "FDM/FEM lanes subject to planner policy", "problem_ir": "study.dynamics.fixed_timestep"},
+      {"python": "LLG.adaptive_timestep", "type": "AdaptiveTimestep", "default": "None", "si_unit": "$1$", "validation": "mutually exclusive with fixed_timestep", "meaning": "embedded-error policy", "backend_support": "adaptive families only", "problem_ir": "study.dynamics.adaptive_timestep"},
+      {"python": "AdaptiveTimestep.atol", "type": "float", "default": "1e-6", "si_unit": "$1$", "validation": "non-negative; not both tolerances zero", "meaning": "absolute error tolerance", "backend_support": "adaptive families only", "problem_ir": "study.dynamics.adaptive_timestep.atol"},
+      {"python": "AdaptiveTimestep.rtol", "type": "float", "default": "1e-3", "si_unit": "$1$", "validation": "non-negative; not both tolerances zero", "meaning": "relative error tolerance", "backend_support": "adaptive families only", "problem_ir": "study.dynamics.adaptive_timestep.rtol"},
+      {"python": "AdaptiveTimestep.dt_initial", "type": "float", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "None or positive and within bounds", "meaning": "first adaptive step", "backend_support": "adaptive families only", "problem_ir": "study.dynamics.adaptive_timestep.dt_initial"},
+      {"python": "AdaptiveTimestep.dt_min", "type": "float", "default": "1e-15", "si_unit": "$\\mathrm{s}$", "validation": "positive", "meaning": "minimum retry step", "backend_support": "adaptive families only", "problem_ir": "study.dynamics.adaptive_timestep.dt_min"},
+      {"python": "AdaptiveTimestep.dt_max", "type": "float", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "None or positive and at least dt_min", "meaning": "maximum adaptive step", "backend_support": "adaptive families only", "problem_ir": "study.dynamics.adaptive_timestep.dt_max"},
+      {"python": "FieldRefreshPolicy.demag_interval_s", "type": "float", "default": "None", "si_unit": "$\\mathrm{s}$", "validation": "None or positive", "meaning": "optional demag refresh cadence", "backend_support": "lane-dependent", "problem_ir": "study.dynamics.field_refresh.demag_interval_s"}
+    ]
+  }
+}

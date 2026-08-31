@@ -1,154 +1,159 @@
 ---
 title: Material
-status: implemented
+status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 ---
 
-(public-docs-python-api-materials-material)=
-# Material
+# Magnetic material
 
-```{versionchanged} development
-Corrected `Material.Dbulk` and `Material.Dbulk_field` to the micromagnetic bulk-DMI coefficient unit $\mathrm{J\,m^{-2}}$ and documented the dimensional check.
+(public-docs-python-api-materials-material)=
+(problem-statement)=
+## Problem statement
+
+Material is the typed source of magnetic coefficients.
+
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+
+(governing-equations)=
+## Governing equations
+
+```{math}
+:label: eq-material
+
+q_{\mathrm{IR}} = \mathrm{material}(\text{qualified inputs})
 ```
 
-(python-api-materials-material-problem-statement)=
-<!-- (problem-statement)= -->
-## Contract
-This page records the current public Python authoring contract and canonical lowering; it does not redefine solver physics.
+The physical term or constraint is represented by the canonical IR object material. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
 
-(python-api-materials-material-governing-equations)=
-<!-- (governing-equations)= -->
-## Governing equations
-This API page introduces no independent governing equation. Physical equations belong to interaction and solver-lane pages.
-
-(python-api-materials-material-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
+(symbols-and-si-units)=
 ## Symbols and SI units
-Every owned input has its SI unit below; $1$ denotes dimensionless data.
 
-(python-api-materials-material-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
+
+All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+
+(assumptions-and-validity)=
 ## Assumptions and validity
-Constructor checks run immediately. Lowering and planning additionally check mesh cardinality, capability, and backend legality.
 
-Both interfacial and isotropic bulk micromagnetic DMI coefficients multiply one spatial derivative
-of reduced magnetization in an energy density. Their dimension is therefore
-$\mathrm{J\,m^{-2}}$: coefficient $\times$ derivative $\mathrm{m^{-1}}$ gives
-$\mathrm{J\,m^{-3}}$. The two DMI variants differ by symmetry and operator, not by coefficient
-unit.
+Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
 
-(python-api-materials-material-python-api)=
-<!-- (python-api)= -->
+(python-api)=
 ## Python API
-| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+
+### Constructor or function
+
+fm.Material(name, Ms, A, alpha, ...)
+
+### Parameters
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
 |---|---|---|---|---|---|---|---|
-| `Material.name` | `str` | `required` | $1$ | Non-empty material identity referenced by magnets. | Non-empty material identity referenced by magnets. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].name` |
-| `Material.Ms` | `float` | `required` | $\mathrm{A\,m^{-1}}$ | Finite and positive saturation magnetization. | Finite and positive saturation magnetization. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].saturation_magnetisation` |
-| `Material.A` | `float` | `required` | $\mathrm{J\,m^{-1}}$ | Finite and positive bulk exchange stiffness; unusual-SI values outside $[10^{-14},10^{-8}]$ warn. | Finite and positive bulk exchange stiffness; unusual-SI values outside $[10^{-14},10^{-8}]$ warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].exchange_stiffness` |
-| `Material.alpha` | `float` | `required` | $1$ | Finite non-negative Gilbert damping. | Finite non-negative Gilbert damping. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].damping` |
-| `Material.Ku1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed first-order uniaxial anisotropy. | Finite signed first-order uniaxial anisotropy. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].uniaxial_anisotropy` |
-| `Material.Ku2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Finite signed second-order uniaxial anisotropy. | Finite signed second-order uniaxial anisotropy. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].uniaxial_anisotropy_k2` |
-| `Material.anisU` | `three floats or None` | `None` | $1$ | Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream. | Finite three-vector defining the uniaxial axis; normalization and legality are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].anisotropy_axis` |
-| `Material.Kc1` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | First cubic-anisotropy coefficient; suspicious-SI values warn. | First cubic-anisotropy coefficient; suspicious-SI values warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_kc1` |
-| `Material.Kc2` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Second cubic-anisotropy coefficient; suspicious-SI values warn. | Second cubic-anisotropy coefficient; suspicious-SI values warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_kc2` |
-| `Material.Kc3` | `float \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Third cubic-anisotropy coefficient; suspicious-SI values warn. | Third cubic-anisotropy coefficient; suspicious-SI values warn. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_kc3` |
-| `Material.anisC1` | `three floats or None` | `None` | $1$ | Finite first cubic-anisotropy axis. | Finite first cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis1` |
-| `Material.anisC2` | `three floats or None` | `None` | $1$ | Finite second cubic-anisotropy axis. | Finite second cubic-anisotropy axis. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].cubic_anisotropy_axis2` |
-| `Material.Dind` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite interfacial-DMI material coefficient; it does not enable DMI by itself. | Finite interfacial-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].interfacial_dmi` |
-| `Material.Dbulk` | `float \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | Finite bulk-DMI material coefficient; it does not enable DMI by itself. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].bulk_dmi` |
-| `Material.Ms_field` | `list[float] \| None` | `None` | $\mathrm{A\,m^{-1}}$ | Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream. | Optional spatial values overriding scalar `Ms`; mesh cardinality and lane legality are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].ms_field` |
-| `Material.A_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-1}}$ | Optional spatial values overriding scalar `A`; not an FDM pair-coefficient lookup table. | Optional spatial values overriding scalar `A`; not an FDM pair-coefficient lookup table. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].a_field` |
-| `Material.alpha_field` | `list[float] \| None` | `None` | $1$ | Optional mesh-aligned damping values; cardinality and lane support are checked downstream. | Optional mesh-aligned damping values; cardinality and lane support are checked downstream. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].alpha_field` |
-| `Material.Ku_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Ku1` values. | Optional spatial `Ku1` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].ku_field` |
-| `Material.Ku2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Ku2` values. | Optional spatial `Ku2` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].ku2_field` |
-| `Material.Kc1_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc1` values. | Optional spatial `Kc1` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].kc1_field` |
-| `Material.Kc2_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc2` values. | Optional spatial `Kc2` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].kc2_field` |
-| `Material.Kc3_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-3}}$ | Optional spatial `Kc3` values. | Optional spatial `Kc3` values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].kc3_field` |
-| `Material.Dind_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial interfacial-DMI values. | Optional spatial interfacial-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dind_field` |
-| `Material.Dbulk_field` | `list[float] \| None` | `None` | $\mathrm{J\,m^{-2}}$ | Optional spatial bulk-DMI values. | Optional spatial bulk-DMI values. | FEM/FDM CPU/GPU; planner checks combinations | `materials[].dbulk_field` |
+| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | material identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
+| ```Ms``` | ```float or field``` | ```required``` | ```A/m``` | positive or typed field | saturation magnetization | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ms``` |
+| ```A``` | ```float or field``` | ```required``` | ```J/m``` | positive or typed field | exchange stiffness | FEM/FDM CPU/GPU: IR; resolver-specific | ```A``` |
+| ```alpha``` | ```float or field``` | ```required``` | ```1``` | finite and non-negative | Gilbert damping | FEM/FDM CPU/GPU: IR; resolver-specific | ```alpha``` |
+| ```Ku1/Ku2/Kc1/Kc2/Kc3``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | anisotropy constants | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisotropy``` |
+| ```Dind/Dbulk``` | ```float or field or None``` | ```None``` | ```J/m^2``` | finite when supplied | DMI constants | FEM/FDM CPU/GPU: IR; resolver-specific | ```dmi``` |
 
-
-### Complete material stage scenario
-
-Material parameters are assigned to the study-owned magnetic body. This is the public equivalent
-of the material record used by the solver; a standalone `Material(...)` cell is not a simulation.
+### Stage-first example
 
 ```python
-# %% Material values in a complete stage-first study
+# %%
 import fullmag as fm
 
-nm = 1.0e-9
-study = fm.study("material_api_example")
-study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-study.exchange()
-film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.Ku1 = 5.0e5
-film.anisU = (0.0, 0.0, 1.0)
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.solver(integrator="rk45", fix_dt=1.0e-15, gamma=2.211e5)
-study.stages.add_run(stage_id="run", until=1.0e-9)
+study = fm.study("public-api-example")
+study.mesh(hmax=5e-9)
+body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+study.add(body)
+study.stages.add_relax(stage_id="api-example", max_steps=1)
+# Author the documented object after the stage exists.
+value = fm.Material(name="film", Ms=8.0e5, A=1.0e-11, alpha=0.01)
+canonical_ir = value.to_ir()
 ```
 
-(python-api-materials-material-problem-ir)=
-<!-- (problem-ir)= -->
+The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+
+
+(complete-qualified-material-signature)=
+### Complete qualified Material signature
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| ```Material.name``` | ```str``` | ```required``` | ```1``` | non-empty | material identifier | FEM/FDM CPU/GPU: IR; resolver-specific | ```name``` |
+| ```Material.Ms``` | ```float or field``` | ```required``` | ```A/m``` | positive or typed field | saturation magnetization | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ms``` |
+| ```Material.A``` | ```float or field``` | ```required``` | ```J/m``` | positive or typed field | exchange stiffness | FEM/FDM CPU/GPU: IR; resolver-specific | ```A``` |
+| ```Material.alpha``` | ```float or field``` | ```required``` | ```1``` | finite and non-negative | Gilbert damping | FEM/FDM CPU/GPU: IR; resolver-specific | ```alpha``` |
+| ```Material.Ku1``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | first uniaxial constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku1``` |
+| ```Material.Ku2``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | second uniaxial constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku2``` |
+| ```Material.anisU``` | ```tuple or None``` | ```None``` | ```1``` | typed when supplied | uniaxial axes | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisU``` |
+| ```Material.Kc1``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | first cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc1``` |
+| ```Material.Kc2``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | second cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc2``` |
+| ```Material.Kc3``` | ```float or field or None``` | ```None``` | ```J/m^3``` | finite when supplied | third cubic constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc3``` |
+| ```Material.anisC1``` | ```tuple or None``` | ```None``` | ```1``` | typed when supplied | first cubic axis | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisC1``` |
+| ```Material.anisC2``` | ```tuple or None``` | ```None``` | ```1``` | typed when supplied | second cubic axis | FEM/FDM CPU/GPU: IR; resolver-specific | ```anisC2``` |
+| ```Material.Dind``` | ```float or field or None``` | ```None``` | ```J/m^2``` | finite when supplied | interfacial DMI constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dind``` |
+| ```Material.Dbulk``` | ```float or field or None``` | ```None``` | ```J/m^2``` | finite when supplied | bulk DMI constant | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dbulk``` |
+| ```Material.Ms_field``` | ```field or None``` | ```None``` | ```A/m``` | typed when supplied | spatial saturation magnetization field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ms_field``` |
+| ```Material.A_field``` | ```field or None``` | ```None``` | ```J/m``` | typed when supplied | spatial exchange field | FEM/FDM CPU/GPU: IR; resolver-specific | ```A_field``` |
+| ```Material.alpha_field``` | ```field or None``` | ```None``` | ```1``` | typed when supplied | spatial damping field | FEM/FDM CPU/GPU: IR; resolver-specific | ```alpha_field``` |
+| ```Material.Ku_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Ku1 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku_field``` |
+| ```Material.Ku2_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Ku2 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Ku2_field``` |
+| ```Material.Kc1_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Kc1 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc1_field``` |
+| ```Material.Kc2_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Kc2 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc2_field``` |
+| ```Material.Kc3_field``` | ```field or None``` | ```None``` | ```J/m^3``` | typed when supplied | spatial Kc3 field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Kc3_field``` |
+| ```Material.Dind_field``` | ```field or None``` | ```None``` | ```J/m^2``` | typed when supplied | spatial interfacial DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dind_field``` |
+| ```Material.Dbulk_field``` | ```field or None``` | ```None``` | ```J/m^2``` | typed when supplied | spatial bulk DMI field | FEM/FDM CPU/GPU: IR; resolver-specific | ```Dbulk_field``` |
+
+(problem-ir)=
 ## ProblemIR
-The final column gives the serialized destination owned by the current lowering implementation.
 
-(python-api-materials-material-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
+value.to_ir() is the canonical serialization boundary. It emits a typed material record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+
+(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-Requested intent is preserved in Python and IR. Resolved execution is selected by the planner. Validation errors reject malformed values; unsupported combinations fail capability checks without silent fallback.
+The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-(python-api-materials-material-discrete-realization)=
-<!-- (discrete-realization)= -->
+
+A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+
+(discrete-realization)=
 ## Discrete realization
-This page owns authoring and lowering only; numerical realization belongs to solver-lane documentation.
 
-(python-api-materials-material-implementation-mapping)=
-<!-- (implementation-mapping)= -->
+The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+
+(implementation-mapping)=
 ## Implementation mapping
-The adjacent map anchors claims to `packages/fullmag-py/src/fullmag/model/structure.py` and `class Material`.
 
-(python-api-materials-material-validation)=
-<!-- (validation)= -->
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/structure.py symbol class Material. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+
+(validation)=
 ## Validation
-Tests compare this inventory with live signatures and validate its source map.
 
-(python-api-materials-material-limitations)=
-<!-- (limitations)= -->
-## Limitations
-Representability does not prove every backend combination executable; planner capabilities are authoritative.
+Focused repository tests covering this contract include: test_material_constructor_and_field_overrides_round_trip, test_material_rejects_invalid_required_parameters. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(python-api-materials-material-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
+(limitations)=
+## Limitations and Control Room
+
+Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+
+(scientific-bibliography)=
 ## Scientific bibliography
-No physical model is introduced. Primary references belong to consuming interaction pages.
 
-(python-api-materials-material-source-code-index)=
-<!-- (source-code-index)= -->
+- W. F. Brown, Jr., Thermal Fluctuations of a Single-Domain Particle, Phys. Rev. 130 (1963), DOI: https://doi.org/10.1103/PhysRev.130.1677
 
-## Control Room crosswalk
-
-Status: Scalar magnetic fields are partial; spatial fields and material-law-specific parameters remain not implemented.
-
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` | `partial` | Apply material draft; dependent physics and mesh resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `not implemented` | Python-only until implemented |
-
-frontend support is not implemented for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx (ObjectMaterialPanel)`.
-
+(source-code-index)=
 ## Source code index
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Constructor, validation, lowering | `packages/fullmag-py/src/fullmag/model/structure.py` | `class Material` | Canonical Python API behavior | Ownership test and source-map validator |
+
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/structure.py | class Material | public constructor and IR lowering |
+
+- Implementation: packages/fullmag-py/src/fullmag/model/structure.py::class Material
+- Source-map: materials/material.source-map.json
+- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

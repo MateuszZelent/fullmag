@@ -4,123 +4,123 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
 ---
 
+# Elastic materials
+
 (public-docs-python-api-materials-elastic-materials)=
-# Elastic Materials
+(problem-statement)=
+## Problem statement
 
-(python-api-materials-elastic-materials-problem-statement)=
-<!-- (problem-statement)= -->
-## Contract
-Elastic materials define linear elastic constitutive behavior for magnetoelastic bodies.
+Elastic constants are authored in SI and serialized with the lower-case IR field names used by the source.
 
-(python-api-materials-elastic-materials-governing-equations)=
-<!-- (governing-equations)= -->
+This page documents the public Python authoring boundary, not an undocumented runtime promise. Construction creates typed authoring data, while to_ir() is the object-level lowering boundary consumed by the study/script pipeline.
+
+(governing-equations)=
 ## Governing equations
-Constitutive equations belong to {doc}`../../physics/interactions/magnetoelastic/index`.
 
-(python-api-materials-elastic-materials-symbols-and-si-units)=
-<!-- (symbols-and-si-units)= -->
-## Symbols and SI units
-Elastic constants are in pascals; mass density in $\mathrm{kg\,m^{-3}}$; damping is dimensionless.
+```{math}
+:label: eq-elastic_material
 
-(python-api-materials-elastic-materials-assumptions-and-validity)=
-<!-- (assumptions-and-validity)= -->
-## Assumptions and validity
-Elastic constants and density must be positive; damping must be non-negative.
-
-(python-api-materials-elastic-materials-python-api)=
-<!-- (python-api)= -->
-## Python API
-| Python | Type | Default | SI unit | Validation | Meaning | ProblemIR |
-|---|---|---|---|---|---|---|
-| `ElasticMaterial.name` | `str` | `required` | $1$ | Non-empty | Material name | `name` |
-| `ElasticMaterial.C11` / `C12` / `C44` | `float` | `required` | $\mathrm{Pa}$ | Positive | Cubic elastic constants | `c11`, `c12`, `c44` |
-| `ElasticMaterial.rho` | `float` | `required` | $\mathrm{kg\,m^{-3}}$ | Positive | Mass density | `density` |
-| `ElasticMaterial.eta_mech` | `float \| None` | `None` | $1$ | Non-negative | Mechanical damping | `mechanical_damping` |
-
-### Complete stage-first context
-
-Elastic materials are attached to elastic bodies rather than constructed in isolation.
-
-```python
-# %% Declare a cubic elastic material
-import fullmag as fm
-
-nm = 1.0e-9
-
-study = fm.study("elastic_materials_api_example")
-study.engine("fdm")
-study.device("cpu", precision="double")
-study.mode("strict")
-
-nm = 1.0e-9
-
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
-film = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")
-film.Ms = 800.0e3
-film.Aex = 13.0e-12
-film.alpha = 0.02
-film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
-study.exchange()
-
-elastic = fm.ElasticMaterial(name="py_elastic", C11=2.0e11, C12=1.0e11, C44=1.0e11, rho=8.0e3)
-study.stages.add_run(stage_id="run", until=1.0e-12)
+q_{\mathrm{IR}} = \mathrm{elastic_material}(\text{qualified inputs})
 ```
 
-(python-api-materials-elastic-materials-problem-ir)=
-<!-- (problem-ir)= -->
+The physical term or constraint is represented by the canonical IR object elastic_material. The exact discrete operator, quadrature, mesh treatment, and solver selection are backend responsibilities; this page does not replace their qualification evidence.
+
+(symbols-and-si-units)=
+## Symbols and SI units
+
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| q | canonical typed authoring quantity | \mathrm{1} |
+
+All dimensional inputs are documented in SI units. Vector quantities use Cartesian components in the repository coordinate convention. Dimensionless parameters are explicitly marked 1; a default of None means that the constructor selects or omits the field according to the contract.
+
+(assumptions-and-validity)=
+## Assumptions and validity
+
+Inputs are finite and typed. Positive lengths, densities, conductivities, temperatures, and material constants are rejected when the source constructor requires positivity. Unsupported combinations fail closed in the constructor or lowering boundary rather than being silently converted.
+
+(python-api)=
+## Python API
+
+### Constructor or function
+
+fm.ElasticMaterial(name, C11, C12, C44, rho, eta_mech=None)
+
+### Parameters
+
+| Python name | Type | Default | SI unit | Validation | Meaning | FEM/FDM CPU/GPU support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| ```name``` | ```str``` | ```required``` | ```1``` | non-empty | material identifier | FEM CPU/GPU: IR; FDM not currently resolved | ```name``` |
+| ```C11/C12/C44``` | ```float``` | ```required``` | ```Pa``` | positive | cubic elastic constants | FEM CPU/GPU: IR; FDM not currently resolved | ```c11/c12/c44``` |
+| ```rho``` | ```float``` | ```required``` | ```kg/m^3``` | positive | mass density | FEM CPU/GPU: IR; FDM not currently resolved | ```density``` |
+| ```eta_mech``` | ```float or None``` | ```None``` | ```Pa s or model-specific``` | non-negative when supplied | mechanical damping | FEM CPU/GPU: IR; FDM not currently resolved | ```mechanical_damping``` |
+
+### Stage-first example
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("public-api-example")
+study.mesh(hmax=5e-9)
+body = fm.geometry(fm.Box(size=(100e-9, 20e-9, 5e-9)), name="film")
+study.add(body)
+study.stages.add_relax(stage_id="api-example", max_steps=1)
+# Author the documented object after the stage exists.
+value = fm.ElasticMaterial(name="substrate", C11=2.0e11, C12=1.0e11, C44=8.0e10, rho=7800.0)
+canonical_ir = value.to_ir()
+```
+
+The example intentionally exposes the object-level boundary. In a full stage, attach canonical_ir through the corresponding study/module registration method; no implicit runtime route is inferred from this page.
+
+(problem-ir)=
 ## ProblemIR
-`ElasticMaterial.to_ir()` emits `name`, `c11`, `c12`, `c44`, `density`, and optional
-`mechanical_damping`.
 
-(python-api-materials-elastic-materials-round-trip-and-failure-semantics)=
-<!-- (round-trip-and-failure-semantics)= -->
+value.to_ir() is the canonical serialization boundary. It emits a typed elastic_material record with the fields listed above; nested geometry, targets, profiles, or material references remain nested typed records rather than opaque Python objects. The IR is the requested intent. Backend resolution must preserve the record or reject an unsupported combination.
+
+(round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
-Non-positive constants/density and negative damping fail immediately.
+The requested intent is preserved before resolved execution. Validation errors identify invalid inputs, while unsupported combinations are rejected.
 
-(python-api-materials-elastic-materials-discrete-realization)=
-<!-- (discrete-realization)= -->
+
+A supported record is expected to round-trip through the repository script/scene representation without changing qualified values, units, or identifiers. Invalid types, missing required fields, non-finite values, contradictory options, and unsupported backend combinations are rejected with an explicit validation error. This page makes no claim that every backend accepts every legal authoring object.
+
+(discrete-realization)=
 ## Discrete realization
-Elastic coefficients feed the mechanics operator; realization belongs to the magnetoelastic lane.
 
-(python-api-materials-elastic-materials-implementation-mapping)=
-<!-- (implementation-mapping)= -->
+The FEM/FDM realization selects its own mesh, stencil or element operator, boundary treatment, and CPU/GPU execution lane. The Python contract supplies the physical inputs and canonical IR only; numerical equivalence requires the backend-specific validation named below.
+
+(implementation-mapping)=
 ## Implementation mapping
-Anchor: `packages/fullmag-py/src/fullmag/model/mechanics.py` (`class ElasticMaterial`).
 
-(python-api-materials-elastic-materials-validation)=
-<!-- (validation)= -->
+The authoritative implementation is packages/fullmag-py/src/fullmag/model/mechanics.py symbol class ElasticMaterial. The public constructor signature, validation branches, defaults, and to_ir() field names are derived from that source, not from a historical example.
+
+(validation)=
 ## Validation
-Ownership tests compare this inventory with live signatures.
 
-(python-api-materials-elastic-materials-limitations)=
-<!-- (limitations)= -->
-## Limitations
-Elastic material alone does not create a coupled problem; it must be assigned to an elastic body.
+Focused repository tests covering this contract include: test_elastic_material_serializes_canonical_ir. These tests are evidence for authoring/IR behavior; live runtime, device performance, and Control Room browser behavior require separate qualification.
 
-(python-api-materials-elastic-materials-scientific-bibliography)=
-<!-- (scientific-bibliography)= -->
+(limitations)=
+## Limitations and Control Room
+
+Control Room route: no dedicated route is claimed for this low-level authoring object. It is observable only through a session/problem/field view when the owning module exposes it; a dedicated object editor or route is not currently exposed. No unsupported UI or runtime capability is implied.
+
+(scientific-bibliography)=
 ## Scientific bibliography
-Constitutive references belong to the magnetoelastic page.
 
-(python-api-materials-elastic-materials-source-code-index)=
-<!-- (source-code-index)= -->
+- L. D. Landau and E. M. Lifshitz, Theory of Elasticity, 3rd ed., DOI: https://doi.org/10.1016/C2013-0-03754-0
 
-## Control Room crosswalk
+(source-code-index)=
+## Source code index
 
-Status: Scalar magnetic fields are partial; spatial fields and material-law-specific parameters remain TODO.
+| Source path | Symbol | Responsibility |
+|---|---|---|
+| packages/fullmag-py/src/fullmag/model/mechanics.py | class ElasticMaterial | public constructor and IR lowering |
 
-| Python/API surface | Control Room path | Status | Transaction |
-|---|---|---|---|
-| Parameters documented on this page | `Model Explorer -> Objects -> <object> -> Material` | `partial` | Apply material draft; dependent physics and mesh resources become stale |
-| Parameters without a named UI field | `Model Explorer -> Objects -> <object> -> Material` | `TODO` | Python-only until implemented |
-
-TODO: frontend support for spatial material fields and every parameter not rendered by ObjectMaterialPanel.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
-Frontend source owner: `apps/control-room/src/modules/inspector/panels/ObjectMaterialPanel.tsx (ObjectMaterialPanel)`.
-
-## Source-code index
-| Claim | Path | Stable symbol | Responsibility | Evidence |
-|---|---|---|---|---|
-| Elastic material | `packages/fullmag-py/src/fullmag/model/mechanics.py` | `class ElasticMaterial` | Constitutive lowering | Ownership test |
+- Implementation: packages/fullmag-py/src/fullmag/model/mechanics.py::class ElasticMaterial
+- Source-map: materials/elastic-materials.source-map.json
+- Contract status: current constructor and to_ir() boundary documented against revision ab3c8802a691a535063102c12f9a79bb0043b367.

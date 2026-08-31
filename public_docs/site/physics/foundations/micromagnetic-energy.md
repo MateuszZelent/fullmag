@@ -4,148 +4,142 @@ status: partial
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs
-source_of_truth: docs/physics/units.md
+last_updated: 2026-08-31
+reviewed_revision: ab3c8802a691a535063102c12f9a79bb0043b367
+source_of_truth: packages/fullmag-py/src/fullmag/model/energy.py and packages/fullmag-py/src/fullmag/world.py
 ---
 
 (public-docs-physics-foundations-micromagnetic-energy)=
+(foundation-energy-problem-statement)=
 # Micromagnetic energy
 
-FullMag solves the Landau–Lifshitz–Gilbert equation for the reduced magnetization
-$\mathbf{m} = \mathbf{M}/M_s$ by computing effective fields from physical energy
-functionals. This page defines the total energy, its decomposition into interaction terms,
-and the variational principle that links energies to effective fields.
+Fullmag represents physical contributions as typed energy terms. This page owns the shared
+variational contract and composition rule; interaction-specific equations and parameters
+remain on their canonical owner pages.
 
-## Total energy functional
-
-The total micromagnetic energy is a sum of independent interaction contributions
+(foundation-energy-governing-equations)=
+## Governing equations
 
 ```{math}
-:label: eq-total-energy
-E_{\mathrm{tot}}[\mathbf{m}]
-=
-E_{\mathrm{ex}} + E_{\mathrm{d}} + E_{\mathrm{Z}} + E_{\mathrm{ani}} + E_{\mathrm{DMI}}
-+ E_{\mathrm{mel}} + E_{\mathrm{oe}} + \cdots
+:label: eq-foundation-energy-sum
+E[\mathbf{m}]=\sum_{k\in\mathcal{K}}E_k[\mathbf{m}].
 ```
-
-Each term is documented in its own canonical interaction page. Every energy is reported in
-joules ($\mathrm{J}$) and integrated over the magnetic domain $\Omega_m$ unless explicitly
-documented otherwise.
-
-## Interaction energy summary
-
-| Energy | Physical origin | Typical density | Canonical page |
-|---|---|---:|---|
-| $E_{\mathrm{ex}}$ | exchange stiffness | $A\,|\nabla\mathbf{m}|^2$ | {doc}`../interactions/exchange/index` |
-| $E_{\mathrm{d}}$ | dipole–dipole (demagnetization) | $-\tfrac{1}{2}\mu_0 M_s\mathbf{m}\cdot\mathbf{H}_{\mathrm{d}}$ | {doc}`../interactions/demagnetization/index` |
-| $E_{\mathrm{Z}}$ | Zeeman (external field) | $-\mu_0 M_s\mathbf{m}\cdot\mathbf{H}_{\mathrm{ext}}$ | {doc}`../interactions/zeeman/index` |
-| $E_{\mathrm{ani}}$ | magnetocrystalline anisotropy | $K_{u1}\sin^2\theta$ (uniaxial) | {doc}`../interactions/anisotropy/index` |
-| $E_{\mathrm{DMI}}$ | Dzyaloshinskii–Moriya | $D\,\mathbf{m}\cdot(\nabla\times\mathbf{m})$ (bulk) | {doc}`../interactions/dmi/index` |
-| $E_{\mathrm{mel}}$ | magnetoelastic coupling | $B_1\varepsilon_{ii}(m_i^2-\tfrac{1}{3})$ | {doc}`../interactions/magnetoelastic/index` |
-| $E_{\mathrm{oe}}$ | Oersted (current-induced) | $-\mu_0 M_s\mathbf{m}\cdot\mathbf{H}_{\mathrm{oe}}$ | {doc}`../interactions/oersted-field/index` |
-
-:::{admonition} Non-conservative interactions
-:class: note
-
-Spin-transfer torque (STT), spin-orbit torque (SOT), and thermal noise are **not** derived
-from an energy functional. They contribute direct torques
-$\boldsymbol{\tau}$ to the LLG right-hand side. See
-{doc}`../interactions/spin-transfer-torque/index`,
-{doc}`../interactions/spin-orbit-torque/index`, and
-{doc}`../interactions/thermal-noise/index`.
-:::
-
-## Variational principle: energy to field
-
-Every conservative interaction derives its effective-field contribution from the variational
-identity
 
 ```{math}
-:label: eq-variational-principle
-\mathbf{H}_{\mathrm{term}}
-=
--\frac{1}{\mu_0 M_s}\frac{\delta E_{\mathrm{term}}}{\delta\mathbf{m}}.
+:label: eq-foundation-energy-variation
+\delta E_k[\mathbf{m};\boldsymbol{\eta}]
+=-\mu_0\int_{\Omega_m}M_s\,\mathbf{H}_k\cdot\boldsymbol{\eta}\,\mathrm{d}V.
 ```
 
-This means the directional derivative of the energy satisfies
-
-```{math}
-:label: eq-directional-derivative
-\delta E_{\mathrm{term}}[\mathbf{m};\boldsymbol{\eta}]
-=
--\mu_0\int_{\Omega_m}M_s\,\mathbf{H}_{\mathrm{term}}\cdot\boldsymbol{\eta}\,\mathrm{d}V
-```
-
-for all admissible variations $\boldsymbol{\eta}$ tangent to the unit sphere
-($\boldsymbol{\eta}\cdot\mathbf{m}=0$).
-
-This variational relation is the definition of the effective field — not a convenience
-shortcut. Every interaction page must verify Eq. {eq}`eq-directional-derivative` for its
-implemented equations.
-
-## Energy minimization and equilibrium
-
-At thermodynamic equilibrium (zero temperature, zero driving current), the magnetization
-minimises the total energy subject to the saturation constraint $|\mathbf{m}|=1$. The
-necessary condition is
-
-```{math}
-:label: eq-equilibrium-condition
-\mathbf{m}\times\mathbf{H}_{\mathrm{eff}} = \mathbf{0}
-\quad\text{on }\Omega_m,
-```
-
-i.e. the magnetization is everywhere parallel to the effective field. FullMag's relaxation
-algorithms (overdamped LLG, direct energy minimizers) converge to states satisfying this
-condition within a documented tolerance.
-
-## Domain integration
-
-Energy integration is always over the magnetic domain $\Omega_m$:
-
-- **FDM**: sum over active cells with volume $V_i$ and (optionally) magnetic volume
-  fraction $\varphi_i$.
-- **FEM**: integration over magnetic elements using the finite-element quadrature rule,
-  with non-magnetic (airbox) elements excluded.
-
-The demagnetization field $\mathbf{H}_{\mathrm{d}}$ may be solved on a larger domain
-(airbox or open boundary), but the energy integral uses only the magnetic subdomain.
-
+(foundation-energy-symbols-and-si-units)=
 ## Symbols and SI units
 
-| Symbol | Definition | SI unit |
+| Symbol | Meaning | SI unit |
 |---|---|---:|
-| $E_{\mathrm{tot}}$ | total micromagnetic energy | $\mathrm{J}$ |
-| $E_{\mathrm{term}}$ | individual interaction energy | $\mathrm{J}$ |
-| $\mathbf{H}_{\mathrm{eff}}$ | total effective field | $\mathrm{A\,m^{-1}}$ |
-| $\mathbf{H}_{\mathrm{term}}$ | interaction effective-field contribution | $\mathrm{A\,m^{-1}}$ |
-| $\boldsymbol{\eta}$ | admissible magnetization variation | $1$ |
-| $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
-| $V_i$ | discrete cell or element volume | $\mathrm{m^3}$ |
+| $E$ | total magnetic energy | $\mathrm{J}$ |
+| $E_k$ | energy of term k | $\mathrm{J}$ |
+| $\mathcal{K}$ | enabled energy-term index set | $1$ |
+| $\mathbf{m}$ | reduced magnetization | $1$ |
+| $\mathbf{H}_k$ | field derived from term k | $\mathrm{A\,m^{-1}}$ |
+| $\boldsymbol{\eta}$ | tangent variation | $1$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
 
+(foundation-energy-assumptions-and-validity)=
+## Assumptions and validity
+
+The sum includes only explicitly enabled terms. Each interaction owns its sign, units,
+discretization, and boundary law. FEM and FDM reductions can use different weights and
+quadrature, so the composition equation alone is not a parity claim.
+
+(foundation-energy-python-api)=
+## Python API
+
+Canonical term constructors are documented on their interaction owner pages. These exact
+object-level boundaries can be inspected without inventing a top-level Problem constructor.
+
+```python
+# %%
+import fullmag as fm
+from fullmag.model.energy import Exchange, Zeeman
+
+study = fm.study("energy_reference")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+exchange_ir = Exchange().to_ir()
+zeeman_ir = Zeeman(B=(0.0, 0.0, 1.0e-3)).to_ir()
+study.stages.add_relax(stage_id="equilibrium", dt=5.0e-13, max_steps=1)
+```
+
+The local foundation API owns no additional constructor parameters. Use interaction pages
+for complete argument tables, support matrices, and rejection semantics.
+
+(foundation-energy-problem-ir)=
+## ProblemIR
+
+Exchange.to_ir() produces {"kind":"exchange"} and Zeeman.to_ir() produces
+{"kind":"zeeman","B":[0.0,0.0,0.001]}. Lowering inserts these fragments into
+ProblemIR.energy_terms and preserves requested values before planner resolution.
+
+(foundation-energy-round-trip-and-failure-semantics)=
+## Round-trip and failure semantics
+
+Requested intent preserves selected term kinds and authored parameters. Resolved execution
+records realization, solver, device, and precision. Validation errors reject malformed
+parameters and incompatible combinations. Unsupported combinations fail closed and are not
+silently dropped from the energy sum.
+
+(foundation-energy-discrete-realization)=
+## Discrete realization
+
+| Lane | Energy and field realization | Status |
+|---|---|---|
+| FDM CPU | cell-based term evaluation and reductions | partial; term evidence applies |
+| FDM GPU | device term kernels and reductions | partial; device evidence applies |
+| FEM CPU | mesh-weighted weak/discrete terms | partial; quadrature applies |
+| FEM GPU | device FEM term kernels and reductions | partial; compiled code is not parity proof |
+
+(foundation-energy-implementation-mapping)=
+## Implementation mapping
+
+energy.py owns typed terms and to_ir serialization. _build_problem assembles enabled
+objects, and ProblemIR owns the typed energy_terms field. Native backends own term evaluation.
+
+(foundation-energy-validation)=
+## Validation
+
+The source map checks all listed Python and Rust symbols. The example is parsed by the
+public-example guard. Energy-derivative and cross-backend parity evidence remains
+interaction-specific.
+
+(foundation-energy-limitations)=
+## Limitations
+
+This page deliberately does not duplicate authoritative interaction formulas or claim every
+term kind is executable on every lane.
+
+(foundation-energy-scientific-bibliography)=
 ## Scientific bibliography
 
-1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, New York, 1963.
-   [Bibliographic record](https://search.worldcat.org/title/536451).
-2. A. Aharoni, *Introduction to the Theory of Ferromagnetism*, 2nd ed., Oxford University
-   Press, 2000.
-3. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
-   Physical Journal B* **92**, 120 (2019).
+1. W. F. Brown Jr., *Micromagnetics*, Interscience Publishers, 1963.
+   [WorldCat record](https://search.worldcat.org/title/536451).
+2. C. Abert, "Micromagnetics and spintronics: models and numerical methods," *European
+   Physical Journal B* 92, 120 (2019).
    [doi:10.1140/epjb/e2019-90599-6](https://doi.org/10.1140/epjb/e2019-90599-6).
-## Control Room crosswalk
 
-No dedicated equation editor exists. Use the applicable Geometry, Material, Physics, or Stage panel. Status: `inspection-only` for the scientific explanation. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
+(foundation-energy-source-code-index)=
 ## Source-code index
 
-- Public Python and lowering sources are linked by the applicable terminal API page. Runtime realization is in the relevant `backends/fdm` or `backends/fem` lane; frontend ownership is `apps/control-room/src/modules/inspector/panels/PhysicsInteractionPanel.tsx` where a live control exists.
-
+| Claim | Repository path | Stable symbol | Responsibility | Lane | Evidence status |
+|---|---|---|---|---|---|
+| exchange authoring | packages/fullmag-py/src/fullmag/model/energy.py | class Exchange | serializes exchange term | all authoring lanes | source-backed |
+| demag authoring | packages/fullmag-py/src/fullmag/model/energy.py | class Demag | validates realization choices | planner-gated | source-backed |
+| Zeeman authoring | packages/fullmag-py/src/fullmag/model/energy.py | class Zeeman | serializes external field | planner-gated | source-backed |
+| uniaxial authoring | packages/fullmag-py/src/fullmag/model/energy.py | class UniaxialAnisotropy | serializes coefficients | planner-gated | source-backed |
+| cubic authoring | packages/fullmag-py/src/fullmag/model/energy.py | class CubicAnisotropy | serializes coefficients | planner-gated | source-backed |
+| interfacial DMI authoring | packages/fullmag-py/src/fullmag/model/energy.py | class InterfacialDMI | serializes D and normal | planner-gated | source-backed |
+| bulk DMI authoring | packages/fullmag-py/src/fullmag/model/energy.py | class BulkDMI | serializes D | planner-gated | source-backed |
+| term assembly | packages/fullmag-py/src/fullmag/world.py | _build_problem | assembles enabled terms | all lanes | source-backed |
+| canonical term container | crates/fullmag-ir/src/lib.rs | ProblemIR | stores energy_terms | all lanes | source-backed |

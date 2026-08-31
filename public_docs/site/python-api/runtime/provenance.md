@@ -34,6 +34,12 @@ from a `completed` one.
 (python-api-runtime-provenance-python-api)=
 <!-- (python-api)= -->
 ## Python API
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `RuntimeSelection.backend_target` | `BackendTarget` | `auto` | $1$ | Enum value; normalized by runtime selection. | Requested backend family. | FEM/FDM CPU/GPU; planner resolves capability. | `backend_policy.requested_backend` |
+| `RuntimeSelection.execution_mode` | `ExecutionMode` | `strict` | $1$ | Enum value; normalized by runtime selection. | Requested execution mode. | FEM/FDM CPU/GPU; planner resolves capability. | `backend_policy.execution_mode` |
+| `Result.status` | `str` | required | $1$ | One of `completed`, `planned`, or `not-executable`. | Resolved execution outcome. | FEM/FDM CPU/GPU runtime record. | `runtime.status` |
 | Record | Meaning |
 |---|---|
 | requested backend/mode/precision | What the script asked for |
@@ -42,6 +48,18 @@ from a `completed` one.
 | `Result.output_dir` | Directory of the produced artifacts |
 
 ### Complete stage-first context
+
+```python
+# %% Validation/provenance stage-first probe
+import fullmag as fm
+
+study = fm.study("api_contract_probe")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+study.stages.add_run(stage_id="probe", until=1.0e-12)
+```
+
 
 Provenance is attached to the study the script authored; the resolved record is read from the
 executed `Result` (see {doc}`../runtime/results`).
@@ -55,6 +73,9 @@ Lowering preserves the requested descriptors (`requested_backend`, `execution_mo
 (python-api-runtime-provenance-round-trip-and-failure-semantics)=
 <!-- (round-trip-and-failure-semantics)= -->
 ## Round-trip and failure semantics
+
+Requested intent is the value authored by Python and preserved in ProblemIR; resolved execution is the planner or realization result. Validation errors identify the violated domain rule, and unsupported combinations are rejected explicitly rather than silently substituted.
+
 A capability failure must state the unsatisfied combination; it never silently substitutes another
 backend, device, precision, or physics term.
 
@@ -95,10 +116,10 @@ Status: Runtime and provenance data are inspection-only; they are not standalone
 | Python/API surface | Control Room path | Status | Transaction |
 |---|---|---|---|
 | Parameters documented on this page | `Model Explorer -> Runtime` | `inspection-only` | No runtime-authoring transaction |
-| Parameters without a named UI field | `Model Explorer -> Runtime` | `TODO` | Python-only until implemented |
+| Parameters without a named UI field | `Model Explorer -> Runtime` | `not implemented` | Python-only until implemented |
 
-TODO: frontend support for runtime-selection and artifact-publication parameters.
-See [Control Room capability register](/frontend/capability-register) for the support matrix and TODO policy.
+not implemented: frontend support for runtime-selection and artifact-publication parameters.
+See [Control Room capability register](/frontend/capability-register) for the support matrix and not implemented policy.
 Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeExplorerInspectorPanels.tsx (RuntimeExplorerInspectorPanels)`.
 
 ## Source-code index
@@ -106,3 +127,10 @@ Frontend source owner: `apps/control-room/src/modules/inspector/panels/RuntimeEx
 |---|---|---|---|---|
 | Requested selection | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested descriptors | Ownership test |
 | Resolved result | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved status | Ownership test |
+
+### Source-map coverage
+
+| Claim | Path | Stable symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Requested runtime descriptors and provenance metadata. | `packages/fullmag-py/src/fullmag/model/problem.py` | `class RuntimeSelection` | Requested runtime descriptors and provenance metadata. | Source-map validator and focused API tests |
+| Resolved execution result and status. | `packages/fullmag-py/src/fullmag/runtime/simulation.py` | `class Result` | Resolved execution result and status. | Source-map validator and focused API tests |
