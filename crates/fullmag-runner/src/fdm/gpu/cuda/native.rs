@@ -796,6 +796,7 @@ pub(crate) struct NativeFdmBackend {
     gpu_transport_bound: bool,
     adaptive_timestep_enabled: bool,
     stats_policy: NativeStatsPolicy,
+    rotated_dmi_only: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -1290,6 +1291,9 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none(),
         })
     }
 
@@ -2009,7 +2013,18 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: adaptive.is_some(),
             stats_policy,
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none(),
         })
+    }
+
+    fn split_dmi_energy(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
+        if self.rotated_dmi_only {
+            (0.0, aggregate_dmi_energy)
+        } else {
+            (aggregate_dmi_energy, 0.0)
+        }
     }
 
     pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {
@@ -2136,6 +2151,7 @@ impl NativeFdmBackend {
 
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -2144,7 +2160,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
@@ -3410,6 +3427,7 @@ impl NativeFdmBackend {
         let magnetization = self.copy_m(cell_count)?;
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3418,7 +3436,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: native_metrics.max_rhs_norm_per_s,
             max_rhs_norm_per_s: native_metrics.max_rhs_norm_per_s,
@@ -7149,6 +7168,10 @@ mod exact_metric_contract_tests {
     #[test]
     fn dynamic_native_stats_map_the_same_energy_components_as_snapshot_stats() {
         let source = include_str!("native.rs");
+        let production_source = source
+            .split("#[cfg(test)]\nmod exact_metric_contract_tests")
+            .next()
+            .expect("production source prefix");
         let dynamic_stats = source
             .split("pub fn step_interruptible")
             .nth(1)
@@ -7161,8 +7184,18 @@ mod exact_metric_contract_tests {
             "dynamic native stats must include cubic anisotropy in e_ani"
         );
         assert!(
-            dynamic_stats.contains("e_dmi: stats.dmi_energy_joules"),
+            dynamic_stats.contains("e_dmi,") && dynamic_stats.contains("e_rotated_dmi,"),
             "dynamic native stats must map the native DMI energy"
+        );
+        assert!(
+            production_source.contains("rotated_dmi_only: bool"),
+            "the native wrapper must remember when aggregate DMI is exactly rotated DMI"
+        );
+        assert!(
+            dynamic_stats.contains(
+                "let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules)"
+            ),
+            "dynamic native stats must expose exact rotated-only energy"
         );
         let average_stats = source
             .split("pub fn apply_average_m_to_step_stats(")
