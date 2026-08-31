@@ -1,96 +1,168 @@
 ---
-title: Spin-orbit torque
+title: Prescribed spin-orbit torque
+description: Local damping-like and field-like spin-orbit torque with prescribed signed current or a named vector-current source.
 status: partial
-doc_kind: reference
-audience: user
-owner: fullmag-public-docs
 ---
 
-(public-docs-physics-interactions-sot)=
-# Spin-orbit torque
+(physics-spin-orbit-torque)=
+# Prescribed spin-orbit torque
 
-`PrescribedSpinOrbitTorque` is a local damping-like and field-like torque driven by a signed
-prescribed current. It is not a charge/spin transport solve and has no conservative energy.
+`PrescribedSpinOrbitTorque` adds a local damping-like (DL) and field-like (FL)
+source to the magnetization equation. It does **not** solve charge accumulation,
+spin accumulation, spin diffusion, or an HM/FM interface problem. The authored
+efficiencies already represent all conversion and transmission physics that the
+model omits.
 
-(physics-spin-orbit-torque-problem-statement)=
-## Physical problem
+Use the tabs below to choose the correct model before assigning parameters.
 
-This page is the public physical and authoring contract for the interaction. It separates authored semantics, planner resolution, executable backend lanes, and scientific qualification.
+::::{tab-set}
+:::{tab-item} Prescribed local SOT
 
-(physics-spin-orbit-torque-governing-equations)=
-## Governing equations
+Use `PrescribedSpinOrbitTorque` when the signed current density, spin-polarization
+axis, and effective DL/FL efficiencies are known inputs. The heavy-metal layer
+does not need to be meshed. Runtime cost is that of a local LLG source.
 
-For a vector-current source, fixed drive direction $\hat{\mathbf t}$, and interface normal
-oriented from nonmagnet to ferromagnet $\hat{\mathbf n}_{NF}$,
+This is the Fullmag counterpart of a MuMax-style `EnableSOT` model: `J` maps to
+the signed drive, `Pol` to `sigma`, `ThetaSH` to `xi_dl`, `ThetaFL` to `xi_fl`,
+and `FreeLayerThickness` to `free_layer_thickness_m`. The mapping is a parameter
+mapping, not a claim that `xi_dl` equals a bulk spin Hall angle in a real stack.
 
-```{math}
-:label: eq-public-spin-orbit-torque-sot-drive
-J_{\mathrm{signed}}=\mathbf J_c\cdot\hat{\mathbf t},
+:::
+:::{tab-item} Solved SHE transport
+
+Use the transport model when the torque must follow from material conductivities,
+spin Hall angle, spin-relaxation lengths, boundary conditions, and HM/FM mixing
+conductance. Fullmag then resolves
+
+```text
+CurrentTransport -> SpinDriftDiffusion -> interface absorption -> DriftDiffusionSpinTorque
+```
+
+That route produces a generally nonuniform torque and can include backflow and
+finite-transparency effects. It is documented separately in
+{doc}`Spin Hall drift-diffusion transport </physics/interactions/drift-diffusion-spin-torque/index>`.
+Do not add `PrescribedSpinOrbitTorque` on top of the solved transport torque
+unless the two sources intentionally represent different physics.
+
+:::
+::::
+
+| Question | Prescribed local SOT | Solved SHE transport |
+| --- | --- | --- |
+| Primary input | signed current and effective `xi_dl`, `xi_fl` | material and interface transport parameters |
+| Charge/spin PDE | none | solved |
+| HM mesh | optional and not consumed by this torque | part of the transport domain |
+| Spatial variation | target mask, material fields, and current-source projection | transport solution and interface absorption |
+| Best use | calibrated reduced model, switching scans, MuMax comparison | stack design and spatial spin-transport studies |
+
+(physics-spin-orbit-torque-derivation)=
+## Physical model and sign convention
+
+Let $\mathbf m$ be the unit magnetization, $\hat{\boldsymbol\sigma}$ the unit spin
+polarization, and $J_{\mathrm{signed}}$ the conventional signed charge-current
+density. A thin-film reduction converts an effective spin angular-momentum flux
+$(\hbar/2e)\,\xi J_{\mathrm{signed}}$ into a volume source by dividing by the
+free-layer thickness $t_F$. Fullmag writes the resulting frequency scale as
+
+(eq-prescribed-sot-prefactor)=
+$$
+\Omega_0 =
+\frac{\gamma_e\hbar J_{\mathrm{signed}}}
+     {2eM_s t_F},
 \qquad
-\hat{\boldsymbol\sigma}
-=
-\frac{\hat{\mathbf n}_{NF}\times\hat{\mathbf t}}
-{|\hat{\mathbf n}_{NF}\times\hat{\mathbf t}|}.
-```
+\Omega_{\mathrm{DL}}=\xi_{\mathrm{DL}}\Omega_0,
+\qquad
+\Omega_{\mathrm{FL}}=\xi_{\mathrm{FL}}\Omega_0.
+$$
 
-A scalar drive authors $J_{\mathrm{signed}}$ and
-$\hat{\boldsymbol\sigma}$ directly. With positive angular gyromagnetic magnitude
-$\gamma_e$,
+Here $e>0$ is the elementary charge and $\gamma_e>0$ is the magnitude of the
+electron gyromagnetic ratio. The canonical Gilbert-form source is
 
-```{math}
-:label: eq-public-spin-orbit-torque-sot-rates
-\Omega_{\mathrm{DL,FL}}
-=
-\frac{\gamma_e\hbar\,\xi_{\mathrm{DL,FL}}J_{\mathrm{signed}}}
-{2eM_st_F}.
-```
-
-```{math}
-:label: eq-public-spin-orbit-torque-sot-gilbert
-\mathbf T_{\mathrm{SOT},G}
-=
+(eq-prescribed-sot-gilbert)=
+$$
+\mathbf T_{\mathrm{SOT}}^{G} =
 \Omega_{\mathrm{DL}}\,
 \mathbf m\times(\hat{\boldsymbol\sigma}\times\mathbf m)
 +
 \Omega_{\mathrm{FL}}\,
 \mathbf m\times\hat{\boldsymbol\sigma}.
-```
+$$
 
-The common Gilbert-to-explicit conversion is applied exactly once by the LLG layer.
+The first basis vector points toward the component of
+$\hat{\boldsymbol\sigma}$ transverse to $\mathbf m$; the second is orthogonal to
+both. Reversing the signed current, reversing `sigma`, or reversing either one
+of the signed efficiencies reverses the corresponding source. Reversing both
+the current and `sigma` leaves the torque unchanged.
 
-(physics-spin-orbit-torque-symbols-and-si-units)=
-## Symbols and SI units
+### Gilbert-to-explicit conversion
 
-| Symbol | Meaning | SI unit |
-|---|---|---:|
-| $J_{\mathrm{signed}}$ | signed current-density drive | $\mathrm{A\,m^{-2}}$ |
-| $\xi_{\mathrm{DL}},\xi_{\mathrm{FL}}$ | signed torque efficiencies | $1$ |
-| $t_F$ | homogenized free-layer thickness | $\mathrm m$ |
-| $\hat{\boldsymbol\sigma}$ | spin-polarization direction | $1$ |
-| $\mathbf T_{\mathrm{SOT},G}$ | Gilbert-source torque | $\mathrm{s^{-1}}$ |
+Backends add an explicit right-hand-side contribution after solving the Gilbert
+form once. For damping $\alpha$, the implemented coefficient convention is
 
-(physics-spin-orbit-torque-assumptions-and-validity)=
-## Assumptions and validity
+(eq-prescribed-sot-explicit)=
+$$
+\mathbf T_{\mathrm{SOT}} =
+\frac{\Omega_0}{1+\alpha^2}
+\left[
+(\xi_{\mathrm{DL}}-\alpha\xi_{\mathrm{FL}})
+\mathbf m\times(\hat{\boldsymbol\sigma}\times\mathbf m)
++
+(\xi_{\mathrm{FL}}+\alpha\xi_{\mathrm{DL}})
+\mathbf m\times\hat{\boldsymbol\sigma}
+\right].
+$$
 
-The model assumes a local homogenized torque. It does not solve spin diffusion, inverse spin Hall
-feedback, spin-memory loss, Rashba–Edelstein transport, or circuit closure. Reversing current
-changes the signed scalar; it does not silently reverse authored axes.
+This mixing is why MuMax-style code often contains an apparent compensation
+between DL and FL coefficients. Author physical `xi_dl` and `xi_fl`; do not
+pre-apply the $1/(1+\alpha^2)$ transform in Python.
 
-(physics-spin-orbit-torque-discrete-realization)=
-## Capability matrix
+(physics-spin-orbit-torque-drives)=
+## Drive definitions
 
-| Solver | Device | Authoring / IR | Executable realization | Scientific qualification | Exact boundary |
-|---|---|---|---|---|---|
-| FDM | CPU | canonical prescribed SOT | reference executable | bounded SI and trajectory tests | target masks and envelopes remain lane-gated |
-| FDM | GPU | same canonical module | production executable FP64 subset | FP32 and broad physical qualification remain open | native CUDA direct-torque path |
-| FEM | CPU | same canonical module | reference executable | bounded mask/time/trajectory evidence | whole-object target support is the conservative boundary |
-| FEM | GPU | same canonical module | reference executable subset | not production-qualified | device-resident FP64 direct torque |
+### Signed scalar drive
 
-(physics-spin-orbit-torque-python-api)=
-## Python API and stage-first example
+`SignedScalarDrive` is the direct reduced-model input:
+
+(eq-prescribed-sot-scalar-drive)=
+$$
+J_{\mathrm{signed}}(t)=J_0 f(t),
+\qquad
+\hat{\boldsymbol\sigma}=
+\frac{\boldsymbol\sigma}{\lVert\boldsymbol\sigma\rVert}.
+$$
+
+`J_0` may be positive, negative, or zero. `sigma` is normalized during
+authoring. The optional envelope must be one of the canonical Fullmag envelope
+objects: `ConstantEnvelope`, `SinusoidalEnvelope`, `PulseEnvelope`,
+`PiecewiseLinearEnvelope`, `SincEnvelope`, or `TabulatedEnvelope`.
+
+### Vector-current binding
+
+`VectorCurrentDrive` binds the torque to a named vector-current source while
+making the geometric convention explicit:
+
+(eq-prescribed-sot-vector-drive)=
+$$
+J_{\mathrm{signed}} = \mathbf J_c\cdot\hat{\mathbf t},
+\qquad
+\hat{\boldsymbol\sigma} =
+\frac{\hat{\mathbf n}_{NF}\times\hat{\mathbf t}}
+     {\lVert\hat{\mathbf n}_{NF}\times\hat{\mathbf t}\rVert}.
+$$
+
+`drive_direction` defines $\hat{\mathbf t}$ and `interface_normal` defines the
+oriented normal $\hat{\mathbf n}_{NF}$ from the nonmagnetic layer toward the
+ferromagnet. Both authored axes are normalized. They must be nonzero and must
+not be parallel within the canonical axis tolerance $10^{-12}$. The projection
+preserves current reversal; the polarization axis does not flip when only the
+source current reverses.
+
+(physics-spin-orbit-torque-python)=
+## Python authoring
+
+### Complete stage-first example
 
 ```python
-# %% Study, execution lane, and magnetic body
 import fullmag as fm
 
 nm = 1.0e-9
@@ -99,6 +171,7 @@ study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
 study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+
 body = study.geometry(fm.Box(40 * nm, 20 * nm, 4 * nm), name="film")
 body.Ms = 8.0e5
 body.Aex = 13.0e-12
@@ -108,7 +181,10 @@ body.m = fm.texture.uniform(1.0, 0.0, 0.0)
 sot = fm.PrescribedSpinOrbitTorque(
     name="hm_sot",
     target=fm.RegionRef("film"),
-    drive=fm.SignedScalarDrive(current_density_Apm2=-4.0e11, sigma=(0.0, 1.0, 0.0)),
+    drive=fm.SignedScalarDrive(
+        current_density_Apm2=-4.0e11,
+        sigma=(0.0, 1.0, 0.0),
+    ),
     xi_dl=0.12,
     xi_fl=-0.03,
     free_layer_thickness_m=1.5 * nm,
@@ -117,79 +193,140 @@ study.spin_torque(sot)
 study.stages.add_run(stage_id="drive", until=1.0e-12)
 ```
 
-`SpinOrbitTorque` is a deprecated compatibility input. New documentation and canonical exports
-must use `PrescribedSpinOrbitTorque`.
+The sign in `current_density_Apm2` is retained in ProblemIR. The authored
+`sigma=(0, 1, 0)` is normalized and serialized as `sigma_hat`.
+
+### Binding to an existing vector-current source
+
+If the study already contains a current module named `charge`, replace the
+drive object only:
+
+```python
+drive = fm.VectorCurrentDrive(
+    current_source="charge",
+    drive_direction=(1.0, 0.0, 0.0),
+    interface_normal=(0.0, 0.0, 1.0),
+)
+
+sot = fm.PrescribedSpinOrbitTorque(
+    name="hm_sot_from_charge",
+    target=fm.RegionRef("film"),
+    drive=drive,
+    xi_dl=0.12,
+    xi_fl=-0.03,
+    free_layer_thickness_m=1.5e-9,
+)
+study.spin_torque(sot)
+```
+
+For these axes, $\hat{\boldsymbol\sigma}=\hat{\mathbf z}\times\hat{\mathbf x}
+=\hat{\mathbf y}$ and only the $x$ projection of the named current contributes.
+`VectorCurrentDrive` has no independent envelope argument; timing belongs to the
+named current source.
+
+### Constructor reference
+
+| Argument | Type | Default | Validation | Meaning |
+| --- | --- | --- | --- | --- |
+| `name` | `str` | required | non-empty | stable module ID |
+| `target` | `RegionRef` | required | exact type; must resolve to a magnetic target | cells/nodes receiving the torque |
+| `drive` | `SignedScalarDrive` or `VectorCurrentDrive` | required | exact canonical drive type | current and polarization definition |
+| `xi_dl` | `float` | required | finite | signed damping-like efficiency |
+| `xi_fl` | `float` | `0.0` | finite | signed field-like efficiency |
+| `free_layer_thickness_m` | `float` | required | finite and positive | physical FM thickness in metres |
+
+| `SignedScalarDrive` argument | Type | Default | Validation | Meaning |
+| --- | --- | --- | --- | --- |
+| `current_density_Apm2` | `float` | required | finite; sign retained | $J_0$ in A/m2 |
+| `sigma` | three-vector | required | finite norm above axis tolerance; normalized | spin-polarization direction |
+| `envelope` | canonical `TimeEnvelope` or `None` | `None` | exact supported envelope type | multiplier $f(t)$ |
+
+| `VectorCurrentDrive` argument | Type | Default | Validation | Meaning |
+| --- | --- | --- | --- | --- |
+| `current_source` | `str` | required | non-empty and resolvable | named vector-current module |
+| `drive_direction` | three-vector | required | finite, nonzero; normalized | projection axis $\hat{\mathbf t}$ |
+| `interface_normal` | three-vector | required | finite, nonzero, nonparallel; normalized | oriented normal $\hat{\mathbf n}_{NF}$ |
+
+`SpinOrbitTorque` is a deprecated compatibility constructor. New scripts and
+canonical exports must use `PrescribedSpinOrbitTorque`.
 
 (physics-spin-orbit-torque-problem-ir)=
-## ProblemIR and validation
+## ProblemIR contract
 
-The module lowers to `spin_torque_modules[]` with its stable ID, target, tagged drive,
-signed efficiencies, thickness, and formula version. Validation must reject non-finite
-coefficients, non-positive thickness, empty/unresolvable target, zero axes, parallel vector-drive
-axes, incompatible envelope artifacts, and unsupported target granularity. A strict GPU request
-must not fall back to CPU.
+The scalar example lowers to the following module record:
+
+```json
+{
+  "kind": "prescribed_sot",
+  "schema_version": "prescribed_sot.v1",
+  "id": "hm_sot",
+  "target": {"object_id": "film", "region_id": null},
+  "formula_version": "prescribed_sot.fullmag.v1",
+  "drive": {
+    "kind": "signed_scalar",
+    "current_density_Apm2": -400000000000.0,
+    "sigma_hat": [0.0, 1.0, 0.0]
+  },
+  "xi_dl": 0.12,
+  "xi_fl": -0.03,
+  "free_layer_thickness_m": 1.5e-9
+}
+```
+
+Validation fails closed for duplicate IDs, non-finite coefficients, non-positive
+thickness, unresolved targets or current sources, invalid axes, parallel vector
+axes, and incompatible envelope artifacts. The legacy wire formula
+`prescribed_sot.legacy_fullmag.v0` is retained only for migration and is not the
+authoring contract documented here.
+
+(physics-spin-orbit-torque-backends)=
+## Backend status
+
+| Solver | Device | Status | Evidence boundary |
+| --- | --- | --- | --- |
+| FDM | CPU | Partial | executable double-precision reference path, signed current, target mask, and envelope contracts; broad scientific qualification is not claimed |
+| FDM | GPU | Partial | native CUDA implementation with fixed-trajectory CPU parity and bounded current-scaling tests when CUDA is available; no implicit CPU fallback |
+| FEM | CPU | Partial | executable MFEM reference source with SI-prefactor, damping conversion, mask, and time-envelope checks |
+| FEM | GPU | Partial | native CUDA RHS kernel with independent SI oracle and CPU comparison; device availability and wider production qualification remain separate gates |
+
+`Partial` means the interaction is executable in the bounded lanes above, not
+that every mesh, precision, integrator, or deployment route is production
+qualified.
 
 (physics-spin-orbit-torque-validation)=
-## Required numerical validation
+## Validation requirements
 
-- exact SI prefactor for a single cell/node;
-- odd current scaling;
-- independent $\xi_{\mathrm{DL}}$ and $\xi_{\mathrm{FL}}$ basis-vector tests;
-- axis-orientation and current-reversal tests;
-- zero torque for the appropriate collinear state;
-- target-mask exclusion;
-- stage-time envelope and rollback/retry behavior;
-- CPU/GPU trajectory comparison with matched integrator and precision;
-- proof of exactly one Gilbert conversion.
+A trustworthy SOT result should demonstrate all of the following for the chosen
+backend and device:
 
-(physics-spin-orbit-torque-limitations)=
-## Limitations and recommended extensions
+- exact SI prefactor for a single cell or node;
+- odd scaling under current reversal;
+- independent DL-only and FL-only basis-vector cases;
+- the $\alpha$-dependent Gilbert-to-explicit coefficient mixing;
+- target-mask exclusion and zero contribution outside the magnetic target;
+- envelope value at stage time, including retry or rollback behavior;
+- CPU/GPU parity on the same trajectory when GPU execution is claimed;
+- no silent CPU fallback for a strict GPU request.
 
-Transport-derived SOT belongs to `SpinDriftDiffusion` and `DriftDiffusionSpinTorque`. Add
-Rashba–Edelstein or spatially resolved efficiencies as separate typed drive variants rather than
-overloading the local efficiency scalars.
+(physics-spin-orbit-torque-source-index)=
+## Source-code reference
 
-(physics-spin-orbit-torque-scientific-bibliography)=
-## Scientific bibliography
+| Layer | File and stable symbol | Responsibility |
+| --- | --- | --- |
+| Python API | `packages/fullmag-py/src/fullmag/model/spin_torque.py`, `class PrescribedSpinOrbitTorque` | validates module arguments and emits canonical v1 ProblemIR |
+| Scalar drive | same file, `class SignedScalarDrive` | preserves signed current, normalizes `sigma`, validates envelope |
+| Vector drive | same file, `class VectorCurrentDrive` | validates axes and emits named-current binding |
+| ProblemIR | `crates/fullmag-ir/src/study.rs`, `PrescribedSotV1DriveIR` | owns tagged drive variants and formula fields |
+| Planner | `crates/fullmag-plan/src/spin_torque.rs`, `resolve_sot_fields` | resolves current projection, polarization, target, and lane eligibility |
+| FDM CPU | `crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs`, `build_sot` | maps the plan into the CPU evaluator configuration |
+| FDM GPU | `crates/fullmag-runner/src/fdm/gpu/cuda/native.rs`, `ffi_prescribed_sot_formula` | selects canonical versus legacy native CUDA formula |
+| FEM CPU | `backends/fem/cpu/mfem/interactions/sot.cpp`, `add_sot_rhs_aos` | evaluates the canonical SI torque and damping conversion |
+| FEM GPU | `backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu`, `fullmag_cuda_add_prescribed_sot_rhs` | adds the canonical source to the device RHS |
+| UI | `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx`, `SpinAuthoringInspector` | exposes prescribed SOT and its DL/FL efficiencies |
 
-1. L. Liu et al., *Physical Review Letters* **109**, 096602 (2012),
-   DOI: 10.1103/PhysRevLett.109.096602.
-2. A. Manchon et al., *Reviews of Modern Physics* **91**, 035004 (2019).
+(physics-spin-orbit-torque-bibliography)=
+## Bibliography
 
-(physics-spin-orbit-torque-source-code-index)=
+- L. Liu et al., "Current-Induced Switching of Perpendicularly Magnetized Magnetic Layers Using Spin Torque from the Spin Hall Effect," *Physical Review Letters* **109**, 096602 (2012), [doi:10.1103/PhysRevLett.109.096602](https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.109.096602).
+- A. Manchon et al., "Current-induced spin-orbit torques in ferromagnetic and antiferromagnetic systems," *Reviews of Modern Physics* **91**, 035004 (2019), [doi:10.1103/RevModPhys.91.035004](https://journals.aps.org/rmp/abstract/10.1103/RevModPhys.91.035004).
 
-## Control Room crosswalk
-
-This is a navigation page; the selected interaction or foundation is configured by its linked Python API and object/stage editor. The category itself has no standalone control. frontend support is not implemented applies to physical parameters without a matching control. See {doc}/frontend/capability-register; do not infer UI support from backend or Python availability.
-
-## Python/API crosswalk
-
-The linked Python API page is authoritative for exact functions, arguments, units, and failure semantics. If this page is a foundation or category overview, runnable Python is 
-ot applicable here and must be taken from the terminal API page.
-
-## Bibliography and source scope
-
-Use the scientific bibliography and source-code index on the linked terminal page. This block adds no new equation or unverified implementation claim.
-
-## Round-trip and failure semantics
-
-Requested intent preserves the authored model, coefficients, orientations, targets, and execution request. Resolved execution records the selected solver, device, precision, discretization, and capability decision. Validation errors reject malformed or contradictory data before runtime. Unsupported combinations fail closed and are not silently omitted or converted to another interaction.
-
-(physics-spin-orbit-torque-implementation-mapping)=
-## Implementation mapping
-
-Python owns authoring and serialization, ProblemIR owns canonical intent, planners own legality and realization selection, and backend kernels own numerical evaluation.
-
-## Source-code index
-
-| Repository path | Stable symbol / area | Responsibility |
-|---|---|---|
-| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `PrescribedSpinOrbitTorque` | canonical local SOT |
-| `packages/fullmag-py/src/fullmag/model/spin_torque.py` | `SignedScalarDrive, VectorCurrentDrive` | signed drive variants |
-| `packages/fullmag-py/src/fullmag/world.py` | `spin_torque` | study registration |
-| `crates/fullmag-plan/src/spin_torque.rs` | `SOT planning` | target/drive/lane resolution |
-| `backends/fdm/gpu/cuda/interactions` | `SOT kernels` | FDM GPU realization |
-| `backends/fem/cpu/mfem/interactions` | `SOT operator` | FEM CPU realization |
-| `backends/fem/gpu/cuda/interactions` | `SOT kernels` | FEM GPU realization |
-
-(physics-spin-orbit-torque-round-trip-and-failure-semantics)=

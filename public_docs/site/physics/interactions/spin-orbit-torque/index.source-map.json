@@ -1,47 +1,73 @@
 {
   "document": {
-    "reviewed_revision": "ab3c8802a691a535063102c12f9a79bb0043b367",
+    "reviewed_revision": "94c72f501da342ae215fb1e159537023cbc8f68d",
     "path": "public_docs/site/physics/interactions/spin-orbit-torque/index.md",
-    "title": "Spin-orbit torque",
-    "interaction": "spin orbit torque"
+    "title": "Prescribed spin-orbit torque",
+    "interaction": "prescribed spin orbit torque"
   },
   "backend_matrix": [
-    {
-      "solver": "FDM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "Authoring, planning, runtime, and scientific qualification are reported separately on the page."
-    },
-    {
-      "solver": "FDM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Device source presence does not replace executed-device evidence and precision-specific qualification."
-    },
-    {
-      "solver": "FEM",
-      "device": "CPU",
-      "status": "partial",
-      "reason": "The exact weak/discrete realization and bounded capability envelope remain lane-specific."
-    },
-    {
-      "solver": "FEM",
-      "device": "GPU",
-      "status": "partial",
-      "reason": "Strict device residency and executed-device qualification remain separate evidence gates."
-    }
+    {"solver": "FDM", "device": "CPU", "status": "partial", "reason": "Executable double-precision reference path and bounded signed-current, mask, envelope, and formula contracts exist; broad scientific qualification is not claimed."},
+    {"solver": "FDM", "device": "GPU", "status": "partial", "reason": "Native CUDA execution has fixed-trajectory CPU parity and bounded current-scaling tests when CUDA is available; strict execution does not imply CPU fallback."},
+    {"solver": "FEM", "device": "CPU", "status": "partial", "reason": "Executable MFEM reference source covers the canonical SI prefactor, damping conversion, active mask, and envelope in bounded tests."},
+    {"solver": "FEM", "device": "GPU", "status": "partial", "reason": "A native CUDA RHS kernel is checked against an independent SI oracle and CPU implementation; device availability and wider production qualification remain separate gates."}
   ],
   "sources": [
-    {
-      "id": "python-owner",
-      "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py",
-      "symbol": "class PrescribedSpinOrbitTorque",
-      "responsibility": "Own the public interaction constructor, validation, or canonical IR lowering boundary."
-    }
+    {"id": "python-torque", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class PrescribedSpinOrbitTorque", "responsibility": "Validate canonical module inputs and emit prescribed_sot.v1 ProblemIR."},
+    {"id": "python-scalar-drive", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class SignedScalarDrive", "responsibility": "Preserve signed scalar current, normalize sigma, and validate canonical envelopes."},
+    {"id": "python-vector-drive", "path": "packages/fullmag-py/src/fullmag/model/spin_torque.py", "symbol": "class VectorCurrentDrive", "responsibility": "Validate geometric axes and emit a named vector-current binding."},
+    {"id": "problem-ir", "path": "crates/fullmag-ir/src/study.rs", "symbol": "PrescribedSotV1DriveIR", "responsibility": "Own canonical tagged drive variants and prescribed-SOT formula fields."},
+    {"id": "problem-validation", "path": "crates/fullmag-ir/src/validation.rs", "symbol": "prescribed_sot", "responsibility": "Reject invalid targets, axes, coefficients, thickness, and source bindings."},
+    {"id": "planner", "path": "crates/fullmag-plan/src/spin_torque.rs", "symbol": "resolve_sot_fields", "responsibility": "Resolve signed current projection, polarization axis, target, envelope, and executable fields."},
+    {"id": "fdm-cpu", "path": "crates/fullmag-runner/src/fdm/cpu/reference/interactions.rs", "symbol": "build_sot", "responsibility": "Map canonical plan fields into the FDM CPU evaluator configuration."},
+    {"id": "fdm-gpu", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "ffi_prescribed_sot_formula", "responsibility": "Select canonical versus legacy formula for native CUDA execution."},
+    {"id": "fem-cpu", "path": "backends/fem/cpu/mfem/interactions/sot.cpp", "symbol": "add_sot_rhs_aos", "responsibility": "Evaluate the canonical SI torque, damping conversion, target mask, and envelope on FEM CPU."},
+    {"id": "fem-gpu", "path": "backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu", "symbol": "fullmag_cuda_add_prescribed_sot_rhs", "responsibility": "Add the canonical prescribed-SOT source to the FEM CUDA RHS."},
+    {"id": "python-tests", "path": "packages/fullmag-py/tests/test_prescribed_sot.py", "symbol": "class TestPrescribedSpinOrbitTorque", "responsibility": "Check exact canonical JSON, constructor validation, compatibility migration, and duplicate IDs."},
+    {"id": "planner-vector-test", "path": "crates/fullmag-plan/src/spin_torque.rs", "symbol": "canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection", "responsibility": "Check normalized geometry, signed current projection, and fixed polarization under reversal."},
+    {"id": "fdm-gpu-test", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs", "symbol": "native_fdm_prescribed_sot_matches_cpu_reference_for_fixed_trajectory_when_cuda_is_available", "responsibility": "Check bounded native FDM CUDA parity against the CPU reference."},
+    {"id": "fem-gpu-test", "path": "backends/fem/tests/cuda_sot_contract.cpp", "symbol": "canonical_prescribed_sot_matches_cpu_and_independent_oracle", "responsibility": "Check the SI prefactor, Gilbert conversion, mask, CPU parity, and CUDA output."},
+    {"id": "control-room", "path": "apps/control-room/src/modules/inspector/panels/SpinAuthoringInspector.tsx", "symbol": "SpinAuthoringInspector", "responsibility": "Expose prescribed SOT and the damping-like and field-like efficiencies."}
   ],
-  "symbols": [],
-  "equations": [],
+  "symbols": [
+    {"id": "m", "latex": "m", "meaning": "unit magnetization", "si_unit": "1"},
+    {"id": "sigma", "latex": "\\hat{\\boldsymbol\\sigma}", "meaning": "unit spin-polarization axis", "si_unit": "1"},
+    {"id": "J_signed", "latex": "J_{\\mathrm{signed}}", "meaning": "signed conventional charge-current density driving the local source", "si_unit": "A/m^2"},
+    {"id": "J_c", "latex": "\\mathbf J_c", "meaning": "named vector charge-current density", "si_unit": "A/m^2"},
+    {"id": "t_hat", "latex": "\\hat{\\mathbf t}", "meaning": "normalized current-projection direction", "si_unit": "1"},
+    {"id": "n_hat", "latex": "\\hat{\\mathbf n}_{NF}", "meaning": "normalized oriented nonmagnet-to-ferromagnet interface normal", "si_unit": "1"},
+    {"id": "xi_dl", "latex": "\\xi_{\\mathrm{DL}}", "meaning": "signed effective damping-like efficiency", "si_unit": "1"},
+    {"id": "xi_fl", "latex": "\\xi_{\\mathrm{FL}}", "meaning": "signed effective field-like efficiency", "si_unit": "1"},
+    {"id": "t_F", "latex": "t_F", "meaning": "physical free-layer thickness", "si_unit": "m"},
+    {"id": "M_s", "latex": "M_s", "meaning": "local saturation magnetization", "si_unit": "A/m"},
+    {"id": "gamma_e", "latex": "\\gamma_e", "meaning": "positive magnitude of electron gyromagnetic ratio", "si_unit": "1/(s T)"},
+    {"id": "hbar", "latex": "\\hbar", "meaning": "reduced Planck constant", "si_unit": "J s"},
+    {"id": "e", "latex": "e", "meaning": "positive elementary charge", "si_unit": "C"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "1"},
+    {"id": "Omega_0", "latex": "\\Omega_0", "meaning": "signed base torque frequency", "si_unit": "1/s"},
+    {"id": "T_sot", "latex": "\\mathbf T_{\\mathrm{SOT}}", "meaning": "prescribed spin-orbit torque contribution", "si_unit": "1/s"},
+    {"id": "envelope", "latex": "f(t)", "meaning": "canonical scalar time-envelope multiplier", "si_unit": "1"}
+  ],
+  "equations": [
+    {"id": "eq-prescribed-sot-prefactor", "symbols": ["Omega_0", "gamma_e", "hbar", "J_signed", "e", "M_s", "t_F", "xi_dl", "xi_fl"], "sources": ["fem-cpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-gilbert", "symbols": ["T_sot", "m", "sigma", "Omega_0", "xi_dl", "xi_fl"], "sources": ["problem-ir", "planner", "fem-cpu"]},
+    {"id": "eq-prescribed-sot-explicit", "symbols": ["T_sot", "m", "sigma", "Omega_0", "xi_dl", "xi_fl", "alpha"], "sources": ["fem-cpu", "fem-gpu", "fem-gpu-test"]},
+    {"id": "eq-prescribed-sot-scalar-drive", "symbols": ["J_signed", "sigma", "envelope"], "sources": ["python-scalar-drive", "problem-ir", "planner"]},
+    {"id": "eq-prescribed-sot-vector-drive", "symbols": ["J_signed", "J_c", "t_hat", "n_hat", "sigma"], "sources": ["python-vector-drive", "planner", "planner-vector-test"]}
+  ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {"python": "PrescribedSpinOrbitTorque.name", "type": "str", "default": "required", "si_unit": "1", "validation": "non-empty", "meaning": "stable module ID", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].id"},
+      {"python": "PrescribedSpinOrbitTorque.target", "type": "RegionRef", "default": "required", "si_unit": "1", "validation": "exact RegionRef resolving to magnetic target", "meaning": "torque target", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].target"},
+      {"python": "PrescribedSpinOrbitTorque.drive", "type": "SignedScalarDrive or VectorCurrentDrive", "default": "required", "si_unit": "1", "validation": "exact canonical drive type", "meaning": "signed current and polarization definition", "backend_support": "all prescribed-SOT lanes after planning", "problem_ir": "spin_torque_modules[].drive"},
+      {"python": "PrescribedSpinOrbitTorque.xi_dl", "type": "float", "default": "required", "si_unit": "1", "validation": "finite", "meaning": "signed damping-like efficiency", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].xi_dl"},
+      {"python": "PrescribedSpinOrbitTorque.xi_fl", "type": "float", "default": "0.0", "si_unit": "1", "validation": "finite", "meaning": "signed field-like efficiency", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].xi_fl"},
+      {"python": "PrescribedSpinOrbitTorque.free_layer_thickness_m", "type": "float", "default": "required", "si_unit": "m", "validation": "finite and positive", "meaning": "physical free-layer thickness", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].free_layer_thickness_m"},
+      {"python": "SignedScalarDrive.current_density_Apm2", "type": "float", "default": "required", "si_unit": "A/m^2", "validation": "finite; sign retained", "meaning": "prescribed scalar current amplitude", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].drive.current_density_Apm2"},
+      {"python": "SignedScalarDrive.sigma", "type": "Sequence[float]", "default": "required", "si_unit": "1", "validation": "finite nonzero three-axis vector; normalized", "meaning": "authored spin-polarization direction", "backend_support": "all prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].drive.sigma_hat"},
+      {"python": "SignedScalarDrive.envelope", "type": "TimeEnvelope or None", "default": "None", "si_unit": "1", "validation": "canonical supported envelope type", "meaning": "scalar time multiplier", "backend_support": "bounded prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].drive.envelope"},
+      {"python": "VectorCurrentDrive.current_source", "type": "str", "default": "required", "si_unit": "1", "validation": "non-empty and resolvable named current source", "meaning": "vector-current producer", "backend_support": "planner-resolved prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].drive.current_source_id"},
+      {"python": "VectorCurrentDrive.drive_direction", "type": "Sequence[float]", "default": "required", "si_unit": "1", "validation": "finite nonzero axis; normalized; not parallel to interface normal", "meaning": "signed current projection axis", "backend_support": "planner-resolved prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].drive.drive_direction"},
+      {"python": "VectorCurrentDrive.interface_normal", "type": "Sequence[float]", "default": "required", "si_unit": "1", "validation": "finite nonzero axis; normalized; not parallel to drive direction", "meaning": "oriented nonmagnet-to-ferromagnet normal", "backend_support": "planner-resolved prescribed-SOT lanes", "problem_ir": "spin_torque_modules[].drive.interface_normal"}
+    ]
   }
 }
