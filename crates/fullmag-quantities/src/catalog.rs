@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 53] = [
+const CATALOG: [QuantitySpec; 56] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -245,6 +245,27 @@ const CATALOG: [QuantitySpec; 53] = [
         interactive_preview: true,
         cached_preview: true,
         quick_access_label: Some("H_dmi"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Vector3,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::HDmiRotated,
+        label: "Rotated Interfacial DMI Field",
+        description: "Göbel rotated-interfacial Dzyaloshinskii-Moriya effective field",
+        shape: QuantityShape::VectorField,
+        unit: "A/m",
+        interactive_preview: true,
+        cached_preview: true,
+        quick_access_label: Some("H_rotated_dmi"),
         scalar_metric_key: None,
         ui_exposed: true,
         n_comp: 3,
@@ -552,6 +573,27 @@ const CATALOG: [QuantitySpec; 53] = [
         supports_export: true,
     },
     QuantitySpec {
+        id: QuantityId::ERotatedDmi,
+        label: "Rotated Interfacial DMI Energy",
+        description: "Göbel rotated-interfacial Dzyaloshinskii-Moriya interaction energy",
+        shape: QuantityShape::GlobalScalar,
+        unit: "J",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("e_rotated_dmi"),
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
         id: QuantityId::EEl,
         label: "Elastic Energy",
         description: "Mechanical elastic strain energy",
@@ -834,6 +876,27 @@ const CATALOG: [QuantitySpec; 53] = [
         interactive_preview: true,
         cached_preview: false,
         quick_access_label: Some("ε_dmi"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::EdenRotatedDmi,
+        label: "Rotated Interfacial DMI Energy Density",
+        description: "Spatial Göbel rotated-interfacial Dzyaloshinskii-Moriya energy density",
+        shape: QuantityShape::SpatialScalar,
+        unit: "J/m³",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("ε_rotated_dmi"),
         scalar_metric_key: None,
         ui_exposed: true,
         n_comp: 1,
@@ -1188,6 +1251,47 @@ pub fn quantity_unit(id: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotated_interfacial_dmi_quantities_are_canonical() {
+        let expected = [
+            (
+                "H_rotated_dmi",
+                QuantityId::HDmiRotated,
+                QuantityShape::VectorField,
+                "A/m",
+                QuantityLocation::Node,
+            ),
+            (
+                "E_rotated_dmi",
+                QuantityId::ERotatedDmi,
+                QuantityShape::GlobalScalar,
+                "J",
+                QuantityLocation::Global,
+            ),
+            (
+                "eden_rotated_dmi",
+                QuantityId::EdenRotatedDmi,
+                QuantityShape::SpatialScalar,
+                "J/m³",
+                QuantityLocation::Cell,
+            ),
+        ];
+
+        for (id, quantity_id, shape, unit, location) in expected {
+            assert_eq!(
+                normalize_quantity_id(id).expect("known quantity"),
+                quantity_id
+            );
+            let spec = quantity_spec(id).expect("rotated DMI quantity should be catalogued");
+            assert_eq!(spec.id, quantity_id);
+            assert_eq!(spec.shape, shape);
+            assert_eq!(spec.unit, unit);
+            assert_eq!(spec.location, location);
+            assert_eq!(spec.domain, QuantityDomain::MagneticOnly);
+            assert!(spec.supports_export);
+        }
+    }
 
     #[test]
     fn steady_transport_outputs_have_canonical_quantity_metadata() {

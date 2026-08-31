@@ -110,6 +110,7 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("e_demag".to_string(), stats.e_demag);
     scalars.insert("e_ext".to_string(), stats.e_ext);
     scalars.insert("e_ani".to_string(), stats.e_ani);
+    scalars.insert("e_rotated_dmi".to_string(), stats.e_rotated_dmi);
     scalars.insert("e_dmi".to_string(), stats.e_dmi);
     scalars.insert("e_total".to_string(), stats.e_total);
     scalars.insert("mx".to_string(), stats.mx);
@@ -236,7 +237,8 @@ pub(crate) fn scalar_outputs_request_average_m(schedules: &[OutputSchedule]) -> 
 mod tests {
     use super::{
         apply_average_m_to_step_stats, apply_weighted_average_m_to_step_stats,
-        weighted_average_magnetization_components, weighted_object_scalars,
+        scalar_snapshot_from_step, weighted_average_magnetization_components,
+        weighted_object_scalars,
     };
     use crate::types::StepStats;
 
@@ -249,6 +251,18 @@ mod tests {
         for (actual, expected) in actual.into_iter().zip([0.1, 0.2, 0.7]) {
             assert!((actual - expected).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn rotated_dmi_energy_is_present_in_scalar_snapshots() {
+        let stats = StepStats {
+            e_rotated_dmi: 2.5e-20,
+            ..StepStats::default()
+        };
+        assert_eq!(
+            scalar_snapshot_from_step(&stats).get("e_rotated_dmi"),
+            Some(&2.5e-20)
+        );
     }
 
     #[test]

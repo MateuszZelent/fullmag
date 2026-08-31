@@ -2538,6 +2538,7 @@ mod tests {
             fft: None,
             external_field: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

@@ -134,6 +134,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => fdm_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some(),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
         QuantityId::HMel => plan.mel_b1.is_some() || plan.mel_b2.is_some(),
         QuantityId::HTherm => plan
@@ -147,6 +148,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }
         QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::MatMs | QuantityId::MatAex | QuantityId::MatAlpha => true,
         QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
@@ -161,6 +163,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::ERotatedDmi
         | QuantityId::EEl
         | QuantityId::EKinEl
         | QuantityId::ETotal
@@ -201,8 +204,10 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
                 || layer.material.cubic_anisotropy_kc3.is_some()
         }),
         QuantityId::HDmi => plan.interfacial_dmi.is_some(),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
         QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         // The multilayer IR does not yet retain drive, antenna, thermal,
         // magnetoelastic, transport, or electric-field terms.  They must stay
         // unavailable rather than being inferred from another plan family.
@@ -225,6 +230,7 @@ fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId)
         | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::ERotatedDmi
         | QuantityId::EEl
         | QuantityId::EKinEl
         | QuantityId::ETotal
@@ -265,6 +271,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
+        QuantityId::HDmiRotated => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::HDmiBulk => plan.bulk_dmi.is_some() || has_values(&plan.dbulk_field),
         QuantityId::HMel => plan.magnetoelastic.is_some(),
         QuantityId::HOe => {
@@ -289,6 +296,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
                 || plan.bulk_dmi.is_some()
                 || has_values(&plan.dbulk_field)
         }
+        QuantityId::EdenRotatedDmi => plan.rotated_interfacial_dmi.is_some(),
         QuantityId::EdenTotal => true,
         QuantityId::VElectric
         | QuantityId::JCharge
@@ -304,6 +312,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
+        | QuantityId::ERotatedDmi
         | QuantityId::EEl
         | QuantityId::EKinEl
         | QuantityId::ETotal
@@ -479,6 +488,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,
@@ -806,5 +816,28 @@ mod tests {
             active_fem_preview_quantities(FemEngine::CpuNative, &plan, &quantities),
             vec!["H_dmi", "H_dmi_bulk"]
         );
+    }
+
+    #[test]
+    fn rotated_dmi_quantities_are_plan_gated_and_not_advertised_before_materializers_exist() {
+        let quantities = ["H_rotated_dmi", "eden_rotated_dmi"];
+
+        let mut fdm = fdm_plan();
+        assert!(!fdm_plan_enables_quantity(&fdm, QuantityId::HDmiRotated));
+        fdm.rotated_interfacial_dmi = Some(3.0e-3);
+        assert!(fdm_plan_enables_quantity(&fdm, QuantityId::HDmiRotated));
+        assert!(fdm_plan_enables_quantity(&fdm, QuantityId::EdenRotatedDmi));
+        assert!(
+            active_fdm_preview_quantities(FdmEngine::CpuReference, &fdm, &quantities).is_empty()
+        );
+        assert!(active_fdm_preview_quantities(FdmEngine::CudaFdm, &fdm, &quantities).is_empty());
+
+        let mut fem = fem_plan();
+        assert!(!fem_plan_enables_quantity(&fem, QuantityId::HDmiRotated));
+        fem.rotated_interfacial_dmi = Some(3.0e-3);
+        assert!(fem_plan_enables_quantity(&fem, QuantityId::HDmiRotated));
+        assert!(fem_plan_enables_quantity(&fem, QuantityId::EdenRotatedDmi));
+        assert!(active_fem_preview_quantities(FemEngine::CpuNative, &fem, &quantities).is_empty());
+        assert!(active_fem_preview_quantities(FemEngine::NativeGpu, &fem, &quantities).is_empty());
     }
 }
