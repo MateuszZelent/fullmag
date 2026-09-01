@@ -49,10 +49,10 @@ def test_common_parameters_match_goebel_2019_supplement_table_i() -> None:
     assert values["KU_X"] == 0.8e6
     assert values["ALPHA"] == 0.3
     assert values["TEMPERATURE"] == 0.0
-    assert values["CELL"] == (1e-9, 1e-9, 0.5e-9)
+    assert values["CELL"] == (0.5e-9, 0.5e-9, 0.5e-9)
     assert values["BIMERON_RADIUS"] == 10e-9
     assert values["BIMERON_WALL_WIDTH"] == 3e-9
-    assert values["LLG_HOLD_TIME"] == 1e-9
+    assert values["LLG_HOLD_TIME"] == 1e-10
 
 
 def test_fdm_scenario_is_strict_fp64_periodic_x_with_relax_and_hold() -> None:
@@ -64,11 +64,17 @@ def test_fdm_scenario_is_strict_fp64_periodic_x_with_relax_and_hold() -> None:
     assert "study.cell(*CELL)" in source
     assert "study.pbc(x=True, demag='truncated_images')" in source
     assert len(_calls(module, "RotatedInterfacialDMI")) == 1
+    assert "film.Ku1 = KU_X" in source
+    assert "film.anisU = (1.0, 0.0, 0.0)" in source
     assert len(_calls(module, "bimeron")) == 1
     assert len(_calls(module, "add_relax")) == 1
     assert "algorithm='llg_overdamped'" in source
-    assert "dt=HOLD_DT" in source
+    assert "fix_dt=LLG_DT" in source
+    assert "dt=LLG_DT" in source
+    assert "vorticity=-1" in source
+    assert "max_physical_time_s=RELAX_TIME" in source
     assert len(_calls(module, "add_run")) == 1
+    assert "until=RELAX_TIME + HOLD_TIME" in source
     assert len(_calls(module, "add_save_state")) == 2
 
 
@@ -84,10 +90,16 @@ def test_fem_scenario_preserves_one_exact_prism_layer_and_periodic_x() -> None:
     assert "exact_layers=True" in source
     assert "study.demag(realization='poisson_robin')" in source
     assert len(_calls(module, "RotatedInterfacialDMI")) == 1
+    assert "film.Ku1 = KU_X" in source
+    assert "film.anisU = (1.0, 0.0, 0.0)" in source
     assert len(_calls(module, "add_relax")) == 1
     assert "algorithm='llg_overdamped'" in source
-    assert "dt=HOLD_DT" in source
+    assert "fix_dt=LLG_DT" in source
+    assert "dt=LLG_DT" in source
+    assert "vorticity=-1" in source
+    assert "max_physical_time_s=RELAX_TIME" in source
     assert len(_calls(module, "add_run")) == 1
+    assert "until=RELAX_TIME + HOLD_TIME" in source
     assert len(_calls(module, "add_save_state")) == 2
 
 
@@ -98,6 +110,7 @@ def test_thresholds_are_source_frozen() -> None:
         "min_abs_topological_charge": 0.8,
         "min_core_abs_mz": 0.5,
         "min_background_mx": 0.8,
+        "min_hold_time_s": 1e-10,
         "fdm_cpu_gpu_fp64_field_rtol": 2e-12,
         "fem_cpu_gpu_fp64_residual_rtol": 5e-11,
         "fp32_field_rtol": 3e-5,

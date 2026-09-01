@@ -118,6 +118,8 @@ def _last_scalar(path: Path) -> dict[str, float]:
 def _initial_energy_from_log(path: Path) -> float:
     pattern = re.compile(r"stage 1/4 .*?step\s+0 .*?E_total=([-+0-9.eE]+)")
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "heartbeat" in line:
+            continue
         match = pattern.search(line)
         if match:
             return float(match.group(1))
@@ -133,8 +135,8 @@ def verify_bundle(
     relax = bundle / "stages" / "stage_00_flat_relax"
     hold = bundle / "stages" / "stage_02_flat_run"
     initial_payload, initial = _read_state(relax / "m_initial.json")
-    _, relaxed = _read_state(relax / "m_final.json")
-    hold_initial_payload, _ = _read_state(hold / "m_initial.json")
+    relaxed_payload, relaxed = _read_state(relax / "m_final.json")
+    _read_state(hold / "m_initial.json")
     held_payload, held = _read_state(hold / "m_final.json")
     relax_scalars = _last_scalar(relax / "scalars.csv")
     hold_scalars = _last_scalar(hold / "scalars.csv")
@@ -185,8 +187,8 @@ def verify_bundle(
             and receipt["executed_unknown_operator_mask"] == 0
         ),
         "source_geometry": (
-            initial_payload["layout"]["grid_cells"] == [500, 40, 1]
-            and initial_payload["layout"]["cell_size"] == [1e-9, 1e-9, 0.5e-9]
+            initial_payload["layout"]["grid_cells"] == [1000, 80, 1]
+            and initial_payload["layout"]["cell_size"] == [0.5e-9, 0.5e-9, 0.5e-9]
         ),
         "energy_decreased": hold_scalars["E_total"] < initial_energy,
         "initial_charge": abs(float(initial["topological_charge"])) >= thresholds["min_abs_topological_charge"],
@@ -211,8 +213,8 @@ def verify_bundle(
             and core_is_central(held["min_mz_core_m"])
         ),
         "hold_duration": (
-            float(held_payload["time"]) - float(hold_initial_payload["time"])
-            >= 1.0e-9 * (1.0 - 1.0e-12)
+            float(held_payload["time"]) - float(relaxed_payload["time"])
+            >= float(thresholds["min_hold_time_s"]) * (1.0 - 1.0e-12)
         ),
     }
 

@@ -10,13 +10,14 @@ from tests.standard_problems.bimeron.goebel_2019.common import (
     BIMERON_RADIUS,
     BIMERON_WALL_WIDTH,
     D_ROTATED,
-    HOLD_DT,
     HOLD_SAMPLE_PERIOD,
     HOLD_TIME,
     KU_X,
+    LLG_DT,
     MS,
     RELAX_FIELD_EVERY_STEPS,
     RELAX_MAX_STEPS,
+    RELAX_TIME,
     TRACK_SIZE,
     requested_device,
 )
@@ -39,7 +40,7 @@ film.anisU = (1.0, 0.0, 0.0)
 film.m = fm.texture.bimeron(
     radius=BIMERON_RADIUS,
     wall_width=BIMERON_WALL_WIDTH,
-    vorticity=1,
+    vorticity=-1,
     helicity_rad=0.0,
     background_sign=1,
     plane="xy",
@@ -56,14 +57,16 @@ film.mesh.thin_film(
 
 study.terms.add(fm.RotatedInterfacialDMI(D=D_ROTATED))
 study.demag(realization="poisson_robin")
-study.solver(dt=HOLD_DT, integrator="rk45")
+study.solver(fix_dt=LLG_DT, integrator="rk45")
 study.build_domain_mesh()
 
 relax = study.stages.add_relax(
     stage_id="relax",
     algorithm="llg_overdamped",
-    dt=HOLD_DT,
+    solver="rk45",
+    dt=LLG_DT,
     max_steps=RELAX_MAX_STEPS,
+    max_physical_time_s=RELAX_TIME,
     tolT=1e-6,
 )
 relax.autosave(
@@ -81,7 +84,7 @@ study.stages.add_save_state(
     dataset="m",
 )
 
-hold = study.stages.add_run(stage_id="hold", until=HOLD_TIME)
+hold = study.stages.add_run(stage_id="hold", until=RELAX_TIME + HOLD_TIME)
 hold.autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(

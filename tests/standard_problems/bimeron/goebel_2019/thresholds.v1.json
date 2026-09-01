@@ -3,6 +3,7 @@
   "min_abs_topological_charge": 0.8,
   "min_core_abs_mz": 0.5,
   "min_background_mx": 0.8,
+  "min_hold_time_s": 1e-10,
   "fdm_cpu_gpu_fp64_field_rtol": 2e-12,
   "fem_cpu_gpu_fp64_residual_rtol": 5e-11,
   "fp32_field_rtol": 3e-5

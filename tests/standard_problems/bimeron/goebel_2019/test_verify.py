@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
-from tests.standard_problems.bimeron.goebel_2019.verify import analyze_fdm_state
+from tests.standard_problems.bimeron.goebel_2019.verify import (
+    _initial_energy_from_log,
+    analyze_fdm_state,
+)
 
 
 def _analytic_bimeron(nx: int, ny: int) -> list[list[float]]:
@@ -57,3 +61,14 @@ def test_analyze_fdm_state_rejects_shape_mismatch() -> None:
         assert "value count" in str(exc)
     else:
         raise AssertionError("shape mismatch must fail closed")
+
+
+def test_initial_energy_ignores_zero_heartbeat(tmp_path: Path) -> None:
+    runtime_log = tmp_path / "runtime.log"
+    runtime_log.write_text(
+        "stage 1/4 (flat_relax) heartbeat step 0 E_total=0.0000e0\n"
+        "stage 1/4 (flat_relax) step 0 E_total=-7.4885e-18\n",
+        encoding="utf-8",
+    )
+
+    assert _initial_energy_from_log(runtime_log) == -7.4885e-18

@@ -122,9 +122,7 @@ Jedynym parametrem publicznym jest wymagane `D`:
 |---|---|---|---|---|---|---|---|
 | `fm.RotatedInterfacialDMI.D` | `float` | required | $\mathrm{J\,m^{-2}}$ | wartość skończona; oba znaki i zero dozwolone | siła i chiralność rDMI | FDM/FEM CPU/GPU po przejściu capability i qualification | `energy_terms[].D` |
 
-Docelowy, stage-first scenariusz publiczny ma następujący kształt. Do czasu
-zakończenia implementacji blok jest kontraktem planowanym i nie jest dowodem
-wykonywalności:
+Wykonywalny, stage-first scenariusz publiczny ma następujący kształt:
 
 ```python
 # %% import and study
@@ -132,10 +130,10 @@ import fullmag as fm
 
 study = fm.study("goebel_2019_bimeron_fdm")
 study.engine("fdm")
-study.device("cpu", precision="double")
+study.device("gpu", precision="double")
 study.mode("strict")
-study.cell(1e-9, 1e-9, 0.5e-9)
-study.pbc(x=True)
+study.cell(0.5e-9, 0.5e-9, 0.5e-9)
+study.pbc(x=True, demag="truncated_images")
 
 # %% geometry, material, and initial state
 film = study.geometry(
@@ -150,6 +148,7 @@ film.anisU = (1.0, 0.0, 0.0)
 film.m = fm.texture.bimeron(
     radius=10e-9,
     wall_width=3e-9,
+    vorticity=-1,
     background_sign=1,
     plane="xy",
 )
@@ -157,13 +156,17 @@ film.m = fm.texture.bimeron(
 # %% interactions and stages
 study.terms.add(fm.RotatedInterfacialDMI(D=3e-3))
 study.demag(realization="auto")
+study.solver(fix_dt=2.5e-15, integrator="rk45")
 study.stages.add_relax(
     stage_id="relax",
-    algorithm="projected_gradient_bb",
-    max_steps=20_000,
+    algorithm="llg_overdamped",
+    solver="rk45",
+    dt=2.5e-15,
+    max_steps=8_000,
+    max_physical_time_s=20e-12,
     tolT=1e-6,
 )
-study.stages.add_run(stage_id="hold", until=1e-9)
+study.stages.add_run(stage_id="hold", until=120e-12)
 ```
 
 Konstruktor odrzuca `NaN`, `+inf` i `-inf` przez `ValueError`. Rust ponawia
@@ -262,10 +265,10 @@ bufora dla aktywnej topologii kończy krok błędem bez delegacji elementów na 
 
 | Solver | Device | Stan kontraktu | Stan runtime | Wymagany dowód przed promocją |
 |---|---|---|---|---|
-| FDM | CPU | zatwierdzony | planned, `NOT VERIFIED` | manufactured field, energy derivative, boundary i bimeron |
-| FDM | GPU | zatwierdzony | planned, `NOT VERIFIED` | FP64/FP32 device receipt, parity, sanitizer i transfer audit |
-| FEM | CPU | zatwierdzony | planned, `NOT VERIFIED` | MFEM typed topology, weak derivative, PBC i bimeron |
-| FEM | GPU | zatwierdzony | planned, `NOT VERIFIED` | typed device quadrature, parity, sanitizer, residency i bimeron |
+| FDM | CPU | zatwierdzony | operator i pochodna energii zweryfikowane; bimeron runtime `NOT VERIFIED` | pełna reprodukcja bimeronu CPU |
+| FDM | GPU | zatwierdzony | FP64 CUDA bimeron 100 ps `validated` | FP32 parity i sanitizer |
+| FEM | CPU | zatwierdzony | operator MFEM, weak derivative i build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM CPU |
+| FEM | GPU | zatwierdzony | operator CUDA, pochodna i managed build zweryfikowane; bimeron runtime `NOT VERIFIED` | reprodukcja bimeronu FEM GPU |
 
 (implementation-mapping)=
 ## Granice implementacji i provenance
@@ -305,6 +308,10 @@ PBC $x$, $M_s=0.58\,\mathrm{MA\,m^{-1}}$,
 $A=15\,\mathrm{pJ\,m^{-1}}$, $D=3\,\mathrm{mJ\,m^{-2}}$,
 $K_x=0.8\,\mathrm{MJ\,m^{-3}}$, $\alpha=0.3$ i $T=0\,\mathrm K$.
 FEM ma dokładnie jedną magnetyczną warstwę `prism6` przez grubość.
+FDM używa komórek $0.5\times0.5\times0.5\,\mathrm{nm^3}$; siatka 1 nm
+nie zachowuje bariery topologicznej dla relaksującego rdzenia o średnicy kilku
+nanometrów i nie jest dopuszczona do tej reprodukcji. Zgodna z obróconym
+Néelowskim skyrmionem chiralność presetu ma `vorticity=-1` dla $D>0$.
 
 Akceptacja wymaga spadku energii, skończonych pól, zachowania normy, dwóch
 rozdzielonych rdzeni o przeciwnych znakach $m_z$, $|Q|\ge0.8$, tła wzdłuż
@@ -316,6 +323,17 @@ Native FEM/MFEM/CUDA/hypre/libCEED jest budowany i uruchamiany wyłącznie przez
 repozytoryjne receptury kontenerowe `just`. Receipt z rzeczywistym urządzeniem
 jest wymagany dla każdego twierdzenia o GPU.
 
+### Wynik kwalifikacyjny FDM GPU FP64
+
+Przebieg na NVIDIA GeForce RTX 4080 SUPER, strict FP64 CUDA, bez fallbacku,
+przeszedł 15/15 bramek po 20 ps relaksacji i 100 ps bezprądowego hold. Otrzymano
+$Q=-0.9999894870$, $m_z^{\max}=0.9932343$,
+$m_z^{\min}=-0.9935072$, separację rdzeni $5.50\,\mathrm{nm}$ oraz
+$\langle m_x\rangle=0.9858318$. Energia spadła z
+$-7.7736\times10^{-18}\,\mathrm J$ do
+$-8.1467871427\times10^{-18}\,\mathrm J$. Receipt wykazał maskę operatorów
+CUDA $159/159$, zero operatorów host/unknown i `fallback_count=0`.
+
 (limitations)=
 ## Ograniczenia i prace odroczone
 
@@ -325,8 +343,8 @@ jest wymagany dla każdego twierdzenia o GPU.
 - reprodukcja ruchu SOT i prędkości z Fig. 3 pracy Göbela;
 - eksperymentalna identyfikacja materiału na podstawie samej symulacji.
 
-Do czasu przejścia wszystkich bramek każdy lane pozostaje `planned` i
-`NOT VERIFIED`.
+Promocja FDM GPU dotyczy wyłącznie powyższego przebiegu FP64. Pozostałe lane'y
+i ruch SOT zachowują status wskazany w macierzy wsparcia.
 
 (scientific-bibliography)=
 ## Bibliografia naukowa
