@@ -81,8 +81,13 @@
     .chart .grid-line { stroke: var(--grid); stroke-width: 1; stroke-dasharray: 2 4; }
     .chart .series { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
     .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; min-height: 18px; margin: 2px 2px 0; color: var(--muted); font-size: 11px; }
-    .legend-item { display: inline-flex; align-items: center; gap: 5px; }
-    .legend-swatch { width: 15px; height: 3px; border-radius: 3px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 5px; border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
+    .legend-item:disabled { cursor: not-allowed; opacity: 0.58; }
+    .legend-item:hover, .legend-item:focus-visible { color: var(--text); outline: 2px solid var(--border); outline-offset: 2px; }
+    .legend-item.is-hidden { opacity: 0.45; }
+    .legend-swatch { width: 15px; height: 3px; border-radius: 3px; background: var(--series-color); }
+    .legend-swatch[data-line-style="dashed"] { background: repeating-linear-gradient(90deg, var(--series-color) 0 8px, transparent 8px 13px); }
+    .legend-swatch[data-line-style="dotted"] { background: repeating-linear-gradient(90deg, var(--series-color) 0 2px, transparent 2px 6px); }
     .empty { display: grid; place-items: center; min-height: 204px; color: var(--muted); font-size: 12px; text-align: center; }
     .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
     table { width: 100%; min-width: 720px; border-collapse: collapse; }
@@ -142,7 +147,7 @@
           <tbody id="latest-body"><tr><td colspan="7" class="muted">Brak danych.</td></tr></tbody>
         </table>
       </div>
-      <p class="footer-note">Fullmag: strumieniowany <code>stages/*/table</code>, potem <code>artifacts/scalars.csv</code> i <code>artifacts/tables/default/table.csv</code>. MuMax3: <code>results/mumax3/table.txt</code>. Na wykresie „zewnętrzna / Zeeman” Fullmag ma mapowanie <code>E_ext + E_drive</code>, a MuMax3 <code>E_zeeman</code>. FDM używa osobnego <code>fdm_case.zarr</code>, aby nie mieszać go ze starym przebiegiem; FEM można wskazać przez <code>?fem=ścieżka/do/fullmag_case.zarr</code>.</p>
+      <p class="footer-note">Fullmag CPU/GPU: strumieniowany <code>stages/*/table</code>, potem <code>artifacts/scalars.csv</code> i <code>artifacts/tables/default/table.csv</code>. MuMax3: zweryfikowany artefakt <code>results/mumax3_aligned_v3/table.txt</code> z builda v3.12.3-20260819. Na wykresie „zewnętrzna / Zeeman” Fullmag używa <code>E_ext</code> (bias + drive), a MuMax3 <code>E_zeeman</code>. Każda seria ma osobny przełącznik w legendzie; brakujący artefakt pozostaje oznaczony jako „oczekuje”.</p>
     </section>
   </main>
 
@@ -151,9 +156,11 @@
       "use strict";
 
       const BACKENDS = [
-        { id: "fdm", label: "FDM · CPU · double", color: "var(--fdm)", kind: "fullmag", roots: ["fdm_case.zarr", "fullmag_case.zarr", "results/fdm/fullmag_case.zarr"], liveCsv: ["fdm_case.zarr/artifacts/scalars.csv", "fullmag_case.zarr/artifacts/scalars.csv"], csv: ["fdm_case.zarr/artifacts/tables/default/table.csv", "fdm_case.zarr/tables/default/table.csv", "fullmag_case.zarr/artifacts/tables/default/table.csv", "fullmag_case.zarr/tables/default/table.csv", "results/fdm/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
-        { id: "fem", label: "FEM · GPU · double", color: "var(--fem)", kind: "fullmag", roots: ["fem_case.zarr", "results/fem/fullmag_case.zarr"], liveCsv: ["fem_case.zarr/artifacts/scalars.csv"], csv: ["fem_case.zarr/artifacts/tables/default/table.csv", "results/fem/fullmag_case.zarr/artifacts/tables/default/table.csv"], },
-        { id: "mumax3", label: "MuMax3 · GPU", color: "var(--mumax)", kind: "mumax", paths: ["results/mumax3_aligned_v2/table.txt", "results/mumax3/table.txt"] },
+        { id: "fdm_cpu", label: "Fullmag FDM · CPU · double", color: "var(--fdm)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", queryKeys: ["fdm_cpu", "fdm"], roots: ["fdm_case.zarr", "fullmag_case.zarr", "results/fdm/fullmag_case.zarr"], liveCsv: ["fdm_case.zarr/artifacts/scalars.csv", "fullmag_case.zarr/artifacts/scalars.csv"], csv: ["fdm_case.zarr/artifacts/tables/default/table.csv", "fdm_case.zarr/tables/default/table.csv", "fullmag_case.zarr/artifacts/tables/default/table.csv", "fullmag_case.zarr/tables/default/table.csv", "results/fdm/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
+        { id: "fdm_gpu", label: "Fullmag FDM · GPU · double", color: "var(--fdm)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", roots: ["fdm_gpu_case.zarr", "results/fdm_gpu/fullmag_case.zarr"], liveCsv: ["fdm_gpu_case.zarr/artifacts/scalars.csv"], csv: ["fdm_gpu_case.zarr/artifacts/tables/default/table.csv", "results/fdm_gpu/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
+        { id: "fem_cpu", label: "Fullmag FEM · CPU · double", color: "var(--fem)", lineStyle: "solid", strokeDasharray: null, kind: "fullmag", queryKeys: ["fem_cpu", "fem"], roots: ["fem_cpu_case.zarr", "results/fem_cpu/fullmag_case.zarr"], liveCsv: ["fem_cpu_case.zarr/artifacts/scalars.csv"], csv: ["fem_cpu_case.zarr/artifacts/tables/default/table.csv", "results/fem_cpu/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
+        { id: "fem_gpu", label: "Fullmag FEM · GPU · double", color: "var(--fem)", lineStyle: "dashed", strokeDasharray: "8 5", kind: "fullmag", roots: ["fem_gpu_case.zarr", "results/fem_gpu/fullmag_case.zarr"], liveCsv: ["fem_gpu_case.zarr/artifacts/scalars.csv"], csv: ["fem_gpu_case.zarr/artifacts/tables/default/table.csv", "results/fem_gpu/fullmag_case.zarr/artifacts/tables/default/table.csv"] },
+        { id: "mumax3", label: "MuMax3 · v3.12.3-20260819 · GPU", color: "var(--mumax)", lineStyle: "dotted", strokeDasharray: "1 6", kind: "mumax", paths: ["results/mumax3_aligned_v3/table.txt"] },
       ];
       const STAGE_CANDIDATES = Array.from({ length: 8 }, (_, index) => `stages/stage_${String(index).padStart(4, "0")}_dynamic`);
       const MAGNETIZATION = ["mx", "my", "mz"];
@@ -166,11 +173,13 @@
         { id: "e_dmi", label: "E DMI" },
         { id: "e_total", label: "E total" },
       ];
-      const state = { backends: {}, refreshing: false, refreshNumber: 0 };
+      const state = { backends: {}, refreshing: false, refreshNumber: 0, hiddenBackends: new Set() };
       const query = new URLSearchParams(window.location.search);
 
       function applyQueryOverride(definition) {
-        const override = query.get(definition.id);
+        const overrideKey = (definition.queryKeys || [definition.id]).find((key) => query.has(key));
+        if (!overrideKey) return definition;
+        const override = query.get(overrideKey);
         if (!override) return definition;
         const root = override.replace(/\/$/, "");
         if (definition.kind === "mumax") return { ...definition, paths: [root] };
@@ -212,7 +221,7 @@
         const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
         if (lines.length < 2) throw new Error("Tabela Fullmag nie ma jeszcze wierszy");
         const headers = lines[0].split(",").map(canonicalHeader);
-        const required = ["time_s", ...MAGNETIZATION, ...ENERGIES];
+        const required = ["time_s", ...MAGNETIZATION, "e_ex", "e_demag", "e_ext", "e_drive", "e_ani", "e_dmi", "e_total"];
         const missing = required.filter((column) => !headers.includes(column));
         if (missing.length) throw new Error(`Brak kolumn: ${missing.join(", ")}`);
         const rows = [];
@@ -288,7 +297,7 @@
           } else {
             normalized.e_ext = row.e_ext;
             normalized.e_drive = row.e_drive;
-            normalized.e_external_total = row.e_ext + row.e_drive;
+            normalized.e_external_total = row.e_ext;
           }
           return normalized;
         }).sort((left, right) => left.time_s - right.time_s);
@@ -328,11 +337,11 @@
       }
 
       async function readFullmag(definition) {
-        for (const root of definition.roots || []) {
+        for (const path of definition.csv || []) {
           try {
-            return await readZarrTable(root);
+            return { rows: parseFullmagCsv(await fetchText(path)), source: path, live: false, complete: true };
           } catch (error) {
-            // Fall through to the next root or the final CSV.
+            // Fall through while the producer is still preparing its artifact.
           }
         }
         for (const path of definition.liveCsv || []) {
@@ -342,11 +351,11 @@
             // Fall through while the producer is still preparing its artifact.
           }
         }
-        for (const path of definition.csv || []) {
+        for (const root of definition.roots || []) {
           try {
-            return { rows: parseFullmagCsv(await fetchText(path)), source: path, live: false, complete: true };
+            return await readZarrTable(root);
           } catch (error) {
-            // Fall through while the producer is still preparing its artifact.
+            // Fall through to the next root while the producer is still preparing its artifact.
           }
         }
         throw new Error("brak tabeli Fullmag");
@@ -408,6 +417,12 @@
         }).join(" ");
       }
 
+      function toggleBackend(backendId) {
+        if (state.hiddenBackends.has(backendId)) state.hiddenBackends.delete(backendId);
+        else state.hiddenBackends.add(backendId);
+        renderCharts();
+      }
+
       function chartCard(title, unit, seriesList) {
         const card = document.createElement("article");
         card.className = "chart-card";
@@ -417,59 +432,78 @@
         heading.querySelector("h3").textContent = title;
         heading.querySelector("span").textContent = unit;
         card.append(heading);
-        const allRows = seriesList.flatMap((series) => series.rows);
+        const visibleSeries = seriesList.filter((series) => series.visible && series.available);
+        const pendingSeries = seriesList.some((series) => series.visible && !series.available);
+        const allRows = visibleSeries.flatMap((series) => series.rows);
         if (!allRows.length) {
           const empty = document.createElement("div");
           empty.className = "empty";
-          empty.textContent = "Oczekiwanie na dane…";
+          empty.textContent = pendingSeries ? "Oczekiwanie na dane…" : "Wybierz co najmniej jedną krzywą…";
           card.append(empty);
-          return card;
+        } else {
+          const width = 640;
+          const height = 204;
+          const padding = { top: 12, right: 12, bottom: 25, left: 52 };
+          const xValues = allRows.map((row) => row.time_s);
+          const yValues = allRows.map((row) => row[visibleSeries[0].column]).filter(Number.isFinite);
+          visibleSeries.forEach((series) => series.rows.forEach((row) => { if (Number.isFinite(row[series.column])) yValues.push(row[series.column]); }));
+          let xMin = Math.min(...xValues), xMax = Math.max(...xValues);
+          let yMin = Math.min(...yValues), yMax = Math.max(...yValues);
+          if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) { yMin = -1; yMax = 1; }
+          if (xMin === xMax) { xMin -= 1e-12; xMax += 1e-12; }
+          if (yMin === yMax) { const delta = Math.max(Math.abs(yMin) * 0.1, 1e-12); yMin -= delta; yMax += delta; }
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.classList.add("chart");
+          svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+          svg.setAttribute("role", "img");
+          svg.setAttribute("aria-label", `${title}, wykres w czasie`);
+          const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          for (let tick = 0; tick <= 4; tick += 1) {
+            const ratio = tick / 4;
+            const y = padding.top + ratio * (height - padding.top - padding.bottom);
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.classList.add("grid-line"); line.setAttribute("x1", padding.left); line.setAttribute("x2", width - padding.right); line.setAttribute("y1", y); line.setAttribute("y2", y); group.append(line);
+            const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            label.setAttribute("x", padding.left - 7); label.setAttribute("y", y + 3); label.setAttribute("text-anchor", "end"); label.textContent = formatNumber(yMax - ratio * (yMax - yMin), 3); group.append(label);
+          }
+          const axis = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          axis.classList.add("axis"); axis.setAttribute("x1", padding.left); axis.setAttribute("x2", width - padding.right); axis.setAttribute("y1", height - padding.bottom); axis.setAttribute("y2", height - padding.bottom); group.append(axis);
+          for (let tick = 0; tick <= 2; tick += 1) {
+            const ratio = tick / 2;
+            const x = padding.left + ratio * (width - padding.left - padding.right);
+            const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            label.setAttribute("x", x); label.setAttribute("y", height - 7); label.setAttribute("text-anchor", tick === 0 ? "start" : tick === 2 ? "end" : "middle"); label.textContent = `${((xMin + ratio * (xMax - xMin)) * 1e9).toFixed(2)} ns`; group.append(label);
+          }
+          svg.append(group);
+          const lines = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          visibleSeries.forEach((series) => {
+            const visibleRows = series.rows.filter((row) => Number.isFinite(row[series.column]));
+            if (!visibleRows.length) return;
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.classList.add("series"); path.style.stroke = series.color; if (series.strokeDasharray) path.setAttribute("stroke-dasharray", series.strokeDasharray); path.setAttribute("d", pathFor({ rows: visibleRows }, null, series.column, width, height, padding, xMin, xMax, yMin, yMax)); lines.append(path);
+          });
+          svg.append(lines);
+          card.append(svg);
         }
-        const width = 640;
-        const height = 204;
-        const padding = { top: 12, right: 12, bottom: 25, left: 52 };
-        const xValues = allRows.map((row) => row.time_s);
-        const yValues = allRows.map((row) => row[seriesList[0].column]).filter(Number.isFinite);
-        seriesList.forEach((series) => series.rows.forEach((row) => { if (Number.isFinite(row[series.column])) yValues.push(row[series.column]); }));
-        let xMin = Math.min(...xValues), xMax = Math.max(...xValues);
-        let yMin = Math.min(...yValues), yMax = Math.max(...yValues);
-        if (!Number.isFinite(yMin) || !Number.isFinite(yMax)) { yMin = -1; yMax = 1; }
-        if (xMin === xMax) { xMin -= 1e-12; xMax += 1e-12; }
-        if (yMin === yMax) { const delta = Math.max(Math.abs(yMin) * 0.1, 1e-12); yMin -= delta; yMax += delta; }
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.classList.add("chart");
-        svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-        svg.setAttribute("role", "img");
-        svg.setAttribute("aria-label", `${title}, wykres w czasie`);
-        const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-        for (let tick = 0; tick <= 4; tick += 1) {
-          const ratio = tick / 4;
-          const y = padding.top + ratio * (height - padding.top - padding.bottom);
-          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          line.classList.add("grid-line"); line.setAttribute("x1", padding.left); line.setAttribute("x2", width - padding.right); line.setAttribute("y1", y); line.setAttribute("y2", y); group.append(line);
-          const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-          label.setAttribute("x", padding.left - 7); label.setAttribute("y", y + 3); label.setAttribute("text-anchor", "end"); label.textContent = formatNumber(yMax - ratio * (yMax - yMin), 3); group.append(label);
-        }
-        const axis = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        axis.classList.add("axis"); axis.setAttribute("x1", padding.left); axis.setAttribute("x2", width - padding.right); axis.setAttribute("y1", height - padding.bottom); axis.setAttribute("y2", height - padding.bottom); group.append(axis);
-        for (let tick = 0; tick <= 2; tick += 1) {
-          const ratio = tick / 2;
-          const x = padding.left + ratio * (width - padding.left - padding.right);
-          const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-          label.setAttribute("x", x); label.setAttribute("y", height - 7); label.setAttribute("text-anchor", tick === 0 ? "start" : tick === 2 ? "end" : "middle"); label.textContent = `${((xMin + ratio * (xMax - xMin)) * 1e9).toFixed(2)} ns`; group.append(label);
-        }
-        svg.append(group);
-        const lines = document.createElementNS("http://www.w3.org/2000/svg", "g");
-        seriesList.forEach((series) => {
-          const visibleRows = series.rows.filter((row) => Number.isFinite(row[series.column]));
-          if (!visibleRows.length) return;
-          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-          path.classList.add("series"); path.style.stroke = series.color; path.setAttribute("d", pathFor({ rows: visibleRows }, null, series.column, width, height, padding, xMin, xMax, yMin, yMax)); lines.append(path);
-        });
-        svg.append(lines);
-        card.append(svg);
         const legend = document.createElement("div"); legend.className = "legend";
-        seriesList.forEach((series) => { const item = document.createElement("span"); item.className = "legend-item"; item.innerHTML = `<span class="legend-swatch"></span><span></span>`; item.querySelector(".legend-swatch").style.background = series.color; item.querySelector("span:last-child").textContent = series.label; legend.append(item); });
+        seriesList.forEach((series) => {
+          const item = document.createElement("button");
+          const status = series.availability === "not_applicable" ? "brak składowej" : "oczekuje";
+          const label = series.available ? series.label : `${series.label} · ${status}`;
+          item.type = "button";
+          item.className = `legend-item${series.visible ? "" : " is-hidden"}`;
+          item.disabled = !series.available;
+          item.setAttribute("aria-pressed", String(series.visible));
+          item.setAttribute("aria-disabled", String(!series.available));
+          item.setAttribute("aria-label", `${series.available ? (series.visible ? "Ukryj" : "Pokaż") : "Niedostępna seria"} ${label}`);
+          item.innerHTML = `<span class="legend-swatch"></span><span></span>`;
+          const swatch = item.querySelector(".legend-swatch");
+          swatch.style.setProperty("--series-color", series.color);
+          swatch.dataset.lineStyle = series.lineStyle;
+          item.querySelector("span:last-child").textContent = label;
+          if (series.available) item.addEventListener("click", () => toggleBackend(series.id));
+          legend.append(item);
+        });
         card.append(legend);
         return card;
       }
@@ -477,9 +511,11 @@
       function methodSeries(column) {
         return BACKENDS.map((definition) => {
           const result = state.backends[definition.id];
-          if (!result || result.error || !result.rows.some((row) => Number.isFinite(row[column]))) return null;
-          return { label: definition.id, color: definition.color, column, rows: result.rows };
-        }).filter(Boolean);
+          const rows = result && !result.error && Array.isArray(result.rows) ? result.rows : [];
+          const hasData = rows.some((row) => Number.isFinite(row[column]));
+          const availability = hasData ? "ready" : result && !result.error ? "not_applicable" : "pending";
+          return { id: definition.id, label: definition.label, color: definition.color, lineStyle: definition.lineStyle, visible: !state.hiddenBackends.has(definition.id), available: hasData, availability, strokeDasharray: definition.strokeDasharray || null, column, rows };
+        });
       }
 
       function renderCharts() {

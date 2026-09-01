@@ -507,6 +507,47 @@ pub struct fullmag_fdm_plan_desc_v2 {
     pub time_policy: fullmag_fdm_time_policy_desc_v2,
 }
 
+pub const FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_regional_field_drive_waveform {
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT = 0,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINUSOIDAL = 1,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE = 2,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR = 3,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_regional_field_drive_time_origin {
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL = 0,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_regional_field_drive_desc_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub field_xyz: *const f64,
+    pub field_len: u64,
+    pub waveform: fullmag_fdm_regional_field_drive_waveform,
+    pub time_origin: fullmag_fdm_regional_field_drive_time_origin,
+    pub stage_start_time_s: f64,
+    pub frequency_hz: f64,
+    pub phase_rad: f64,
+    pub offset: f64,
+    pub t_on_s: f64,
+    pub t_off_s: f64,
+    pub cutoff_hz: f64,
+    pub t0_s: f64,
+    pub amplitude: f64,
+    pub piecewise_points: *const f64,
+    pub piecewise_point_count: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fdm_llg_checkpoint_info_v2 {
@@ -1891,6 +1932,12 @@ extern "C" {
         field_len: u64,
     ) -> i32;
 
+    pub fn fullmag_fdm_backend_set_regional_field_drives_v1(
+        handle: *mut fullmag_fdm_backend,
+        drives: *const fullmag_fdm_regional_field_drive_desc_v1,
+        drive_count: u32,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_step(
         handle: *mut fullmag_fdm_backend,
         dt_seconds: f64,
@@ -2247,6 +2294,26 @@ mod tests {
             *mut fullmag_fdm_backend,
             *const fullmag_fdm_stats_policy_v1,
         ) -> i32 = fullmag_fdm_backend_set_stats_policy_v1;
+    }
+
+    #[test]
+    fn regional_field_drive_v1_has_append_only_layout_and_ffi_symbol() {
+        assert_eq!(FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1, 1);
+        assert_eq!(size_of::<fullmag_fdm_regional_field_drive_desc_v1>(), 120);
+        assert_eq!(align_of::<fullmag_fdm_regional_field_drive_desc_v1>(), 8);
+        assert_eq!(
+            offset_of!(fullmag_fdm_regional_field_drive_desc_v1, field_xyz),
+            8
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_regional_field_drive_desc_v1, piecewise_points),
+            104
+        );
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fdm_backend,
+            *const fullmag_fdm_regional_field_drive_desc_v1,
+            u32,
+        ) -> i32 = fullmag_fdm_backend_set_regional_field_drives_v1;
     }
 
     #[test]

@@ -625,6 +625,157 @@ fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunEr
     }
 }
 
+#[cfg(feature = "cuda")]
+struct NativeRegionalFieldDrivePayload {
+    _fields: Vec<Vec<f64>>,
+    _piecewise_points: Vec<Vec<f64>>,
+    descriptors: Vec<ffi::fullmag_fdm_regional_field_drive_desc_v1>,
+}
+
+#[cfg(feature = "cuda")]
+fn native_regional_field_drive_payload(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<Option<NativeRegionalFieldDrivePayload>, RunError> {
+    if plan.regional_field_drive_bases.is_empty() {
+        return Ok(None);
+    }
+    let cell_count = plan.initial_magnetization.len();
+    let flat_len = cell_count.checked_mul(3).ok_or_else(|| RunError {
+        message: "regional field drive basis length overflows usize".to_string(),
+    })?;
+    let drive_count = u32::try_from(plan.regional_field_drive_bases.len()).map_err(|_| RunError {
+        message: "regional field drive count exceeds the native CUDA ABI limit".to_string(),
+    })?;
+    let mut fields = Vec::with_capacity(plan.regional_field_drive_bases.len());
+    let mut piecewise_points = Vec::with_capacity(plan.regional_field_drive_bases.len());
+    let mut descriptors = Vec::with_capacity(plan.regional_field_drive_bases.len());
+
+    for resolved in &plan.regional_field_drive_bases {
+        if resolved.field_xyz.len() != cell_count {
+            return Err(RunError {
+                message: format!(
+                    "regional field drive '{}' basis length {} differs from FDM cell count {}",
+                    resolved.drive.id,
+                    resolved.field_xyz.len(),
+                    cell_count
+                ),
+            });
+        }
+        let mut field = Vec::with_capacity(flat_len);
+        for value in &resolved.field_xyz {
+            field.extend_from_slice(value);
+        }
+        let mut frequency_hz = 0.0;
+        let mut phase_rad = 0.0;
+        let mut offset = 0.0;
+        let mut t_on_s = 0.0;
+        let mut t_off_s = 0.0;
+        let mut cutoff_hz = 0.0;
+        let mut t0_s = 0.0;
+        let mut amplitude = 1.0;
+        let (waveform, points) = match &resolved.drive.waveform {
+            fullmag_ir::TimeDependenceIR::Constant => (
+                ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT,
+                Vec::new(),
+            ),
+            fullmag_ir::TimeDependenceIR::Sinusoidal {
+                frequency_hz: frequency,
+                phase_rad: phase,
+                offset: waveform_offset,
+            } => {
+                frequency_hz = *frequency;
+                phase_rad = *phase;
+                offset = *waveform_offset;
+                (
+                    ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINUSOIDAL,
+                    Vec::new(),
+                )
+            }
+            fullmag_ir::TimeDependenceIR::Pulse { t_on, t_off } => {
+                t_on_s = *t_on;
+                t_off_s = *t_off;
+                (
+                    ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE,
+                    Vec::new(),
+                )
+            }
+            fullmag_ir::TimeDependenceIR::PiecewiseLinear { points } => {
+                let mut flat = Vec::with_capacity(points.len().checked_mul(2).ok_or_else(|| {
+                    RunError {
+                        message: "piecewise regional field drive length overflows usize"
+                            .to_string(),
+                    }
+                })?);
+                for [time_s, value] in points {
+                    flat.push(*time_s);
+                    flat.push(*value);
+                }
+                (
+                    ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR,
+                    flat,
+                )
+            }
+            fullmag_ir::TimeDependenceIR::SincPulse {
+                cutoff_hz: cutoff,
+                t0,
+                amplitude: waveform_amplitude,
+            } => {
+                cutoff_hz = *cutoff;
+                t0_s = *t0;
+                amplitude = *waveform_amplitude;
+                (
+                    ffi::fullmag_fdm_regional_field_drive_waveform::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE,
+                    Vec::new(),
+                )
+            }
+        };
+        fields.push(field);
+        piecewise_points.push(points);
+        let field_storage = fields.last().expect("field storage was just appended");
+        let points_storage = piecewise_points
+            .last()
+            .expect("piecewise storage was just appended");
+        descriptors.push(ffi::fullmag_fdm_regional_field_drive_desc_v1 {
+            abi_version: ffi::FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1,
+            struct_size: std::mem::size_of::<ffi::fullmag_fdm_regional_field_drive_desc_v1>()
+                as u32,
+            field_xyz: field_storage.as_ptr(),
+            field_len: field_storage.len() as u64,
+            waveform,
+            time_origin: match resolved.drive.time_origin {
+                fullmag_ir::FieldTimeOriginIR::StageLocal => {
+                    ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
+                }
+                fullmag_ir::FieldTimeOriginIR::Absolute => {
+                    ffi::fullmag_fdm_regional_field_drive_time_origin::FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE
+                }
+            },
+            stage_start_time_s: plan.time_stage.start_time_s,
+            frequency_hz,
+            phase_rad,
+            offset,
+            t_on_s,
+            t_off_s,
+            cutoff_hz,
+            t0_s,
+            amplitude,
+            piecewise_points: if points_storage.is_empty() {
+                std::ptr::null()
+            } else {
+                points_storage.as_ptr()
+            },
+            piecewise_point_count: (points_storage.len() / 2) as u64,
+        });
+    }
+
+    debug_assert_eq!(descriptors.len(), drive_count as usize);
+    Ok(Some(NativeRegionalFieldDrivePayload {
+        _fields: fields,
+        _piecewise_points: piecewise_points,
+        descriptors,
+    }))
+}
+
 /// Safe wrapper around the native FDM backend handle.
 #[cfg(feature = "cuda")]
 pub(crate) struct NativeFdmBackend {
@@ -1794,6 +1945,28 @@ impl NativeFdmBackend {
                     let err = ffi::fullmag_fdm_backend_last_error(handle);
                     if err.is_null() {
                         "failed to mark static external field profile".to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
+        }
+
+        if let Some(regional_drives) = native_regional_field_drive_payload(plan)? {
+            let drive_status = unsafe {
+                ffi::fullmag_fdm_backend_set_regional_field_drives_v1(
+                    handle,
+                    regional_drives.descriptors.as_ptr(),
+                    regional_drives.descriptors.len() as u32,
+                )
+            };
+            if drive_status != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to upload regional field drives to CUDA FDM".to_string()
                     } else {
                         CStr::from_ptr(err).to_string_lossy().to_string()
                     }

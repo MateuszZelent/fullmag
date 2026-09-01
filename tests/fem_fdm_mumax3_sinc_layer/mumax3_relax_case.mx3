@@ -1,0 +1,26 @@
+// Static relaxation probe for the 500 nm x 500 nm x 10 nm Py layer.
+// Only scalar rows are written; no magnetization field is saved.
+
+SetGridSize(200, 200, 1)
+SetCellSize(2.5e-9, 2.5e-9, 10e-9)
+SetPBC(0, 0, 0)
+DemagAccuracy = 29
+
+Msat = 800e3
+Aex = 13e-12
+alpha = 0.01
+Temp = 0
+m = uniform(1, 0, 0)
+B_ext = vector(100e-3, 0, 0)
+MinimizerStop = 1e-6
+MinimizeMaxSteps = 50000
+MinimizerSamples = 10
+
+tableadd(E_exch)
+tableadd(E_demag)
+tableadd(E_zeeman)
+tableadd(E_anis)
+tableadd(E_total)
+tableSave()
+minimize()
+tableSave()

@@ -10953,7 +10953,7 @@ async fn mesh_quality_gates_publishes_revision_bound_mixed_certificate_evidence(
         .iter()
         .find(|gate| gate["family"] == "prism6")
         .expect("prism6 gate should be published");
-    assert_eq!(prism["metric"], "tetra_decomposition_scaled_jacobian.v1");
+    assert_eq!(prism["metric"], "mixed_topology_scaled_jacobian.v1");
     assert_eq!(prism["threshold"], 0.1);
     assert_eq!(prism["passed"], true);
     assert_eq!(prism["positive_jacobian"], true);

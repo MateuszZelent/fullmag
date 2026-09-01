@@ -1,6 +1,8 @@
 # Regional time-domain magnetic-field drive
 
-- Status: canonical physics and numerics contract; implementation in progress
+- Status: canonical physics and numerics contract; FDM CPU reference and FEM
+  native field-drive paths exist; FDM GPU and FEM GPU remain qualification
+  lanes for the comparison study below
 - Owners: Fullmag core
 - Last updated: 2026-07-15
 - Decision: `docs/adr/0019-regional-field-drive-and-stage-time-semantics.md`
@@ -192,9 +194,12 @@ strategy. Adaptive mask integration uses relative tolerance `1e-6` and maximum
 depth 10. Failure to converge is an error, not a centroid fallback. The
 immutable cell basis is cached independently of the waveform.
 
-FDM CPU double is the reference implementation. FDM GPU remains unsupported
-until its own double-precision field, RHS, energy, and trajectory parity gates
-pass; capability cannot be inherited from CPU.
+FDM CPU double is the reference implementation. FDM GPU may execute this
+contract only through its own double-precision field, RHS, energy, and
+trajectory parity gates; capability cannot be inherited from CPU. A study that
+compares lanes must publish the requested and resolved lane separately and
+must leave a lane pending when its runtime or mesh qualification has not
+passed.
 
 ## 6. FEM P1 lumped-L2 projection
 
@@ -213,6 +218,15 @@ energy, response moments, and quantity readback. Global uniform must produce
 `w_i=1` on every active magnetic degree of freedom to solver tolerance. Version
 1 rejects `fe_order != 1`; broadcasting nodal values to higher-order degrees
 of freedom is forbidden.
+
+The qualified mixed `prism6`/`pyramid5`/`tet4` P1 time-domain lane used by the
+shared-domain comparison accepts the global uniform spatial profile exactly:
+after MFEM publishes the magnetic nodal mass row sums, every active node gets
+the prescribed field value and every air-only node gets zero. This lane does
+not reinterpret a mixed cell as four tetrahedral vertices. Non-uniform
+regional profiles remain on the tetrahedral projection path until an
+element-family-specific MFEM projection is qualified; an unsupported mixed
+profile must fail explicitly before time integration.
 
 Production quadrature and basis construction belong to `backends/fem`. The
 Rust planner resolves stable target markers, the closed geometry/profile
@@ -393,9 +407,11 @@ a declared time window.
   electromagnetic propagation is inferred.
 - The first FEM realization is P1 and the first production GPU qualification
   is double precision.
-- FDM GPU, FEM GPU single, higher-order FEM, arbitrary expression callbacks,
-  direct nonzero Bloch phase, and automatic nonlinear-response qualification
-  are unsupported until their own contracts and gates pass.
+- FEM GPU single, higher-order FEM, arbitrary expression callbacks, direct
+  nonzero Bloch phase, and automatic nonlinear-response qualification are
+  unsupported until their own contracts and gates pass. FDM GPU double is
+  limited to the explicitly qualified regional-drive waveform set and remains
+  unvalidated until the five-lane comparison evidence is complete.
 - A sinc has infinite tails; the solver does not truncate it silently.
 
 ## 13. Validation and completeness gates
@@ -414,6 +430,16 @@ The feature is not complete until all of the following are evidenced:
 10. OpenAPI generation, resource lifecycle, binary data, and invalidation tests;
 11. Explorer-to-Inspector, preview, quantity, and browser round-trip tests;
 12. passing Gamma and finite-k publication-aligned benchmarks.
+
+For the open, one-layer Py comparison workload, the minimum numerical evidence
+is one common scalar table with `mx`, `my`, `mz`, `e_ex`, `e_demag`, `e_ext`,
+`e_drive`, `e_ani`, `e_dmi`, and `e_total` for each of: Fullmag FDM CPU,
+Fullmag FDM GPU, Fullmag FEM CPU, Fullmag FEM GPU, and the newest locally
+verified MuMax3 executable. Every dynamic lane starts from the same declared
+uniform `m0=(1,0,0)`; a separately measured relaxation result is not silently
+transferred to only one lane. The workload must record no time-dependent full
+magnetization snapshots. A chart may show a pending or not-applicable lane,
+but it must not draw an absent result as zero.
 
 Capability states remain `source_visible`, `executable`, or `validated` based
 on these proofs. Source presence alone never promotes a lane.

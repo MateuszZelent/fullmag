@@ -161,6 +161,26 @@ def test_mixed_gmsh_quality_vectorization_matches_scalar_reference() -> None:
         assert actual[family] == pytest.approx(expected[family], rel=1.0e-12)
 
 
+def test_mixed_topology_quality_preserves_anisotropic_prism() -> None:
+    coordinates = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [2.5e-9, 0.0, 0.0],
+            [0.0, 2.5e-9, 0.0],
+            [0.0, 0.0, 10.0e-9],
+            [2.5e-9, 0.0, 10.0e-9],
+            [0.0, 2.5e-9, 10.0e-9],
+        ],
+        dtype=np.float64,
+    )
+
+    quality = gmsh_types._mixed_cell_scaled_jacobians("prism6", coordinates)
+
+    assert quality.shape == (6,)
+    assert np.all(quality >= gmsh_types.MIXED_SCALED_JACOBIAN_P05_MIN)
+    np.testing.assert_allclose(quality, 1.0, rtol=1.0e-12, atol=1.0e-12)
+
+
 def _empty_tet_gmsh_mock() -> Mock:
     gmsh = Mock()
     gmsh.model.mesh.getElementsByType.return_value = (
@@ -3126,12 +3146,12 @@ def test_mixed_certificate_rejects_semantically_resigned_part_reassignment() -> 
         replace(unsigned, mixed_layer_topology_certificate=resigned)
 
 
-def test_mixed_certificate_uses_recomputable_scaled_jacobian_not_gmsh_sicn() -> None:
+def test_mixed_certificate_uses_recomputable_topology_scaled_jacobian_not_gmsh_sicn() -> None:
     pytest.importorskip("gmsh")
     certificate = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate
     assert certificate is not None
     payload = certificate.to_dict()
-    assert payload["quality_metric"] == "tetra_decomposition_scaled_jacobian.v1"
+    assert payload["quality_metric"] == "mixed_topology_scaled_jacobian.v1"
     assert "scaled_jacobian_minima_by_family" in payload
     assert "scaled_jacobian_p05_by_family" in payload
     assert all(
@@ -3400,11 +3420,11 @@ def test_mixed_certificate_nested_wire_types_fail_before_normalization(
         gmsh_types.MixedLayerTopologyCertificate.from_dict(payload)
 
 
-def test_mixed_certificate_uses_versioned_tetra_decomposition_quality_name() -> None:
+def test_mixed_certificate_uses_versioned_topology_quality_name() -> None:
     pytest.importorskip("gmsh")
     certificate = _mixed_shared_domain_case()[2].mixed_layer_topology_certificate
     assert certificate is not None
-    assert certificate.quality_metric == "tetra_decomposition_scaled_jacobian.v1"
+    assert certificate.quality_metric == "mixed_topology_scaled_jacobian.v1"
     payload = certificate.to_dict()
     payload["quality_metric"] = "scaled_jacobian"
     with pytest.raises(ValueError, match="quality_metric"):

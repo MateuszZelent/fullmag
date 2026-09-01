@@ -16,7 +16,7 @@ pub const FEM_MESH_QUALITY_METRIC_IDS: &[&str] = &[
     "cell.det_jacobian.v1",
     "gmsh.min_sicn.v1",
     "gmsh.gamma.v1",
-    "tetra_decomposition_scaled_jacobian.v1",
+    "mixed_topology_scaled_jacobian.v1",
     "cell.volume.v1",
     "cell.max_edge.v1",
     "adjacent_size_growth.v1",

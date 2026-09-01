@@ -43,6 +43,26 @@ struct DeviceVectorField {
     void *z = nullptr;
 };
 
+/// Device-side copy of one resolved regional-drive waveform descriptor.
+/// Spatial bases are stored separately as flattened SoA arrays with layout
+/// [drive][cell]. Time offsets are resolved at the Rust/native boundary so
+/// the CUDA kernels only evaluate an absolute stage time.
+struct RegionalFieldDriveParams {
+    int waveform = FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT;
+    int reserved = 0;
+    uint64_t point_offset = 0;
+    uint64_t point_count = 0;
+    double time_offset_s = 0.0;
+    double frequency_hz = 0.0;
+    double phase_rad = 0.0;
+    double offset = 0.0;
+    double t_on_s = 0.0;
+    double t_off_s = 0.0;
+    double cutoff_hz = 0.0;
+    double t0_s = 0.0;
+    double amplitude = 1.0;
+};
+
 // Fixed-size CUDA transfer pool for observable snapshots.  The solver never
 // allocates device or pinned-host transfer storage on the publication path;
 // callers either lease one of these slots or receive bounded backpressure.
@@ -432,6 +452,17 @@ struct Context {
     double oersted_time_dep_t_off = 0.0; // pulse: t_off [s]
     // Precomputed static Oersted field profile for I = 1 A (SoA layout)
     DeviceVectorField h_oe_static;       // H_oe(x,y,z) for I=1A
+
+    // Resolved regional time-domain drives. Bases are flattened [drive][cell]
+    // in the selected solver precision; waveform parameters and optional PWL
+    // points remain double precision and are read by every RK substage.
+    void *regional_field_drive_x = nullptr;
+    void *regional_field_drive_y = nullptr;
+    void *regional_field_drive_z = nullptr;
+    RegionalFieldDriveParams *regional_field_drive_params = nullptr;
+    double *regional_field_drive_points = nullptr;
+    uint32_t regional_field_drive_count = 0;
+    uint64_t regional_field_drive_point_count = 0;
 
     // Execution
     fullmag_fdm_precision precision;
@@ -2087,7 +2118,8 @@ inline uint64_t fullmag_fdm_required_operator_mask(const Context &ctx) {
     if (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_ANISOTROPY;
     }
-    if (ctx.has_external_field || ctx.has_static_external_field_profile) {
+    if (ctx.has_external_field || ctx.has_static_external_field_profile ||
+        ctx.regional_field_drive_count != 0) {
         required_operator_mask |= FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD;
     }
     if (ctx.has_active_mask || ctx.has_frozen_mask || ctx.has_region_mask ||
@@ -2130,6 +2162,9 @@ inline uint64_t context_local_pipeline_active_feature_mask(const Context &ctx) {
     }
     if (ctx.has_static_external_field_profile) {
         mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_STATIC_FIELD_PROFILE;
+    }
+    if (ctx.regional_field_drive_count != 0) {
+        mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_REGIONAL_FIELD_DRIVE;
     }
     if (ctx.has_oersted_field) {
         mask |= FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_OERSTED;
@@ -2799,6 +2834,12 @@ bool context_mark_static_external_field_profile(
     Context &ctx,
     const double *field_xyz,
     uint64_t len);
+
+/// Upload resolved cell-wise regional field bases and waveform descriptors.
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count);
 
 /// Upload sparse demag boundary correction tensors.
 bool context_upload_demag_boundary_corr(

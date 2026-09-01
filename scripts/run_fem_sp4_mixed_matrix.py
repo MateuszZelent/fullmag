@@ -52,7 +52,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 SCALAR_CSV_SERIALIZATION_RTOL = 1.0e-15
 DIMENSIONLESS_RECOMPUTATION_ATOL = 16.0 * sys.float_info.epsilon
 MAX_MAGNETIZATION_NORM_DEFECT = 1.0e-9
-MIXED_QUALITY_METRIC = "tetra_decomposition_scaled_jacobian.v1"
+MIXED_QUALITY_METRIC = "mixed_topology_scaled_jacobian.v1"
 MIXED_SCALED_JACOBIAN_P05_MIN = 0.1
 REQUIRED_NATIVE_LIBRARIES = ("fullmag_fem", "mfem", "hypre", "libceed")
 

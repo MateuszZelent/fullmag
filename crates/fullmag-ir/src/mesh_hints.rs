@@ -3828,6 +3828,10 @@ fn determinant3(matrix: [[f64; 3]; 3]) -> f64 {
 }
 
 fn mapped_jacobian_determinant(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> f64 {
+    determinant3(mapped_jacobian(coordinates, derivatives))
+}
+
+fn mapped_jacobian(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> [[f64; 3]; 3] {
     let mut jacobian = [[0.0; 3]; 3];
     for (coordinate, derivative) in coordinates.iter().zip(derivatives) {
         for physical_axis in 0..3 {
@@ -3837,7 +3841,27 @@ fn mapped_jacobian_determinant(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]
             }
         }
     }
-    determinant3(jacobian)
+    jacobian
+}
+
+fn mapped_jacobian_scaled_jacobian(
+    coordinates: &[[f64; 3]],
+    derivatives: &[[f64; 3]],
+) -> f64 {
+    let jacobian = mapped_jacobian(coordinates, derivatives);
+    let denominator = (0..3)
+        .map(|reference_axis| {
+            (0..3)
+                .map(|physical_axis| jacobian[physical_axis][reference_axis].powi(2))
+                .sum::<f64>()
+                .sqrt()
+        })
+        .product::<f64>();
+    if denominator == 0.0 {
+        0.0
+    } else {
+        determinant3(jacobian).abs() / denominator
+    }
 }
 
 pub(crate) fn cell_jacobian_determinants(
@@ -3952,6 +3976,119 @@ pub(crate) fn cell_jacobian_determinants(
                         ]
                     });
                     mapped_jacobian_determinant(coordinates, &derivatives)
+                })
+                .collect()
+        }
+    }
+}
+
+/// Return the normalized mapped-Jacobian samples used by the mixed-topology
+/// quality certificate. Non-tetrahedral cells are evaluated in their native
+/// isoparametric topology rather than decomposed into substitute tetrahedra.
+pub(crate) fn cell_scaled_jacobians(
+    cell_type: FemCellTypeIR,
+    coordinates: &[[f64; 3]],
+) -> Vec<f64> {
+    let q = 1.0 / 3.0_f64.sqrt();
+    match cell_type {
+        FemCellTypeIR::Tet4 => {
+            let derivatives = [
+                [-1.0, -1.0, -1.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ];
+            vec![mapped_jacobian_scaled_jacobian(coordinates, &derivatives)]
+        }
+        FemCellTypeIR::Prism6 => [
+            (1.0 / 6.0, 1.0 / 6.0, -q),
+            (2.0 / 3.0, 1.0 / 6.0, -q),
+            (1.0 / 6.0, 2.0 / 3.0, -q),
+            (1.0 / 6.0, 1.0 / 6.0, q),
+            (2.0 / 3.0, 1.0 / 6.0, q),
+            (1.0 / 6.0, 2.0 / 3.0, q),
+        ]
+        .into_iter()
+        .map(|(r, s, t)| {
+            let derivatives = [
+                [-(1.0 - t) / 2.0, -(1.0 - t) / 2.0, -(1.0 - r - s) / 2.0],
+                [(1.0 - t) / 2.0, 0.0, -r / 2.0],
+                [0.0, (1.0 - t) / 2.0, -s / 2.0],
+                [-(1.0 + t) / 2.0, -(1.0 + t) / 2.0, (1.0 - r - s) / 2.0],
+                [(1.0 + t) / 2.0, 0.0, r / 2.0],
+                [0.0, (1.0 + t) / 2.0, s / 2.0],
+            ];
+            mapped_jacobian_scaled_jacobian(coordinates, &derivatives)
+        })
+        .collect(),
+        FemCellTypeIR::Pyramid5 => {
+            let qt = 10.0_f64.sqrt() / 15.0;
+            [
+                (-q, -q, 1.0 / 3.0 - qt),
+                (q, -q, 1.0 / 3.0 - qt),
+                (-q, q, 1.0 / 3.0 - qt),
+                (q, q, 1.0 / 3.0 - qt),
+                (-q, -q, 1.0 / 3.0 + qt),
+                (q, -q, 1.0 / 3.0 + qt),
+                (-q, q, 1.0 / 3.0 + qt),
+                (q, q, 1.0 / 3.0 + qt),
+            ]
+            .into_iter()
+            .map(|(r, s, t)| {
+                let derivatives = [
+                    [
+                        -(1.0 - s) * (1.0 - t) / 4.0,
+                        -(1.0 - r) * (1.0 - t) / 4.0,
+                        -(1.0 - r) * (1.0 - s) / 4.0,
+                    ],
+                    [
+                        (1.0 - s) * (1.0 - t) / 4.0,
+                        -(1.0 + r) * (1.0 - t) / 4.0,
+                        -(1.0 + r) * (1.0 - s) / 4.0,
+                    ],
+                    [
+                        (1.0 + s) * (1.0 - t) / 4.0,
+                        (1.0 + r) * (1.0 - t) / 4.0,
+                        -(1.0 + r) * (1.0 + s) / 4.0,
+                    ],
+                    [
+                        -(1.0 + s) * (1.0 - t) / 4.0,
+                        (1.0 - r) * (1.0 - t) / 4.0,
+                        -(1.0 - r) * (1.0 + s) / 4.0,
+                    ],
+                    [0.0, 0.0, 1.0],
+                ];
+                mapped_jacobian_scaled_jacobian(coordinates, &derivatives)
+            })
+            .collect()
+        }
+        FemCellTypeIR::Hex8 => {
+            let signs = [
+                [-1.0, -1.0, -1.0],
+                [1.0, -1.0, -1.0],
+                [1.0, 1.0, -1.0],
+                [-1.0, 1.0, -1.0],
+                [-1.0, -1.0, 1.0],
+                [1.0, -1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [-1.0, 1.0, 1.0],
+            ];
+            [-q, q]
+                .into_iter()
+                .flat_map(|r| {
+                    [-q, q]
+                        .into_iter()
+                        .flat_map(move |s| [-q, q].into_iter().map(move |t| (r, s, t)))
+                })
+                .map(|(r, s, t)| {
+                    let derivatives = signs.map(|sign| {
+                        [
+                            sign[0] * (1.0 + sign[1] * s) * (1.0 + sign[2] * t) / 8.0,
+                            sign[1] * (1.0 + sign[0] * r) * (1.0 + sign[2] * t) / 8.0,
+                            sign[2] * (1.0 + sign[0] * r) * (1.0 + sign[1] * s) / 8.0,
+                        ]
+                    });
+                    mapped_jacobian_scaled_jacobian(coordinates, &derivatives)
                 })
                 .collect()
         }

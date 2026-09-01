@@ -14586,7 +14586,7 @@ fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
 }
 
 #[test]
-fn fdm_cuda_regional_field_drive_fails_closed() {
+fn fdm_cuda_regional_field_drive_is_plannable_for_native_runtime() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
@@ -14606,11 +14606,13 @@ fn fdm_cuda_regional_field_drive_fails_closed() {
         activation: DriveActivationIR::AllTimeEvolution {},
         migration: None,
     });
-    let error = plan(&ir).expect_err("CUDA FDM must not silently ignore field drives");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| { reason.contains("fdm_cuda_regional_field_drive_unsupported") }));
+    let planned = plan(&ir).expect("CUDA FDM regional drive should reach native runtime");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = planned.backend_plan else {
+        panic!("FDM plan");
+    };
+    assert_eq!(fdm.regional_field_drive_bases.len(), 1);
+    let cell_count = fdm.grid.cells.iter().map(|&value| value as usize).product::<usize>();
+    assert_eq!(fdm.regional_field_drive_bases[0].field_xyz.len(), cell_count);
 }
 
 fn fem_minimal_test_ir() -> ProblemIR {
@@ -14887,9 +14889,9 @@ fn valid_mixed_certificate_asset_for_version(
             "cell_family_counts_by_part":{"far_air":{"tet4":4},"magnetic":{"prism6":2},"transition_air":{"pyramid5":4,"tet4":4}},
             "facet_family_counts_by_role_marker":{"exterior:3":{"tri3":38},"material_interface:2":{"quad4":4,"tri3":4}},
             "jacobian_minima_m3_by_family":{"prism6":3.999999999999999,"pyramid5":0.20779754131836622,"tet4":4.0},
-            "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
-            "scaled_jacobian_minima_by_family":{"prism6":0.4082482904638629,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
-            "scaled_jacobian_p05_by_family":{"prism6":0.4311862178478971,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
+            "quality_metric":"mixed_topology_scaled_jacobian.v1",
+            "scaled_jacobian_minima_by_family":{"prism6":0.7071067811865475,"pyramid5":0.7745966692414832,"tet4":0.40824829046386296},
+            "scaled_jacobian_p05_by_family":{"prism6":0.7071067811865475,"pyramid5":0.7745966692414832,"tet4":0.40824829046386296},
             "magnetic_volume_m3":8.0,"expected_magnetic_volume_m3":8.0,
             "magnetic_relative_volume_error":0.0,"air_volume_m3":56.0,
             "shared_domain_volume_m3":64.0,"expected_shared_domain_volume_m3":64.0,
@@ -15521,7 +15523,6 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4
         "device_auto",
         "single",
         "extended",
-        "time_evolution",
         "missing_exchange",
         "ms_field",
         "fem_bem",
@@ -15546,9 +15547,6 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4
             }
             "extended" => {
                 ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
-            }
-            "time_evolution" => {
-                ir.study = ProblemIR::bootstrap_example().study;
             }
             "missing_exchange" => {
                 ir.energy_terms
@@ -15603,6 +15601,55 @@ fn fem_planner_rejects_every_mixed_p1_execution_tuple_outside_bounded_strict_sp4
         );
         assert!(reason.contains("fallback=none"), "case={case}: {reason}");
     }
+}
+
+#[test]
+fn fem_planner_accepts_mixed_p1_time_evolution_with_uniform_regional_drive() {
+    let mut ir = mixed_cpu_relaxation_ir(
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RequestedFemDemagIR::PoissonRobin,
+    );
+    let sampling = ir.study.sampling().clone();
+    ir.study = fullmag_ir::StudyIR::TimeEvolution {
+        dynamics: fullmag_ir::DynamicsIR::Llg {
+            gyromagnetic_ratio: 2.211e5,
+            integrator: "rk45".to_string(),
+            fixed_timestep: None,
+            adaptive_timestep: None,
+            field_refresh: None,
+            mechanics: None,
+        },
+        sampling,
+    };
+    ir.field_drives.push(fullmag_ir::RegionalFieldDriveIR {
+        id: "pulse".to_string(),
+        name: "Pulse".to_string(),
+        kind: fullmag_ir::FieldDriveKindIR::Regional,
+        enabled: true,
+        target: fullmag_ir::FieldTargetIR::Global {},
+        amplitude_b_t: 1.0e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: fullmag_ir::FieldSpatialProfileIR::Uniform {},
+        waveform: fullmag_ir::TimeDependenceIR::SincPulse {
+            cutoff_hz: 10.0e9,
+            t0: 2.0e-9,
+            amplitude: 1.0,
+        },
+        time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+        activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+
+    let planned = plan(&ir)
+        .expect("qualified mixed P1 time evolution with a regional drive must plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("mixed P1 time evolution must resolve to FEM");
+    };
+    assert_eq!(fem.field_drives.len(), 1);
+    assert!(matches!(
+        fem.field_drives[0].waveform,
+        fullmag_ir::TimeDependenceIR::SincPulse { .. }
+    ));
 }
 
 #[test]

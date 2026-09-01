@@ -389,7 +389,7 @@ fn percentile_uses_binary64_linear_interpolation() {
     let evidence = compute_with_threads(&golden_mesh(), 4);
     assert_close(
         evidence.scaled_jacobian_p05_by_family["prism6"],
-        0.431_186_217_847_897_1,
+        0.707_106_781_186_547_5,
         1.0e-12,
         16.0 * f64::EPSILON,
     );

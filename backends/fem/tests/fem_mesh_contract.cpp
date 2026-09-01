@@ -243,6 +243,43 @@ fullmag_fem_plan_desc qualified_mixed_operator_plan(const MeshBuffers &source) {
     return plan;
 }
 
+fullmag_fem_regional_field_drive_desc qualified_global_uniform_sinc_drive() {
+    fullmag_fem_regional_field_drive_desc drive{};
+    drive.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+    drive.struct_size = sizeof(drive);
+    drive.target.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+    drive.target.struct_size = sizeof(drive.target);
+    drive.target.kind = FULLMAG_FEM_FIELD_TARGET_GLOBAL;
+    drive.spatial_profile.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+    drive.spatial_profile.struct_size = sizeof(drive.spatial_profile);
+    drive.spatial_profile.kind = FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM;
+    drive.amplitude_b_t = 1.0e-3;
+    drive.direction[1] = 1.0;
+    drive.waveform.abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+    drive.waveform.struct_size = sizeof(drive.waveform);
+    drive.waveform.kind = FULLMAG_FEM_TIME_SINC_PULSE;
+    drive.waveform.parameters.sinc_pulse = {10.0e9, 2.0e-9, 1.0};
+    drive.time_origin = FULLMAG_FEM_TIME_STAGE_LOCAL;
+    return drive;
+}
+
+void native_physics_gate_accepts_only_qualified_global_uniform_sinc_drive() {
+    MeshBuffers source = qualified_mixed_operator_mesh();
+    fullmag::fem::Context ctx;
+    std::string error;
+    check(fullmag::fem::initialize_mesh_plan_fields(ctx, source.desc(), error), error.c_str());
+
+    auto plan = qualified_mixed_operator_plan(source);
+    auto drive = qualified_global_uniform_sinc_drive();
+    plan.regional_field_drives = &drive;
+    plan.regional_field_drive_count = 1;
+    for (const char *device : {"cpu", "cuda"}) {
+        plan.mfem_device_string = device;
+        error.clear();
+        check(fullmag::fem::validate_supported_physics_topology(ctx, plan, error), error.c_str());
+    }
+}
+
 void native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_operator_scope() {
     MeshBuffers source = qualified_mixed_operator_mesh();
     fullmag::fem::Context ctx;
@@ -680,6 +717,7 @@ void element_family_tables_cover_all_supported_cells() {
 int main() {
     typed_mesh_import_copies_every_canonical_buffer();
     exported_mesh_abi_query_matches_compiled_layout();
+    native_physics_gate_accepts_only_qualified_global_uniform_sinc_drive();
     native_physics_gate_accepts_only_qualified_explicit_cpu_or_cuda_mixed_p1_operator_scope();
     native_physics_gate_accepts_bounded_cpu_pure_prism_p2_shared_domain();
     typed_mesh_import_accepts_empty_optional_buffers();

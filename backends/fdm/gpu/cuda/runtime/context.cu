@@ -546,6 +546,31 @@ static void free_vector_field(DeviceVectorField &field) {
     if (field.z) { fullmag_fdm_untracked_cuda_free(field.z); field.z = nullptr; }
 }
 
+static void free_regional_field_drives(Context &ctx) {
+    if (ctx.regional_field_drive_x) {
+        fullmag_fdm_untracked_cuda_free(ctx.regional_field_drive_x);
+        ctx.regional_field_drive_x = nullptr;
+    }
+    if (ctx.regional_field_drive_y) {
+        fullmag_fdm_untracked_cuda_free(ctx.regional_field_drive_y);
+        ctx.regional_field_drive_y = nullptr;
+    }
+    if (ctx.regional_field_drive_z) {
+        fullmag_fdm_untracked_cuda_free(ctx.regional_field_drive_z);
+        ctx.regional_field_drive_z = nullptr;
+    }
+    if (ctx.regional_field_drive_params) {
+        fullmag_fdm_untracked_cuda_free(ctx.regional_field_drive_params);
+        ctx.regional_field_drive_params = nullptr;
+    }
+    if (ctx.regional_field_drive_points) {
+        fullmag_fdm_untracked_cuda_free(ctx.regional_field_drive_points);
+        ctx.regional_field_drive_points = nullptr;
+    }
+    ctx.regional_field_drive_count = 0;
+    ctx.regional_field_drive_point_count = 0;
+}
+
 static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &pool)
 {
     for (auto &slot : pool.slots) {
@@ -3422,6 +3447,8 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.abm_f_n2);
     // Oersted static field
     free_vector_field(ctx.h_oe_static);
+    // Regional time-domain field drives
+    free_regional_field_drives(ctx);
     free_fft_workspace(ctx);
     free_demag_kernel(ctx);
     free_active_mask(ctx);
@@ -4455,6 +4482,277 @@ bool context_mark_static_external_field_profile(
         return false;
     }
     ctx.has_static_external_field_profile = true;
+    return true;
+}
+
+bool context_upload_regional_field_drives(
+    Context &ctx,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count)
+{
+    if (drive_count == 0) return true;
+    if (drives == nullptr) {
+        ctx.last_error = "regional field drives require a non-null descriptor array";
+        return false;
+    }
+    if (ctx.regional_field_drive_count != 0 ||
+        ctx.regional_field_drive_x != nullptr ||
+        ctx.regional_field_drive_params != nullptr) {
+        ctx.last_error = "regional field drives may be configured only once per backend";
+        return false;
+    }
+    if (ctx.gpu_workspace_step_active ||
+        (ctx.gpu_workspace_setup_complete &&
+         ctx.gpu_workspace_observed_step_count != 0)) {
+        ctx.last_error =
+            "regional field drives must be configured before the first solver step";
+        return false;
+    }
+
+    const uint64_t cell_count = ctx.cell_count;
+    const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+    if (drive_count != 0 && cell_count > maximum / drive_count) {
+        ctx.last_error = "regional field drive basis size overflows uint64_t";
+        return false;
+    }
+    const uint64_t basis_count = static_cast<uint64_t>(drive_count) * cell_count;
+    if (basis_count > maximum / 3u) {
+        ctx.last_error = "regional field drive basis component count overflows uint64_t";
+        return false;
+    }
+    std::vector<double> basis_x(basis_count, 0.0);
+    std::vector<double> basis_y(basis_count, 0.0);
+    std::vector<double> basis_z(basis_count, 0.0);
+    std::vector<RegionalFieldDriveParams> params(drive_count);
+    std::vector<double> piecewise_points;
+
+    for (uint32_t drive_index = 0; drive_index < drive_count; ++drive_index) {
+        const auto &descriptor = drives[drive_index];
+        if (descriptor.abi_version != FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 ||
+            descriptor.struct_size < sizeof(fullmag_fdm_regional_field_drive_desc_v1)) {
+            ctx.last_error = "regional field drive descriptor ABI mismatch";
+            return false;
+        }
+        if (descriptor.field_xyz == nullptr ||
+            descriptor.field_len != cell_count * 3u) {
+            ctx.last_error = "regional field drive field_len must equal 3 * cell_count";
+            return false;
+        }
+        if (!std::isfinite(descriptor.stage_start_time_s) ||
+            !std::isfinite(descriptor.frequency_hz) ||
+            !std::isfinite(descriptor.phase_rad) ||
+            !std::isfinite(descriptor.offset) ||
+            !std::isfinite(descriptor.t_on_s) ||
+            !std::isfinite(descriptor.t_off_s) ||
+            !std::isfinite(descriptor.cutoff_hz) ||
+            !std::isfinite(descriptor.t0_s) ||
+            !std::isfinite(descriptor.amplitude)) {
+            ctx.last_error = "regional field drive descriptor contains non-finite parameters";
+            return false;
+        }
+
+        if (descriptor.time_origin !=
+                FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL &&
+            descriptor.time_origin !=
+                FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE) {
+            ctx.last_error = "unknown regional field drive time origin";
+            return false;
+        }
+
+        auto &resolved = params[drive_index];
+        resolved.waveform = static_cast<int>(descriptor.waveform);
+        resolved.time_offset_s =
+            descriptor.time_origin == FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL
+                ? descriptor.stage_start_time_s : 0.0;
+        resolved.frequency_hz = descriptor.frequency_hz;
+        resolved.phase_rad = descriptor.phase_rad;
+        resolved.offset = descriptor.offset;
+        resolved.t_on_s = descriptor.t_on_s;
+        resolved.t_off_s = descriptor.t_off_s;
+        resolved.cutoff_hz = descriptor.cutoff_hz;
+        resolved.t0_s = descriptor.t0_s;
+        resolved.amplitude = descriptor.amplitude;
+
+        switch (descriptor.waveform) {
+        case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT:
+            if (descriptor.piecewise_point_count != 0 ||
+                descriptor.piecewise_points != nullptr) {
+                ctx.last_error =
+                    "constant regional field drive cannot carry piecewise points";
+                return false;
+            }
+            break;
+        case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINUSOIDAL:
+            if (descriptor.frequency_hz <= 0.0 ||
+                descriptor.piecewise_point_count != 0 ||
+                descriptor.piecewise_points != nullptr) {
+                ctx.last_error = "invalid sinusoidal regional field drive parameters";
+                return false;
+            }
+            break;
+        case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE:
+            if (descriptor.t_off_s <= descriptor.t_on_s ||
+                descriptor.piecewise_point_count != 0 ||
+                descriptor.piecewise_points != nullptr) {
+                ctx.last_error = "invalid pulse regional field drive parameters";
+                return false;
+            }
+            break;
+        case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR: {
+            if (descriptor.piecewise_points == nullptr ||
+                descriptor.piecewise_point_count < 2) {
+                ctx.last_error =
+                    "piecewise regional field drive requires at least two points";
+                return false;
+            }
+            if (piecewise_points.size() / 2u > maximum -
+                    descriptor.piecewise_point_count) {
+                ctx.last_error = "regional field drive piecewise point count overflows";
+                return false;
+            }
+            resolved.point_offset = static_cast<uint64_t>(piecewise_points.size() / 2u);
+            resolved.point_count = descriptor.piecewise_point_count;
+            for (uint64_t point = 0; point < descriptor.piecewise_point_count; ++point) {
+                const double time_s = descriptor.piecewise_points[2u * point];
+                const double value = descriptor.piecewise_points[2u * point + 1u];
+                if (!std::isfinite(time_s) || !std::isfinite(value) ||
+                    (!piecewise_points.empty() &&
+                     time_s <= piecewise_points.back())) {
+                    ctx.last_error =
+                        "piecewise regional field drive times must be finite and strictly increasing";
+                    return false;
+                }
+                piecewise_points.push_back(time_s);
+                piecewise_points.push_back(value);
+            }
+            break;
+        }
+        case FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE:
+            if (descriptor.cutoff_hz <= 0.0 || descriptor.t0_s < 0.0 ||
+                descriptor.piecewise_point_count != 0 ||
+                descriptor.piecewise_points != nullptr) {
+                ctx.last_error = "invalid sinc regional field drive parameters";
+                return false;
+            }
+            break;
+        default:
+            ctx.last_error = "unknown regional field drive waveform";
+            return false;
+        }
+
+        const uint64_t basis_offset = static_cast<uint64_t>(drive_index) * cell_count;
+        for (uint64_t cell = 0; cell < cell_count; ++cell) {
+            const uint64_t source = 3u * cell;
+            if (!std::isfinite(descriptor.field_xyz[source]) ||
+                !std::isfinite(descriptor.field_xyz[source + 1u]) ||
+                !std::isfinite(descriptor.field_xyz[source + 2u])) {
+                ctx.last_error = "regional field drive basis contains non-finite values";
+                return false;
+            }
+            basis_x[basis_offset + cell] = descriptor.field_xyz[source];
+            basis_y[basis_offset + cell] = descriptor.field_xyz[source + 1u];
+            basis_z[basis_offset + cell] = descriptor.field_xyz[source + 2u];
+        }
+    }
+
+    if (piecewise_points.size() / 2u > maximum) {
+        ctx.last_error = "regional field drive piecewise point count overflows";
+        return false;
+    }
+    const size_t scalar_bytes = scalar_size(ctx.precision);
+    if (basis_count > std::numeric_limits<size_t>::max() / scalar_bytes ||
+        params.size() > std::numeric_limits<size_t>::max() / sizeof(RegionalFieldDriveParams) ||
+        piecewise_points.size() > std::numeric_limits<size_t>::max() / sizeof(double)) {
+        ctx.last_error = "regional field drive workspace byte count overflows size_t";
+        return false;
+    }
+
+    void *basis_x_device = nullptr;
+    void *basis_y_device = nullptr;
+    void *basis_z_device = nullptr;
+    RegionalFieldDriveParams *params_device = nullptr;
+    double *points_device = nullptr;
+    auto cleanup = [&]() {
+        if (basis_x_device) cudaFree(basis_x_device);
+        if (basis_y_device) cudaFree(basis_y_device);
+        if (basis_z_device) cudaFree(basis_z_device);
+        if (params_device) cudaFree(params_device);
+        if (points_device) cudaFree(points_device);
+    };
+
+    const size_t basis_bytes = static_cast<size_t>(basis_count) * scalar_bytes;
+    if (cudaMalloc(&basis_x_device, basis_bytes) != cudaSuccess ||
+        cudaMalloc(&basis_y_device, basis_bytes) != cudaSuccess ||
+        cudaMalloc(&basis_z_device, basis_bytes) != cudaSuccess ||
+        cudaMalloc(&params_device,
+                   params.size() * sizeof(RegionalFieldDriveParams)) != cudaSuccess) {
+        if (ctx.last_error.empty()) {
+            ctx.last_error = "regional field drive device allocation failed";
+        }
+        cleanup();
+        return false;
+    }
+    if (!piecewise_points.empty() &&
+        cudaMalloc(&points_device,
+                   piecewise_points.size() * sizeof(double)) != cudaSuccess) {
+        if (ctx.last_error.empty()) {
+            ctx.last_error = "regional field drive piecewise allocation failed";
+        }
+        cleanup();
+        return false;
+    }
+
+    auto copy_basis = [&](void *destination, const std::vector<double> &source,
+                          const char *label) -> bool {
+        if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            const cudaError_t error = cudaMemcpy(
+                destination, source.data(), basis_bytes, cudaMemcpyHostToDevice);
+            if (error != cudaSuccess) set_cuda_error(ctx, label, error);
+            return error == cudaSuccess;
+        }
+        std::vector<float> converted(source.size());
+        for (size_t index = 0; index < source.size(); ++index) {
+            converted[index] = static_cast<float>(source[index]);
+        }
+        const cudaError_t error = cudaMemcpy(
+            destination, converted.data(), basis_bytes, cudaMemcpyHostToDevice);
+        if (error != cudaSuccess) set_cuda_error(ctx, label, error);
+        return error == cudaSuccess;
+    };
+    if (!copy_basis(basis_x_device, basis_x, "regional field drive basis x") ||
+        !copy_basis(basis_y_device, basis_y, "regional field drive basis y") ||
+        !copy_basis(basis_z_device, basis_z, "regional field drive basis z")) {
+        cleanup();
+        return false;
+    }
+    const cudaError_t params_error = cudaMemcpy(
+        params_device, params.data(),
+        params.size() * sizeof(RegionalFieldDriveParams),
+        cudaMemcpyHostToDevice);
+    if (params_error != cudaSuccess) {
+        set_cuda_error(ctx, "regional field drive parameters", params_error);
+        cleanup();
+        return false;
+    }
+    const cudaError_t points_error = points_device != nullptr
+        ? cudaMemcpy(
+            points_device, piecewise_points.data(),
+            piecewise_points.size() * sizeof(double),
+            cudaMemcpyHostToDevice)
+        : cudaSuccess;
+    if (points_error != cudaSuccess) {
+        set_cuda_error(ctx, "regional field drive piecewise points", points_error);
+        cleanup();
+        return false;
+    }
+
+    ctx.regional_field_drive_x = basis_x_device;
+    ctx.regional_field_drive_y = basis_y_device;
+    ctx.regional_field_drive_z = basis_z_device;
+    ctx.regional_field_drive_params = params_device;
+    ctx.regional_field_drive_points = points_device;
+    ctx.regional_field_drive_count = drive_count;
+    ctx.regional_field_drive_point_count = static_cast<uint64_t>(piecewise_points.size() / 2u);
     return true;
 }
 

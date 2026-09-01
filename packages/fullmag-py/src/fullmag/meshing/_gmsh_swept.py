@@ -45,6 +45,7 @@ from ._gmsh_types import (
     _count_exact_layer_planes,
     _cell_jacobian_determinants,
     _mixed_cell_scaled_jacobians,
+    _mixed_reference_derivative_samples,
     MIXED_PYRAMID_APEX_SCALE_MAX,
     MIXED_PYRAMID_APEX_SCALE_STEP,
     MIXED_SCALED_JACOBIAN_P05_MIN,
@@ -283,11 +284,6 @@ def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
     order = np.argsort(node_tags_array)
     sorted_tags = node_tags_array[order]
     sorted_coordinates = node_coordinates[order]
-    decompositions = {
-        "tet4": ((0, 1, 2, 3),),
-        "prism6": ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)),
-        "pyramid5": ((0, 1, 2, 4), (0, 2, 3, 4)),
-    }
     values: dict[str, list[np.ndarray]] = {}
     batch_size = 65_536
     for element_type, family, arity in (
@@ -308,28 +304,20 @@ def _mixed_gmsh_scaled_jacobian_p05(gmsh: Any) -> dict[str, float]:
             ):
                 raise RuntimeError("mixed Gmsh connectivity references an unknown node")
             points = sorted_coordinates[positions]
-            for indices in decompositions[family]:
-                tetra = points[:, np.asarray(indices, dtype=np.intp), :]
-                matrix = np.stack(
-                    (
-                        tetra[:, 1] - tetra[:, 0],
-                        tetra[:, 2] - tetra[:, 0],
-                        tetra[:, 3] - tetra[:, 0],
-                    ),
-                    axis=2,
-                )
-                # ``matrix`` stores edge vectors as columns (N, row, column),
-                # matching the scalar helper's ``norm(..., axis=0)``.
-                denominator = np.prod(np.linalg.norm(matrix, axis=1), axis=1)
-                determinants = np.abs(np.linalg.det(matrix))
-                family_values.append(
-                    np.divide(
-                        determinants,
-                        denominator,
-                        out=np.zeros_like(determinants),
-                        where=denominator > 0.0,
-                    )
-                )
+            derivatives = _mixed_reference_derivative_samples(family)
+            jacobians = np.einsum(
+                "bnp,snr->bspr", points, derivatives, optimize=True
+            )
+            denominator = np.prod(np.linalg.norm(jacobians, axis=2), axis=2)
+            determinants = np.abs(np.linalg.det(jacobians))
+            family_values.append(
+                np.divide(
+                    determinants,
+                    denominator,
+                    out=np.zeros_like(determinants),
+                    where=denominator > 0.0,
+                ).reshape(-1)
+            )
         values[family] = family_values
     return {
         family: float(np.percentile(np.concatenate(family_values), 5.0))

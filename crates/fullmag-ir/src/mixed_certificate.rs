@@ -54,7 +54,7 @@ struct CellEvidenceRecord {
     signed_volume_m3: f64,
     absolute_volume_m3: f64,
     jacobian_samples_m3: SmallVec<[f64; 8]>,
-    scaled_jacobian_samples: SmallVec<[f64; 3]>,
+        scaled_jacobian_samples: SmallVec<[f64; 8]>,
     faces: SmallVec<[FaceRecord; 6]>,
     semantic_error: Option<String>,
 }
@@ -167,28 +167,6 @@ fn mixed_cell_volumes(cell_type: FemCellTypeIR, points: &[[f64; 3]]) -> Result<(
     ))
 }
 
-fn mixed_scaled_jacobians(
-    cell_type: FemCellTypeIR,
-    points: &[[f64; 3]],
-) -> Result<SmallVec<[f64; 3]>, String> {
-    Ok(mixed_tets(cell_type)?
-        .iter()
-        .map(|indices| {
-            let columns = [
-                sub3(points[indices[1]], points[indices[0]]),
-                sub3(points[indices[2]], points[indices[0]]),
-                sub3(points[indices[3]], points[indices[0]]),
-            ];
-            let denominator = columns.iter().copied().map(norm3).product::<f64>();
-            if denominator == 0.0 {
-                0.0
-            } else {
-                det3(columns).abs() / denominator
-            }
-        })
-        .collect())
-}
-
 fn build_cell_record(mesh: &MeshIR, ordinal: usize) -> Result<CellEvidenceRecord, String> {
     let cell_type = mesh.cells.types[ordinal];
     let mesh_part = mesh.cells.mesh_parts[ordinal];
@@ -223,7 +201,9 @@ fn build_cell_record(mesh: &MeshIR, ordinal: usize) -> Result<CellEvidenceRecord
         (
             signed,
             absolute,
-            mixed_scaled_jacobians(cell_type, &points)?,
+            crate::mesh_hints::cell_scaled_jacobians(cell_type, &points)
+                .into_iter()
+                .collect(),
         )
     } else {
         (0.0, 0.0, SmallVec::new())

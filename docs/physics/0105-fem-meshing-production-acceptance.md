@@ -272,7 +272,7 @@ with at least 30 bins and never replace the underlying array.
 | `cell.det_jacobian.v1` | tet: jeden stały affine determinant; prism: 3 triangle points $\times\{\pm1/\sqrt3\}$; pyramid: $r,s\in\{\pm1/\sqrt3\}$ i $t=1/3\pm\sqrt{10}/15$; hex: $2^3$ Gauss points | wszystkie determinants $>\tau_J(h_K^\mathrm{strict})^3$; każdy negative fail niezależnie od progu | missing/non-finite/non-positive fail | topology-aware certificate path implemented |
 | `gmsh.min_sicn.v1` | wszystkie finalne element tags obsługiwane przez Gmsh, `minSICN` | p05 $\ge0.1$ i minimum $>0$ | inny producer/proxy nie spełnia gate | tetra reports implemented; mixed production evidence nie jest FMMQ v2 |
 | `gmsh.gamma.v1` | wszystkie finalne element tags, Gmsh `gamma` | minimum $\ge0.08$ | brak per-element array daje `not_qualified` | tetra reports implemented |
-| `tetra_decomposition_scaled_jacobian.v1` | wszystkie sub-tet samples z jawnego decomposition każdego prism/pyramid/tet | per-family p05 $\ge0.1$ i każde minimum $>0$ | musi pozostać proxy o tej nazwie; nie SICN | mixed certificate implemented |
+| `mixed_topology_scaled_jacobian.v1` | `tet4`: affine map; `prism6`/`pyramid5`: mapowany Jacobian w jawnych punktach kwadratury danej topologii | per-family p05 $\ge0.1$ i każde minimum $>0$; signed Jacobian pozostaje osobnym gate'em | nie jest SICN ani tetrahedralnym proxy; każda rodzina jest oceniana w swojej topologii | mixed certificate implemented |
 | `cell.volume.v1` | całkowanie mapy na wszystkich komórkach; SI $\mathrm{m^3}$ | $V_K>0$; względny CAD/shared-domain error $\le10^{-8}$ | non-finite/non-positive lub przekroczenie fail | tet + bounded mixed certificate implemented |
 | `cell.max_edge.v1` | $h_K^\mathrm{edge}$: maksimum wszystkich canonical edges komórki; agregacja po pełnym scope | object/interface p95 $\le1.25h_\mathrm{target}$ i max $\le1.50h_\mathrm{target}$ | pusty wymagany scope lub przekroczenie fail | kontrakt planowany; obecne tet-equivalent stats nie są tym gate'em |
 | `adjacent_size_growth.v1` | każda para komórek dzieląca pełną ścianę w tym samym resolved growth graph | $\rho_{KL}=\max(h_K^\mathrm{edge},h_L^\mathrm{edge})/\min(h_K^\mathrm{edge},h_L^\mathrm{edge})\le g(1+0.05)$ | cross-zone pary są oceniane tylko, gdy plan jawnie łączy ich growth graph; przekroczenie fail | planowany |
@@ -293,7 +293,10 @@ tetra-equivalent diagnostic, nie `cell.max_edge.v1` i nie mixed-topology gate.
 - `_build_field_stack` składa bieżący plan pól Gmsh; docelowo musi publikować
   dokładną algebrę i strefową eligibility.
 - `_extract_quality_metrics` pobiera bieżące Gmsh SICN/gamma/volume.
-- `_cell_jacobian_determinants` implementuje jawne topology sampling points.
+- `_cell_jacobian_determinants` implementuje jawne topology sampling points, a
+  `_mixed_cell_scaled_jacobians` oblicza wersjonowany metric
+  `mixed_topology_scaled_jacobian.v1` bez rozkładania prism/pyramid na
+  zastępcze tetraedry.
 - `_write_quality_data_artifact_if_available` jest aktywnym writerem FMMQ v1; nie koduje family/topology i nie ma mixed guard.
 - `decodeMeshQualityData` oraz Rust `per_element_quality_metric_from_fmmq` są aktywnymi czytnikami v1. UI `topologySupportsTet4FmmqQuality` jest osobną ochroną prezentacji, nie cechą ani guardem formatu.
 

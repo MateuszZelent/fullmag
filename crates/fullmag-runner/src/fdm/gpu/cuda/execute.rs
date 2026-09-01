@@ -38,6 +38,8 @@ use crate::schedules::{
     collect_field_schedules, collect_scalar_schedules, is_due, OutputSchedule,
     OUTPUT_TIME_TOLERANCE,
 };
+#[cfg(feature = "cuda")]
+use crate::time_dependence::evaluate_time_dependence;
 use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::{
@@ -91,6 +93,46 @@ fn ensure_single_object_scalars(stats: &mut StepStats, object_id: &str) {
     if stats.per_object_scalars.is_empty() {
         stats.per_object_scalars = single_object_scalars(object_id, stats);
     }
+}
+
+#[cfg(feature = "cuda")]
+fn apply_regional_drive_energy(
+    plan: &FdmPlanIR,
+    stats: &mut StepStats,
+    magnetization: &[[f64; 3]],
+) {
+    let cell_volume = plan.cell_size[0] * plan.cell_size[1] * plan.cell_size[2];
+    let mut magnetization_dot_field = 0.0;
+    for resolved in &plan.regional_field_drive_bases {
+        if !resolved.drive.enabled {
+            continue;
+        }
+        let time_offset_s = match resolved.drive.time_origin {
+            fullmag_ir::FieldTimeOriginIR::StageLocal => plan.time_stage.start_time_s,
+            fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
+        };
+        let multiplier = evaluate_time_dependence(
+            &resolved.drive.waveform,
+            stats.time - time_offset_s,
+        );
+        for (index, (m, field)) in magnetization
+            .iter()
+            .zip(&resolved.field_xyz)
+            .enumerate()
+        {
+            if plan
+                .active_mask
+                .as_ref()
+                .is_some_and(|mask| !mask[index])
+            {
+                continue;
+            }
+            magnetization_dot_field += multiplier
+                * plan.material.saturation_magnetisation
+                * (m[0] * field[0] + m[1] * field[1] + m[2] * field[2]);
+        }
+    }
+    stats.e_drive = -crate::MU0 * cell_volume * magnetization_dot_field;
 }
 
 #[cfg(feature = "cuda")]
@@ -470,11 +512,19 @@ pub(crate) fn execute_cuda_fdm(
                 ensure_single_object_scalars(&mut stats, "free");
                 latest_stats = Some(stats.clone());
                 current_stats = stats.clone();
+                let magnetization = backend.copy_m(cell_count)?;
+                let mut sampled_stats = stats.clone();
+                apply_average_m_to_step_stats_with_active_mask(
+                    &mut sampled_stats,
+                    &magnetization,
+                    plan.active_mask.as_deref(),
+                );
+                apply_regional_drive_energy(plan, &mut sampled_stats, &magnetization);
                 record_cuda_due_outputs(
                     &backend,
                     cell_count,
-                    &stats,
-                    None,
+                    &sampled_stats,
+                    Some(&magnetization),
                     &mut scalar_schedules,
                     &mut field_schedules,
                     &mut steps,
@@ -569,6 +619,13 @@ pub(crate) fn execute_cuda_fdm(
                         .expect("magnetization cache initialized"),
                     plan.active_mask.as_deref(),
                 );
+                apply_regional_drive_energy(
+                    plan,
+                    &mut sampled_stats,
+                    magnetization_cache
+                        .as_deref()
+                        .expect("magnetization cache initialized"),
+                );
             }
             if let Some(live) = live.as_mut() {
                 let heavy_payload_every = live.field_every_n.max(1);
@@ -583,6 +640,13 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                    );
+                    apply_regional_drive_energy(
+                        plan,
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
                     );
                 }
                 let display_selection = live.display_selection.map(|get| get());
@@ -610,6 +674,13 @@ pub(crate) fn execute_cuda_fdm(
                             .as_deref()
                             .expect("magnetization cache initialized"),
                         plan.active_mask.as_deref(),
+                    );
+                    apply_regional_drive_energy(
+                        plan,
+                        &mut sampled_stats,
+                        magnetization_cache
+                            .as_deref()
+                            .expect("magnetization cache initialized"),
                     );
                 }
                 let magnetization = if heavy_payload_due {
@@ -702,6 +773,16 @@ pub(crate) fn execute_cuda_fdm(
         latest_stats = Some(final_stats.clone());
     }
 
+    let final_magnetization = backend.copy_m(cell_count)?;
+    if let Some(final_stats) = latest_stats.as_mut() {
+        apply_average_m_to_step_stats_with_active_mask(
+            final_stats,
+            &final_magnetization,
+            plan.active_mask.as_deref(),
+        );
+        apply_regional_drive_energy(plan, final_stats, &final_magnetization);
+    }
+
     record_cuda_final_outputs(
         &backend,
         cell_count,
@@ -713,7 +794,6 @@ pub(crate) fn execute_cuda_fdm(
         &mut artifacts,
     )?;
 
-    let final_magnetization = backend.copy_m(cell_count)?;
     final_frozen_checkpoint = frozen_spins_checkpoint_value(
         plan,
         frozen_spins_state.as_ref(),

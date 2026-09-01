@@ -10,6 +10,7 @@
 #include "context.hpp"
 #include "dmi_boundary.cuh"
 #include "kernels.hpp"
+#include "regional_field_drive.cuh"
 
 #include <cuda_runtime.h>
 #include <cufft.h>
@@ -298,6 +299,14 @@ __global__ void combine_effective_field_fp64_kernel(
     const double * __restrict__ profile_z,
     int has_profile,
     double profile_scale,
+    const double * __restrict__ regional_drive_x,
+    const double * __restrict__ regional_drive_y,
+    const double * __restrict__ regional_drive_z,
+    const RegionalFieldDriveParams * __restrict__ regional_drive_params,
+    const double * __restrict__ regional_drive_points,
+    uint32_t regional_drive_count,
+    uint64_t regional_drive_cell_count,
+    double evaluation_time_s,
     const uint8_t * __restrict__ frozen_mask,
     int has_frozen_mask,
     double * __restrict__ rhs_x,
@@ -490,6 +499,16 @@ __global__ void combine_effective_field_fp64_kernel(
         hy += profile_scale * profile_y[idx];
         hz += profile_scale * profile_z[idx];
     }
+
+    hx += regional_field_drive_component(
+        regional_drive_x, regional_drive_params, regional_drive_points,
+        regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
+    hy += regional_field_drive_component(
+        regional_drive_y, regional_drive_params, regional_drive_points,
+        regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
+    hz += regional_field_drive_component(
+        regional_drive_z, regional_drive_params, regional_drive_points,
+        regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
 
     h_eff_x[idx] = hx;
     h_eff_y[idx] = hy;
@@ -859,6 +878,14 @@ static void launch_effective_field_fp64_impl(
         static_cast<const double*>(ctx.h_oe_static.z),
         has_profile ? 1 : 0,
         profile_scale,
+        static_cast<const double*>(ctx.regional_field_drive_x),
+        static_cast<const double*>(ctx.regional_field_drive_y),
+        static_cast<const double*>(ctx.regional_field_drive_z),
+        ctx.regional_field_drive_params,
+        ctx.regional_field_drive_points,
+        ctx.regional_field_drive_count,
+        ctx.cell_count,
+        evaluation_time,
         ctx.frozen_mask,
         ctx.has_frozen_mask ? 1 : 0,
         write_rhs ? static_cast<double*>(rhs_out->x) : nullptr,
@@ -886,7 +913,8 @@ static void launch_effective_field_fp64_impl(
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_ANISOTROPY);
     }
-    if (ctx.has_external_field || ctx.has_static_external_field_profile) {
+    if (ctx.has_external_field || ctx.has_static_external_field_profile ||
+        ctx.regional_field_drive_count != 0) {
         fullmag_fdm_note_operator_device_execution(
             ctx, FULLMAG_FDM_OPERATOR_EXTERNAL_FIELD);
     }

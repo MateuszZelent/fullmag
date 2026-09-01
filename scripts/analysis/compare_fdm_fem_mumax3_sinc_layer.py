@@ -1,4 +1,4 @@
-"""Parse and compare scalar Fullmag and MuMax3 tables for the sinc-layer case."""
+"""Parse and compare scalar Fullmag CPU/GPU, FEM CPU/GPU, and MuMax3 tables."""
 
 from __future__ import annotations
 
@@ -270,10 +270,10 @@ def _interpolate(table: ScalarTable, column: str, time_s: float) -> float:
 def _external_energy(table: ScalarTable, time_s: float) -> float:
     if "e_zeeman" in table.columns:
         return _interpolate(table, "e_zeeman", time_s)
-    return _interpolate(table, "e_ext", time_s) + _interpolate(table, "e_drive", time_s)
+    return _interpolate(table, "e_ext", time_s)
 
 
-def _common_grid(tables: Mapping[str, ScalarTable], reference_backend: str = "fdm") -> list[float]:
+def _common_grid(tables: Mapping[str, ScalarTable], reference_backend: str = "fdm_cpu") -> list[float]:
     reference = tables.get(reference_backend) or next(iter(tables.values()))
     start = max(table.first_time_s for table in tables.values())
     stop = min(table.last_time_s for table in tables.values())
@@ -288,18 +288,48 @@ def _series_value(table: ScalarTable, column: str, time_s: float) -> float:
     return _interpolate(table, column, time_s)
 
 
-def compare_tables(tables: Mapping[str, ScalarTable], *, reference_backend: str = "fdm") -> dict[str, object]:
+def compare_tables(
+    tables: Mapping[str, ScalarTable],
+    *,
+    reference_backend: str = "fdm_cpu",
+    alignment: str = "time",
+) -> dict[str, object]:
     if len(tables) < 2:
         raise ValueError("at least two scalar tables are required for comparison")
-    grid = _common_grid(tables, reference_backend=reference_backend)
-    if not grid:
+    if alignment not in {"time", "row"}:
+        raise ValueError(f"unsupported comparison alignment: {alignment!r}")
+    reference = tables.get(reference_backend) or next(iter(tables.values()))
+    if alignment == "time":
+        points: list[tuple[int | None, float]] = [
+            (None, time_s) for time_s in _common_grid(tables, reference_backend=reference_backend)
+        ]
+    else:
+        row_count = len(reference.rows)
+        if any(len(table.rows) != row_count for table in tables.values()):
+            raise ValueError("row-aligned comparison requires equal row counts")
+        points = [(index, reference.rows[index]["time_s"]) for index in range(row_count)]
+    if not points:
         raise ValueError("common comparison grid is empty")
     aligned_rows: list[dict[str, float]] = []
-    for time_s in grid:
+    for row_index, time_s in points:
         row: dict[str, float] = {"time_s": time_s}
+        if row_index is not None:
+            row["row_index"] = row_index
         for backend, table in tables.items():
             for column in (*MAGNETIZATION_COLUMNS, *COMPARABLE_ENERGY_COLUMNS):
-                row[f"{backend}_{column}"] = _series_value(table, column, time_s)
+                if row_index is None:
+                    value = _series_value(table, column, time_s)
+                else:
+                    value = (
+                        table.rows[row_index]["e_zeeman"]
+                        if column == "e_external_total" and "e_zeeman" in table.columns
+                        else (
+                            table.rows[row_index]["e_ext"]
+                            if column == "e_external_total"
+                            else table.rows[row_index][column]
+                        )
+                    )
+                row[f"{backend}_{column}"] = value
         aligned_rows.append(row)
 
     pair_metrics: dict[str, object] = {}
@@ -320,9 +350,10 @@ def compare_tables(tables: Mapping[str, ScalarTable], *, reference_backend: str 
             pair_metrics[pair_key] = metrics
     return {
         "reference_backend": reference_backend if reference_backend in tables else backends[0],
+        "alignment": alignment,
         "grid_rows": len(aligned_rows),
-        "grid_first_time_s": grid[0],
-        "grid_last_time_s": grid[-1],
+        "grid_first_time_s": points[0][1],
+        "grid_last_time_s": points[-1][1],
         "tables": {
             backend: {
                 "source": str(table.source),
@@ -334,7 +365,8 @@ def compare_tables(tables: Mapping[str, ScalarTable], *, reference_backend: str 
             for backend, table in tables.items()
         },
         "mapping": {
-            "mumax3_e_zeeman": "Fullmag e_ext + e_drive",
+            "fullmag_e_ext": "Fullmag e_ext (bias + drive)",
+            "mumax3_e_zeeman": "MuMax3 e_zeeman (bias + drive)",
             "interpolation": "linear on reference backend times when source times differ",
         },
         "pair_metrics": pair_metrics,
@@ -368,8 +400,10 @@ def write_outputs(output_dir: str | Path, comparison: Mapping[str, object]) -> N
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fdm", type=Path, required=True, help="Fullmag FDM scalars.csv")
-    parser.add_argument("--fem", type=Path, required=True, help="Fullmag FEM scalars.csv")
+    parser.add_argument("--fdm", "--fdm-cpu", dest="fdm", type=Path, required=True, help="Fullmag FDM CPU scalar table")
+    parser.add_argument("--fdm-gpu", dest="fdm_gpu", type=Path, help="Fullmag FDM GPU scalar table")
+    parser.add_argument("--fem", "--fem-cpu", dest="fem", type=Path, help="Fullmag FEM CPU scalar table")
+    parser.add_argument("--fem-gpu", dest="fem_gpu", type=Path, help="Fullmag FEM GPU scalar table")
     parser.add_argument("--mumax", type=Path, required=True, help="MuMax3 table.txt")
     parser.add_argument("--output-dir", type=Path, default=Path("comparison"))
     parser.add_argument(
@@ -377,20 +411,38 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate and compare inputs without writing output files",
     )
+    parser.add_argument(
+        "--align-by-row",
+        action="store_true",
+        help="align static relaxation tables by row index instead of time",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    roots = {args.fdm.parent, args.fem.parent, args.mumax.parent}
+    roots = {args.fdm.parent, args.mumax.parent}
+    if args.fdm_gpu is not None:
+        roots.add(args.fdm_gpu.parent)
+    if args.fem is not None:
+        roots.add(args.fem.parent)
+    if args.fem_gpu is not None:
+        roots.add(args.fem_gpu.parent)
     for root in roots:
         assert_no_field_snapshots(root)
-    tables = {
-        "fdm": parse_fullmag_scalars(args.fdm),
-        "fem": parse_fullmag_scalars(args.fem),
-        "mumax3": parse_mumax_table(args.mumax),
-    }
-    comparison = compare_tables(tables)
+    tables = {"fdm_cpu": parse_fullmag_scalars(args.fdm)}
+    if args.fdm_gpu is not None:
+        tables["fdm_gpu"] = parse_fullmag_scalars(args.fdm_gpu)
+    if args.fem is not None:
+        tables["fem_cpu"] = parse_fullmag_scalars(args.fem)
+    if args.fem_gpu is not None:
+        tables["fem_gpu"] = parse_fullmag_scalars(args.fem_gpu)
+    tables["mumax3"] = parse_mumax_table(args.mumax)
+    comparison = compare_tables(
+        tables,
+        reference_backend="fdm_cpu",
+        alignment="row" if args.align_by_row else "time",
+    )
     if not args.verify_only:
         write_outputs(args.output_dir, comparison)
     print(json.dumps({key: value for key, value in comparison.items() if key != "aligned_rows"}, indent=2, sort_keys=True))

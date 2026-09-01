@@ -220,7 +220,7 @@ mod mesh_asset_validation_tests {
                 "cell_family_counts_by_part":{"magnetic":{"prism6":1},"transition_air":{"pyramid5":1},"far_air":{"tet4":1}},
                 "facet_family_counts_by_role_marker":{"exterior:3":{"quad4":2,"tri3":1},"material_interface:2":{"tri3":1}},
                 "jacobian_minima_m3_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
-                "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
+                "quality_metric":"mixed_topology_scaled_jacobian.v1",
                 "scaled_jacobian_minima_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
                 "scaled_jacobian_p05_by_family":{"prism6":1.0,"pyramid5":1.0,"tet4":1.0},
                 "magnetic_volume_m3":1.0,"expected_magnetic_volume_m3":1.0,
@@ -471,16 +471,16 @@ mod mesh_asset_validation_tests {
         assert_eq!(
             evidence["scaled_jacobian_minima_by_family"],
             serde_json::json!({
-                "prism6":0.4082482904638629,
-                "pyramid5":0.40824829046386296,
+                "prism6":0.7071067811865475,
+                "pyramid5":0.7745966692414832,
                 "tet4":0.40824829046386296
             })
         );
         assert_eq!(
             evidence["scaled_jacobian_p05_by_family"],
             serde_json::json!({
-                "prism6":0.4311862178478971,
-                "pyramid5":0.40824829046386296,
+                "prism6":0.7071067811865475,
+                "pyramid5":0.7745966692414832,
                 "tet4":0.40824829046386296
             })
         );
@@ -1678,7 +1678,7 @@ impl MixedLayerTopologyCertificateV1IR {
                     .to_string(),
             );
         }
-        if self.quality_metric != "tetra_decomposition_scaled_jacobian.v1" {
+        if self.quality_metric != "mixed_topology_scaled_jacobian.v1" {
             errors
                 .push("mixed layer topology certificate quality metric is unqualified".to_string());
         }

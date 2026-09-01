@@ -11,7 +11,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.analysis.compare_fdm_fem_mumax3_sinc_layer import (
+    _build_parser,
     assert_no_field_snapshots,
+    compare_tables,
     parse_fullmag_scalars,
     parse_mumax_table,
 )
@@ -83,6 +85,121 @@ class ScalarComparisonParserTests(unittest.TestCase):
             (root / "m.npy").write_bytes(b"not a field")
             with self.assertRaises(ValueError):
                 assert_no_field_snapshots(root)
+
+    def test_fullmag_external_energy_uses_e_ext_once(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "scalars.csv"
+            path.write_text(
+                "step,time,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_dmi,E_total\n"
+                "1,0,1,0,0,1e-20,2e-20,-3e-20,-4e-21,0,0,-1e-20\n",
+                encoding="utf-8",
+            )
+            table = parse_fullmag_scalars(path)
+            comparison = compare_tables({"fdm": table, "fem": table})
+
+        row = comparison["aligned_rows"][0]
+        self.assertEqual(row["fdm_e_external_total"], -3e-20)
+        self.assertEqual(comparison["mapping"]["fullmag_e_ext"], "Fullmag e_ext (bias + drive)")
+
+    def test_cli_allows_fdm_mumax3_comparison_without_fem(self) -> None:
+        args = _build_parser().parse_args([
+            "--fdm",
+            "fdm-table.csv",
+            "--mumax",
+            "mumax-table.txt",
+            "--verify-only",
+        ])
+        self.assertIsNone(args.fem)
+
+    def test_cli_accepts_all_cpu_gpu_solver_lanes(self) -> None:
+        args = _build_parser().parse_args([
+            "--fdm",
+            "fdm-cpu.csv",
+            "--fdm-gpu",
+            "fdm-gpu.csv",
+            "--fem",
+            "fem-cpu.csv",
+            "--fem-gpu",
+            "fem-gpu.csv",
+            "--mumax",
+            "mumax.txt",
+            "--verify-only",
+        ])
+        self.assertEqual(args.fdm_gpu, Path("fdm-gpu.csv"))
+        self.assertEqual(args.fem, Path("fem-cpu.csv"))
+        self.assertEqual(args.fem_gpu, Path("fem-gpu.csv"))
+
+    def test_multi_lane_cli_uses_stable_backend_ids(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fullmag = (
+                "step,time,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_dmi,E_total\n"
+                "0,0,1,0,0,1e-20,2e-20,-3e-20,0,0,0,-1e-20\n"
+            )
+            paths = {}
+            for lane in ("fdm-cpu", "fdm-gpu", "fem-cpu", "fem-gpu"):
+                paths[lane] = root / f"{lane}.csv"
+                paths[lane].write_text(fullmag, encoding="utf-8")
+            mumax = root / "mumax.txt"
+            mumax.write_text(
+                "# t (s)\tmx ()\tmy ()\tmz ()\tE_exch (J)\tE_demag (J)\tE_zeeman (J)\tE_anis (J)\tE_total (J)\n"
+                "0\t1\t0\t0\t1e-20\t2e-20\t-3e-20\t0\t-1e-20\n",
+                encoding="utf-8",
+            )
+            from contextlib import redirect_stdout
+            from io import StringIO
+            from scripts.analysis.compare_fdm_fem_mumax3_sinc_layer import main
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main([
+                    "--fdm", str(paths["fdm-cpu"]),
+                    "--fdm-gpu", str(paths["fdm-gpu"]),
+                    "--fem", str(paths["fem-cpu"]),
+                    "--fem-gpu", str(paths["fem-gpu"]),
+                    "--mumax", str(mumax),
+                    "--verify-only",
+                ])
+
+        self.assertEqual(exit_code, 0)
+        payload = __import__("json").loads(output.getvalue())
+        self.assertEqual(payload["reference_backend"], "fdm_cpu")
+        self.assertIn("fdm_cpu_vs_mumax3", payload["pair_metrics"])
+        self.assertIn("fem_gpu_vs_mumax3", payload["pair_metrics"])
+
+    def test_row_alignment_compares_relaxation_endpoints_with_duplicate_times(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fdm_path = root / "fdm.csv"
+            fdm_path.write_text(
+                "step,time,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_dmi,E_total\n"
+                "0,0,1,0,0,0,2e-20,-3e-20,0,0,0,-1e-20\n"
+                "10,0,0.99,1e-6,2e-6,1e-21,1.9e-20,-2.9e-20,0,0,0,-9e-21\n",
+                encoding="utf-8",
+            )
+            mumax_path = root / "mumax.txt"
+            mumax_path.write_text(
+                "# t (s)\tmx ()\tmy ()\tmz ()\tE_exch (J)\tE_demag (J)\tE_zeeman (J)\tE_anis (J)\tE_total (J)\n"
+                "0\t1\t0\t0\t0\t2e-20\t-3e-20\t0\t-1e-20\n"
+                "0\t0.991\t2e-6\t3e-6\t2e-21\t1.8e-20\t-2.8e-20\t0\t-8e-21\n",
+                encoding="utf-8",
+            )
+            comparison = compare_tables(
+                {
+                    "fdm": parse_fullmag_scalars(fdm_path),
+                    "mumax3": parse_mumax_table(mumax_path),
+                },
+                alignment="row",
+            )
+
+        self.assertEqual(comparison["alignment"], "row")
+        self.assertEqual(comparison["grid_rows"], 2)
+        self.assertEqual(comparison["aligned_rows"][-1]["fdm_mx"], 0.99)
+        self.assertEqual(comparison["aligned_rows"][-1]["mumax3_mx"], 0.991)
+        self.assertAlmostEqual(
+            comparison["pair_metrics"]["fdm_vs_mumax3"]["mx"]["final_abs"],
+            0.001,
+        )
 
 
 if __name__ == "__main__":

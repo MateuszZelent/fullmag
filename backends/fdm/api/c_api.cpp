@@ -3229,6 +3229,111 @@ int fullmag_fdm_backend_set_static_external_field_f64(
 #endif
 }
 
+int fullmag_fdm_backend_set_regional_field_drives_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || (drive_count != 0 && !drives)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (reject_step_transaction_mutation(*ctx, "regional_field_drive_change")) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    const uint64_t allocation_count_before =
+        ctx->gpu_workspace_total_device_allocation_count;
+    const uint64_t allocation_bytes_before =
+        ctx->gpu_workspace_total_device_allocation_bytes;
+    if (!context_upload_regional_field_drives(*ctx, drives, drive_count)) {
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (drive_count != 0 && ctx->gpu_workspace_setup_complete) {
+        const uint64_t scalar_bytes =
+            ctx->precision == FULLMAG_FDM_PRECISION_DOUBLE
+                ? sizeof(double) : sizeof(float);
+        uint64_t basis_bytes = 0;
+        uint64_t params_bytes = 0;
+        uint64_t points_bytes = 0;
+        const bool basis_count_valid =
+            ctx->cell_count == 0 ||
+            ctx->regional_field_drive_count <=
+                std::numeric_limits<uint64_t>::max() / ctx->cell_count;
+        const uint64_t basis_count = basis_count_valid
+            ? ctx->regional_field_drive_count * ctx->cell_count : 0;
+        const auto checked_bytes = [](uint64_t count, uint64_t element_bytes,
+                                      uint64_t &out_bytes) {
+            if (element_bytes != 0 &&
+                count > std::numeric_limits<uint64_t>::max() / element_bytes) {
+                return false;
+            }
+            out_bytes = count * element_bytes;
+            return true;
+        };
+        const bool expected_sizes =
+            basis_count_valid && checked_bytes(
+                basis_count,
+                scalar_bytes,
+                basis_bytes) &&
+            checked_bytes(
+                ctx->regional_field_drive_count,
+                sizeof(RegionalFieldDriveParams),
+                params_bytes) &&
+            ctx->regional_field_drive_point_count <=
+                std::numeric_limits<uint64_t>::max() / 2u &&
+            checked_bytes(
+                ctx->regional_field_drive_point_count * 2u,
+                sizeof(double),
+                points_bytes);
+        uint64_t expected_bytes = 0;
+        const bool expected_total = expected_sizes &&
+            basis_bytes <= std::numeric_limits<uint64_t>::max() / 3u &&
+            (expected_bytes = basis_bytes * 3u,
+             params_bytes <= std::numeric_limits<uint64_t>::max() - expected_bytes) &&
+            ((expected_bytes += params_bytes),
+             points_bytes <= std::numeric_limits<uint64_t>::max() - expected_bytes) &&
+            ((expected_bytes += points_bytes), true);
+        const uint64_t allocation_count_delta =
+            ctx->gpu_workspace_total_device_allocation_count >= allocation_count_before
+                ? ctx->gpu_workspace_total_device_allocation_count - allocation_count_before
+                : std::numeric_limits<uint64_t>::max();
+        const uint64_t allocation_bytes_delta =
+            ctx->gpu_workspace_total_device_allocation_bytes >= allocation_bytes_before
+                ? ctx->gpu_workspace_total_device_allocation_bytes - allocation_bytes_before
+                : std::numeric_limits<uint64_t>::max();
+        const uint64_t expected_allocation_count =
+            4u + (ctx->regional_field_drive_point_count != 0 ? 1u : 0u);
+        const bool baseline_was_current =
+            allocation_count_before ==
+                ctx->gpu_workspace_setup_device_allocation_count &&
+            allocation_bytes_before ==
+                ctx->gpu_workspace_setup_device_allocation_bytes;
+        if (!baseline_was_current || !expected_total ||
+            allocation_count_delta != expected_allocation_count ||
+            allocation_bytes_delta != expected_bytes ||
+            ctx->gpu_workspace_observed_step_count != 0) {
+            ctx->gpu_workspace_accounting_valid = false;
+            ctx->last_error =
+                "regional field drive workspace extension violated setup accounting";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        ctx->gpu_workspace_setup_device_allocation_count =
+            ctx->gpu_workspace_total_device_allocation_count;
+        ctx->gpu_workspace_setup_device_allocation_bytes =
+            ctx->gpu_workspace_total_device_allocation_bytes;
+    }
+    context_note_field_source_revision_change(*ctx);
+    fullmag_fdm_commit_operator_residency(*ctx);
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle;
+    (void)drives;
+    (void)drive_count;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 /* ── Error ── */
 
 const char *fullmag_fdm_backend_last_error(fullmag_fdm_backend *handle) {

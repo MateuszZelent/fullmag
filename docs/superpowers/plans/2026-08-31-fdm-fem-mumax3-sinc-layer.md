@@ -59,8 +59,11 @@ otwarty demag. Dla FEM ustawić `engine("fem")`, jawny device z env,
 `2.5 nm`, `swept_prism`, `prismatic`, `prism`, `z`, jedna warstwa, P1 i
 `pyramid_to_tetrahedra`.
 
-Zdefiniować `Py`, stan `+x`, bias `+x`, poprzeczny uniform sinc `1 mT +y`,
-relaksację `tolT=1e-6`, a po niej tabelę i bieg `until=4e-9`. Tabela ma tylko
+Zdefiniować `Py`, stan `+x`, bias `+x` oraz poprzeczny uniform sinc `1 mT +y`.
+Dynamiczny benchmark FDM i FEM startuje bezpośrednio z tego samego,
+zadeklarowanego `m0`; relaksacja jest osobnym badaniem (`fdm_relax_case.py` i
+`mumax3_relax_case.mx3`) i nie może być dołączona tylko do jednego backendu.
+Po stanie początkowym uruchomić tabelę i bieg `until=4e-9`. Tabela ma tylko
 kolumny skalarne: czas/krok, trzy średnie magnetyzacji i wszystkie terminy
 energii. Nie wywoływać żadnego zapisu pola.
 
@@ -73,9 +76,10 @@ uruchomienie loadera bez solve.
 
 Ustawić `SetGridSize(200,200,1)`, `SetCellSize(2.5e-9,2.5e-9,10e-9)`,
 `SetPBC(0,0,0)`, parametry Py, `m=uniform(1,0,0)`, bias `100 mT` i
-`B_ext=vector(100e-3, 1e-3*sinc(2*pi*10e9*(t-20/fcut)), 0)`. Wykonać `relax()`
-przed konfiguracją dynamicznej tabeli, a potem `tableautosave(1/(2*1.3*fcut))`
-oraz `run(40/fcut)`. Dodać do tabeli magnetyzację i `E_exch`, `E_demag`,
+`B_ext=vector(100e-3, 1e-3*sinc(2*pi*10e9*(t-20/fcut)), 0)`. Nie wykonywać
+relaksacji w dynamicznym przebiegu, aby stan początkowy był identyczny z FDM
+i FEM; relaksacja pozostaje osobnym skryptem. Następnie użyć
+`tableautosave(1/(2*1.3*fcut))` oraz `run(40/fcut)`. Dodać do tabeli magnetyzację i `E_exch`, `E_demag`,
 `E_zeeman`, `E_anis`, `E_total`; nie używać `save(m)` ani `autosave(m)`.
 
 **Weryfikacja:** parser tekstu sprawdza brak `PBC` innych niż zero, brak zapisów

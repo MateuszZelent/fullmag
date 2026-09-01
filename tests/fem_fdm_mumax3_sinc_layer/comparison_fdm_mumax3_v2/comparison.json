@@ -1,0 +1,86 @@
+{
+  "grid_first_time_s": 0.0,
+  "grid_last_time_s": 4e-09,
+  "grid_rows": 105,
+  "mapping": {
+    "fullmag_e_ext": "Fullmag e_ext (bias + drive)",
+    "interpolation": "linear on reference backend times when source times differ",
+    "mumax3_e_zeeman": "MuMax3 e_zeeman (bias + drive)"
+  },
+  "pair_metrics": {
+    "fdm_vs_mumax3": {
+      "e_ani": {
+        "final_abs": 0.0,
+        "max_abs": 0.0
+      },
+      "e_demag": {
+        "final_abs": 7.656260149768305e-19,
+        "max_abs": 8.03054630306873e-19
+      },
+      "e_ex": {
+        "final_abs": 7.700343826726489e-23,
+        "max_abs": 1.467755025239199e-20
+      },
+      "e_external_total": {
+        "final_abs": 3.3763452771987555e-21,
+        "max_abs": 3.115386879354001e-20
+      },
+      "e_total": {
+        "final_abs": 7.623376731378945e-19,
+        "max_abs": 7.624729275833775e-19
+      },
+      "mx": {
+        "final_abs": 1.6881726393691565e-05,
+        "max_abs": 0.000155719203767668
+      },
+      "my": {
+        "final_abs": 0.00011793006180846333,
+        "max_abs": 0.0003980199062777244
+      },
+      "mz": {
+        "final_abs": 3.4491952279169194e-05,
+        "max_abs": 0.0001487100231829803
+      }
+    }
+  },
+  "reference_backend": "fdm",
+  "tables": {
+    "fdm": {
+      "columns": [
+        "step",
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_ext",
+        "e_drive",
+        "e_ani",
+        "e_dmi",
+        "e_total"
+      ],
+      "first_time_s": 0.0,
+      "last_time_s": 4e-09,
+      "rows": 105,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\fdm_case.zarr\\artifacts\\tables\\default\\table.csv"
+    },
+    "mumax3": {
+      "columns": [
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_zeeman",
+        "e_ani",
+        "e_total"
+      ],
+      "first_time_s": 0.0,
+      "last_time_s": 4e-09,
+      "rows": 105,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\results\\mumax3_aligned_v2\\table.txt"
+    }
+  }
+}

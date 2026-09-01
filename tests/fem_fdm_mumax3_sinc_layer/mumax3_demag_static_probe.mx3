@@ -1,0 +1,14 @@
+// Static demagnetization probe for the 500 nm x 500 nm x 10 nm layer.
+// Only scalar energy rows are written; no magnetization field is saved.
+
+SetGridSize(200, 200, 1)
+SetCellSize(2.5e-9, 2.5e-9, 10e-9)
+SetPBC(0, 0, 0)
+DemagAccuracy = 29
+
+Msat = 800e3
+Aex = 13e-12
+m = uniform(1, 0, 0)
+
+tableadd(E_demag)
+tableSave()

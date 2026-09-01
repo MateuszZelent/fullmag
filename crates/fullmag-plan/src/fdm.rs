@@ -2761,17 +2761,6 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
-    if runtime_requests_cuda(problem)
-        && problem
-            .field_drives
-            .iter()
-            .any(|drive| crate::util::field_drive_is_active(drive, problem))
-    {
-        errors.push(
-            "fdm_cuda_regional_field_drive_unsupported: regional time-domain field drives are implemented only by the FDM CPU reference lane; request device='cpu' or use FEM CUDA double"
-                .to_string(),
-        );
-    }
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;

@@ -1,0 +1,2 @@
+# t (s)	mx ()	my ()	mz ()	E_exch (J)	E_demag (J)	E_Zeeman (J)	E_anis (J)	E_total (J)
+0	1	0	0	-0	2.9710994e-17	-2e-16	0	-1.7028901e-16

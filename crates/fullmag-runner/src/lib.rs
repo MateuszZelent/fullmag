@@ -1689,11 +1689,29 @@ pub(crate) fn integrator_choice_name(integrator: fullmag_ir::IntegratorChoice) -
     }
 }
 
+fn mixed_p1_runtime_supports_time_evolution(
+    problem: &ProblemIR,
+    fem_plan: Option<&fullmag_ir::FemPlanIR>,
+) -> bool {
+    matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+        && fem_plan.is_some_and(|fem| {
+            matches!(
+                fem.integrator,
+                Some(
+                    fullmag_ir::IntegratorChoice::Heun
+                        | fullmag_ir::IntegratorChoice::Rk4
+                        | fullmag_ir::IntegratorChoice::Rk23
+                        | fullmag_ir::IntegratorChoice::Rk45
+                )
+            )
+        })
+}
+
 fn require_supported_fem_topology(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<(), RunError> {
-    let (mesh, build_report, precision, study_kind, relaxation_plan) = match &plan.backend_plan {
+    let (mesh, build_report, precision, study_kind, fem_plan) = match &plan.backend_plan {
         BackendPlanIR::Fem(fem) => (
             &fem.mesh,
             fem.mesh_build_report.as_ref(),
@@ -1848,7 +1866,7 @@ fn require_supported_fem_topology(
     let mut demag_count = 0usize;
     let mut demag_realization_supported = true;
     let mut energy_supported = true;
-    let resolved_demag_is_supported_poisson = relaxation_plan.is_some_and(|fem| {
+    let resolved_demag_is_supported_poisson = fem_plan.is_some_and(|fem| {
         matches!(
             fem.demag_realization,
             Some(
@@ -1878,7 +1896,7 @@ fn require_supported_fem_topology(
             _ => energy_supported = false,
         }
     }
-    let has_dmi = relaxation_plan.is_some_and(|fem| {
+    let has_dmi = fem_plan.is_some_and(|fem| {
         fem.interfacial_dmi.is_some()
             || fem.bulk_dmi.is_some()
             || fem.dind_field.is_some()
@@ -1908,7 +1926,9 @@ fn require_supported_fem_topology(
     if !matches!(requested_device.as_str(), "cpu" | "gpu") {
         failed_predicates.push("explicit_device_cpu_or_gpu_required");
     }
-    if let Some(fem) = relaxation_plan {
+    let supports_time_evolution =
+        mixed_p1_runtime_supports_time_evolution(problem, fem_plan);
+    if let Some(fem) = fem_plan {
         if fem.fe_order != 1 {
             failed_predicates.push("fem_fe_order_not_p1");
         }
@@ -1930,11 +1950,11 @@ fn require_supported_fem_topology(
         ) {
             failed_predicates.push("fem_demag_realization_not_poisson_robin_or_dirichlet");
         }
-        if fem.relaxation.is_none() {
+        if fem.relaxation.is_none() && !supports_time_evolution {
             failed_predicates.push("fem_relaxation_plan_missing");
         }
-        if !fem.relaxation.as_ref().is_some_and(|relaxation| {
-            matches!(
+        if fem.relaxation.as_ref().is_some_and(|relaxation| {
+            !matches!(
                 relaxation.algorithm,
                 fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
                     | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
@@ -1946,7 +1966,7 @@ fn require_supported_fem_topology(
         if !fem.current_modules.is_empty() {
             failed_predicates.push("fem_current_modules_present");
         }
-        if !fem.field_drives.is_empty() {
+        if !fem.field_drives.is_empty() && !supports_time_evolution && fem.relaxation.is_none() {
             failed_predicates.push("fem_field_drives_present");
         }
         if fem.temperature.is_some() {
@@ -2010,9 +2030,6 @@ fn require_supported_fem_topology(
     }
     if !problem.current_modules.is_empty() {
         failed_predicates.push("current_modules_present");
-    }
-    if !problem.field_drives.is_empty() {
-        failed_predicates.push("field_drives_present");
     }
     if !problem.spin_torque_modules.is_empty() {
         failed_predicates.push("spin_torque_modules_present");
@@ -2099,7 +2116,12 @@ fn require_supported_fem_topology(
                 failed_predicates.push("study_relaxation_algorithm_unsupported");
             }
         }
-        _ => failed_predicates.push("study_not_relaxation"),
+        fullmag_ir::StudyIR::TimeEvolution { .. } => {
+            if !supports_time_evolution {
+                failed_predicates.push("study_time_evolution_integrator_unsupported");
+            }
+        }
+        _ => failed_predicates.push("study_not_relaxation_or_time_evolution"),
     }
     if has_dmi && requested_device == "gpu" {
         failed_predicates.push("gpu_dmi_kernel_not_mixed_p1");
@@ -2107,7 +2129,7 @@ fn require_supported_fem_topology(
     if !failed_predicates.is_empty() {
         return Err(RunError {
             message: format!(
-                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+PG_BB_or_NCG_or_LLG_overdamped; failed_predicates=[{}]; fallback=none",
+                "fem_mixed_p1_runtime_scope_rejected: study={study_kind}; requested_device={requested_device}; precision={precision:?}; required=explicit_cpu_or_gpu+strict+double+P1+exchange+poisson_robin_or_dirichlet+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; failed_predicates=[{}]; fallback=none",
                 failed_predicates.join(",")
             ),
         });
@@ -6129,6 +6151,52 @@ mod tests {
 
         require_supported_fem_topology(&problem, &plan)
             .expect("bound GPU-double mixed P1 relaxation must cross the startup guard");
+    }
+
+    #[test]
+    fn fem_topology_guard_accepts_bound_mixed_p1_time_evolution_with_regional_drive() {
+        let (mut problem, mut plan) = certified_mixed_cpu_relaxation_guard_fixture();
+        let sampling = problem.study.sampling().clone();
+        problem.study = fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg {
+                gyromagnetic_ratio: 2.211e5,
+                integrator: "rk45".to_string(),
+                fixed_timestep: None,
+                adaptive_timestep: None,
+                field_refresh: None,
+                mechanics: None,
+            },
+            sampling,
+        };
+        let drive = fullmag_ir::RegionalFieldDriveIR {
+            id: "pulse".to_string(),
+            name: "Pulse".to_string(),
+            kind: fullmag_ir::FieldDriveKindIR::Regional,
+            enabled: true,
+            target: fullmag_ir::FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: fullmag_ir::FieldSpatialProfileIR::Uniform {},
+            waveform: fullmag_ir::TimeDependenceIR::SincPulse {
+                cutoff_hz: 10.0e9,
+                t0: 2.0e-9,
+                amplitude: 1.0,
+            },
+            time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+            activation: fullmag_ir::DriveActivationIR::AllTimeEvolution {},
+            migration: None,
+        };
+        problem.field_drives = vec![drive.clone()];
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            unreachable!()
+        };
+        fem.relaxation = None;
+        fem.integrator = Some(IntegratorChoice::Rk45);
+        fem.fixed_timestep = None;
+        fem.field_drives = vec![drive];
+
+        require_supported_fem_topology(&problem, &plan)
+            .expect("bound mixed P1 time evolution with a regional drive must cross the startup guard");
     }
 
     #[test]

@@ -123,10 +123,6 @@ bool build_context_from_plan(
     // Precompute per-node dual volumes for thermal noise after mesh masks exist.
     compute_node_volumes(ctx);
 
-    if (!project_regional_field_drive_bases(ctx, error)) {
-        return false;
-    }
-
     initialize_uniform_zeeman_field(ctx);
     initialize_context_field_buffers(ctx);
 
@@ -156,6 +152,12 @@ bool build_context_from_plan(
     if (!context_initialize_mfem(ctx, error)) {
         return false;
     }
+    // Mixed P1 uses MFEM's assembled magnetic mass row sums as the canonical
+    // nodal integration weights. Project the drive only after that publication
+    // so the basis is both topology-safe and normalized on the same weights.
+    if (!project_regional_field_drive_bases(ctx, error)) {
+        return false;
+    }
     if (!initialize_demag_runtime(ctx, error)) {
         return false;
     }
@@ -163,6 +165,10 @@ bool build_context_from_plan(
         return false;
     }
     context_populate_device_info(ctx);
+#else
+    if (!project_regional_field_drive_bases(ctx, error)) {
+        return false;
+    }
 #endif
     if (!initialize_context_gpu_state(ctx, error)) {
         return false;

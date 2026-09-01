@@ -1,0 +1,41 @@
+//mumax 3.12 [linux_amd64 go1.25.0(gc) CUDA-12.4]
+//mumax3 build: version=v3.12.3-20260819 commit=1d5b2579 built=2026-08-19T11:56:30Z
+//CPU info: AMD Ryzen Threadripper 3960X 24-Core Processor, Cores: 20, MHz: 3800.041
+//GPU info: NVIDIA GeForce RTX 4080 SUPER(16375MB), CUDA Driver 13.1, cc=8.9, using cc=89 PTX
+//OS  info: Ubuntu 22.04.5 LTS, Hostname: Orion
+//Timestamp: 2026-08-31 20:33:13
+//(c) Arne Vansteenkiste, Dynamat LAB, Ghent University, Belgium
+//This is free software without any warranty. See license.txt
+//********************************************************************//
+//  If you use mumax in any work or publication,                      //
+//  we kindly ask you to cite the references in references.bib        //
+//********************************************************************//
+//output directory: /mnt/c/git/fullmag/fullmag/tests/fem_fdm_mumax3_sinc_layer/results/mumax3_relax_v2/
+SetGridSize(200, 200, 1)
+SetCellSize(2.5e-9, 2.5e-9, 10e-9)
+SetPBC(0, 0, 0)
+//resizing...
+DemagAccuracy = 29
+Msat = 800e3
+Aex = 13e-12
+alpha = 0.01
+Temp = 0
+m = uniform(1, 0, 0)
+B_ext = vector(100e-3, 0, 0)
+MinimizerStop = 1e-6
+MinimizeMaxSteps = 50000
+MinimizerSamples = 10
+tableadd(E_exch)
+tableadd(E_demag)
+tableadd(E_zeeman)
+tableadd(E_anis)
+tableadd(E_total)
+tableSave()
+minimize()
+tableSave()
+//********************************************************************//
+//Please cite the following references, relevant for your simulation. //
+//See bibtex file in output folder for justification.                 //
+//********************************************************************//
+//   * Vansteenkiste et al., AIP Adv. 4, 107133 (2014).
+//   * Exl et al., J. Appl. Phys. 115, 17D118 (2014).

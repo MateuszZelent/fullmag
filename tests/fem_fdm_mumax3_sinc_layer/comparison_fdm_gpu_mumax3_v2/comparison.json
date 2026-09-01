@@ -1,0 +1,175 @@
+{
+  "alignment": "time",
+  "grid_first_time_s": 3.846153846153846e-11,
+  "grid_last_time_s": 4e-09,
+  "grid_rows": 104,
+  "mapping": {
+    "fullmag_e_ext": "Fullmag e_ext (bias + drive)",
+    "interpolation": "linear on reference backend times when source times differ",
+    "mumax3_e_zeeman": "MuMax3 e_zeeman (bias + drive)"
+  },
+  "pair_metrics": {
+    "fdm_cpu_vs_fdm_gpu": {
+      "e_ani": {
+        "final_abs": 0.0,
+        "max_abs": 0.0
+      },
+      "e_demag": {
+        "final_abs": 1.2557063237404778e-29,
+        "max_abs": 1.1291670693931827e-20
+      },
+      "e_ex": {
+        "final_abs": 5.1927845681012015e-27,
+        "max_abs": 4.733759276403694e-21
+      },
+      "e_external_total": {
+        "final_abs": 1.239990735394278e-29,
+        "max_abs": 6.52668799752307e-21
+      },
+      "e_total": {
+        "final_abs": 5.217698590454789e-27,
+        "max_abs": 7.646597997018912e-23
+      },
+      "mx": {
+        "final_abs": 7.238654120556021e-14,
+        "max_abs": 3.263387624752312e-05
+      },
+      "my": {
+        "final_abs": 3.139849491518021e-16,
+        "max_abs": 0.000158222837739295
+      },
+      "mz": {
+        "final_abs": 1.3300992252052168e-15,
+        "max_abs": 4.396534392527799e-05
+      }
+    },
+    "fdm_cpu_vs_mumax3": {
+      "e_ani": {
+        "final_abs": 0.0,
+        "max_abs": 0.0
+      },
+      "e_demag": {
+        "final_abs": 1.4176014976832874e-20,
+        "max_abs": 2.1925349214877598e-20
+      },
+      "e_ex": {
+        "final_abs": 2.4270343826722234e-22,
+        "max_abs": 2.4612393981558943e-21
+      },
+      "e_external_total": {
+        "final_abs": 3.53654722795292e-22,
+        "max_abs": 5.647453535716849e-21
+      },
+      "e_total": {
+        "final_abs": 1.4777673137886773e-20,
+        "max_abs": 1.5031102676188502e-20
+      },
+      "mx": {
+        "final_abs": 1.6882736063594805e-06,
+        "max_abs": 2.8146534706396942e-05
+      },
+      "my": {
+        "final_abs": 2.94193819153684e-06,
+        "max_abs": 0.0001253403356024866
+      },
+      "mz": {
+        "final_abs": 8.092022791692161e-07,
+        "max_abs": 5.071404882831584e-05
+      }
+    },
+    "fdm_gpu_vs_mumax3": {
+      "e_ani": {
+        "final_abs": 0.0,
+        "max_abs": 0.0
+      },
+      "e_demag": {
+        "final_abs": 1.4176014989389937e-20,
+        "max_abs": 2.1714245639899548e-20
+      },
+      "e_ex": {
+        "final_abs": 2.4270863105179044e-22,
+        "max_abs": 3.7779921947961215e-21
+      },
+      "e_external_total": {
+        "final_abs": 3.5365473519519936e-22,
+        "max_abs": 5.0749832054948656e-21
+      },
+      "e_total": {
+        "final_abs": 1.4777678355585363e-20,
+        "max_abs": 1.4976591365988902e-20
+      },
+      "mx": {
+        "final_abs": 1.6882736787460217e-06,
+        "max_abs": 2.546112054890859e-05
+      },
+      "my": {
+        "final_abs": 2.941938191222855e-06,
+        "max_abs": 0.00010928500293415182
+      },
+      "mz": {
+        "final_abs": 8.092022778391169e-07,
+        "max_abs": 4.079477931868145e-05
+      }
+    }
+  },
+  "reference_backend": "fdm_cpu",
+  "tables": {
+    "fdm_cpu": {
+      "columns": [
+        "step",
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_ext",
+        "e_drive",
+        "e_ani",
+        "e_dmi",
+        "e_total"
+      ],
+      "first_time_s": 0.0,
+      "last_time_s": 4e-09,
+      "rows": 105,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\fdm_case.zarr\\artifacts\\tables\\default\\table.csv"
+    },
+    "fdm_gpu": {
+      "columns": [
+        "step",
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_ext",
+        "e_drive",
+        "e_ani",
+        "e_dmi",
+        "e_total"
+      ],
+      "first_time_s": 1.542882808243691e-13,
+      "last_time_s": 4e-09,
+      "rows": 105,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\fdm_gpu_case.zarr\\artifacts\\tables\\default\\table.csv"
+    },
+    "mumax3": {
+      "columns": [
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_zeeman",
+        "e_ani",
+        "e_total"
+      ],
+      "first_time_s": 0.0,
+      "last_time_s": 4e-09,
+      "rows": 105,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\results\\mumax3_aligned_v3\\table.txt"
+    }
+  }
+}

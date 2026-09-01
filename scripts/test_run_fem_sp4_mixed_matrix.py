@@ -268,7 +268,7 @@ class MixedSP4MatrixExecutorTests(unittest.TestCase):
                         "jacobian_minima_m3_by_family": {
                             family: 1.0e-27 for family in cell_quality
                         },
-                        "quality_metric": "tetra_decomposition_scaled_jacobian.v1",
+                        "quality_metric": "mixed_topology_scaled_jacobian.v1",
                         "scaled_jacobian_minima_by_family": cell_quality,
                         "scaled_jacobian_p05_by_family": cell_quality,
                         "magnetic_volume_m3": 1.0e-21,

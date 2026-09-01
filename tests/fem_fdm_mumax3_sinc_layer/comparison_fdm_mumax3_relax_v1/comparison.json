@@ -1,0 +1,87 @@
+{
+  "alignment": "row",
+  "grid_first_time_s": 0.0,
+  "grid_last_time_s": 0.0,
+  "grid_rows": 2,
+  "mapping": {
+    "fullmag_e_ext": "Fullmag e_ext (bias + drive)",
+    "interpolation": "linear on reference backend times when source times differ",
+    "mumax3_e_zeeman": "MuMax3 e_zeeman (bias + drive)"
+  },
+  "pair_metrics": {
+    "fdm_vs_mumax3": {
+      "e_ani": {
+        "final_abs": 0.0,
+        "max_abs": 0.0
+      },
+      "e_demag": {
+        "final_abs": 1.4319889755811286e-20,
+        "max_abs": 1.4919131709874366e-20
+      },
+      "e_ex": {
+        "final_abs": 2.0452292960328954e-22,
+        "max_abs": 2.0452292960328954e-22
+      },
+      "e_external_total": {
+        "final_abs": 2.5627630318954625e-22,
+        "max_abs": 2.5627630318954625e-22
+      },
+      "e_total": {
+        "final_abs": 1.477718898870569e-20,
+        "max_abs": 1.492313150620455e-20
+      },
+      "mx": {
+        "final_abs": 1.1113815100438629e-06,
+        "max_abs": 1.1113815100438629e-06
+      },
+      "my": {
+        "final_abs": 4.428625546582224e-09,
+        "max_abs": 4.428625546582224e-09
+      },
+      "mz": {
+        "final_abs": 8.51776470991995e-16,
+        "max_abs": 8.51776470991995e-16
+      }
+    }
+  },
+  "reference_backend": "fdm",
+  "tables": {
+    "fdm": {
+      "columns": [
+        "step",
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_ext",
+        "e_drive",
+        "e_ani",
+        "e_dmi",
+        "e_total"
+      ],
+      "first_time_s": 0.0,
+      "last_time_s": 0.0,
+      "rows": 2,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\fdm_relax_case.zarr\\artifacts\\tables\\default\\table.csv"
+    },
+    "mumax3": {
+      "columns": [
+        "time_s",
+        "mx",
+        "my",
+        "mz",
+        "e_ex",
+        "e_demag",
+        "e_zeeman",
+        "e_ani",
+        "e_total"
+      ],
+      "first_time_s": 0.0,
+      "last_time_s": 0.0,
+      "rows": 2,
+      "source": "tests\\fem_fdm_mumax3_sinc_layer\\results\\mumax3_relax_v2\\table.txt"
+    }
+  }
+}

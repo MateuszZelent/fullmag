@@ -397,12 +397,21 @@ hash and region/material realization. For the first workload it proves:
 The certificate fails closed. A warning, inferred layer count, clipped cell,
 tet conversion, or unversioned connectivity does not satisfy it.
 
+The mixed quality metric is `mixed_topology_scaled_jacobian.v1`. For `tet4` it
+is the normalized absolute determinant of the affine edge Jacobian. For
+`prism6` and `pyramid5` it is the normalized absolute determinant of the
+topology-specific isoparametric Jacobian, sampled at the same order-2
+quadrature points as the signed-Jacobian gate. The threshold remains
+`p05 >= 0.1` for every family; changing the metric does not lower the
+threshold, convert the magnetic prism to tetrahedra, or permit a negative
+mapped Jacobian.
+
 For $L=2$ or $L=3$, the mesher bounds the magnetic source-face target size by
 $2t/L$ before extrusion. This local, deterministic refinement keeps the lateral
 `quad4` prism faces and their incident transition pyramids within the unchanged
-p05 scaled-Jacobian floor without globally refining the far-air tetrahedra. The
-authored `hmax` remains an upper bound; the realized topology and derived local
-refinement remain fingerprint-bound certificate evidence.
+p05 topology-aware scaled-Jacobian floor without globally refining the far-air
+tetrahedra. The authored `hmax` remains an upper bound; the realized topology
+and derived local refinement remain fingerprint-bound certificate evidence.
 
 Cross-language certificate recomputation admits the bounded binary64
 comparison
@@ -570,8 +579,8 @@ contract is:
    before admitting evidence;
 2. use Rayon only for independent per-cell work; each worker returns one
    immutable record containing the cell global ordinal, topology family,
-   signed and absolute volume, order-2 Jacobian samples, tetra-decomposition
-   scaled-Jacobian samples, and canonical face records;
+   signed and absolute volume, order-2 Jacobian samples,
+   topology-aware scaled-Jacobian samples, and canonical face records;
 3. collect all records, then sort them by exact cell global ordinal before any
    count or floating-point reduction;
 4. sort face records by sorted global node IDs, cell global ordinal, local face

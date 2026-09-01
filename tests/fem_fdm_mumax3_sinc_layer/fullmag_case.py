@@ -54,8 +54,15 @@ def _requested_backend() -> str:
 
 
 def _configure_fdm(study: fm.StudyBuilder) -> None:
+    device = os.environ.get("FULLMAG_FDM_EXECUTION", "cpu").strip().lower()
+    if device == "cpu":
+        study_device = "cpu"
+    elif device == "cuda":
+        study_device = "cuda:0"
+    else:
+        raise ValueError("FULLMAG_FDM_EXECUTION must be 'cpu' or 'cuda'")
     study.engine("fdm")
-    study.device("cpu", precision="double")
+    study.device(study_device, precision="double")
     study.universe(
         mode="manual",
         size=FILM_SIZE_M,
@@ -109,21 +116,12 @@ def _configure_common_physics(study: fm.StudyBuilder, backend: str) -> None:
             element_family="prism",
             transition_policy="pyramid_to_tetrahedra",
             exact_layer_count=True,
-            interface_hmax=2.5e-9,
-            interface_thickness=2.5e-9,
-            transition_distance=3e-9,
-            edge_hmax=2.5e-9,
-            edge_thickness=10e-9,
-            edge_transition_distance=20e-9,
-            corner_hmax=2.5e-9,
-            corner_extent=5e-9,
-            corner_transition_distance=10e-9,
         )
         study.demag(realization="poisson_robin")
         study.fem_demag_solver(
             solver="CG",
             preconditioner="AMG",
-            rtol=1e-10,
+            rtol=1e-12,
             max_iterations=1000,
             print_level=0,
         )
@@ -162,14 +160,8 @@ def _configure_common_physics(study: fm.StudyBuilder, backend: str) -> None:
                 "t0_s": T0_S,
             },
             "duration_s": TOTAL_TIME_S,
-            "dynamic_initial_state": (
-                "uniform_declared_m0" if backend == "fdm" else "relaxed_state_after_bb"
-            ),
-            "relaxation_policy": (
-                "excluded_from_dynamic_benchmark"
-                if backend == "fdm"
-                else "included_in_deferred_fem_probe"
-            ),
+            "dynamic_initial_state": "uniform_declared_m0",
+            "relaxation_policy": "excluded_from_dynamic_benchmark",
             "table_sampling_policy": {
                 "kind": "auto_sinc_cutoff",
                 "nyquist_guard_factor": 1.3,
@@ -178,13 +170,6 @@ def _configure_common_physics(study: fm.StudyBuilder, backend: str) -> None:
         },
     )
 
-    if backend == "fem":
-        study.stages.add_minimize(
-            stage_id="relax",
-            method="bb",
-            tolT=1e-6,
-            max_steps=5000,
-        )
     study.field_drives.add(
         fm.RegionalFieldDrive(
             id="uniform_sinc_y",

@@ -95,19 +95,19 @@
     "orphan_face_count": 0,
     "outer_boundary_marker": 3,
     "plane_tolerance_m": 2e-08,
-    "quality_metric": "tetra_decomposition_scaled_jacobian.v1",
+    "quality_metric": "mixed_topology_scaled_jacobian.v1",
     "realized_layer_count": 4,
     "requested_layer_count": 4,
     "requested_sweep_direction": "z",
     "resolved_sweep_direction": "z",
     "scaled_jacobian_minima_by_family": {
-      "prism6": 0.6755205294731985,
-      "pyramid5": 0.140028008402801,
+      "prism6": 0.7071067811865475,
+      "pyramid5": 0.684678923488613,
       "tet4": 0.40824829046386296
     },
     "scaled_jacobian_p05_by_family": {
-      "prism6": 0.6755205294731985,
-      "pyramid5": 0.140028008402801,
+      "prism6": 0.7071067811865475,
+      "pyramid5": 0.6846789234886133,
       "tet4": 0.40824829046386296
     },
     "schema_version": "mixed_layer_topology_certificate.v1",

@@ -13,6 +13,7 @@
 
 #include "context.hpp"
 #include "adaptive_controller.cuh"
+#include "../interactions/regional_field_drive.cuh"
 #include <cuda_runtime.h>
 #include <math_constants.h>
 #include <cmath>
@@ -758,7 +759,15 @@ __global__ void external_energy_blocks_kernel(
     const Scalar *oe_x,
     const Scalar *oe_y,
     const Scalar *oe_z,
-    double oe_scale)
+    double oe_scale,
+    const Scalar *regional_drive_x,
+    const Scalar *regional_drive_y,
+    const Scalar *regional_drive_z,
+    const RegionalFieldDriveParams *regional_drive_params,
+    const double *regional_drive_points,
+    uint32_t regional_drive_count,
+    uint64_t regional_drive_cell_count,
+    double evaluation_time_s)
 {
     __shared__ double shared[REDUCTION_BLOCK_SIZE];
     uint64_t idx = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -775,6 +784,15 @@ __global__ void external_energy_blocks_kernel(
             field_y += oe_scale * to_f64(oe_y[idx]);
             field_z += oe_scale * to_f64(oe_z[idx]);
         }
+        field_x += regional_field_drive_component(
+            regional_drive_x, regional_drive_params, regional_drive_points,
+            regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
+        field_y += regional_field_drive_component(
+            regional_drive_y, regional_drive_params, regional_drive_points,
+            regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
+        field_z += regional_field_drive_component(
+            regional_drive_z, regional_drive_params, regional_drive_points,
+            regional_drive_count, regional_drive_cell_count, idx, evaluation_time_s);
         double mdoth =
             to_f64(mx[idx]) * field_x + to_f64(my[idx]) * field_y + to_f64(mz[idx]) * field_z;
         energy += coeff * phi_i * mdoth;
@@ -1357,7 +1375,8 @@ double reduce_demag_energy_fp32(Context &ctx) {
 }
 
 double reduce_external_energy_fp64(Context &ctx) {
-    if (!ctx.has_external_field && !ctx.has_oersted_field) {
+    if (!ctx.has_external_field && !ctx.has_oersted_field &&
+        ctx.regional_field_drive_count == 0) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
@@ -1381,12 +1400,21 @@ double reduce_external_energy_fp64(Context &ctx) {
         oe_x,
         oe_y,
         oe_z,
-        ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time));
+        ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time),
+        static_cast<const double *>(ctx.regional_field_drive_x),
+        static_cast<const double *>(ctx.regional_field_drive_y),
+        static_cast<const double *>(ctx.regional_field_drive_z),
+        ctx.regional_field_drive_params,
+        ctx.regional_field_drive_points,
+        ctx.regional_field_drive_count,
+        ctx.cell_count,
+        ctx.current_time);
     return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 
 double reduce_external_energy_fp32(Context &ctx) {
-    if (!ctx.has_external_field && !ctx.has_oersted_field) {
+    if (!ctx.has_external_field && !ctx.has_oersted_field &&
+        ctx.regional_field_drive_count == 0) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
@@ -1410,7 +1438,15 @@ double reduce_external_energy_fp32(Context &ctx) {
         oe_x,
         oe_y,
         oe_z,
-        ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time));
+        ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time),
+        static_cast<const float *>(ctx.regional_field_drive_x),
+        static_cast<const float *>(ctx.regional_field_drive_y),
+        static_cast<const float *>(ctx.regional_field_drive_z),
+        ctx.regional_field_drive_params,
+        ctx.regional_field_drive_points,
+        ctx.regional_field_drive_count,
+        ctx.cell_count,
+        ctx.current_time);
     return finalize_sum_reduction(ctx, ctx.reduction_scratch, blocks);
 }
 

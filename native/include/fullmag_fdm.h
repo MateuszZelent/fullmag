@@ -52,6 +52,7 @@ extern "C" {
 #define FULLMAG_FDM_FROZEN_SPINS_ABI_V1 1u
 #define FULLMAG_FDM_CAPABILITY_FROZEN_SPINS_V1 (UINT64_C(1) << 0)
 #define FULLMAG_FDM_PLAN_DESC_ABI_V2 UINT32_C(2)
+#define FULLMAG_FDM_REGIONAL_FIELD_DRIVES_ABI_V1 UINT32_C(1)
 
 /* ── Enums ── */
 
@@ -763,6 +764,45 @@ typedef struct {
     fullmag_fdm_time_policy_desc_v2 time_policy;
 } fullmag_fdm_plan_desc_v2;
 
+/* Append-only native CUDA extension for resolved regional field drives. */
+typedef enum {
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_CONSTANT = 0,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINUSOIDAL = 1,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PULSE = 2,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_PIECEWISE_LINEAR = 3,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_SINC_PULSE = 4,
+} fullmag_fdm_regional_field_drive_waveform;
+
+typedef enum {
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_STAGE_LOCAL = 0,
+    FULLMAG_FDM_REGIONAL_FIELD_DRIVE_ABSOLUTE = 1,
+} fullmag_fdm_regional_field_drive_time_origin;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const double *field_xyz;       /* resolved H0 basis, AoS f64, A/m */
+    uint64_t field_len;            /* exactly 3 * cell_count */
+    fullmag_fdm_regional_field_drive_waveform waveform;
+    fullmag_fdm_regional_field_drive_time_origin time_origin;
+    double stage_start_time_s;     /* used only for STAGE_LOCAL */
+    double frequency_hz;
+    double phase_rad;
+    double offset;
+    double t_on_s;
+    double t_off_s;
+    double cutoff_hz;
+    double t0_s;
+    double amplitude;
+    const double *piecewise_points; /* AoS [time_s, value], if PWL */
+    uint64_t piecewise_point_count;
+} fullmag_fdm_regional_field_drive_desc_v1;
+
+#if defined(__cplusplus)
+static_assert(sizeof(fullmag_fdm_regional_field_drive_desc_v1) == 120,
+              "regional field-drive v1 ABI size changed");
+#endif
+
 /* ── Per-step diagnostics ── */
 
 typedef struct {
@@ -1022,6 +1062,7 @@ typedef enum {
 #define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_ZHANG_LI_STT (UINT64_C(1) << 8)
 #define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SLONCZEWSKI_STT (UINT64_C(1) << 9)
 #define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_SOT (UINT64_C(1) << 10)
+#define FULLMAG_FDM_LOCAL_PIPELINE_FEATURE_REGIONAL_FIELD_DRIVE (UINT64_C(1) << 11)
 
 typedef struct {
     uint32_t abi_version;
@@ -1332,6 +1373,15 @@ int fullmag_fdm_backend_set_static_external_field_f64(
     fullmag_fdm_backend *handle,
     const double *field_xyz,
     uint64_t field_len);
+
+/* Upload resolved cell-wise regional H-field bases and their time envelopes.
+ * The operation is valid before the first solver step and owns device copies
+ * after return. It is intentionally separate from the legacy plan descriptor.
+ */
+int fullmag_fdm_backend_set_regional_field_drives_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_regional_field_drive_desc_v1 *drives,
+    uint32_t drive_count);
 
 /**
  * Execute one time step of length dt_seconds using the configured integrator.

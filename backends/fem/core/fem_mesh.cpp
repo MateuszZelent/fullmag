@@ -581,8 +581,7 @@ bool validate_supported_physics_topology(
         plan.a_element_field_len == 0u &&
         plan.has_zhang_li_stt == 0 && plan.has_slonczewski_stt == 0 &&
         plan.has_oersted_cylinder == 0 && plan.oersted_field_len == 0u &&
-        plan.temperature == 0.0 && plan.has_magnetoelastic == 0 &&
-        plan.regional_field_drive_count == 0u;
+        plan.temperature == 0.0 && plan.has_magnetoelastic == 0;
     const bool common_scope = exact_plan_topology && explicit_cpu_or_cuda_device &&
         plan.fe_order == 1u && plan.precision == FULLMAG_FEM_PRECISION_DOUBLE &&
         plan.enable_exchange != 0 && plan.enable_demag != 0 &&

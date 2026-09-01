@@ -15,7 +15,7 @@ describe("MeshQualityGatesSection mixed certificate evidence", () => {
       family_gates: [
         {
           family: "prism6",
-          metric: "tetra_decomposition_scaled_jacobian.v1",
+          metric: "mixed_topology_scaled_jacobian.v1",
           minimum_jacobian_m3: 2.5e-22,
           p05: 0.34,
           passed: true,
@@ -41,7 +41,7 @@ describe("MeshQualityGatesSection mixed certificate evidence", () => {
     expect(html).toContain("Mesh revision");
     expect(html).toContain("91");
     expect(html).toContain("prism6");
-    expect(html).toContain("tetra_decomposition_scaled_jacobian.v1");
+    expect(html).toContain("mixed_topology_scaled_jacobian.v1");
     expect(html).toContain("0.34");
     expect(html).toContain("0.1");
     expect(html).toContain("positive");

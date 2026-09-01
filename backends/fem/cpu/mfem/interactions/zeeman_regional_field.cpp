@@ -445,8 +445,35 @@ bool project_regional_field_drive_bases(Context &ctx, std::string &error)
 {
     constexpr double mu0 = 1.2566370614359172953850573533118e-6;
     const size_t nodes = ctx.mesh.n_nodes;
+    if (!ctx.zeeman.regional_drives.empty() && ctx.mesh.node_volumes.size() != nodes) {
+        error = "regional field drive projection requires published nodal integration weights";
+        return false;
+    }
     for (auto &drive : ctx.zeeman.regional_drives) {
         drive.basis_h_xyz.assign(nodes * 3u, 0.0);
+        if (drive.target_kind == FULLMAG_FEM_FIELD_TARGET_GLOBAL &&
+            drive.spatial_profile_kind == FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM) {
+            // A global uniform field is represented exactly by its nodal value.
+            // This avoids imposing tetrahedral arity on the canonical mixed
+            // prism/pyramid/tet CSR mesh; MFEM has already published the
+            // magnetic nodal mass weights used to identify active nodes.
+            const double amplitude_h = drive.amplitude_b_t / mu0;
+            for (size_t node = 0; node < nodes; ++node) {
+                if (ctx.mesh.node_volumes[node] <= 0.0) continue;
+                const size_t base = node * 3u;
+                for (size_t c = 0; c < 3u; ++c) {
+                    drive.basis_h_xyz[base + c] = amplitude_h * drive.direction[c];
+                }
+            }
+            continue;
+        }
+        const bool tetrahedral = std::all_of(
+            ctx.mesh.cell_types.begin(), ctx.mesh.cell_types.end(),
+            [](uint32_t type) { return type == FULLMAG_FEM_CELL_TET4; });
+        if (!tetrahedral) {
+            error = "mixed FEM regional field drive projection currently supports only a global uniform spatial profile";
+            return false;
+        }
         std::vector<double> target_mass(nodes, 0.0);
         const std::unordered_set<uint32_t> markers(
             drive.target_element_markers.begin(), drive.target_element_markers.end());

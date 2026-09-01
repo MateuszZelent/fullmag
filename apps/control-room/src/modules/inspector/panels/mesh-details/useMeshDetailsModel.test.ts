@@ -57,7 +57,7 @@ describe("useMeshDetailsModel helpers", () => {
         family_gates: [
           {
             family: "prism6",
-            metric: "tetra_decomposition_scaled_jacobian.v1",
+            metric: "mixed_topology_scaled_jacobian.v1",
             minimum_jacobian_m3: 2.5e-22,
             p05: 0.34,
             passed: true,

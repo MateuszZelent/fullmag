@@ -177,7 +177,7 @@ Każdy cold run i każdy kandydat repair przechodzi:
 - zero fallback i zero `degraded`;
 - wszystkie order-2 Jacobian samples dodatnie ponad kanonicznym progiem;
 - relative volume error `<= 1e-8`;
-- `tetra_decomposition_scaled_jacobian.v1` p05 per family `>= 0.1` i każde minimum `> 0`;
+- `mixed_topology_scaled_jacobian.v1` p05 per family `>= 0.1` i każde minimum `> 0`; prism/pyramid używają własnego mapowanego Jacobianu;
 - `gmsh.min_sicn.v1` p05 `>= 0.1` i minimum `> 0`, jeżeli producer i pełne per-element samples spełniają kontrakt metryki;
 - marker coverage, shared interface ownership i global ordinals zgodne;
 - ten sam topology fingerprint v3 dla powtórzeń tej samej konfiguracji.

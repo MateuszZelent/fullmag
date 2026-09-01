@@ -26,7 +26,7 @@ FEM_EXACT_LAYER_PLANE_REL_TOLERANCE = 1.0e-8
 MIXED_SHARED_GMSH_VERSION = "4.15.2"
 MIXED_SHARED_GEO_STRATEGY = "shared_geo_extrusion_partitioned_pyramid_tet.v2"
 MIXED_INTERFACE_MARKER = 10
-MIXED_QUALITY_METRIC = "tetra_decomposition_scaled_jacobian.v1"
+MIXED_QUALITY_METRIC = "mixed_topology_scaled_jacobian.v1"
 MIXED_SCALED_JACOBIAN_P05_MIN = 0.1
 MIXED_PYRAMID_APEX_SCALE_STEP = 0.001
 MIXED_PYRAMID_APEX_SCALE_MAX = 1.25
@@ -3754,21 +3754,62 @@ def _mixed_cell_signed_and_absolute_volume(
     return sum(signed_tetra_volumes), sum(abs(value) for value in signed_tetra_volumes)
 
 
+def _mixed_reference_derivative_samples(family: str) -> NDArray[np.float64]:
+    """Return the fixed order-2 reference derivatives for one cell family."""
+    q = 1.0 / math.sqrt(3.0)
+    if family == "tet4":
+        return np.asarray(
+            [[[-1.0, -1.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]],
+            dtype=np.float64,
+        )
+    if family == "prism6":
+        triangle_points = (
+            (1.0 / 6.0, 1.0 / 6.0),
+            (2.0 / 3.0, 1.0 / 6.0),
+            (1.0 / 6.0, 2.0 / 3.0),
+        )
+        return np.asarray(
+            [
+                [
+                    [-(1 - t) / 2, -(1 - t) / 2, -(1 - r - s) / 2],
+                    [(1 - t) / 2, 0.0, -r / 2],
+                    [0.0, (1 - t) / 2, -s / 2],
+                    [-(1 + t) / 2, -(1 + t) / 2, (1 - r - s) / 2],
+                    [(1 + t) / 2, 0.0, r / 2],
+                    [0.0, (1 + t) / 2, s / 2],
+                ]
+                for t in (-q, q)
+                for r, s in triangle_points
+            ],
+            dtype=np.float64,
+        )
+    if family == "pyramid5":
+        qt = math.sqrt(10.0) / 15.0
+        return np.asarray(
+            [
+                [
+                    [-(1 - s) * (1 - t) / 4, -(1 - r) * (1 - t) / 4, -(1 - r) * (1 - s) / 4],
+                    [(1 - s) * (1 - t) / 4, -(1 + r) * (1 - t) / 4, -(1 + r) * (1 - s) / 4],
+                    [(1 + s) * (1 - t) / 4, (1 + r) * (1 - t) / 4, -(1 + r) * (1 + s) / 4],
+                    [-(1 + s) * (1 - t) / 4, (1 - r) * (1 - t) / 4, -(1 - r) * (1 + s) / 4],
+                    [0.0, 0.0, 1.0],
+                ]
+                for t in (1.0 / 3.0 - qt, 1.0 / 3.0 + qt)
+                for r in (-q, q)
+                for s in (-q, q)
+            ],
+            dtype=np.float64,
+        )
+    raise ValueError(f"mixed quality metric does not support {family}")
+
+
 def _mixed_cell_scaled_jacobians(
     family: str, coordinates: NDArray[np.float64]
 ) -> NDArray[np.float64]:
-    decompositions = {
-        "tet4": ((0, 1, 2, 3),),
-        "prism6": ((0, 1, 2, 3), (1, 2, 3, 4), (2, 3, 4, 5)),
-        "pyramid5": ((0, 1, 2, 4), (0, 2, 3, 4)),
-    }[family]
+    """Evaluate the normalized mapped Jacobian in the native topology."""
     values: list[float] = []
-    for indices in decompositions:
-        points = coordinates[list(indices)]
-        matrix = np.stack(
-            [points[1] - points[0], points[2] - points[0], points[3] - points[0]],
-            axis=1,
-        )
+    for derivatives in _mixed_reference_derivative_samples(family):
+        matrix = coordinates.T @ derivatives
         denominator = float(np.prod(np.linalg.norm(matrix, axis=0)))
         values.append(abs(float(np.linalg.det(matrix))) / denominator if denominator else 0.0)
     return np.asarray(values, dtype=np.float64)

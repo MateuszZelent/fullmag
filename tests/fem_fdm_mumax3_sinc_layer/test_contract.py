@@ -17,8 +17,14 @@ from fullmag.model import BackendTarget, ExecutionMode, ExecutionPrecision
 
 CASE = Path(__file__).with_name("fullmag_case.py")
 FDM_CASE = Path(__file__).with_name("fdm_case.py")
+FDM_GPU_CASE = Path(__file__).with_name("fdm_gpu_case.py")
 FEM_CASE = Path(__file__).with_name("fem_case.py")
+FEM_CPU_CASE = Path(__file__).with_name("fem_cpu_case.py")
+FEM_GPU_CASE = Path(__file__).with_name("fem_gpu_case.py")
 MUMAX_CASE = Path(__file__).with_name("mumax3_case.mx3")
+FDM_RELAX_CASE = Path(__file__).with_name("fdm_relax_case.py")
+MUMAX_RELAX_CASE = Path(__file__).with_name("mumax3_relax_case.mx3")
+FDM_CUDA_CONTEXT = REPO_ROOT / "backends" / "fdm" / "gpu" / "cuda" / "runtime" / "context.cu"
 
 
 class SincLayerContractTests(unittest.TestCase):
@@ -43,8 +49,13 @@ class SincLayerContractTests(unittest.TestCase):
     def test_case_sources_exist(self) -> None:
         self.assertTrue(CASE.is_file())
         self.assertTrue(FDM_CASE.is_file())
+        self.assertTrue(FDM_GPU_CASE.is_file())
         self.assertTrue(FEM_CASE.is_file())
+        self.assertTrue(FEM_CPU_CASE.is_file())
+        self.assertTrue(FEM_GPU_CASE.is_file())
         self.assertTrue(MUMAX_CASE.is_file())
+        self.assertTrue(FDM_RELAX_CASE.is_file())
+        self.assertTrue(MUMAX_RELAX_CASE.is_file())
 
     def test_shared_fullmag_contract_is_exact_for_fdm_and_fem(self) -> None:
         for backend in ("fdm", "fem"):
@@ -105,15 +116,20 @@ class SincLayerContractTests(unittest.TestCase):
                     [2.5e-9, 2.5e-9, 10e-9] if backend == "fdm" else 2.5e-9,
                 )
 
-    def test_fdm_dynamic_benchmark_has_no_backend_specific_relaxation(self) -> None:
-        ir = self._load_ir("fdm")
-        pipeline = ir["problem_meta"]["runtime_metadata"]["study_pipeline"]
-        dynamic_stage_kinds = [
-            node["stage_kind"]
-            for node in pipeline["nodes"]
-            if node["stage_kind"] in {"relax", "run"}
-        ]
-        self.assertEqual(dynamic_stage_kinds, ["run"])
+    def test_dynamic_benchmark_starts_from_same_declared_uniform_state(self) -> None:
+        for backend in ("fdm", "fem"):
+            with self.subTest(backend=backend):
+                ir = self._load_ir(backend)
+                pipeline = ir["problem_meta"]["runtime_metadata"]["study_pipeline"]
+                dynamic_stage_kinds = [
+                    node["stage_kind"]
+                    for node in pipeline["nodes"]
+                    if node["stage_kind"] in {"relax", "run"}
+                ]
+                self.assertEqual(dynamic_stage_kinds, ["run"])
+                metadata = ir["problem_meta"]["runtime_metadata"]["fdm_fem_mumax3_sinc_layer"]
+                self.assertEqual(metadata["dynamic_initial_state"], "uniform_declared_m0")
+                self.assertEqual(metadata["relaxation_policy"], "excluded_from_dynamic_benchmark")
 
     def test_fem_is_strict_single_layer_prismatic_mesh(self) -> None:
         ir = self._load_ir("fem")
@@ -128,15 +144,18 @@ class SincLayerContractTests(unittest.TestCase):
         self.assertEqual(recipe["transition_policy"], "pyramid_to_tetrahedra")
         self.assertTrue(recipe["exact_layer_count"])
         self.assertEqual(recipe["order"], 1)
-        self.assertEqual(recipe["interface_hmax"], 2.5e-9)
-        self.assertEqual(recipe["interface_thickness"], 2.5e-9)
-        self.assertEqual(recipe["transition_distance"], 3e-9)
-        self.assertEqual(recipe["edge_hmax"], 2.5e-9)
-        self.assertEqual(recipe["edge_thickness"], 10e-9)
-        self.assertEqual(recipe["edge_transition_distance"], 20e-9)
-        self.assertEqual(recipe["corner_hmax"], 2.5e-9)
-        self.assertEqual(recipe["corner_extent"], 5e-9)
-        self.assertEqual(recipe["corner_transition_distance"], 10e-9)
+        for key in (
+            "interface_hmax",
+            "interface_thickness",
+            "transition_distance",
+            "edge_hmax",
+            "edge_thickness",
+            "edge_transition_distance",
+            "corner_hmax",
+            "corner_extent",
+            "corner_transition_distance",
+        ):
+            self.assertNotIn(key, recipe)
 
     def test_fem_launcher_environment_selects_fem_without_private_selector(self) -> None:
         previous_backend = os.environ.pop("FULLMAG_SINC_LAYER_BACKEND", None)
@@ -188,11 +207,46 @@ class SincLayerContractTests(unittest.TestCase):
             else:
                 os.environ["FULLMAG_FDM_EXECUTION"] = previous_fdm_execution
 
+    def test_fdm_gpu_launcher_environment_selects_cuda_runtime(self) -> None:
+        previous_backend = os.environ.get("FULLMAG_SINC_LAYER_BACKEND")
+        previous_fdm_execution = os.environ.get("FULLMAG_FDM_EXECUTION")
+        os.environ["FULLMAG_SINC_LAYER_BACKEND"] = "fdm"
+        os.environ["FULLMAG_FDM_EXECUTION"] = "cuda"
+        try:
+            loaded = fm.load_problem_from_script(CASE, lightweight_assets=True)
+            ir = loaded.to_ir(
+                requested_backend=BackendTarget("fdm"),
+                execution_mode=ExecutionMode.STRICT,
+                execution_precision=ExecutionPrecision.DOUBLE,
+                include_geometry_assets=False,
+            )
+            runtime = ir["problem_meta"]["runtime_metadata"]["runtime_selection"]
+            self.assertEqual(runtime["device"], "cuda")
+            self.assertEqual(runtime["device_index"], 0)
+        finally:
+            fm.reset()
+            if previous_backend is None:
+                os.environ.pop("FULLMAG_SINC_LAYER_BACKEND", None)
+            else:
+                os.environ["FULLMAG_SINC_LAYER_BACKEND"] = previous_backend
+            if previous_fdm_execution is None:
+                os.environ.pop("FULLMAG_FDM_EXECUTION", None)
+            else:
+                os.environ["FULLMAG_FDM_EXECUTION"] = previous_fdm_execution
+
+    def test_fdm_cuda_upload_preserves_regional_drive_waveform(self) -> None:
+        source = FDM_CUDA_CONTEXT.read_text(encoding="utf-8")
+        self.assertIn(
+            "resolved.waveform = static_cast<int>(descriptor.waveform);",
+            source,
+        )
+
     def test_mumax_source_has_scalar_only_output_contract(self) -> None:
         source = MUMAX_CASE.read_text(encoding="utf-8")
         self.assertIn("SetGridSize(200, 200, 1)", source)
         self.assertIn("SetCellSize(2.5e-9, 2.5e-9, 10e-9)", source)
         self.assertIn("SetPBC(0, 0, 0)", source)
+        self.assertIn("DemagAccuracy = 29", source)
         self.assertIn("sinc(2*pi*fcut*(t-t0))", source)
         self.assertIn("GammaLL = 2.211e5/(4*pi*1e-7)", source)
         self.assertIn("SetSolver(5)", source)
@@ -201,6 +255,20 @@ class SincLayerContractTests(unittest.TestCase):
         self.assertIn("tableautosave(1/(2*1.3*fcut))", source)
         self.assertNotRegex(source, r"(?im)^\s*relax\s*\(")
         self.assertNotRegex(source, r"(?im)^\s*(save|autosave)\s*\(\s*m\b")
+
+    def test_relaxation_sources_use_static_bias_and_scalar_only_output(self) -> None:
+        fdm_source = FDM_RELAX_CASE.read_text(encoding="utf-8")
+        mumax_source = MUMAX_RELAX_CASE.read_text(encoding="utf-8")
+        self.assertIn('algorithm="nonlinear_cg"', fdm_source)
+        self.assertIn("tolT=1e-6", fdm_source)
+        self.assertIn("every_steps=100", fdm_source)
+        self.assertIn("B_EXT_T = (100e-3, 0.0, 0.0)", fdm_source)
+        self.assertIn("DemagAccuracy = 29", mumax_source)
+        self.assertIn("MinimizerStop = 1e-6", mumax_source)
+        self.assertIn("MinimizeMaxSteps = 50000", mumax_source)
+        self.assertIn("minimize()", mumax_source)
+        self.assertNotIn("sinc(", mumax_source)
+        self.assertNotRegex(mumax_source, r"(?im)^\s*(save|autosave)\s*\(\s*m\b")
 
 
 if __name__ == "__main__":

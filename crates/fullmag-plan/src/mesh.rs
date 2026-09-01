@@ -1373,6 +1373,16 @@ fn validate_mixed_p1_build_report(
     }
 }
 
+fn mixed_p1_supports_time_evolution(problem: &ProblemIR) -> bool {
+    matches!(
+        &problem.study,
+        fullmag_ir::StudyIR::TimeEvolution {
+            dynamics: fullmag_ir::DynamicsIR::Llg { integrator, .. },
+            ..
+        } if matches!(integrator.as_str(), "auto" | "heun" | "rk4" | "rk23" | "rk45")
+    )
+}
+
 fn mixed_p1_scope_failed_predicates(
     problem: &ProblemIR,
     certificate: &fullmag_ir::MixedLayerTopologyCertificateV1IR,
@@ -1422,6 +1432,12 @@ fn mixed_p1_scope_failed_predicates(
         }
     }
 
+    let active_field_drive = problem
+        .field_drives
+        .iter()
+        .any(|drive| crate::util::field_drive_is_active(drive, problem));
+    let supports_time_evolution = mixed_p1_supports_time_evolution(problem);
+
     let mut failed = Vec::new();
     if problem.backend_policy.requested_backend != fullmag_ir::BackendTarget::Fem {
         failed.push("backend_not_explicit_fem");
@@ -1464,7 +1480,6 @@ fn mixed_p1_scope_failed_predicates(
         || !problem.material_parameter_fields.is_empty()
         || !problem.couplings.is_empty()
         || !problem.current_modules.is_empty()
-        || !problem.field_drives.is_empty()
         || !problem.spin_torque_modules.is_empty()
         || problem.current_density.is_some()
         || problem.stt_degree.is_some()
@@ -1484,16 +1499,20 @@ fn mixed_p1_scope_failed_predicates(
     {
         failed.push("unsupported_extended_module");
     }
-    if !matches!(
-        problem.study,
+    let supports_relaxation = matches!(
+        &problem.study,
         fullmag_ir::StudyIR::Relaxation {
             algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb
                 | fullmag_ir::RelaxationAlgorithmIR::NonlinearCg
                 | fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
             ..
         }
-    ) {
+    );
+    if !supports_relaxation && !supports_time_evolution {
         failed.push("unsupported_study");
+    }
+    if active_field_drive && !supports_time_evolution {
+        failed.push("unsupported_regional_field_drive");
     }
     if exchange_count == 0 {
         failed.push("missing_exchange");
@@ -1537,7 +1556,7 @@ fn validate_mixed_p1_execution_scope(
         return Ok(());
     }
     Err(format!(
-        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+cpu_dmi_only+auto_or_poisson_open_boundary_order_one+PG_BB_or_NCG_or_LLG_overdamped; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
+        "fem_mixed_p1_scope_rejected: failed_predicates=[{}]; required=explicit_fem+explicit_cpu_or_gpu+strict+double+P1+one_axis_aligned_box+exact_1_to_3_layers+uniform_material+exchange+uniform_or_nodal_uniaxial_or_cubic_anisotropy+cpu_dmi_only+auto_or_poisson_open_boundary_order_one+relaxation_PG_BB_NCG_LLG_overdamped_or_time_evolution_heun_rk4_rk23_rk45+regional_field_drive_supported_by_time_evolution; requested_backend={:?}; requested_device={}; requested_precision={:?}; execution_mode={:?}; study={:?}; energy_terms={:?}; fallback=none",
         failed.join(","),
         problem.backend_policy.requested_backend,
         effective_runtime_device(problem),

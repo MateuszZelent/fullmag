@@ -1674,7 +1674,7 @@ mod tests {
             "cell_family_counts_by_part":{"far_air":{"tet4":4},"magnetic":{"prism6":2},"transition_air":{"pyramid5":4,"tet4":4}},
             "facet_family_counts_by_role_marker":{"exterior:3":{"tri3":38},"material_interface:2":{"quad4":4,"tri3":4}},
             "jacobian_minima_m3_by_family":{"prism6":3.999999999999999,"pyramid5":0.20779754131836622,"tet4":4.0},
-            "quality_metric":"tetra_decomposition_scaled_jacobian.v1",
+            "quality_metric":"mixed_topology_scaled_jacobian.v1",
             "scaled_jacobian_minima_by_family":{"prism6":0.4082482904638629,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
             "scaled_jacobian_p05_by_family":{"prism6":0.4311862178478971,"pyramid5":0.40824829046386296,"tet4":0.40824829046386296},
             "magnetic_volume_m3":8.0,"expected_magnetic_volume_m3":8.0,"magnetic_relative_volume_error":0.0,

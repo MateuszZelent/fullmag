@@ -400,6 +400,39 @@ void global_uniform_regional_drive_projects_and_materializes_exactly() {
     }
 }
 
+void mixed_global_uniform_drive_uses_canonical_magnetic_nodes() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 8;
+    ctx.mesh.n_elements = 3;
+    ctx.mesh.nodes_xyz = {
+        0,0,0, 1,0,0, 0,1,0, 0,0,1, 1,0,1, 0,1,1,
+        0.5,-1,0.5, 1.5,-1,0.5};
+    ctx.mesh.cell_types = {
+        FULLMAG_FEM_CELL_PRISM6, FULLMAG_FEM_CELL_PYRAMID5, FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0, 6, 11, 15};
+    ctx.mesh.cell_nodes = {0,1,2,3,4,5, 0,1,4,3,6, 1,4,6,7};
+    ctx.mesh.magnetic_element_mask = {1, 0, 0};
+    ctx.mesh.node_volumes = {1, 1, 1, 1, 1, 1, 0, 0};
+
+    auto drive_desc = global_uniform_drive_desc();
+    fullmag_fem_plan_desc plan{};
+    plan.regional_field_drives = &drive_desc;
+    plan.regional_field_drive_count = 1;
+    std::string error;
+    check(fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error), error.c_str());
+    check(fullmag::fem::project_regional_field_drive_bases(ctx, error), error.c_str());
+    fullmag::fem::materialize_regional_field_drive(ctx, 0.0);
+    for (size_t node = 0; node < 8; ++node) {
+        const double expected_y = node < 6 ? 7.0 : 0.0;
+        check_near(ctx.zeeman.h_drive_xyz[3 * node], 0.0, 1e-14,
+            "mixed global drive Hx");
+        check_near(ctx.zeeman.h_drive_xyz[3 * node + 1], expected_y, 1e-14,
+            "mixed global drive Hy");
+        check_near(ctx.zeeman.h_drive_xyz[3 * node + 2], 0.0, 1e-14,
+            "mixed global drive Hz");
+    }
+}
+
 void spatial_sinc_regional_drive_uses_tetra_volume_projection() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -684,6 +717,7 @@ int main() {
     regional_drive_waveform_golden_values();
     regional_drive_invalid_numeric_descriptors_fail_closed();
     global_uniform_regional_drive_projects_and_materializes_exactly();
+    mixed_global_uniform_drive_uses_canonical_magnetic_nodes();
     spatial_sinc_regional_drive_uses_tetra_volume_projection();
     spatial_gaussian_plane_wave_uses_global_carrier_origin();
     geometry_mask_projection_matches_analytic_clipped_tetra_volume();

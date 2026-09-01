@@ -500,12 +500,18 @@ void mixed_mesh_builder_owns_topology_translation_with_selective_physics_gate() 
     const size_t material_runtime =
         context_builder.find("initialize_material_runtime(ctx, error)");
     const size_t mfem_runtime = context_builder.find("context_initialize_mfem(ctx, error)");
+    const size_t regional_projection =
+        context_builder.find("project_regional_field_drive_bases(ctx, error)");
+    const size_t initial_refresh =
+        context_builder.find("refresh_initial_effective_field_from_plan(ctx, plan, error)");
     const size_t gpu_runtime = context_builder.find("initialize_context_gpu_state(ctx, error)");
     check(
         topology_gate != std::string::npos && material_runtime != std::string::npos &&
-            mfem_runtime != std::string::npos && gpu_runtime != std::string::npos &&
+            mfem_runtime != std::string::npos && regional_projection != std::string::npos &&
+            initial_refresh != std::string::npos && gpu_runtime != std::string::npos &&
             topology_gate < material_runtime && topology_gate < mfem_runtime &&
-            topology_gate < gpu_runtime,
+            mfem_runtime < regional_projection && regional_projection < initial_refresh &&
+            regional_projection < gpu_runtime,
         "public selective topology gate must remain before material, MFEM, and GPU initialization");
 }
 
