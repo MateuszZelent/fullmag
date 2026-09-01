@@ -185,6 +185,7 @@ const DEFAULT_EIGENMODES_STAGE: JsonObject = {
   eigen_damping_policy: "ignore",
   eigen_equilibrium_source: "relax",
   eigen_include_demag: true,
+  eigen_magnetostatic_bc: "open",
   eigen_normalization: "unit_l2",
   eigen_spin_wave_bc: "free",
   eigen_target: "lowest",
@@ -194,6 +195,7 @@ const DEFAULT_EIGENMODES_STAGE: JsonObject = {
   equilibrium_source: "relax",
   include_demag: true,
   kind: "eigenmodes",
+  magnetostatic_bc: "open",
   normalization: "unit_l2",
   target: "lowest",
   frequency_min: "",
@@ -1278,8 +1280,8 @@ function invalidateHysteresisBookmarkResources(
 interface ImportStateInput {
   fmsBase64?: string;
   fms_base64?: string;
-  restoreMode?: string;
-  restore_mode?: string;
+  restoreMode?: "resume" | "visualization_only" | "replace_project";
+  restore_mode?: "resume" | "visualization_only" | "replace_project";
 }
 
 interface FieldStateInput {

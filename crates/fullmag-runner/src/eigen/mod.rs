@@ -8,11 +8,22 @@ pub mod tracking;
 pub mod types;
 
 pub use artifacts::{
-    solve_and_write_field_driven_response_sweep_bundle,
+    build_fmr_peaks_artifact, build_fmr_peaks_artifact_with_progress,
+    build_frequency_domain_field_sweep_artifact, build_kittel_fit_artifact,
+    build_resonance_fits_artifact, solve_and_write_field_driven_response_sweep_bundle,
     solve_and_write_field_driven_response_sweep_bundle_with_interrupt, write_branch_bundle,
-    write_frequency_domain_eigen_manifest, write_mode_bundle, write_path_bundle,
-    write_response_sweep_artifact, write_response_sweep_bundle,
+    write_fmr_analysis_artifacts, write_frequency_domain_eigen_manifest,
+    write_frequency_domain_field_sweep_artifact, write_kittel_fit_artifact, write_mode_bundle,
+    write_path_bundle, write_response_sweep_artifact, write_response_sweep_bundle,
     write_response_sweep_bundle_with_progress,
+};
+pub use artifacts::{
+    FieldSweepAxisArtifact, FieldSweepDisplayConversion, FmrPeakArtifact, FmrPeakSource,
+    FmrPeakSourceKind, FmrPeakUncertainty, FmrPeaksArtifact, FrequencyDomainFieldSweepArtifact,
+    FrequencyDomainFieldSweepModeArtifact, FrequencyDomainFieldSweepSampleArtifact,
+    KittelFitArtifact, KittelFitParameterArtifact, KittelFitPointArtifact, ResonanceFitArtifact,
+    ResonanceFitsArtifact, ServerArtifactExecution, ServerArtifactReference, ServerArtifactSource,
+    ServerArtifactStatus, ServerArtifactTopology, ServerArtifactUnits,
 };
 pub use orchestrator::{run_path_or_single, SingleKSolver};
 pub use path::expand_k_sampling;
@@ -27,6 +38,11 @@ pub use response_block_real::{
 };
 pub use tracking::track_branches;
 pub use types::{
-    EigenSolverModel, K0KittelPeriodicAirboxDemagMetrics, KSampleDescriptor, PathSolveResult,
-    SingleKModeResult, SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
+    EigenSolverModel, K0KittelPeriodicAirboxDemagMetrics, KSampleDescriptor,
+    ModalObjectParticipation, ModalParticipationAvailability, ModalParticipationFractions,
+    ModalParticipationMeshContext, ModalParticipationObjectMarkerMembership,
+    ModalParticipationObservable, ModalParticipationProvenance,
+    ModalParticipationSourceMeshIdentity, ModalParticipationUnavailable,
+    ModalParticipationUnavailableDetail, PathSolveResult, SingleKModeResult, SingleKSolveResult,
+    TrackedBranch, TrackedBranchPoint, MODAL_PARTICIPATION_DEFINITION_ID,
 };

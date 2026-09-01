@@ -1133,6 +1133,10 @@ impl ProblemIR {
                 target,
                 equilibrium,
                 k_sampling,
+                bias_field_sweep,
+                damping_policy,
+                spin_wave_bc,
+                magnetostatic_bc,
                 ..
             } => {
                 validate_frequency_response_dynamics(dynamics, &mut errors);
@@ -1200,6 +1204,143 @@ impl ProblemIR {
                         *closed,
                         &mut errors,
                     );
+                }
+                if let Some(sweep) = bias_field_sweep {
+                    if sweep.samples_a_per_m.is_empty() {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep.samples_a_per_m must not be empty"
+                                .to_string(),
+                        );
+                    }
+                    for (sample_index, sample) in sweep.samples_a_per_m.iter().enumerate() {
+                        if !sample.iter().all(|value| value.is_finite()) {
+                            errors.push(format!(
+                                "eigenmodes.bias_field_sweep.samples_a_per_m[{sample_index}] must contain finite A/m values"
+                            ));
+                        }
+                    }
+                    if sweep.ordering != "declared" {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep.ordering must be 'declared'".to_string(),
+                        );
+                    }
+                    if !matches!(
+                        k_sampling,
+                        Some(KSamplingIR::Single {
+                            k_vector: [0.0, 0.0, 0.0]
+                        })
+                    ) {
+                        errors
+                            .push("eigenmodes.bias_field_sweep_requires_single_gamma".to_string());
+                    }
+                    if !operator.include_demag
+                        || !self
+                            .energy_terms
+                            .iter()
+                            .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+                    {
+                        errors.push("eigenmodes.bias_field_sweep_requires_demag".to_string());
+                    }
+                    if *magnetostatic_bc != MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep_requires_periodic_airbox_k0".to_string(),
+                        );
+                    }
+                    if *damping_policy != EigenDampingPolicyIR::Ignore {
+                        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
+                    }
+                    if self
+                        .materials
+                        .iter()
+                        .any(|material| material.damping != 0.0)
+                    {
+                        errors.push("eigenmodes.bias_field_sweep_requires_alpha_zero".to_string());
+                    }
+                    if self.backend_policy.execution_precision != ExecutionPrecision::Double {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep_requires_double_precision".to_string(),
+                        );
+                    }
+                    if self.validation_profile.execution_mode != ExecutionMode::Strict {
+                        errors.push(
+                            "eigenmodes.bias_field_sweep_requires_strict_execution_mode"
+                                .to_string(),
+                        );
+                    }
+                    match &self.pbc {
+                        Some(periodicity)
+                            if periodicity.axes
+                                == [
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Open,
+                                ] => {}
+                        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
+                            errors.push(
+                                "eigenmodes.bias_field_sweep_rejects_fully_periodic_3d".to_string(),
+                            );
+                        }
+                        _ => errors.push(
+                            "eigenmodes.bias_field_sweep_requires_xy_periodic_open_z".to_string(),
+                        ),
+                    }
+                }
+                if *magnetostatic_bc == MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
+                    if !operator.include_demag {
+                        errors.push("eigenmodes.k0_periodic_airbox_requires_demag".to_string());
+                    }
+                    if spin_wave_bc.kind() != SpinWaveBoundaryKindIR::Periodic {
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_periodic_spin_wave_bc"
+                                .to_string(),
+                        );
+                    }
+                    if !matches!(
+                        k_sampling,
+                        Some(KSamplingIR::Single {
+                            k_vector: [0.0, 0.0, 0.0]
+                        })
+                    ) {
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_exact_zero_k".to_string(),
+                        );
+                    }
+                    if *damping_policy != EigenDampingPolicyIR::Ignore {
+                        errors
+                            .push("eigenmodes.k0_periodic_airbox_requires_alpha_zero".to_string());
+                    }
+                    if self.backend_policy.execution_precision != ExecutionPrecision::Double {
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_double_precision".to_string(),
+                        );
+                    }
+                    if !self
+                        .energy_terms
+                        .iter()
+                        .any(|term| matches!(term, EnergyTermIR::Demag { .. }))
+                    {
+                        errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_demag_energy".to_string(),
+                        );
+                    }
+                    match &self.pbc {
+                        Some(periodicity)
+                            if periodicity.axes
+                                == [
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Periodic,
+                                    AxisBoundary::Open,
+                                ] => {}
+                        Some(periodicity) if periodicity.axes[2] == AxisBoundary::Periodic => {
+                            errors.push(
+                                "eigenmodes.k0_periodic_airbox_rejects_fully_periodic_3d"
+                                    .to_string(),
+                            );
+                        }
+                        _ => errors.push(
+                            "eigenmodes.k0_periodic_airbox_requires_xy_periodic_open_z".to_string(),
+                        ),
+                    }
                 }
                 let has_mode_output = self
                     .study

@@ -771,7 +771,7 @@ verify-fem-demag-amg-benchmark-contract:
 
 verify-fem-dependency-stack-contract:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON && cmake --build native/build --target fem_dependency_stack_contract && native/build/backends/fem/fem_dependency_stack_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --fresh -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON && cmake --build native/build --parallel 8 --target fem_dependency_stack_contract && native/build/backends/fem/fem_dependency_stack_contract'
 
 verify-fem-time-domain-native-contract:
     just ensure-python
@@ -1627,9 +1627,14 @@ verify-fem-oersted-observable-runtime:
 
 verify-fem-exchange-runtime:
     just ensure-managed-fem-runtime
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    test -f "$runtime_root/manifest.json"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
       -e FULLMAG_FDM_EXECUTION=cpu \
       -e FULLMAG_FEM_EXECUTION=cpu \
       -e FULLMAG_RELAX_DEVICE=cpu \
@@ -1653,14 +1658,17 @@ verify-fem-frequency-domain-dynamic-pencil:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_linearized_dynamic_pencil_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_linearized_dynamic_pencil_contract'
 
+verify-fem-frequency-domain-real-frequency-rotated:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_real_frequency_rotated_pencil_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_real_frequency_rotated_pencil_contract'
+
 verify-fem-frequency-domain-floquet-bloch-scalar:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_floquet_bloch_scalar_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_floquet_bloch_scalar_contract'
 
 verify-fem-frequency-domain-native-contract:
-    just ensure-managed-fem-runtime
-    docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_frequency_domain_contract && cmake --build native/build --target fem_frequency_domain_checked_extent_contract && cmake --build native/build --target fem_mode_kinematics_contract && cmake --build native/build --target fem_linearized_dynamic_pencil_contract && cmake --build native/build --target fem_operator_contract && cmake --build native/build --target fem_modal_eigen_contract && cmake --build native/build --target fem_driven_response_contract && cmake --build native/build --target fem_window_partition_contract && cmake --build native/build --target fem_mode_deduplication_contract && cmake --build native/build --target fem_contour_interval_solver_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_frequency_domain_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_frequency_domain_checked_extent_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mode_kinematics_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_linearized_dynamic_pencil_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_modal_eigen_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_driven_response_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_window_partition_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mode_deduplication_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_contour_interval_solver_contract'
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/verify_fem_frequency_domain_native_contract.ps1" -Device gpu
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-dense-oracle:
     just ensure-managed-fem-runtime
@@ -1670,7 +1678,25 @@ verify-fem-frequency-domain-eigen-k0-poisson-airbox-dense-oracle:
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_poisson_airbox_modal_eigen_slepc_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_poisson_airbox_modal_eigen_slepc_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_poisson_airbox_modal_eigen_slepc_contract && FULLMAG_SKIP_GPU_TESTS=1 LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_poisson_airbox_modal_eigen_slepc_contract'
+
+verify-fem-frequency-domain-gpu-petsc-slepc-runtime:
+    just ensure-managed-fem-runtime
+    docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_gpu_petsc_slepc_runtime_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_gpu_petsc_slepc_runtime_contract'
+
+verify-fem-frequency-domain-eigen-k0-gpu-petsc-slepc:
+    FULLMAG_FEM_RUNTIME_VARIANT=hypre-baseline just ensure-managed-fem-runtime
+    FULLMAG_FEM_RUNTIME_VARIANT=hypre-baseline docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_gpu_k0_modal_petsc_slepc_contract && export LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} && FULLMAG_N3_W1_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && FULLMAG_N3_W2_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && FULLMAG_GPU_TEARDOWN_LIFECYCLE_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && FULLMAG_GPU_KSP_DESTROY_ABI_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract'
+
+# D2 adapter-scale probe only. It routes a sparse algebraic block fixture through
+# the scalable production solver controls and exceeds 1024 physical block DOFs.
+# It does not replace a real MFEM shared-domain mesh, profiler proof, or R9/Q2.
+verify-fem-frequency-domain-eigen-k0-gpu-adapter-scale-contract:
+    FULLMAG_FEM_RUNTIME_VARIANT=hypre-baseline just ensure-managed-fem-runtime
+    FULLMAG_FEM_RUNTIME_VARIANT=hypre-baseline docker compose --profile fem-gpu run --rm --no-deps \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_gpu_k0_modal_petsc_slepc_contract && export LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} && FULLMAG_GPU_PRODUCTION_SCALE_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract'
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action:
     just ensure-managed-fem-runtime
@@ -1729,7 +1755,7 @@ verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-cpu-periodic-airbox-demag-smoke-runtime
     just verify-fem-frequency-domain-periodic-airbox-gpu-runtime
     just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu
-    just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated
+    just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu
     just verify-fem-frequency-domain-gpu-floquet-airbox-unsupported-runtime
     just verify-fem-frequency-domain-gpu-floquet-reciprocal-runtime
     just verify-fem-frequency-domain-eigen-runtime
@@ -1944,7 +1970,10 @@ verify-fem-frequency-domain-eigen-k0-kittel-runtime:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-runtime
     mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-runtime
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -1975,7 +2004,10 @@ verify-fem-frequency-domain-eigen-k0-kittel-demag-cpu:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-demag
     mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-demag
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -2006,7 +2038,10 @@ verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-cpu:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox
     mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -2038,7 +2073,10 @@ verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence
     mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -2050,37 +2088,94 @@ verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu:
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
         trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence 2>/dev/null || true'\'' EXIT && \
-        rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/coarse/artifacts && \
-        rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/fine/artifacts && \
-        FULLMAG_K0_KITTEL_MAG_HMAX_NM=24 \
-        FULLMAG_K0_KITTEL_MAG_HMIN_NM=12 \
-        FULLMAG_K0_KITTEL_AIRBOX_HMAX_NM=48 \
-        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
-          examples/fem_eigen_k0_kittel_periodic_airbox.py \
-          --backend fem \
-          --headless \
-          --json \
-          --output-dir .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/coarse/artifacts && \
-        FULLMAG_K0_KITTEL_MAG_HMAX_NM=20 \
-        FULLMAG_K0_KITTEL_MAG_HMIN_NM=10 \
-        FULLMAG_K0_KITTEL_AIRBOX_HMAX_NM=40 \
-        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
-          examples/fem_eigen_k0_kittel_periodic_airbox.py \
-          --backend fem \
-          --headless \
-          --json \
-          --output-dir .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/fine/artifacts && \
-        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py --require-k0-kittel-periodic-airbox-demag .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/coarse/artifacts && \
-        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py --require-k0-kittel-periodic-airbox-demag .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/fine/artifacts && \
+        report=.fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence && \
+        rm -rf "$report/mesh" "$report/airbox" "$report/aggregate" && \
+        run_case() { \
+          label="$1"; mag_hmax="$2"; mag_hmin="$3"; airbox_hmax="$4"; airbox_factor="$5"; \
+          root="$report/$label/artifacts"; \
+          FULLMAG_K0_KITTEL_MAG_HMAX_NM="$mag_hmax" \
+          FULLMAG_K0_KITTEL_MAG_HMIN_NM="$mag_hmin" \
+          FULLMAG_K0_KITTEL_AIRBOX_HMAX_NM="$airbox_hmax" \
+          FULLMAG_K0_KITTEL_AIRBOX_FACTOR="$airbox_factor" \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            examples/fem_eigen_k0_kittel_periodic_airbox.py \
+            --backend fem --headless --json --output-dir "$root" && \
+          python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+            --require-k0-kittel-periodic-airbox-demag "$root"; \
+        } && \
+        run_case mesh/coarse 24 12 40 9 && \
+        run_case mesh/medium 20 10 40 9 && \
+        run_case mesh/fine 16 8 40 9 && \
+        run_case airbox/small 16 8 40 5 && \
+        run_case airbox/medium 16 8 40 7 && \
+        run_case airbox/large 16 8 40 9 && \
         python3 scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py \
-          .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/coarse/artifacts \
-          .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/fine/artifacts'
+          --mesh-root "$report/mesh/coarse/artifacts" \
+          --mesh-root "$report/mesh/medium/artifacts" \
+          --mesh-root "$report/mesh/fine/artifacts" \
+          --airbox-root "$report/airbox/small/artifacts" \
+          --airbox-root "$report/airbox/medium/artifacts" \
+          --airbox-root "$report/airbox/large/artifacts" \
+          --output-dir "$report/aggregate"'
+
+verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu:
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu
+    mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=gpu \
+      -e FULLMAG_RELAX_DEVICE=gpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu 2>/dev/null || true'\'' EXIT && \
+        report=.fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu && \
+        rm -rf "$report/mesh" "$report/airbox" "$report/aggregate" && \
+        run_case() { \
+          label="$1"; mag_hmax="$2"; mag_hmin="$3"; airbox_hmax="$4"; airbox_factor="$5"; \
+          root="$report/$label/artifacts"; \
+          FULLMAG_K0_KITTEL_MAG_HMAX_NM="$mag_hmax" \
+          FULLMAG_K0_KITTEL_MAG_HMIN_NM="$mag_hmin" \
+          FULLMAG_K0_KITTEL_AIRBOX_HMAX_NM="$airbox_hmax" \
+          FULLMAG_K0_KITTEL_AIRBOX_FACTOR="$airbox_factor" \
+          .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            examples/fem_eigen_k0_kittel_periodic_airbox_gpu.py \
+            --backend fem --headless --json --output-dir "$root" && \
+          python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+            --require-gpu-modal-k0-periodic-airbox-provenance "$root"; \
+        } && \
+        run_case mesh/coarse 24 12 40 9 && \
+        run_case mesh/medium 20 10 40 9 && \
+        run_case mesh/fine 16 8 40 9 && \
+        run_case airbox/small 16 8 40 5 && \
+        run_case airbox/medium 16 8 40 7 && \
+        run_case airbox/large 16 8 40 9 && \
+        python3 scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py \
+          --mesh-root "$report/mesh/coarse/artifacts" \
+          --mesh-root "$report/mesh/medium/artifacts" \
+          --mesh-root "$report/mesh/fine/artifacts" \
+          --airbox-root "$report/airbox/small/artifacts" \
+          --airbox-root "$report/airbox/medium/artifacts" \
+          --airbox-root "$report/airbox/large/artifacts" \
+          --execution-lane production_gpu \
+          --output-dir "$report/aggregate"'
 
 verify-fem-frequency-domain-eigen-k0-kittel-gpu-runtime:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime
     mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -2107,11 +2202,14 @@ verify-fem-frequency-domain-eigen-k0-kittel-gpu-runtime:
         test -f .fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts/validation/kittel_k0_pbc/points.v1.csv && \
         python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py --require-k0-kittel-field-sweep --require-gpu-modal-k0-kittel-provenance .fullmag/reports/frequency-domain-eigen-k0-kittel-gpu-runtime/artifacts'
 
-verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated:
+verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu:
     just ensure-managed-fem-runtime
-    rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated
-    mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated
+    rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu
+    mkdir -p .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -2122,30 +2220,295 @@ verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated:
       -e FULLMAG_HOST_UID="$(id -u)" \
       -e FULLMAG_HOST_GID="$(id -g)" \
       fem-gpu bash -lc 'cd /workspace && \
-        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated 2>/dev/null || true'\'' EXIT && \
-        rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/artifacts && \
-        set +e && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu 2>/dev/null || true'\'' EXIT && \
+        rm -rf .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu/artifacts && \
         .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
-          examples/fem_eigen_k0_kittel_periodic_airbox_gpu_gated.py \
+          examples/fem_eigen_k0_kittel_periodic_airbox_gpu.py \
           --backend fem \
           --headless \
           --json \
-          --output-dir .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/artifacts \
-          > .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/stdout.log \
-          2> .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/stderr.log; \
-        status=$?; \
-        set -e; \
-        if [ "$status" -eq 0 ]; then \
-          echo "GPU periodic-airbox modal demag unexpectedly succeeded; strict GPU demag must remain gated until PA-G parity/runtime passes" >&2; \
-          exit 1; \
-        fi; \
-        cat .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/stdout.log .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/stderr.log > .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/combined.log && \
-        grep -F "GPU modal K0/Kittel with demag" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/combined.log && \
-        grep -F "CPU fallback" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/combined.log && \
-        grep -F "disabled" .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/combined.log && \
-        python3 -c '\''import json, pathlib; p=pathlib.Path(".fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/unsupported_boundary.v1.json"); p.write_text(json.dumps({"schema_version":"gpu_modal_poisson_airbox_unsupported_boundary.v1","lane":"gpu_modal_poisson_airbox_k0","case_id":"K0-3","demag_kind":"periodic_airbox_k0","requested_device":"gpu","gpu_device_resident_modal_eigensolver":False,"cpu_fallback":"disabled","status":"unsupported_until_pa_g_parity_runtime","required_diagnostic_fragments":["GPU modal K0/Kittel with demag","CPU fallback","disabled"]}, indent=2) + "\n", encoding="utf-8")'\'' && \
-        python3 scripts/verify_fem_gpu_modal_poisson_airbox_unsupported_boundary.py \
-          .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated/unsupported_boundary.v1.json'
+          --output-dir .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+          --require-gpu-modal-k0-periodic-airbox-provenance \
+          .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu/artifacts'
+
+verify-fem-periodic-antidot-relax-eigenmodes-runtime device="cpu":
+    just ensure-managed-fem-runtime
+    mode="{{device}}"; \
+    case "$mode" in cpu|gpu) ;; \
+      *) echo "device must be cpu or gpu" >&2; exit 2 ;; \
+    esac; \
+    if [ "$mode" = cpu ]; then \
+      profile=fem-modal-cpu; service=fem-modal-cpu; verifier_flag=--require-k0-periodic-airbox-production; \
+    else \
+      profile=fem-gpu; service=fem-gpu; verifier_flag=--require-gpu-modal-k0-periodic-airbox-production; \
+    fi; \
+    root="${FULLMAG_ANTIDOT_E2E_REPORT_ROOT:-.fullmag/reports/fem-periodic-antidot-relax-eigenmodes/$mode}"; \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    docker compose --profile "$profile" run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T="${FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T:-1e-6}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE="$mode" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET:-frequency_window}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ:-2.0}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT:-8}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT:-4}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EQUILIBRIUM_CACHE="${FULLMAG_PERIODIC_ANTIDOT_EQUILIBRIUM_CACHE:-}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH:-}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE:-}" \
+      -e FULLMAG_ANTIDOT_E2E_REPORT_ROOT="$root" \
+      -e FULLMAG_ANTIDOT_E2E_VERIFIER_FLAG="$verifier_flag" \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      "$service" bash -lc 'set -euo pipefail; cd /workspace; \
+        root="$FULLMAG_ANTIDOT_E2E_REPORT_ROOT"; \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" "$root" 2>/dev/null || true'\'' EXIT; \
+        rm -rf "$root"; \
+        mkdir -p "$root"; \
+        TIMEFORMAT='\''real_seconds=%R user_seconds=%U system_seconds=%S'\''; \
+        { time .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            examples/fem_periodic_antidot_relax_eigenmodes.py \
+            --backend fem \
+            --mode strict \
+            --precision double \
+            --headless \
+            --json \
+            --workspace-root "$root/workspace-history" \
+            --output-dir "$root/artifacts" \
+          2>&1 | tee "$root/runtime.log"; } 2> "$root/time.txt"; \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+          "$FULLMAG_ANTIDOT_E2E_VERIFIER_FLAG" \
+          "$root/artifacts"; \
+        python3 scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py \
+          "$root" \
+          --device "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE" \
+          --expected-target "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET" \
+          --expected-mode-count "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT" \
+          --expected-saved-mode-count "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT" \
+          $(if [ "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET" = nearest ]; then \
+              printf -- "--expected-target-frequency-ghz %s" \
+                "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ"; \
+            fi)'
+
+verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-cpu:
+    test -n "${FULLMAG_FEM_K0_CPU_SCOPE_JSON:-}" || { echo "production CPU gate is blocked: FULLMAG_FEM_K0_CPU_SCOPE_JSON is required" >&2; exit 1; }
+    test -n "${FULLMAG_FEM_K0_CPU_EVIDENCE_MANIFEST:-}" || { echo "production CPU gate is blocked: FULLMAG_FEM_K0_CPU_EVIDENCE_MANIFEST is required" >&2; exit 1; }
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu
+    mkdir -p .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    docker compose --profile fem-modal-cpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_K0_PRODUCTION_DEVICE=cpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-modal-cpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu 2>/dev/null || true'\'' EXIT && \
+        rm -rf .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_eigen_k0_poisson_airbox_production.py \
+          --backend fem --headless --json \
+          --output-dir .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+          --require-k0-periodic-airbox-production \
+          .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts'
+    just write-fem-frequency-domain-validation-bundle .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts "$FULLMAG_FEM_K0_CPU_SCOPE_JSON" cpu "$FULLMAG_FEM_K0_CPU_EVIDENCE_MANIFEST"
+    record=".fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts/validation/frequency_domain_production_dod.v1.json"; \
+    test -f "$record" || { echo "production CPU gate is blocked: missing frequency_domain_production_dod.v1 record" >&2; exit 1; }; \
+    python3 scripts/verify_fem_frequency_domain_production_dod.py \
+      --record "$record" \
+      --bundle-root .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts; \
+    test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["promotion_decision"])' "$record")" = "production_qualified" || { echo "production CPU gate is blocked: promotion_decision is not production_qualified" >&2; exit 1; }; \
+    test "$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["open_blockers"]))' "$record")" = "[]" || { echo "production CPU gate is blocked: open_blockers is not empty" >&2; exit 1; }
+
+verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-gpu:
+    test -n "${FULLMAG_FEM_K0_GPU_SCOPE_JSON:-}" || { echo "production GPU gate is blocked: FULLMAG_FEM_K0_GPU_SCOPE_JSON is required" >&2; exit 1; }
+    test -n "${FULLMAG_FEM_K0_GPU_EVIDENCE_MANIFEST:-}" || { echo "production GPU gate is blocked: FULLMAG_FEM_K0_GPU_EVIDENCE_MANIFEST is required" >&2; exit 1; }
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu
+    mkdir -p .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=gpu \
+      -e FULLMAG_RELAX_DEVICE=gpu \
+      -e FULLMAG_K0_PRODUCTION_DEVICE=gpu \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      fem-gpu bash -lc 'cd /workspace && \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu 2>/dev/null || true'\'' EXIT && \
+        rm -rf .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts && \
+        .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+          examples/fem_eigen_k0_poisson_airbox_production.py \
+          --backend fem --headless --json \
+          --output-dir .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts && \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+          --require-gpu-modal-k0-periodic-airbox-production \
+          .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts'
+    just write-fem-frequency-domain-validation-bundle .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts "$FULLMAG_FEM_K0_GPU_SCOPE_JSON" gpu "$FULLMAG_FEM_K0_GPU_EVIDENCE_MANIFEST"
+    record=".fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts/validation/frequency_domain_production_dod.v1.json"; \
+    test -f "$record" || { echo "production GPU gate is blocked: missing frequency_domain_production_dod.v1 record" >&2; exit 1; }; \
+    python3 scripts/verify_fem_frequency_domain_production_dod.py \
+      --record "$record" \
+      --bundle-root .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts; \
+    test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["promotion_decision"])' "$record")" = "production_qualified" || { echo "production GPU gate is blocked: promotion_decision is not production_qualified" >&2; exit 1; }; \
+    test "$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["open_blockers"]))' "$record")" = "[]" || { echo "production GPU gate is blocked: open_blockers is not empty" >&2; exit 1; }
+
+write-fem-frequency-domain-validation-bundle bundle_root scope_json expected_device evidence_manifest:
+    python3 scripts/write_fem_frequency_domain_validation_bundle.py --bundle-root "{{bundle_root}}" --scope "{{scope_json}}" --expected-device "{{expected_device}}" --evidence-manifest "{{evidence_manifest}}"
+
+verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-release:
+    just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu
+    just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu
+    just verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-cpu
+    just verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-gpu
+    test -n "${FULLMAG_FEM_K0_PERFORMANCE_JSON:-}" || { echo "production release is blocked: FULLMAG_FEM_K0_PERFORMANCE_JSON is required" >&2; exit 1; }
+    just verify-fem-frequency-domain-eigen-k0-poisson-airbox-performance "$FULLMAG_FEM_K0_PERFORMANCE_JSON"
+    python3 scripts/verify_fem_eigen_k0_periodic_airbox_cpu_gpu_parity.py \
+      --cpu .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-cpu/artifacts \
+      --gpu .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-gpu/artifacts \
+      --output .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-release/cpu_gpu_parity.v1.json
+
+run-fem-frequency-domain-eigen-k0-poisson-airbox-performance-case *args:
+    phase="${FULLMAG_K0_PERFORMANCE_PHASE:-run}"; \
+    run_id="${FULLMAG_K0_PERFORMANCE_RUN_ID:-}"; \
+    dof_count="${FULLMAG_K0_PERFORMANCE_DOF_COUNT:-}"; \
+    case "$phase" in \
+      run) \
+        test -n "$run_id" || { echo "K0 performance case requires FULLMAG_K0_PERFORMANCE_RUN_ID" >&2; exit 2; }; \
+        case "$run_id" in *[!A-Za-z0-9._-]*) echo "unsupported K0 performance run id: $run_id" >&2; exit 2 ;; esac; \
+        test -n "$dof_count" || { echo "K0 performance case requires FULLMAG_K0_PERFORMANCE_DOF_COUNT" >&2; exit 2; }; \
+        test -n "${FULLMAG_K0_PERFORMANCE_NATIVE_DIAGNOSTICS:-}" || { echo "K0 performance case requires FULLMAG_K0_PERFORMANCE_NATIVE_DIAGNOSTICS" >&2; exit 2; }; \
+        case "$dof_count" in \
+          128) mag_hmax=20.0; mag_hmin=10.0; airbox_hmax=40.0 ;; \
+          256) mag_hmax=10.0; mag_hmin=5.0; airbox_hmax=20.0 ;; \
+          512) mag_hmax=5.0; mag_hmin=2.5; airbox_hmax=10.0 ;; \
+          *) echo "unsupported K0 performance DOF tier: $dof_count (expected 128, 256, or 512)" >&2; exit 2 ;; \
+        esac; \
+        repeat=0; case "$run_id" in *reuse) repeat=1 ;; esac; \
+        case_root=".fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-performance/$run_id"; \
+        artifacts="$case_root/artifacts"; \
+        rm -rf "$case_root"; mkdir -p "$artifacts" "$(dirname "$FULLMAG_K0_PERFORMANCE_NATIVE_DIAGNOSTICS")"; \
+        runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+        docker compose --profile fem-gpu run --rm \
+          -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+          -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+          -e FULLMAG_PYTHON=/usr/bin/python3 \
+          -e FULLMAG_FDM_EXECUTION=cpu \
+          -e FULLMAG_FEM_EXECUTION=gpu \
+          -e FULLMAG_RELAX_DEVICE=gpu \
+          -e FULLMAG_K0_PRODUCTION_DEVICE=gpu \
+          -e FULLMAG_K0_PRODUCTION_MAG_HMAX_NM="$mag_hmax" \
+          -e FULLMAG_K0_PRODUCTION_MAG_HMIN_NM="$mag_hmin" \
+          -e FULLMAG_K0_PRODUCTION_AIRBOX_HMAX_NM="$airbox_hmax" \
+          -e FULLMAG_K0_PERFORMANCE_REPEAT="$repeat" \
+          -e FULLMAG_K0_PERFORMANCE_ARTIFACTS="$artifacts" \
+          -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+          -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+          -e FULLMAG_HOST_UID="$(id -u)" \
+          -e FULLMAG_HOST_GID="$(id -g)" \
+          fem-gpu bash -lc 'cd /workspace && \
+            trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-performance 2>/dev/null || true'\'' EXIT && \
+            rm -rf "$FULLMAG_K0_PERFORMANCE_ARTIFACTS" && mkdir -p "$FULLMAG_K0_PERFORMANCE_ARTIFACTS" && \
+            .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+              examples/fem_eigen_k0_poisson_airbox_production.py \
+              --backend fem --headless --json --output-dir "$FULLMAG_K0_PERFORMANCE_ARTIFACTS"'; \
+        test -f "$artifacts/eigen/diagnostics/solver.v1.json" || { echo "K0 performance case did not produce native diagnostics" >&2; exit 1; }; \
+        cp "$artifacts/eigen/diagnostics/solver.v1.json" "$FULLMAG_K0_PERFORMANCE_NATIVE_DIAGNOSTICS"; \
+        ;; \
+      cancellation) \
+        test -n "${FULLMAG_K0_PERFORMANCE_PARTIAL_ARTIFACT:-}" || { echo "K0 cancellation case requires FULLMAG_K0_PERFORMANCE_PARTIAL_ARTIFACT" >&2; exit 2; }; \
+        cancel_root=".fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-performance/cancellation"; \
+        cancel_artifacts="$cancel_root/artifacts"; \
+        rm -rf "$cancel_root"; mkdir -p "$cancel_artifacts" "$(dirname "$FULLMAG_K0_PERFORMANCE_PARTIAL_ARTIFACT")"; \
+        runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+        set +e; docker compose --profile fem-gpu run --rm \
+          -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+          -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+          -e FULLMAG_PYTHON=/usr/bin/python3 \
+          -e FULLMAG_FDM_EXECUTION=cpu \
+          -e FULLMAG_FEM_EXECUTION=gpu \
+          -e FULLMAG_RELAX_DEVICE=gpu \
+          -e FULLMAG_K0_PRODUCTION_DEVICE=gpu \
+          -e FULLMAG_K0_PERFORMANCE_CANCEL_ARTIFACTS="$cancel_artifacts" \
+          -e FULLMAG_FEM_EIGEN_CANCEL_AFTER_MS="${FULLMAG_FEM_EIGEN_CANCEL_AFTER_MS:-25}" \
+          -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+          -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+          -e FULLMAG_HOST_UID="$(id -u)" \
+          -e FULLMAG_HOST_GID="$(id -g)" \
+          fem-gpu bash -lc 'cd /workspace && \
+            trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-performance/cancellation 2>/dev/null || true'\'' EXIT && \
+            rm -rf "$FULLMAG_K0_PERFORMANCE_CANCEL_ARTIFACTS" && mkdir -p "$FULLMAG_K0_PERFORMANCE_CANCEL_ARTIFACTS" && \
+            .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+              examples/fem_eigen_k0_poisson_airbox_production.py \
+              --backend fem --headless --json --output-dir "$FULLMAG_K0_PERFORMANCE_CANCEL_ARTIFACTS"'; \
+        status=$?; set -e; \
+        test -f "$cancel_artifacts/eigen/partial.v1.json" || { echo "K0 cancellation did not preserve eigen/partial.v1.json (status=$status)" >&2; exit 1; }; \
+        cp "$cancel_artifacts/eigen/partial.v1.json" "$FULLMAG_K0_PERFORMANCE_PARTIAL_ARTIFACT"; \
+        ;; \
+      sanitizer) \
+        test -n "${FULLMAG_K0_PERFORMANCE_SANITIZER_LOG:-}" || { echo "K0 sanitizer case requires FULLMAG_K0_PERFORMANCE_SANITIZER_LOG" >&2; exit 2; }; \
+        sanitizer_root=".fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-performance/sanitizer"; \
+        sanitizer_artifacts="$sanitizer_root/artifacts"; \
+        rm -rf "$sanitizer_root"; mkdir -p "$sanitizer_artifacts" "$(dirname "$FULLMAG_K0_PERFORMANCE_SANITIZER_LOG")"; \
+        runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+        docker compose --profile fem-gpu run --rm \
+          -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+          -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+          -e FULLMAG_PYTHON=/usr/bin/python3 \
+          -e FULLMAG_FDM_EXECUTION=cpu \
+          -e FULLMAG_FEM_EXECUTION=gpu \
+          -e FULLMAG_RELAX_DEVICE=gpu \
+          -e FULLMAG_K0_PRODUCTION_DEVICE=gpu \
+          -e FULLMAG_K0_PERFORMANCE_SANITIZER_ARTIFACTS="$sanitizer_artifacts" \
+          -e FULLMAG_K0_PERFORMANCE_SANITIZER_LOG="${FULLMAG_K0_PERFORMANCE_SANITIZER_LOG}" \
+          -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+          -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+          -e FULLMAG_HOST_UID="$(id -u)" \
+          -e FULLMAG_HOST_GID="$(id -g)" \
+          fem-gpu bash -lc 'cd /workspace && \
+            trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-performance/sanitizer 2>/dev/null || true'\'' EXIT && \
+            rm -rf "$FULLMAG_K0_PERFORMANCE_SANITIZER_ARTIFACTS" && mkdir -p "$FULLMAG_K0_PERFORMANCE_SANITIZER_ARTIFACTS" && \
+            command -v compute-sanitizer >/dev/null 2>&1 || { echo "compute-sanitizer is unavailable in the managed FEM GPU image" >&2; exit 127; }; \
+            compute-sanitizer --tool memcheck --error-exitcode 1 --log-file "$FULLMAG_K0_PERFORMANCE_SANITIZER_LOG" \
+              .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+              examples/fem_eigen_k0_poisson_airbox_production.py \
+              --backend fem --headless --json --output-dir "$FULLMAG_K0_PERFORMANCE_SANITIZER_ARTIFACTS"'; \
+        test -f "$FULLMAG_K0_PERFORMANCE_SANITIZER_LOG" || { echo "compute-sanitizer did not write its log" >&2; exit 1; }; \
+        ;; \
+      *) echo "unsupported FULLMAG_K0_PERFORMANCE_PHASE: $phase" >&2; exit 2 ;; \
+    esac
+
+capture-fem-frequency-domain-eigen-k0-poisson-airbox-performance config_json output_json:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    python3 scripts/capture_fem_eigen_k0_periodic_airbox_performance.py --config "{{config_json}}" --output "{{output_json}}"
+
+verify-fem-frequency-domain-eigen-k0-poisson-airbox-performance input_json:
+    python3 scripts/verify_fem_eigen_k0_periodic_airbox_performance.py "{{input_json}}" \
+      --output .fullmag/reports/frequency-domain-eigen-k0-poisson-airbox-production-release/performance.v1.json
 
 fem-fmr-free-demag-airbox-example:
     just verify-fem-fmr-free-demag-airbox-runtime
@@ -4948,6 +5311,8 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
         elif [ ! -f "{{local_web_root}}/index.html" ] && [ ! -f "{{control_room_static_out}}/index.html" ]; then echo "Static control room is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       fi; \
       if [ "$backend" = "fem" ]; then \
+        runtime_copy_helper="{{repo_root}}/scripts/lib/runtime_bundle_copy.sh"; \
+        test -f "$runtime_copy_helper" || { echo "managed FEM runtime copy helper is missing: $runtime_copy_helper" >&2; exit 2; }; \
         if [ "$force" = "true" ]; then just rebuild-fem-runtime; else just ensure-managed-fem-runtime; fi; \
         bin="{{gpu_runtime_bin}}"; path_prefix=""; \
       else \
@@ -5432,6 +5797,8 @@ ensure-managed-fem-runtime:
     bash -euo pipefail -c '\
       source scripts/lib/managed_fem_build_policy.sh; \
       resolve_managed_fem_build_policy; \
+      runtime_copy_helper="{{repo_root}}/scripts/lib/runtime_bundle_copy.sh"; \
+      test -f "$runtime_copy_helper" || { echo "managed FEM runtime copy helper is missing: $runtime_copy_helper" >&2; exit 2; }; \
       identity_file="$(mktemp "${TMPDIR:-/tmp}/fullmag-current-source.XXXXXXXXXX.json")"; \
       trap '\''rm -f -- "$identity_file"'\'' EXIT; \
       python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$identity_file"; \
@@ -5443,6 +5810,7 @@ ensure-managed-fem-runtime:
       validate_current() { \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
           --runtime-root .fullmag/runtimes/fem-gpu-host \
+          --allow-active-alias \
           --require-git-commit "$git_commit" \
           --require-worktree-state "$worktree_state" \
           --require-source-snapshot-sha256 "$source_snapshot"; \
@@ -5461,7 +5829,8 @@ ensure-managed-fem-runtime:
               --identity "$identity_file"; then \
             echo "Managed FEM runtime source differs only in documentation, CI, tests, or packaging helpers; reusing the validated binary." >&2; \
             python3 scripts/validate_managed_fem_runtime_bundle.py \
-              --runtime-root .fullmag/runtimes/fem-gpu-host; \
+              --runtime-root .fullmag/runtimes/fem-gpu-host \
+              --allow-active-alias; \
             runtime_reused_for_non_runtime_changes=1; \
           else \
             FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD="$FULLMAG_FEM_RUNTIME_REUSE_BUILD" just rebuild-fem-runtime; \
@@ -5479,10 +5848,11 @@ ensure-managed-fem-runtime:
       fi; \
       if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
-          --runtime-root .fullmag/runtimes/fem-gpu-host; \
-       else \
-         validate_current; \
-       fi'
+          --runtime-root .fullmag/runtimes/fem-gpu-host \
+          --allow-active-alias; \
+      else \
+        validate_current; \
+      fi'
 
 # Cleanup is deliberately separate from ensure/build.  The default invocation
 # only prints candidates; pass apply=1 after reviewing that dry-run to remove
@@ -5500,7 +5870,7 @@ verify-managed-fem-runtime-source-provenance:
     tmp_provenance="$(mktemp "${TMPDIR:-/tmp}/fullmag-fem-runtime-source-provenance.XXXXXXXXXX.json")"; trap 'rm -f -- "$tmp_provenance"' EXIT; \
     python3 scripts/hash_managed_fem_runtime_sources.py --repo-root . --source-input-manifest scripts/managed_fem_runtime_source_inputs.v1.txt --output "$tmp_provenance"; \
     python3 -c 'import json, sys; from pathlib import Path; expected=json.loads(Path(sys.argv[1]).read_text())["source_provenance"]; actual=json.loads(Path(".fullmag/runtimes/fem-gpu-host/manifest.json").read_text()).get("source_provenance"); assert actual == expected, "managed FEM runtime source provenance differs; run: just rebuild-fem-runtime"' "$tmp_provenance"; \
-    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host --allow-active-alias
 
 inspect-managed-fem-frequency-domain-deps:
     just ensure-managed-fem-runtime

@@ -1624,6 +1624,49 @@ pub struct FemEigenK0KittelValidationIR {
     pub samples: Vec<FemEigenK0KittelValidationSampleIR>,
 }
 
+/// Planner-visible engine identity for the bounded FEM K0 periodic-airbox modal lane.
+///
+/// `Auto` is valid only as requested intent. Resolved plans always carry one
+/// concrete CPU or GPU engine.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemEigenEngineIR {
+    Auto,
+    K0PoissonAirboxCpuSchurSlepc,
+    /// Canonical planner identity for the production GPU modal lane.
+    ///
+    /// The native PETSc/SLEPc adapter remains an implementation detail of
+    /// this engine and is therefore not exposed as the resolved planner
+    /// contract. Older provenance documents may still contain the legacy
+    /// adapter token; it is accepted on input but never emitted.
+    #[serde(alias = "k0_poisson_airbox_gpu_petsc_slepc")]
+    GpuModalDeviceKrylov,
+}
+
+/// Requested and resolved execution identity emitted after K0 legality checks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemEigenExecutionResolutionIR {
+    pub requested_device: crate::ExecutionDevice,
+    pub resolved_device: crate::ExecutionDevice,
+    pub requested_precision: ExecutionPrecision,
+    pub resolved_precision: ExecutionPrecision,
+    pub requested_engine: FemEigenEngineIR,
+    pub resolved_engine: FemEigenEngineIR,
+    pub fallback_used: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    pub selection_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemEigenBiasFieldSamplePlanIR {
+    pub sample_index: u32,
+    pub field_a_per_m: [f64; 3],
+    pub equilibrium_policy: crate::BiasFieldSweepEquilibriumPolicyIR,
+    pub continuation_seed: crate::BiasFieldSweepContinuationSeedIR,
+    pub execution: FemEigenExecutionResolutionIR,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemEigenPlanIR {
     pub mesh_name: String,
@@ -1650,6 +1693,8 @@ pub struct FemEigenPlanIR {
     pub equilibrium: EquilibriumSourceIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k_sampling: Option<KSamplingIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bias_field_samples: Vec<FemEigenBiasFieldSamplePlanIR>,
     pub normalization: EigenNormalizationIR,
     pub damping_policy: EigenDampingPolicyIR,
     pub enable_exchange: bool,
@@ -2029,6 +2074,9 @@ pub struct ProvenancePlanIR {
     pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrator_resolution: Option<IntegratorResolutionProvenanceIR>,
+    /// Present only for the bounded K0 periodic-airbox FEM eigen planner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_eigen_execution_resolution: Option<FemEigenExecutionResolutionIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub physics_graph: Option<PhysicsGraphRuntimeProvenanceIR>,
 }
@@ -2038,11 +2086,11 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{
-        FdmGridCertificateIR, FdmPlanIR, FdmRegionLegendEntryIR, FemMeshTopologyFamilyIR,
-        FemMixedTopologyCapabilityStatusIR, FemMixedTopologyProvenanceIR, RequestedFemDemagIR,
-        ResolvedFemDemagIR, ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR,
-        SelectionCertificateIR, RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION,
-        SELECTION_CERTIFICATE_SCHEMA_VERSION,
+        FdmGridCertificateIR, FdmPlanIR, FdmRegionLegendEntryIR, FemEigenEngineIR,
+        FemEigenExecutionResolutionIR, FemMeshTopologyFamilyIR, FemMixedTopologyCapabilityStatusIR,
+        FemMixedTopologyProvenanceIR, RequestedFemDemagIR, ResolvedFemDemagIR,
+        ResolvedFrozenSpinsPlanIR, SelectionAuthoredFingerprintIR, SelectionCertificateIR,
+        RESOLVED_FROZEN_SPINS_PLAN_SCHEMA_VERSION, SELECTION_CERTIFICATE_SCHEMA_VERSION,
     };
 
     fn resolved_frozen_spins_fixture() -> ResolvedFrozenSpinsPlanIR {
@@ -2220,6 +2268,56 @@ mod tests {
             .validate_for(ExecutionPrecision::Single)
             .expect_err("arbitrary mixed precision must fail closed");
         assert!(error.contains("fdm_precision_policy_mismatch"));
+    }
+
+    #[test]
+    fn fem_eigen_execution_resolution_round_trips_stable_typed_tokens() {
+        let resolution = FemEigenExecutionResolutionIR {
+            requested_device: ExecutionDevice::Auto,
+            resolved_device: ExecutionDevice::Gpu,
+            requested_precision: ExecutionPrecision::Double,
+            resolved_precision: ExecutionPrecision::Double,
+            requested_engine: FemEigenEngineIR::Auto,
+            resolved_engine: FemEigenEngineIR::GpuModalDeviceKrylov,
+            fallback_used: false,
+            fallback_reason: None,
+            selection_reason: "fem_eigen.k0_periodic_airbox.auto_runtime_gpu".to_string(),
+        };
+
+        let encoded = serde_json::to_value(&resolution).expect("resolution serializes");
+        assert_eq!(encoded["requested_device"], "auto");
+        assert_eq!(encoded["resolved_device"], "gpu");
+        assert_eq!(encoded["requested_precision"], "double");
+        assert_eq!(encoded["resolved_precision"], "double");
+        assert_eq!(encoded["requested_engine"], "auto");
+        assert_eq!(encoded["resolved_engine"], "gpu_modal_device_krylov");
+        assert_eq!(encoded["fallback_used"], false);
+        assert!(encoded.get("fallback_reason").is_none());
+        let decoded: FemEigenExecutionResolutionIR =
+            serde_json::from_value(encoded).expect("resolution deserializes");
+        assert_eq!(decoded, resolution);
+    }
+
+    #[test]
+    fn fem_eigen_execution_resolution_accepts_legacy_gpu_engine_token() {
+        let encoded = serde_json::json!({
+            "requested_device": "gpu",
+            "resolved_device": "gpu",
+            "requested_precision": "double",
+            "resolved_precision": "double",
+            "requested_engine": "auto",
+            "resolved_engine": "k0_poisson_airbox_gpu_petsc_slepc",
+            "fallback_used": false,
+            "selection_reason": "fem_eigen.k0_periodic_airbox.explicit_gpu"
+        });
+        let decoded: FemEigenExecutionResolutionIR =
+            serde_json::from_value(encoded).expect("legacy GPU token deserializes");
+        assert_eq!(
+            decoded.resolved_engine,
+            FemEigenEngineIR::GpuModalDeviceKrylov
+        );
+        let reencoded = serde_json::to_value(decoded).expect("canonical GPU token serializes");
+        assert_eq!(reencoded["resolved_engine"], "gpu_modal_device_krylov");
     }
 
     #[test]

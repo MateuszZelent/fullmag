@@ -6,6 +6,7 @@ import type {
 import type { FieldVectorQuery } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { SelectionRef } from "../selection/selectionTypes";
+import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 import type {
   AnalysisFieldOverlayAppearanceState,
@@ -372,6 +373,10 @@ function overlayStateFromContext(
     activeOverlay?.query.phase_rad ??
     0;
   const selectedRef = selectedFrequencyDomainRef(context);
+  const modeIntent =
+    resolvedSource === "eigen-mode"
+      ? createModeFieldOverlayIntent(selectedRef)
+      : null;
   const identityRef = selectedOverlayIdentityRef(context);
   const activeIdentityOverlay =
     identityRef?.type === "mode-visualization" &&
@@ -434,6 +439,7 @@ function overlayStateFromContext(
     ...((numberValue(input.modeIndex) ?? identityRef?.modeIndex) !== undefined
       ? { modeIndex: numberValue(input.modeIndex) ?? identityRef?.modeIndex }
       : {}),
+    ...(modeIntent?.fieldId === fieldId ? { modeIntent } : {}),
     ...(phasorConvention ? { phasorConvention } : {}),
     query: defaultView == null
       ? overlayQueryFromContext(context, phaseRad)

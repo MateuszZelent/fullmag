@@ -8,6 +8,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JUSTFILE = REPO_ROOT / "justfile"
+COMPOSE_FILE = REPO_ROOT / "compose.yaml"
 FMR_SMOKE = REPO_ROOT / "examples" / "fem_frequency_response_smoke.py"
 EIGEN_DISPERSION_SMOKE = (
     REPO_ROOT / "examples" / "fem_eigenmodes_dispersion_k_path.py"
@@ -27,15 +28,23 @@ EIGEN_PRODUCTION_GAMMA_K_PATH_SMOKE = (
 EIGEN_K0_KITTEL_ZEEMAN_NO_DEMAG = (
     REPO_ROOT / "examples" / "fem_eigen_k0_kittel_zeeman_no_demag.py"
 )
-EIGEN_K0_KITTEL_PERIODIC_AIRBOX_GPU_GATED = (
+EIGEN_K0_KITTEL_PERIODIC_AIRBOX_GPU = (
     REPO_ROOT
     / "examples"
-    / "fem_eigen_k0_kittel_periodic_airbox_gpu_gated.py"
+    / "fem_eigen_k0_kittel_periodic_airbox_gpu.py"
 )
 EIGEN_K0_KITTEL_PERIODIC_AIRBOX = (
     REPO_ROOT
     / "examples"
     / "fem_eigen_k0_kittel_periodic_airbox.py"
+)
+EIGEN_K0_PRODUCTION_PERIODIC_AIRBOX = (
+    REPO_ROOT
+    / "examples"
+    / "fem_eigen_k0_poisson_airbox_production.py"
+)
+CONTROL_ROOM_SMOKE = (
+    REPO_ROOT / "apps" / "control-room" / "scripts" / "smoke-study-authoring-ui.mjs"
 )
 PERIODIC_K0_SMOKE = REPO_ROOT / "examples" / "fem_fmr_periodic_k0_smoke.py"
 PERIODIC_ANTIDOT_FREQUENCY_DRIVEN = (
@@ -840,6 +849,9 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert "load_periodic_antidot_fixture_config" in example
     assert "os.environ" not in example
     assert "fm.load_magnetization(fixture_config.relaxed_state_path, format=\"json\")" in example
+    assert "if fixture_config.domain_mesh_path:" in example
+    assert "study.domain_mesh(" in example
+    assert "region_markers={\"periodic_antidot_film\": 1}" in example
     assert "run_stage = fixture_config.run_stage" in example
     assert "study.stages.add_minimize(" in example
     assert "method=\"bb\"" in example
@@ -952,7 +964,7 @@ def test_cpu_periodic_airbox_demag_smoke_requests_periodic_airbox_demag() -> Non
     example = CPU_PERIODIC_AIRBOX_DEMAG_RESPONSE.read_text(encoding="utf-8")
 
     assert 'study.device("cpu", precision="double")' in example
-    assert 'study.pbc(x=True, demag="periodic_airbox_k0")' in example
+    assert 'study.pbc(x=True, y=True, demag="periodic_airbox_k0")' in example
     assert 'study.demag(realization="poisson_robin")' in example
     assert "study.build_domain_mesh()" in example
     assert "include_demag=True" in example
@@ -1156,40 +1168,36 @@ def test_gpu_floquet_airbox_unsupported_runtime_target_is_artifact_backed() -> N
     assert "FULLMAG_FMR_FLOQUET_KX_RAD_PER_M=1000000" in target
 
 
-def test_gpu_periodic_airbox_eigen_demag_gated_target_is_artifact_backed() -> None:
+def test_gpu_periodic_airbox_eigen_demag_target_is_artifact_backed() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
-    example = EIGEN_K0_KITTEL_PERIODIC_AIRBOX_GPU_GATED.read_text(encoding="utf-8")
+    example = EIGEN_K0_KITTEL_PERIODIC_AIRBOX_GPU.read_text(encoding="utf-8")
 
     target_start = justfile.find(
-        "verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated:"
+        "verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu:"
     )
     assert target_start != -1
     next_target = justfile.find("\n\n", target_start + 1)
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
     assert "just ensure-managed-fem-runtime" in target
-    assert "examples/fem_eigen_k0_kittel_periodic_airbox_gpu_gated.py" in target
-    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated" in target
+    assert "examples/fem_eigen_k0_kittel_periodic_airbox_gpu.py" in target
+    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-gpu" in target
     assert "FULLMAG_FEM_EXECUTION=gpu" in target
     assert "FULLMAG_RELAX_DEVICE=gpu" in target
-    assert "GPU periodic-airbox modal demag unexpectedly succeeded" in target
-    assert "GPU modal K0/Kittel with demag" in target
-    assert "CPU fallback" in target
-    assert "disabled" in target
-    assert "unsupported_boundary.v1.json" in target
-    assert "verify_fem_gpu_modal_poisson_airbox_unsupported_boundary.py" in target
-    assert "gpu_modal_poisson_airbox_k0" in target
-    assert "gpu_device_resident_modal_eigensolver" in target
-    assert "False" in target
-    assert "cpu_fallback" in target
-    assert "disabled" in target
-    assert "--require-production-gpu" not in target
+    assert "--require-gpu-modal-k0-periodic-airbox-provenance" in target
+    assert "unexpectedly succeeded" not in target
+    assert "unsupported_boundary.v1.json" not in target
     assert 'study.device("gpu", precision="double")' in example
-    assert 'study.pbc(x=True, demag="periodic_airbox_k0")' in example
+    assert 'study.pbc(x=True, y=True, demag="periodic_airbox_k0")' in example
     assert "include_demag=True" in example
+    assert "BIAS_FIELD_MIN_T = 5.0e-3" in example
+    assert "BIAS_FIELD_MAX_T = 0.10" in example
+    assert "samples_per_segment=[14]" in example
+    assert 'study.save("spectrum")' in example
+    assert 'study.save("mode", indices=(0,))' in example
 
 
-def test_frequency_domain_runtime_suite_includes_gpu_periodic_airbox_eigen_demag_gated_boundary() -> None:
+def test_frequency_domain_runtime_suite_includes_gpu_periodic_airbox_eigen_demag_gate() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
     target_start = justfile.find("verify-fem-frequency-domain-runtime-suite:")
@@ -1198,12 +1206,12 @@ def test_frequency_domain_runtime_suite_includes_gpu_periodic_airbox_eigen_demag
     target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
 
     assert (
-        "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu-gated"
+        "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu"
         in target
     )
 
 
-def test_periodic_airbox_eigen_convergence_target_runs_two_real_meshes() -> None:
+def test_periodic_airbox_eigen_convergence_target_runs_independent_three_level_sequences() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
     example = EIGEN_K0_KITTEL_PERIODIC_AIRBOX.read_text(encoding="utf-8")
 
@@ -1216,15 +1224,32 @@ def test_periodic_airbox_eigen_convergence_target_runs_two_real_meshes() -> None
 
     assert "just ensure-managed-fem-runtime" in target
     assert "examples/fem_eigen_k0_kittel_periodic_airbox.py" in target
-    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/coarse/artifacts" in target
-    assert "frequency-domain-eigen-k0-kittel-periodic-airbox-convergence/fine/artifacts" in target
-    assert "FULLMAG_K0_KITTEL_MAG_HMAX_NM=24" in target
-    assert "FULLMAG_K0_KITTEL_MAG_HMAX_NM=20" in target
+    assert "run_case mesh/coarse 24 12 40 9" in target
+    assert "run_case mesh/medium 20 10 40 9" in target
+    assert "run_case mesh/fine 16 8 40 9" in target
+    assert "run_case airbox/small 16 8 40 5" in target
+    assert "run_case airbox/medium 16 8 40 7" in target
+    assert "run_case airbox/large 16 8 40 9" in target
+    assert target.count("--mesh-root") == 3
+    assert target.count("--airbox-root") == 3
+    assert "--output-dir \"$report/aggregate\"" in target
     assert "scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py" in target
     assert "--require-k0-kittel-periodic-airbox-demag" in target
     assert "FULLMAG_FEM_EXECUTION=cpu" in target
     assert "FULLMAG_RELAX_DEVICE=cpu" in target
     assert "FULLMAG_K0_KITTEL_MAG_HMAX_NM" in example
+
+
+def test_periodic_airbox_kittel_fixture_exports_a_shape_selectable_positive_field_sweep() -> None:
+    example = EIGEN_K0_KITTEL_PERIODIC_AIRBOX.read_text(encoding="utf-8")
+
+    assert "BIAS_FIELD_MIN_T = 5.0e-3" in example
+    assert "BIAS_FIELD_MAX_T = 0.10" in example
+    # The current production K0 lane qualifies one accepted mode per physical
+    # field sample; requesting twelve modes would make this fixture claim a
+    # qualification the GPU lane does not yet provide.
+    assert "N_MODES = 1" in example
+    assert "study.fem_demag_solver(rtol=1e-10, max_iterations=1000)" in example
 
 
 def test_frequency_domain_runtime_suite_includes_periodic_airbox_eigen_convergence_gate() -> None:
@@ -1239,6 +1264,123 @@ def test_frequency_domain_runtime_suite_includes_periodic_airbox_eigen_convergen
         "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu"
         in target
     )
+
+
+def test_periodic_airbox_eigen_gpu_convergence_target_runs_independent_three_level_sequences() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\n\n", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just ensure-managed-fem-runtime" in target
+    assert "examples/fem_eigen_k0_kittel_periodic_airbox_gpu.py" in target
+    assert "run_case mesh/coarse 24 12 40 9" in target
+    assert "run_case mesh/medium 20 10 40 9" in target
+    assert "run_case mesh/fine 16 8 40 9" in target
+    assert "run_case airbox/small 16 8 40 5" in target
+    assert "run_case airbox/medium 16 8 40 7" in target
+    assert "run_case airbox/large 16 8 40 9" in target
+    assert target.count("--mesh-root") == 3
+    assert target.count("--airbox-root") == 3
+    assert "scripts/verify_fem_eigen_k0_periodic_airbox_convergence.py" in target
+    assert "--require-gpu-modal-k0-periodic-airbox-provenance" in target
+    assert "--execution-lane production_gpu" in target
+    assert "FULLMAG_FEM_EXECUTION=gpu" in target
+    assert "FULLMAG_RELAX_DEVICE=gpu" in target
+
+
+def test_k0_production_release_runs_cpu_and_gpu_convergence_before_promotion() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    target_start = justfile.find(
+        "verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-release:"
+    )
+    assert target_start != -1
+    next_target = justfile.find("\n\n", target_start + 1)
+    target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+
+    assert "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-cpu" in target
+    assert "just verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-convergence-gpu" in target
+    assert "just verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-cpu" in target
+    assert "just verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-gpu" in target
+
+
+def test_k0_production_targets_execute_fresh_scope_fixture_not_kittel_copy() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    example = EIGEN_K0_PRODUCTION_PERIODIC_AIRBOX.read_text(encoding="utf-8")
+
+    assert "k0_kittel_validation" not in example
+    assert "FULLMAG_K0_PRODUCTION_DEVICE" in example
+    assert "study.pbc(x=True, y=True, demag=\"periodic_airbox_k0\")" in example
+    assert 'study.stages.add_eigenmodes(' in example
+
+    for target_name, device, verifier_flag in (
+        (
+            "verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-cpu:",
+            "cpu",
+            "--require-k0-periodic-airbox-production",
+        ),
+        (
+            "verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-gpu:",
+            "gpu",
+            "--require-gpu-modal-k0-periodic-airbox-production",
+        ),
+    ):
+        target_start = justfile.find(target_name)
+        assert target_start != -1
+        next_target = justfile.find("\n\n", target_start + 1)
+        target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+        service = "fem-modal-cpu" if device == "cpu" else "fem-gpu"
+        profile = "fem-modal-cpu" if device == "cpu" else "fem-gpu"
+        assert "examples/fem_eigen_k0_poisson_airbox_production.py" in target
+        assert f"FULLMAG_K0_PRODUCTION_DEVICE={device}" in target
+        assert f"docker compose --profile {profile} run" in target
+        assert f"      {service} bash -lc" in target
+        expected_scope_env = (
+            "FULLMAG_FEM_K0_CPU_SCOPE_JSON"
+            if device == "cpu"
+            else "FULLMAG_FEM_K0_GPU_SCOPE_JSON"
+        )
+        assert expected_scope_env in target
+        expected_evidence_env = (
+            "FULLMAG_FEM_K0_CPU_EVIDENCE_MANIFEST"
+            if device == "cpu"
+            else "FULLMAG_FEM_K0_GPU_EVIDENCE_MANIFEST"
+        )
+        assert expected_evidence_env in target
+        assert verifier_flag in target
+        assert "frequency-domain-eigen-k0-kittel-periodic-airbox/artifacts" not in target
+        assert "cp -a" not in target
+
+
+def test_control_room_frequency_fixture_does_not_claim_k0_production_qualification() -> None:
+    smoke = CONTROL_ROOM_SMOKE.read_text(encoding="utf-8")
+
+    modal_start = smoke.index("modal: {")
+    modal_end = smoke.index("response: {", modal_start)
+    modal = smoke[modal_start:modal_end]
+
+    assert 'production_cpu: frequencyDomainCapability(\n          "partial_production_executable",\n        )' in modal
+    assert 'production_gpu: frequencyDomainCapability("source_visible")' in modal
+    assert 'production_qualified' not in modal
+
+
+def test_modal_cpu_compose_service_is_gpu_request_free() -> None:
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+    start = compose.find("  fem-modal-cpu:\n")
+    assert start != -1
+    end = compose.find("\n  fem-cpu:\n", start)
+    assert end != -1
+    service = compose[start:end]
+    assert "image: ${FULLMAG_FEM_GPU_IMAGE:-fullmag/fem-gpu:local}" in service
+    assert "FULLMAG_FEM_WITH_SLEPC: \"ON\"" in service
+    assert "FULLMAG_FEM_MFEM_DEVICE: cpu" in service
+    assert "LD_LIBRARY_PATH: /usr/local/cuda/compat:/opt/fullmag-deps/lib" in service
+    assert "gpus:" not in service
 
 
 def test_frequency_domain_runtime_suite_includes_floquet_airbox_gpu_boundary() -> None:
@@ -1421,7 +1563,7 @@ def test_shared_domain_static_periodic_smoke_is_no_demag_shared_domain() -> None
     example = SHARED_DOMAIN_STATIC_PERIODIC_RESPONSE.read_text(encoding="utf-8")
 
     assert 'study.universe(' in example
-    assert 'study.pbc(x=True, demag="periodic_airbox_k0")' in example
+    assert 'study.pbc(x=True, y=True, demag="periodic_airbox_k0")' in example
     assert 'study.demag(realization="poisson_robin")' in example
     assert "study.build_domain_mesh()" in example
     assert "study.demag(enabled=False)" in example

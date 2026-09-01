@@ -7,6 +7,7 @@ LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag.ps1"
 CONTROL_ROOM = ROOT / "crates" / "fullmag-cli" / "src" / "control_room.rs"
 LEGACY_FEM_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
 FEM_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_fem.ps1"
+DOCKER_LAUNCHER = ROOT / "scripts" / "windows" / "run_fullmag_docker.ps1"
 WINDOWS_COMPOSE = ROOT / "compose.windows.yaml"
 FEM_GPU_DOCKERFILE = ROOT / "docker" / "fem-gpu" / "Dockerfile"
 FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
@@ -247,6 +248,25 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     assert 'Invoke-External "wsl.exe"' not in launcher
     assert '"buildx", "build"' in launcher
     assert "run_fullmag.ps1" not in launcher
+
+
+def test_windows_docker_compatibility_launcher_captures_image_inspect_exit_code() -> None:
+    launcher = DOCKER_LAUNCHER.read_text(encoding="utf-8")
+
+    inspect = launcher.index("docker image inspect")
+    exit_candidates = [
+        launcher.find("$imageExitCode = $LASTEXITCODE", inspect),
+        launcher.find("$imageInspectExitCode = $LASTEXITCODE", inspect),
+    ]
+    exit_code = min(index for index in exit_candidates if index != -1)
+    selection_candidates = [
+        launcher.find("Select-Object -First 1", inspect),
+        launcher.find("$imageId = if", inspect),
+    ]
+    selection = min(index for index in selection_candidates if index != -1)
+
+    assert inspect < exit_code < selection
+    assert 'Invoke-External "wsl.exe"' not in launcher
 
 
 def test_windows_launchers_and_setup_namespace_default_storage_per_worktree() -> None:

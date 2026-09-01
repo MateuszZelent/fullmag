@@ -180,6 +180,8 @@ pub struct ResourceRevisionMap {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_revision: Option<u64>,
     pub visualization_state_revision: u64,
+    /// Independent revision of the lightweight per-object modal visualization composition.
+    pub mode_composition_revision: u64,
     pub region_topology_revision: u64,
     pub region_membership_revision: u64,
     pub region_coefficients_revision: u64,

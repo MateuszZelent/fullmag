@@ -10460,9 +10460,11 @@ fn fem_eigen_backend_with_mesh_asset_plans_successfully() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -10612,9 +10614,11 @@ fn fem_eigen_carries_k0_kittel_validation_from_runtime_metadata() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -10815,6 +10819,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
             samples_per_segment: vec![2],
             closed: false,
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
@@ -10827,6 +10832,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -10852,8 +10858,7 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
     }
 }
 
-#[test]
-fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
+fn k0_periodic_airbox_fem_eigen_ir() -> ProblemIR {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;
     ir.geometry_assets = Some(fullmag_ir::GeometryAssetsIR {
@@ -10973,6 +10978,7 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
             samples_per_segment: vec![2],
             closed: false,
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
@@ -10985,6 +10991,7 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -10995,6 +11002,33 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
         mode_tracking: None,
     };
 
+    ir.pbc = Some(fullmag_ir::FdmPeriodicityIR {
+        axes: [
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Periodic,
+            fullmag_ir::AxisBoundary::Open,
+        ],
+        demag: fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0,
+        image_counts: None,
+    });
+    let fullmag_ir::StudyIR::Eigenmodes {
+        k_sampling,
+        magnetostatic_bc,
+        ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [0.0, 0.0, 0.0],
+    });
+    *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
+    ir
+}
+
+#[test]
+fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
+    let ir = k0_periodic_airbox_fem_eigen_ir();
     let planned = plan(&ir).expect("K0-3 periodic_airbox_k0 should plan with shared-domain airbox");
     match planned.backend_plan {
         BackendPlanIR::FemEigen(fem) => {
@@ -11012,6 +11046,406 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
         }
         other => panic!("expected FEM eigen plan, got {other:?}"),
     }
+}
+
+#[test]
+fn fem_eigen_bias_field_sweep_plans_declared_samples_with_resolved_execution() {
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir())
+        .expect("bounded K0 fixture serializes");
+    encoded["problem_meta"]["runtime_metadata"]
+        .as_object_mut()
+        .expect("fixture runtime metadata should be an object")
+        .remove("k0_kittel_validation");
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [[12500.0, 0.0, 0.0], [25000.0, 0.0, 0.0]],
+        "equilibrium_policy": "continuation",
+        "ordering": "declared",
+        "continuation_seed": "previous_accepted_equilibrium"
+    });
+    let ir: ProblemIR = serde_json::from_value(encoded).expect("bias sweep IR deserializes");
+
+    let planned = plan(&ir).expect("legal K0 bias sweep plans before CPU/GPU resolution");
+    let value = serde_json::to_value(planned).expect("planned sweep serializes");
+    assert_eq!(
+        value["backend_plan"]["bias_field_samples"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        value["backend_plan"]["bias_field_samples"][0]["sample_index"],
+        0
+    );
+    assert_eq!(
+        value["backend_plan"]["bias_field_samples"][1]["field_a_per_m"],
+        serde_json::json!([25000.0, 0.0, 0.0])
+    );
+    assert_eq!(
+        value["provenance"]["fem_eigen_execution_resolution"]["resolved_device"],
+        "cpu"
+    );
+}
+
+#[test]
+fn fem_eigen_bias_field_sweep_kittel_metadata_requires_sample_field_mapping() {
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir())
+        .expect("bounded K0 fixture serializes");
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [
+            [15915.494309189535, 0.0, 0.0],
+            [39788.735772973836, 0.0, 0.0],
+            [79577.47154594767, 0.0, 0.0]
+        ],
+        "equilibrium_policy": "continuation",
+        "ordering": "declared",
+        "continuation_seed": "previous_accepted_equilibrium"
+    });
+
+    let mut field_mismatch = encoded.clone();
+    field_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][1]
+        ["bias_field"] = serde_json::json!([41_000.0, 0.0, 0.0]);
+    let ir: ProblemIR = serde_json::from_value(field_mismatch).unwrap();
+    let error = plan(&ir).expect_err("mismatched oracle field must fail closed");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("eigenmodes.bias_field_sweep_kittel_field_mismatch") }));
+
+    let mut index_mismatch = encoded;
+    index_mismatch["problem_meta"]["runtime_metadata"]["k0_kittel_validation"]["samples"][2]
+        ["sample_index"] = serde_json::json!(7);
+    let ir: ProblemIR = serde_json::from_value(index_mismatch).unwrap();
+    let error = plan(&ir).expect_err("mismatched oracle sample index must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eigenmodes.bias_field_sweep_kittel_sample_index_mismatch")
+    }));
+}
+
+#[test]
+fn fem_eigen_bias_field_sweep_rejects_relax_each_previous_seed() {
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir())
+        .expect("bounded K0 fixture serializes");
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+    encoded["problem_meta"]["runtime_metadata"]
+        .as_object_mut()
+        .expect("fixture runtime metadata should be an object")
+        .remove("k0_kittel_validation");
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+        "equilibrium_policy": "relax_each",
+        "ordering": "declared",
+        "continuation_seed": "previous_accepted_equilibrium"
+    });
+    let ir: ProblemIR = serde_json::from_value(encoded).unwrap();
+    let error = plan(&ir).expect_err("relax_each must not ignore continuation seed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("eigenmodes.bias_field_sweep_relax_each_requires_initial_state_seed")
+    }));
+}
+
+#[test]
+fn fdm_eigenmodes_remain_explicitly_not_executable() {
+    let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir()).unwrap();
+    encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+    encoded["study"]["bias_field_sweep"] = serde_json::json!({
+        "samples_a_per_m": [[12500.0, 0.0, 0.0]],
+        "equilibrium_policy": "relax_each",
+        "ordering": "declared",
+        "continuation_seed": "initial_state"
+    });
+    let mut ir: ProblemIR = serde_json::from_value(encoded).unwrap();
+    ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fdm;
+
+    let error = plan(&ir).expect_err("FDM bias-field sweep must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason == "eigenmodes.bias_field_sweep_requires_fem_backend; fallback=none"
+    }));
+}
+
+#[test]
+fn fem_eigen_bias_field_samples_bind_cpu_and_gpu_execution() {
+    for device in ["cpu", "gpu"] {
+        let mut encoded = serde_json::to_value(k0_periodic_airbox_fem_eigen_ir()).unwrap();
+        encoded["materials"][0]["damping"] = serde_json::json!(0.0);
+        encoded["problem_meta"]["runtime_metadata"]
+            .as_object_mut()
+            .expect("fixture runtime metadata should be an object")
+            .remove("k0_kittel_validation");
+        encoded["study"]["bias_field_sweep"] = serde_json::json!({
+            "samples_a_per_m": [[12500.0, 0.0, 0.0], [25000.0, 0.0, 0.0]],
+            "equilibrium_policy": "relax_each",
+            "ordering": "declared",
+            "continuation_seed": "initial_state"
+        });
+        let mut ir: ProblemIR = serde_json::from_value(encoded).unwrap();
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": device, "precision": "double"}),
+        );
+        let value = serde_json::to_value(plan(&ir).unwrap()).unwrap();
+        for sample in value["backend_plan"]["bias_field_samples"]
+            .as_array()
+            .unwrap()
+        {
+            assert_eq!(sample["execution"]["requested_device"], device);
+            assert_eq!(sample["execution"]["resolved_device"], device);
+            assert_eq!(sample["execution"]["requested_precision"], "double");
+            assert_eq!(sample["execution"]["resolved_precision"], "double");
+        }
+    }
+}
+
+fn planned_k0_eigen_execution_resolution(
+    requested_device: &str,
+    runtime_override: Option<&str>,
+) -> serde_json::Value {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": requested_device, "precision": "double"}),
+    );
+    if let Some(device) = runtime_override {
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": device, "source": "managed_launcher"}),
+        );
+    }
+    let planned = plan(&ir).expect("bounded K0 periodic-airbox execution must plan");
+    serde_json::to_value(
+        planned
+            .provenance
+            .fem_eigen_execution_resolution
+            .expect("bounded K0 plan must publish typed execution resolution"),
+    )
+    .expect("FEM eigen execution resolution must serialize")
+}
+
+#[test]
+fn fem_eigen_k0_execution_resolution_selects_exact_cpu_and_gpu_engines() {
+    for (device, engine, reason) in [
+        (
+            "cpu",
+            "k0_poisson_airbox_cpu_schur_slepc",
+            "fem_eigen.k0_periodic_airbox.explicit_cpu",
+        ),
+        (
+            "gpu",
+            "gpu_modal_device_krylov",
+            "fem_eigen.k0_periodic_airbox.explicit_gpu",
+        ),
+    ] {
+        let resolution = planned_k0_eigen_execution_resolution(device, None);
+        assert_eq!(resolution["requested_device"], device);
+        assert_eq!(resolution["resolved_device"], device);
+        assert_eq!(resolution["requested_precision"], "double");
+        assert_eq!(resolution["resolved_precision"], "double");
+        assert_eq!(resolution["requested_engine"], "auto");
+        assert_eq!(resolution["resolved_engine"], engine);
+        assert_eq!(resolution["fallback_used"], false);
+        assert!(resolution.get("fallback_reason").is_none());
+        assert_eq!(resolution["selection_reason"], reason);
+    }
+}
+
+#[test]
+fn fem_eigen_k0_kittel_validation_resolves_execution_when_study_bc_is_open() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    let fullmag_ir::StudyIR::Eigenmodes {
+        magnetostatic_bc, ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::Open;
+
+    let planned = plan(&ir)
+        .expect("K0-3 validation metadata must bind the periodic-airbox execution contract");
+    let resolution = serde_json::to_value(
+        planned
+            .provenance
+            .fem_eigen_execution_resolution
+            .expect("K0-3 validation must publish typed execution resolution"),
+    )
+    .expect("K0-3 execution resolution must serialize");
+
+    assert_eq!(resolution["requested_device"], "auto");
+    assert_eq!(resolution["resolved_device"], "cpu");
+    assert_eq!(
+        resolution["resolved_engine"],
+        "k0_poisson_airbox_cpu_schur_slepc"
+    );
+    assert_eq!(
+        resolution["selection_reason"],
+        "fem_eigen.k0_periodic_airbox.auto_default_cpu"
+    );
+}
+
+#[test]
+fn fem_eigen_k0_auto_uses_managed_runtime_selection_without_marking_fallback() {
+    for (device, engine, reason) in [
+        (
+            "cpu",
+            "k0_poisson_airbox_cpu_schur_slepc",
+            "fem_eigen.k0_periodic_airbox.auto_runtime_cpu",
+        ),
+        (
+            "gpu",
+            "gpu_modal_device_krylov",
+            "fem_eigen.k0_periodic_airbox.auto_runtime_gpu",
+        ),
+    ] {
+        let resolution = planned_k0_eigen_execution_resolution("auto", Some(device));
+        assert_eq!(resolution["requested_device"], "auto");
+        assert_eq!(resolution["resolved_device"], device);
+        assert_eq!(resolution["resolved_engine"], engine);
+        assert_eq!(resolution["fallback_used"], false);
+        assert!(resolution.get("fallback_reason").is_none());
+        assert_eq!(resolution["selection_reason"], reason);
+    }
+}
+
+#[test]
+fn fem_eigen_k0_auto_records_identical_physics_cpu_fallback() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "auto", "precision": "double"}),
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".to_string(),
+        serde_json::json!({
+            "device": "cpu",
+            "source": "managed_launcher",
+            "fallback_reason": "gpu_modal_device_krylov_unavailable",
+        }),
+    );
+
+    let planned = plan(&ir)
+        .expect("auto may fall back to the CPU engine only for the identical K0 physical contract");
+    let resolution = serde_json::to_value(
+        planned
+            .provenance
+            .fem_eigen_execution_resolution
+            .expect("K0 fallback must publish typed execution resolution"),
+    )
+    .expect("K0 fallback resolution must serialize");
+
+    assert_eq!(resolution["requested_device"], "auto");
+    assert_eq!(resolution["resolved_device"], "cpu");
+    assert_eq!(
+        resolution["resolved_engine"],
+        "k0_poisson_airbox_cpu_schur_slepc"
+    );
+    assert_eq!(resolution["fallback_used"], true);
+    assert_eq!(
+        resolution["fallback_reason"],
+        "gpu_modal_device_krylov_unavailable"
+    );
+    assert_eq!(
+        resolution["selection_reason"],
+        "fem_eigen.k0_periodic_airbox.auto_gpu_unavailable_cpu_fallback"
+    );
+}
+
+#[test]
+fn fem_eigen_k0_strict_gpu_ignores_conflicting_cpu_override_without_fallback() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "gpu", "precision": "double"}),
+    );
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_device_override".to_string(),
+        serde_json::json!({
+            "device": "cpu",
+            "source": "managed_launcher",
+            "fallback_reason": "gpu_modal_device_krylov_unavailable",
+        }),
+    );
+    let planned = plan(&ir).expect("strict GPU intent must ignore CPU fallback metadata");
+    let resolution = serde_json::to_value(
+        planned
+            .provenance
+            .fem_eigen_execution_resolution
+            .expect("strict GPU K0 plan must publish execution resolution"),
+    )
+    .expect("strict GPU K0 resolution must serialize");
+    assert_eq!(resolution["requested_device"], "gpu");
+    assert_eq!(resolution["resolved_device"], "gpu");
+    assert_eq!(resolution["resolved_engine"], "gpu_modal_device_krylov");
+    assert_eq!(resolution["fallback_used"], false);
+    assert!(resolution.get("fallback_reason").is_none());
+}
+
+#[test]
+fn fem_eigen_k0_auto_without_runtime_override_resolves_deterministically_to_cpu() {
+    let resolution = planned_k0_eigen_execution_resolution("auto", None);
+    assert_eq!(resolution["requested_device"], "auto");
+    assert_eq!(resolution["resolved_device"], "cpu");
+    assert_eq!(
+        resolution["resolved_engine"],
+        "k0_poisson_airbox_cpu_schur_slepc"
+    );
+    assert_eq!(
+        resolution["selection_reason"],
+        "fem_eigen.k0_periodic_airbox.auto_default_cpu"
+    );
+    assert_eq!(resolution["fallback_used"], false);
+}
+
+#[test]
+fn fem_eigen_k0_rejects_non_strict_execution_without_fallback() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
+    let error = plan(&ir).expect_err("bounded K0 production engines require strict mode");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("fem_eigen.k0_periodic_airbox_requires_strict_execution_mode")
+            && reason.contains("fallback=none")
+    }));
+}
+
+#[test]
+fn fem_eigen_k0_rejects_illegal_precision_and_nonzero_k_before_engine_resolution() {
+    let mut single = k0_periodic_airbox_fem_eigen_ir();
+    single.backend_policy.execution_precision = ExecutionPrecision::Single;
+    let single_error = plan(&single).expect_err("K0 periodic-airbox single precision is illegal");
+    assert!(single_error.reasons.iter().any(|reason| {
+        reason.contains("eigenmodes.k0_periodic_airbox_requires_double_precision")
+    }));
+
+    let mut nonzero_k = k0_periodic_airbox_fem_eigen_ir();
+    let fullmag_ir::StudyIR::Eigenmodes { k_sampling, .. } = &mut nonzero_k.study else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    *k_sampling = Some(fullmag_ir::KSamplingIR::Single {
+        k_vector: [1.0, 0.0, 0.0],
+    });
+    let k_error = plan(&nonzero_k).expect_err("K0 engine must reject nonzero-k intent");
+    assert!(k_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("eigenmodes.k0_periodic_airbox_requires_exact_zero_k")));
+}
+
+#[test]
+fn fem_eigen_k0_plan_deserializes_without_optional_execution_resolution() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu", "precision": "double"}),
+    );
+    let planned = plan(&ir).expect("bounded K0 CPU plan must serialize");
+    let mut encoded = serde_json::to_value(planned.provenance).expect("plan provenance serializes");
+    encoded
+        .as_object_mut()
+        .expect("plan provenance serializes as an object")
+        .remove("fem_eigen_execution_resolution");
+    let legacy: fullmag_ir::ProvenancePlanIR =
+        serde_json::from_value(encoded).expect("legacy plan without provenance deserializes");
+    assert!(legacy.fem_eigen_execution_resolution.is_none());
 }
 
 #[test]
@@ -11111,9 +11545,11 @@ fn fem_eigen_shared_domain_region_samples_equilibrium_once_per_object() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11210,9 +11646,11 @@ fn fem_eigen_backend_interfacial_dmi_defaults_interface_normal_to_z_in_strict_mo
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11314,9 +11752,11 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
         target: fullmag_ir::EigenTargetIR::Lowest,
         equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
         k_sampling: None,
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11413,11 +11853,13 @@ fn fem_eigen_periodic_bc_requires_periodic_node_pairs() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
             fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11501,6 +11943,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [0.0, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
@@ -11513,6 +11956,7 @@ fn fem_eigen_periodic_bc_with_pairs_plans_successfully() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11593,6 +12037,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [1.0e7, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
@@ -11605,6 +12050,7 @@ fn fem_eigen_floquet_bc_with_pairs_and_k_sampling_plans_successfully() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11708,6 +12154,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
         k_sampling: Some(fullmag_ir::KSamplingIR::Single {
             k_vector: [1.0e7, 0.0, 0.0],
         }),
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
@@ -11720,6 +12167,7 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
                 surface_anisotropy_axis: None,
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -11847,6 +12295,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
         target: fullmag_ir::EigenTargetIR::Lowest,
         equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
         k_sampling: None,
+        bias_field_sweep: None,
         normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
         damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
         spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::Config(
@@ -11859,6 +12308,7 @@ fn fem_eigen_surface_anisotropy_requires_positive_ks_and_axis() {
                 surface_anisotropy_axis: Some([0.0, 0.0, 0.0]),
             },
         ),
+        magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
         sampling: fullmag_ir::SamplingIR {
             table_autosave: None,
             stage_autosave: None,
@@ -12562,6 +13012,19 @@ fn fem_frequency_response_periodic_airbox_magnetostatic_bc_requires_periodic_gam
         "unexpected nonzero-k rejection reasons: {:?}",
         err.reasons
     );
+}
+
+#[test]
+fn fem_frequency_response_preserves_periodic_airbox_bc_through_eigen_proxy() {
+    let ir = fem_frequency_response_periodic_airbox_domain_problem();
+    let planned = plan(&ir).expect("periodic-airbox response must lower through its eigen proxy");
+    match planned.backend_plan {
+        BackendPlanIR::FemFrequencyResponse(fem) => assert_eq!(
+            fem.magnetostatic_bc,
+            fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        ),
+        other => panic!("expected FemFrequencyResponse plan, got {other:?}"),
+    }
 }
 
 #[test]
@@ -14611,8 +15074,16 @@ fn fdm_cuda_regional_field_drive_is_plannable_for_native_runtime() {
         panic!("FDM plan");
     };
     assert_eq!(fdm.regional_field_drive_bases.len(), 1);
-    let cell_count = fdm.grid.cells.iter().map(|&value| value as usize).product::<usize>();
-    assert_eq!(fdm.regional_field_drive_bases[0].field_xyz.len(), cell_count);
+    let cell_count = fdm
+        .grid
+        .cells
+        .iter()
+        .map(|&value| value as usize)
+        .product::<usize>();
+    assert_eq!(
+        fdm.regional_field_drive_bases[0].field_xyz.len(),
+        cell_count
+    );
 }
 
 fn fem_minimal_test_ir() -> ProblemIR {
@@ -15640,8 +16111,8 @@ fn fem_planner_accepts_mixed_p1_time_evolution_with_uniform_regional_drive() {
         migration: None,
     });
 
-    let planned = plan(&ir)
-        .expect("qualified mixed P1 time evolution with a regional drive must plan");
+    let planned =
+        plan(&ir).expect("qualified mixed P1 time evolution with a regional drive must plan");
     let BackendPlanIR::Fem(fem) = planned.backend_plan else {
         panic!("mixed P1 time evolution must resolve to FEM");
     };

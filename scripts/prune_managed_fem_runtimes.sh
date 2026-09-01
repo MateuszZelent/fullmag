@@ -53,8 +53,15 @@ declare -A FAMILY_COUNTS=()
 mark_process_reference() {
   local raw_path="${1:-}"
   [ -n "${raw_path}" ] || return 0
-  # Procfs exe/cwd links already expose the process target. Do not canonicalize
-  # arbitrary paths here: a target may live on an unresponsive filesystem.
+  # Process command lines contain arbitrary paths from unrelated mounts. Do
+  # not canonicalize those paths: a stale sshfs/FUSE mount can block
+  # indefinitely and hold the managed-runtime export lock. Only runtime
+  # paths can protect a managed variant, so reject everything else before
+  # touching the filesystem.
+  case "${raw_path}" in
+    "${VARIANTS_ROOT}"/*|"${RUNTIME_PARENT}"/*) ;;
+    *) return 0 ;;
+  esac
   local resolved_path="${raw_path}"
   local relative variant_root
   case "${resolved_path}" in
@@ -75,8 +82,9 @@ mark_process_reference() {
 for process_dir in "${PROC_ROOT}"/[0-9]*; do
   [ -d "${process_dir}" ] || continue
   for process_link in exe cwd; do
-    # Read the procfs link text without canonicalizing its target. `readlink -f`
-    # can block forever when a process cwd is on an unresponsive filesystem.
+    # Read only the symlink target here.  Resolving a process cwd/exe before
+    # the runtime-path filter can block on an unrelated stale FUSE/SSHFS mount
+    # and keep the export lock held indefinitely.
     mark_process_reference "$(readlink -- "${process_dir}/${process_link}" 2>/dev/null || true)"
   done
   if [ -r "${process_dir}/cmdline" ]; then

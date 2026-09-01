@@ -465,6 +465,10 @@ pub use capabilities::{
     ResolvedQuantityProviderRegistry, RuntimeEngineId, MIXED_P1_FEATURE_CAPABILITY_IDS,
     MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
 };
+pub use fem_eigen::{
+    fem_relax_equilibrium_identity_signatures, validate_recomputed_fem_linearization_certificate,
+    AcceptedFemRelaxStageHandoff,
+};
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
 pub use interactive::commands::{
@@ -503,15 +507,18 @@ pub use timestep_qualification::{
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
-    AuxiliaryArtifact, ExecutionProvenance, FdmGpuExecutionReceipt, FdmGpuOperatorResidency,
-    FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt, FdmGpuTransferCounts,
-    FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload,
-    FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LiveFieldMaterializationState,
-    LiveFieldMaterializationStatus, LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot,
-    LlgTimestepCapabilityId, LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback,
-    ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord,
-    StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend,
-    TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
+    recomputed_fem_equilibrium_content_sha256, recomputed_fem_linearization_certificate_sha256,
+    AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutionProvenance, FdmGpuExecutionReceipt,
+    FdmGpuOperatorResidency, FdmGpuPrecisionComponents, FdmGpuPrecisionPolicyReceipt,
+    FdmGpuTransferCounts, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
+    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LlgTimestepQualificationId, RecomputedFemLinearizationCertificateV1, RequestedTimestepPolicy,
+    ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult, RunStatus, RuntimeEngineInfo,
+    SolverAttemptRecord, StageFemMeshAsset, StageFemMeshIdentity, StepAction, StepStats,
+    StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
+    TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -1926,8 +1933,7 @@ fn require_supported_fem_topology(
     if !matches!(requested_device.as_str(), "cpu" | "gpu") {
         failed_predicates.push("explicit_device_cpu_or_gpu_required");
     }
-    let supports_time_evolution =
-        mixed_p1_runtime_supports_time_evolution(problem, fem_plan);
+    let supports_time_evolution = mixed_p1_runtime_supports_time_evolution(problem, fem_plan);
     if let Some(fem) = fem_plan {
         if fem.fe_order != 1 {
             failed_predicates.push("fem_fe_order_not_p1");
@@ -2523,8 +2529,8 @@ pub fn run_planned_problem(
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
-            let engine = dispatch::resolve_fem_engine(problem)?;
-            dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
+            let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
+            dispatch::execute_fem_eigen(execution, fem, &plan.output_plan.outputs)
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             let stage_context =
@@ -2641,6 +2647,32 @@ fn fem_eigen_progress_update(
     if let Some(residual) = progress.residual {
         progress_scalars.insert("residual".to_string(), residual);
     }
+    if let Some(current_subwindow) = progress.current_subwindow {
+        progress_scalars.insert(
+            "current_subwindow".to_string(),
+            f64::from(current_subwindow),
+        );
+    }
+    if let Some(total_subwindows) = progress.total_subwindows {
+        progress_scalars.insert("total_subwindows".to_string(), f64::from(total_subwindows));
+    }
+    if let Some(subwindow_elapsed_seconds) = progress.subwindow_elapsed_seconds {
+        progress_scalars.insert(
+            "subwindow_elapsed_seconds".to_string(),
+            subwindow_elapsed_seconds,
+        );
+    }
+    if let Some(window_elapsed_seconds) = progress.window_elapsed_seconds {
+        progress_scalars.insert("window_elapsed_seconds".to_string(), window_elapsed_seconds);
+    }
+    progress_scalars.insert(
+        "window_phase_base".to_string(),
+        (progress.window_phase == Some("base")) as u8 as f64,
+    );
+    progress_scalars.insert(
+        "window_phase_refinement".to_string(),
+        (progress.window_phase == Some("refinement")) as u8 as f64,
+    );
     progress_scalars.insert(
         "phase_materializing_equilibrium".to_string(),
         (progress.phase == "materializing_equilibrium") as u8 as f64,
@@ -2756,6 +2788,28 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        None,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2876,7 +2930,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
-            let engine = dispatch::resolve_fem_engine(problem)?;
+            let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
             let mut progress_callback = |progress| {
                 on_step(fem_eigen_progress_update(
                     progress,
@@ -2885,12 +2939,21 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                         .and_then(|context| context.generation_id()),
                 ))
             };
-            dispatch::execute_fem_eigen_with_progress(
-                engine,
-                fem,
-                &runtime_outputs,
-                &mut progress_callback,
-            )
+            match relax_handoff {
+                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff(
+                    execution,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                    handoff,
+                ),
+                None => dispatch::execute_fem_eigen_with_progress(
+                    execution,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                ),
+            }
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             frequency_response::execute_fem_frequency_response_validation_with_context(
@@ -3029,6 +3092,48 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
         until_seconds,
         output_dir,
         field_every_n,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_hysteresis_stage_id_and_relax_handoff(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    hysteresis_stage_id: Option<&str>,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        if relax_handoff.is_some() {
+            return Err(RunError {
+                message: "relax_stage_handoff_requires_single_k_target".to_string(),
+            });
+        }
+        return hysteresis::run_planned_hysteresis_with_callback(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            hysteresis_stage_id,
+            None,
+            &mut on_step,
+        );
+    }
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        relax_handoff,
         on_step,
     )
 }
@@ -3304,7 +3409,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             Ok(executed)
         }
         BackendPlanIR::FemEigen(fem) => {
-            let engine = dispatch::resolve_fem_engine(problem)?;
+            let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
             let mut progress_callback = |progress| {
                 on_step(fem_eigen_progress_update(
                     progress,
@@ -3314,7 +3419,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 ))
             };
             dispatch::execute_fem_eigen_with_progress(
-                engine,
+                execution,
                 fem,
                 &runtime_outputs,
                 &mut progress_callback,
@@ -4201,9 +4306,9 @@ pub fn resolve_planned_runtime_engine(
                 accelerator: accelerator.to_string(),
             })
         }
-        BackendPlanIR::FemEigen(_) => {
-            let engine = dispatch::resolve_fem_engine_with_trail(problem)?.engine;
-            let (engine_id, engine_label, accelerator) = fem_eigen_runtime_engine_info(engine);
+        BackendPlanIR::FemEigen(fem) => {
+            let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
+            let (engine_id, engine_label, accelerator) = fem_eigen_runtime_engine_info(execution);
             Ok(RuntimeEngineInfo {
                 backend_family: "fem_eigen".to_string(),
                 engine_id: engine_id.to_string(),
@@ -4238,17 +4343,25 @@ fn fem_runtime_engine_info(
 }
 
 fn fem_eigen_runtime_engine_info(
-    engine: dispatch::FemEngine,
+    execution: fem::eigen_execution_resolution::PlannedFemEigenExecution<'_>,
 ) -> (&'static str, &'static str, &'static str) {
-    match engine {
-        dispatch::FemEngine::CpuNative => (
-            dispatch::fem_eigen_engine_id(engine),
-            "CPU FEM Eigen Baseline",
+    match execution.lane() {
+        fem::eigen_execution_resolution::FemEigenExecutionLane::Cpu => (
+            "fem_eigen_cpu_baseline",
+            if execution.resolution().is_some() {
+                "CPU FEM K0 Poisson-airbox Schur/SLEPc"
+            } else {
+                "CPU FEM Eigen Baseline"
+            },
             "cpu",
         ),
-        dispatch::FemEngine::NativeGpu => (
-            dispatch::fem_eigen_engine_id(engine),
-            "GPU FEM Eigen",
+        fem::eigen_execution_resolution::FemEigenExecutionLane::Gpu => (
+            "fem_eigen_native_gpu",
+            if execution.resolution().is_some() {
+                "GPU FEM Modal Device Krylov"
+            } else {
+                "GPU FEM Eigen"
+            },
             "gpu",
         ),
     }
@@ -4266,15 +4379,15 @@ fn fem_session_runtime_defaults(
 }
 
 fn fem_eigen_session_runtime_defaults(
-    engine: dispatch::FemEngine,
+    execution: fem::eigen_execution_resolution::PlannedFemEigenExecution<'_>,
 ) -> (&'static str, &'static str, &'static str) {
-    match engine {
-        dispatch::FemEngine::CpuNative => (
+    match execution.lane() {
+        fem::eigen_execution_resolution::FemEigenExecutionLane::Cpu => (
             "fem-eigen-cpu-baseline",
             "fem_eigen_cpu_baseline",
             "../../bin/fullmag-bin",
         ),
-        dispatch::FemEngine::NativeGpu => (
+        fem::eigen_execution_resolution::FemEigenExecutionLane::Gpu => (
             "fem-eigen-gpu",
             "fem_eigen_native_gpu",
             "bin/fullmag-fem-gpu-bin",
@@ -4376,11 +4489,20 @@ pub fn resolve_planned_runtime_capabilities(
             });
             Ok(capabilities)
         }
-        BackendPlanIR::FemEigen(_) => Ok(mark_study_quantity_registry_as_resolved_plan(
-            capabilities_for_fem_eigen_engine(
-                dispatch::resolve_fem_engine_with_trail(problem)?.engine,
-            ),
-        )),
+        BackendPlanIR::FemEigen(fem) => {
+            let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
+            let engine = match execution.lane() {
+                fem::eigen_execution_resolution::FemEigenExecutionLane::Cpu => {
+                    dispatch::FemEngine::CpuNative
+                }
+                fem::eigen_execution_resolution::FemEigenExecutionLane::Gpu => {
+                    dispatch::FemEngine::NativeGpu
+                }
+            };
+            Ok(mark_study_quantity_registry_as_resolved_plan(
+                capabilities_for_fem_eigen_engine(engine),
+            ))
+        }
         BackendPlanIR::FemFrequencyResponse(_) => {
             Ok(mark_study_quantity_registry_as_resolved_plan(
                 capabilities_for_fem_frequency_response_validation_engine(
@@ -4465,7 +4587,7 @@ pub fn resolve_session_runtime_with_registry_and_preview(
     preview_enabled: bool,
 ) -> Result<ResolvedSessionRuntime, RunError> {
     let plan = fullmag_plan::plan(problem)?;
-    resolve_session_runtime_with_plan_and_registry_and_preview(
+    resolve_planned_session_runtime_with_registry_and_preview(
         problem,
         &plan,
         registry,
@@ -4483,7 +4605,7 @@ pub fn resolve_session_runtime_for_plan_and_preview(
     plan: &fullmag_ir::ExecutionPlanIR,
     field_every_n: u64,
 ) -> Result<ResolvedSessionRuntime, RunError> {
-    resolve_session_runtime_with_plan_and_registry_and_preview(
+    resolve_planned_session_runtime_with_registry_and_preview(
         problem,
         plan,
         None,
@@ -4491,7 +4613,7 @@ pub fn resolve_session_runtime_for_plan_and_preview(
     )
 }
 
-fn resolve_session_runtime_with_plan_and_registry_and_preview(
+pub(crate) fn resolve_planned_session_runtime_with_registry_and_preview(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
     registry: Option<&RuntimeRegistry>,
@@ -4502,6 +4624,20 @@ fn resolve_session_runtime_with_plan_and_registry_and_preview(
     let effective_requested_device = match &plan.backend_plan {
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => {
             dispatch::requested_registry_device_for_fdm(problem)
+        }
+        BackendPlanIR::FemEigen(fem) => {
+            match fem::eigen_execution_resolution::resolve_planned_fem_eigen_execution(plan, fem)? {
+                Some(execution) => match execution
+                    .resolution()
+                    .expect("planned FEM eigen execution owns a resolution")
+                    .requested_device
+                {
+                    fullmag_ir::ExecutionDevice::Auto => "auto".to_string(),
+                    fullmag_ir::ExecutionDevice::Cpu => "cpu".to_string(),
+                    fullmag_ir::ExecutionDevice::Gpu => "gpu".to_string(),
+                },
+                None => dispatch::effective_fem_device_request(problem),
+            }
         }
         _ => dispatch::effective_fem_device_request(problem),
     };
@@ -4614,9 +4750,27 @@ fn resolve_session_runtime_with_plan_and_registry_and_preview(
                 fem_crossover_decision: dispatch_resolution.fem_crossover_decision,
             })
         }
-        (BackendPlanIR::FemEigen(_), dispatch::DispatchEngine::Fem(engine)) => {
+        (BackendPlanIR::FemEigen(fem), dispatch::DispatchEngine::Fem(engine)) => {
+            let execution = dispatch::resolve_planned_fem_eigen_execution(problem, plan, fem)?;
+            let expected_engine = match execution.lane() {
+                fem::eigen_execution_resolution::FemEigenExecutionLane::Cpu => {
+                    dispatch::FemEngine::CpuNative
+                }
+                fem::eigen_execution_resolution::FemEigenExecutionLane::Gpu => {
+                    dispatch::FemEngine::NativeGpu
+                }
+            };
+            if engine != expected_engine {
+                return Err(RunError {
+                    message: format!(
+                        "planned_fem_eigen_session_engine_mismatch: planned={} registry={}",
+                        execution.engine_id(),
+                        dispatch::fem_eigen_engine_id(engine)
+                    ),
+                });
+            }
             let (default_family, engine_id, default_worker) =
-                fem_eigen_session_runtime_defaults(engine);
+                fem_eigen_session_runtime_defaults(execution);
             Ok(ResolvedSessionRuntime {
                 requested_device: effective_requested_device,
                 requested_cpu_threads,
@@ -4967,7 +5121,13 @@ pub fn run_reference_fem_eigen(
         plan.mesh_build_report.as_ref(),
         "fem_eigen_reference",
     )?;
-    let executed = dispatch::execute_fem_eigen(dispatch::FemEngine::CpuNative, plan, outputs)?;
+    let executed = dispatch::execute_fem_eigen(
+        fem::eigen_execution_resolution::PlannedFemEigenExecution::legacy(
+            fem::eigen_execution_resolution::FemEigenExecutionLane::Cpu,
+        ),
+        plan,
+        outputs,
+    )?;
     Ok(types::FemEigenRunResult {
         status: executed.result.status,
         artifacts: executed
@@ -6195,8 +6355,9 @@ mod tests {
         fem.fixed_timestep = None;
         fem.field_drives = vec![drive];
 
-        require_supported_fem_topology(&problem, &plan)
-            .expect("bound mixed P1 time evolution with a regional drive must cross the startup guard");
+        require_supported_fem_topology(&problem, &plan).expect(
+            "bound mixed P1 time evolution with a regional drive must cross the startup guard",
+        );
     }
 
     #[test]
@@ -6404,6 +6565,7 @@ mod tests {
             provenance: fullmag_ir::ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         };
@@ -6476,7 +6638,10 @@ mod tests {
                 .and_then(|tail| tail.split("\npub fn ").next())
                 .unwrap_or_else(|| panic!("missing hysteresis entrypoint {entrypoint}"));
             assert!(
-                body.contains("hysteresis::run_planned_hysteresis"),
+                body.contains("hysteresis::run_planned_hysteresis")
+                    || body.contains(
+                        "run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(",
+                    ),
                 "{entrypoint} bypasses the shared hysteresis owner"
             );
         }
@@ -9400,12 +9565,15 @@ mod tests {
 
     #[test]
     fn fem_runtime_and_eigen_engine_ids_stay_distinct() {
+        let legacy_eigen_cpu = fem::eigen_execution_resolution::PlannedFemEigenExecution::legacy(
+            fem::eigen_execution_resolution::FemEigenExecutionLane::Cpu,
+        );
         assert_eq!(
             fem_runtime_engine_info(dispatch::FemEngine::CpuNative),
             ("fem_cpu_native", "CPU FEM (MFEM/libCEED/hypre)", "cpu")
         );
         assert_eq!(
-            fem_eigen_runtime_engine_info(dispatch::FemEngine::CpuNative),
+            fem_eigen_runtime_engine_info(legacy_eigen_cpu),
             ("fem_eigen_cpu_baseline", "CPU FEM Eigen Baseline", "cpu")
         );
         assert_eq!(
@@ -9413,7 +9581,7 @@ mod tests {
             ("fem-cpu-native", "fem_cpu_native", "../../bin/fullmag-bin")
         );
         assert_eq!(
-            fem_eigen_session_runtime_defaults(dispatch::FemEngine::CpuNative),
+            fem_eigen_session_runtime_defaults(legacy_eigen_cpu),
             (
                 "fem-eigen-cpu-baseline",
                 "fem_eigen_cpu_baseline",

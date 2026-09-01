@@ -102,8 +102,18 @@ export function useAnalysisFrequencyData(
   const frequencyDomainContext = useMemo(
     () => frequencyDomainResultContextFromManifest(
       frequencyDomainManifest.data?.result_manifest?.payload,
+      {
+        meshGenerationId: frequencyDomainManifest.data?.result_manifest?.mesh_generation_id,
+        runId: frequencyDomainManifest.data?.result_manifest?.run_id,
+        stageId: frequencyDomainManifest.data?.result_manifest?.stage_id,
+      },
     ),
-    [frequencyDomainManifest.data?.result_manifest?.payload],
+    [
+      frequencyDomainManifest.data?.result_manifest?.mesh_generation_id,
+      frequencyDomainManifest.data?.result_manifest?.payload,
+      frequencyDomainManifest.data?.result_manifest?.run_id,
+      frequencyDomainManifest.data?.result_manifest?.stage_id,
+    ],
   );
   const frequencyDomainRouteOverride = useSelectionSelector(
     frequencyDomainChartRouteOverrideFromSelection,

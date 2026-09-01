@@ -9,8 +9,10 @@ import {
 export type ChartExportFormat = "csv" | "tsv";
 
 export interface ChartExportProvenance {
+  artifactPath: string | null;
   backend: string | null;
   canonicalUnits: { x: string; y: string[] };
+  contentDigest: string | null;
   dataRevision: string | number | null;
   decimation: string;
   descriptorId: string;
@@ -18,10 +20,13 @@ export interface ChartExportProvenance {
   displayUnits: Record<string, string>;
   exportedAt: string;
   precision: string | null;
+  provenance: string | null;
+  qualification: string;
   query: string;
   resourceKey: string;
   runId: string | null;
   schemaVersion: 1;
+  sourceSchemaVersion: string | null;
   sessionId: string | null;
   status: ChartRenderModel["status"];
   stageId: string | null;
@@ -33,6 +38,7 @@ export function chartExportProvenance(
   exportedAt = new Date().toISOString(),
 ): ChartExportProvenance {
   return {
+    artifactPath: model.provenance?.artifactPath ?? null,
     dataRevision: model.provenance?.dataRevision ?? null,
     decimation: model.provenance?.decimation ?? "unknown",
     descriptorId: model.provenance?.descriptorId ?? model.key,
@@ -41,14 +47,18 @@ export function chartExportProvenance(
       x: model.xAxis.unit,
       y: model.series.map((series) => series.unit),
     },
+    contentDigest: model.provenance?.contentDigest ?? null,
     device: model.provenance?.device ?? null,
     displayUnits: resolvedDisplayUnits(model),
     exportedAt,
     precision: model.provenance?.precision ?? null,
+    provenance: model.provenance?.provenance ?? null,
+    qualification: model.provenance?.qualification ?? "unknown",
     query: model.provenance?.query ?? model.key,
     resourceKey: model.provenance?.resourceKey ?? "unknown",
     runId: model.provenance?.runId ?? null,
     schemaVersion: 1,
+    sourceSchemaVersion: model.provenance?.schemaVersion ?? null,
     sessionId: model.provenance?.sessionId ?? null,
     status: model.status,
     scientificTrust: model.provenance?.scientificTrust ?? "unknown",

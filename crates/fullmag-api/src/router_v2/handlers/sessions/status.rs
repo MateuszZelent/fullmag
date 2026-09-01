@@ -309,6 +309,7 @@ pub(crate) fn build_live_status(
         solver_profile_revision: snapshot.solver_profile.revision,
         display_revision: display_sel.revision,
         visualization_state_revision: display_sel.revision,
+        mode_composition_revision: display_presentation.mode_composition.revision,
         workspace_revision: workspace_selection
             .revision
             .max(workspace_ribbon.revision)

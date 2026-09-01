@@ -4,6 +4,7 @@ import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectV
 
 import {
   resolveMeshPartSurfaceMaterialColor,
+  resolveMeshPartMagnetizationTexturePreviewColor,
   surfaceMaterialColorFromSettings,
   VERTEX_COLOR_MATERIAL_COLOR,
   vectorStyleFromSettings,
@@ -92,6 +93,21 @@ describe("resolveMeshPartSurfaceMaterialColor", () => {
         "#313244",
         "#c255f0",
         false,
+      ),
+    ).toBe("#c255f0");
+  });
+
+  it("does not expose magnetization preview color while an analysis overlay is active", () => {
+    expect(
+      resolveMeshPartMagnetizationTexturePreviewColor(
+        true,
+        "#c255f0",
+      ),
+    ).toBeNull();
+    expect(
+      resolveMeshPartMagnetizationTexturePreviewColor(
+        false,
+        "#c255f0",
       ),
     ).toBe("#c255f0");
   });

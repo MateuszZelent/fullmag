@@ -749,6 +749,11 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .post(handlers::visualization::post_visualization_client_ack),
         )
         .route(
+            "/v2/sessions/current/visualization/mode-compositions/active",
+            get(handlers::visualization::get_active_mode_composition)
+                .patch(handlers::visualization::patch_active_mode_composition),
+        )
+        .route(
             "/v2/sessions/current/workspace/layout",
             get(handlers::workspace::get_workspace_layout)
                 .put(handlers::workspace::replace_workspace_layout),
@@ -825,8 +830,16 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_frequency_domain_eigen_spectrum_v2),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3",
+            get(handlers::analysis::get_frequency_domain_eigen_spectrum_v3),
+        )
+        .route(
             "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
             get(handlers::analysis::get_frequency_domain_eigen_branches_v2),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+            get(handlers::analysis::get_frequency_domain_eigen_field_sweep),
         )
         .route(
             "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
@@ -837,8 +850,24 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_frequency_domain_eigen_diagnostics_v2),
         )
         .route(
+            "/v2/sessions/current/analysis/frequency-domain/eigen/modes/:sample_index/:mode_index",
+            get(handlers::analysis::get_frequency_domain_eigen_mode),
+        )
+        .route(
             "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/:sample_index/:mode_index/meta",
             get(handlers::analysis::get_frequency_domain_eigen_mode_field_meta),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+            get(handlers::analysis::get_frequency_domain_fmr_peaks),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+            get(handlers::analysis::get_frequency_domain_fmr_resonance_fits),
+        )
+        .route(
+            "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
+            get(handlers::analysis::get_frequency_domain_fmr_kittel_fit),
         )
         .route(
             "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",

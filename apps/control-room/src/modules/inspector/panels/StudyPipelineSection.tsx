@@ -17,6 +17,7 @@ import { InspectorGroup } from "../primitives/InspectorGroup";
 
 import {
   validateStudyStageDraft,
+  type K0ModalExecutionReadiness,
   type StudyStageDraft,
 } from "./StudyStageAuthoringModel";
 import type {
@@ -136,6 +137,7 @@ export function StudyPipelineSection({
   authoringBusy = false,
   authoringFeedback,
   demagEnabled = false,
+  k0ModalReadinessFor,
   draft,
   draftIndex,
   drafts,
@@ -157,6 +159,7 @@ export function StudyPipelineSection({
   authoringBusy?: boolean;
   authoringFeedback: { kind: "success" | "danger" | "error" | "warning"; message: string } | null;
   demagEnabled?: boolean;
+  k0ModalReadinessFor?: (draft: StudyStageDraft) => K0ModalExecutionReadiness;
   draft: StudyStageDraft | null;
   draftIndex: number;
   drafts: readonly StudyStageDraft[];
@@ -179,6 +182,7 @@ export function StudyPipelineSection({
         backend: model.requested.backend,
         demagEnabled,
         device: model.requested.device,
+        ...k0ModalReadinessFor?.(draft),
         mode: model.requested.mode,
         precision: model.requested.precision,
       })

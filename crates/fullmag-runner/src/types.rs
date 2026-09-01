@@ -1,9 +1,12 @@
 //! Public and internal types for the runner.
 
-use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR, StageCompletionIR};
-pub use fullmag_quantities::FemRepresentationReceipt;
-#[cfg(any(feature = "fem-gpu", test))]
-pub use fullmag_quantities::{FemMaterialFieldLocation, FemStateRepresentation};
+use fullmag_ir::{
+    FemEigenExecutionResolutionIR, FemMeshPartRole, FemMeshPartSelector, MeshQualityIR,
+    StageCompletionIR,
+};
+pub use fullmag_quantities::{
+    FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation,
+};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -93,6 +96,139 @@ pub struct RunResult {
     pub final_magnetization: Vec<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<StageCompletionIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CertifiedFemEquilibriumFields {
+    pub schema_version: String,
+    pub h_ex_a_per_m: Vec<[f64; 3]>,
+    pub h_demag_a_per_m: Vec<[f64; 3]>,
+    pub h_ext_a_per_m: Vec<[f64; 3]>,
+    pub h_eff_a_per_m: Vec<[f64; 3]>,
+    pub phi_a: Vec<f64>,
+    pub content_sha256: String,
+}
+
+impl CertifiedFemEquilibriumFields {
+    pub fn from_fields(
+        h_ex_a_per_m: Vec<[f64; 3]>,
+        h_demag_a_per_m: Vec<[f64; 3]>,
+        h_ext_a_per_m: Vec<[f64; 3]>,
+        h_eff_a_per_m: Vec<[f64; 3]>,
+        phi_a: Vec<f64>,
+    ) -> Result<Self, RunError> {
+        let node_count = h_eff_a_per_m.len();
+        if node_count == 0
+            || h_ex_a_per_m.len() != node_count
+            || h_demag_a_per_m.len() != node_count
+            || h_ext_a_per_m.len() != node_count
+            || phi_a.len() != node_count
+            || [
+                &h_ex_a_per_m,
+                &h_demag_a_per_m,
+                &h_ext_a_per_m,
+                &h_eff_a_per_m,
+            ]
+            .into_iter()
+            .flat_map(|values| values.iter())
+            .flat_map(|value| value.iter())
+            .any(|value| !value.is_finite())
+            || phi_a.iter().any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "certified FEM equilibrium fields are incomplete or non-finite"
+                    .to_string(),
+            });
+        }
+        let mut value = Self {
+            schema_version: "CertifiedFemEquilibriumFields.v1".to_string(),
+            h_ex_a_per_m,
+            h_demag_a_per_m,
+            h_ext_a_per_m,
+            h_eff_a_per_m,
+            phi_a,
+            content_sha256: String::new(),
+        };
+        value.content_sha256 = certified_equilibrium_fields_sha256(&value);
+        Ok(value)
+    }
+}
+
+pub(crate) fn certified_equilibrium_fields_sha256(
+    fields: &CertifiedFemEquilibriumFields,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"CertifiedFemEquilibriumFields.v1\0");
+    for vectors in [
+        &fields.h_ex_a_per_m,
+        &fields.h_demag_a_per_m,
+        &fields.h_ext_a_per_m,
+        &fields.h_eff_a_per_m,
+    ] {
+        hash.update((vectors.len() as u64).to_le_bytes());
+        for vector in vectors {
+            for value in vector {
+                hash.update(value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    hash.update((fields.phi_a.len() as u64).to_le_bytes());
+    for value in &fields.phi_a {
+        hash.update(value.to_bits().to_le_bytes());
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecomputedFemLinearizationCertificateV1 {
+    pub schema_version: String,
+    pub status: String,
+    pub recompute_provider: String,
+    pub node_count: usize,
+    pub equilibrium_content_sha256: String,
+    pub mesh_topology_sha256: String,
+    pub equilibrium_material_signature: String,
+    pub equilibrium_static_physics_signature: String,
+    pub equilibrium_boundary_signature: String,
+    pub accepted_fields_content_sha256: String,
+    pub recomputed_fields_content_sha256: String,
+    pub max_h_ex_difference_a_per_m: f64,
+    pub max_h_demag_difference_a_per_m: f64,
+    pub max_h_ext_difference_a_per_m: f64,
+    pub max_h_eff_difference_a_per_m: f64,
+    pub max_phi_difference_a: f64,
+    pub field_absolute_tolerance_a_per_m: f64,
+    pub field_relative_tolerance: f64,
+    pub phi_absolute_tolerance_a: f64,
+    pub content_sha256: String,
+}
+
+pub fn recomputed_fem_linearization_certificate_sha256(
+    certificate: &RecomputedFemLinearizationCertificateV1,
+) -> Result<String, RunError> {
+    let mut preimage = certificate.clone();
+    preimage.content_sha256.clear();
+    let encoded = serde_json::to_vec(&preimage).map_err(|error| RunError {
+        message: format!("failed to encode recomputed FEM linearization certificate: {error}"),
+    })?;
+    let mut hash = Sha256::new();
+    hash.update(b"RecomputedFemLinearizationCertificate.v1\0");
+    hash.update((encoded.len() as u64).to_le_bytes());
+    hash.update(encoded);
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+pub fn recomputed_fem_equilibrium_content_sha256(values: &[[f64; 3]]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"RecomputedFemLinearizationCertificate.m0.v1\0");
+    hash.update((values.len() as u64).to_le_bytes());
+    for vector in values {
+        for value in vector {
+            hash.update(value.to_bits().to_le_bytes());
+        }
+    }
+    format!("sha256:{:x}", hash.finalize())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -3496,6 +3632,21 @@ mod fem_gpu_execution_receipt_contract_tests {
         assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
     }
 }
+/// Attestation returned by the native modal boundary after planner selection.
+///
+/// This is intentionally separate from `resolved_fallback`: the latter records
+/// planner selection (including legal auto-to-CPU resolution), while this
+/// object proves that the native runtime executed the accepted target without
+/// a second, hidden runtime fallback.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemEigenNativeExecutionAttestation {
+    pub requested_target: String,
+    pub resolved_target: String,
+    pub resolved_engine_id: String,
+    pub fallback_used: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
 
 /// FEM demag solver provenance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -3823,6 +3974,12 @@ pub struct ExecutionProvenance {
     pub random_seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_fallback: Option<ResolvedFallback>,
+    /// Full planner-accepted exact FEM eigen execution resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_eigen_execution_resolution: Option<FemEigenExecutionResolutionIR>,
+    /// Native no-fallback attestation, recorded independently of planner fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_eigen_native_execution_attestation: Option<FemEigenNativeExecutionAttestation>,
     /// Qualified FEM auto-device crossover decision, if requested device was auto.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_crossover_decision: Option<FemCrossoverDecision>,
@@ -4393,8 +4550,9 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
+        fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
         fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
-        normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
+        fem_plan_mesh_generation_id, reset_fem_mesh_fingerprint_count,
         reset_fem_mesh_payload_build_count, ExecutionProvenance, FdmCpuStateLayoutProvenance,
         FemMeshPartPayload, FemMeshPayload, FemPoissonDemagProvenance, InitialTimestepReason,
         LegacyDtPolicy, LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
@@ -4406,7 +4564,6 @@ mod tests {
         ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemMeshPartIR,
         FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR,
     };
-    use std::collections::BTreeSet;
 
     fn fdm_cpu_timestep_identity() -> TimestepExecutionIdentity {
         TimestepExecutionIdentity {
@@ -4542,6 +4699,171 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    fn tiny_fem_eigen_plan(plan: &FemPlanIR) -> fullmag_ir::FemEigenPlanIR {
+        fullmag_ir::FemEigenPlanIR {
+            mesh_name: plan.mesh_name.clone(),
+            mesh_source: plan.mesh_source.clone(),
+            mesh: plan.mesh.clone(),
+            object_segments: plan.object_segments.clone(),
+            mesh_parts: plan.mesh_parts.clone(),
+            mesh_build_report: plan.mesh_build_report.clone(),
+            domain_mesh_mode: plan.domain_mesh_mode,
+            domain_frame: plan.domain_frame.clone(),
+            fe_order: plan.fe_order,
+            hmax: plan.hmax,
+            equilibrium_magnetization: plan.initial_magnetization.clone(),
+            material: plan.material.clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 1,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: None,
+            bias_field_samples: Vec::new(),
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: None,
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            precision: plan.precision,
+            exchange_bc: plan.exchange_bc,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            demag_realization: None,
+            air_box_config: None,
+            mode_tracking: None,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+        }
+    }
+
+    fn tiny_fem_frequency_response_plan(
+        plan: &FemPlanIR,
+    ) -> fullmag_ir::FemFrequencyResponsePlanIR {
+        fullmag_ir::FemFrequencyResponsePlanIR {
+            mesh_name: plan.mesh_name.clone(),
+            mesh_source: plan.mesh_source.clone(),
+            mesh: plan.mesh.clone(),
+            object_segments: plan.object_segments.clone(),
+            mesh_parts: plan.mesh_parts.clone(),
+            mesh_build_report: plan.mesh_build_report.clone(),
+            domain_mesh_mode: plan.domain_mesh_mode,
+            domain_mesh_workflow_mode: None,
+            domain_frame: plan.domain_frame.clone(),
+            fe_order: plan.fe_order,
+            hmax: plan.hmax,
+            equilibrium_magnetization: plan.initial_magnetization.clone(),
+            material: plan.material.clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: None,
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitMaxAmplitude,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [0.0, 0.0, 1.0],
+                phase_rad: 0.0,
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: vec![1.0e9],
+            },
+            solver_policy: None,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: None,
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            precision: plan.precision,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            exchange_bc: plan.exchange_bc,
+            demag_realization: None,
+            air_box_config: None,
+            demag_solver_policy: None,
+            periodic_constraint_sets: Vec::new(),
+            equilibrium_provenance: None,
+        }
+    }
+
+    #[test]
+    fn fem_plan_families_share_full_topology_sha256_identity() {
+        let mut time_domain = tiny_fem_plan();
+        time_domain
+            .mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 2, 1, 3]]);
+        time_domain.mesh.element_markers = vec![7, 9];
+        time_domain.region_materials = vec![
+            fullmag_ir::FemRegionMaterialIR {
+                object_id: "film-left".to_string(),
+                material: time_domain.material.clone(),
+                element_marker: 7,
+            },
+            fullmag_ir::FemRegionMaterialIR {
+                object_id: "film-right".to_string(),
+                material: time_domain.material.clone(),
+                element_marker: 9,
+            },
+        ];
+        let time_domain_payload = FemMeshPayload::from(&time_domain);
+        // The planner carries the normalized magnetic/air marker projection
+        // into each FEM study family.  Use that canonical realized topology
+        // for the cross-family identity check; raw authoring markers are not
+        // themselves a stable payload identity when region materials exist.
+        let canonical_markers = time_domain_payload.element_markers.clone();
+        let mut modal = tiny_fem_eigen_plan(&time_domain);
+        modal.mesh.element_markers = canonical_markers.clone();
+        let mut driven = tiny_fem_frequency_response_plan(&time_domain);
+        driven.mesh.element_markers = canonical_markers.clone();
+        let canonical = fullmag_ir::fem_mesh_topology_fingerprint_v3(
+            &time_domain_payload.nodes,
+            &time_domain_payload.cells,
+            &canonical_markers,
+            &time_domain_payload.facets,
+            &time_domain_payload.boundary_markers,
+            &time_domain_payload.periodic_boundary_pairs,
+            &time_domain_payload.periodic_node_pairs,
+        )
+        .expect("finite test mesh");
+
+        let canonical_generation = fem_plan_mesh_generation_id(&time_domain);
+        assert_eq!(fem_eigen_mesh_generation_id(&modal), canonical_generation);
+        assert_eq!(
+            fem_frequency_response_mesh_generation_id(&driven),
+            canonical_generation
+        );
+        assert_eq!(
+            time_domain_payload.generation_id.as_deref(),
+            Some(canonical_generation.as_str())
+        );
+        let modal_payload = FemMeshPayload::from(&modal);
+        let driven_payload = FemMeshPayload::from(&driven);
+        assert_eq!(time_domain_payload.element_markers, canonical_markers);
+        assert_eq!(
+            modal_payload.element_markers,
+            time_domain_payload.element_markers
+        );
+        assert_eq!(
+            driven_payload.element_markers,
+            time_domain_payload.element_markers
+        );
+        assert_eq!(
+            fem_mesh_topology_fingerprint(&time_domain_payload),
+            canonical
+        );
+        assert_eq!(fem_mesh_topology_fingerprint(&modal_payload), canonical);
+        assert_eq!(fem_mesh_topology_fingerprint(&driven_payload), canonical);
     }
 
     #[test]
@@ -4733,31 +5055,6 @@ mod tests {
         assert_eq!(
             fem_mesh_topology_fingerprint(&base),
             fem_mesh_topology_fingerprint(&repartitioned)
-        );
-    }
-
-    #[test]
-    fn normalized_payload_markers_use_region_material_contract_when_available() {
-        let magnetic_markers = [7u32].into_iter().collect::<BTreeSet<_>>();
-        assert_eq!(
-            normalized_payload_element_markers(&[7, 99, 0], Some(&magnetic_markers)),
-            vec![1, 0, 0]
-        );
-    }
-
-    #[test]
-    fn normalized_payload_markers_preserve_simple_air_split_without_region_materials() {
-        assert_eq!(
-            normalized_payload_element_markers(&[2, 0], None),
-            vec![1, 0]
-        );
-    }
-
-    #[test]
-    fn normalized_payload_markers_treat_uniform_marker_mesh_as_fully_magnetic() {
-        assert_eq!(
-            normalized_payload_element_markers(&[5, 5], None),
-            vec![1, 1]
         );
     }
 

@@ -27,6 +27,6 @@ pub use capture::{
     CheckpointSnapshotProvider,
 };
 pub use cas::{hex_sha256, CasStore};
-pub use fms::{inspect_fms, pack_fms, unpack_fms, PackOptions};
+pub use fms::{inspect_fms, pack_fms, preflight_fms, unpack_fms, FmsPreflight, PackOptions};
 pub use store::SessionStore;
 pub use types::*;

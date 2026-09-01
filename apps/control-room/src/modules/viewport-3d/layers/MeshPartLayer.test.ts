@@ -367,6 +367,7 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("field-scalar-shader");
     expect(source).toContain("<primitive attach=\"material\" object={scalarShaderMaterial} />");
     expect(source).not.toContain("applyScalarShaderColorBuffer");
+    expect(source).not.toContain("scalarShaderBufferRef.current =");
   });
 
   it("lets diagnostics bypass field-color buffer application without hiding surfaces", () => {
@@ -415,7 +416,10 @@ describe("MeshPartLayer", () => {
     );
 
     expect(source).toContain(
-      "if (!renderSettings.visible || !hasAnyVisibleRenderableSubLayer) return null;",
+      "(!renderSettings.visible && !modalSurfaceActive && !modalVectorsActive)",
+    );
+    expect(source).toContain(
+      "!hasAnyVisibleRenderableSubLayer",
     );
     expect(source).not.toContain(
       "if (!geometry || !renderSettings.visible",
@@ -558,6 +562,17 @@ describe("MeshPartLayer", () => {
     expect(source).not.toContain("fieldModel?.partVectorSegments.get(part.id)");
   });
 
+  it("gives a ready modal layer ownership of glyph-only vector segments", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("buildModeCompositionVectorLayerInput");
+    expect(source).toContain("modalVectorLayerInput?.segments ?? vectorLayerInput.segments");
+    expect(source).toContain("modalVectorsActive || renderPlan.vectors.visible");
+  });
+
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {
     const surfaceEdges = new Uint32Array([0, 1, 1, 2]);
     const volumeEdges = new Uint32Array([0, 1, 1, 2, 2, 3, 0, 3]);
@@ -653,6 +668,31 @@ describe("MeshPartLayer", () => {
         },
       }),
     ).toBe(partEffectiveFieldY);
+  });
+
+  it("accepts an analysis mode scalar buffer for an m target", () => {
+    const modeColors = {
+      colors: new Float32Array(0),
+      colorMode: "magnitude",
+      colorPalette: "coolwarm",
+      quantityId: "analysis:eigen:sample-0000:mode-0000",
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      resolveMeshPartScalarColors({
+        fieldModel: {
+          scalarColorsByMode: new Map([["magnitude", modeColors]]),
+          scalarColorsByPartAndMode: new Map(),
+        },
+        partId: "part-a",
+        scalarColorMode: "magnitude",
+        settings: {
+          activeQuantityId: "m",
+          scalarColorPalette: "coolwarm",
+        },
+      }),
+    ).toBe(modeColors);
   });
 
   it("uses target-pass scalar colors before legacy part/global maps", () => {

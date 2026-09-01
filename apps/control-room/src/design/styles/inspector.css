@@ -586,7 +586,7 @@
 /* ── Redesigned Inspector Shell ── */
 .fm-inspector {
   display: grid;
-  grid-template-rows: auto 44px minmax(0, 1fr) 56px;
+  grid-template-rows: auto 44px minmax(0, 1fr) auto;
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -596,7 +596,7 @@
 }
 
 .fm-inspector:not(:has(> .fm-inspector__tabs)) {
-  grid-template-rows: auto minmax(0, 1fr) 56px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .fm-inspector__header {
@@ -833,7 +833,7 @@
   box-shadow: 0 0 12px color-mix(in srgb, var(--fm-accent) 35%, transparent) !important;
 }
 
-@container (max-width: 390px) {
+@container (max-width: 560px) {
   .fm-inspector__header {
     padding-inline: var(--fm-space-3);
   }

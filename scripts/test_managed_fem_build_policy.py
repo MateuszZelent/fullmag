@@ -73,6 +73,36 @@ def test_build_policy_rejects_unknown_profiles_and_reuse_values(
     assert "managed_fem_build_policy" in result.stderr
 
 
+def test_windows_worktree_git_environment_matches_checkout_semantics() -> None:
+    git_record = REPO_ROOT / ".git"
+    if not git_record.is_file():
+        pytest.skip("test requires a linked Windows worktree")
+    record = git_record.read_text(encoding="utf-8").strip()
+    if len(record) < 11 or record[9:11] != ":/":
+        pytest.skip("test requires a Windows gitdir record")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            'source "$1"; resolve_managed_fem_build_policy; '
+            'printf "%s|%s" "$(git config --get core.autocrlf)" '
+            '"$(git config --get core.filemode)"',
+            "bash",
+            str(HELPER),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "true|false"
+
+
 def test_nightly_checksum_freshness_rebuilds_rust_source_with_old_mtime(
     tmp_path: Path,
 ) -> None:

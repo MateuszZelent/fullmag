@@ -1378,6 +1378,11 @@ export function EigenSpectrumInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Primary mode" value={summary.primaryMode} />
         <FieldRow label="Damping coverage" value={summary.dampingCoverage} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
+        <FieldRow label="Solve status" value={summary.solveStatus} />
+        <FieldRow label="Field availability" value={summary.fieldAvailability} />
+        <FieldRow label="Spectrum completeness" value={summary.spectrumCompleteness} />
+        <FieldRow label="Window certificate" value={summary.windowCertificate} />
+        <FieldRow label="Candidate identity" value={summary.candidateIdentity} />
         <FieldRow
           label="3D workflow"
           value="select mode -> plot phase-rotated real field"
@@ -3374,6 +3379,11 @@ export function EigenSpectrumResourceInspectorPanel(props: InspectorPanelProps) 
         />
         <FieldRow label="Frequency range" value={summary.frequencyRange} />
         <FieldRow label="Residual coverage" value={summary.residualCoverage} />
+        <FieldRow label="Solve status" value={summary.solveStatus} />
+        <FieldRow label="Field availability" value={summary.fieldAvailability} />
+        <FieldRow label="Spectrum completeness" value={summary.spectrumCompleteness} />
+        <FieldRow label="Window certificate" value={summary.windowCertificate} />
+        <FieldRow label="Candidate identity" value={summary.candidateIdentity} />
       </InspectorGroup>
     </div>
   );
@@ -4385,6 +4395,33 @@ function useEigenSpectrumSummary() {
     (point) => point.modeFieldId,
   ).length;
   const primaryMode = spectrumModel.points[0] ?? null;
+  const payload = record(spectrum.data?.payload);
+  const candidate = record(payload?.candidate_identity);
+  const solveSucceeded =
+    typeof payload?.solve_succeeded === "boolean"
+      ? payload.solve_succeeded
+      : null;
+  const fieldsAvailable =
+    typeof payload?.fields_available === "boolean"
+      ? payload.fields_available
+      : null;
+  const windowComplete =
+    typeof payload?.window_complete === "boolean"
+      ? payload.window_complete
+      : null;
+  const identityParts = [
+    spectrum.data?.run_id ? `run=${spectrum.data.run_id}` : null,
+    spectrum.data?.stage_id ? `stage=${spectrum.data.stage_id}` : null,
+    spectrum.data?.revision ? `artifact=${spectrum.data.revision}` : null,
+    spectrum.data?.mesh_generation_id
+      ? `mesh=${spectrum.data.mesh_generation_id}`
+      : stringValue(candidate?.mesh_generation_id)
+        ? `mesh=${stringValue(candidate?.mesh_generation_id)}`
+        : null,
+    stringValue(candidate?.device)
+      ? `device=${stringValue(candidate?.device)}`
+      : null,
+  ].filter((value): value is string => value != null);
 
   return {
     badge:
@@ -4393,6 +4430,14 @@ function useEigenSpectrumSummary() {
         : spectrum.status,
     capabilitySummary: `reference_cpu: ${capabilityStatus(modalCapabilities?.reference_cpu)}; mode_field_payload: ${capabilityStatus(modalCapabilities?.mode_field_payload)}`,
     dampingCoverage: `${dampingCount}/${spectrumModel.points.length} mode(s)`,
+    candidateIdentity:
+      identityParts.length > 0 ? identityParts.join("; ") : "not published",
+    fieldAvailability:
+      fieldsAvailable == null
+        ? "unknown"
+        : fieldsAvailable
+          ? "available"
+          : "unavailable",
     fieldOverlayCount,
     frequencyRange: formatFrequencyRange(frequencies),
     modeCount: spectrumModel.points.length,
@@ -4400,8 +4445,22 @@ function useEigenSpectrumSummary() {
       ? `mode ${primaryMode.rawModeIndex} at ${formatFrequency(primaryMode.frequencyHz)}`
       : "not available",
     residualCoverage: `${residualCount}/${spectrumModel.points.length} mode(s)`,
+    solveStatus:
+      solveSucceeded == null
+        ? "unknown"
+        : solveSucceeded
+          ? "succeeded"
+          : "failed",
+    spectrumCompleteness:
+      stringValue(payload?.spectrum_completeness) ?? "unknown",
     spectrumModel,
     spectrumResource: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    windowCertificate:
+      windowComplete == null
+        ? "unknown"
+        : windowComplete
+          ? "complete"
+          : "incomplete",
   };
 }
 

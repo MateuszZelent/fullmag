@@ -67,6 +67,66 @@ class ProblemApiTests(unittest.TestCase):
             with self.subTest(field=field_name):
                 with self.assertRaisesRegex(TypeError, "not bool"):
                     fm.FEM(order=1, **kwargs)
+from fullmag.model.problem import (
+    _fem_mesh_cache_key,
+    _geometry_asset_cache_key,
+    build_geometry_assets_for_request,
+)
+
+
+class ProblemApiTests(unittest.TestCase):
+    def test_fem_mesh_cache_key_changes_when_imported_source_content_changes_with_same_stat(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "shape.stl"
+            source.write_bytes(b"mesh-v1")
+            geometry = fm.ImportedGeometry(source=str(source), name="shape")
+            hints = fm.FEM(order=1, hmax=1e-9)
+            initial_stat = source.stat()
+            initial_key = _fem_mesh_cache_key(geometry, hints)
+
+            source.write_bytes(b"mesh-v2")
+            os.utime(source, ns=(initial_stat.st_atime_ns, initial_stat.st_mtime_ns))
+
+            replacement_stat = source.stat()
+            self.assertEqual(replacement_stat.st_size, initial_stat.st_size)
+            self.assertEqual(replacement_stat.st_mtime_ns, initial_stat.st_mtime_ns)
+            self.assertNotEqual(_fem_mesh_cache_key(geometry, hints), initial_key)
+
+    def test_geometry_asset_cache_key_changes_when_imported_source_content_changes_with_same_stat(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "shape.stl"
+            source.write_bytes(b"mesh-v1")
+            geometry = fm.ImportedGeometry(source=str(source), name="shape")
+            discretization = fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=1e-9))
+            initial_stat = source.stat()
+            initial_key = _geometry_asset_cache_key(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[geometry],
+                discretization=discretization,
+                study_universe=None,
+                mesh_workflow=None,
+                object_regions=None,
+                fdm_only=False,
+            )
+
+            source.write_bytes(b"mesh-v2")
+            os.utime(source, ns=(initial_stat.st_atime_ns, initial_stat.st_mtime_ns))
+
+            replacement_stat = source.stat()
+            self.assertEqual(replacement_stat.st_size, initial_stat.st_size)
+            self.assertEqual(replacement_stat.st_mtime_ns, initial_stat.st_mtime_ns)
+            self.assertNotEqual(
+                _geometry_asset_cache_key(
+                    requested_backend=fm.BackendTarget.FEM,
+                    geometries=[geometry],
+                    discretization=discretization,
+                    study_universe=None,
+                    mesh_workflow=None,
+                    object_regions=None,
+                    fdm_only=False,
+                ),
+                initial_key,
+            )
 
     def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
         cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
@@ -1547,7 +1607,7 @@ class ProblemApiTests(unittest.TestCase):
         problem = replace(
             self._build_problem(),
             pbc=fm.FdmPbc(
-                axes=(True, False, False),
+                axes=(True, True, False),
                 demag="periodic_airbox_k0",
             ),
         )
@@ -5415,6 +5475,72 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('operator="full_2x2"', rewritten)
+
+    def test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent(self) -> None:
+        for device in ("cpu", "cuda"):
+            script = f"""
+            import fullmag as fm
+
+            study = fm.study("stage_bias_field_sweep_{device}")
+            study.engine("fem")
+            study.device("{device}", precision="double")
+            body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+            body.Ms = 800e3
+            body.Aex = 13e-12
+            body.alpha = 0.0
+            body.m = fm.texture.uniform(1, 0, 0)
+            study.save("spectrum")
+            study.stages.add_eigenmodes(
+                count=4,
+                target="frequency_window",
+                frequency_min=100e6,
+                frequency_max=5e9,
+                include_demag=True,
+                k_vector=(0.0, 0.0, 0.0),
+                bc="periodic",
+                magnetostatic_bc="periodic_airbox_k0",
+                bias_field_sweep=fm.BiasFieldSweep(
+                    samples_a_per_m=[
+                        (12_500.123456789122, 0.0, 0.0),
+                        (25_000.0, 0.0, 0.0),
+                    ],
+                    equilibrium_policy="relax_each",
+                    continuation_seed="initial_state",
+                ),
+            )
+            """
+            with TemporaryDirectory() as tmp_dir:
+                path = Path(tmp_dir) / f"bias_field_sweep_{device}.py"
+                path.write_text(textwrap.dedent(script), encoding="utf-8")
+                loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            study_ir = loaded.stages[0].problem.to_ir()["study"]
+            self.assertEqual(study_ir["bias_field_sweep"]["samples_a_per_m"], [
+                [12_500.123456789122, 0.0, 0.0],
+                [25_000.0, 0.0, 0.0],
+            ])
+            self.assertEqual(
+                loaded.stages[0].problem.to_ir()["problem_meta"]["runtime_metadata"]
+                ["runtime_selection"]["device"],
+                device,
+            )
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn("bias_field_sweep=fm.BiasFieldSweep(", rendered)
+
+            with TemporaryDirectory() as tmp_dir:
+                rewritten_path = Path(tmp_dir) / f"bias_field_sweep_{device}_rewritten.py"
+                rewritten_path.write_text(rendered, encoding="utf-8")
+                reloaded = fm.load_problem_from_script(
+                    rewritten_path, lightweight_assets=True
+                )
+
+            reloaded_ir = reloaded.stages[0].problem.to_ir()
+            reloaded_study_ir = reloaded_ir["study"]
+            self.assertEqual(reloaded_study_ir, study_ir)
+            self.assertEqual(
+                reloaded_ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"],
+                device,
+            )
 
     def test_study_builder_eigenmodes_forwards_operator(self) -> None:
         builder = flat_world.study("immediate_eigen_operator")

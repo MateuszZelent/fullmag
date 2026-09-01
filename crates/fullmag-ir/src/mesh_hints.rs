@@ -2619,9 +2619,28 @@ fn audit_edge_corner_closure(mesh: &MeshIR, errors: &mut Vec<String>) -> EdgeCor
 }
 
 fn periodic_equivalence_classes(mesh: &MeshIR) -> (Vec<Vec<(u32, [f64; 3])>>, Vec<String>) {
+    periodic_equivalence_classes_with_node_limit(mesh, mesh.nodes.len())
+}
+
+fn periodic_equivalence_classes_with_node_limit(
+    mesh: &MeshIR,
+    node_limit: usize,
+) -> (Vec<Vec<(u32, [f64; 3])>>, Vec<String>) {
     let mut graph: BTreeMap<u32, Vec<(u32, [f64; 3])>> = BTreeMap::new();
     let mut errors = Vec::new();
     for pair in &mesh.periodic_node_pairs {
+        let source_in = (pair.node_a as usize) < node_limit;
+        let destination_in = (pair.node_b as usize) < node_limit;
+        if source_in != destination_in {
+            errors.push(format!(
+                "periodic v6 relation '{}' crosses certified node prefix {}",
+                pair.pair_id, node_limit
+            ));
+            continue;
+        }
+        if !source_in {
+            continue;
+        }
         let Some(boundary_pair) = mesh
             .periodic_boundary_pairs
             .iter()
@@ -3150,26 +3169,72 @@ impl MeshIR {
 
         let (classes, class_errors) = periodic_equivalence_classes(self);
         errors.extend(class_errors);
+        let magnetic_node_count = self
+            .require_tet4_elements()
+            .ok()
+            .filter(|cells| cells.len() == self.element_markers.len())
+            .map(|cells| {
+                let mut magnetic_mask = vec![false; self.nodes.len()];
+                for (cell, marker) in cells.iter().zip(&self.element_markers) {
+                    if *marker != 0 {
+                        for node in cell {
+                            if let Some(value) = magnetic_mask.get_mut(*node as usize) {
+                                *value = true;
+                            }
+                        }
+                    }
+                }
+                let prefix = magnetic_mask.iter().take_while(|value| **value).count();
+                if magnetic_mask[prefix..].iter().any(|value| *value) {
+                    errors.push(
+                        "periodic v6 magnetic nodes do not form an exact leading prefix"
+                            .to_string(),
+                    );
+                }
+                if prefix == 0 && !self.nodes.is_empty() {
+                    self.nodes.len()
+                } else {
+                    prefix
+                }
+            })
+            .unwrap_or(self.nodes.len());
+        let (magnetic_classes, magnetic_class_errors) =
+            periodic_equivalence_classes_with_node_limit(self, magnetic_node_count);
+        errors.extend(magnetic_class_errors);
         let edge_corner_audit = audit_edge_corner_closure(self, &mut errors);
-        let class_count = classes.iter().filter(|class| class.len() > 1).count() as u64;
-        let pair_count = classes
+        let scalar_class_count = classes.iter().filter(|class| class.len() > 1).count() as u64;
+        let scalar_pair_count = classes
             .iter()
             .map(|class| class.len().saturating_sub(1) as u64)
             .sum::<u64>();
-        let class_payload = serde_json::to_vec(&classes).unwrap_or_default();
-        let class_hash = format!("sha256:{:x}", Sha256::digest(class_payload));
+        let magnetic_class_count = magnetic_classes
+            .iter()
+            .filter(|class| class.len() > 1)
+            .count() as u64;
+        let magnetic_pair_count = magnetic_classes
+            .iter()
+            .map(|class| class.len().saturating_sub(1) as u64)
+            .sum::<u64>();
+        let scalar_class_hash = format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&classes).unwrap_or_default())
+        );
+        let magnetic_class_hash = format!(
+            "sha256:{:x}",
+            Sha256::digest(serde_json::to_vec(&magnetic_classes).unwrap_or_default())
+        );
         if errors.is_empty() {
             Ok(PeriodicMeshCertificateV6IR {
                 schema_version: "periodic_mesh_certificate.v6".to_string(),
                 certificate_status: "accepted".to_string(),
                 topology_fingerprint,
                 axis_pairs,
-                magnetic_class_count: class_count,
-                magnetic_pair_count: pair_count,
-                scalar_class_count: class_count,
-                scalar_pair_count: pair_count,
-                magnetic_equivalence_classes_sha256: class_hash.clone(),
-                scalar_equivalence_classes_sha256: class_hash,
+                magnetic_class_count,
+                magnetic_pair_count,
+                scalar_class_count,
+                scalar_pair_count,
+                magnetic_equivalence_classes_sha256: magnetic_class_hash,
+                scalar_equivalence_classes_sha256: scalar_class_hash,
                 translation_residual_max_m: global_translation_residual,
                 orientation_residual_max: global_orientation_residual,
                 normal_mismatch_max: global_normal_mismatch,
@@ -3184,7 +3249,7 @@ impl MeshIR {
                 h_demag0_seam_mismatch_max: 0.0,
                 marker_map_fingerprint: marker_map_fingerprint(self),
                 material_realization_fingerprint: material_realization_fingerprint(None, None),
-                region_class_count: class_count,
+                region_class_count: scalar_class_count,
                 max_material_residual: 0.0,
             })
         } else {
@@ -3844,10 +3909,7 @@ fn mapped_jacobian(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> [[f64;
     jacobian
 }
 
-fn mapped_jacobian_scaled_jacobian(
-    coordinates: &[[f64; 3]],
-    derivatives: &[[f64; 3]],
-) -> f64 {
+fn mapped_jacobian_scaled_jacobian(coordinates: &[[f64; 3]], derivatives: &[[f64; 3]]) -> f64 {
     let jacobian = mapped_jacobian(coordinates, derivatives);
     let denominator = (0..3)
         .map(|reference_axis| {
@@ -4724,6 +4786,73 @@ mod mesh_validation_tests {
             .material_realization_fingerprint
             .starts_with("sha256:"));
         assert_eq!(certificate.max_material_residual, 0.0);
+    }
+
+    #[test]
+    fn periodic_certificate_v6_separates_magnetic_prefix_from_global_scalar_classes() {
+        let mut mesh = mirrored_periodic_mesh();
+        let node_offset = mesh.nodes.len() as u32;
+        mesh.nodes.extend([
+            [0.0, 2.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.0, 2.0, 1.0],
+            [1.0, 2.0, 0.0],
+            [1.0, 3.0, 0.0],
+            [1.0, 2.0, 1.0],
+        ]);
+        mesh.set_tet4_cells(vec![
+            [0, 1, 2, 3],
+            [3, 5, 4, 0],
+            [6, 7, 8, 9],
+            [9, 11, 10, 6],
+        ]);
+        mesh.element_markers = vec![1, 1, 0, 0];
+        mesh.extend_tri3_facets(vec![
+            [node_offset, node_offset + 1, node_offset + 2],
+            [node_offset + 3, node_offset + 5, node_offset + 4],
+        ])
+        .unwrap();
+        mesh.boundary_markers.extend([20, 21]);
+        mesh.periodic_boundary_pairs
+            .push(MeshPeriodicBoundaryPairIR {
+                pair_id: "air_x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 20,
+                marker_b: 21,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            });
+        mesh.periodic_node_pairs.extend([
+            MeshPeriodicNodePairIR {
+                pair_id: "air_x_faces".to_string(),
+                node_a: node_offset,
+                node_b: node_offset + 3,
+            },
+            MeshPeriodicNodePairIR {
+                pair_id: "air_x_faces".to_string(),
+                node_a: node_offset + 1,
+                node_b: node_offset + 4,
+            },
+            MeshPeriodicNodePairIR {
+                pair_id: "air_x_faces".to_string(),
+                node_a: node_offset + 2,
+                node_b: node_offset + 5,
+            },
+        ]);
+
+        let certificate = mesh.periodic_mesh_certificate_v6().unwrap();
+        assert_eq!(certificate.magnetic_class_count, 3);
+        assert_eq!(certificate.magnetic_pair_count, 3);
+        assert_eq!(certificate.scalar_class_count, 6);
+        assert_eq!(certificate.scalar_pair_count, 6);
+        assert_ne!(
+            certificate.magnetic_equivalence_classes_sha256,
+            certificate.scalar_equivalence_classes_sha256
+        );
     }
 
     #[test]

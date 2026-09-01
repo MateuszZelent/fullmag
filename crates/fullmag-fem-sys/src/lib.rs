@@ -1469,6 +1469,37 @@ pub enum fullmag_fem_frequency_domain_phase_convention {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_execution_target {
+    FULLMAG_FEM_MODAL_EXECUTION_AUTO = 0,
+    FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_CPU = 1,
+    FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU = 2,
+    FULLMAG_FEM_MODAL_EXECUTION_VALIDATION = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_scalar_representation {
+    FULLMAG_FEM_MODAL_SCALAR_REAL_SPLIT = 0,
+    FULLMAG_FEM_MODAL_SCALAR_COMPLEX_DOUBLE = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_result_field_representation {
+    FULLMAG_FEM_MODAL_RESULT_TANGENT_Q = 0,
+    FULLMAG_FEM_MODAL_RESULT_CARTESIAN_DELTA_M = 1,
+    FULLMAG_FEM_MODAL_RESULT_TANGENT_Q_AND_CARTESIAN_DELTA_M = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_modal_spectral_transform_kind {
+    FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO = 0,
+    FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_frequency_domain_drive_kind {
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_UNSPECIFIED = 0,
     FULLMAG_FEM_FREQUENCY_DOMAIN_DRIVE_DYNAMIC_FIELD_PHASOR_A_PER_M = 1,
@@ -1727,7 +1758,41 @@ pub struct fullmag_fem_frequency_domain_solve_result {
     pub artifact_manifest_path: *mut c_char,
 }
 
-pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 12;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION: u32 = 12;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_PRIOR_ABI_VERSION: u32 = 13;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION: u32 = 14;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION: u32 = 15;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION: u32 = 16;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION: u32 = 17;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION: u32 = 18;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION: u32 = 19;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION: u32 = 18;
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION: u32 = 20;
+pub const FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNSPECIFIED: u32 = 0;
+pub const FULLMAG_FEM_MODAL_GPU_MEASUREMENT_MEASURED: u32 = 1;
+pub const FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE: u32 = 2;
+pub const FULLMAG_FEM_MODAL_GPU_MEASUREMENT_FAILED: u32 = 3;
+pub const FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP: u64 = 1;
+pub const FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP: u64 = 2;
+pub const FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH: u64 = 4;
+pub const FULLMAG_FEM_MODAL_GPU_COVERAGE_SCALAR_TELEMETRY: u64 = 8;
+pub const FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT: u64 = 16;
+pub const FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_V1_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_SCHEMA: &[u8] =
+    b"modal_exchange_material_view.v1\0";
+pub const FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_KIND_AEX: u32 = 1;
+pub const FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT: usize = 7;
+pub const FULLMAG_FEM_MODAL_LINEARIZATION_TERM_EXCHANGE: u32 = 1 << 0;
+pub const FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD: u32 = 1 << 1;
+pub const FULLMAG_FEM_MODAL_LINEARIZATION_TERM_ANISOTROPY: u32 = 1 << 2;
+pub const FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DMI: u32 = 1 << 3;
+pub const FULLMAG_FEM_MODAL_LINEARIZATION_TERM_DEMAG: u32 = 1 << 4;
+pub const FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED: u32 = 0;
+pub const FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_ACCEPTED: u32 = 1;
+pub const FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNVERIFIABLE: u32 = 2;
+pub const FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID: u32 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1776,6 +1841,198 @@ pub struct FullmagFemCsrMatrixView {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalCertificateV6Relation {
+    pub source_node: u64,
+    pub destination_node: u64,
+    pub axis_mask: u32,
+    pub kind: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalCertificateV6RegionRole {
+    pub region_id: u32,
+    pub part_role: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalCertificateV6ClassDigest {
+    pub canonical_class_id: u64,
+    pub member_count: u64,
+    pub sha256: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalCertificateV6View {
+    pub view_kind: u32,
+    pub part_role: u32,
+    pub part_identity: *const c_char,
+    pub topology_fingerprint: *const c_char,
+    pub node_count: u64,
+    pub region_ids: *const u32,
+    pub boundary_axis_masks: *const u32,
+    pub region_roles: *const FullmagFemModalCertificateV6RegionRole,
+    pub region_role_count: u64,
+    pub generator_relations: *const FullmagFemModalCertificateV6Relation,
+    pub generator_relation_count: u64,
+    pub closure_relations: *const FullmagFemModalCertificateV6Relation,
+    pub closure_relation_count: u64,
+    pub require_complete_closure: u8,
+    pub expected_class_ids: *const u64,
+    pub expected_class_id_count: u64,
+    pub expected_class_digests: *const FullmagFemModalCertificateV6ClassDigest,
+    pub expected_class_digest_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalCertificateV6BindingRequest {
+    pub schema_version: *const c_char,
+    pub mesh_magnetic: FullmagFemModalCertificateV6View,
+    pub payload_magnetic: FullmagFemModalCertificateV6View,
+    pub mesh_scalar: FullmagFemModalCertificateV6View,
+    pub payload_scalar: FullmagFemModalCertificateV6View,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalLinearizationDescriptor {
+    pub abi_version: u32,
+    pub reserved0: u32,
+    pub struct_size: u64,
+    pub schema_version: *const c_char,
+    pub node_count: u64,
+    pub tangent_dof_count: u64,
+    pub coordinate_unit: *const c_char,
+    pub magnetisation_unit: *const c_char,
+    pub time_unit: *const c_char,
+    pub frequency_unit: *const c_char,
+    pub angular_frequency_unit: *const c_char,
+    pub linearization_state_digest: *const c_char,
+    pub equilibrium_digest: *const c_char,
+    pub exchange_term_digest: *const c_char,
+    pub field_term_digest: *const c_char,
+    pub anisotropy_term_digest: *const c_char,
+    pub dmi_term_digest: *const c_char,
+    pub demag_term_digest: *const c_char,
+    pub operator_input_digest: *const c_char,
+    pub demag_provider_signature: *const c_char,
+    pub term_presence_mask: u32,
+    pub reserved_contract_flags: u32,
+    pub tangent_frame_xyz: *const f64,
+    pub tangent_frame_xyz_count: u64,
+    pub equilibrium_m0_xyz: *const f64,
+    pub equilibrium_m0_xyz_count: u64,
+    pub effective_field_h_eff0_xyz: *const f64,
+    pub effective_field_h_eff0_xyz_count: u64,
+    pub external_field_h_ext0_xyz: *const f64,
+    pub external_field_h_ext0_xyz_count: u64,
+    pub alpha_per_node: *const f64,
+    pub alpha_per_node_count: u64,
+    pub uniaxial_axis_xyz: *const f64,
+    pub uniaxial_axis_xyz_count: u64,
+    pub uniaxial_anisotropy_field_a_per_m: *const f64,
+    pub uniaxial_anisotropy_field_count: u64,
+    pub saturation_magnetisation_a_per_m: *const f64,
+    pub saturation_magnetisation_count: u64,
+    pub uniform_saturation_magnetisation_a_per_m: f64,
+    pub exchange_edges: *const fullmag_fem_frequency_domain_exchange_edge,
+    pub exchange_edge_count: u64,
+    pub dmi_elements: *const fullmag_fem_frequency_domain_dmi_element,
+    pub dmi_element_count: u64,
+    pub dmi_lumped_mass: *const f64,
+    pub dmi_lumped_mass_count: u64,
+    pub dmi_ms_field: *const f64,
+    pub dmi_ms_field_count: u64,
+    pub dmi_uniform_ms: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalExchangeMaterialView {
+    pub abi_version: u32,
+    pub reserved0: u32,
+    pub struct_size: u64,
+    pub schema_version: *const c_char,
+    pub material_kind: u32,
+    pub reserved1: u32,
+    pub exchange_stiffness_j_per_m: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalSharedDomainPayload {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mesh: *const fullmag_fem_mesh_desc,
+    pub equilibrium_m0_xyz: *const f64,
+    pub equilibrium_m0_xyz_count: u64,
+    pub saturation_magnetisation_a_per_m: *const f64,
+    pub saturation_magnetisation_count: u64,
+    pub uniform_saturation_magnetisation_a_per_m: f64,
+    pub gamma0_m_per_a_s: f64,
+    pub magnetic_a_qq_csr: FullmagFemCsrMatrixView,
+    pub scalar_reduced_node: *const u32,
+    pub scalar_reduced_node_count: u64,
+    pub magnetic_reduced_node: *const u32,
+    pub magnetic_reduced_node_count: u64,
+    pub magnetic_pair_count: u64,
+    pub airbox_pair_count: u64,
+    pub boundary_kind: *const c_char,
+    pub robin_beta: f64,
+    pub boundary_marker: u32,
+    pub equilibrium_digest: *const c_char,
+    pub mesh_certificate_digest: *const c_char,
+    pub mesh_certificate_schema: *const c_char,
+    pub linearization_state_digest: *const c_char,
+    pub linearization_m0_xyz: *const f64,
+    pub linearization_m0_xyz_count: u64,
+    pub linearization_h_eff0_xyz: *const f64,
+    pub linearization_h_eff0_xyz_count: u64,
+    pub linearization_h_demag0_xyz: *const f64,
+    pub linearization_h_demag0_xyz_count: u64,
+    pub linearization_phi0: *const f64,
+    pub linearization_phi0_count: u64,
+    pub equilibrium_id: *const c_char,
+    pub mesh_snapshot_id: *const c_char,
+    pub material_snapshot_id: *const c_char,
+    pub physics_snapshot_id: *const c_char,
+    pub boundary_snapshot_id: *const c_char,
+    pub producer_run_id: *const c_char,
+    pub equilibrium_content_sha256: *const c_char,
+    pub demag_model: *const c_char,
+    pub m0_norm_tolerance: f64,
+    pub equilibrium_torque_relative_tolerance: f64,
+    pub mesh_certificate_map_binding_digest: *const c_char,
+    pub boundary_gauge_digest: *const c_char,
+    pub bias_field_sample_index: u64,
+    pub bias_field_sample_id: *const c_char,
+    pub bias_field_sample_signature: *const c_char,
+    pub magnetic_part_identity: *const c_char,
+    pub airbox_part_identity: *const c_char,
+    pub mesh_generation_identity: *const c_char,
+    pub canonical_preimage: *const c_char,
+    pub canonical_preimage_len: u64,
+    pub canonical_preimage_sha256: *const c_char,
+    pub magnetic_class_digest_sha256: *const c_char,
+    pub scalar_class_digest_sha256: *const c_char,
+    pub certificate_binding_status: u32,
+    pub certificate_binding_reason: *const c_char,
+    pub certificate_binding_v6: *const FullmagFemModalCertificateV6BindingRequest,
+    pub linearization_descriptor: *const FullmagFemModalLinearizationDescriptor,
+    pub exchange_material_view: *const FullmagFemModalExchangeMaterialView,
+    pub acceptance_criterion: *const c_char,
+    pub acceptance_metric_kind: *const c_char,
+    pub acceptance_unit: *const c_char,
+    pub acceptance_metric_value: f64,
+    pub acceptance_threshold: f64,
+    pub acceptance_certificate_sha256: *const c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct FullmagFemModalEigenRequest {
     pub abi_version: u32,
     pub operator_request: FullmagFemLinearizedOperatorRequest,
@@ -1791,7 +2048,7 @@ pub struct FullmagFemModalEigenRequest {
     pub write_partial_artifacts: i32,
     pub completeness_policy: i32,
     pub eigensolver_family: i32,
-    pub spectral_transform_kind: i32,
+    pub spectral_transform_kind: fullmag_fem_modal_spectral_transform_kind,
     pub cancel_user_data: *mut c_void,
     pub cancel_requested: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
     pub progress_user_data: *mut c_void,
@@ -1847,6 +2104,14 @@ pub struct FullmagFemModalEigenRequest {
     pub poisson_airbox_assembly_kind: *const c_char,
     pub dynamic_demag_k_tangent_matrix_row_major: *const f64,
     pub dynamic_demag_k_tangent_matrix_value_count: u64,
+    pub struct_size: u64,
+    pub execution_target: fullmag_fem_modal_execution_target,
+    pub scalar_representation: fullmag_fem_modal_scalar_representation,
+    pub result_field_representation: fullmag_fem_modal_result_field_representation,
+    pub reserved_modal_contract_flags: u32,
+    pub shared_domain_payload: *const FullmagFemModalSharedDomainPayload,
+    pub mesh_generation_identity: *const c_char,
+    pub canonical_preimage_sha256: *const c_char,
 }
 
 #[repr(C)]
@@ -1872,6 +2137,13 @@ pub struct FullmagFemDrivenResponseRequest {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct FullmagFemComplex64 {
+    pub real: f64,
+    pub imag: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct FullmagFemFrequencyDomainResult {
     pub abi_version: u32,
     pub status: FullmagFemFrequencyDomainStatus,
@@ -1879,6 +2151,123 @@ pub struct FullmagFemFrequencyDomainResult {
     pub diagnostics_json: *mut c_char,
     pub result_json: *mut c_char,
     pub artifact_manifest_path: *mut c_char,
+    pub mode_count: u64,
+    pub q_dof_count: u64,
+    pub phi_dof_count: u64,
+    pub mode_lambda_count: u64,
+    pub mode_q_complex_count: u64,
+    pub mode_phi_complex_count: u64,
+    pub mode_delta_m_xyz_complex_count: u64,
+    pub mode_residual_count: u64,
+    pub mode_cluster_id_count: u64,
+    pub mode_lambda: *mut FullmagFemComplex64,
+    pub mode_q_complex: *mut FullmagFemComplex64,
+    pub mode_phi_complex: *mut FullmagFemComplex64,
+    pub mode_delta_m_xyz_complex: *mut FullmagFemComplex64,
+    pub mode_residuals: *mut f64,
+    pub mode_cluster_ids: *mut u64,
+    pub resolved_execution_target: fullmag_fem_modal_execution_target,
+    pub resolved_scalar_representation: fullmag_fem_modal_scalar_representation,
+    pub resolved_spectral_transform_kind: fullmag_fem_modal_spectral_transform_kind,
+    pub result_flags: u32,
+    pub struct_size: u64,
+    pub resolved_fallback_state: u32,
+    pub resolved_engine_id: *mut c_char,
+    pub resolved_fallback_reason: *mut c_char,
+    pub resolved_canonical_preimage_sha256: *mut c_char,
+    pub resolved_certificate_binding_status: u32,
+    pub resolved_certificate_binding_reason: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemModalGpuAttestationV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub measurement_state: u32,
+    pub fallback_state: u32,
+    pub measurement_coverage_flags: u64,
+    pub device_residency_verified: u32,
+    pub production_shared_domain: u32,
+    pub validation_only: u32,
+    pub operator_kind: u32,
+    pub hypre_memory_location: u32,
+    pub hypre_execution_policy: u32,
+    pub compute_capability_major: u32,
+    pub compute_capability_minor: u32,
+    pub cuda_driver_version: u32,
+    pub cuda_runtime_version: u32,
+    pub device_name: *mut c_char,
+    pub mfem_version: *mut c_char,
+    pub hypre_version: *mut c_char,
+    pub petsc_version: *mut c_char,
+    pub slepc_version: *mut c_char,
+    pub petsc_vec_type: *mut c_char,
+    pub petsc_matrix_type: *mut c_char,
+    pub matshell_vec_type: *mut c_char,
+    pub slepc_bv_type: *mut c_char,
+    pub eps_type: *mut c_char,
+    pub st_type: *mut c_char,
+    pub ksp_type: *mut c_char,
+    pub poisson_pc_type: *mut c_char,
+    pub shift_pc_type: *mut c_char,
+    pub last_invalidation_reason: *mut c_char,
+    pub device_uuid: [u8; 16],
+    pub object_graph_sha256: [u8; 32],
+    pub native_trace_sha256: [u8; 32],
+    pub source_snapshot_sha256: [u8; 32],
+    pub runtime_manifest_sha256: [u8; 32],
+    pub mesh_identity_sha256: [u8; 32],
+    pub equilibrium_sha256: [u8; 32],
+    pub certificate_sha256: [u8; 32],
+    pub linearization_sha256: [u8; 32],
+    pub material_sha256: [u8; 32],
+    pub physics_sha256: [u8; 32],
+    pub boundary_sha256: [u8; 32],
+    pub gauge_sha256: [u8; 32],
+    pub operator_terms_sha256: [u8; 32],
+    pub solver_policy_sha256: [u8; 32],
+    pub operator_key_sha256: [u8; 32],
+    pub target_key_sha256: [u8; 32],
+    pub session_context_sha256: [u8; 32],
+    pub setup_h2d_count: u64,
+    pub setup_h2d_bytes: u64,
+    pub hot_loop_computational_h2d_count: u64,
+    pub hot_loop_computational_h2d_bytes: u64,
+    pub hot_loop_computational_d2h_count: u64,
+    pub hot_loop_computational_d2h_bytes: u64,
+    pub hot_loop_scalar_telemetry_d2h_count: u64,
+    pub hot_loop_scalar_telemetry_d2h_bytes: u64,
+    pub hot_loop_full_vector_crossings: u64,
+    pub hot_loop_computational_host_syncs: u64,
+    pub hot_loop_scalar_telemetry_syncs: u64,
+    pub hot_loop_allocations: u64,
+    pub export_d2h_count: u64,
+    pub export_d2h_bytes: u64,
+    pub device_memory_baseline_bytes: u64,
+    pub device_memory_peak_bytes: u64,
+    pub device_memory_final_bytes: u64,
+    pub operator_dimension: u64,
+    pub operator_apply_count: u64,
+    pub poisson_solve_count: u64,
+    pub poisson_iteration_count: u64,
+    pub eps_iteration_count: u64,
+    pub eps_restart_count: u64,
+    pub eps_converged_reason: i64,
+    pub operator_state_generation: u64,
+    pub target_state_generation: u64,
+    pub operator_reuse_count: u64,
+    pub target_rebuild_count: u64,
+    pub invalidation_flags: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FullmagFemFrequencyDomainResultV20 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub scientific_result_v18: FullmagFemFrequencyDomainResult,
+    pub gpu_attestation: *mut FullmagFemModalGpuAttestationV1,
 }
 
 #[repr(C)]
@@ -1932,6 +2321,162 @@ pub struct fullmag_fem_frequency_domain_abi_layout {
     pub driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset: u64,
     pub solve_result_size: u64,
     pub solve_result_artifact_manifest_path_offset: u64,
+    pub modal_abi_schema: u64,
+    pub modal_abi_version: u64,
+    pub modal_eigen_request_size: u64,
+    pub modal_eigen_request_struct_size_offset: u64,
+    pub modal_eigen_request_shared_domain_payload_offset: u64,
+    pub modal_shared_domain_payload_size: u64,
+    pub modal_shared_domain_payload_struct_size_offset: u64,
+    pub modal_shared_domain_payload_mesh_certificate_digest_offset: u64,
+    pub modal_shared_domain_payload_map_binding_digest_offset: u64,
+    pub modal_shared_domain_payload_bias_field_sample_id_offset: u64,
+    pub modal_frequency_domain_result_size: u64,
+    pub modal_frequency_domain_result_struct_size_offset: u64,
+    pub modal_frequency_domain_result_resolved_engine_id_offset: u64,
+    pub modal_csr_matrix_view_size: u64,
+    pub modal_csr_matrix_view_values_len_offset: u64,
+    pub modal_eigen_request_abi_version_offset: u64,
+    pub modal_eigen_request_operator_request_offset: u64,
+    pub modal_eigen_request_spectral_transform_kind_offset: u64,
+    pub modal_eigen_request_execution_target_offset: u64,
+    pub modal_eigen_request_scalar_representation_offset: u64,
+    pub modal_eigen_request_result_field_representation_offset: u64,
+    pub modal_shared_domain_payload_abi_version_offset: u64,
+    pub modal_shared_domain_payload_mesh_offset: u64,
+    pub modal_shared_domain_payload_magnetic_a_qq_csr_offset: u64,
+    pub modal_shared_domain_payload_scalar_reduced_node_offset: u64,
+    pub modal_shared_domain_payload_magnetic_reduced_node_offset: u64,
+    pub modal_shared_domain_payload_magnetic_pair_count_offset: u64,
+    pub modal_shared_domain_payload_airbox_pair_count_offset: u64,
+    pub modal_shared_domain_payload_boundary_marker_offset: u64,
+    pub modal_shared_domain_payload_mesh_certificate_schema_offset: u64,
+    pub modal_shared_domain_payload_equilibrium_digest_offset: u64,
+    pub modal_shared_domain_payload_linearization_state_digest_offset: u64,
+    pub modal_shared_domain_payload_boundary_gauge_digest_offset: u64,
+    pub modal_shared_domain_payload_bias_field_sample_index_offset: u64,
+    pub modal_shared_domain_payload_bias_field_sample_signature_offset: u64,
+    pub modal_shared_domain_payload_magnetic_part_identity_offset: u64,
+    pub modal_shared_domain_payload_airbox_part_identity_offset: u64,
+    pub modal_frequency_domain_result_abi_version_offset: u64,
+    pub modal_frequency_domain_result_status_offset: u64,
+    pub modal_frequency_domain_result_error_message_offset: u64,
+    pub modal_frequency_domain_result_mode_lambda_offset: u64,
+    pub modal_frequency_domain_result_resolved_execution_target_offset: u64,
+    pub modal_frequency_domain_result_resolved_scalar_representation_offset: u64,
+    pub modal_frequency_domain_result_resolved_spectral_transform_kind_offset: u64,
+    pub modal_frequency_domain_result_resolved_fallback_state_offset: u64,
+    pub modal_frequency_domain_result_resolved_fallback_reason_offset: u64,
+    pub modal_csr_matrix_view_row_count_offset: u64,
+    pub modal_csr_matrix_view_column_count_offset: u64,
+    pub modal_csr_matrix_view_row_offsets_offset: u64,
+    pub modal_csr_matrix_view_row_offsets_len_offset: u64,
+    pub modal_csr_matrix_view_column_indices_offset: u64,
+    pub modal_csr_matrix_view_column_indices_len_offset: u64,
+    pub modal_csr_matrix_view_values_offset: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_modal_abi_layout_v2 {
+    pub abi_version: u32,
+    pub reserved0: u32,
+    pub struct_size: u64,
+    pub modal_abi_schema: u64,
+    pub modal_eigen_request_size: u64,
+    pub modal_linearized_operator_request_size: u64,
+    pub modal_shared_domain_payload_size: u64,
+    pub modal_frequency_domain_result_size: u64,
+    pub modal_csr_matrix_view_size: u64,
+    pub modal_eigen_request_field_count: u64,
+    pub modal_eigen_request_field_offsets: [u64; 128],
+    pub modal_linearized_operator_request_field_count: u64,
+    pub modal_linearized_operator_request_field_offsets: [u64; 32],
+    pub modal_shared_domain_payload_field_count: u64,
+    pub modal_shared_domain_payload_field_offsets: [u64; 128],
+    pub modal_frequency_domain_result_field_count: u64,
+    pub modal_frequency_domain_result_field_offsets: [u64; 64],
+    pub modal_csr_matrix_view_field_count: u64,
+    pub modal_csr_matrix_view_field_offsets: [u64; 8],
+    pub modal_certificate_v6_relation_size: u64,
+    pub modal_certificate_v6_relation_field_count: u64,
+    pub modal_certificate_v6_relation_field_offsets: [u64; 8],
+    pub modal_certificate_v6_region_role_size: u64,
+    pub modal_certificate_v6_region_role_field_count: u64,
+    pub modal_certificate_v6_region_role_field_offsets: [u64; 4],
+    pub modal_certificate_v6_class_digest_size: u64,
+    pub modal_certificate_v6_class_digest_field_count: u64,
+    pub modal_certificate_v6_class_digest_field_offsets: [u64; 8],
+    pub modal_certificate_v6_view_size: u64,
+    pub modal_certificate_v6_view_field_count: u64,
+    pub modal_certificate_v6_view_field_offsets: [u64; 32],
+    pub modal_certificate_v6_binding_request_size: u64,
+    pub modal_certificate_v6_binding_request_field_count: u64,
+    pub modal_certificate_v6_binding_request_field_offsets: [u64; 8],
+}
+
+impl Default for fullmag_fem_frequency_domain_modal_abi_layout_v2 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V3: u32 = 3;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_modal_abi_layout_v3 {
+    pub v2: fullmag_fem_frequency_domain_modal_abi_layout_v2,
+    pub modal_linearization_descriptor_size: u64,
+    pub modal_linearization_descriptor_field_count: u64,
+    pub modal_linearization_descriptor_field_offsets: [u64; 128],
+    pub modal_exchange_material_view_size: u64,
+    pub modal_exchange_material_view_field_count: u64,
+    pub modal_exchange_material_view_field_offsets: [u64; 16],
+}
+
+impl Default for fullmag_fem_frequency_domain_modal_abi_layout_v3 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V4: u32 = 4;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_modal_abi_layout_v4 {
+    pub v3: fullmag_fem_frequency_domain_modal_abi_layout_v3,
+    pub modal_acceptance_certificate_field_count: u64,
+    pub modal_acceptance_certificate_field_offsets: [u64; 8],
+}
+
+impl Default for fullmag_fem_frequency_domain_modal_abi_layout_v4 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+pub const FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V5: u32 = 5;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_frequency_domain_modal_abi_layout_v5 {
+    pub v4: fullmag_fem_frequency_domain_modal_abi_layout_v4,
+    pub modal_frequency_domain_result_v20_size: u64,
+    pub modal_frequency_domain_result_v20_align: u64,
+    pub modal_frequency_domain_result_v20_field_count: u64,
+    pub modal_frequency_domain_result_v20_field_offsets: [u64; 4],
+    pub modal_gpu_attestation_v1_size: u64,
+    pub modal_gpu_attestation_v1_align: u64,
+    pub modal_gpu_attestation_v1_field_count: u64,
+    pub modal_gpu_attestation_v1_field_offsets: [u64; 128],
+}
+
+impl Default for fullmag_fem_frequency_domain_modal_abi_layout_v5 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -2117,6 +2662,18 @@ extern "C" {
     pub fn fullmag_fem_get_frequency_domain_abi_layout(
         out_layout: *mut fullmag_fem_frequency_domain_abi_layout,
     ) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_modal_abi_layout_v2(
+        out_layout: *mut fullmag_fem_frequency_domain_modal_abi_layout_v2,
+    ) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
+        out_layout: *mut fullmag_fem_frequency_domain_modal_abi_layout_v3,
+    ) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_modal_abi_layout_v4(
+        out_layout: *mut fullmag_fem_frequency_domain_modal_abi_layout_v4,
+    ) -> i32;
+    pub fn fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
+        out_layout: *mut fullmag_fem_frequency_domain_modal_abi_layout_v5,
+    ) -> i32;
     pub fn fullmag_fem_frequency_domain_initial_sweep_progress(
         total_frequency_points: u64,
         out_progress: *mut fullmag_fem_frequency_domain_sweep_progress,
@@ -2167,6 +2724,14 @@ extern "C" {
     pub fn fullmag_fem_modal_eigen_solve(
         request: *const FullmagFemModalEigenRequest,
     ) -> FullmagFemFrequencyDomainResult;
+    pub fn fullmag_fem_modal_eigen_solve_v20(
+        request: *const FullmagFemModalEigenRequest,
+        out_result: *mut FullmagFemFrequencyDomainResultV20,
+    ) -> i32;
+    pub fn fullmag_fem_frequency_domain_result_v20_destroy(
+        result: *mut FullmagFemFrequencyDomainResultV20,
+    );
+    pub fn fullmag_fem_modal_eigen_gpu_runtime_finalize() -> i32;
     pub fn fullmag_fem_driven_response_solve(
         request: *const FullmagFemDrivenResponseRequest,
     ) -> FullmagFemFrequencyDomainResult;
@@ -2229,6 +2794,13 @@ extern "C" {
     ) -> i32;
 
     pub fn fullmag_fem_backend_copy_field_f64(
+        handle: *mut fullmag_fem_backend,
+        observable: fullmag_fem_observable,
+        out_xyz: *mut f64,
+        out_len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_copy_linearization_field_f64(
         handle: *mut fullmag_fem_backend,
         observable: fullmag_fem_observable,
         out_xyz: *mut f64,
@@ -3429,9 +4001,17 @@ mod tests {
 
     #[test]
     fn frequency_domain_runtime_abi_layout_matches_rust_bindings() {
-        let mut layout = fullmag_fem_frequency_domain_abi_layout::default();
-        let status = unsafe { fullmag_fem_get_frequency_domain_abi_layout(&mut layout) };
-        assert_eq!(status, 0);
+        let mut legacy_layout = fullmag_fem_frequency_domain_abi_layout::default();
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_abi_layout(&mut legacy_layout) },
+            0
+        );
+        let mut layout = fullmag_fem_frequency_domain_modal_abi_layout_v2::default();
+        layout.struct_size = std::mem::size_of_val(&layout) as u64;
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_modal_abi_layout_v2(&mut layout) },
+            0
+        );
 
         type AvailabilityRequest = fullmag_fem_frequency_domain_availability_request;
         type AvailabilityInfo = fullmag_fem_frequency_domain_availability_info;
@@ -3444,129 +4024,508 @@ mod tests {
         type DmiElement = fullmag_fem_frequency_domain_dmi_element;
         type DrivenRequest = fullmag_fem_frequency_domain_driven_response_request;
         type SolveResult = fullmag_fem_frequency_domain_solve_result;
+        type ModalOperatorRequest = FullmagFemLinearizedOperatorRequest;
+        type ModalRequest = FullmagFemModalEigenRequest;
+        type ModalPayload = FullmagFemModalSharedDomainPayload;
+        type ModalResult = FullmagFemFrequencyDomainResult;
+        type ModalCsr = FullmagFemCsrMatrixView;
+        let modal_v17_payload_size =
+            std::mem::offset_of!(ModalPayload, linearization_descriptor) as u64;
 
+        assert_eq!(legacy_layout.modal_abi_schema, 1);
         assert_eq!(
-            layout.availability_request_size,
-            std::mem::size_of::<AvailabilityRequest>() as u64
+            legacy_layout.modal_abi_version,
+            FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION as u64
         );
         assert_eq!(
-            layout.availability_request_phase_convention_offset,
-            std::mem::offset_of!(AvailabilityRequest, phase_convention) as u64
+            legacy_layout.modal_eigen_request_size,
+            std::mem::size_of::<ModalRequest>() as u64
         );
         assert_eq!(
-            layout.availability_info_size,
-            std::mem::size_of::<AvailabilityInfo>() as u64
+            legacy_layout.modal_shared_domain_payload_size,
+            modal_v17_payload_size
         );
         assert_eq!(
-            layout.availability_info_diagnostics_json_offset,
-            std::mem::offset_of!(AvailabilityInfo, diagnostics_json) as u64
+            legacy_layout.modal_frequency_domain_result_size,
+            std::mem::size_of::<ModalResult>() as u64
         );
         assert_eq!(
-            layout.dependency_info_size,
-            std::mem::size_of::<DependencyInfo>() as u64
+            legacy_layout.modal_csr_matrix_view_size,
+            std::mem::size_of::<ModalCsr>() as u64
         );
         assert_eq!(
-            layout.dependency_info_modal_eigen_native_cpu_slepc_available_offset,
-            std::mem::offset_of!(DependencyInfo, modal_eigen_native_cpu_slepc_available) as u64
+            legacy_layout.modal_eigen_request_struct_size_offset,
+            std::mem::offset_of!(ModalRequest, struct_size) as u64
         );
         assert_eq!(
-            layout.dependency_info_diagnostics_json_offset,
-            std::mem::offset_of!(DependencyInfo, diagnostics_json) as u64
+            legacy_layout.modal_eigen_request_shared_domain_payload_offset,
+            std::mem::offset_of!(ModalRequest, shared_domain_payload) as u64
         );
         assert_eq!(
-            layout.sweep_progress_size,
-            std::mem::size_of::<SweepProgress>() as u64
+            legacy_layout.modal_shared_domain_payload_struct_size_offset,
+            std::mem::offset_of!(ModalPayload, struct_size) as u64
         );
         assert_eq!(
-            layout.sweep_progress_progress_json_offset,
-            std::mem::offset_of!(SweepProgress, progress_json) as u64
-        );
-        assert_eq!(layout.progress_size, std::mem::size_of::<Progress>() as u64);
-        assert_eq!(
-            layout.progress_converged_offset,
-            std::mem::offset_of!(Progress, converged) as u64
+            legacy_layout.modal_shared_domain_payload_mesh_certificate_digest_offset,
+            std::mem::offset_of!(ModalPayload, mesh_certificate_digest) as u64
         );
         assert_eq!(
-            layout.exchange_edge_size,
-            std::mem::size_of::<ExchangeEdge>() as u64
+            legacy_layout.modal_shared_domain_payload_map_binding_digest_offset,
+            std::mem::offset_of!(ModalPayload, mesh_certificate_map_binding_digest) as u64
         );
         assert_eq!(
-            layout.exchange_edge_stiffness_offset,
-            std::mem::offset_of!(ExchangeEdge, stiffness) as u64
+            legacy_layout.modal_shared_domain_payload_bias_field_sample_id_offset,
+            std::mem::offset_of!(ModalPayload, bias_field_sample_id) as u64
         );
         assert_eq!(
-            layout.periodic_node_pair_size,
-            std::mem::size_of::<PeriodicNodePair>() as u64
+            legacy_layout.modal_frequency_domain_result_struct_size_offset,
+            std::mem::offset_of!(ModalResult, struct_size) as u64
         );
         assert_eq!(
-            layout.periodic_node_pair_node_b_offset,
-            std::mem::offset_of!(PeriodicNodePair, node_b) as u64
+            legacy_layout.modal_frequency_domain_result_resolved_engine_id_offset,
+            std::mem::offset_of!(ModalResult, resolved_engine_id) as u64
         );
         assert_eq!(
-            layout.floquet_periodic_pair_size,
-            std::mem::size_of::<FloquetPeriodicPair>() as u64
+            legacy_layout.modal_csr_matrix_view_values_len_offset,
+            std::mem::offset_of!(ModalCsr, values_len) as u64
+        );
+
+        assert_eq!(layout.modal_abi_schema, 2);
+        assert_eq!(
+            layout.modal_eigen_request_size,
+            std::mem::size_of::<ModalRequest>() as u64
         );
         assert_eq!(
-            layout.floquet_periodic_pair_phase_rad_offset,
-            std::mem::offset_of!(FloquetPeriodicPair, phase_rad) as u64
+            layout.modal_linearized_operator_request_size,
+            std::mem::size_of::<ModalOperatorRequest>() as u64
         );
         assert_eq!(
-            layout.dmi_element_size,
-            std::mem::size_of::<DmiElement>() as u64
+            layout.modal_shared_domain_payload_size,
+            modal_v17_payload_size
         );
         assert_eq!(
-            layout.dmi_element_normal_offset,
-            std::mem::offset_of!(DmiElement, normal) as u64
+            layout.modal_frequency_domain_result_size,
+            std::mem::size_of::<ModalResult>() as u64
         );
         assert_eq!(
-            layout.driven_response_request_size,
-            std::mem::size_of::<DrivenRequest>() as u64
+            layout.modal_csr_matrix_view_size,
+            std::mem::size_of::<ModalCsr>() as u64
         );
         assert_eq!(
-            layout.driven_response_request_requested_execution_lane_offset,
-            std::mem::offset_of!(DrivenRequest, requested_execution_lane) as u64
+            legacy_layout.modal_eigen_request_size,
+            layout.modal_eigen_request_size
         );
         assert_eq!(
-            layout.driven_response_request_progress_callback_offset,
-            std::mem::offset_of!(DrivenRequest, progress_callback) as u64
+            legacy_layout.modal_shared_domain_payload_size,
+            layout.modal_shared_domain_payload_size
         );
         assert_eq!(
-            layout.driven_response_request_tiny_validation_drive_imag_offset,
-            std::mem::offset_of!(DrivenRequest, tiny_validation_drive_imag) as u64
+            legacy_layout.modal_frequency_domain_result_size,
+            layout.modal_frequency_domain_result_size
         );
         assert_eq!(
-            layout.driven_response_request_phase_convention_offset,
-            std::mem::offset_of!(DrivenRequest, phase_convention) as u64
+            legacy_layout.modal_csr_matrix_view_size,
+            layout.modal_csr_matrix_view_size
+        );
+        let modal_operator_request_offsets = [
+            std::mem::offset_of!(ModalOperatorRequest, abi_version),
+            std::mem::offset_of!(ModalOperatorRequest, mesh_asset_id),
+            std::mem::offset_of!(ModalOperatorRequest, equilibrium_source_kind),
+            std::mem::offset_of!(ModalOperatorRequest, gamma_rad_s_T),
+            std::mem::offset_of!(ModalOperatorRequest, mu0_T_m_A),
+            std::mem::offset_of!(ModalOperatorRequest, alpha),
+            std::mem::offset_of!(ModalOperatorRequest, include_exchange),
+            std::mem::offset_of!(ModalOperatorRequest, include_demag),
+            std::mem::offset_of!(ModalOperatorRequest, demag_realization),
+            std::mem::offset_of!(ModalOperatorRequest, damping_policy),
+            std::mem::offset_of!(ModalOperatorRequest, spin_wave_bc_kind),
+            std::mem::offset_of!(ModalOperatorRequest, k_vector_rad_m),
+            std::mem::offset_of!(ModalOperatorRequest, k_vector_len),
+            std::mem::offset_of!(ModalOperatorRequest, operator_diagnostics_json),
+        ];
+        let modal_request_offsets = [
+            std::mem::offset_of!(ModalRequest, abi_version),
+            std::mem::offset_of!(ModalRequest, operator_request),
+            std::mem::offset_of!(ModalRequest, requested_mode_count),
+            std::mem::offset_of!(ModalRequest, target_kind),
+            std::mem::offset_of!(ModalRequest, target_frequency_hz),
+            std::mem::offset_of!(ModalRequest, frequency_min_hz),
+            std::mem::offset_of!(ModalRequest, frequency_max_hz),
+            std::mem::offset_of!(ModalRequest, residual_tolerance),
+            std::mem::offset_of!(ModalRequest, max_outer_iterations),
+            std::mem::offset_of!(ModalRequest, max_linear_iterations),
+            std::mem::offset_of!(ModalRequest, output_directory),
+            std::mem::offset_of!(ModalRequest, write_partial_artifacts),
+            std::mem::offset_of!(ModalRequest, completeness_policy),
+            std::mem::offset_of!(ModalRequest, eigensolver_family),
+            std::mem::offset_of!(ModalRequest, spectral_transform_kind),
+            std::mem::offset_of!(ModalRequest, cancel_user_data),
+            std::mem::offset_of!(ModalRequest, cancel_requested),
+            std::mem::offset_of!(ModalRequest, progress_user_data),
+            std::mem::offset_of!(ModalRequest, progress_callback),
+            std::mem::offset_of!(ModalRequest, tiny_validation_enabled),
+            std::mem::offset_of!(ModalRequest, tiny_validation_tangent_dof_count),
+            std::mem::offset_of!(ModalRequest, tiny_validation_stiffness_matrix_row_major),
+            std::mem::offset_of!(ModalRequest, tiny_validation_mass_matrix_row_major),
+            std::mem::offset_of!(ModalRequest, tiny_validation_stiffness_diagonal),
+            std::mem::offset_of!(ModalRequest, tiny_validation_mass_diagonal),
+            std::mem::offset_of!(ModalRequest, mfem_operator_enabled),
+            std::mem::offset_of!(ModalRequest, mfem_tangent_dof_count),
+            std::mem::offset_of!(ModalRequest, mfem_stiffness_matrix_row_major),
+            std::mem::offset_of!(ModalRequest, mfem_gyrotropic_matrix_row_major),
+            std::mem::offset_of!(ModalRequest, mfem_mass_matrix_row_major),
+            std::mem::offset_of!(ModalRequest, mfem_linearized_pencil_dependency_digest),
+            std::mem::offset_of!(ModalRequest, mfem_linearized_pencil_gamma0_m_per_a_s),
+            std::mem::offset_of!(ModalRequest, mfem_sparse_operator_enabled),
+            std::mem::offset_of!(ModalRequest, mfem_sparse_stiffness_csr),
+            std::mem::offset_of!(ModalRequest, mfem_sparse_gyrotropic_csr),
+            std::mem::offset_of!(ModalRequest, mfem_sparse_mass_csr),
+            std::mem::offset_of!(ModalRequest, has_floquet_k_vector),
+            std::mem::offset_of!(ModalRequest, floquet_k_vector_rad_per_m),
+            std::mem::offset_of!(ModalRequest, phase_convention),
+            std::mem::offset_of!(ModalRequest, mfem_floquet_periodic_pairs),
+            std::mem::offset_of!(ModalRequest, mfem_floquet_periodic_pair_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_block_enabled),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_q_dof_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_phi_dof_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_a_qq_csr),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_a_qphi_csr),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_a_phiq_csr),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_a_phiphi_csr),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_b_qq_csr),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_phi_mean_weights),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_phi_mean_weights_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_target_frequency_hz),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_expected_reference_frequency_hz),
+            std::mem::offset_of!(
+                ModalRequest,
+                poisson_airbox_periodic_mesh_certificate_schema
+            ),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_magnetic_pair_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_airbox_pair_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_invert_action_enabled),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_invert_action_device),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_sigma_real),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_sigma_imag),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_action_vector_real),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_action_vector_imag),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_shift_action_vector_count),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_outer_boundary_kind),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_robin_beta),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_gauge_policy),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_gauge_reason),
+            std::mem::offset_of!(ModalRequest, poisson_airbox_assembly_kind),
+            std::mem::offset_of!(ModalRequest, dynamic_demag_k_tangent_matrix_row_major),
+            std::mem::offset_of!(ModalRequest, dynamic_demag_k_tangent_matrix_value_count),
+            std::mem::offset_of!(ModalRequest, struct_size),
+            std::mem::offset_of!(ModalRequest, execution_target),
+            std::mem::offset_of!(ModalRequest, scalar_representation),
+            std::mem::offset_of!(ModalRequest, result_field_representation),
+            std::mem::offset_of!(ModalRequest, reserved_modal_contract_flags),
+            std::mem::offset_of!(ModalRequest, shared_domain_payload),
+            std::mem::offset_of!(ModalRequest, mesh_generation_identity),
+            std::mem::offset_of!(ModalRequest, canonical_preimage_sha256),
+        ];
+        let modal_payload_offsets = [
+            std::mem::offset_of!(ModalPayload, abi_version),
+            std::mem::offset_of!(ModalPayload, struct_size),
+            std::mem::offset_of!(ModalPayload, mesh),
+            std::mem::offset_of!(ModalPayload, equilibrium_m0_xyz),
+            std::mem::offset_of!(ModalPayload, equilibrium_m0_xyz_count),
+            std::mem::offset_of!(ModalPayload, saturation_magnetisation_a_per_m),
+            std::mem::offset_of!(ModalPayload, saturation_magnetisation_count),
+            std::mem::offset_of!(ModalPayload, uniform_saturation_magnetisation_a_per_m),
+            std::mem::offset_of!(ModalPayload, gamma0_m_per_a_s),
+            std::mem::offset_of!(ModalPayload, magnetic_a_qq_csr),
+            std::mem::offset_of!(ModalPayload, scalar_reduced_node),
+            std::mem::offset_of!(ModalPayload, scalar_reduced_node_count),
+            std::mem::offset_of!(ModalPayload, magnetic_reduced_node),
+            std::mem::offset_of!(ModalPayload, magnetic_reduced_node_count),
+            std::mem::offset_of!(ModalPayload, magnetic_pair_count),
+            std::mem::offset_of!(ModalPayload, airbox_pair_count),
+            std::mem::offset_of!(ModalPayload, boundary_kind),
+            std::mem::offset_of!(ModalPayload, robin_beta),
+            std::mem::offset_of!(ModalPayload, boundary_marker),
+            std::mem::offset_of!(ModalPayload, equilibrium_digest),
+            std::mem::offset_of!(ModalPayload, mesh_certificate_digest),
+            std::mem::offset_of!(ModalPayload, mesh_certificate_schema),
+            std::mem::offset_of!(ModalPayload, linearization_state_digest),
+            std::mem::offset_of!(ModalPayload, linearization_m0_xyz),
+            std::mem::offset_of!(ModalPayload, linearization_m0_xyz_count),
+            std::mem::offset_of!(ModalPayload, linearization_h_eff0_xyz),
+            std::mem::offset_of!(ModalPayload, linearization_h_eff0_xyz_count),
+            std::mem::offset_of!(ModalPayload, linearization_h_demag0_xyz),
+            std::mem::offset_of!(ModalPayload, linearization_h_demag0_xyz_count),
+            std::mem::offset_of!(ModalPayload, linearization_phi0),
+            std::mem::offset_of!(ModalPayload, linearization_phi0_count),
+            std::mem::offset_of!(ModalPayload, equilibrium_id),
+            std::mem::offset_of!(ModalPayload, mesh_snapshot_id),
+            std::mem::offset_of!(ModalPayload, material_snapshot_id),
+            std::mem::offset_of!(ModalPayload, physics_snapshot_id),
+            std::mem::offset_of!(ModalPayload, boundary_snapshot_id),
+            std::mem::offset_of!(ModalPayload, producer_run_id),
+            std::mem::offset_of!(ModalPayload, equilibrium_content_sha256),
+            std::mem::offset_of!(ModalPayload, demag_model),
+            std::mem::offset_of!(ModalPayload, m0_norm_tolerance),
+            std::mem::offset_of!(ModalPayload, equilibrium_torque_relative_tolerance),
+            std::mem::offset_of!(ModalPayload, mesh_certificate_map_binding_digest),
+            std::mem::offset_of!(ModalPayload, boundary_gauge_digest),
+            std::mem::offset_of!(ModalPayload, bias_field_sample_index),
+            std::mem::offset_of!(ModalPayload, bias_field_sample_id),
+            std::mem::offset_of!(ModalPayload, bias_field_sample_signature),
+            std::mem::offset_of!(ModalPayload, magnetic_part_identity),
+            std::mem::offset_of!(ModalPayload, airbox_part_identity),
+            std::mem::offset_of!(ModalPayload, mesh_generation_identity),
+            std::mem::offset_of!(ModalPayload, canonical_preimage),
+            std::mem::offset_of!(ModalPayload, canonical_preimage_len),
+            std::mem::offset_of!(ModalPayload, canonical_preimage_sha256),
+            std::mem::offset_of!(ModalPayload, magnetic_class_digest_sha256),
+            std::mem::offset_of!(ModalPayload, scalar_class_digest_sha256),
+            std::mem::offset_of!(ModalPayload, certificate_binding_status),
+            std::mem::offset_of!(ModalPayload, certificate_binding_reason),
+            std::mem::offset_of!(ModalPayload, certificate_binding_v6),
+        ];
+        let modal_result_offsets = [
+            std::mem::offset_of!(ModalResult, abi_version),
+            std::mem::offset_of!(ModalResult, status),
+            std::mem::offset_of!(ModalResult, error_message),
+            std::mem::offset_of!(ModalResult, diagnostics_json),
+            std::mem::offset_of!(ModalResult, result_json),
+            std::mem::offset_of!(ModalResult, artifact_manifest_path),
+            std::mem::offset_of!(ModalResult, mode_count),
+            std::mem::offset_of!(ModalResult, q_dof_count),
+            std::mem::offset_of!(ModalResult, phi_dof_count),
+            std::mem::offset_of!(ModalResult, mode_lambda_count),
+            std::mem::offset_of!(ModalResult, mode_q_complex_count),
+            std::mem::offset_of!(ModalResult, mode_phi_complex_count),
+            std::mem::offset_of!(ModalResult, mode_delta_m_xyz_complex_count),
+            std::mem::offset_of!(ModalResult, mode_residual_count),
+            std::mem::offset_of!(ModalResult, mode_cluster_id_count),
+            std::mem::offset_of!(ModalResult, mode_lambda),
+            std::mem::offset_of!(ModalResult, mode_q_complex),
+            std::mem::offset_of!(ModalResult, mode_phi_complex),
+            std::mem::offset_of!(ModalResult, mode_delta_m_xyz_complex),
+            std::mem::offset_of!(ModalResult, mode_residuals),
+            std::mem::offset_of!(ModalResult, mode_cluster_ids),
+            std::mem::offset_of!(ModalResult, resolved_execution_target),
+            std::mem::offset_of!(ModalResult, resolved_scalar_representation),
+            std::mem::offset_of!(ModalResult, resolved_spectral_transform_kind),
+            std::mem::offset_of!(ModalResult, result_flags),
+            std::mem::offset_of!(ModalResult, struct_size),
+            std::mem::offset_of!(ModalResult, resolved_fallback_state),
+            std::mem::offset_of!(ModalResult, resolved_engine_id),
+            std::mem::offset_of!(ModalResult, resolved_fallback_reason),
+            std::mem::offset_of!(ModalResult, resolved_canonical_preimage_sha256),
+            std::mem::offset_of!(ModalResult, resolved_certificate_binding_status),
+            std::mem::offset_of!(ModalResult, resolved_certificate_binding_reason),
+        ];
+        let modal_csr_offsets = [
+            std::mem::offset_of!(ModalCsr, row_count),
+            std::mem::offset_of!(ModalCsr, column_count),
+            std::mem::offset_of!(ModalCsr, row_offsets),
+            std::mem::offset_of!(ModalCsr, row_offsets_len),
+            std::mem::offset_of!(ModalCsr, column_indices),
+            std::mem::offset_of!(ModalCsr, column_indices_len),
+            std::mem::offset_of!(ModalCsr, values),
+            std::mem::offset_of!(ModalCsr, values_len),
+        ];
+        let offsets_match = |actual: &[u64], expected: &[usize]| {
+            actual.len() == expected.len()
+                && actual
+                    .iter()
+                    .zip(expected.iter())
+                    .all(|(actual, expected)| *actual == *expected as u64)
+        };
+        assert_eq!(
+            layout.modal_eigen_request_field_count as usize,
+            modal_request_offsets.len()
+        );
+        assert!(offsets_match(
+            &layout.modal_eigen_request_field_offsets[..modal_request_offsets.len()],
+            &modal_request_offsets
+        ));
+        assert!(
+            layout.modal_eigen_request_field_offsets[modal_request_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
         );
         assert_eq!(
-            layout.driven_response_request_drive_kind_offset,
-            std::mem::offset_of!(DrivenRequest, drive_kind) as u64
+            layout.modal_linearized_operator_request_field_count as usize,
+            modal_operator_request_offsets.len()
+        );
+        assert!(offsets_match(
+            &layout.modal_linearized_operator_request_field_offsets
+                [..modal_operator_request_offsets.len()],
+            &modal_operator_request_offsets
+        ));
+        assert!(layout.modal_linearized_operator_request_field_offsets
+            [modal_operator_request_offsets.len()..]
+            .iter()
+            .all(|offset| *offset == 0));
+        assert_eq!(
+            layout.modal_shared_domain_payload_field_count as usize,
+            modal_payload_offsets.len()
+        );
+        assert!(offsets_match(
+            &layout.modal_shared_domain_payload_field_offsets[..modal_payload_offsets.len()],
+            &modal_payload_offsets
+        ));
+        assert!(
+            layout.modal_shared_domain_payload_field_offsets[modal_payload_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
         );
         assert_eq!(
-            layout.driven_response_request_require_nonzero_rhs_offset,
-            std::mem::offset_of!(DrivenRequest, require_nonzero_rhs) as u64
+            layout.modal_frequency_domain_result_field_count as usize,
+            modal_result_offsets.len()
+        );
+        assert!(offsets_match(
+            &layout.modal_frequency_domain_result_field_offsets[..modal_result_offsets.len()],
+            &modal_result_offsets
+        ));
+        assert!(
+            layout.modal_frequency_domain_result_field_offsets[modal_result_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
         );
         assert_eq!(
-            layout.driven_response_request_mfem_floquet_periodic_pair_count_offset,
-            std::mem::offset_of!(DrivenRequest, mfem_floquet_periodic_pair_count) as u64
+            layout.modal_csr_matrix_view_field_count as usize,
+            modal_csr_offsets.len()
         );
-        assert_eq!(
+        assert!(offsets_match(
+            &layout.modal_csr_matrix_view_field_offsets[..modal_csr_offsets.len()],
+            &modal_csr_offsets
+        ));
+        assert!(
+            layout.modal_csr_matrix_view_field_offsets[modal_csr_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
+        );
+
+        let layout = legacy_layout;
+        {
+            assert_eq!(
+                layout.availability_request_size,
+                std::mem::size_of::<AvailabilityRequest>() as u64
+            );
+            assert_eq!(
+                layout.availability_request_phase_convention_offset,
+                std::mem::offset_of!(AvailabilityRequest, phase_convention) as u64
+            );
+            assert_eq!(
+                layout.availability_info_size,
+                std::mem::size_of::<AvailabilityInfo>() as u64
+            );
+            assert_eq!(
+                layout.availability_info_diagnostics_json_offset,
+                std::mem::offset_of!(AvailabilityInfo, diagnostics_json) as u64
+            );
+            assert_eq!(
+                layout.dependency_info_size,
+                std::mem::size_of::<DependencyInfo>() as u64
+            );
+            assert_eq!(
+                layout.dependency_info_modal_eigen_native_cpu_slepc_available_offset,
+                std::mem::offset_of!(DependencyInfo, modal_eigen_native_cpu_slepc_available) as u64
+            );
+            assert_eq!(
+                layout.dependency_info_diagnostics_json_offset,
+                std::mem::offset_of!(DependencyInfo, diagnostics_json) as u64
+            );
+            assert_eq!(
+                layout.sweep_progress_size,
+                std::mem::size_of::<SweepProgress>() as u64
+            );
+            assert_eq!(
+                layout.sweep_progress_progress_json_offset,
+                std::mem::offset_of!(SweepProgress, progress_json) as u64
+            );
+            assert_eq!(layout.progress_size, std::mem::size_of::<Progress>() as u64);
+            assert_eq!(
+                layout.progress_converged_offset,
+                std::mem::offset_of!(Progress, converged) as u64
+            );
+            assert_eq!(
+                layout.exchange_edge_size,
+                std::mem::size_of::<ExchangeEdge>() as u64
+            );
+            assert_eq!(
+                layout.exchange_edge_stiffness_offset,
+                std::mem::offset_of!(ExchangeEdge, stiffness) as u64
+            );
+            assert_eq!(
+                layout.periodic_node_pair_size,
+                std::mem::size_of::<PeriodicNodePair>() as u64
+            );
+            assert_eq!(
+                layout.periodic_node_pair_node_b_offset,
+                std::mem::offset_of!(PeriodicNodePair, node_b) as u64
+            );
+            assert_eq!(
+                layout.floquet_periodic_pair_size,
+                std::mem::size_of::<FloquetPeriodicPair>() as u64
+            );
+            assert_eq!(
+                layout.floquet_periodic_pair_phase_rad_offset,
+                std::mem::offset_of!(FloquetPeriodicPair, phase_rad) as u64
+            );
+            assert_eq!(
+                layout.dmi_element_size,
+                std::mem::size_of::<DmiElement>() as u64
+            );
+            assert_eq!(
+                layout.dmi_element_normal_offset,
+                std::mem::offset_of!(DmiElement, normal) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_size,
+                std::mem::size_of::<DrivenRequest>() as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_requested_execution_lane_offset,
+                std::mem::offset_of!(DrivenRequest, requested_execution_lane) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_progress_callback_offset,
+                std::mem::offset_of!(DrivenRequest, progress_callback) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_tiny_validation_drive_imag_offset,
+                std::mem::offset_of!(DrivenRequest, tiny_validation_drive_imag) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_phase_convention_offset,
+                std::mem::offset_of!(DrivenRequest, phase_convention) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_drive_kind_offset,
+                std::mem::offset_of!(DrivenRequest, drive_kind) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_require_nonzero_rhs_offset,
+                std::mem::offset_of!(DrivenRequest, require_nonzero_rhs) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_mfem_floquet_periodic_pair_count_offset,
+                std::mem::offset_of!(DrivenRequest, mfem_floquet_periodic_pair_count) as u64
+            );
+            assert_eq!(
             layout.driven_response_request_periodic_airbox_magnetostatic_periodic_node_pairs_offset,
             std::mem::offset_of!(
                 DrivenRequest,
                 periodic_airbox_magnetostatic_periodic_node_pairs
             ) as u64
         );
-        assert_eq!(
-            layout.driven_response_request_periodic_airbox_coupled_block_enabled_offset,
-            std::mem::offset_of!(DrivenRequest, periodic_airbox_coupled_block_enabled) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset,
-            std::mem::offset_of!(DrivenRequest, periodic_airbox_coupled_block_apply_stiffness)
-                as u64
-        );
-        assert_eq!(
+            assert_eq!(
+                layout.driven_response_request_periodic_airbox_coupled_block_enabled_offset,
+                std::mem::offset_of!(DrivenRequest, periodic_airbox_coupled_block_enabled) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_periodic_airbox_coupled_block_apply_stiffness_offset,
+                std::mem::offset_of!(DrivenRequest, periodic_airbox_coupled_block_apply_stiffness)
+                    as u64
+            );
+            assert_eq!(
             layout
                 .driven_response_request_periodic_airbox_coupled_block_apply_complex_stiffness_offset,
             std::mem::offset_of!(
@@ -3574,58 +4533,58 @@ mod tests {
                 periodic_airbox_coupled_block_apply_complex_stiffness
             ) as u64
         );
-        assert_eq!(
+            assert_eq!(
             layout.driven_response_request_periodic_airbox_coupled_block_operator_user_data_offset,
             std::mem::offset_of!(
                 DrivenRequest,
                 periodic_airbox_coupled_block_operator_user_data
             ) as u64
         );
-        assert_eq!(
-            layout.driven_response_request_mfem_apply_demag_tangent_offset,
-            std::mem::offset_of!(DrivenRequest, mfem_apply_demag_tangent) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_mfem_demag_tangent_user_data_offset,
-            std::mem::offset_of!(DrivenRequest, mfem_demag_tangent_user_data) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_mfem_demag_tangent_matrix_row_major_offset,
-            std::mem::offset_of!(DrivenRequest, mfem_demag_tangent_matrix_row_major) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_solver_relative_tolerance_offset,
-            std::mem::offset_of!(DrivenRequest, solver_relative_tolerance) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_solver_absolute_tolerance_offset,
-            std::mem::offset_of!(DrivenRequest, solver_absolute_tolerance) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_solver_max_iterations_offset,
-            std::mem::offset_of!(DrivenRequest, solver_max_iterations) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_solver_restart_iterations_offset,
-            std::mem::offset_of!(DrivenRequest, solver_restart_iterations) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_solver_progress_interval_iterations_offset,
-            std::mem::offset_of!(DrivenRequest, solver_progress_interval_iterations) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_tiny_validation_drive_real_value_count_offset,
-            std::mem::offset_of!(DrivenRequest, tiny_validation_drive_real_value_count) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_mfem_equilibrium_m_value_count_offset,
-            std::mem::offset_of!(DrivenRequest, mfem_equilibrium_m_value_count) as u64
-        );
-        assert_eq!(
-            layout.driven_response_request_mfem_drive_real_value_count_offset,
-            std::mem::offset_of!(DrivenRequest, mfem_drive_real_value_count) as u64
-        );
-        assert_eq!(
+            assert_eq!(
+                layout.driven_response_request_mfem_apply_demag_tangent_offset,
+                std::mem::offset_of!(DrivenRequest, mfem_apply_demag_tangent) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_mfem_demag_tangent_user_data_offset,
+                std::mem::offset_of!(DrivenRequest, mfem_demag_tangent_user_data) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_mfem_demag_tangent_matrix_row_major_offset,
+                std::mem::offset_of!(DrivenRequest, mfem_demag_tangent_matrix_row_major) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_solver_relative_tolerance_offset,
+                std::mem::offset_of!(DrivenRequest, solver_relative_tolerance) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_solver_absolute_tolerance_offset,
+                std::mem::offset_of!(DrivenRequest, solver_absolute_tolerance) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_solver_max_iterations_offset,
+                std::mem::offset_of!(DrivenRequest, solver_max_iterations) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_solver_restart_iterations_offset,
+                std::mem::offset_of!(DrivenRequest, solver_restart_iterations) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_solver_progress_interval_iterations_offset,
+                std::mem::offset_of!(DrivenRequest, solver_progress_interval_iterations) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_tiny_validation_drive_real_value_count_offset,
+                std::mem::offset_of!(DrivenRequest, tiny_validation_drive_real_value_count) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_mfem_equilibrium_m_value_count_offset,
+                std::mem::offset_of!(DrivenRequest, mfem_equilibrium_m_value_count) as u64
+            );
+            assert_eq!(
+                layout.driven_response_request_mfem_drive_real_value_count_offset,
+                std::mem::offset_of!(DrivenRequest, mfem_drive_real_value_count) as u64
+            );
+            assert_eq!(
             layout
                 .driven_response_request_periodic_airbox_coupled_block_drive_real_value_count_offset,
             std::mem::offset_of!(
@@ -3633,13 +4592,711 @@ mod tests {
                 periodic_airbox_coupled_block_drive_real_value_count
             ) as u64
         );
+            assert_eq!(
+                layout.solve_result_size,
+                std::mem::size_of::<SolveResult>() as u64
+            );
+            assert_eq!(
+                layout.solve_result_artifact_manifest_path_offset,
+                std::mem::offset_of!(SolveResult, artifact_manifest_path) as u64
+            );
+        }
+    }
+
+    #[test]
+    fn frequency_domain_modal_abi_layout_v2_preserves_v1_and_publishes_manifest() {
+        let mut legacy = fullmag_fem_frequency_domain_abi_layout::default();
         assert_eq!(
-            layout.solve_result_size,
-            std::mem::size_of::<SolveResult>() as u64
+            unsafe { fullmag_fem_get_frequency_domain_abi_layout(&mut legacy) },
+            0
         );
         assert_eq!(
-            layout.solve_result_artifact_manifest_path_offset,
-            std::mem::offset_of!(SolveResult, artifact_manifest_path) as u64
+            legacy.solve_result_size,
+            std::mem::size_of::<fullmag_fem_frequency_domain_solve_result>() as u64
+        );
+        let mut modal = fullmag_fem_frequency_domain_modal_abi_layout_v2::default();
+        modal.struct_size = std::mem::size_of_val(&modal) as u64;
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_modal_abi_layout_v2(&mut modal) },
+            0
+        );
+        assert_eq!(modal.abi_version, 2);
+        assert_eq!(modal.struct_size, std::mem::size_of_val(&modal) as u64);
+        assert_eq!(modal.modal_abi_schema, 2);
+        let modal_v17_payload_size =
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, linearization_descriptor)
+                as u64;
+        assert_eq!(
+            modal.modal_shared_domain_payload_size,
+            modal_v17_payload_size
+        );
+        assert_eq!(modal.modal_eigen_request_field_count, 78);
+        assert_eq!(modal.modal_linearized_operator_request_field_count, 14);
+        assert_eq!(modal.modal_shared_domain_payload_field_count, 57);
+        assert_eq!(modal.modal_frequency_domain_result_field_count, 32);
+        assert_eq!(modal.modal_csr_matrix_view_field_count, 8);
+        assert_eq!(
+            modal.modal_certificate_v6_relation_size,
+            std::mem::size_of::<FullmagFemModalCertificateV6Relation>() as u64
+        );
+        assert_eq!(
+            modal.modal_certificate_v6_region_role_size,
+            std::mem::size_of::<FullmagFemModalCertificateV6RegionRole>() as u64
+        );
+        assert_eq!(
+            modal.modal_certificate_v6_class_digest_size,
+            std::mem::size_of::<FullmagFemModalCertificateV6ClassDigest>() as u64
+        );
+        assert_eq!(
+            modal.modal_certificate_v6_view_size,
+            std::mem::size_of::<FullmagFemModalCertificateV6View>() as u64
+        );
+        assert_eq!(
+            modal.modal_certificate_v6_binding_request_size,
+            std::mem::size_of::<FullmagFemModalCertificateV6BindingRequest>() as u64
+        );
+        assert_eq!(modal.modal_certificate_v6_relation_field_count, 4);
+        assert_eq!(modal.modal_certificate_v6_region_role_field_count, 2);
+        assert_eq!(modal.modal_certificate_v6_class_digest_field_count, 3);
+        assert_eq!(modal.modal_certificate_v6_view_field_count, 18);
+        assert_eq!(modal.modal_certificate_v6_binding_request_field_count, 5);
+        let relation_offsets = [
+            std::mem::offset_of!(FullmagFemModalCertificateV6Relation, source_node),
+            std::mem::offset_of!(FullmagFemModalCertificateV6Relation, destination_node),
+            std::mem::offset_of!(FullmagFemModalCertificateV6Relation, axis_mask),
+            std::mem::offset_of!(FullmagFemModalCertificateV6Relation, kind),
+        ];
+        let region_role_offsets = [
+            std::mem::offset_of!(FullmagFemModalCertificateV6RegionRole, region_id),
+            std::mem::offset_of!(FullmagFemModalCertificateV6RegionRole, part_role),
+        ];
+        let class_digest_offsets = [
+            std::mem::offset_of!(FullmagFemModalCertificateV6ClassDigest, canonical_class_id),
+            std::mem::offset_of!(FullmagFemModalCertificateV6ClassDigest, member_count),
+            std::mem::offset_of!(FullmagFemModalCertificateV6ClassDigest, sha256),
+        ];
+        let view_offsets = [
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, view_kind),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, part_role),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, part_identity),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, topology_fingerprint),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, node_count),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, region_ids),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, boundary_axis_masks),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, region_roles),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, region_role_count),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, generator_relations),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, generator_relation_count),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, closure_relations),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, closure_relation_count),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, require_complete_closure),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, expected_class_ids),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, expected_class_id_count),
+            std::mem::offset_of!(FullmagFemModalCertificateV6View, expected_class_digests),
+            std::mem::offset_of!(
+                FullmagFemModalCertificateV6View,
+                expected_class_digest_count
+            ),
+        ];
+        let binding_request_offsets = [
+            std::mem::offset_of!(FullmagFemModalCertificateV6BindingRequest, schema_version),
+            std::mem::offset_of!(FullmagFemModalCertificateV6BindingRequest, mesh_magnetic),
+            std::mem::offset_of!(FullmagFemModalCertificateV6BindingRequest, payload_magnetic),
+            std::mem::offset_of!(FullmagFemModalCertificateV6BindingRequest, mesh_scalar),
+            std::mem::offset_of!(FullmagFemModalCertificateV6BindingRequest, payload_scalar),
+        ];
+        assert_eq!(
+            &modal.modal_certificate_v6_relation_field_offsets[..relation_offsets.len()],
+            &relation_offsets.map(|offset| offset as u64)
+        );
+        assert_eq!(
+            &modal.modal_certificate_v6_region_role_field_offsets[..region_role_offsets.len()],
+            &region_role_offsets.map(|offset| offset as u64)
+        );
+        assert_eq!(
+            &modal.modal_certificate_v6_class_digest_field_offsets[..class_digest_offsets.len()],
+            &class_digest_offsets.map(|offset| offset as u64)
+        );
+        assert_eq!(
+            &modal.modal_certificate_v6_view_field_offsets[..view_offsets.len()],
+            &view_offsets.map(|offset| offset as u64)
+        );
+        assert_eq!(
+            &modal.modal_certificate_v6_binding_request_field_offsets
+                [..binding_request_offsets.len()],
+            &binding_request_offsets.map(|offset| offset as u64)
+        );
+        assert!(modal.modal_certificate_v6_relation_field_offsets[4..]
+            .iter()
+            .all(|offset| *offset == 0));
+        assert!(modal.modal_certificate_v6_region_role_field_offsets[2..]
+            .iter()
+            .all(|offset| *offset == 0));
+        assert!(modal.modal_certificate_v6_class_digest_field_offsets[3..]
+            .iter()
+            .all(|offset| *offset == 0));
+        assert!(modal.modal_certificate_v6_view_field_offsets[18..]
+            .iter()
+            .all(|offset| *offset == 0));
+        assert!(
+            modal.modal_certificate_v6_binding_request_field_offsets[5..]
+                .iter()
+                .all(|offset| *offset == 0)
+        );
+        assert_eq!(modal.modal_eigen_request_field_offsets[0], 0);
+        assert_eq!(
+            modal.modal_eigen_request_field_offsets[77],
+            std::mem::offset_of!(FullmagFemModalEigenRequest, canonical_preimage_sha256) as u64
+        );
+        assert_eq!(
+            modal.modal_shared_domain_payload_field_offsets[55],
+            std::mem::offset_of!(
+                FullmagFemModalSharedDomainPayload,
+                certificate_binding_reason
+            ) as u64
+        );
+        assert_eq!(
+            modal.modal_shared_domain_payload_field_offsets[56],
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, certificate_binding_v6) as u64
+        );
+        assert!(modal.modal_shared_domain_payload_field_offsets[57..]
+            .iter()
+            .all(|offset| *offset == 0));
+        assert_eq!(
+            modal.modal_frequency_domain_result_field_offsets[31],
+            std::mem::offset_of!(
+                FullmagFemFrequencyDomainResult,
+                resolved_certificate_binding_reason
+            ) as u64
+        );
+    }
+
+    #[test]
+    fn frequency_domain_modal_abi_layout_v3_publishes_v18_descriptor_tail() {
+        let mut short_layout = fullmag_fem_frequency_domain_modal_abi_layout_v3::default();
+        short_layout.v2.struct_size =
+            std::mem::size_of::<fullmag_fem_frequency_domain_modal_abi_layout_v3>() as u64 - 1;
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_modal_abi_layout_v3(&mut short_layout) },
+            FULLMAG_FEM_ERR_INVALID
+        );
+        let mut layout = fullmag_fem_frequency_domain_modal_abi_layout_v3::default();
+        layout.v2.struct_size = std::mem::size_of_val(&layout) as u64;
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_modal_abi_layout_v3(&mut layout) },
+            0
+        );
+        assert_eq!(
+            layout.v2.abi_version,
+            FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V3
+        );
+        assert_eq!(layout.v2.modal_shared_domain_payload_field_count, 59);
+        assert_eq!(
+            layout.v2.modal_shared_domain_payload_size,
+            (std::mem::offset_of!(FullmagFemModalSharedDomainPayload, exchange_material_view)
+                + std::mem::size_of::<*const FullmagFemModalExchangeMaterialView>())
+                as u64
+        );
+        assert_eq!(
+            layout.v2.modal_shared_domain_payload_field_offsets[57],
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, linearization_descriptor)
+                as u64
+        );
+        assert_eq!(
+            layout.v2.modal_shared_domain_payload_field_offsets[58],
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, exchange_material_view) as u64
+        );
+        assert_eq!(
+            layout.modal_linearization_descriptor_size,
+            std::mem::size_of::<FullmagFemModalLinearizationDescriptor>() as u64
+        );
+        assert_eq!(
+            layout.modal_exchange_material_view_size,
+            std::mem::size_of::<FullmagFemModalExchangeMaterialView>() as u64
+        );
+        assert_eq!(
+            layout.modal_exchange_material_view_field_count as usize,
+            FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT
+        );
+        let material_offsets = [
+            std::mem::offset_of!(FullmagFemModalExchangeMaterialView, abi_version),
+            std::mem::offset_of!(FullmagFemModalExchangeMaterialView, reserved0),
+            std::mem::offset_of!(FullmagFemModalExchangeMaterialView, struct_size),
+            std::mem::offset_of!(FullmagFemModalExchangeMaterialView, schema_version),
+            std::mem::offset_of!(FullmagFemModalExchangeMaterialView, material_kind),
+            std::mem::offset_of!(FullmagFemModalExchangeMaterialView, reserved1),
+            std::mem::offset_of!(
+                FullmagFemModalExchangeMaterialView,
+                exchange_stiffness_j_per_m
+            ),
+        ];
+        assert_eq!(
+            &layout.modal_exchange_material_view_field_offsets[..material_offsets.len()],
+            &material_offsets.map(|offset| offset as u64)
+        );
+        assert!(
+            layout.modal_exchange_material_view_field_offsets[material_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
+        );
+        let descriptor_offsets = [
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, abi_version),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, reserved0),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, struct_size),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, schema_version),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, node_count),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, tangent_dof_count),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, coordinate_unit),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, magnetisation_unit),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, time_unit),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, frequency_unit),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                angular_frequency_unit
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                linearization_state_digest
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, equilibrium_digest),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, exchange_term_digest),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, field_term_digest),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                anisotropy_term_digest
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_term_digest),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, demag_term_digest),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                operator_input_digest
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                demag_provider_signature
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, term_presence_mask),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                reserved_contract_flags
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, tangent_frame_xyz),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                tangent_frame_xyz_count
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, equilibrium_m0_xyz),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                equilibrium_m0_xyz_count
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                effective_field_h_eff0_xyz
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                effective_field_h_eff0_xyz_count
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                external_field_h_ext0_xyz
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                external_field_h_ext0_xyz_count
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, alpha_per_node),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, alpha_per_node_count),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, uniaxial_axis_xyz),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                uniaxial_axis_xyz_count
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                uniaxial_anisotropy_field_a_per_m
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                uniaxial_anisotropy_field_count
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                saturation_magnetisation_a_per_m
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                saturation_magnetisation_count
+            ),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                uniform_saturation_magnetisation_a_per_m
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, exchange_edges),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, exchange_edge_count),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_elements),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_element_count),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_lumped_mass),
+            std::mem::offset_of!(
+                FullmagFemModalLinearizationDescriptor,
+                dmi_lumped_mass_count
+            ),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_ms_field),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_ms_field_count),
+            std::mem::offset_of!(FullmagFemModalLinearizationDescriptor, dmi_uniform_ms),
+        ];
+        assert_eq!(
+            layout.modal_linearization_descriptor_field_count as usize,
+            descriptor_offsets.len()
+        );
+        assert_eq!(
+            &layout.modal_linearization_descriptor_field_offsets[..descriptor_offsets.len()],
+            &descriptor_offsets.map(|offset| offset as u64)
+        );
+        assert!(
+            layout.modal_linearization_descriptor_field_offsets[descriptor_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
+        );
+    }
+
+    #[test]
+    fn frequency_domain_modal_abi_layout_v4_publishes_v19_acceptance_tail() {
+        let mut layout = fullmag_fem_frequency_domain_modal_abi_layout_v4::default();
+        layout.v3.v2.struct_size = std::mem::size_of_val(&layout) as u64;
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_modal_abi_layout_v4(&mut layout) },
+            0
+        );
+        assert_eq!(
+            layout.v3.v2.abi_version,
+            FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V4
+        );
+        assert_eq!(layout.v3.v2.modal_abi_schema, 4);
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_frequency_domain_modal_abi_layout_v4>(),
+            std::mem::size_of::<fullmag_fem_frequency_domain_modal_abi_layout_v3>()
+                + std::mem::size_of::<u64>()
+                + std::mem::size_of::<[u64; 8]>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_frequency_domain_modal_abi_layout_v4,
+                modal_acceptance_certificate_field_count
+            ),
+            std::mem::size_of::<fullmag_fem_frequency_domain_modal_abi_layout_v3>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_frequency_domain_modal_abi_layout_v4,
+                modal_acceptance_certificate_field_offsets
+            ),
+            std::mem::size_of::<fullmag_fem_frequency_domain_modal_abi_layout_v3>()
+                + std::mem::size_of::<u64>()
+        );
+        assert_eq!(
+            layout.v3.v2.modal_shared_domain_payload_size,
+            std::mem::size_of::<FullmagFemModalSharedDomainPayload>() as u64
+        );
+        assert_eq!(layout.v3.v2.modal_shared_domain_payload_field_count, 65);
+        assert_eq!(layout.modal_acceptance_certificate_field_count, 6);
+        let offsets = [
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, acceptance_criterion),
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, acceptance_metric_kind),
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, acceptance_unit),
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, acceptance_metric_value),
+            std::mem::offset_of!(FullmagFemModalSharedDomainPayload, acceptance_threshold),
+            std::mem::offset_of!(
+                FullmagFemModalSharedDomainPayload,
+                acceptance_certificate_sha256
+            ),
+        ];
+        assert_eq!(
+            &layout.modal_acceptance_certificate_field_offsets[..offsets.len()],
+            &offsets.map(|offset| offset as u64)
+        );
+        assert!(
+            layout.modal_acceptance_certificate_field_offsets[offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
+        );
+        assert_eq!(
+            &layout.v3.v2.modal_shared_domain_payload_field_offsets[59..65],
+            &offsets.map(|offset| offset as u64)
+        );
+    }
+
+    #[test]
+    fn modal_gpu_attestation_v1_wire_codes_and_layout_are_frozen() {
+        assert_eq!(FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION, 1);
+        assert_eq!(FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP, 1);
+        assert_eq!(FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP, 2);
+        assert_eq!(FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH, 4);
+        assert_eq!(FULLMAG_FEM_MODAL_GPU_COVERAGE_SCALAR_TELEMETRY, 8);
+        assert_eq!(FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT, 16);
+
+        type Attestation = FullmagFemModalGpuAttestationV1;
+        let attestation = unsafe { std::mem::MaybeUninit::<Attestation>::zeroed().assume_init() };
+        assert_eq!(attestation.abi_version, 0);
+        assert_eq!(attestation.struct_size, 0);
+        assert_eq!(attestation.measurement_state, 0);
+        assert_eq!(attestation.fallback_state, 0);
+        assert_eq!(attestation.measurement_coverage_flags, 0);
+        assert!(attestation.device_name.is_null());
+        assert!(attestation.last_invalidation_reason.is_null());
+        assert_eq!(attestation.device_uuid, [0; 16]);
+        assert_eq!(attestation.object_graph_sha256, [0; 32]);
+        assert_eq!(attestation.session_context_sha256, [0; 32]);
+        assert_eq!(attestation.operator_dimension, 0);
+        assert_eq!(attestation.invalidation_flags, 0);
+
+        let offsets = [
+            std::mem::offset_of!(Attestation, abi_version),
+            std::mem::offset_of!(Attestation, struct_size),
+            std::mem::offset_of!(Attestation, measurement_state),
+            std::mem::offset_of!(Attestation, fallback_state),
+            std::mem::offset_of!(Attestation, measurement_coverage_flags),
+            std::mem::offset_of!(Attestation, device_residency_verified),
+            std::mem::offset_of!(Attestation, production_shared_domain),
+            std::mem::offset_of!(Attestation, validation_only),
+            std::mem::offset_of!(Attestation, operator_kind),
+            std::mem::offset_of!(Attestation, hypre_memory_location),
+            std::mem::offset_of!(Attestation, hypre_execution_policy),
+            std::mem::offset_of!(Attestation, compute_capability_major),
+            std::mem::offset_of!(Attestation, compute_capability_minor),
+            std::mem::offset_of!(Attestation, cuda_driver_version),
+            std::mem::offset_of!(Attestation, cuda_runtime_version),
+            std::mem::offset_of!(Attestation, device_name),
+            std::mem::offset_of!(Attestation, mfem_version),
+            std::mem::offset_of!(Attestation, hypre_version),
+            std::mem::offset_of!(Attestation, petsc_version),
+            std::mem::offset_of!(Attestation, slepc_version),
+            std::mem::offset_of!(Attestation, petsc_vec_type),
+            std::mem::offset_of!(Attestation, petsc_matrix_type),
+            std::mem::offset_of!(Attestation, matshell_vec_type),
+            std::mem::offset_of!(Attestation, slepc_bv_type),
+            std::mem::offset_of!(Attestation, eps_type),
+            std::mem::offset_of!(Attestation, st_type),
+            std::mem::offset_of!(Attestation, ksp_type),
+            std::mem::offset_of!(Attestation, poisson_pc_type),
+            std::mem::offset_of!(Attestation, shift_pc_type),
+            std::mem::offset_of!(Attestation, last_invalidation_reason),
+            std::mem::offset_of!(Attestation, device_uuid),
+            std::mem::offset_of!(Attestation, object_graph_sha256),
+            std::mem::offset_of!(Attestation, native_trace_sha256),
+            std::mem::offset_of!(Attestation, source_snapshot_sha256),
+            std::mem::offset_of!(Attestation, runtime_manifest_sha256),
+            std::mem::offset_of!(Attestation, mesh_identity_sha256),
+            std::mem::offset_of!(Attestation, equilibrium_sha256),
+            std::mem::offset_of!(Attestation, certificate_sha256),
+            std::mem::offset_of!(Attestation, linearization_sha256),
+            std::mem::offset_of!(Attestation, material_sha256),
+            std::mem::offset_of!(Attestation, physics_sha256),
+            std::mem::offset_of!(Attestation, boundary_sha256),
+            std::mem::offset_of!(Attestation, gauge_sha256),
+            std::mem::offset_of!(Attestation, operator_terms_sha256),
+            std::mem::offset_of!(Attestation, solver_policy_sha256),
+            std::mem::offset_of!(Attestation, operator_key_sha256),
+            std::mem::offset_of!(Attestation, target_key_sha256),
+            std::mem::offset_of!(Attestation, session_context_sha256),
+            std::mem::offset_of!(Attestation, setup_h2d_count),
+            std::mem::offset_of!(Attestation, setup_h2d_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_computational_h2d_count),
+            std::mem::offset_of!(Attestation, hot_loop_computational_h2d_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_computational_d2h_count),
+            std::mem::offset_of!(Attestation, hot_loop_computational_d2h_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_scalar_telemetry_d2h_count),
+            std::mem::offset_of!(Attestation, hot_loop_scalar_telemetry_d2h_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_full_vector_crossings),
+            std::mem::offset_of!(Attestation, hot_loop_computational_host_syncs),
+            std::mem::offset_of!(Attestation, hot_loop_scalar_telemetry_syncs),
+            std::mem::offset_of!(Attestation, hot_loop_allocations),
+            std::mem::offset_of!(Attestation, export_d2h_count),
+            std::mem::offset_of!(Attestation, export_d2h_bytes),
+            std::mem::offset_of!(Attestation, device_memory_baseline_bytes),
+            std::mem::offset_of!(Attestation, device_memory_peak_bytes),
+            std::mem::offset_of!(Attestation, device_memory_final_bytes),
+            std::mem::offset_of!(Attestation, operator_dimension),
+            std::mem::offset_of!(Attestation, operator_apply_count),
+            std::mem::offset_of!(Attestation, poisson_solve_count),
+            std::mem::offset_of!(Attestation, poisson_iteration_count),
+            std::mem::offset_of!(Attestation, eps_iteration_count),
+            std::mem::offset_of!(Attestation, eps_restart_count),
+            std::mem::offset_of!(Attestation, eps_converged_reason),
+            std::mem::offset_of!(Attestation, operator_state_generation),
+            std::mem::offset_of!(Attestation, target_state_generation),
+            std::mem::offset_of!(Attestation, operator_reuse_count),
+            std::mem::offset_of!(Attestation, target_rebuild_count),
+            std::mem::offset_of!(Attestation, invalidation_flags),
+        ];
+        assert_eq!(offsets.len(), 77);
+        assert!(offsets.windows(2).all(|window| window[0] < window[1]));
+    }
+
+    #[test]
+    fn frequency_domain_result_v20_is_caller_sized_and_publishes_attestation_layout() {
+        type ResultV18 = FullmagFemFrequencyDomainResult;
+        type ResultV20 = FullmagFemFrequencyDomainResultV20;
+        type Attestation = FullmagFemModalGpuAttestationV1;
+
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION, 20);
+        let result = unsafe { std::mem::MaybeUninit::<ResultV20>::zeroed().assume_init() };
+        assert_eq!(result.abi_version, 0);
+        assert_eq!(result.struct_size, 0);
+        assert_eq!(result.scientific_result_v18.abi_version, 0);
+        assert!(result.gpu_attestation.is_null());
+        assert!(std::mem::size_of::<ResultV20>() > std::mem::size_of::<ResultV18>());
+        assert_eq!(
+            std::mem::align_of::<ResultV20>(),
+            std::mem::align_of::<ResultV18>()
+        );
+
+        let result_offsets = [
+            std::mem::offset_of!(ResultV20, abi_version),
+            std::mem::offset_of!(ResultV20, struct_size),
+            std::mem::offset_of!(ResultV20, scientific_result_v18),
+            std::mem::offset_of!(ResultV20, gpu_attestation),
+        ];
+        assert_eq!(result_offsets.len(), 4);
+        assert!(result_offsets
+            .windows(2)
+            .all(|window| window[0] < window[1]));
+        assert_eq!(std::mem::offset_of!(ResultV20, scientific_result_v18), 8);
+        assert_eq!(
+            std::mem::offset_of!(ResultV20, gpu_attestation),
+            std::mem::offset_of!(ResultV20, scientific_result_v18)
+                + std::mem::size_of::<ResultV18>()
+        );
+
+        let mut layout = fullmag_fem_frequency_domain_modal_abi_layout_v5::default();
+        layout.v4.v3.v2.struct_size = std::mem::size_of_val(&layout) as u64;
+        assert_eq!(
+            unsafe { fullmag_fem_get_frequency_domain_modal_abi_layout_v5(&mut layout) },
+            0
+        );
+        assert_eq!(
+            layout.v4.v3.v2.abi_version,
+            FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V5
+        );
+        assert_eq!(layout.v4.v3.v2.modal_abi_schema, 5);
+        assert_eq!(
+            std::mem::offset_of!(
+                fullmag_fem_frequency_domain_modal_abi_layout_v5,
+                modal_frequency_domain_result_v20_size
+            ),
+            std::mem::size_of::<fullmag_fem_frequency_domain_modal_abi_layout_v4>()
+        );
+        assert_eq!(
+            layout.modal_frequency_domain_result_v20_size,
+            std::mem::size_of::<ResultV20>() as u64
+        );
+        assert_eq!(
+            layout.modal_frequency_domain_result_v20_align,
+            std::mem::align_of::<ResultV20>() as u64
+        );
+        assert_eq!(layout.modal_frequency_domain_result_v20_field_count, 4);
+        assert_eq!(
+            layout.modal_frequency_domain_result_v20_field_offsets,
+            result_offsets.map(|offset| offset as u64)
+        );
+        assert_eq!(
+            layout.modal_gpu_attestation_v1_size,
+            std::mem::size_of::<Attestation>() as u64
+        );
+        assert_eq!(
+            layout.modal_gpu_attestation_v1_align,
+            std::mem::align_of::<Attestation>() as u64
+        );
+        assert_eq!(layout.modal_gpu_attestation_v1_field_count, 77);
+        let attestation_offsets = [
+            std::mem::offset_of!(Attestation, abi_version),
+            std::mem::offset_of!(Attestation, struct_size),
+            std::mem::offset_of!(Attestation, measurement_state),
+            std::mem::offset_of!(Attestation, fallback_state),
+            std::mem::offset_of!(Attestation, measurement_coverage_flags),
+            std::mem::offset_of!(Attestation, device_residency_verified),
+            std::mem::offset_of!(Attestation, production_shared_domain),
+            std::mem::offset_of!(Attestation, validation_only),
+            std::mem::offset_of!(Attestation, operator_kind),
+            std::mem::offset_of!(Attestation, hypre_memory_location),
+            std::mem::offset_of!(Attestation, hypre_execution_policy),
+            std::mem::offset_of!(Attestation, compute_capability_major),
+            std::mem::offset_of!(Attestation, compute_capability_minor),
+            std::mem::offset_of!(Attestation, cuda_driver_version),
+            std::mem::offset_of!(Attestation, cuda_runtime_version),
+            std::mem::offset_of!(Attestation, device_name),
+            std::mem::offset_of!(Attestation, mfem_version),
+            std::mem::offset_of!(Attestation, hypre_version),
+            std::mem::offset_of!(Attestation, petsc_version),
+            std::mem::offset_of!(Attestation, slepc_version),
+            std::mem::offset_of!(Attestation, petsc_vec_type),
+            std::mem::offset_of!(Attestation, petsc_matrix_type),
+            std::mem::offset_of!(Attestation, matshell_vec_type),
+            std::mem::offset_of!(Attestation, slepc_bv_type),
+            std::mem::offset_of!(Attestation, eps_type),
+            std::mem::offset_of!(Attestation, st_type),
+            std::mem::offset_of!(Attestation, ksp_type),
+            std::mem::offset_of!(Attestation, poisson_pc_type),
+            std::mem::offset_of!(Attestation, shift_pc_type),
+            std::mem::offset_of!(Attestation, last_invalidation_reason),
+            std::mem::offset_of!(Attestation, device_uuid),
+            std::mem::offset_of!(Attestation, object_graph_sha256),
+            std::mem::offset_of!(Attestation, native_trace_sha256),
+            std::mem::offset_of!(Attestation, source_snapshot_sha256),
+            std::mem::offset_of!(Attestation, runtime_manifest_sha256),
+            std::mem::offset_of!(Attestation, mesh_identity_sha256),
+            std::mem::offset_of!(Attestation, equilibrium_sha256),
+            std::mem::offset_of!(Attestation, certificate_sha256),
+            std::mem::offset_of!(Attestation, linearization_sha256),
+            std::mem::offset_of!(Attestation, material_sha256),
+            std::mem::offset_of!(Attestation, physics_sha256),
+            std::mem::offset_of!(Attestation, boundary_sha256),
+            std::mem::offset_of!(Attestation, gauge_sha256),
+            std::mem::offset_of!(Attestation, operator_terms_sha256),
+            std::mem::offset_of!(Attestation, solver_policy_sha256),
+            std::mem::offset_of!(Attestation, operator_key_sha256),
+            std::mem::offset_of!(Attestation, target_key_sha256),
+            std::mem::offset_of!(Attestation, session_context_sha256),
+            std::mem::offset_of!(Attestation, setup_h2d_count),
+            std::mem::offset_of!(Attestation, setup_h2d_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_computational_h2d_count),
+            std::mem::offset_of!(Attestation, hot_loop_computational_h2d_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_computational_d2h_count),
+            std::mem::offset_of!(Attestation, hot_loop_computational_d2h_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_scalar_telemetry_d2h_count),
+            std::mem::offset_of!(Attestation, hot_loop_scalar_telemetry_d2h_bytes),
+            std::mem::offset_of!(Attestation, hot_loop_full_vector_crossings),
+            std::mem::offset_of!(Attestation, hot_loop_computational_host_syncs),
+            std::mem::offset_of!(Attestation, hot_loop_scalar_telemetry_syncs),
+            std::mem::offset_of!(Attestation, hot_loop_allocations),
+            std::mem::offset_of!(Attestation, export_d2h_count),
+            std::mem::offset_of!(Attestation, export_d2h_bytes),
+            std::mem::offset_of!(Attestation, device_memory_baseline_bytes),
+            std::mem::offset_of!(Attestation, device_memory_peak_bytes),
+            std::mem::offset_of!(Attestation, device_memory_final_bytes),
+            std::mem::offset_of!(Attestation, operator_dimension),
+            std::mem::offset_of!(Attestation, operator_apply_count),
+            std::mem::offset_of!(Attestation, poisson_solve_count),
+            std::mem::offset_of!(Attestation, poisson_iteration_count),
+            std::mem::offset_of!(Attestation, eps_iteration_count),
+            std::mem::offset_of!(Attestation, eps_restart_count),
+            std::mem::offset_of!(Attestation, eps_converged_reason),
+            std::mem::offset_of!(Attestation, operator_state_generation),
+            std::mem::offset_of!(Attestation, target_state_generation),
+            std::mem::offset_of!(Attestation, operator_reuse_count),
+            std::mem::offset_of!(Attestation, target_rebuild_count),
+            std::mem::offset_of!(Attestation, invalidation_flags),
+        ];
+        assert_eq!(attestation_offsets.len(), 77);
+        assert_eq!(
+            &layout.modal_gpu_attestation_v1_field_offsets[..attestation_offsets.len()],
+            &attestation_offsets.map(|offset| offset as u64)
+        );
+        assert!(
+            layout.modal_gpu_attestation_v1_field_offsets[attestation_offsets.len()..]
+                .iter()
+                .all(|offset| *offset == 0)
         );
     }
 
@@ -3691,6 +5348,7 @@ mod tests {
         assert_eq!(request.mfem_sparse_stiffness_csr.values_len, 0);
         assert_eq!(request.mfem_sparse_gyrotropic_csr.row_count, 0);
         assert_eq!(request.mfem_sparse_mass_csr.row_count, 0);
+        assert!(request.shared_domain_payload.is_null());
     }
 
     #[test]
@@ -3808,6 +5466,140 @@ mod tests {
         assert!(poisson_gauge_reason < poisson_assembly_kind);
         assert!(poisson_assembly_kind < dynamic_demag_k_matrix);
         assert!(dynamic_demag_k_matrix < dynamic_demag_k_count);
+    }
+
+    #[test]
+    fn modal_v16_request_and_result_tails_are_append_only_and_zeroable() {
+        type Request = FullmagFemModalEigenRequest;
+        type Result = FullmagFemFrequencyDomainResult;
+        type Shared = FullmagFemModalSharedDomainPayload;
+        let request = unsafe { std::mem::MaybeUninit::<Request>::zeroed().assume_init() };
+        assert_eq!(request.struct_size, 0);
+        assert_eq!(request.execution_target as u32, 0);
+        assert_eq!(request.scalar_representation as u32, 0);
+        assert_eq!(request.result_field_representation as u32, 0);
+        assert_eq!(
+            fullmag_fem_modal_spectral_transform_kind::FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_AUTO
+                as u32,
+            0
+        );
+        assert_eq!(
+            fullmag_fem_modal_spectral_transform_kind::FULLMAG_FEM_MODAL_SPECTRAL_TRANSFORM_SHIFT_INVERT
+                as u32,
+            1
+        );
+        let dynamic_count =
+            std::mem::offset_of!(Request, dynamic_demag_k_tangent_matrix_value_count);
+        let request_struct_size = std::mem::offset_of!(Request, struct_size);
+        assert!(dynamic_count < request_struct_size);
+        assert!(request_struct_size < std::mem::offset_of!(Request, execution_target));
+        assert!(
+            std::mem::offset_of!(Request, execution_target)
+                < std::mem::offset_of!(Request, scalar_representation)
+        );
+        assert!(
+            std::mem::offset_of!(Request, scalar_representation)
+                < std::mem::offset_of!(Request, result_field_representation)
+        );
+
+        let result = unsafe { std::mem::MaybeUninit::<Result>::zeroed().assume_init() };
+        assert_eq!(result.mode_count, 0);
+        assert_eq!(
+            result.resolved_certificate_binding_status,
+            FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED
+        );
+        assert!(result.resolved_canonical_preimage_sha256.is_null());
+        assert!(result.resolved_certificate_binding_reason.is_null());
+        assert!(result.mode_lambda.is_null());
+        assert!(result.mode_q_complex.is_null());
+        assert!(result.mode_phi_complex.is_null());
+        assert!(result.mode_delta_m_xyz_complex.is_null());
+        assert!(result.mode_residuals.is_null());
+        assert!(result.mode_cluster_ids.is_null());
+        let shared = unsafe { std::mem::MaybeUninit::<Shared>::zeroed().assume_init() };
+        assert!(shared.mesh_generation_identity.is_null());
+        assert!(shared.canonical_preimage.is_null());
+        assert_eq!(shared.canonical_preimage_len, 0);
+        assert!(shared.canonical_preimage_sha256.is_null());
+        assert!(shared.magnetic_class_digest_sha256.is_null());
+        assert!(shared.scalar_class_digest_sha256.is_null());
+        assert_eq!(shared.certificate_binding_status, 0);
+        assert!(shared.certificate_binding_reason.is_null());
+        assert!(shared.certificate_binding_v6.is_null());
+        assert!(shared.linearization_descriptor.is_null());
+        assert!(shared.acceptance_criterion.is_null());
+        assert!(shared.acceptance_metric_kind.is_null());
+        assert!(shared.acceptance_unit.is_null());
+        assert_eq!(shared.acceptance_metric_value, 0.0);
+        assert_eq!(shared.acceptance_threshold, 0.0);
+        assert!(shared.acceptance_certificate_sha256.is_null());
+        assert!(shared.linearization_state_digest.is_null());
+        assert!(shared.linearization_m0_xyz.is_null());
+        assert!(shared.linearization_h_eff0_xyz.is_null());
+        assert!(shared.linearization_h_demag0_xyz.is_null());
+        assert!(shared.linearization_phi0.is_null());
+        assert!(shared.equilibrium_id.is_null());
+        assert_eq!(shared.m0_norm_tolerance, 0.0);
+        assert_eq!(shared.equilibrium_torque_relative_tolerance, 0.0);
+        assert!(
+            std::mem::offset_of!(Shared, linearization_state_digest)
+                < std::mem::offset_of!(Shared, linearization_m0_xyz)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, linearization_m0_xyz_count)
+                < std::mem::offset_of!(Shared, linearization_h_eff0_xyz)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, linearization_phi0_count)
+                < std::mem::offset_of!(Shared, equilibrium_id)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, equilibrium_content_sha256)
+                < std::mem::offset_of!(Shared, demag_model)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, demag_model)
+                < std::mem::offset_of!(Shared, m0_norm_tolerance)
+        );
+        assert!(
+            std::mem::offset_of!(Result, mode_count)
+                > std::mem::offset_of!(Result, artifact_manifest_path)
+        );
+        assert!(
+            std::mem::offset_of!(Result, mode_lambda)
+                < std::mem::offset_of!(Result, mode_q_complex)
+        );
+        assert!(
+            std::mem::offset_of!(Result, mode_cluster_ids)
+                < std::mem::offset_of!(Result, struct_size)
+        );
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_LEGACY_ABI_VERSION, 12);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_PRIOR_ABI_VERSION, 13);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_PREVIOUS_ABI_VERSION, 14);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION, 15);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION, 16);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION, 17);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION, 18);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION, 19);
+        assert_eq!(FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION, 18);
+        assert_eq!(FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION, 1);
+        assert!(
+            std::mem::offset_of!(Shared, exchange_material_view)
+                < std::mem::offset_of!(Shared, acceptance_criterion)
+        );
+        assert!(
+            std::mem::offset_of!(Shared, acceptance_criterion)
+                < std::mem::offset_of!(Shared, acceptance_certificate_sha256)
+        );
+        assert!(
+            std::mem::offset_of!(Request, reserved_modal_contract_flags)
+                < std::mem::offset_of!(Request, shared_domain_payload)
+        );
+        assert!(
+            std::mem::offset_of!(Request, shared_domain_payload)
+                + std::mem::size_of::<*const FullmagFemModalSharedDomainPayload>()
+                <= std::mem::size_of::<Request>()
+        );
     }
 
     #[test]

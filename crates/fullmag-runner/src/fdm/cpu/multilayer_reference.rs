@@ -314,6 +314,8 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         cuda_runtime_version: None,
         lossy_fallback_used: false,
         resolved_fallback: None,
+        fem_eigen_execution_resolution: None,
+        fem_eigen_native_execution_attestation: None,
         fem_crossover_decision: None,
         ignored_terms: Vec::new(),
         random_seed: None,

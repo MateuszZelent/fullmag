@@ -27,6 +27,7 @@ export interface ScalarRangeDiagnostics extends ScalarRange {
 }
 
 export interface ScalarColorBuffer {
+  amplitudeScale?: number;
   buildKey?: string;
   colors: Float32Array;
   colorMode?: string;
@@ -34,6 +35,12 @@ export interface ScalarColorBuffer {
   complexImagValues?: Float32Array;
   complexPhaseRad?: number;
   complexRealValues?: Float32Array;
+  complexRepresentation?:
+    | "phase_rotated_real"
+    | "real"
+    | "imag"
+    | "abs"
+    | "phase";
   wavevectorKf?: [number, number, number];
   cellOrigin?: [number, number, number];
   floquetSpatialConvention?: string;

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::Json;
 
@@ -61,9 +62,12 @@ pub async fn inspect_session(
 )]
 pub async fn commit_session(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<SessionImportCommitRequest>,
+    request: Result<Json<SessionImportCommitRequest>, JsonRejection>,
 ) -> Result<Json<SessionImportCommitResponse>, ApiError> {
-    crate::session_persistence::import_session_commit(State(state), Json(req)).await
+    let request = request.map_err(|error| {
+        ApiError::bad_request(format!("invalid_session_import_request: {error}"))
+    })?;
+    crate::session_persistence::import_session_commit(State(state), request).await
 }
 
 #[utoipa::path(

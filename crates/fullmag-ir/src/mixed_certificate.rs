@@ -54,7 +54,7 @@ struct CellEvidenceRecord {
     signed_volume_m3: f64,
     absolute_volume_m3: f64,
     jacobian_samples_m3: SmallVec<[f64; 8]>,
-        scaled_jacobian_samples: SmallVec<[f64; 8]>,
+    scaled_jacobian_samples: SmallVec<[f64; 8]>,
     faces: SmallVec<[FaceRecord; 6]>,
     semantic_error: Option<String>,
 }

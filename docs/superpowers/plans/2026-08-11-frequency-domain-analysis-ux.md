@@ -22,6 +22,22 @@
 - Nie kopiować do Inspectorów drugiego payloadu ani prywatnych komponentów `analysis-plots`.
 - Zachować niezwiązane `external_solvers/3` i path-specific commits.
 
+### Bramka publikacji Results
+
+Results jest projekcją gotowego `result_manifest`, nie projekcją capability ani
+zasobów zwróconych przez poprzednią revision. Resolver wymaga
+`result_manifest.status="ready"`, rozpoznawalnego `study_product` oraz jawnej
+deklaracji każdego podproduktu w `payload.artifacts` lub `payload.resources`.
+Dlatego przekazany przez cache `dispersion` nie może utworzyć węzła, jeżeli
+bieżący run nie opublikował `dispersion.csv`/jego typed resource key.
+Nieznany produkt i manifest niegotowy są fail-closed. Fallback do starego
+`requested_execution.calculation_mode` jest dozwolony wyłącznie dla artefaktów
+bez klucza `study_product`.
+
+Explorer musi zachować nazwę węzła przy szerokości dokowania 360 px i 300 px:
+status pomocniczy może zniknąć, badge ma ellipsis i tooltip pełnej wartości, a
+wiersz nie może powodować poziomego overflow.
+
 ---
 
 ## Mapa plików

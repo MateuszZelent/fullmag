@@ -643,9 +643,10 @@ fn native_regional_field_drive_payload(
     let flat_len = cell_count.checked_mul(3).ok_or_else(|| RunError {
         message: "regional field drive basis length overflows usize".to_string(),
     })?;
-    let drive_count = u32::try_from(plan.regional_field_drive_bases.len()).map_err(|_| RunError {
-        message: "regional field drive count exceeds the native CUDA ABI limit".to_string(),
-    })?;
+    let drive_count =
+        u32::try_from(plan.regional_field_drive_bases.len()).map_err(|_| RunError {
+            message: "regional field drive count exceeds the native CUDA ABI limit".to_string(),
+        })?;
     let mut fields = Vec::with_capacity(plan.regional_field_drive_bases.len());
     let mut piecewise_points = Vec::with_capacity(plan.regional_field_drive_bases.len());
     let mut descriptors = Vec::with_capacity(plan.regional_field_drive_bases.len());

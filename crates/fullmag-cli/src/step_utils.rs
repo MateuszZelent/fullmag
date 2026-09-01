@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{
-    normalize_unit_vectors, transfer_fem_field_to_grid, transfer_vector_field, GridTransferResult,
+    normalize_unit_vectors, transfer_fem_field_to_grid, GridTransferResult,
 };
 
 use crate::formatting::unix_time_millis;
@@ -2058,6 +2058,18 @@ fn materialize_pipeline_eigenmodes(
         .as_ref()
         .map(|current| current.7.clone())
         .unwrap_or_default();
+    let bias_field_sweep = match &base_ir.study {
+        fullmag_ir::StudyIR::Eigenmodes {
+            bias_field_sweep, ..
+        } => bias_field_sweep.clone(),
+        _ => None,
+    };
+    let default_magnetostatic_bc = match &base_ir.study {
+        fullmag_ir::StudyIR::Eigenmodes {
+            magnetostatic_bc, ..
+        } => *magnetostatic_bc,
+        _ => fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+    };
     let count = payload_u32(payload, "eigen_count")?.unwrap_or(default_count);
     let include_demag = payload_bool(payload, "eigen_include_demag")?.unwrap_or_else(|| {
         current_eigen
@@ -2080,9 +2092,11 @@ fn materialize_pipeline_eigenmodes(
             payload,
             current_eigen.as_ref().and_then(|current| current.4.clone()),
         )?,
+        bias_field_sweep,
         normalization: payload_eigen_normalization(payload)?.unwrap_or(default_normalization),
         damping_policy: payload_eigen_damping_policy(payload)?.unwrap_or(default_damping_policy),
         spin_wave_bc: payload_spin_wave_bc(payload)?.unwrap_or(default_spin_wave_bc),
+        magnetostatic_bc: default_magnetostatic_bc,
         sampling: eigen_sampling_from(&sampling, count),
         mode_tracking: None,
     };
@@ -4050,14 +4064,65 @@ fn planned_fem_mesh_node_count(problem: &ProblemIR) -> Result<Option<usize>> {
 #[derive(Debug, Clone)]
 pub(crate) enum ContinuationSource {
     /// Magnetization came from an FDM stage — cell-centered on a regular grid.
-    Fdm,
-    /// Magnetization came from a single-grid FDM stage and carries the exact
-    /// source grid needed for a same-backend continuation onto a compatible
-    /// union grid (for example FM-only relaxation -> FM+HM transport).
-    FdmGrid(FdmContinuationGrid),
+    Fdm(FdmContinuationIdentity),
     /// Magnetization came from a FEM stage — node-based on a tet mesh.
     /// Carries the mesh IR needed for resampling to a different backend.
     Fem(fullmag_ir::MeshIR),
+    /// The producing backend has no qualified continuation contract.
+    Unsupported(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FdmContinuationIdentity {
+    origin_m: [f64; 3],
+    cells: [u32; 3],
+    cell_size: [f64; 3],
+    active_mask: Option<Vec<bool>>,
+    region_mask: Vec<u32>,
+    grid_fingerprint: String,
+}
+
+fn fdm_continuation_identity(plan: &fullmag_ir::FdmPlanIR) -> Result<FdmContinuationIdentity> {
+    let certificate = plan
+        .grid_certificate
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("FDM continuation requires a validated grid certificate"))?;
+    certificate
+        .validate_against_masks(plan.active_mask.as_deref(), &plan.region_mask)
+        .map_err(|error| {
+            anyhow::anyhow!("FDM continuation grid certificate is invalid: {error}")
+        })?;
+    if certificate.origin_m != plan.origin_m
+        || certificate.counts != plan.grid.cells
+        || certificate.cell_m != plan.cell_size
+    {
+        bail!("FDM continuation grid certificate disagrees with the resolved plan grid");
+    }
+    Ok(FdmContinuationIdentity {
+        origin_m: plan.origin_m,
+        cells: plan.grid.cells,
+        cell_size: plan.cell_size,
+        active_mask: plan.active_mask.clone(),
+        region_mask: plan.region_mask.clone(),
+        grid_fingerprint: certificate.grid_fingerprint.clone(),
+    })
+}
+
+pub(crate) fn continuation_source_from_backend_plan(
+    backend_plan: &BackendPlanIR,
+) -> ContinuationSource {
+    match backend_plan {
+        BackendPlanIR::Fdm(plan) => match fdm_continuation_identity(plan) {
+            Ok(identity) => ContinuationSource::Fdm(identity),
+            Err(error) => ContinuationSource::Unsupported(error.to_string()),
+        },
+        BackendPlanIR::FdmMultilayer(_) => ContinuationSource::Unsupported(
+            "FDM-multilayer continuation is not supported".to_string(),
+        ),
+        BackendPlanIR::Fem(plan) => ContinuationSource::Fem(plan.mesh.clone()),
+        BackendPlanIR::FemEigen(plan) => ContinuationSource::Fem(plan.mesh.clone()),
+        BackendPlanIR::FemFrequencyResponse(plan) => ContinuationSource::Fem(plan.mesh.clone()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -4079,6 +4144,26 @@ pub(crate) struct CrossBackendTransferResult {
     pub unit_label: &'static str,
 }
 
+fn transfer_fem_to_fem_state(
+    continuation_m: &[[f64; 3]],
+    source_mesh: &fullmag_ir::MeshIR,
+    target_mesh: &fullmag_ir::MeshIR,
+) -> Result<Option<CrossBackendTransferResult>> {
+    if source_mesh.nodes.len() != continuation_m.len() {
+        bail!(
+            "FEM → FEM continuation has {} vectors, but source FEM mesh has {} nodes",
+            continuation_m.len(),
+            source_mesh.nodes.len()
+        );
+    }
+    if target_mesh.topology_fingerprint_v6() == source_mesh.topology_fingerprint_v6() {
+        return Ok(None);
+    }
+    bail!(
+        "FEM → FEM continuation requires identical mesh topology; dedicated remeshing must own interpolation"
+    )
+}
+
 /// If the previous stage was FEM and the next stage will be FDM,
 /// resample the continuation magnetization from FEM nodes to the target mesh
 /// or grid.
@@ -4091,58 +4176,67 @@ pub(crate) fn resample_continuation_if_cross_backend(
     source: &ContinuationSource,
     next_stage_ir: &ProblemIR,
 ) -> Result<Option<CrossBackendTransferResult>> {
-    let source_grid = match source {
-        ContinuationSource::Fem(_) => None,
-        ContinuationSource::Fdm => return Ok(None), // legacy same-backend marker
-        ContinuationSource::FdmGrid(grid) => Some(grid),
-    };
+    if let ContinuationSource::Unsupported(reason) = source {
+        bail!("unsupported continuation source: {reason}");
+    }
 
-    let fem_mesh_ir = match source {
-        ContinuationSource::Fem(mesh_ir) => Some(mesh_ir),
-        ContinuationSource::Fdm | ContinuationSource::FdmGrid(_) => None,
-    };
-
-    // Pre-plan the next stage to discover if it's FDM and get grid parameters.
+    // Pre-plan the next stage before selecting a transfer. Cross-discretization
+    // continuation must fail closed instead of being mistaken for same-backend reuse.
     let next_plan = fullmag_plan::plan(next_stage_ir)
         .map_err(|e| anyhow::anyhow!("pre-plan for cross-backend transfer failed: {}", e))?;
 
-    match (&next_plan.backend_plan, source_grid, fem_mesh_ir) {
-        (BackendPlanIR::Fem(fem), None, Some(fem_mesh_ir)) => {
-            if fem_mesh_ir.nodes.len() != continuation_m.len() {
+    match (source, &next_plan.backend_plan) {
+        (ContinuationSource::Fdm(_), BackendPlanIR::Fem(_))
+        | (ContinuationSource::Fdm(_), BackendPlanIR::FemEigen(_))
+        | (ContinuationSource::Fdm(_), BackendPlanIR::FemFrequencyResponse(_)) => {
+            bail!("FDM → FEM continuation is not supported without an explicit transfer implementation")
+        }
+        (ContinuationSource::Fdm(source_identity), BackendPlanIR::Fdm(target_plan)) => {
+            let target_identity = fdm_continuation_identity(target_plan)?;
+            let source_vectors = source_identity
+                .cells
+                .iter()
+                .try_fold(1usize, |product, count| {
+                    product.checked_mul(*count as usize)
+                })
+                .ok_or_else(|| anyhow::anyhow!("FDM continuation grid size overflows usize"))?;
+            if continuation_m.len() != source_vectors {
                 bail!(
-                    "FEM → FEM continuation has {} vectors, but source FEM mesh has {} nodes",
+                    "FDM → FDM continuation has {} vectors, but the source grid requires {} cells",
                     continuation_m.len(),
-                    fem_mesh_ir.nodes.len()
+                    source_vectors
                 );
             }
-            if fem.mesh == *fem_mesh_ir {
+            if source_identity == &target_identity {
                 return Ok(None);
             }
-            let old_topo = MeshTopology::from_ir(fem_mesh_ir).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to build source mesh topology for FEM state transfer: {}",
-                    e
-                )
-            })?;
-            let new_topo = MeshTopology::from_ir(&fem.mesh).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to build target mesh topology for FEM state transfer: {}",
-                    e
-                )
-            })?;
-            let transfer = transfer_vector_field(&old_topo, continuation_m, &new_topo);
-            let mut values = transfer.values;
-            normalize_unit_vectors(&mut values, 1e-12);
-            Ok(Some(CrossBackendTransferResult {
-                values,
-                n_located: transfer.n_located,
-                n_outside: transfer.n_nearest_fallback,
-                n_total: transfer.n_total,
-                label: "FEM→FEM",
-                unit_label: "nodes",
-            }))
+            let source_grid = FdmContinuationGrid {
+                cells: source_identity.cells,
+                origin_m: source_identity.origin_m,
+                cell_size_m: source_identity.cell_size,
+                active_mask: source_identity.active_mask.clone(),
+            };
+            let target_grid = FdmContinuationGrid {
+                cells: target_identity.cells,
+                origin_m: target_identity.origin_m,
+                cell_size_m: target_identity.cell_size,
+                active_mask: target_identity.active_mask.clone(),
+            };
+            transfer_fdm_field_to_grid(continuation_m, &source_grid, &target_grid).map(Some)
         }
-        (BackendPlanIR::Fdm(fdm_plan), None, Some(fem_mesh_ir)) => {
+        (ContinuationSource::Fdm(_), BackendPlanIR::FdmMultilayer(_)) => {
+            bail!("FDM → FDM-multilayer continuation is not supported")
+        }
+        (ContinuationSource::Fem(fem_mesh_ir), BackendPlanIR::Fem(fem)) => {
+            transfer_fem_to_fem_state(continuation_m, fem_mesh_ir, &fem.mesh)
+        }
+        (ContinuationSource::Fem(fem_mesh_ir), BackendPlanIR::FemEigen(fem)) => {
+            transfer_fem_to_fem_state(continuation_m, fem_mesh_ir, &fem.mesh)
+        }
+        (ContinuationSource::Fem(fem_mesh_ir), BackendPlanIR::FemFrequencyResponse(fem)) => {
+            transfer_fem_to_fem_state(continuation_m, fem_mesh_ir, &fem.mesh)
+        }
+        (ContinuationSource::Fem(fem_mesh_ir), BackendPlanIR::Fdm(fdm_plan)) => {
             // Extract FDM grid parameters.
             let grid_cells = fdm_plan.grid.cells;
             let cell_size = fdm_plan.cell_size;
@@ -4187,24 +4281,11 @@ pub(crate) fn resample_continuation_if_cross_backend(
                 unit_label: "cells",
             }))
         }
-        (BackendPlanIR::Fdm(fdm_plan), Some(source_grid), None) => {
-            let target_grid = FdmContinuationGrid {
-                cells: fdm_plan.grid.cells,
-                origin_m: fdm_plan.origin_m,
-                cell_size_m: fdm_plan.cell_size,
-                active_mask: fdm_plan.active_mask.clone(),
-            };
-            if source_grid == &target_grid {
-                return Ok(None);
-            }
-            let transfer = transfer_fdm_field_to_grid(continuation_m, source_grid, &target_grid)?;
-            Ok(Some(transfer))
-        }
-        (BackendPlanIR::FdmMultilayer(_), _, _) => {
+        (ContinuationSource::Fem(_), BackendPlanIR::FdmMultilayer(_)) => {
             // Multi-layer FDM continuation from FEM is not yet supported.
             bail!("FEM → FDM-multilayer cross-backend continuation is not yet supported");
         }
-        _ => Ok(None),
+        (ContinuationSource::Unsupported(_), _) => unreachable!(),
     }
 }
 
@@ -4252,6 +4333,20 @@ fn transfer_fdm_field_to_grid(
     for (axis, cell) in target.cell_size_m.iter().enumerate() {
         if !cell.is_finite() || *cell <= 0.0 {
             bail!("target FDM continuation cell size axis {axis} is not finite and positive");
+        }
+    }
+    if source.cell_size_m != target.cell_size_m {
+        bail!(
+            "FDM → FDM continuation requires identical grid identity or an aligned compatible union grid with identical cell size"
+        );
+    }
+    for axis in 0..3 {
+        let cell_offset =
+            (target.origin_m[axis] - source.origin_m[axis]) / source.cell_size_m[axis];
+        if !cell_offset.is_finite() || (cell_offset - cell_offset.round()).abs() > 1.0e-9 {
+            bail!(
+                "FDM → FDM continuation requires identical grid identity or an aligned compatible union grid"
+            );
         }
     }
 
@@ -5815,6 +5910,51 @@ mod tests {
     }
 
     #[test]
+    fn materialize_pipeline_eigenmodes_preserves_canonical_bias_field_sweep() {
+        let mut base = sample_problem_ir();
+        let dynamics = base.study.dynamics().clone();
+        let sampling = base.study.sampling().clone();
+        let sweep = fullmag_ir::BiasFieldSweepIR {
+            samples_a_per_m: vec![[12_500.0, 0.0, 0.0], [25_000.0, 500.0, -250.0]],
+            equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+            ordering: "declared".to_string(),
+            continuation_seed:
+                fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium,
+        };
+        base.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: true,
+            },
+            count: 4,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            bias_field_sweep: Some(sweep.clone()),
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            mode_tracking: None,
+            sampling,
+        };
+
+        let stage = materialize_pipeline_eigenmodes(&base, &BTreeMap::new())
+            .expect("pipeline eigenmodes stage should materialize");
+        let fullmag_ir::StudyIR::Eigenmodes {
+            bias_field_sweep, ..
+        } = &stage.ir.study
+        else {
+            panic!("pipeline eigenmodes stage must retain eigenmode semantics");
+        };
+
+        assert_eq!(bias_field_sweep.as_ref(), Some(&sweep));
+    }
+
+    #[test]
     fn materialize_script_stages_uses_study_pipeline_when_explicit_stages_are_absent() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -6210,9 +6350,11 @@ mod tests {
             target: fullmag_ir::EigenTargetIR::Lowest,
             equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
             k_sampling: None,
+            bias_field_sweep: None,
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             mode_tracking: None,
             sampling: sampling.clone(),
         };
@@ -8795,7 +8937,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resample_fem_to_fem_returns_transfer_for_remeshed_target() {
+    fn test_resample_fem_to_fem_rejects_remeshed_target_without_dedicated_remesher() {
         let source_mesh = small_fem_cube_mesh();
         let target_ir = fem_target_problem_ir(small_fem_cube_mesh_with_center_node());
         let fem_m: Vec<[f64; 3]> = source_mesh
@@ -8812,44 +8954,118 @@ mod tests {
             .collect();
         let source = ContinuationSource::Fem(source_mesh);
 
-        let result = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
-            .expect("FEM to FEM remesh transfer should succeed");
+        let error = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect_err("ordinary FEM continuation must reject a changed topology");
 
-        let transfer = result.expect("FEM→FEM remesh should transfer to target nodes");
-        assert_eq!(transfer.n_total, 9);
-        assert_eq!(transfer.values.len(), 9);
-        assert!(transfer.n_located > 0);
-        for value in transfer.values {
-            let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
-            assert!(
-                (norm - 1.0).abs() < 1e-12,
-                "transferred magnetization should be normalized, got {norm}"
-            );
-        }
+        assert!(error
+            .to_string()
+            .contains("FEM → FEM continuation requires identical mesh topology"));
     }
 
     #[test]
-    fn test_resample_fem_to_fem_transfers_when_mesh_changes_without_node_count_change() {
+    fn test_resample_fem_to_fem_rejects_changed_topology_with_same_node_count() {
         let source_mesh = small_fem_cube_mesh();
         let target_ir = fem_target_problem_ir(small_fem_cube_mesh_same_count_shifted());
         let fem_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; source_mesh.nodes.len()];
         let source = ContinuationSource::Fem(source_mesh);
 
-        let result = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
-            .expect("FEM to FEM same-count remesh transfer should succeed");
+        let error = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect_err("node count equality must not hide a topology change");
 
-        let transfer =
-            result.expect("changed FEM mesh should transfer even when node count matches");
-        assert_eq!(transfer.n_total, 8);
-        assert_eq!(transfer.values.len(), 8);
-        assert!(transfer.n_located > 0);
+        assert!(error
+            .to_string()
+            .contains("FEM → FEM continuation requires identical mesh topology"));
+    }
+
+    #[test]
+    fn test_resample_fem_to_fem_accepts_same_topology_with_different_metadata() {
+        let source_mesh = small_fem_cube_mesh();
+        let mut target_mesh = source_mesh.clone();
+        target_mesh.mesh_name = "renamed_same_topology".to_string();
+        let source_ir = fem_target_problem_ir(source_mesh);
+        let source_plan = fullmag_plan::plan(&source_ir).expect("FEM source plan");
+        let source = continuation_source_from_backend_plan(&source_plan.backend_plan);
+        let target_ir = fem_target_problem_ir(target_mesh);
+        let source_node_count = match &source {
+            ContinuationSource::Fem(mesh) => mesh.nodes.len(),
+            _ => panic!("expected FEM continuation source"),
+        };
+        let fem_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; source_node_count];
+
+        let result = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect("non-topological metadata must not invalidate FEM continuation");
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resample_fem_to_fem_rejects_changed_eigen_target_topology() {
+        let source_mesh = small_fem_cube_mesh();
+        let mut target_ir = fem_target_problem_ir(small_fem_cube_mesh_with_center_node());
+        let dynamics = target_ir.study.dynamics().clone();
+        let mut sampling = target_ir.study.sampling().clone();
+        sampling.outputs = vec![
+            fullmag_ir::OutputIR::EigenSpectrum {
+                quantity: "spectrum".to_string(),
+            },
+            fullmag_ir::OutputIR::EigenMode {
+                field: "mode".to_string(),
+                indices: vec![0, 1],
+            },
+        ];
+        target_ir.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 2,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            bias_field_sweep: None,
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            mode_tracking: None,
+            sampling,
+        };
+        let fem_m = vec![[1.0, 0.0, 0.0]; source_mesh.nodes.len()];
+        let source = ContinuationSource::Fem(source_mesh);
+
+        let error = resample_continuation_if_cross_backend(&fem_m, &source, &target_ir)
+            .expect_err("ordinary FEM eigen continuation must reject a changed topology");
+
+        assert!(error
+            .to_string()
+            .contains("FEM → FEM continuation requires identical mesh topology"));
+    }
+
+    #[test]
+    fn test_resample_fdm_to_fem_fails_closed() {
+        let source_ir = fdm_target_problem_ir();
+        let source_plan = fullmag_plan::plan(&source_ir).expect("FDM source plan");
+        let source = continuation_source_from_backend_plan(&source_plan.backend_plan);
+        let target_ir = fem_target_problem_ir(small_fem_cube_mesh());
+        let fdm_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; 64];
+
+        let error = resample_continuation_if_cross_backend(&fdm_m, &source, &target_ir)
+            .expect_err("FDM to FEM continuation requires an explicit transfer implementation");
+
+        assert!(error
+            .to_string()
+            .contains("FDM → FEM continuation is not supported"));
     }
 
     #[test]
     fn test_resample_fdm_to_fdm_returns_none() {
-        let fdm_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; 64];
-        let source = ContinuationSource::Fdm;
         let target_ir = fdm_target_problem_ir();
+        let source_plan = fullmag_plan::plan(&target_ir).expect("FDM source plan");
+        let fdm_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; 64];
+        let source = continuation_source_from_backend_plan(&source_plan.backend_plan);
 
         let result = resample_continuation_if_cross_backend(&fdm_m, &source, &target_ir)
             .expect("same-backend check should succeed");
@@ -8883,6 +9099,149 @@ mod tests {
         assert_eq!(transfer.values[1], [0.0, 0.0, 0.0]);
         assert_eq!(transfer.values[2], [1.0, 0.0, 0.0]);
         assert_eq!(transfer.values[3], [0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_resample_fdm_to_fdm_rejects_changed_grid_identity() {
+        let source_ir = fdm_target_problem_ir();
+        let source_plan = fullmag_plan::plan(&source_ir).expect("FDM source plan");
+        let fdm_m: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; 64];
+        let source = continuation_source_from_backend_plan(&source_plan.backend_plan);
+        let mut target_ir = fdm_target_problem_ir();
+        target_ir
+            .backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("FDM hints")
+            .cell = [20e-9, 20e-9, 20e-9];
+
+        let error = resample_continuation_if_cross_backend(&fdm_m, &source, &target_ir)
+            .expect_err("FDM continuation must reject a changed resolved grid");
+
+        assert!(error
+            .to_string()
+            .contains("FDM → FDM continuation requires identical grid identity"));
+    }
+
+    #[test]
+    fn fdm_continuation_identity_includes_origin_cells_cell_size_masks_and_fingerprint() {
+        let source_ir = fdm_target_problem_ir();
+        let source_plan = fullmag_plan::plan(&source_ir).expect("FDM source plan");
+        let BackendPlanIR::Fdm(plan) = source_plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        let identity = fdm_continuation_identity(&plan).expect("validated identity");
+
+        let mut changed = identity.clone();
+        changed.origin_m[0] += 1e-9;
+        assert_ne!(changed, identity);
+        let mut changed = identity.clone();
+        changed.cells[0] += 1;
+        assert_ne!(changed, identity);
+        let mut changed = identity.clone();
+        changed.cell_size[0] *= 2.0;
+        assert_ne!(changed, identity);
+        let mut changed = identity.clone();
+        changed.active_mask = Some(vec![false]);
+        assert_ne!(changed, identity);
+        let mut changed = identity.clone();
+        changed.region_mask.push(1);
+        assert_ne!(changed, identity);
+        let mut changed = identity.clone();
+        changed.grid_fingerprint.replace_range(..1, "0");
+        if changed.grid_fingerprint == identity.grid_fingerprint {
+            changed.grid_fingerprint.replace_range(..1, "1");
+        }
+        assert_ne!(changed, identity);
+    }
+
+    #[test]
+    fn missing_fdm_grid_certificate_classifies_as_unsupported() {
+        let source_ir = fdm_target_problem_ir();
+        let source_plan = fullmag_plan::plan(&source_ir).expect("FDM source plan");
+        let BackendPlanIR::Fdm(mut plan) = source_plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        plan.grid_certificate = None;
+
+        assert!(matches!(
+            continuation_source_from_backend_plan(&BackendPlanIR::Fdm(plan)),
+            ContinuationSource::Unsupported(reason)
+                if reason.contains("validated grid certificate")
+        ));
+    }
+
+    #[test]
+    fn continuation_source_classifies_all_fem_plan_variants_as_fem() {
+        let mesh = small_fem_cube_mesh();
+        let fem_ir = fem_target_problem_ir(mesh.clone());
+        let fem_plan = fullmag_plan::plan(&fem_ir).expect("FEM plan");
+        let BackendPlanIR::Fem(expected_fem) = &fem_plan.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        assert!(matches!(
+            continuation_source_from_backend_plan(&fem_plan.backend_plan),
+            ContinuationSource::Fem(source_mesh) if source_mesh == expected_fem.mesh
+        ));
+
+        let mut eigen_ir = fem_target_problem_ir(mesh.clone());
+        let dynamics = eigen_ir.study.dynamics().clone();
+        let mut sampling = eigen_ir.study.sampling().clone();
+        sampling.outputs = vec![fullmag_ir::OutputIR::EigenSpectrum {
+            quantity: "spectrum".to_string(),
+        }];
+        eigen_ir.study = fullmag_ir::StudyIR::Eigenmodes {
+            dynamics,
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 2,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: Some(fullmag_ir::KSamplingIR::Single {
+                k_vector: [0.0, 0.0, 0.0],
+            }),
+            bias_field_sweep: None,
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            mode_tracking: None,
+            sampling,
+        };
+        let eigen_plan = fullmag_plan::plan(&eigen_ir).expect("FEM eigen plan");
+        let BackendPlanIR::FemEigen(expected_eigen) = &eigen_plan.backend_plan else {
+            panic!("expected FEM eigen plan");
+        };
+        assert!(matches!(
+            continuation_source_from_backend_plan(&eigen_plan.backend_plan),
+            ContinuationSource::Fem(source_mesh) if source_mesh == expected_eigen.mesh
+        ));
+
+        let mut frequency_plan = minimal_frequency_response_plan();
+        frequency_plan.mesh = mesh.clone();
+        let frequency_plan = BackendPlanIR::FemFrequencyResponse(frequency_plan);
+        assert!(matches!(
+            continuation_source_from_backend_plan(&frequency_plan),
+            ContinuationSource::Fem(source_mesh) if source_mesh == mesh
+        ));
+    }
+
+    #[test]
+    fn unsupported_continuation_source_fails_before_target_mutation() {
+        let target_ir = fem_target_problem_ir(small_fem_cube_mesh());
+        let original_target = target_ir.clone();
+        let source = ContinuationSource::Unsupported("unqualified backend".to_string());
+
+        let error = resample_continuation_if_cross_backend(&[], &source, &target_ir)
+            .expect_err("unsupported continuation must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("unsupported continuation source: unqualified backend"));
+        assert_eq!(target_ir, original_target);
     }
 
     #[test]
@@ -9029,9 +9388,11 @@ mod tests {
             target: fullmag_ir::EigenTargetIR::Lowest,
             equilibrium: fullmag_ir::EquilibriumSourceIR::RelaxedInitialState,
             k_sampling: None,
+            bias_field_sweep: None,
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             sampling,
             mode_tracking: None,
         };

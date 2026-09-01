@@ -324,6 +324,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_field_sweep"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{mode_index}/meta": {
         parameters: {
             query?: never;
@@ -340,6 +356,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/modes/{sample_index}/{mode_index}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_modes_sample_index_mode_index"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2": {
         parameters: {
             query?: never;
@@ -348,6 +380,70 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v3"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_fmr_kittel_fit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/fmr/peaks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_fmr_peaks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_fmr_resonance_fits"];
         put?: never;
         post?: never;
         delete?: never;
@@ -380,6 +476,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_cancel_requested_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/frequency-domain/response/diagnostics.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3547,6 +3659,22 @@ export interface paths {
         patch: operations["visualization_patch_sessions_current_visualization_display"];
         trace?: never;
     };
+    "/v2/sessions/current/visualization/mode-compositions/active": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["visualization_get_sessions_current_visualization_mode_compositions_active"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["visualization_patch_sessions_current_visualization_mode_compositions_active"];
+        trace?: never;
+    };
     "/v2/sessions/current/visualization/state": {
         parameters: {
             query?: never;
@@ -4520,6 +4648,18 @@ export interface components {
             wavevector_unit: string;
             x_m: number[];
         };
+        EigenModeResourceRef: {
+            artifact_revision: string;
+            branch_id?: string | null;
+            mode_id: string;
+            /** Format: int32 */
+            raw_mode_index?: number | null;
+            run_id: string;
+            sample_id: string;
+            /** Format: int32 */
+            sample_index?: number | null;
+            stage_id: string;
+        };
         /** @enum {string} */
         EmptySelectionPolicySchema: "error" | "allow_noop";
         EnergySummary: {
@@ -5443,6 +5583,9 @@ export interface components {
         };
         /** @enum {string} */
         FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
+        FrequencyDomainArtifactExtras: {
+            [key: string]: unknown;
+        };
         FrequencyDomainAvailabilitySummaryResource: {
             diagnostics_json: string;
             driven_response_available: boolean;
@@ -5462,6 +5605,34 @@ export interface components {
             periodic_pair_diagnostics: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             static_periodic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
+        FrequencyDomainBranchPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            branch_id?: number | null;
+            points?: components["schemas"]["FrequencyDomainBranchPointPayload"][] | null;
+        };
+        FrequencyDomainBranchPointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+        };
+        FrequencyDomainBranchesArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            branches: components["schemas"]["FrequencyDomainBranchPayload"][];
+            diagnostics?: null | components["schemas"]["FrequencyDomainTrackingDiagnosticsPayload"];
+            schema_version: string;
+        };
+        FrequencyDomainCandidateIdentityPayload: {
+            device?: string | null;
+            engine_id?: string | null;
+            equilibrium_artifact_sha256?: string | null;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            schema_version: string;
+            source_identity: Record<string, never>;
+            topology_fingerprint?: string | null;
+        };
         FrequencyDomainCapabilityEntryResource: {
             reason: string;
             status: string;
@@ -5479,6 +5650,12 @@ export interface components {
         FrequencyDomainDemagCapabilitiesResource: {
             floquet_dynamic_k: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             static_periodic_pbc: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainDiagnosticsArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            schema_version: string;
+            status?: string | null;
         };
         FrequencyDomainDispersionCapabilitiesResource: {
             branch_tracking: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -5499,6 +5676,8 @@ export interface components {
             /** Format: int64 */
             component_count?: number | null;
             components: string[];
+            /** @description SHA-256 digest of the immutable field payload bytes. */
+            content_digest?: string | null;
             /** Format: double */
             default_phase_rad?: number | null;
             default_view: string;
@@ -5509,6 +5688,8 @@ export interface components {
             payload_value_count?: number | null;
             quantity: string;
             resource_key: string;
+            /** @description Content-addressed revision of the immutable field payload bytes. */
+            revision?: string | null;
             schema_version: string;
             source_family: string;
             status: string;
@@ -5533,12 +5714,61 @@ export interface components {
             zarr_shape?: number[] | null;
             zarr_store_path?: string | null;
         };
+        FrequencyDomainFieldSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            artifact_id?: string | null;
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            samples?: components["schemas"]["FrequencyDomainFieldSweepSamplePayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
+        FrequencyDomainFieldSweepSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            bias_field_a_per_m?: number[] | null;
+            sample_id?: string | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+            status?: string | null;
+        };
+        FrequencyDomainFmrPeakPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            frequency_hz?: number | null;
+            mode_id?: string | null;
+            peak_id?: string | null;
+            sample_id?: string | null;
+            status?: string | null;
+        };
+        FrequencyDomainFmrPeaksArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            peaks?: components["schemas"]["FrequencyDomainFmrPeakPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
+        /**
+         * @description Typed control-plane payloads published by the frequency-domain artifact
+         *     family.  The enum is intentionally untagged so the JSON body remains
+         *     backward compatible with the existing artifact files: the artifact's
+         *     `schema_version` remains the discriminator on the wire.
+         */
+        FrequencyDomainJsonArtifactPayload: components["schemas"]["FrequencyDomainManifestArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumV3ArtifactPayload"] | components["schemas"]["FrequencyDomainSpectrumArtifactPayload"] | components["schemas"]["FrequencyDomainBranchesArtifactPayload"] | components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"] | components["schemas"]["FrequencyDomainDiagnosticsArtifactPayload"] | components["schemas"]["FrequencyDomainModeArtifactPayload"] | components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"] | components["schemas"]["FrequencyDomainResponsePointPayload"] | components["schemas"]["FrequencyDomainFmrPeaksArtifactPayload"] | components["schemas"]["FrequencyDomainResonanceFitsArtifactPayload"] | components["schemas"]["FrequencyDomainKittelFitArtifactPayload"];
         FrequencyDomainJsonArtifactResource: {
             artifact_path: string;
+            /** @description SHA-256 digest of the immutable JSON artifact bytes. */
+            content_digest?: string | null;
+            /** @description Runtime mesh generation bound to the publishing stage. */
+            mesh_generation_id?: string | null;
             missing_reason?: string | null;
-            payload?: unknown;
+            payload?: null | components["schemas"]["FrequencyDomainJsonArtifactPayload"];
             resource_key: string;
+            /** @description Content-addressed revision of the immutable JSON artifact bytes. */
+            revision?: string | null;
+            /** @description Actual run that owns the current immutable artifact directory. */
+            run_id?: string | null;
             schema_version: string;
+            /** @description Actual session that owns the current immutable artifact directory. */
+            session_id?: string | null;
+            /** @description Actual stage that published the artifact, when available in live state. */
+            stage_id?: string | null;
             status: string;
         };
         FrequencyDomainKPathControlPointResource: {
@@ -5553,6 +5783,31 @@ export interface components {
             kind: string;
             points: components["schemas"]["FrequencyDomainKPathControlPointResource"][];
             samples_per_segment: number[];
+        };
+        FrequencyDomainKittelFitArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            points?: components["schemas"]["FrequencyDomainKittelFitPointPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+            validation_status?: string | null;
+        };
+        FrequencyDomainKittelFitPointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            relative_frequency_error?: number | null;
+            sample_id?: string | null;
+            /** Format: double */
+            solved_frequency_hz?: number | null;
+        };
+        FrequencyDomainManifestArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            analysis_family?: string | null;
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            study_product?: string | null;
+            window_complete?: boolean | null;
         };
         FrequencyDomainManifestResource: {
             capabilities: components["schemas"]["FrequencyDomainCapabilitySnapshotResource"];
@@ -5578,6 +5833,89 @@ export interface components {
             production_gpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             reference_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
         };
+        FrequencyDomainModalObjectParticipationPayload: {
+            components: components["schemas"]["FrequencyDomainModalParticipationFractionsPayload"];
+            object_id: string;
+            /** Format: double */
+            total_fraction: number;
+        };
+        FrequencyDomainModalParticipationFractionsPayload: {
+            /** Format: double */
+            total: number;
+            /** Format: double */
+            x: number;
+            /** Format: double */
+            y: number;
+            /** Format: double */
+            z: number;
+        };
+        FrequencyDomainModalParticipationPayload: {
+            component_basis: string;
+            definition_id: string;
+            global?: null | components["schemas"]["FrequencyDomainModalParticipationFractionsPayload"];
+            integration_method: string;
+            objects?: components["schemas"]["FrequencyDomainModalObjectParticipationPayload"][];
+            provenance: components["schemas"]["FrequencyDomainModalParticipationProvenancePayload"];
+            qualification: string;
+            quantity_id: string;
+            quantity_symbol: string;
+            schema_version: string;
+            status: components["schemas"]["FrequencyDomainModalParticipationStatus"];
+            unavailable?: null | components["schemas"]["FrequencyDomainModalParticipationUnavailablePayload"];
+            unit: string;
+        };
+        FrequencyDomainModalParticipationProvenancePayload: {
+            observable_lane: string;
+            solver_device: string;
+            source_mesh_identity?: null | components["schemas"]["FrequencyDomainModeSourceMeshIdentityPayload"];
+        };
+        /** @enum {string} */
+        FrequencyDomainModalParticipationStatus: "ready" | "unavailable";
+        FrequencyDomainModalParticipationUnavailablePayload: {
+            detail: string;
+            reason_code: string;
+        };
+        FrequencyDomainModeArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            component_basis?: string | null;
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            source_mesh_identity?: null | components["schemas"]["FrequencyDomainModeSourceMeshIdentityPayload"];
+            source_spectrum_revision?: string | null;
+            spectrum_completeness?: string | null;
+            value_kind?: string | null;
+            window_complete?: boolean | null;
+        };
+        FrequencyDomainModeSourceMeshIdentityPayload: {
+            indexing: string;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            /** Format: int64 */
+            mesh_revision?: number | null;
+            /** Format: int64 */
+            node_count: number;
+            topology_fingerprint: string;
+        };
+        FrequencyDomainResonanceFitPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            fit_id?: string | null;
+            model?: string | null;
+            /** Format: double */
+            peak_frequency_hz?: number | null;
+        };
+        FrequencyDomainResonanceFitsArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            fits?: components["schemas"]["FrequencyDomainResonanceFitPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
         FrequencyDomainResponseCapabilitiesResource: {
             frequency_sweep: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             magnetic_cpu: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -5585,6 +5923,84 @@ export interface components {
             magnetoelastic_elastodynamic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             magnetoelastic_quasistatic: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
             mode_projected: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
+        };
+        FrequencyDomainResponsePointPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: int64 */
+            frequency_index?: number | null;
+            /** @description Stable response-point identity; `frequency_index` is presentation order only. */
+            point_id?: string | null;
+        };
+        FrequencyDomainResponseSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            complete?: boolean | null;
+            interrupted?: boolean | null;
+            points?: components["schemas"]["FrequencyDomainResponsePointPayload"][] | null;
+            schema_version: string;
+            status?: string | null;
+        };
+        FrequencyDomainSpectrumArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            samples: components["schemas"]["FrequencyDomainSpectrumSamplePayload"][];
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            window_complete?: boolean | null;
+        };
+        FrequencyDomainSpectrumModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            branch_id?: number | null;
+            /** Format: double */
+            frequency_hz?: number | null;
+            /** Format: double */
+            frequency_real_hz?: number | null;
+            /** @description Stable mode identity within a spectrum sample. */
+            mode_id?: string | null;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+        };
+        FrequencyDomainSpectrumSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            modes?: components["schemas"]["FrequencyDomainSpectrumModePayload"][] | null;
+            /** @description Stable sample identity; `sample_index` is presentation order only. */
+            sample_id?: string | null;
+            /** Format: int64 */
+            sample_index?: number | null;
+        };
+        /**
+         * @description Per-object modal-spectrum contract. Unlike `eigen_spectrum.v2`, this
+         *     version owns stable sample/mode identities and component participation.
+         */
+        FrequencyDomainSpectrumV3ArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
+            samples: components["schemas"]["FrequencyDomainSpectrumV3SamplePayload"][];
+            schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            window_complete?: boolean | null;
+        };
+        FrequencyDomainSpectrumV3ModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: int64 */
+            branch_id?: number | null;
+            component_participation: components["schemas"]["FrequencyDomainModalParticipationPayload"];
+            /** Format: double */
+            frequency_hz: number;
+            mode_field_id?: string | null;
+            mode_field_resource_key?: string | null;
+            mode_id: string;
+            /** Format: int64 */
+            raw_mode_index: number;
+            /** Format: double */
+            residual_relative_l2: number;
+        };
+        FrequencyDomainSpectrumV3SamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            modes: components["schemas"]["FrequencyDomainSpectrumV3ModePayload"][];
+            sample_id: string;
+            /** Format: int64 */
+            sample_index: number;
         };
         FrequencyDomainSweepProgressResource: {
             complete: boolean;
@@ -5618,6 +6034,10 @@ export interface components {
             schema_version: string;
             status: string;
             text?: string | null;
+        };
+        FrequencyDomainTrackingDiagnosticsPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            modal_overlap_available?: boolean | null;
+            tracking_score_source?: string | null;
         };
         FrequencyDomainValidationCapabilitiesResource: {
             fmr_k0: components["schemas"]["FrequencyDomainCapabilityEntryResource"];
@@ -7544,6 +7964,107 @@ export interface components {
             /** Format: int64 */
             uptime_seconds: number;
         };
+        ModeCompositionDatasetPatch: {
+            artifact_revision: string;
+            run_id: string;
+            stage_id: string;
+        };
+        ModeCompositionLayer: {
+            /** Format: double */
+            amplitude_scale: number;
+            animation: components["schemas"]["ModeLayerAnimation"];
+            appearance: components["schemas"]["ModeLayerAppearance"];
+            component: components["schemas"]["ModeFieldComponent"];
+            enabled: boolean;
+            field_id: string;
+            layer_id: string;
+            mode: components["schemas"]["EigenModeResourceRef"];
+            normalization: components["schemas"]["ModeFieldNormalization"];
+            object_id: string;
+            /** Format: double */
+            phase_rad: number;
+            representation: components["schemas"]["ModeFieldRepresentation"];
+            target_id: string;
+        };
+        ModeCompositionLifecycle: {
+            /** Format: int64 */
+            artifact_revision: number;
+            /** Format: int64 */
+            mesh_revision: number;
+            run_id?: string | null;
+            session_id: string;
+        };
+        ModeCompositionOperation: {
+            layer: components["schemas"]["ModeCompositionLayer"];
+            /** @enum {string} */
+            op: "upsert_layer";
+        } | {
+            layer_id: string;
+            /** @enum {string} */
+            op: "remove_layer";
+        } | {
+            /** @enum {string} */
+            op: "clear_layers";
+        };
+        ModeCompositionPatch: {
+            /** Format: int64 */
+            base_revision: number;
+            dataset?: null | components["schemas"]["ModeCompositionDatasetPatch"];
+            operations?: components["schemas"]["ModeCompositionOperation"][];
+            phase_clock?: null | components["schemas"]["ModeCompositionPhaseClock"];
+        };
+        ModeCompositionPhaseClock: {
+            /** Format: double */
+            master_rate_hz: number;
+            synchronized: boolean;
+        };
+        ModeCompositionResource: {
+            artifact_revision: string;
+            composition_id: string;
+            layers: components["schemas"]["ModeCompositionLayer"][];
+            /**
+             * @description Runtime identity that owns this ephemeral visualization resource. It is
+             *     intentionally distinct from the immutable mode-artifact identity.
+             */
+            lifecycle: components["schemas"]["ModeCompositionLifecycle"];
+            phase_clock: components["schemas"]["ModeCompositionPhaseClock"];
+            /** Format: int64 */
+            revision: number;
+            run_id: string;
+            schema_version: string;
+            stage_id: string;
+        };
+        /** @enum {string} */
+        ModeFieldComponent: "vector" | "magnitude" | "x" | "y" | "z";
+        /** @enum {string} */
+        ModeFieldNormalization: "mode_global_max" | "object_max" | "manual";
+        /** @enum {string} */
+        ModeFieldRepresentation: "phase_rotated_real" | "real" | "imag" | "abs" | "phase";
+        ModeLayerAnimation: {
+            enabled: boolean;
+            /** Format: double */
+            phase_offset_rad: number;
+            /** Format: double */
+            rate_hz: number;
+            synchronized: boolean;
+        };
+        ModeLayerAppearance: {
+            auto_range: boolean;
+            colorbar_visible: boolean;
+            colormap: string;
+            /** Format: double */
+            opacity: number;
+            /** Format: double */
+            range_max?: number | null;
+            /** Format: double */
+            range_min?: number | null;
+            symmetric_zero: boolean;
+            /** Format: int32 */
+            vector_budget: number;
+            /** Format: double */
+            vector_length_scale: number;
+            vectors_visible: boolean;
+        };
         ModelAuthoringCapabilities: {
             move: components["schemas"]["ModelAuthoringCapability"];
             rotate: components["schemas"]["ModelAuthoringCapability"];
@@ -8545,6 +9066,11 @@ export interface components {
             mesh_build_revision: number;
             /** Format: int64 */
             mesh_revision: number;
+            /**
+             * Format: int64
+             * @description Independent revision of the lightweight per-object modal visualization composition.
+             */
+            mode_composition_revision: number;
             /** Format: int64 */
             region_coefficients_revision: number;
             /** Format: int64 */
@@ -9661,11 +10187,13 @@ export interface components {
         SessionImportCommitRequest: {
             /** @description Base64-encoded `.fms` file content. */
             fms_base64: string;
-            /** @description Restore mode: "resume", "initial_condition", "config_only". */
-            restore_mode?: string | null;
+            /** @description Requested import behavior. Defaults to a visualization-only restore. */
+            restore_mode?: components["schemas"]["SessionRestoreMode"];
         };
         SessionImportCommitResponse: {
+            compatibility: components["schemas"]["SessionRestoreCompatibility"];
             restore_class: components["schemas"]["RestoreClass"];
+            restore_mode: components["schemas"]["SessionRestoreMode"];
             session_id: string;
             ui_state?: unknown;
             warnings: string[];
@@ -9707,6 +10235,30 @@ export interface components {
         };
         /** @enum {string} */
         SessionResourceLifecycle: "active" | "tombstoned";
+        /** @description Semantic compatibility report returned with every accepted FMS import. */
+        SessionRestoreCompatibility: {
+            execution: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            geometry: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            materials_physics: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            mesh: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            problem_ir: components["schemas"]["SessionRestoreCompatibilityCategory"];
+            study_stages: components["schemas"]["SessionRestoreCompatibilityCategory"];
+        };
+        /**
+         * @description Whether a semantic category could be compared from both snapshots.
+         * @enum {string}
+         */
+        SessionRestoreCompatibilityBasis: "available" | "unavailable";
+        /** @description Non-blocking semantic differences in one restore category. */
+        SessionRestoreCompatibilityCategory: {
+            basis: components["schemas"]["SessionRestoreCompatibilityBasis"];
+            differences: string[];
+        };
+        /**
+         * @description Explicit import behavior for an FMS archive.
+         * @enum {string}
+         */
+        SessionRestoreMode: "visualization_only" | "replace_project" | "resume";
         SessionSummary: {
             created_at: string;
             name: string;
@@ -10428,6 +10980,15 @@ export interface components {
             /** Format: int64 */
             last_progress_unix_ms?: number | null;
             loaded_state_ref?: string | null;
+            /** @description Stable generation identity of the solver mesh used by this stage. */
+            mesh_generation_id?: string | null;
+            /**
+             * Format: int64
+             * @description Mesh resource revision observed when this stage mesh was published.
+             */
+            mesh_revision?: number | null;
+            /** @description Content-derived topology fingerprint of the solver mesh used by this stage. */
+            mesh_topology_fingerprint?: string | null;
             metric_kind?: null | components["schemas"]["StageMetricKind"];
             metric_name?: string | null;
             metric_unit?: null | components["schemas"]["StageMetricUnit"];
@@ -11965,6 +12526,26 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_field_sweep: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen field sweep resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_frequency_domain_eigen_mode_field_sample_index_mode_index_meta: {
         parameters: {
             query?: never;
@@ -11990,6 +12571,31 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_modes_sample_index_mode_index: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description K-path sample index */
+                sample_index: number;
+                /** @description Raw mode index within the sample */
+                mode_index: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revisioned frequency-domain eigen mode resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
     analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v2: {
         parameters: {
             query?: never;
@@ -12000,6 +12606,86 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Frequency-domain eigen spectrum v2 resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_eigen_spectrum_v3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain eigen spectrum v3 resource with per-object component participation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_fmr_kittel_fit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain FMR Kittel fit resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_fmr_peaks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain FMR peaks resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_fmr_resonance_fits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain FMR resonance fits resource */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12046,6 +12732,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FrequencyDomainSweepProgressResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_frequency_domain_response_diagnostics_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Frequency-domain response diagnostics compatibility resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FrequencyDomainJsonArtifactResource"];
                 };
             };
         };
@@ -21520,6 +22226,64 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    visualization_get_sessions_current_visualization_mode_compositions_active: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active per-object eigenmode visualization composition */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeCompositionResource"];
+                };
+            };
+        };
+    };
+    visualization_patch_sessions_current_visualization_mode_compositions_active: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModeCompositionPatch"];
+            };
+        };
+        responses: {
+            /** @description Active composition patched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModeCompositionResource"];
+                };
+            };
+            /** @description Invalid composition patch */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Composition revision or dataset conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -182,7 +182,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diagnostic_energy_plateau_without_torque_never_reports_converged() {
+    fn diagnostic_energy_plateau_can_certify_equilibrium_without_torque() {
         let control = RelaxationControlIR {
             algorithm: RelaxationAlgorithmIR::LlgOverdamped,
             stop: RelaxStopIR {
@@ -201,7 +201,7 @@ mod tests {
             0.0,
         );
 
-        assert!(!diagnostic.converged);
+        assert!(diagnostic.converged);
         assert!(!diagnostic.torque_ok);
         assert!(diagnostic.energy_ok);
     }

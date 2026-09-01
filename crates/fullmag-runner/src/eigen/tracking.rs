@@ -214,6 +214,7 @@ mod tests {
             relaxation_steps: 0,
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             solver_notes: Vec::new(),
+            solver_diagnostics: None,
         }
     }
 
@@ -237,6 +238,7 @@ mod tests {
             residual_linf: None,
             tangent_leakage_mean_abs: None,
             tangent_leakage_max_abs: None,
+            tangent_leakage_weighted_relative_l2: None,
             dominant_polarization: "test".to_string(),
             reduced_vector: Some(vector.to_vec()),
             lifted_real: None,
@@ -244,6 +246,8 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
     }
 
@@ -263,6 +267,7 @@ mod tests {
             residual_linf: None,
             tangent_leakage_mean_abs: None,
             tangent_leakage_max_abs: None,
+            tangent_leakage_weighted_relative_l2: None,
             dominant_polarization: "test".to_string(),
             reduced_vector: None,
             lifted_real: None,
@@ -270,6 +275,8 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
     }
 

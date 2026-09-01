@@ -4487,7 +4487,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_minimizer_energy_plateau_does_not_replace_torque_convergence() {
+    fn direct_minimizer_energy_plateau_can_certify_without_torque_convergence() {
         let control = RelaxationControlIR {
             stop: RelaxStopIR {
                 torque_tolerance_apm: None,
@@ -4501,11 +4501,14 @@ mod tests {
             infer_direct_minimizer_completion(&control, true, 8, false, false, Some(5.0e-19), 2.0);
 
         assert_eq!(completion.status, "completed");
-        assert!(!completion.converged);
-        assert_eq!(completion.reason, None);
-        assert_eq!(completion.metric_name, None);
-        assert_eq!(completion.metric_value, None);
-        assert_eq!(completion.threshold, None);
+        assert!(completion.converged);
+        assert_eq!(completion.reason, Some(StageStopReason::Energy));
+        assert_eq!(
+            completion.metric_name.as_deref(),
+            Some("total_energy_plateau_range_J")
+        );
+        assert_eq!(completion.metric_value, Some(5.0e-19));
+        assert_eq!(completion.threshold, Some(1.0e-18));
     }
 
     #[test]
