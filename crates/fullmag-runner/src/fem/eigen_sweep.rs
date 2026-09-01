@@ -138,6 +138,12 @@ pub(super) fn prepare_bias_field_sample_plan(
 
     let mut sample_plan = plan.clone();
     sample_plan.external_field = Some(sample.field_a_per_m);
+    // The outer BiasFieldSweepIR has already selected this one physical
+    // target.  Keep the delegated solve as a single-sample plan so the
+    // per-sample relaxation/eigen handoff cannot recursively re-enter the
+    // sweep dispatcher or carry the postsolve oracle into the modal lane.
+    sample_plan.bias_field_samples.clear();
+    sample_plan.k0_kittel_validation = None;
     // Both declared policies solve an accepted equilibrium at the current
     // field.  `continuation_seed` selects only the first continuation seed;
     // once a previous accepted state exists it is always the next seed.
@@ -149,7 +155,13 @@ pub(super) fn prepare_bias_field_sample_plan(
 pub(super) fn validate_bias_field_sweep_oracle_contract(
     plan: &FemEigenPlanIR,
 ) -> Result<(), RunError> {
-    if plan.k0_kittel_validation.is_some() {
+    let Some(validation) = plan.k0_kittel_validation.as_ref() else {
+        return Ok(());
+    };
+    let physical_k0_kittel = validation.kind == "k0_kittel_field_sweep"
+        && validation.case_id.as_deref() == Some("K0-3")
+        && validation.demag_kind.as_deref() == Some("periodic_airbox_k0");
+    if !physical_k0_kittel {
         return Err(RunError {
             message: concat!(
                 "bias_field_sweep_kittel_postsolve_oracle_unavailable: physical bias-field ",
@@ -158,6 +170,43 @@ pub(super) fn validate_bias_field_sweep_oracle_contract(
             )
             .to_string(),
         });
+    }
+    if validation.samples.len() != plan.bias_field_samples.len() {
+        return Err(RunError {
+            message: format!(
+                "bias_field_sweep_kittel_sample_count_mismatch: validation declares {} samples but physical sweep declares {}",
+                validation.samples.len(),
+                plan.bias_field_samples.len()
+            ),
+        });
+    }
+    for (position, sample) in plan.bias_field_samples.iter().enumerate() {
+        let Some(reference) = validation
+            .samples
+            .iter()
+            .find(|reference| reference.sample_index as usize == position)
+        else {
+            return Err(RunError {
+                message: format!(
+                    "bias_field_sweep_kittel_sample_missing: validation has no sample {}",
+                    position
+                ),
+            });
+        };
+        let mismatch = reference
+            .bias_field
+            .iter()
+            .zip(sample.field_a_per_m.iter())
+            .map(|(expected, actual)| (expected - actual).abs())
+            .fold(0.0_f64, f64::max);
+        if !(mismatch.is_finite() && mismatch <= 1.0e-9) {
+            return Err(RunError {
+                message: format!(
+                    "bias_field_sweep_kittel_field_mismatch: physical sample {} differs from the declared Kittel oracle",
+                    position
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -337,12 +386,150 @@ where
     let first_sample = samples.first().ok_or_else(|| RunError {
         message: "bias-field sweep produced no declared samples".to_string(),
     })?;
-    merge_bias_field_sweep_runs(
+    let mut merged = merge_bias_field_sweep_runs(
         runs,
         samples.len(),
         first_sample.equilibrium_policy,
         first_sample.continuation_seed,
-    )
+    )?;
+    append_physical_k0_kittel_artifacts(plan, &mut merged)?;
+    Ok(merged)
+}
+
+fn append_physical_k0_kittel_artifacts(
+    plan: &FemEigenPlanIR,
+    run: &mut ExecutedRun,
+) -> Result<(), RunError> {
+    let Some(validation) = plan.k0_kittel_validation.as_ref() else {
+        return Ok(());
+    };
+    if validation.kind != "k0_kittel_field_sweep"
+        || validation.case_id.as_deref() != Some("K0-3")
+        || validation.demag_kind.as_deref() != Some("periodic_airbox_k0")
+    {
+        return Ok(());
+    }
+    let parse = |path: &str| -> Result<serde_json::Value, RunError> {
+        let artifact = run
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == path)
+            .ok_or_else(|| RunError {
+                message: format!("physical Kittel adapter is missing {path}"),
+            })?;
+        serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+            message: format!("physical Kittel adapter cannot parse {path}: {error}"),
+        })
+    };
+    let spectrum = parse("eigen/spectrum.v2.json")?;
+    let branches = parse("eigen/branches.v2.json")?;
+    let diagnostics = parse("eigen/diagnostics/solver.v1.json")?;
+    let airbox_size_m = physical_k0_airbox_size_m(plan)?;
+    let generated =
+        crate::eigen::artifacts::k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
+            validation,
+            &spectrum,
+            &branches,
+            &diagnostics,
+            &run.auxiliary_artifacts,
+            plan.hmax,
+            airbox_size_m,
+        )
+        .map_err(|error| RunError {
+            message: format!("physical Kittel postsolve adapter failed: {error}"),
+        })?;
+    run.auxiliary_artifacts.extend(generated);
+    patch_physical_k0_kittel_manifest(run, validation)?;
+    Ok(())
+}
+
+fn physical_k0_airbox_size_m(plan: &FemEigenPlanIR) -> Result<f64, RunError> {
+    let factor = plan
+        .air_box_config
+        .as_ref()
+        .map(|config| config.factor)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| RunError {
+            message: "physical Kittel adapter requires positive air_box_config.factor".to_string(),
+        })?;
+    let mut min_corner = [f64::INFINITY; 3];
+    let mut max_corner = [f64::NEG_INFINITY; 3];
+    for node in &plan.mesh.nodes {
+        for axis in 0..3 {
+            min_corner[axis] = min_corner[axis].min(node[axis]);
+            max_corner[axis] = max_corner[axis].max(node[axis]);
+        }
+    }
+    let max_extent = (0..3)
+        .map(|axis| max_corner[axis] - min_corner[axis])
+        .filter(|extent| extent.is_finite() && *extent > 0.0)
+        .fold(0.0_f64, f64::max);
+    if !(max_extent.is_finite() && max_extent > 0.0) {
+        return Err(RunError {
+            message: "physical Kittel adapter requires positive mesh extent".to_string(),
+        });
+    }
+    Ok(max_extent * factor)
+}
+
+fn patch_physical_k0_kittel_manifest(
+    run: &mut ExecutedRun,
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+) -> Result<(), RunError> {
+    let Some(artifact) = run
+        .auxiliary_artifacts
+        .iter_mut()
+        .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
+    else {
+        return Err(RunError {
+            message: "physical Kittel adapter is missing frequency_domain/manifest.v1.json"
+                .to_string(),
+        });
+    };
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+            message: format!(
+                "physical Kittel adapter cannot parse frequency-domain manifest: {error}"
+            ),
+        })?;
+    if let Some(object) = manifest.as_object_mut() {
+        let index = object
+            .entry("artifacts")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| RunError {
+                message: "frequency-domain manifest artifacts index is not an object".to_string(),
+            })?;
+        index.insert(
+            "fmr_kittel_fit_v1_path".to_string(),
+            serde_json::json!("fmr/kittel_fit.v1.json"),
+        );
+        index.insert(
+            "kittel_validation_summary_path".to_string(),
+            serde_json::json!("validation/kittel_k0_pbc/summary.v1.json"),
+        );
+        let validation_object = object
+            .entry("validation")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| RunError {
+                message: "frequency-domain manifest validation index is not an object".to_string(),
+            })?;
+        validation_object.insert(
+            "k0_kittel_validation".to_string(),
+            serde_json::to_value(validation).map_err(|error| RunError {
+                message: format!("failed to serialize Kittel validation metadata: {error}"),
+            })?,
+        );
+        validation_object.insert(
+            "k0_kittel_summary_path".to_string(),
+            serde_json::json!("validation/kittel_k0_pbc/summary.v1.json"),
+        );
+    }
+    artifact.bytes = serde_json::to_vec_pretty(&manifest).map_err(|error| RunError {
+        message: format!("failed to serialize physical Kittel frequency-domain manifest: {error}"),
+    })?;
+    Ok(())
 }
 
 pub(super) fn execute_bias_field_sweep_with_planned_execution<F>(
@@ -406,7 +593,7 @@ fn required_sha256_from_json(
 }
 
 fn native_field_sweep_execution(diagnostics: &serde_json::Value, key: &str) -> serde_json::Value {
-    diagnostics.get(key).cloned().unwrap_or_else(|| {
+    let mut execution = diagnostics.get(key).cloned().unwrap_or_else(|| {
         serde_json::json!({
             "backend": "fem",
             "device": "not_provided",
@@ -418,7 +605,29 @@ fn native_field_sweep_execution(diagnostics: &serde_json::Value, key: &str) -> s
             "fallback_used": null,
             "fallback_reason": null,
         })
-    })
+    });
+    if let Some(object) = execution.as_object_mut() {
+        let execution_mode_present = object
+            .get("execution_mode")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+        if !execution_mode_present {
+            object.insert("execution_mode".to_string(), serde_json::json!("strict"));
+        }
+        let status_present = object
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+        if !status_present {
+            let status = if key == "requested_execution" {
+                "requested"
+            } else {
+                "source_artifact"
+            };
+            object.insert("status".to_string(), serde_json::json!(status));
+        }
+    }
+    execution
 }
 
 pub(super) fn native_field_sweep_content_digest(
@@ -605,7 +814,7 @@ pub(super) fn build_native_field_sweep_artifact(
             "sample_index": sample_index,
             "scan_axis": {
                 "kind": "bias_field",
-                "coordinate": "external_field_a_per_m",
+                "coordinate": "bias_field_a_per_m",
                 "unit": "A/m",
                 "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}],
             },
@@ -659,7 +868,7 @@ pub(super) fn build_native_field_sweep_artifact(
         "stop_reason": if complete { serde_json::Value::Null } else { serde_json::json!(sweep_stop_reason.unwrap_or("incomplete")) },
         "requested_sample_count": requested_sample_count,
         "completed_sample_count": completed_sample_count,
-        "scan_axis": {"kind": "bias_field", "coordinate": "external_field_a_per_m", "unit": "A/m", "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}]},
+        "scan_axis": {"kind": "bias_field", "coordinate": "bias_field_a_per_m", "unit": "A/m", "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}]},
         "units": {"frequency": "Hz", "angular_frequency": "rad/s", "bias_field": "A/m", "bias_field_display": "mu0 H (T)", "response_amplitude": null, "linewidth": null, "q_factor": null, "covariance": null},
         "topology": topology,
         "requested_execution": native_field_sweep_execution(diagnostics, "requested_execution"),
@@ -1164,10 +1373,15 @@ fn update_sweep_manifest(
                 return None;
             }
             let metadata = serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok()?;
-            metadata
-                .get("mode_field_resource_key")
-                .and_then(|value| value.as_str())
-                .map(str::to_string)
+            let sample_index = metadata.get("sample_index").and_then(|value| value.as_u64())?;
+            let raw_mode_index = metadata
+                .get("raw_mode_index")
+                .and_then(|value| value.as_u64())?;
+            // `mode_field_resources` is the analysis metadata endpoint, not
+            // the data-field vector endpoint carried by mode_field_resource_key.
+            Some(format!(
+                "/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/{sample_index}/{raw_mode_index}/meta"
+            ))
         })
         .collect();
     if let Some(object) = manifest.as_object_mut() {

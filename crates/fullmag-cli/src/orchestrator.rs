@@ -1958,6 +1958,38 @@ fn fem_eigen_progress_detail(
     if let Some(residual) = progress.get("residual").copied() {
         detail.push_str(&format!("; residual={residual:.3e}"));
     }
+    let window_phase = if progress
+        .get("window_phase_base")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("base")
+    } else if progress
+        .get("window_phase_refinement")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("refinement")
+    } else {
+        None
+    };
+    if let Some(window_phase) = window_phase {
+        detail.push_str(&format!("; window_phase={window_phase}"));
+    }
+    if let (Some(current), Some(total)) = (
+        progress.get("current_subwindow").copied(),
+        progress.get("total_subwindows").copied(),
+    ) {
+        detail.push_str(&format!("; subwindow={}/{}", current as u64, total as u64));
+    }
+    if let Some(seconds) = progress.get("subwindow_elapsed_seconds").copied() {
+        if seconds.is_finite() {
+            detail.push_str(&format!("; subwindow_s={seconds:.1}"));
+        }
+    }
+    if let Some(seconds) = progress.get("window_elapsed_seconds").copied() {
+        if seconds.is_finite() {
+            detail.push_str(&format!("; window_s={seconds:.1}"));
+        }
+    }
     if progress
         .get("warning_dense_o_n3")
         .is_some_and(|value| *value > 0.0)
@@ -2080,6 +2112,51 @@ fn append_detailed_fem_step_profile(line: &mut String, stats: &fullmag_runner::S
         stats.error_estimate.unwrap_or(0.0),
         dt_next,
     ));
+}
+
+fn append_fem_eigen_step_progress(line: &mut String, stats: &fullmag_runner::StepStats) {
+    let Some(progress) = stats.per_object_scalars.get("fem_eigen_progress") else {
+        return;
+    };
+    let window_phase = if progress
+        .get("window_phase_base")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("base")
+    } else if progress
+        .get("window_phase_refinement")
+        .is_some_and(|value| *value > 0.0)
+    {
+        Some("refinement")
+    } else {
+        None
+    };
+    let Some(window_phase) = window_phase else {
+        return;
+    };
+    let mut segment = format!("  modal window phase={window_phase}");
+    if let (Some(current), Some(total)) = (
+        progress.get("current_subwindow").copied(),
+        progress.get("total_subwindows").copied(),
+    ) {
+        segment.push_str(&format!(" subwindow={}/{}", current as u64, total as u64));
+    }
+    if let Some(seconds) = progress.get("subwindow_elapsed_seconds").copied() {
+        if seconds.is_finite() {
+            segment.push_str(&format!(" subwindow_s={seconds:.1}"));
+        }
+    }
+    if let Some(seconds) = progress.get("window_elapsed_seconds").copied() {
+        if seconds.is_finite() {
+            segment.push_str(&format!(" window_s={seconds:.1}"));
+        }
+    }
+    if let Some(residual) = progress.get("residual").copied() {
+        if residual.is_finite() {
+            segment.push_str(&format!(" relres={residual:.3e}"));
+        }
+    }
+    line.push_str(&segment);
 }
 
 fn frequency_response_step_progress_segment(stats: &fullmag_runner::StepStats) -> Option<String> {
@@ -2213,6 +2290,7 @@ fn format_stage_progress_line(
             wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
+        append_fem_eigen_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     } else {
@@ -2227,6 +2305,7 @@ fn format_stage_progress_line(
             wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
+        append_fem_eigen_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
         line
     }
@@ -13091,6 +13170,11 @@ mod tests {
         progress.insert("iteration".to_string(), 37.0);
         progress.insert("max_iterations".to_string(), 5000.0);
         progress.insert("residual".to_string(), 1.2e-5);
+        progress.insert("window_phase_base".to_string(), 1.0);
+        progress.insert("current_subwindow".to_string(), 3.0);
+        progress.insert("total_subwindows".to_string(), 16.0);
+        progress.insert("subwindow_elapsed_seconds".to_string(), 2.5);
+        progress.insert("window_elapsed_seconds".to_string(), 8.0);
         let mut update = test_step_update(37);
         update
             .stats
@@ -13117,7 +13201,43 @@ mod tests {
         assert!(detail.contains("effective_dof=3862"));
         assert!(detail.contains("iteration=37/5000"));
         assert!(detail.contains("residual=1.200e-5"));
+        assert!(detail.contains("window_phase=base"));
+        assert!(detail.contains("subwindow=3/16"));
+        assert!(detail.contains("subwindow_s=2.5"));
+        assert!(detail.contains("window_s=8.0"));
         assert!(stage.last_progress_unix_ms.is_some());
+    }
+
+    #[test]
+    fn terminal_stage_line_includes_fem_eigen_window_progress() {
+        let mut progress = std::collections::HashMap::new();
+        progress.insert("window_phase_refinement".to_string(), 1.0);
+        progress.insert("current_subwindow".to_string(), 17.0);
+        progress.insert("total_subwindows".to_string(), 34.0);
+        progress.insert("subwindow_elapsed_seconds".to_string(), 4.25);
+        progress.insert("window_elapsed_seconds".to_string(), 71.5);
+        progress.insert("residual".to_string(), 2.0e-9);
+        let mut per_object_scalars = std::collections::HashMap::new();
+        per_object_scalars.insert("fem_eigen_progress".to_string(), progress);
+        let stats = fullmag_runner::StepStats {
+            step: 17,
+            per_object_scalars,
+            ..fullmag_runner::StepStats::default()
+        };
+
+        let line = format_stage_progress_line(
+            "stage 2/2 (flat_eigenmodes)",
+            &stats,
+            None,
+            Some(Duration::from_secs(5)),
+            None,
+        );
+
+        assert!(line.contains("modal window phase=refinement"), "{line}");
+        assert!(line.contains("subwindow=17/34"), "{line}");
+        assert!(line.contains("subwindow_s=4.2"), "{line}");
+        assert!(line.contains("window_s=71.5"), "{line}");
+        assert!(line.contains("relres=2.000e-9"), "{line}");
     }
 
     #[test]

@@ -8,6 +8,11 @@ import {
 } from "@/kernel/api/apiPaths";
 import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import type {
+  AnalysisFieldOverlayKContextKind,
+  AnalysisFieldOverlayRepresentation,
+  AnalysisFieldOverlaySource,
+} from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 import type { DecodedComplexFieldVector } from "@/kernel/api/codecs/types";
 import {
@@ -58,6 +63,35 @@ export function frequencyDomainResultTitle(
   return classification?.resultLabel ?? "Spectral Response Map · A(k,f)";
 }
 
+const DISPERSION_MODAL_SELECTION_ROUTE = {
+  mode: "dispersion_modal",
+  primaryChart: "dispersion",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+const FMR_MODAL_SELECTION_ROUTE = {
+  mode: "fmr_modal",
+  primaryChart: "modal-spectrum",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+const FREE_MODES_SELECTION_ROUTE = {
+  mode: "free_modes",
+  primaryChart: "modal-spectrum",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+const FMR_RESPONSE_SELECTION_ROUTE = {
+  mode: "fmr_response",
+  primaryChart: "response-sweep",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+const FREQUENCY_RESPONSE_SELECTION_ROUTE = {
+  mode: "frequency_response",
+  primaryChart: "response-sweep",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+const FMR_MODAL_DRIVEN_SELECTION_ROUTE = {
+  mode: "fmr_modal_driven",
+  primaryChart: "comparison",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+const RESPONSE_MAP_SELECTION_ROUTE = {
+  mode: "response_map",
+  primaryChart: "response-map",
+} as const satisfies Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">;
+
 export function frequencyDomainChartRouteOverrideFromSelection(
   state: import("@/kernel/selection/selectionTypes").Selection | { kind?: string | null; ref?: { kind?: string | null; type?: string | null } | null } | null | undefined,
 ): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
@@ -67,17 +101,19 @@ export function frequencyDomainChartRouteOverrideFromSelection(
   const calculationMode = (ref as { calculationMode?: unknown }).calculationMode;
   switch (calculationMode) {
     case "dispersion_modal":
-      return { mode: calculationMode, primaryChart: "dispersion" };
+      return DISPERSION_MODAL_SELECTION_ROUTE;
     case "fmr_modal":
+      return FMR_MODAL_SELECTION_ROUTE;
     case "free_modes":
-      return { mode: calculationMode, primaryChart: "modal-spectrum" };
+      return FREE_MODES_SELECTION_ROUTE;
     case "fmr_response":
+      return FMR_RESPONSE_SELECTION_ROUTE;
     case "frequency_response":
-      return { mode: calculationMode, primaryChart: "response-sweep" };
+      return FREQUENCY_RESPONSE_SELECTION_ROUTE;
     case "fmr_modal_driven":
-      return { mode: calculationMode, primaryChart: "comparison" };
+      return FMR_MODAL_DRIVEN_SELECTION_ROUTE;
     case "response_map":
-      return { mode: calculationMode, primaryChart: "response-map" };
+      return RESPONSE_MAP_SELECTION_ROUTE;
     default:
       return null;
   }
@@ -119,15 +155,24 @@ export interface FrequencyDomainResultContext {
   studyProduct: FrequencyDomainResultEvidence["studyProduct"] | null;
 }
 
+export interface FrequencyDomainResultOwnerContext {
+  meshGenerationId?: string | null;
+  runId?: string | null;
+  stageId?: string | null;
+}
+
 export function frequencyDomainResultContextFromManifest(
   manifestPayload: unknown,
+  owner: FrequencyDomainResultOwnerContext = {},
 ): FrequencyDomainResultContext {
   const manifest = record(manifestPayload);
   const requested = record(manifest?.requested_execution);
   const contractGaps: string[] = [];
-  const runId = stringValue(manifest?.run_id);
-  const stageId = stringValue(manifest?.stage_id);
-  const equilibriumId = stringValue(manifest?.equilibrium_identity);
+  const runId = stringValue(manifest?.run_id) ?? stringValue(owner.runId);
+  const stageId = stringValue(manifest?.stage_id) ?? stringValue(owner.stageId);
+  const equilibriumId = stringValue(
+    manifest?.equilibrium_identity ?? manifest?.equilibrium_artifact_sha256,
+  );
   const studyProduct = manifest?.study_product === "modal_eigen" || manifest?.study_product === "driven_response"
     ? manifest.study_product
     : null;
@@ -139,7 +184,7 @@ export function frequencyDomainResultContextFromManifest(
   const geometryId = stringValue(manifest?.geometry_identity);
   const physics = record(manifest?.physics);
   const normalization = stringValue(physics?.normalization ?? manifest?.normalization);
-  const meshId = stringValue(manifest?.mesh_identity);
+  const meshId = stringValue(manifest?.mesh_identity) ?? stringValue(owner.meshGenerationId);
   const observables = typedObservableEvidence(manifest?.observables);
   const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
   if (!runId) contractGaps.push("run identity unavailable");
@@ -321,6 +366,7 @@ export interface EigenSpectrumPoint {
   rawModeIndex: number;
   residualNorm: number | null;
   sampleIndex: number;
+  sampleId?: string | null;
   tangentLeakageMax: number | null;
 }
 
@@ -336,6 +382,7 @@ export interface EigenSpectrumPayloadMode {
   rawModeIndex: number;
   residualNorm: number | null;
   sampleIndex: number;
+  sampleId: string | null;
   tangentLeakageMax: number | null;
 }
 
@@ -467,10 +514,17 @@ export interface FmrModalDrivenComparisonModel {
 export interface FrequencyDomainSelectionContext {
   analysisRunId?: string | null;
   analysisStageId?: string | null;
+  artifactRevision?: number | string | null;
   artifactPath?: string | null;
   calculationMode?: FrequencyDomainCalculationMode | null;
+  equilibriumId?: string | null;
+  kContextKind?: AnalysisFieldOverlayKContextKind | null;
   nodeId?: string | null;
+  representation?: AnalysisFieldOverlayRepresentation | null;
   resourceRef?: string | null;
+  source?: AnalysisFieldOverlaySource | null;
+  studyProduct?: string | null;
+  wavevectorKf?: readonly [number, number, number] | null;
 }
 
 export interface FrequencyDomainResponseFieldResource {
@@ -740,6 +794,7 @@ export function readEigenSpectrumPayload(
       rowIndex,
     );
     const modeId = stringValue(item.mode_id ?? item.modeId ?? item.id);
+    const sampleId = stringValue(item.sample_id ?? item.sampleId);
     const displayModeIndex = sampleRanks.get(sampleIndex) ?? 0;
     sampleRanks.set(sampleIndex, displayModeIndex + 1);
     const modeFieldId = stringValue(item.mode_field_id ?? item.modeFieldId);
@@ -768,6 +823,7 @@ export function readEigenSpectrumPayload(
       rawModeIndex,
       residualNorm: finiteNumber(item.residual_norm ?? item.relative_residual_norm),
       sampleIndex,
+      sampleId,
       tangentLeakageMax: finiteNumber(
         item.tangent_leakage_max ?? item.tangentLeakageMax,
       ),
@@ -801,9 +857,14 @@ export function buildEigenSpectrumChartModel(
       rawModeIndex: mode.rawModeIndex,
       residualNorm: mode.residualNorm,
       sampleIndex: mode.sampleIndex,
+      sampleId: mode.sampleId,
       tangentLeakageMax: mode.tangentLeakageMax,
     });
   }
+
+  const frequencyScale = frequencyChartScale(
+    points.map((point) => point.frequencyHz),
+  );
 
   return {
     dataSourceVersion: "unknown",
@@ -817,7 +878,7 @@ export function buildEigenSpectrumChartModel(
         points: points.map((point, rowIndex) => ({
           rowIndex,
           x: point.displayModeIndex,
-          y: point.frequencyHz,
+          y: point.frequencyHz / frequencyScale.divisor,
         })),
         quantity: "frequency",
         source: {
@@ -826,7 +887,7 @@ export function buildEigenSpectrumChartModel(
           tableId: "frequency-domain:eigen-spectrum",
         },
         status: artifactStatus(resource),
-        unit: "Hz",
+        unit: frequencyScale.unit,
         xUnit: "1",
       },
     ],
@@ -840,16 +901,28 @@ export function buildEigenModeSelectionRef(
   return cleanFrequencyDomainSelectionRef({
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
+    artifactRevision: context.artifactRevision == null
+      ? undefined
+      : String(context.artifactRevision),
     artifactPath: context.artifactPath ?? undefined,
     branchId: point.branchId ?? undefined,
     calculationMode: context.calculationMode ?? "free_modes",
     fieldId: point.modeFieldId ?? undefined,
+    frequencyHz: point.frequencyHz,
+    equilibriumId: context.equilibriumId ?? undefined,
+    kContextKind: context.kContextKind ?? undefined,
     kind: "results.eigen.mode",
+    modeId: point.modeId ?? undefined,
     modeIndex: point.rawModeIndex,
     nodeId: context.nodeId ?? frequencyDomainModeNodeId(point),
     resourceRef: context.resourceRef ?? point.modeFieldResourceKey ?? undefined,
+    representation: context.representation ?? undefined,
+    sampleId: point.sampleId ?? undefined,
     sampleIndex: point.sampleIndex,
+    source: context.source ?? "eigen-mode",
+    studyProduct: context.studyProduct ?? undefined,
     type: "frequency-domain",
+    wavevectorKf: context.wavevectorKf ?? undefined,
   });
 }
 
@@ -1594,6 +1667,11 @@ function sampleModeRows(samplesValue: unknown): unknown[] {
           ...modeRecord,
           sample_index:
             modeRecord.sample_index ?? modeRecord.sampleIndex ?? sampleIndex,
+          sample_id:
+            modeRecord.sample_id ??
+            modeRecord.sampleId ??
+            sampleRecord.sample_id ??
+            sampleRecord.sampleId,
         },
       ];
     });

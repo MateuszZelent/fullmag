@@ -5,11 +5,12 @@
 #include <complex>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 4;
+constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 5;
 
 struct PoissonAirboxEigenBlockProblem {
     std::uint32_t abi_version = kPoissonAirboxEigenBlockProblemAbiVersion;
@@ -82,6 +83,13 @@ struct PoissonAirboxEigenBlockProblem {
     int (*cancel_requested)(void *user_data) = nullptr;
     void *progress_user_data = nullptr;
     void (*progress_callback)(void *user_data, const char *progress_json) = nullptr;
+    // Optional one-based frequency-window location carried through nested
+    // shift-invert callbacks. Zero counts mean a nearest-frequency solve.
+    const char *progress_window_phase = nullptr;
+    std::uint32_t progress_current_subwindow = 0;
+    std::uint32_t progress_total_subwindows = 0;
+    double progress_subwindow_elapsed_seconds = 0.0;
+    double progress_window_elapsed_seconds = 0.0;
 };
 
 inline bool poisson_airbox_modal_cancel_requested(
@@ -121,6 +129,11 @@ inline void poisson_airbox_modal_emit_progress(
         "\"max_linear_iterations\":%u,"
         "\"current_residual_relative_l2\":%.17g,"
         "\"target_residual_relative_l2\":%.17g,"
+        "\"window_phase\":%s,"
+        "\"current_subwindow\":%u,"
+        "\"total_subwindows\":%u,"
+        "\"subwindow_elapsed_seconds\":%.17g,"
+        "\"window_elapsed_seconds\":%.17g,"
         "\"partial_artifacts_available\":false,"
         "\"latest_artifact_manifest_path\":\"\","
         "\"stop_reason\":%s}",
@@ -134,6 +147,15 @@ inline void poisson_airbox_modal_emit_progress(
         problem.max_linear_iterations,
         residual_relative,
         problem.residual_tolerance,
+        problem.progress_window_phase != nullptr
+            ? (std::strcmp(problem.progress_window_phase, "base") == 0
+                   ? "\"base\""
+                   : "\"refinement\"")
+            : "null",
+        problem.progress_current_subwindow,
+        problem.progress_total_subwindows,
+        problem.progress_subwindow_elapsed_seconds,
+        problem.progress_window_elapsed_seconds,
         stop_reason != nullptr ? "\"cancel_requested\"" : "null");
     if (written > 0 && static_cast<std::size_t>(written) < sizeof(progress_json)) {
         problem.progress_callback(problem.progress_user_data, progress_json);

@@ -7223,6 +7223,57 @@
           }
         ]
       },
+      "FrequencyDomainCandidateIdentityPayload": {
+        "properties": {
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "equilibrium_artifact_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_identity": {
+            "type": "object"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "source_identity"
+        ],
+        "type": "object"
+      },
       "FrequencyDomainCapabilityEntryResource": {
         "properties": {
           "reason": {
@@ -7835,6 +7886,13 @@
               "null"
             ]
           },
+          "mesh_generation_id": {
+            "description": "Runtime mesh generation bound to the publishing stage.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "missing_reason": {
             "type": [
               "string",
@@ -7861,8 +7919,29 @@
               "null"
             ]
           },
+          "run_id": {
+            "description": "Actual run that owns the current immutable artifact directory.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "schema_version": {
             "type": "string"
+          },
+          "session_id": {
+            "description": "Actual session that owns the current immutable artifact directory.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "description": "Actual stage that published the artifact, when available in live state.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "type": "string"
@@ -8033,12 +8112,52 @@
                   "null"
                 ]
               },
+              "candidate_identity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainCandidateIdentityPayload"
+                  }
+                ]
+              },
+              "engine_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fields_available": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "schema_version": {
                 "type": "string"
+              },
+              "solve_succeeded": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "spectrum_completeness": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "study_product": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "window_complete": {
+                "type": [
+                  "boolean",
                   "null"
                 ]
               }
@@ -8336,9 +8455,31 @@
           },
           {
             "properties": {
+              "candidate_identity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainCandidateIdentityPayload"
+                  }
+                ]
+              },
               "component_basis": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "engine_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fields_available": {
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },
@@ -8368,6 +8509,12 @@
               "schema_version": {
                 "type": "string"
               },
+              "solve_succeeded": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "source_mesh_identity": {
                 "oneOf": [
                   {
@@ -8378,9 +8525,27 @@
                   }
                 ]
               },
+              "source_spectrum_revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spectrum_completeness": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "value_kind": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "window_complete": {
+                "type": [
+                  "boolean",
                   "null"
                 ]
               }
@@ -8620,6 +8785,28 @@
           },
           {
             "properties": {
+              "candidate_identity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainCandidateIdentityPayload"
+                  }
+                ]
+              },
+              "engine_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fields_available": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "samples": {
                 "items": {
                   "$ref": "#/components/schemas/FrequencyDomainSpectrumSamplePayload"
@@ -8628,6 +8815,24 @@
               },
               "schema_version": {
                 "type": "string"
+              },
+              "solve_succeeded": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "spectrum_completeness": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "window_complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -8730,6 +8935,28 @@
           },
           {
             "properties": {
+              "candidate_identity": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainCandidateIdentityPayload"
+                  }
+                ]
+              },
+              "engine_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "fields_available": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "samples": {
                 "items": {
                   "$ref": "#/components/schemas/FrequencyDomainSpectrumV3SamplePayload"
@@ -8738,6 +8965,24 @@
               },
               "schema_version": {
                 "type": "string"
+              },
+              "solve_succeeded": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "spectrum_completeness": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "window_complete": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               }
             },
             "required": [

@@ -19,10 +19,16 @@ MU0 = 4.0e-7 * math.pi
 MS = 800e3
 MAG_HMAX_M = float(os.environ.get("FULLMAG_K0_KITTEL_MAG_HMAX_NM", "20.0")) * 1e-9
 MAG_HMIN_M = float(os.environ.get("FULLMAG_K0_KITTEL_MAG_HMIN_NM", "10.0")) * 1e-9
+MAG_LAYERS = int(os.environ.get("FULLMAG_K0_KITTEL_LAYERS", "1"))
+if MAG_LAYERS < 1:
+    raise ValueError("FULLMAG_K0_KITTEL_LAYERS must be >= 1")
 AIRBOX_HMAX_M = float(os.environ.get("FULLMAG_K0_KITTEL_AIRBOX_HMAX_NM", "40.0")) * 1e-9
 AIRBOX_FACTOR = float(os.environ.get("FULLMAG_K0_KITTEL_AIRBOX_FACTOR", "5.0"))
-BODY_X_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_X_NM", "40.0")) * 1e-9
-BODY_Y_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Y_NM", "20.0")) * 1e-9
+# Keep the default periodic cell sufficiently wide in-plane for the analytical
+# thin-film Kittel oracle.  The previous 40x20x10 nm cell behaved as a finite
+# aspect-ratio platelet and produced a deterministic ~6.9% oracle deficit.
+BODY_X_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_X_NM", "160.0")) * 1e-9
+BODY_Y_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Y_NM", "80.0")) * 1e-9
 BODY_Z_M = float(os.environ.get("FULLMAG_K0_KITTEL_BODY_Z_NM", "10.0")) * 1e-9
 BIAS_FIELD_MIN_T = 5.0e-3
 BIAS_FIELD_MAX_T = 0.10
@@ -31,7 +37,9 @@ BIAS_FIELDS_T = tuple(
     + (BIAS_FIELD_MAX_T - BIAS_FIELD_MIN_T) * sample_index / 14.0
     for sample_index in range(15)
 )
-BIAS_FIELDS_A_PER_M = tuple(field_t / MU0 for field_t in BIAS_FIELDS_T)
+BIAS_FIELDS_A_PER_M = tuple(
+    (field_t / MU0, 0.0, 0.0) for field_t in BIAS_FIELDS_T
+)
 # The production GPU lane currently qualifies one accepted K0 mode per
 # sample; keep the CPU peer on the same exact modal request for parity.
 N_MODES = 1
@@ -40,7 +48,13 @@ FREQUENCY_MAX_HZ = 25.0e9
 
 study = fm.study("fem_eigen_k0_kittel_periodic_airbox")
 study.engine("fem")
-study.device("cpu", precision="double")
+# Keep the fixture CPU-first for the analytical smoke gate, while allowing an
+# explicit GPU run to carry a GPU-owned execution plan into the artifact
+# identity.  The runtime may not silently reinterpret a CPU plan as GPU.
+requested_device = os.environ.get("FULLMAG_K0_KITTEL_DEVICE", "cpu").strip().lower()
+if requested_device not in {"cpu", "gpu"}:
+    raise ValueError("FULLMAG_K0_KITTEL_DEVICE must be 'cpu' or 'gpu'")
+study.device(requested_device, precision="double")
 study.universe(
     mode="manual",
     size=(BODY_X_M, BODY_Y_M, AIRBOX_FACTOR * BODY_Z_M),
@@ -76,17 +90,20 @@ body.mesh.thin_film(
     edge_transition_distance=4e-9,
     corner_extent=2e-9,
     corner_transition_distance=4e-9,
-    layers=1,
+    layers=MAG_LAYERS,
     order=1,
 )
 
 study.pbc(x=True, y=True, demag="periodic_airbox_k0")
-study.b_ext(BIAS_FIELDS_T[0], 0.0, 0.0)
+study.b_ext(*BIAS_FIELDS_A_PER_M[0])
 study.demag(realization="poisson_robin")
 # Keep the iterative solve tighter than the independent 1e-8 residual gate;
 # otherwise a backend stopping at its own 1e-8 estimate can miss the
 # independently recomputed threshold by roundoff on refined meshes.
-study.fem_demag_solver(rtol=1e-10, max_iterations=1000)
+# The independent artifact gate accepts a certified Poisson residual <=1e-8.
+# Keep the iterative solve one decade tighter, while avoiding false rejection
+# from CG roundoff at 1e-10 on refined periodic airbox meshes.
+study.fem_demag_solver(rtol=1e-9, max_iterations=1000)
 study.build_domain_mesh()
 
 study.save("spectrum")
@@ -101,7 +118,7 @@ study.k0_kittel_validation(
         effective_magnetisation=MS,
         relative_tolerance=0.05,
         samples=[
-            fm.K0KittelFieldSample(sample_index, (field_a_per_m, 0.0, 0.0))
+            fm.K0KittelFieldSample(sample_index, field_a_per_m)
             for sample_index, field_a_per_m in enumerate(BIAS_FIELDS_A_PER_M)
         ],
     )
@@ -123,15 +140,18 @@ study.stages.add_eigenmodes(
     equilibrium_source="relax",
     normalization="unit_l2",
     damping_policy="ignore",
-    # The K0-3 validation is a real zero-k field sweep: the path keeps the
-    # physical wavevector at Gamma while the runner applies each declared
-    # bias-field sample to the native modal solve.
-    k_sampling=fm.KPath(
-        [
-            fm.KPoint("Hnear0", (0.0, 0.0, 0.0)),
-            fm.KPoint("H100mT", (0.0, 0.0, 0.0)),
-        ],
-        samples_per_segment=[14],
+    # The K0-3 validation is a real zero-k field sweep.  Keep one explicit
+    # Gamma target so the Relax handoff remains legal; the runner applies each
+    # declared bias-field sample to this same native modal solve.
+    k_sampling=fm.KPoint("Gamma", (0.0, 0.0, 0.0)),
+    # This is the physics-owned scan axis.  The Kittel metadata above remains
+    # an analytical postsolve oracle; it must never be used to manufacture
+    # solver samples.
+    bias_field_sweep=fm.BiasFieldSweep(
+        samples_a_per_m=BIAS_FIELDS_A_PER_M,
+        equilibrium_policy="relax_each",
+        continuation_seed="initial_state",
     ),
     bc=fm.PeriodicBC(["x_faces", "y_faces"]),
+    magnetostatic_bc="periodic_airbox_k0",
 )

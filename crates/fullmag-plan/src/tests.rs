@@ -11244,6 +11244,39 @@ fn fem_eigen_k0_execution_resolution_selects_exact_cpu_and_gpu_engines() {
 }
 
 #[test]
+fn fem_eigen_k0_kittel_validation_resolves_execution_when_study_bc_is_open() {
+    let mut ir = k0_periodic_airbox_fem_eigen_ir();
+    let fullmag_ir::StudyIR::Eigenmodes {
+        magnetostatic_bc, ..
+    } = &mut ir.study
+    else {
+        unreachable!("fixture must remain an eigenmode study")
+    };
+    *magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::Open;
+
+    let planned = plan(&ir)
+        .expect("K0-3 validation metadata must bind the periodic-airbox execution contract");
+    let resolution = serde_json::to_value(
+        planned
+            .provenance
+            .fem_eigen_execution_resolution
+            .expect("K0-3 validation must publish typed execution resolution"),
+    )
+    .expect("K0-3 execution resolution must serialize");
+
+    assert_eq!(resolution["requested_device"], "auto");
+    assert_eq!(resolution["resolved_device"], "cpu");
+    assert_eq!(
+        resolution["resolved_engine"],
+        "k0_poisson_airbox_cpu_schur_slepc"
+    );
+    assert_eq!(
+        resolution["selection_reason"],
+        "fem_eigen.k0_periodic_airbox.auto_default_cpu"
+    );
+}
+
+#[test]
 fn fem_eigen_k0_auto_uses_managed_runtime_selection_without_marking_fallback() {
     for (device, engine, reason) in [
         (

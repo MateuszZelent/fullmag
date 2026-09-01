@@ -371,7 +371,8 @@ set -euo pipefail
 cd /workspace
 mkdir -p /workspace/.fullmag-build/cargo-targets/$TargetKey /workspace/.fullmag-cache /workspace/.fullmag-cargo /workspace/.fullmag-rustup /tmp/fullmag-windows
 rustup toolchain install nightly --profile minimal --no-self-update
-if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ]; then
+if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ] ||
+   [ ! -f /workspace/apps/control-room/node_modules/next/dist/bin/next ]; then
   pnpm --dir /workspace/apps/control-room install --frozen-lockfile
 fi
 FULLMAG_CUDA_BASE_IMAGE=$CudaBaseImage FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_GPU=1 make $makeTarget
@@ -383,7 +384,8 @@ set -euo pipefail
 cd /workspace
 mkdir -p /workspace/.fullmag-build/cargo-targets/$TargetKey /workspace/.fullmag-cache /workspace/.fullmag-cargo /workspace/.fullmag-rustup /tmp/fullmag-windows
 rustup toolchain install nightly --profile minimal --no-self-update
-if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ]; then
+if [ ! -f /workspace/apps/control-room/node_modules/.bin/next ] ||
+   [ ! -f /workspace/apps/control-room/node_modules/next/dist/bin/next ]; then
   pnpm --dir /workspace/apps/control-room install --frozen-lockfile
 fi
 FULLMAG_CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey CARGO_TARGET_ROOT=/workspace/.fullmag-build/cargo-targets/$TargetKey FULLMAG_FORCE_LOCAL_FEM_CPU=1 make $makeTarget
@@ -467,12 +469,14 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
   )
   foreach ($entry in @(
     "FULLMAG_FEM_EXECUTION=$Device",
+    "FULLMAG_K0_PRODUCTION_DEVICE=$Device",
     "FULLMAG_RELAX_DEVICE=$Device",
     $(if ($Device -eq "gpu") { "FULLMAG_FEM_MFEM_DEVICE=cuda" } else { "FULLMAG_FEM_MFEM_DEVICE=cpu" }),
     $(if ($Device -eq "gpu") { "FULLMAG_FEM_REQUIRE_GPU=1" } else { "FULLMAG_FEM_REQUIRE_GPU=0" }),
     $(if ($Device -eq "gpu") { "FULLMAG_FEM_REQUIRE_CEED=1" } else { "FULLMAG_FEM_REQUIRE_CEED=0" }),
     "FULLMAG_DISABLE_MANAGED_FEM_GPU_RUNTIME=1",
-    "FULLMAG_FDM_EXECUTION=cpu"
+    "FULLMAG_FDM_EXECUTION=cpu",
+    $(if ($RunMode -eq "headless") { "FULLMAG_API_PORT=0" } else { "FULLMAG_API_PORT=8081" })
   )) {
     $runArguments += @("-e", $entry)
   }

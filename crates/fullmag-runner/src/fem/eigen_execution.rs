@@ -71,12 +71,16 @@ use crate::types::StepStats;
 use fullmag_engine::Vector3;
 use fullmag_engine::MU0;
 use fullmag_ir::EigenDampingPolicyIR;
+use fullmag_ir::ExecutionMode;
 use fullmag_ir::FemEigenPlanIR;
 use fullmag_ir::OutputIR;
 use fullmag_ir::SpinWaveBoundaryConditionIR;
 use fullmag_ir::SpinWaveBoundaryKindIR;
+use fullmag_ir::{IntegratorChoice, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR};
 use num_complex::Complex64;
 use std::collections::BTreeSet;
+
+use crate::dispatch::FemEngine;
 
 pub(crate) fn reject_unsupported_floquet_dynamic_demag(
     spin_wave_bc: &SpinWaveBoundaryConditionIR,
@@ -119,8 +123,8 @@ pub(crate) fn execute_baseline_fem_eigen_with_progress(
 }
 
 /// Execute every declared physics-owned bias-field sample as an independent
-/// solve. Kittel metadata is rejected by the sweep owner until a real
-/// per-sample postsolve adapter can emit expected-vs-solved pass/fail artifacts.
+/// solve.  A sweep owns its per-sample equilibrium state, so a single global
+/// relax-stage handoff must not be applied to the sweep as a whole.
 fn execute_bias_field_sweep(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -128,16 +132,16 @@ fn execute_bias_field_sweep(
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
     execute_bias_field_sweep_with_executor(plan, |sample_plan, sample_position| {
-        execute_fem_eigen_inner(
+        execute_bias_field_sample_with_relaxation(
             sample_plan,
             outputs,
-            try_gpu,
-            true,
+            if try_gpu {
+                FemEigenExecutionLane::Gpu
+            } else {
+                FemEigenExecutionLane::Cpu
+            },
             progress.as_deref_mut(),
             sample_position,
-            Some(&sample_plan.equilibrium_magnetization),
-            None,
-            None,
             None,
         )
     })
@@ -156,20 +160,211 @@ fn execute_planned_bias_field_sweep(
         plan,
         resolution,
         |sample_plan, sample_position| {
-            execute_fem_eigen_inner(
+            execute_bias_field_sample_with_relaxation(
                 sample_plan,
                 outputs,
-                execution.lane() == FemEigenExecutionLane::Gpu,
-                true,
+                execution.lane(),
                 progress.as_deref_mut(),
                 sample_position,
-                Some(&sample_plan.equilibrium_magnetization),
-                None,
-                None,
                 Some(execution),
             )
         },
     )
+}
+
+/// Execute one physical bias-field sample with its own accepted relaxation
+/// certificate before entering the modal solver.  A top-level scripted Relax
+/// stage is still useful as a bootstrap/preview, but it cannot be reused for a
+/// field value whose equilibrium identity contains a different external field.
+fn execute_bias_field_sample_with_relaxation(
+    sample_plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    lane: FemEigenExecutionLane,
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    sample_position: usize,
+    planned_execution: Option<PlannedFemEigenExecution<'_>>,
+) -> Result<ExecutedRun, RunError> {
+    let relax_plan = bias_field_relax_plan(sample_plan);
+    let relax_engine = match lane {
+        FemEigenExecutionLane::Cpu => FemEngine::CpuNative,
+        FemEigenExecutionLane::Gpu => FemEngine::NativeGpu,
+    };
+    let relax_run = crate::dispatch::execute_fem_in_mode(
+        relax_engine,
+        &relax_plan,
+        f64::INFINITY,
+        &[],
+        None,
+        None,
+        ExecutionMode::Strict,
+    )?;
+    let completion = relax_run
+        .result
+        .completion
+        .clone()
+        .ok_or_else(|| RunError {
+            message: format!(
+                "FEM bias-field sample {} relaxation did not publish a completion certificate",
+                sample_position
+            ),
+        })?;
+    let final_magnetization = relax_run.result.final_magnetization.clone();
+    let certified_fields =
+        decode_bias_field_relaxation_artifact::<crate::types::CertifiedFemEquilibriumFields>(
+            &relax_run,
+            "equilibrium/certified_fem_equilibrium_fields.v1.json",
+            sample_position,
+        )?;
+    let recomputed_certificate = decode_bias_field_relaxation_artifact::<
+        crate::types::RecomputedFemLinearizationCertificateV1,
+    >(
+        &relax_run,
+        "equilibrium/recomputed_fem_linearization_certificate.v1.json",
+        sample_position,
+    )?;
+    let source_mesh = crate::types::FemMeshPayload::from(&relax_plan);
+    crate::validate_recomputed_fem_linearization_certificate(
+        &relax_plan,
+        &source_mesh,
+        &final_magnetization,
+        &certified_fields,
+        &recomputed_certificate,
+    )?;
+    let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+        &format!("bias-field-sweep-sample-{sample_position:04}"),
+        &format!("sample-{sample_position:04}-relax"),
+        "bias_field_sweep_relaxation",
+        true,
+        &relax_plan,
+        &source_mesh,
+        &completion,
+        final_magnetization,
+        certified_fields,
+    )?;
+    let equilibrium = handoff.equilibrium_magnetization.clone();
+    execute_fem_eigen_inner(
+        sample_plan,
+        outputs,
+        lane == FemEigenExecutionLane::Gpu,
+        true,
+        progress,
+        sample_position,
+        Some(&equilibrium),
+        None,
+        Some(&handoff),
+        planned_execution,
+    )
+}
+
+fn decode_bias_field_relaxation_artifact<T: serde::de::DeserializeOwned>(
+    run: &ExecutedRun,
+    relative_path: &str,
+    sample_position: usize,
+) -> Result<T, RunError> {
+    let artifact = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative_path)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "FEM bias-field sample {} relaxation did not publish {}",
+                sample_position, relative_path
+            ),
+        })?;
+    serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+        message: format!(
+            "FEM bias-field sample {} relaxation artifact {} is invalid: {}",
+            sample_position, relative_path, error
+        ),
+    })
+}
+
+/// Build the minimal static FEM plan needed to run the canonical overdamped
+/// relaxation for one bias-field sample.  The eigen plan intentionally does
+/// not carry a second relaxation stage, so the sweep owns this deterministic
+/// per-sample control contract.
+fn bias_field_relax_plan(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
+    fullmag_ir::FemPlanIR {
+        mesh_name: plan.mesh_name.clone(),
+        mesh_source: plan.mesh_source.clone(),
+        mesh: plan.mesh.clone(),
+        object_segments: plan.object_segments.clone(),
+        mesh_parts: plan.mesh_parts.clone(),
+        mesh_build_report: plan.mesh_build_report.clone(),
+        domain_mesh_mode: plan.domain_mesh_mode,
+        domain_frame: plan.domain_frame.clone(),
+        fe_order: plan.fe_order,
+        hmax: plan.hmax,
+        initial_magnetization: plan.equilibrium_magnetization.clone(),
+        frozen_spins: None,
+        material: plan.material.clone(),
+        anisotropy_axis_field: None,
+        ms_element_field: None,
+        a_element_field: None,
+        region_materials: Vec::new(),
+        enable_exchange: plan.enable_exchange,
+        enable_demag: plan.enable_demag,
+        external_field: plan.external_field,
+        antenna_zeeman_masks: Vec::new(),
+        field_drives: Vec::new(),
+        field_drive_geometry_masks: Vec::new(),
+        time_stage: Default::default(),
+        current_modules: Vec::new(),
+        spin_transport_plans: Vec::new(),
+        gyromagnetic_ratio: plan.gyromagnetic_ratio,
+        precision: plan.precision,
+        exchange_bc: plan.exchange_bc,
+        integrator: Some(IntegratorChoice::Heun),
+        fixed_timestep: Some(1.0e-15),
+        adaptive_timestep: None,
+        field_refresh: None,
+        relaxation: Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
+            stop: RelaxStopIR {
+                torque_tolerance_apm: Some(1.0e-3),
+                energy_tolerance_j: None,
+                max_steps: Some(8),
+                max_relaxation_time_s: None,
+            },
+        }),
+        demag_realization: plan.demag_realization,
+        air_box_config: plan.air_box_config.clone(),
+        interfacial_dmi: plan.interfacial_dmi,
+        dmi_interface_normal: plan.dmi_interface_normal,
+        bulk_dmi: plan.bulk_dmi,
+        dind_field: None,
+        dbulk_field: None,
+        temperature: None,
+        current_density: None,
+        stt_degree: None,
+        stt_beta: None,
+        stt_spin_polarization: None,
+        stt_lambda: None,
+        stt_epsilon_prime: None,
+        stt_thickness: None,
+        stt_fixed_layer_position: None,
+        spin_torque_contract: None,
+        has_oersted_cylinder: false,
+        oersted_current: None,
+        oersted_radius: None,
+        oersted_center: None,
+        oersted_axis: None,
+        oersted_field_xyz: None,
+        oersted_time_dep_kind: 0,
+        oersted_time_dep_freq: 0.0,
+        oersted_time_dep_phase: 0.0,
+        oersted_time_dep_offset: 0.0,
+        oersted_time_dep_t_on: 0.0,
+        oersted_time_dep_t_off: 0.0,
+        magnetoelastic: None,
+        mechanics: None,
+        demag_solver_policy: None,
+        thermal_seed_config: None,
+        oersted_realization: None,
+        gpu_device_index: None,
+        mfem_device_string: None,
+        use_consistent_mass: None,
+    }
 }
 
 fn validate_planned_execution(
@@ -283,6 +478,14 @@ pub(crate) fn execute_planned_fem_eigen_with_progress_and_stage_handoff(
     progress: &mut FemEigenProgressCallback<'_>,
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        // Each physical sweep sample carries its own relaxed equilibrium.  The
+        // outer planned execution may still have produced a stage handoff, but
+        // that handoff represents one target only and is invalid for a
+        // multi-sample sweep.  Route directly through the planned sweep owner.
+        validate_planned_execution(execution, plan)?;
+        return execute_planned_bias_field_sweep(execution, plan, outputs, Some(progress));
+    }
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
     validate_planned_execution(execution, &prepared)?;
     let mut run = execute_fem_eigen_inner(
@@ -378,6 +581,9 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
     progress: &mut FemEigenProgressCallback<'_>,
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        return execute_bias_field_sweep(plan, outputs, false, Some(progress));
+    }
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
     let mut run = execute_fem_eigen_inner(
         &prepared,
@@ -497,6 +703,9 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
     progress: Option<&mut FemEigenProgressCallback<'_>>,
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<ExecutedRun, RunError> {
+    if bias_field_sweep_requested(plan) {
+        return execute_bias_field_sweep(plan, outputs, true, progress);
+    }
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
     if !native_gpu_shared_domain_modal_supported(&prepared) {
         return Err(RunError {
@@ -792,6 +1001,7 @@ pub(super) fn execute_fem_eigen_inner(
             max_iterations: None,
             residual: None,
             warning: None,
+            ..Default::default()
         },
     )?;
 
@@ -857,6 +1067,7 @@ pub(super) fn execute_fem_eigen_inner(
             max_iterations: None,
             residual: None,
             warning: dense_warning,
+            ..Default::default()
         },
     )?;
 
@@ -956,6 +1167,7 @@ pub(super) fn execute_fem_eigen_inner(
                     max_iterations: None,
                     residual: None,
                     warning: None,
+                    ..Default::default()
                 },
             )?;
             solve_real_symmetric_eigenpairs_sparse(
@@ -985,6 +1197,7 @@ pub(super) fn execute_fem_eigen_inner(
                     max_iterations: None,
                     residual: None,
                     warning: dense_warning,
+                    ..Default::default()
                 },
             )?;
             let eigenpairs = solve_real_symmetric_eigenpairs(plan, &stiffness, &mass)?;
@@ -1052,6 +1265,7 @@ pub(super) fn execute_fem_eigen_inner(
                     max_iterations: None,
                     residual: None,
                     warning: None,
+                    ..Default::default()
                 },
             )?;
             solve_real_symmetric_eigenpairs_sparse(
@@ -1081,6 +1295,7 @@ pub(super) fn execute_fem_eigen_inner(
                     max_iterations: None,
                     residual: None,
                     warning: dense_warning,
+                    ..Default::default()
                 },
             )?;
             let eigenpairs =
@@ -1176,6 +1391,7 @@ pub(super) fn execute_fem_eigen_inner(
             max_iterations: None,
             residual: None,
             warning: None,
+            ..Default::default()
         },
     )?;
 
@@ -1566,6 +1782,7 @@ pub(super) fn execute_fem_eigen_inner(
             max_iterations: None,
             residual: None,
             warning: None,
+            ..Default::default()
         },
     )?;
 

@@ -142,6 +142,18 @@ pub struct FrequencyDomainJsonArtifactResource {
     /// SHA-256 digest of the immutable JSON artifact bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_digest: Option<String>,
+    /// Actual session that owns the current immutable artifact directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Actual run that owns the current immutable artifact directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Actual stage that published the artifact, when available in live state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    /// Runtime mesh generation bound to the publishing stage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
     pub missing_reason: Option<String>,
 }
 
@@ -191,6 +203,18 @@ pub struct FrequencyDomainManifestArtifactPayload {
     pub analysis_family: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub study_product: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solve_succeeded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spectrum_completeness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_identity: Option<FrequencyDomainCandidateIdentityPayload>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -199,8 +223,39 @@ pub struct FrequencyDomainManifestArtifactPayload {
 pub struct FrequencyDomainSpectrumArtifactPayload {
     pub schema_version: String,
     pub samples: Vec<FrequencyDomainSpectrumSamplePayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solve_succeeded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spectrum_completeness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_identity: Option<FrequencyDomainCandidateIdentityPayload>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainCandidateIdentityPayload {
+    pub schema_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub equilibrium_artifact_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[schema(value_type = Object)]
+    pub source_identity: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -239,6 +294,18 @@ pub struct FrequencyDomainSpectrumModePayload {
 pub struct FrequencyDomainSpectrumV3ArtifactPayload {
     pub schema_version: String,
     pub samples: Vec<FrequencyDomainSpectrumV3SamplePayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solve_succeeded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spectrum_completeness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_identity: Option<FrequencyDomainCandidateIdentityPayload>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -439,6 +506,20 @@ pub struct FrequencyDomainModeArtifactPayload {
     pub component_basis: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_mesh_identity: Option<FrequencyDomainModeSourceMeshIdentityPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_spectrum_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solve_succeeded: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields_available: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spectrum_completeness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidate_identity: Option<FrequencyDomainCandidateIdentityPayload>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -1636,6 +1717,7 @@ async fn json_artifact_resource_first_existing(
     let artifact_dir = require_current_live_artifact_dir(state).await?;
     for artifact_path in artifact_paths {
         if try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some() {
+            let live_identity = frequency_domain_live_artifact_identity(state, artifact_path).await;
             let payload_value = read_json_artifact_value(&artifact_dir, artifact_path)?;
             let payload = decode_frequency_domain_artifact_payload(artifact_path, payload_value)?;
             let content_digest =
@@ -1648,6 +1730,10 @@ async fn json_artifact_resource_first_existing(
                 payload: Some(payload),
                 revision: Some(content_digest.clone()),
                 content_digest: Some(content_digest),
+                session_id: live_identity.session_id,
+                run_id: live_identity.run_id,
+                stage_id: live_identity.stage_id,
+                mesh_generation_id: live_identity.mesh_generation_id,
                 missing_reason: None,
             }));
         }
@@ -1664,8 +1750,86 @@ async fn json_artifact_resource_first_existing(
         payload: None,
         revision: None,
         content_digest: None,
+        session_id: None,
+        run_id: None,
+        stage_id: None,
+        mesh_generation_id: None,
         missing_reason: Some("artifact is not present in the active workspace".to_string()),
     }))
+}
+
+#[derive(Default)]
+struct FrequencyDomainLiveArtifactIdentity {
+    session_id: Option<String>,
+    run_id: Option<String>,
+    stage_id: Option<String>,
+    mesh_generation_id: Option<String>,
+}
+
+async fn frequency_domain_live_artifact_identity(
+    state: &Arc<AppState>,
+    artifact_path: &str,
+) -> FrequencyDomainLiveArtifactIdentity {
+    let current = state.current_live_state.read().await;
+    let Some(snapshot) = current.as_ref() else {
+        return FrequencyDomainLiveArtifactIdentity::default();
+    };
+    let expected_kind_fragment = if artifact_path.starts_with("eigen/") {
+        Some("eigen")
+    } else if artifact_path.starts_with("response/") {
+        Some("frequency")
+    } else {
+        None
+    };
+    let stage = snapshot.stage_execution.as_ref().and_then(|execution| {
+        execution
+            .stages
+            .iter()
+            .rev()
+            .find(|stage| {
+                stage.artifact_refs.iter().any(|reference| {
+                    reference == artifact_path || reference.ends_with(artifact_path)
+                })
+            })
+            .or_else(|| {
+                expected_kind_fragment.and_then(|fragment| {
+                    execution.stages.iter().rev().find(|stage| {
+                        stage
+                            .kind
+                            .as_deref()
+                            .is_some_and(|kind| kind.contains(fragment))
+                    })
+                })
+            })
+            .or_else(|| {
+                execution
+                    .active_stage_index
+                    .and_then(|index| execution.stages.get(index))
+            })
+    });
+    FrequencyDomainLiveArtifactIdentity {
+        session_id: Some(snapshot.session.session_id.clone()),
+        run_id: snapshot
+            .run
+            .as_ref()
+            .map(|run| run.run_id.clone())
+            .or_else(|| Some(snapshot.session.run_id.clone())),
+        stage_id: stage.and_then(|stage| stage.stage_id.clone()),
+        mesh_generation_id: stage
+            .and_then(|stage| stage.mesh_generation_id.clone())
+            .or_else(|| {
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .and_then(|live| live.latest_step.fem_mesh_generation_id.clone())
+            })
+            .or_else(|| {
+                snapshot
+                    .fem_mesh
+                    .as_ref()
+                    .and_then(|mesh| mesh.generation_id.clone())
+            }),
+    }
 }
 
 fn frequency_domain_artifact_content_digest(

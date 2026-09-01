@@ -2588,6 +2588,32 @@ fn fem_eigen_progress_update(
     if let Some(residual) = progress.residual {
         progress_scalars.insert("residual".to_string(), residual);
     }
+    if let Some(current_subwindow) = progress.current_subwindow {
+        progress_scalars.insert(
+            "current_subwindow".to_string(),
+            f64::from(current_subwindow),
+        );
+    }
+    if let Some(total_subwindows) = progress.total_subwindows {
+        progress_scalars.insert("total_subwindows".to_string(), f64::from(total_subwindows));
+    }
+    if let Some(subwindow_elapsed_seconds) = progress.subwindow_elapsed_seconds {
+        progress_scalars.insert(
+            "subwindow_elapsed_seconds".to_string(),
+            subwindow_elapsed_seconds,
+        );
+    }
+    if let Some(window_elapsed_seconds) = progress.window_elapsed_seconds {
+        progress_scalars.insert("window_elapsed_seconds".to_string(), window_elapsed_seconds);
+    }
+    progress_scalars.insert(
+        "window_phase_base".to_string(),
+        (progress.window_phase == Some("base")) as u8 as f64,
+    );
+    progress_scalars.insert(
+        "window_phase_refinement".to_string(),
+        (progress.window_phase == Some("refinement")) as u8 as f64,
+    );
     progress_scalars.insert(
         "phase_materializing_equilibrium".to_string(),
         (progress.phase == "materializing_equilibrium") as u8 as f64,

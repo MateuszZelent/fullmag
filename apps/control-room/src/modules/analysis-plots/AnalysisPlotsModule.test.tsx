@@ -1796,12 +1796,15 @@ describe("AnalysisPlotsView", () => {
       ref: {
         calculationMode: "fmr_response",
         fieldId: "analysis:frequency-response:frequency-0042",
+        frequencyHz: 12.5e9,
         frequencyIndex: 7,
         kind: "results.frequency_response.frequency_point",
         nodeId:
           "analysis:charts:frequency-domain:response-sweep:point:analysis.frequency-domain:response:amplitude:0",
         observableId: "mx",
         resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
+        representation: "complex-vector-xyz",
+        source: "frequency-response",
         type: "frequency-domain",
       },
     });
@@ -1856,12 +1859,15 @@ describe("AnalysisPlotsView", () => {
         artifactPath: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
         calculationMode: "free_modes",
         fieldId: "analysis:eigen:sample-0000:mode-0001",
+        frequencyHz: 9.5e9,
         kind: "results.eigen.mode",
         modeIndex: 1,
         nodeId:
           "analysis:charts:frequency-domain:eigen-spectrum:point:analysis.frequency-domain:eigen:spectrum:frequency:0",
         resourceRef: analysisFieldVectorResourceKey("analysis:eigen:sample-0000:mode-0001"),
+        representation: "complex-vector-xyz",
         sampleIndex: 0,
+        source: "eigen-mode",
         type: "frequency-domain",
       },
     });
@@ -1907,6 +1913,7 @@ describe("AnalysisPlotsView", () => {
         branchId: "acoustic",
         calculationMode: "dispersion_modal",
         fieldId: "analysis:eigen:sample-0004:mode-0005",
+        frequencyHz: 12.5e9,
         kind: "results.eigen.mode",
         modeIndex: 5,
         nodeId:
@@ -1914,7 +1921,9 @@ describe("AnalysisPlotsView", () => {
         resourceRef: analysisFieldVectorResourceKey(
           "analysis:eigen:sample-0004:mode-0005",
         ),
+        representation: "complex-vector-xyz",
         sampleIndex: 4,
+        source: "eigen-mode",
         type: "frequency-domain",
       },
     });

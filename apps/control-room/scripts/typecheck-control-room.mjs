@@ -7,19 +7,20 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = dirname(scriptDir);
 const nextEnvPath = join(appRoot, "next-env.d.ts");
 const nextEnvSnapshot = readFileSync(nextEnvPath, "utf8");
-const binSuffix = process.platform === "win32" ? ".cmd" : "";
-
-function runTool(tool, args) {
-  execFileSync(`${tool}${binSuffix}`, args, {
+function runNodeTool(modulePath, args) {
+  execFileSync(process.execPath, [modulePath, ...args], {
     cwd: appRoot,
     stdio: "inherit",
   });
 }
 
+const nextCli = join(appRoot, "node_modules", "next", "dist", "bin", "next");
+const tscCli = join(appRoot, "node_modules", "typescript", "bin", "tsc");
+
 try {
-  runTool("next", ["typegen", "."]);
+  runNodeTool(nextCli, ["typegen", "."]);
 } finally {
   writeFileSync(nextEnvPath, nextEnvSnapshot);
 }
 
-runTool("tsc", ["--noEmit", "--project", "tsconfig.typecheck.json"]);
+runNodeTool(tscCli, ["--noEmit", "--project", "tsconfig.typecheck.json"]);

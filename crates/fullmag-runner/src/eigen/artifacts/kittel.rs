@@ -1,10 +1,12 @@
 use super::common::*;
 use crate::eigen::types::{
-    K0KittelPeriodicAirboxDemagMetrics, PathSolveResult, SingleKModeResult, TrackedBranch,
+    EigenSolverModel, K0KittelPeriodicAirboxDemagMetrics, KSampleDescriptor, PathSolveResult,
+    SingleKModeResult, SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
 };
 use crate::types::AuxiliaryArtifact;
 use num_complex::Complex64;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::io::{Error, ErrorKind};
 use std::path::Path;
@@ -388,6 +390,547 @@ fn k0_kittel_expected_points(
                 h0_a_per_m,
                 expected_frequency_hz: k0_kittel_expected_frequency_hz(validation, h0_a_per_m)?,
             })
+        })
+        .collect()
+}
+
+/// Reconstruct the small `PathSolveResult` view needed by the Kittel selector
+/// from the canonical physical bias-field sweep artifacts.  The sweep owner
+/// executes every sample independently; this adapter is deliberately
+/// post-solve only and never feeds the analytical reference back into the
+/// native operator.
+pub(crate) fn k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep(
+    validation: &fullmag_ir::FemEigenK0KittelValidationIR,
+    spectrum: &Value,
+    branches: &Value,
+    diagnostics: &Value,
+    artifacts: &[AuxiliaryArtifact],
+    mesh_resolution_m: f64,
+    airbox_size_m: f64,
+) -> std::io::Result<Vec<AuxiliaryArtifact>> {
+    let solver_model = solver_model_from_bias_field_sweep(spectrum, diagnostics);
+    let branch_map = bias_field_branch_map(branches);
+    let samples = spectrum
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            invalid_k0_kittel_artifact("physical Kittel adapter requires spectrum.samples")
+        })?;
+    if samples.is_empty() {
+        return Err(invalid_k0_kittel_artifact(
+            "physical Kittel adapter requires at least one solved sample",
+        ));
+    }
+
+    let mut path_samples = Vec::with_capacity(samples.len());
+    for sample in samples {
+        let sample_index = required_usize(sample, "sample_index", "spectrum sample")?;
+        let k_vector = array3(sample.get("k_vector"), "k_vector", "spectrum sample")?;
+        let sample_diagnostics = diagnostics
+            .get("sample_solver_diagnostics")
+            .and_then(Value::as_array)
+            .and_then(|entries| {
+                entries.iter().find(|entry| {
+                    entry.get("sample_index").and_then(Value::as_u64) == Some(sample_index as u64)
+                })
+            })
+            .and_then(|entry| entry.get("diagnostics"))
+            .cloned()
+            .or_else(|| Some(diagnostics.clone()));
+        let modes_json = sample
+            .get("modes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                invalid_k0_kittel_artifact(format!(
+                    "physical Kittel adapter sample {sample_index} has no modes"
+                ))
+            })?;
+        let mut modes = Vec::with_capacity(modes_json.len());
+        for mode_json in modes_json {
+            let raw_mode_index = mode_json
+                .get("raw_mode_index")
+                .or_else(|| mode_json.get("index"))
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    invalid_k0_kittel_artifact(format!(
+                        "physical Kittel adapter sample {sample_index} has a mode without raw_mode_index"
+                    ))
+                })? as usize;
+            let metadata = find_bias_field_mode_metadata(artifacts, sample_index, raw_mode_index);
+            let (reduced_vector, lifted_real, lifted_imag, node_mass_weights) = metadata
+                .as_ref()
+                .map(|metadata| parse_bias_field_mode_vectors(metadata, artifacts))
+                .transpose()?
+                .unwrap_or_default();
+            let branch_id = mode_json
+                .get("branch_id")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .or_else(|| branch_map.get(&(sample_index, raw_mode_index)).copied());
+            modes.push(SingleKModeResult {
+                raw_mode_index,
+                branch_id,
+                frequency_real_hz: finite_json_f64(
+                    mode_json,
+                    &["frequency_real_hz", "frequency_hz"],
+                )
+                .unwrap_or(0.0),
+                frequency_imag_hz: finite_json_f64(mode_json, &["frequency_imag_hz"])
+                    .unwrap_or(0.0),
+                angular_frequency_rad_per_s: finite_json_f64(
+                    mode_json,
+                    &["angular_frequency_rad_per_s", "omega_rad_s"],
+                )
+                .unwrap_or(0.0),
+                eigenvalue_real: finite_json_f64(mode_json, &["eigenvalue_real"]).unwrap_or(0.0),
+                eigenvalue_imag: finite_json_f64(mode_json, &["eigenvalue_imag"]).unwrap_or(0.0),
+                norm: finite_json_f64(mode_json, &["norm"]).unwrap_or(1.0),
+                mass_norm: finite_json_f64(mode_json, &["mass_norm"]),
+                max_amplitude: finite_json_f64(mode_json, &["max_amplitude"]).unwrap_or(0.0),
+                residual_norm: finite_json_f64(
+                    mode_json,
+                    &["residual_relative_l2", "residual_norm"],
+                ),
+                residual_linf: finite_json_f64(mode_json, &["residual_linf"]),
+                tangent_leakage_mean_abs: finite_json_f64(mode_json, &["tangent_leakage_mean_abs"]),
+                tangent_leakage_max_abs: finite_json_f64(mode_json, &["tangent_leakage_max_abs"]),
+                tangent_leakage_weighted_relative_l2: finite_json_f64(
+                    mode_json,
+                    &["tangent_leakage_weighted_relative_l2"],
+                ),
+                dominant_polarization: mode_json
+                    .get("dominant_polarization")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                reduced_vector,
+                lifted_real,
+                lifted_imag,
+                amplitude: None,
+                phase: None,
+                node_mass_weights,
+                component_participation:
+                    crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                        solver_model_device(solver_model),
+                    ),
+            });
+        }
+        path_samples.push(SingleKSolveResult {
+            sample: KSampleDescriptor {
+                sample_index,
+                label: sample
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                segment_index: sample
+                    .get("segment_index")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize),
+                path_s: sample.get("path_s").and_then(Value::as_f64).unwrap_or(0.0),
+                t_in_segment: sample
+                    .get("t_in_segment")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+                k_vector,
+            },
+            modes,
+            relaxation_steps: 0,
+            solver_model,
+            solver_notes: vec!["physical bias-field sweep postsolve adapter".to_string()],
+            solver_diagnostics: sample_diagnostics,
+        });
+    }
+
+    let tracked_branches = branches_from_bias_field_sweep(branches);
+    if tracked_branches.is_empty() {
+        return Err(invalid_k0_kittel_artifact(
+            "physical Kittel adapter requires tracked branches",
+        ));
+    }
+    let metrics_diagnostics = path_samples
+        .first()
+        .and_then(sample_native_solver_diagnostics)
+        .ok_or_else(|| {
+            invalid_k0_kittel_artifact(
+                "physical Kittel adapter requires per-sample native diagnostics",
+            )
+        })?;
+    let metrics = K0KittelPeriodicAirboxDemagMetrics {
+        mesh_resolution_m,
+        airbox_size_m,
+        phi_dof_count: required_u64_any(
+            metrics_diagnostics,
+            &["phi_dof_count", "augmented_phi_dof_count"],
+            "phi_dof_count",
+        )?,
+        augmented_phi_dof_count: required_u64_any(
+            metrics_diagnostics,
+            &["augmented_phi_dof_count", "phi_dof_count"],
+            "augmented_phi_dof_count",
+        )?,
+        poisson_constraint_relative_residual: required_f64_any(
+            metrics_diagnostics,
+            &["poisson_constraint_relative_residual"],
+            "poisson_constraint_relative_residual",
+        )?,
+        magnetic_pair_count: required_u64_any(
+            metrics_diagnostics,
+            &["magnetic_pair_count"],
+            "magnetic_pair_count",
+        )?,
+        airbox_pair_count: required_u64_any(
+            metrics_diagnostics,
+            &["airbox_pair_count"],
+            "airbox_pair_count",
+        )?,
+        effective_magnetisation_a_per_m: validation
+            .material
+            .effective_magnetisation
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| {
+                invalid_k0_kittel_artifact(
+                    "physical Kittel adapter requires positive effective_magnetisation",
+                )
+            })?,
+        // This field is replaced by the selected branch's independently
+        // computed error in `k0_kittel_validation_auxiliary_artifacts`.
+        relative_kittel_frequency_error: 0.0,
+    };
+    let result = PathSolveResult {
+        samples: path_samples,
+        branches: tracked_branches,
+        solver_model,
+        notes: vec!["physical bias-field sweep postsolve adapter".to_string()],
+        include_demag: true,
+        dispersion_validation: None,
+        k0_kittel_validation: Some(validation.clone()),
+        dispersion_analytic_reference: None,
+        k0_kittel_periodic_airbox_demag: Some(metrics),
+    };
+    let mut output = k0_kittel_validation_auxiliary_artifacts(&result)?;
+    if let Some(fit) = build_kittel_fit_artifact(&result)? {
+        output.push(AuxiliaryArtifact {
+            relative_path: "fmr/kittel_fit.v1.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&fit).map_err(|error| {
+                invalid_k0_kittel_artifact(format!(
+                    "failed to serialize physical Kittel fit artifact: {error}"
+                ))
+            })?,
+        });
+    }
+    Ok(output)
+}
+
+fn required_usize(value: &Value, key: &str, context: &str) -> std::io::Result<usize> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| invalid_k0_kittel_artifact(format!("{context} is missing integer {key}")))
+}
+
+fn array3(value: Option<&Value>, key: &str, context: &str) -> std::io::Result<[f64; 3]> {
+    let values = value
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 3)
+        .ok_or_else(|| invalid_k0_kittel_artifact(format!("{context} is missing {key}[3]")))?;
+    let mut result = [0.0; 3];
+    for (index, value) in values.iter().enumerate() {
+        result[index] = value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| {
+                invalid_k0_kittel_artifact(format!("{context} has non-finite {key}[{index}]"))
+            })?;
+    }
+    Ok(result)
+}
+
+fn finite_json_f64(value: &Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite())
+    })
+}
+
+fn required_u64_any(value: &Value, keys: &[&str], label: &str) -> std::io::Result<u64> {
+    keys.iter()
+        .find_map(|key| {
+            value.get(*key).and_then(Value::as_u64).or_else(|| {
+                value
+                    .get("periodic_mesh_certificate")
+                    .and_then(|certificate| certificate.get(*key))
+                    .and_then(Value::as_u64)
+            })
+        })
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            invalid_k0_kittel_artifact(format!("native diagnostics are missing positive {label}"))
+        })
+}
+
+fn required_f64_any(value: &Value, keys: &[&str], label: &str) -> std::io::Result<f64> {
+    keys.iter()
+        .find_map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+        })
+        .ok_or_else(|| {
+            invalid_k0_kittel_artifact(format!("native diagnostics are missing finite {label}"))
+        })
+}
+
+fn solver_model_device(model: EigenSolverModel) -> &'static str {
+    match model {
+        EigenSolverModel::ProductionGpuDenseK0Macrospin
+        | EigenSolverModel::ProductionGpuModalDeviceKrylov => "gpu",
+        _ => "cpu",
+    }
+}
+
+fn solver_model_from_bias_field_sweep(spectrum: &Value, diagnostics: &Value) -> EigenSolverModel {
+    let name = spectrum
+        .get("solver_model")
+        .or_else(|| spectrum.get("solver_id"))
+        .or_else(|| diagnostics.get("solver_model"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match name {
+        "k0_poisson_airbox_gpu_petsc_slepc"
+        | "k0_poisson_airbox_gpu_modal_device_krylov"
+        | "gpu_modal_device_krylov" => EigenSolverModel::ProductionGpuModalDeviceKrylov,
+        "gpu_dense_k0_macrospin_modal_eigen" => EigenSolverModel::ProductionGpuDenseK0Macrospin,
+        "k0_poisson_airbox_cpu_schur_slepc" | "slepc_multi_shift_invert_production_cpu_dense" => {
+            EigenSolverModel::ProductionCpuShiftInvert
+        }
+        _ => EigenSolverModel::ReferenceFull2x2Tangent,
+    }
+}
+
+fn bias_field_branch_map(branches: &Value) -> std::collections::BTreeMap<(usize, usize), usize> {
+    let mut map = std::collections::BTreeMap::new();
+    for branch in branches
+        .get("branches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(branch_id) = branch.get("branch_id").and_then(Value::as_u64) else {
+            continue;
+        };
+        for point in branch
+            .get("points")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let (Some(sample_index), Some(raw_mode_index)) = (
+                point.get("sample_index").and_then(Value::as_u64),
+                point.get("raw_mode_index").and_then(Value::as_u64),
+            ) else {
+                continue;
+            };
+            map.insert(
+                (sample_index as usize, raw_mode_index as usize),
+                branch_id as usize,
+            );
+        }
+    }
+    map
+}
+
+fn branches_from_bias_field_sweep(branches: &Value) -> Vec<TrackedBranch> {
+    branches
+        .get("branches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|branch| {
+            let branch_id = branch.get("branch_id").and_then(Value::as_u64)? as usize;
+            let points = branch
+                .get("points")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|point| {
+                    Some(TrackedBranchPoint {
+                        sample_index: point.get("sample_index").and_then(Value::as_u64)? as usize,
+                        raw_mode_index: point.get("raw_mode_index").and_then(Value::as_u64)?
+                            as usize,
+                        frequency_real_hz: finite_json_f64(
+                            point,
+                            &["frequency_real_hz", "frequency_hz"],
+                        )?,
+                        frequency_imag_hz: finite_json_f64(point, &["frequency_imag_hz"])
+                            .unwrap_or(0.0),
+                        tracking_confidence: finite_json_f64(point, &["tracking_confidence"])
+                            .unwrap_or(1.0),
+                        overlap_prev: finite_json_f64(point, &["overlap_prev"]),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Some(TrackedBranch {
+                branch_id,
+                label: branch
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                points,
+            })
+        })
+        .collect()
+}
+
+fn find_bias_field_mode_metadata(
+    artifacts: &[AuxiliaryArtifact],
+    sample_index: usize,
+    raw_mode_index: usize,
+) -> Option<Value> {
+    let paths = [
+        format!("eigen/modes/sample_{sample_index:04}/mode_{raw_mode_index:04}.json"),
+        format!("eigen/modes/sample_{sample_index:04}_mode_{raw_mode_index:04}.json"),
+    ];
+    paths.iter().find_map(|path| {
+        artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == *path)
+            .and_then(|artifact| serde_json::from_slice::<Value>(&artifact.bytes).ok())
+    })
+}
+
+fn parse_bias_field_mode_vectors(
+    metadata: &Value,
+    artifacts: &[AuxiliaryArtifact],
+) -> std::io::Result<(
+    Option<Vec<Complex64>>,
+    Option<Vec<[f64; 3]>>,
+    Option<Vec<[f64; 3]>>,
+    Option<Vec<f64>>,
+)> {
+    let mut real = vec3_array(metadata.get("real"));
+    let mut imag = vec3_array(metadata.get("imag"));
+    let mut weights = metadata
+        .get("node_mass_weights")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| {
+                    value
+                        .as_f64()
+                        .filter(|value| value.is_finite() && *value > 0.0)
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty());
+    if real.is_empty() && imag.is_empty() {
+        let payload_path = metadata
+            .get("compatibility_binary_payload_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                invalid_k0_kittel_artifact(
+                    "physical Kittel adapter mode metadata has no Cartesian payload",
+                )
+            })?;
+        let payload = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == payload_path)
+            .ok_or_else(|| {
+                invalid_k0_kittel_artifact(format!(
+                    "physical Kittel adapter is missing mode payload {payload_path}"
+                ))
+            })?;
+        let (payload_real, payload_imag) = parse_complex_xyz_binary_payload(&payload.bytes)?;
+        real = payload_real;
+        imag = payload_imag;
+    } else if real.len() != imag.len() {
+        return Err(invalid_k0_kittel_artifact(
+            "physical Kittel adapter mode metadata has asymmetric real/imag payloads",
+        ));
+    }
+    if let Some(weights_ref) = weights.as_ref() {
+        let count = weights_ref.len();
+        if real.len() > count {
+            real.truncate(count);
+        }
+        if imag.len() > count {
+            imag.truncate(count);
+        }
+    }
+    let count = real.len().max(imag.len());
+    if count == 0 {
+        return Ok((None, None, None, weights));
+    }
+    let mut reduced = Vec::with_capacity(count * 3);
+    for index in 0..count {
+        let r = real.get(index).copied().unwrap_or([0.0; 3]);
+        let i = imag.get(index).copied().unwrap_or([0.0; 3]);
+        for component in 0..3 {
+            reduced.push(Complex64::new(r[component], i[component]));
+        }
+    }
+    if weights.as_ref().is_some_and(|values| values.len() != count) {
+        weights = None;
+    }
+    Ok((Some(reduced), Some(real), Some(imag), weights))
+}
+
+fn parse_complex_xyz_binary_payload(
+    bytes: &[u8],
+) -> std::io::Result<(Vec<[f64; 3]>, Vec<[f64; 3]>)> {
+    const BYTES_PER_NODE: usize = 3 * 2 * std::mem::size_of::<f64>();
+    if bytes.is_empty() || bytes.len() % BYTES_PER_NODE != 0 {
+        return Err(invalid_k0_kittel_artifact(
+            "physical Kittel adapter mode payload is not f64 interleaved real/imag xyz",
+        ));
+    }
+    let node_count = bytes.len() / BYTES_PER_NODE;
+    let mut real = Vec::with_capacity(node_count);
+    let mut imag = Vec::with_capacity(node_count);
+    for node_bytes in bytes.chunks_exact(BYTES_PER_NODE) {
+        let mut node_real = [0.0; 3];
+        let mut node_imag = [0.0; 3];
+        for component in 0..3 {
+            let offset = component * 2 * std::mem::size_of::<f64>();
+            let real_bytes: [u8; 8] = node_bytes[offset..offset + 8]
+                .try_into()
+                .expect("f64 payload slice has fixed width");
+            let imag_bytes: [u8; 8] = node_bytes[offset + 8..offset + 16]
+                .try_into()
+                .expect("f64 payload slice has fixed width");
+            node_real[component] = f64::from_le_bytes(real_bytes);
+            node_imag[component] = f64::from_le_bytes(imag_bytes);
+            if !node_real[component].is_finite() || !node_imag[component].is_finite() {
+                return Err(invalid_k0_kittel_artifact(
+                    "physical Kittel adapter mode payload contains a non-finite value",
+                ));
+            }
+        }
+        real.push(node_real);
+        imag.push(node_imag);
+    }
+    Ok((real, imag))
+}
+
+fn vec3_array(value: Option<&Value>) -> Vec<[f64; 3]> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let values = entry.as_array()?;
+            if values.len() != 3 {
+                return None;
+            }
+            Some([
+                values[0].as_f64().filter(|value| value.is_finite())?,
+                values[1].as_f64().filter(|value| value.is_finite())?,
+                values[2].as_f64().filter(|value| value.is_finite())?,
+            ])
         })
         .collect()
 }
@@ -809,7 +1352,8 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
     let Some(validation) = result.k0_kittel_validation.as_ref() else {
         return Ok(Vec::new());
     };
-    let periodic_airbox_metrics = if validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+    let mut periodic_airbox_metrics = if validation.demag_kind.as_deref()
+        == Some("periodic_airbox_k0")
     {
         let metrics = result.k0_kittel_periodic_airbox_demag.as_ref().ok_or_else(|| {
             invalid_k0_kittel_artifact(
@@ -817,7 +1361,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
             )
         })?;
         validate_k0_kittel_periodic_airbox_metrics(validation, metrics)?;
-        Some(metrics)
+        Some(metrics.clone())
     } else {
         None
     };
@@ -832,6 +1376,15 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
             "no tracked eigen branch covers all declared K0 Kittel validation samples",
         )
     })?;
+
+    // The native PA-E4b diagnostics carry structural Poisson metrics, while
+    // the Kittel frequency comparison is intentionally performed only here,
+    // after the physical sweep has produced its modes.  Keep the convergence
+    // receipt honest by replacing the legacy placeholder with the selected
+    // branch's independently computed maximum error.
+    if let Some(metrics) = periodic_airbox_metrics.as_mut() {
+        metrics.relative_kittel_frequency_error = selected_branch.max_relative_frequency_error;
+    }
 
     let tolerance = validation.relative_tolerance;
     let status = if tolerance.is_finite()
@@ -874,7 +1427,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
         .iter()
         .map(|point| point.mode_residual_relative)
         .fold(0.0, f64::max);
-    let demag = if let Some(metrics) = periodic_airbox_metrics {
+    let demag = if let Some(metrics) = periodic_airbox_metrics.as_ref() {
         serde_json::json!({
             "kind": k0_kittel_validation_demag_kind(validation),
             "effective_magnetisation_A_per_m": metrics.effective_magnetisation_a_per_m,
@@ -948,7 +1501,7 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
     if let Some(metrics) = periodic_airbox_metrics {
         artifacts.push(AuxiliaryArtifact {
             relative_path: "validation/kittel_k0_pbc/convergence.v1.csv".to_string(),
-            bytes: k0_kittel_periodic_airbox_convergence_csv_bytes(validation, metrics),
+            bytes: k0_kittel_periodic_airbox_convergence_csv_bytes(validation, &metrics),
         });
     }
     Ok(artifacts)

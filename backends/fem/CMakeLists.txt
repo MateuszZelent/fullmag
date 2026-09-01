@@ -877,6 +877,16 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
+    # This contract intentionally keeps several ~800 KiB diagnostics records
+    # alive in distinct test functions. Release inlining can merge them into a
+    # multi-megabyte main frame and overflow the standard container stack
+    # before the GPU assertions run.
+    target_compile_options(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang>:-fno-inline>
+            $<$<CXX_COMPILER_ID:MSVC>:/Ob0>
+    )
     add_test(
         NAME fem_gpu_k0_modal_petsc_slepc_contract
         COMMAND fem_gpu_k0_modal_petsc_slepc_contract

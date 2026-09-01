@@ -53,8 +53,8 @@ pub(crate) async fn submit_structured_command_impl(
     headers: &HeaderMap,
     mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
-    enforce_session_command_admission(&state).await?;
     reject_imported_read_only_command(&state).await?;
+    enforce_session_command_admission(&state).await?;
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
     if request_has_adaptive_solver_policy(&req) {

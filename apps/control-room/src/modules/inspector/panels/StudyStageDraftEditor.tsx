@@ -747,9 +747,13 @@ function SpectralStageDraftFields({
   const showOperator =
     view === "overview" || view === "operator" || view === "solver";
   const showBoundary =
-    view === "overview" || view === "boundary" || view === "periodic_pairs";
+    view === "overview" ||
+    view === "setup" ||
+    view === "boundary" ||
+    view === "periodic_pairs";
   const showKSampling =
     view === "overview" ||
+    view === "setup" ||
     view === "k_sampling" ||
     view === "k_path" ||
     view === "k_grid";
@@ -881,7 +885,7 @@ function SpectralStageDraftFields({
             value={draft.bc}
             onChange={(event) => onUpdate({ bc: event.target.value })}
           />
-          {draft.kind === "frequency_response" ? (
+          {draft.kind === "eigenmodes" || draft.kind === "frequency_response" ? (
             <FormField
               label="Magnetostatic BC"
               type="select"

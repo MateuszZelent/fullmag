@@ -1570,7 +1570,7 @@ fn fem_physics_terms(fem: &fullmag_ir::FemPlanIR) -> Vec<String> {
     terms
 }
 
-fn solver_mesh_signature(mesh: &fullmag_ir::MeshIR) -> String {
+pub(crate) fn solver_mesh_signature(mesh: &fullmag_ir::MeshIR) -> String {
     let payload = serde_json::json!({
         "nodes": mesh.nodes,
         "cells": mesh.cells,

@@ -173,6 +173,86 @@ WindowSpectrumFixture make_window_spectrum_fixture(
     return fixture;
 }
 
+WindowSpectrumFixture make_sparse_production_scale_fixture(
+    std::uint64_t block_count,
+    double first_frequency_hz,
+    double frequency_step_hz)
+{
+    constexpr double two_pi = 6.283185307179586476925286766559;
+    constexpr double pencil_scale = 1.0e-18;
+    WindowSpectrumFixture fixture{};
+    fixture.q_count = 2u * block_count;
+
+    fixture.a_qq.rows = fixture.q_count;
+    fixture.a_qq.columns = fixture.q_count;
+    fixture.a_qq.row_offsets.reserve(
+        static_cast<std::size_t>(fixture.q_count + 1u));
+    fixture.a_qq.column_indices.reserve(
+        static_cast<std::size_t>(fixture.q_count));
+    fixture.a_qq.values.reserve(static_cast<std::size_t>(fixture.q_count));
+    fixture.a_qq.row_offsets.push_back(0u);
+
+    fixture.b_qq.rows = fixture.q_count;
+    fixture.b_qq.columns = fixture.q_count;
+    fixture.b_qq.row_offsets.reserve(
+        static_cast<std::size_t>(fixture.q_count + 1u));
+    fixture.b_qq.column_indices.reserve(
+        static_cast<std::size_t>(fixture.q_count));
+    fixture.b_qq.values.reserve(static_cast<std::size_t>(fixture.q_count));
+    fixture.b_qq.row_offsets.push_back(0u);
+
+    for (std::uint64_t block = 0u; block < block_count; ++block) {
+        const std::uint32_t first = static_cast<std::uint32_t>(2u * block);
+        const std::uint32_t second = first + 1u;
+        const double frequency_hz =
+            first_frequency_hz + frequency_step_hz * static_cast<double>(block);
+        const double omega = two_pi * frequency_hz;
+
+        fixture.a_qq.column_indices.push_back(second);
+        fixture.a_qq.values.push_back(-pencil_scale * omega);
+        fixture.a_qq.row_offsets.push_back(
+            static_cast<std::uint32_t>(fixture.a_qq.values.size()));
+        fixture.a_qq.column_indices.push_back(first);
+        fixture.a_qq.values.push_back(pencil_scale * omega);
+        fixture.a_qq.row_offsets.push_back(
+            static_cast<std::uint32_t>(fixture.a_qq.values.size()));
+
+        fixture.b_qq.column_indices.push_back(first);
+        fixture.b_qq.values.push_back(pencil_scale);
+        fixture.b_qq.row_offsets.push_back(
+            static_cast<std::uint32_t>(fixture.b_qq.values.size()));
+        fixture.b_qq.column_indices.push_back(second);
+        fixture.b_qq.values.push_back(pencil_scale);
+        fixture.b_qq.row_offsets.push_back(
+            static_cast<std::uint32_t>(fixture.b_qq.values.size()));
+    }
+
+    fixture.a_qphi.rows = fixture.q_count;
+    fixture.a_qphi.columns = 1u;
+    fixture.a_qphi.row_offsets.reserve(
+        static_cast<std::size_t>(fixture.q_count + 1u));
+    fixture.a_qphi.row_offsets.push_back(0u);
+    fixture.a_qphi.column_indices.push_back(0u);
+    fixture.a_qphi.values.push_back(-pencil_scale * 1.5e8);
+    fixture.a_qphi.row_offsets.push_back(1u);
+    for (std::uint64_t row = 1u; row < fixture.q_count; ++row) {
+        fixture.a_qphi.row_offsets.push_back(1u);
+    }
+
+    fixture.a_phiq.rows = 1u;
+    fixture.a_phiq.columns = fixture.q_count;
+    fixture.a_phiq.row_offsets = {0u, 1u};
+    fixture.a_phiq.column_indices = {1u};
+    fixture.a_phiq.values = {pencil_scale};
+
+    fixture.a_phiphi.rows = 1u;
+    fixture.a_phiphi.columns = 1u;
+    fixture.a_phiphi.row_offsets = {0u, 1u};
+    fixture.a_phiphi.column_indices = {0u};
+    fixture.a_phiphi.values = {pencil_scale};
+    return fixture;
+}
+
 struct WindowProgressControl {
     CsrOwned *a_qq = nullptr;
     std::uint32_t original_first_row_offset = 0u;
@@ -180,6 +260,9 @@ struct WindowProgressControl {
     bool cancel = false;
     bool inject_refinement_failure = false;
     bool row_offsets_corrupted = false;
+    bool saw_first_base_position = false;
+    bool saw_first_refinement_position = false;
+    bool saw_timed_completion = false;
 };
 
 int window_cancel_requested(void *user_data)
@@ -201,6 +284,20 @@ void window_progress(void *user_data, const char *progress_json)
     const bool refinement_subwindow = contains(
         progress_json,
         "\"solver_phase\":\"frequency_window_refinement_subwindow\"");
+    control->saw_first_base_position = control->saw_first_base_position ||
+        (contains(progress_json, "\"window_phase\":\"base\"") &&
+         contains(progress_json, "\"current_subwindow\":1") &&
+         contains(progress_json, "\"total_subwindows\":50"));
+    control->saw_first_refinement_position =
+        control->saw_first_refinement_position ||
+        (refinement_subwindow &&
+         contains(progress_json, "\"window_phase\":\"refinement\"") &&
+         contains(progress_json, "\"current_subwindow\":17") &&
+         contains(progress_json, "\"total_subwindows\":50"));
+    control->saw_timed_completion = control->saw_timed_completion ||
+        (contains(progress_json,
+                  "\"solver_phase\":\"frequency_window_subwindow_complete\"") &&
+         !contains(progress_json, "\"subwindow_elapsed_seconds\":0,"));
     if (control->inject_refinement_failure && refinement_subwindow &&
         contains(progress_json, "\"outer_iteration\":0")) {
         control->a_qq->row_offsets[0] = 1u;
@@ -235,10 +332,13 @@ void FrequencyWindowPublishesCompleteGpuCertificate()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
         {0.25e9, 1.0e9, 2.0e9, 3.0e9});
-    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+    fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
         0.5e9,
         2.5e9,
         2u);
+    WindowProgressControl control{};
+    problem.progress_user_data = &control;
+    problem.progress_callback = &window_progress;
     fd::PoissonAirboxModalEigenResult result{};
     const fd::FrequencyDomainStatus status =
         fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &result);
@@ -273,6 +373,10 @@ void FrequencyWindowPublishesCompleteGpuCertificate()
           "certified GPU window must contain complete certificate and schedule JSON");
     check(contains(result.diagnostics_json, "\"fallback_used\":false"),
           "GPU frequency window must never use a CPU fallback");
+    check(control.saw_first_base_position &&
+              control.saw_first_refinement_position &&
+              control.saw_timed_completion,
+          "GPU window progress must publish global base/refinement position and timing");
 }
 
 void FrequencyWindowCertifiesDegenerateGpuSubspace()
@@ -401,7 +505,7 @@ void FrequencyWindowCancelsBetweenGpuPasses()
           "GPU cancellation certificate must show an unexecuted cancelled refinement pass");
 }
 
-void FrequencyWindowFailsClosedWhenGpuScheduleTruncates()
+void FrequencyWindowPublishesHighOccupancyGpuScheduleWithoutTruncation()
 {
     std::vector<double> frequencies{0.25e9};
     for (std::uint32_t index = 0; index < 15u; ++index) {
@@ -414,18 +518,23 @@ void FrequencyWindowFailsClosedWhenGpuScheduleTruncates()
         2.6e9,
         15u);
     fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &result);
     check(
-        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &result) ==
-            fd::FrequencyDomainStatus::solve_error,
-        "truncated GPU window schedule must fail closed");
-    check(!result.window_complete &&
-              std::strcmp(result.stop_reason,
-                          "frequency_window_certificate_truncated") == 0,
-          "GPU schedule truncation must use the canonical certificate-truncated reason");
-    check(contains(result.window_certificate_json, "\"truncated\":true") &&
+        status == fd::FrequencyDomainStatus::ok,
+        "high-occupancy GPU window schedule must solve successfully");
+    check(result.window_complete &&
+              std::strcmp(result.stop_reason, "window_complete") == 0,
+          "high-occupancy GPU schedule must remain completely certified");
+    check(result.accepted_mode_count == 15u &&
+              result.window_subwindow_count == 50u &&
+              result.window_completed_subwindow_count == 50u &&
+              result.window_failed_subwindow_count == 0u,
+          "high-occupancy GPU schedule must retain all requested modes and shifts");
+    check(!contains(result.window_certificate_json, "\"truncated\":true") &&
               contains(result.window_certificate_json,
                        "\"method\":\"shift_nev_refinement_subspace_v1\""),
-          "GPU truncation must preserve schema method and explicit truncation evidence");
+          "high-occupancy GPU certificate must preserve the canonical method without truncation");
 }
 
 void PersistentGpuTargetUpdateAcceptsDifferentSparsePatterns()
@@ -482,7 +591,7 @@ int run_n3_w1_focused_tests()
     FrequencyWindowRejectsSplitGpuCluster();
     FrequencyWindowFailsClosedForGpuSubwindowFailure();
     FrequencyWindowCancelsBetweenGpuPasses();
-    FrequencyWindowFailsClosedWhenGpuScheduleTruncates();
+    FrequencyWindowPublishesHighOccupancyGpuScheduleWithoutTruncation();
     check(
         fd::finalize_poisson_airbox_modal_eigen_gpu_petsc_slepc_runtime() ==
             fd::FrequencyDomainStatus::ok,
@@ -992,10 +1101,102 @@ int run_n3_w2_focused_tests()
     return 0;
 }
 
+int run_production_scale_focused_test()
+{
+    constexpr std::uint64_t default_block_count = 513u;
+    // Keep the adapter-scale gate away from an exact synthetic eigenvalue.
+    // STSINVERT is singular when the requested shift lands on a mode; the
+    // separate target override below is available for explicit near-shift
+    // diagnostics without weakening this >1024-DOF capacity gate.
+    constexpr double default_target_frequency_hz = 5.0e9;
+    const char *requested_block_count =
+        std::getenv("FULLMAG_GPU_PRODUCTION_SCALE_BLOCK_COUNT");
+    const std::uint64_t block_count = requested_block_count == nullptr
+        ? default_block_count
+        : static_cast<std::uint64_t>(std::strtoull(requested_block_count, nullptr, 10));
+    const char *requested_target_frequency =
+        std::getenv("FULLMAG_GPU_PRODUCTION_SCALE_TARGET_HZ");
+    const double target_frequency_hz = requested_target_frequency == nullptr
+        ? default_target_frequency_hz
+        : std::strtod(requested_target_frequency, nullptr);
+    check(block_count > 0u,
+          "production GPU scale block count must be positive");
+    check(std::isfinite(target_frequency_hz) && target_frequency_hz > 0.0,
+          "production GPU scale target frequency must be finite and positive");
+    const WindowSpectrumFixture fixture = make_sparse_production_scale_fixture(
+        block_count,
+        1.0e9,
+        5.0e6);
+    fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        0.0,
+        0.0,
+        1u);
+    problem.target_kind = "nearest_frequency";
+    problem.target_frequency_hz = target_frequency_hz;
+    problem.residual_tolerance = 1.0e-6;
+    problem.max_outer_iterations = 256u;
+    problem.max_linear_iterations = 1024u;
+    problem.validation_only_adapter = false;
+    problem.production_shared_domain = true;
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.mesh_generation_identity = "gpu-scale-mesh-generation-v1";
+    problem.equilibrium_digest = "gpu-scale-equilibrium-v1";
+    problem.bias_field_sample_signature = "gpu-scale-bias-v1";
+    problem.boundary_gauge_digest = "gpu-scale-boundary-v1";
+    problem.operator_input_digest = "gpu-scale-operator-v1";
+
+    fd::PoissonAirboxModalEigenResult result{};
+    const fd::FrequencyDomainStatus status =
+        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &result);
+    if (status != fd::FrequencyDomainStatus::ok) {
+        std::fprintf(stderr, "GPU production-scale diagnostics: %s\n", result.diagnostics_json);
+    }
+    check(status == fd::FrequencyDomainStatus::ok, result.error_message);
+    check(result.q_dof_count == 2u * block_count &&
+              result.augmented_dof_count == 2u * block_count + 1u,
+          "production GPU scale gate must report the requested physical block DOFs");
+    check(result.full_residual_certified && result.accepted_mode_count >= 1u,
+          "production GPU scale gate must retain a fully certified mode");
+    check(result.device_residency_verified,
+          "production GPU scale gate must verify PETSc/SLEPc CUDA residency");
+    check(contains(result.diagnostics_json, "\"execution_lane\":\"production_gpu\"") &&
+              contains(result.diagnostics_json, "\"production_implication\":true") &&
+              contains(result.diagnostics_json, "\"validation_only\":false"),
+          "production GPU scale gate must not run through the bounded validation lane");
+    check(contains(result.diagnostics_json,
+                   "\"eigensolver_operator_kind\":\"matrix_free_schur_cuda\"") &&
+              contains(result.diagnostics_json, "\"scalable_selected_spectrum\":true") &&
+              contains(result.diagnostics_json, "\"fallback_used\":false"),
+          "production GPU scale gate must use the scalable matrix-free Schur path");
+    check(result.hot_loop_allocations == 0u &&
+              result.hot_loop_h2d_bytes == 0u &&
+              result.hot_loop_d2h_bytes == 0u,
+          "production GPU scale gate must preserve zero self-reported hot-loop traffic");
+    std::fprintf(
+        stderr,
+        "GPU production-scale summary: q=%llu phi=%llu augmented=%llu accepted=%u "
+        "frequency_hz=%.17g full_residual=%.17g operator_applies=%llu\n",
+        static_cast<unsigned long long>(result.q_dof_count),
+        static_cast<unsigned long long>(result.phi_dof_count),
+        static_cast<unsigned long long>(result.augmented_dof_count),
+        result.accepted_mode_count,
+        result.frequency_hz,
+        result.full_residual_reconstruction_relative_error,
+        static_cast<unsigned long long>(result.operator_apply_count));
+    check(
+        fd::finalize_poisson_airbox_modal_eigen_gpu_petsc_slepc_runtime() ==
+            fd::FrequencyDomainStatus::ok,
+        "production GPU scale runtime finalization must succeed");
+    return 0;
+}
+
 } // namespace
 
 int main()
 {
+    if (std::getenv("FULLMAG_GPU_PRODUCTION_SCALE_FOCUSED") != nullptr) {
+        return run_production_scale_focused_test();
+    }
     if (std::getenv("FULLMAG_GPU_TEARDOWN_LIFECYCLE_FOCUSED") != nullptr) {
         return run_gpu_teardown_lifecycle_focused_test();
     }
@@ -1073,18 +1274,19 @@ int main()
     problem.residual_tolerance = 1.0e-8;
     problem.max_outer_iterations = 128;
     problem.max_linear_iterations = 256;
+    fd::PoissonAirboxModalEigenResult gpu{};
 
     // Validation must reject an empty mode request before probing CUDA/SLEPc;
     // a caller must never receive a solver-unavailable error for malformed
     // modal intent.
     problem.requested_mode_count = 0;
-    fd::PoissonAirboxModalEigenResult invalid_count{};
+    gpu = {};
     check(
-        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &invalid_count) ==
+        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &gpu) ==
             fd::FrequencyDomainStatus::validation_error,
         "GPU K0 must reject a zero requested mode count before allocation");
     check(
-        std::strstr(invalid_count.diagnostics_json, "gpu_k0_requested_mode_count_invalid") !=
+        std::strstr(gpu.diagnostics_json, "gpu_k0_requested_mode_count_invalid") !=
             nullptr,
         "GPU K0 zero-count diagnostics must expose the stable validation reason");
 
@@ -1092,58 +1294,58 @@ int main()
     problem.target_kind = "frequency_window";
     problem.frequency_min_hz = 3.0e9;
     problem.frequency_max_hz = 3.0e9;
-    fd::PoissonAirboxModalEigenResult invalid_window{};
+    gpu = {};
     check(
-        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &invalid_window) ==
+        fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &gpu) ==
             fd::FrequencyDomainStatus::validation_error,
         "GPU K0 must reject a degenerate frequency window before allocation");
     check(
-        std::strstr(invalid_window.diagnostics_json, "gpu_k0_target_invalid") != nullptr,
+        std::strstr(gpu.diagnostics_json, "gpu_k0_target_invalid") != nullptr,
         "GPU K0 invalid target diagnostics must expose the stable validation reason");
 
     problem.target_kind = "unsupported_target";
     problem.frequency_min_hz = 0.0;
     problem.frequency_max_hz = 0.0;
-    fd::PoissonAirboxModalEigenResult invalid_target_kind{};
+    gpu = {};
     check(
         fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
-            problem, &invalid_target_kind) == fd::FrequencyDomainStatus::validation_error,
+            problem, &gpu) == fd::FrequencyDomainStatus::validation_error,
         "GPU K0 must reject an unknown target kind before allocation");
     check(
-        std::strstr(invalid_target_kind.diagnostics_json, "gpu_k0_target_invalid") != nullptr,
+        std::strstr(gpu.diagnostics_json, "gpu_k0_target_invalid") != nullptr,
         "GPU K0 unknown-target diagnostics must expose the stable validation reason");
 
     problem.target_kind = "nearest_frequency";
     problem.phasor_convention = "exp_minus_i_omega_t";
-    fd::PoissonAirboxModalEigenResult invalid_phasor_convention{};
+    gpu = {};
     check(
         fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
-            problem, &invalid_phasor_convention) ==
+            problem, &gpu) ==
             fd::FrequencyDomainStatus::validation_error,
         "GPU K0 must reject a noncanonical phasor convention before allocation");
     check(
         std::strstr(
-            invalid_phasor_convention.diagnostics_json,
+            gpu.diagnostics_json,
             "gpu_k0_convention_invalid") != nullptr,
         "GPU K0 phasor-convention diagnostics must expose the stable validation reason");
 
     problem.phasor_convention = "exp_plus_i_omega_t";
     problem.eigenvalue_convention = "lambda_real_positive_frequency";
-    fd::PoissonAirboxModalEigenResult invalid_eigenvalue_convention{};
+    gpu = {};
     check(
         fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
-            problem, &invalid_eigenvalue_convention) ==
+            problem, &gpu) ==
             fd::FrequencyDomainStatus::validation_error,
         "GPU K0 must reject a noncanonical eigenvalue convention before allocation");
     check(
         std::strstr(
-            invalid_eigenvalue_convention.diagnostics_json,
+            gpu.diagnostics_json,
             "gpu_k0_convention_invalid") != nullptr,
         "GPU K0 eigenvalue-convention diagnostics must expose the stable validation reason");
 
     problem.eigenvalue_convention = "lambda_imag_positive_frequency";
 
-    fd::PoissonAirboxModalEigenResult gpu{};
+    gpu = {};
     check(
         fd::solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(problem, &gpu) ==
             fd::FrequencyDomainStatus::ok,

@@ -11,7 +11,12 @@
 
 #include "fem_common.hpp"
 
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem/config/_config.hpp>
+#endif
+
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+#include <HYPRE_config.h>
 #include <HYPRE_utilities.h>
 #endif
 

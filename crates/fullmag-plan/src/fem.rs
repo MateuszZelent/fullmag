@@ -4076,6 +4076,26 @@ fn resolve_k0_periodic_airbox_execution(
     })
 }
 
+/// Return whether a FEM eigen plan needs the bounded periodic-airbox K0
+/// execution contract even when the study-level magnetostatic boundary token
+/// remains `open`.
+///
+/// The K0-3 field sweep is represented by validation metadata on the stage
+/// and is deliberately accepted by the runner as a shared-domain modal
+/// request. Keep the planner predicate identical to the runner predicate so
+/// the typed execution resolution is always present before dispatch.
+fn k0_kittel_periodic_airbox_execution_requested(
+    magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR,
+    validation: Option<&FemEigenK0KittelValidationIR>,
+) -> bool {
+    magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0
+        || validation.is_some_and(|validation| {
+            validation.kind == "k0_kittel_field_sweep"
+                && validation.case_id.as_deref() == Some("K0-3")
+                && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+        })
+}
+
 pub(crate) fn plan_fem_eigen(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -4766,12 +4786,14 @@ pub(crate) fn plan_fem_eigen(
         });
     }
 
-    let execution_resolution =
-        if *magnetostatic_bc == fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0 {
-            Some(resolve_k0_periodic_airbox_execution(problem)?)
-        } else {
-            None
-        };
+    let execution_resolution = if k0_kittel_periodic_airbox_execution_requested(
+        *magnetostatic_bc,
+        k0_kittel_validation.as_ref(),
+    ) {
+        Some(resolve_k0_periodic_airbox_execution(problem)?)
+    } else {
+        None
+    };
     let bias_execution = bias_field_sweep.as_ref().map(|_| {
         execution_resolution
             .as_ref()

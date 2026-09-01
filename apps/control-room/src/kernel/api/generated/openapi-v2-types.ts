@@ -5607,6 +5607,16 @@ export interface components {
             diagnostics?: null | components["schemas"]["FrequencyDomainTrackingDiagnosticsPayload"];
             schema_version: string;
         };
+        FrequencyDomainCandidateIdentityPayload: {
+            device?: string | null;
+            engine_id?: string | null;
+            equilibrium_artifact_sha256?: string | null;
+            mesh_generation_id?: string | null;
+            mesh_id?: string | null;
+            schema_version: string;
+            source_identity: Record<string, never>;
+            topology_fingerprint?: string | null;
+        };
         FrequencyDomainCapabilityEntryResource: {
             reason: string;
             status: string;
@@ -5729,12 +5739,20 @@ export interface components {
             artifact_path: string;
             /** @description SHA-256 digest of the immutable JSON artifact bytes. */
             content_digest?: string | null;
+            /** @description Runtime mesh generation bound to the publishing stage. */
+            mesh_generation_id?: string | null;
             missing_reason?: string | null;
             payload?: null | components["schemas"]["FrequencyDomainJsonArtifactPayload"];
             resource_key: string;
             /** @description Content-addressed revision of the immutable JSON artifact bytes. */
             revision?: string | null;
+            /** @description Actual run that owns the current immutable artifact directory. */
+            run_id?: string | null;
             schema_version: string;
+            /** @description Actual session that owns the current immutable artifact directory. */
+            session_id?: string | null;
+            /** @description Actual stage that published the artifact, when available in live state. */
+            stage_id?: string | null;
             status: string;
         };
         FrequencyDomainKPathControlPointResource: {
@@ -5766,8 +5784,14 @@ export interface components {
         };
         FrequencyDomainManifestArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             analysis_family?: string | null;
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
             schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
             study_product?: string | null;
+            window_complete?: boolean | null;
         };
         FrequencyDomainManifestResource: {
             capabilities: components["schemas"]["FrequencyDomainCapabilitySnapshotResource"];
@@ -5836,7 +5860,10 @@ export interface components {
             reason_code: string;
         };
         FrequencyDomainModeArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
             component_basis?: string | null;
+            engine_id?: string | null;
+            fields_available?: boolean | null;
             /** Format: double */
             frequency_hz?: number | null;
             /** Format: int64 */
@@ -5844,8 +5871,12 @@ export interface components {
             /** Format: int64 */
             sample_index?: number | null;
             schema_version: string;
+            solve_succeeded?: boolean | null;
             source_mesh_identity?: null | components["schemas"]["FrequencyDomainModeSourceMeshIdentityPayload"];
+            source_spectrum_revision?: string | null;
+            spectrum_completeness?: string | null;
             value_kind?: string | null;
+            window_complete?: boolean | null;
         };
         FrequencyDomainModeSourceMeshIdentityPayload: {
             indexing: string;
@@ -5893,8 +5924,14 @@ export interface components {
             status?: string | null;
         };
         FrequencyDomainSpectrumArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
             samples: components["schemas"]["FrequencyDomainSpectrumSamplePayload"][];
             schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            window_complete?: boolean | null;
         };
         FrequencyDomainSpectrumModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: int64 */
@@ -5920,8 +5957,14 @@ export interface components {
          *     version owns stable sample/mode identities and component participation.
          */
         FrequencyDomainSpectrumV3ArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            candidate_identity?: null | components["schemas"]["FrequencyDomainCandidateIdentityPayload"];
+            engine_id?: string | null;
+            fields_available?: boolean | null;
             samples: components["schemas"]["FrequencyDomainSpectrumV3SamplePayload"][];
             schema_version: string;
+            solve_succeeded?: boolean | null;
+            spectrum_completeness?: string | null;
+            window_complete?: boolean | null;
         };
         FrequencyDomainSpectrumV3ModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: int64 */

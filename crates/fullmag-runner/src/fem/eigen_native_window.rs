@@ -2,6 +2,7 @@ use super::eigen_constants::{
     NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND, NATIVE_GPU_MODAL_SHARED_DOMAIN_SOLVER_KIND,
 };
 use super::eigen_digest::shared_domain_content_digest;
+use super::eigen_equilibrium::bind_stage_continuation_artifacts;
 use super::eigen_equilibrium_contract::{
     AcceptedFemEigenEquilibriumHandoff, AcceptedFemRelaxStageHandoff, LoadedEquilibriumArtifactV7,
 };
@@ -112,6 +113,7 @@ pub(super) fn execute_native_modal_window(
             max_iterations: Some(300),
             residual: None,
             warning: None,
+            ..Default::default()
         },
     )?;
 
@@ -571,6 +573,7 @@ pub(super) fn execute_native_modal_window(
                     .map(|mode| mode.residual_relative_l2)
                     .reduce(f64::max),
                 warning: None,
+                ..Default::default()
             },
         )?;
     }
@@ -650,6 +653,7 @@ pub(super) fn execute_native_modal_window(
                 max_iterations: None,
                 residual: None,
                 warning: None,
+                ..Default::default()
             },
         )?;
     }
@@ -674,7 +678,7 @@ pub(super) fn execute_native_modal_window(
         provenance.fem_eigen_native_execution_attestation = native_execution_attestation;
     }
 
-    Ok(ExecutedRun {
+    let mut run = ExecutedRun {
         result: RunResult {
             status,
             steps: vec![stats],
@@ -690,7 +694,16 @@ pub(super) fn execute_native_modal_window(
         field_snapshot_count: 0,
         auxiliary_artifacts,
         provenance,
-    })
+    };
+    // Bias-field sweeps execute one accepted Relax stage per sample.  The
+    // native modal builder reports zero additional relaxation steps, so bind
+    // the published summaries to that explicit stage-continuation handoff;
+    // otherwise the physical periodic-airbox validator would interpret the
+    // zero step count as an unproven equilibrium source.
+    if let Some(handoff) = source_relax_handoff {
+        bind_stage_continuation_artifacts(&mut run, handoff)?;
+    }
+    Ok(run)
 }
 
 pub(super) fn bind_planned_execution_diagnostics(
@@ -837,6 +850,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             max_iterations: Some(300),
             residual: None,
             warning: None,
+            ..Default::default()
         },
     )?;
 
@@ -955,6 +969,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
                 .map(|mode| mode.residual_relative_l2)
                 .reduce(f64::max),
             warning: None,
+            ..Default::default()
         },
     )?;
 
@@ -1004,6 +1019,7 @@ pub(super) fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
             max_iterations: None,
             residual: None,
             warning: None,
+            ..Default::default()
         },
     )?;
 

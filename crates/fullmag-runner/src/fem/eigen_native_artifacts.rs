@@ -104,6 +104,30 @@ pub(super) fn native_modal_artifacts(
             );
         }
     }
+    // A cached equilibrium is a valid source for the shared-domain modal
+    // solve, but it intentionally has no in-memory relax-to-eigen handoff.
+    // The publication contract still needs the topology identity that was
+    // validated at the native boundary.  Derive it from the exact mesh being
+    // published rather than leaving the field absent (or inventing a
+    // placeholder), so cache-backed production runs remain fail-closed on any
+    // later mesh drift.
+    if let Some(object) = solver_diagnostics.as_object_mut() {
+        let production_k0_adapter = matches!(
+            object
+                .get("solver_adapter")
+                .and_then(serde_json::Value::as_str),
+            Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+                | Some("k0_poisson_airbox_cpu_schur_slepc")
+                | Some("k0_poisson_airbox_gpu_petsc_slepc")
+                | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+        );
+        if production_k0_adapter && !object.contains_key("source_mesh_topology_sha256") {
+            object.insert(
+                "source_mesh_topology_sha256".to_string(),
+                serde_json::json!(plan.mesh.topology_fingerprint_v6()),
+            );
+        }
+    }
     let sample_diagnostics = solver_diagnostics.clone();
     if let Some(object) = solver_diagnostics.as_object_mut() {
         if !object.contains_key("sample_solver_diagnostics") {

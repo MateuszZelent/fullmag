@@ -32,9 +32,13 @@ describe("frequencyDomainPublishedState", () => {
     ).toEqual({
       artifact: "partial",
       binding: "compatible",
+      fields: "unknown",
       qualification: "unknown",
       resource: "stale",
       retainedLastValid: false,
+      solve: "unknown",
+      spectrum: "unknown",
+      window: "unknown",
       source: {
         artifactPath: "fmr/peaks.v1.json",
         backend: null,
@@ -46,6 +50,7 @@ describe("frequencyDomainPublishedState", () => {
         runId: "run-7",
         schemaVersion: "fmr/peaks.v1",
         stageId: "stage-3",
+        meshGenerationId: null,
       },
     });
   });
@@ -162,6 +167,58 @@ describe("frequencyDomainPublishedState", () => {
       runId: "run-7",
       schemaVersion: "fmr/peaks.v1",
       stageId: "stage-3",
+      meshGenerationId: null,
+    });
+  });
+
+  it("keeps solve, field availability, completeness, qualification, and candidate identity separate", () => {
+    const state = frequencyDomainPublishedState({
+      data: artifact({
+        artifact_path: "eigen/spectrum.v2.json",
+        content_digest: "sha256:spectrum",
+        mesh_generation_id: "mesh-generation-runtime",
+        run_id: "run-api",
+        stage_id: "stage-api",
+        payload: {
+          schema_version: "eigen_spectrum.v2",
+          samples: [],
+          engine_id: "native-fem-k0-cpu",
+          solve_succeeded: true,
+          fields_available: true,
+          spectrum_completeness: "selected_only",
+          window_complete: false,
+          validation_state: "unvalidated",
+          candidate_identity: {
+            schema_version: "frequency_domain_candidate_identity.v1",
+            mesh_generation_id: "mesh-generation-artifact",
+            device: "cpu",
+            source_identity: {
+              source_snapshot_sha256: "sha256:source",
+            },
+          },
+        },
+      }),
+      publishedRevision: "sha256:spectrum",
+      resourceStatus: "ready",
+      runId: "stale-run",
+      stageId: "stale-stage",
+    });
+
+    expect(state).toMatchObject({
+      artifact: "partial",
+      fields: "available",
+      qualification: "unqualified",
+      solve: "succeeded",
+      spectrum: "selected_only",
+      window: "incomplete",
+      source: {
+        backend: "native-fem-k0-cpu",
+        device: "cpu",
+        meshGenerationId: "mesh-generation-runtime",
+        provenance: "sha256:source",
+        runId: "run-api",
+        stageId: "stage-api",
+      },
     });
   });
 });

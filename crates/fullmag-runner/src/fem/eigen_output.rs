@@ -297,6 +297,149 @@ fn mode_zarr_array_attrs_artifact(
     )
 }
 
+fn production_k0_publication_adapter(adapter: Option<&str>) -> bool {
+    matches!(
+        adapter,
+        Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+            | Some("k0_poisson_airbox_cpu_schur_slepc")
+            | Some("k0_poisson_airbox_gpu_petsc_slepc")
+            | Some("k0_poisson_airbox_gpu_modal_device_krylov")
+    )
+}
+
+fn modal_publication_contract(
+    plan: &FemEigenPlanIR,
+    summary_payload: &serde_json::Value,
+) -> Result<serde_json::Value, RunError> {
+    let diagnostics = summary_payload
+        .get("solver_diagnostics")
+        .and_then(serde_json::Value::as_object);
+    let adapter = diagnostics
+        .and_then(|object| object.get("solver_adapter"))
+        .and_then(serde_json::Value::as_str);
+    let production_k0 = production_k0_publication_adapter(adapter);
+
+    let required_string = |key: &str| -> Result<Option<String>, RunError> {
+        let value = diagnostics
+            .and_then(|object| object.get(key))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty() && *value != "unknown")
+            .map(str::to_owned);
+        if production_k0 && value.is_none() {
+            return Err(RunError {
+                message: format!(
+                    "production K0 modal publication requires solver_diagnostics.{key}"
+                ),
+            });
+        }
+        Ok(value)
+    };
+    let required_bool = |key: &str| -> Result<Option<bool>, RunError> {
+        let value = diagnostics
+            .and_then(|object| object.get(key))
+            .and_then(serde_json::Value::as_bool);
+        if production_k0 && value.is_none() {
+            return Err(RunError {
+                message: format!(
+                    "production K0 modal publication requires boolean solver_diagnostics.{key}"
+                ),
+            });
+        }
+        Ok(value)
+    };
+
+    let engine_id = required_string("engine_id")?;
+    let solve_succeeded = required_bool("solve_succeeded")?;
+    let fields_available = required_bool("fields_available")?;
+    let spectrum_completeness = required_string("spectrum_completeness")?;
+    let window_complete = required_bool("window_complete")?;
+    let equilibrium_digest = required_string("equilibrium_artifact_sha256")?;
+    let source_topology = required_string("source_mesh_topology_sha256")?;
+    let resolved_device = diagnostics
+        .and_then(|object| object.get("resolved_execution"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("device"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty() && *value != "unknown")
+        .map(str::to_owned)
+        .or_else(|| {
+            diagnostics
+                .and_then(|object| object.get("execution_lane"))
+                .and_then(serde_json::Value::as_str)
+                .map(|lane| if lane.contains("gpu") { "gpu" } else { "cpu" }.to_string())
+        });
+    if production_k0 && resolved_device.is_none() {
+        return Err(RunError {
+            message: "production K0 modal publication requires resolved device identity"
+                .to_string(),
+        });
+    }
+
+    let topology_fingerprint = plan.mesh.topology_fingerprint_v6();
+    if production_k0
+        && source_topology
+            .as_deref()
+            .is_some_and(|source| source != topology_fingerprint)
+    {
+        return Err(RunError {
+            message:
+                "production K0 modal publication source topology does not match the published mesh"
+                    .to_string(),
+        });
+    }
+
+    let mut contract = serde_json::Map::new();
+    for (key, value) in [
+        (
+            "engine_id",
+            engine_id.clone().map(serde_json::Value::String),
+        ),
+        (
+            "solve_succeeded",
+            solve_succeeded.map(serde_json::Value::Bool),
+        ),
+        (
+            "fields_available",
+            fields_available.map(serde_json::Value::Bool),
+        ),
+        (
+            "spectrum_completeness",
+            spectrum_completeness.map(serde_json::Value::String),
+        ),
+        (
+            "window_complete",
+            window_complete.map(serde_json::Value::Bool),
+        ),
+    ] {
+        if let Some(value) = value {
+            contract.insert(key.to_string(), value);
+        }
+    }
+    contract.insert(
+        "candidate_identity".to_string(),
+        serde_json::json!({
+            "schema_version": "frequency_domain_candidate_identity.v1",
+            "mesh_id": plan.mesh_name,
+            "mesh_generation_id": crate::artifacts::solver_mesh_signature(&plan.mesh),
+            "topology_fingerprint": topology_fingerprint,
+            "equilibrium_artifact_sha256": equilibrium_digest,
+            "engine_id": engine_id,
+            "device": resolved_device,
+            "source_identity": crate::artifacts::build_identity_json(),
+        }),
+    );
+    Ok(serde_json::Value::Object(contract))
+}
+
+fn insert_modal_publication_contract(target: &mut serde_json::Value, contract: &serde_json::Value) {
+    let (Some(target), Some(contract)) = (target.as_object_mut(), contract.as_object()) else {
+        return;
+    };
+    for (key, value) in contract {
+        target.insert(key.clone(), value.clone());
+    }
+}
+
 pub(super) fn write_eigen_v2_bundle(
     plan: &FemEigenPlanIR,
     summary_payload: &serde_json::Value,
@@ -304,6 +447,7 @@ pub(super) fn write_eigen_v2_bundle(
     auxiliary_artifacts: &mut Vec<AuxiliaryArtifact>,
     sample_index: usize,
 ) -> Result<(), RunError> {
+    let publication_contract = modal_publication_contract(plan, summary_payload)?;
     let modes = summary_payload
         .get("modes")
         .and_then(|value| value.as_array())
@@ -396,7 +540,7 @@ pub(super) fn write_eigen_v2_bundle(
             mode
         })
         .collect();
-    let spectrum_v2 = serde_json::json!({
+    let mut spectrum_v2 = serde_json::json!({
         "schema_version": "eigen_spectrum.v2",
         "solver_model": summary_payload["solver_kind"],
         "sample_count": 1,
@@ -414,7 +558,10 @@ pub(super) fn write_eigen_v2_bundle(
             "modes": spectrum_v2_modes,
         }],
     });
+    insert_modal_publication_contract(&mut spectrum_v2, &publication_contract);
     auxiliary_artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum_v2)?);
+    let spectrum_v2_revision =
+        published_artifact_sha256(auxiliary_artifacts, "eigen/spectrum.v2.json")?;
 
     let participation_solver_device = if solver_model.contains("gpu") {
         "gpu"
@@ -477,28 +624,27 @@ pub(super) fn write_eigen_v2_bundle(
             Ok(mode)
         })
         .collect::<Result<Vec<_>, RunError>>()?;
-    auxiliary_artifacts.push(json_artifact(
-        "eigen/spectrum.v3.json",
-        &serde_json::json!({
-            "schema_version": "eigen_spectrum.v3",
-            "solver_model": summary_payload["solver_kind"],
-            "sample_count": 1,
-            "mode_count": spectrum_v3_modes.len(),
-            "samples": [{
-                "sample_id": format!("bias-field-sample-{sample_index:04}"),
-                "sample_index": sample_index,
-                "label": label,
-                "k_vector": k_vector,
-                "path_s": 0.0,
-                "segment_index": 0,
-                "t_in_segment": 0.0,
-                "external_field_a_per_m": plan.external_field,
-                "mesh_id": plan.mesh_name,
-                "topology_revision": plan.mesh.topology_fingerprint_v6(),
-                "modes": spectrum_v3_modes,
-            }],
-        }),
-    )?);
+    let mut spectrum_v3 = serde_json::json!({
+        "schema_version": "eigen_spectrum.v3",
+        "solver_model": summary_payload["solver_kind"],
+        "sample_count": 1,
+        "mode_count": spectrum_v3_modes.len(),
+        "samples": [{
+            "sample_id": format!("bias-field-sample-{sample_index:04}"),
+            "sample_index": sample_index,
+            "label": label,
+            "k_vector": k_vector,
+            "path_s": 0.0,
+            "segment_index": 0,
+            "t_in_segment": 0.0,
+            "external_field_a_per_m": plan.external_field,
+            "mesh_id": plan.mesh_name,
+            "topology_revision": plan.mesh.topology_fingerprint_v6(),
+            "modes": spectrum_v3_modes,
+        }],
+    });
+    insert_modal_publication_contract(&mut spectrum_v3, &publication_contract);
+    auxiliary_artifacts.push(json_artifact("eigen/spectrum.v3.json", &spectrum_v3)?);
 
     let branches: Vec<serde_json::Value> = modes
         .iter()
@@ -630,7 +776,9 @@ pub(super) fn write_eigen_v2_bundle(
                 "node_count": source_node_count,
             },
             "payload_sha256": payload_sha256,
+            "source_spectrum_revision": spectrum_v2_revision.clone(),
         });
+        insert_modal_publication_contract(&mut metadata, &publication_contract);
         if let Some(object) = metadata.as_object_mut() {
             object.insert("mode_field_id".to_string(), serde_json::json!(field_id));
             object.insert(
@@ -845,20 +993,32 @@ pub(super) fn write_eigen_v2_bundle(
         mode_resource_keys.push(mode_meta_resource_key(sample_index, raw_mode_index));
     }
 
+    let published_solver_diagnostics = summary_payload
+        .get("solver_diagnostics")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| modal_solver_diagnostics_json(plan, solver_model, modes.len()));
     auxiliary_artifacts.push(json_artifact(
         "eigen/diagnostics/solver.v1.json",
-        &modal_solver_diagnostics_json(plan, solver_model, modes.len()),
+        &published_solver_diagnostics,
     )?);
 
     let has_mode_fields = !mode_metadata_paths.is_empty();
-    let spectrum_revision =
-        published_artifact_sha256(auxiliary_artifacts, "eigen/spectrum.v2.json")?;
+    let spectrum_revision = spectrum_v2_revision;
     let branches_revision =
         published_artifact_sha256(auxiliary_artifacts, "eigen/branches.v2.json")?;
     let mut manifest = serde_json::json!({
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
         "study_product": "modal_eigen",
+        "equilibrium_identity": summary_payload
+            .get("solver_diagnostics")
+            .and_then(|value| value.get("equilibrium_artifact_sha256"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        "mesh_identity": crate::artifacts::solver_mesh_signature(&plan.mesh),
+        "boundary_context": modal_boundary_context(plan),
+        "k_sampling": modal_k_sampling_manifest(plan.k_sampling.as_ref()),
         "stage_kind": "eigenmodes",
         "status": "ready",
         "complete": true,
@@ -948,9 +1108,19 @@ pub(super) fn write_eigen_v2_bundle(
             "spectral",
             "block_residuals",
             "device_transfer_audit",
+            "engine_id",
+            "solve_succeeded",
+            "fields_available",
+            "spectrum_completeness",
+            "window_complete",
         ] {
             if let Some(value) = diagnostics_object.get(key) {
                 manifest_object.insert(key.to_string(), value.clone());
+            }
+        }
+        if let Some(contract_object) = publication_contract.as_object() {
+            for (key, value) in contract_object {
+                manifest_object.insert(key.clone(), value.clone());
             }
         }
         if let Some(validation) = plan.dispersion_validation.as_ref() {
@@ -971,6 +1141,35 @@ pub(super) fn write_eigen_v2_bundle(
     )?);
 
     Ok(())
+}
+
+fn modal_boundary_context(plan: &FemEigenPlanIR) -> &'static str {
+    match plan.spin_wave_bc.kind() {
+        SpinWaveBoundaryKindIR::Periodic | SpinWaveBoundaryKindIR::Floquet => "floquet_periodic",
+        SpinWaveBoundaryKindIR::Free
+        | SpinWaveBoundaryKindIR::Pinned
+        | SpinWaveBoundaryKindIR::SurfaceAnisotropy => "finite_open",
+    }
+}
+
+fn modal_k_sampling_manifest(k_sampling: Option<&KSamplingIR>) -> serde_json::Value {
+    match k_sampling {
+        Some(KSamplingIR::Single { k_vector }) => serde_json::json!({
+            "kind": "single",
+            "vector_rad_per_m": k_vector,
+        }),
+        Some(KSamplingIR::Path {
+            points,
+            samples_per_segment,
+            closed,
+        }) => serde_json::json!({
+            "kind": "path",
+            "points": points,
+            "samples_per_segment": samples_per_segment,
+            "closed": closed,
+        }),
+        None => serde_json::Value::Null,
+    }
 }
 
 pub(super) fn normalization_label(normalization: EigenNormalizationIR) -> &'static str {

@@ -1200,6 +1200,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn pack_rejects_unsafe_artifact_name_before_output() {
         let (_directory, store, mut session, workspace, profile, documents) =
@@ -1263,6 +1264,16 @@ mod tests {
     }
 
     #[test]
+    fn portable_namespace_rejects_unsafe_artifact_name() {
+        let error = validate_portable_namespace_path(
+            "runs/run-001/artifacts/bad:artifact",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsafe archive path"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn pack_rejects_case_folded_dynamic_artifact_collision_before_output() {
         let (_directory, store, mut session, workspace, profile, documents) =
             pack_fixture(SaveProfile::Solved);
@@ -1285,6 +1296,16 @@ mod tests {
             &documents,
             "case-fold collision",
         );
+    }
+
+    #[test]
+    fn export_plan_rejects_case_folded_dynamic_artifact_collision() {
+        let error = validate_export_entry_metadata(vec![
+            ("runs/run-001/artifacts/result.bin".to_string(), 5),
+            ("runs/run-001/artifacts/RESULT.bin".to_string(), 6),
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("case-fold collision"));
     }
 
     #[test]

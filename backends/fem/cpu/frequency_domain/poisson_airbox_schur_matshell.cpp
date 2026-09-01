@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -18,6 +19,31 @@
 #if FULLMAG_FEM_WITH_SLEPC
 #include <petscksp.h>
 #include <slepceps.h>
+
+// The managed qualification runtime intentionally supports PETSc 3.15, while
+// the development lane may use current PETSc. Keep callback code source-level
+// compatible without changing solver semantics.
+#ifndef PETSC_SUCCESS
+#define PETSC_SUCCESS 0
+#endif
+#ifndef PetscCall
+#define PetscCall(expression) \
+    do { \
+        const PetscErrorCode fullmag_petsc_error_ = (expression); \
+        CHKERRQ(fullmag_petsc_error_); \
+    } while (0)
+#endif
+#ifndef PetscCheck
+#define PetscCheck(condition, communicator, error_code, ...) \
+    do { \
+        if (!(condition)) { \
+            SETERRQ(communicator, error_code, __VA_ARGS__); \
+        } \
+    } while (0)
+#endif
+#ifndef KSP_DIVERGED_USER
+#define KSP_DIVERGED_USER KSP_DIVERGED_BREAKDOWN
+#endif
 #endif
 
 namespace fullmag::fem::frequency_domain {
@@ -1192,18 +1218,37 @@ struct ProductionKspConvergenceContext {
     void *default_context = nullptr;
 };
 
-PetscErrorCode destroy_production_modal_ksp_convergence_context(void **raw_context)
+PetscErrorCode destroy_production_modal_ksp_convergence_context_value(
+    ProductionKspConvergenceContext *context)
 {
     PetscFunctionBeginUser;
-    if (raw_context == nullptr || *raw_context == nullptr) {
+    if (context == nullptr) {
         PetscFunctionReturn(PETSC_SUCCESS);
     }
-    auto *context = static_cast<ProductionKspConvergenceContext *>(*raw_context);
     PetscCall(KSPConvergedDefaultDestroy(&context->default_context));
     delete context;
-    *raw_context = nullptr;
     PetscFunctionReturn(PETSC_SUCCESS);
 }
+
+#if PETSC_VERSION_LT(3, 24, 0)
+PetscErrorCode destroy_production_modal_ksp_convergence_context(void *raw_context)
+{
+    return destroy_production_modal_ksp_convergence_context_value(
+        static_cast<ProductionKspConvergenceContext *>(raw_context));
+}
+#else
+PetscErrorCode destroy_production_modal_ksp_convergence_context(void **raw_context)
+{
+    if (raw_context == nullptr) {
+        return PETSC_SUCCESS;
+    }
+    const PetscErrorCode status =
+        destroy_production_modal_ksp_convergence_context_value(
+            static_cast<ProductionKspConvergenceContext *>(*raw_context));
+    *raw_context = nullptr;
+    return status;
+}
+#endif
 
 PetscErrorCode production_modal_ksp_convergence_test(
     KSP ksp,
@@ -1289,10 +1334,8 @@ PetscErrorCode install_production_modal_ksp_convergence_test(
             destroy_production_modal_ksp_convergence_context);
     }
     if (status != PETSC_SUCCESS) {
-        void *raw_context = context;
         const PetscErrorCode destroy_status =
-            destroy_production_modal_ksp_convergence_context(
-                &raw_context);
+            destroy_production_modal_ksp_convergence_context_value(context);
         PetscFunctionReturn(status != PETSC_SUCCESS ? status : destroy_status);
     }
     PetscFunctionReturn(PETSC_SUCCESS);
@@ -3024,7 +3067,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
     }
-    *out_result = PoissonAirboxModalEigenResult{};
+    // This result owns large bounded JSON buffers (hundreds of KiB).  The
+    // frequency-window solver calls this function recursively for shifted
+    // subwindows, so assigning from a temporary would materialize another
+    // large object on each worker stack and can exhaust the native stack
+    // before the first shifted solve returns.  Reconstruct the already
+    // constructed caller-owned result in place instead; no large temporary is
+    // needed and the vector/string members are released by the destructor.
+    out_result->~PoissonAirboxModalEigenResult();
+    ::new (static_cast<void *>(out_result)) PoissonAirboxModalEigenResult();
     out_result->q_dof_count = problem.q_dof_count;
     out_result->phi_dof_count = problem.phi_dof_count;
     out_result->augmented_dof_count = problem.q_dof_count + problem.phi_dof_count +
@@ -3129,9 +3180,15 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             "frequency_window");
         struct WindowCandidate {
             PoissonAirboxModalEigenResult::AcceptedMode mode{};
-            PoissonAirboxModalEigenResult source{};
             std::uint32_t pass_index = 0;
         };
+        // Keep one heap-owned result template for the final aggregate.  A
+        // complete modal result contains large fixed diagnostic buffers; the
+        // previous per-candidate `source` copy multiplied that storage by the
+        // number of modes retained across all 50 subwindows.
+        auto window_template_storage =
+            std::make_unique<PoissonAirboxModalEigenResult>();
+        bool window_template_initialized = false;
         std::vector<WindowCandidate> window_candidates;
         constexpr std::uint32_t base_subwindow_count = 16u;
         constexpr std::uint32_t refinement_partition_count = 32u;
@@ -3167,15 +3224,33 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         std::numeric_limits<std::uint32_t>::max() / 2u
                     ? 2u * problem.requested_mode_count
                     : std::numeric_limits<std::uint32_t>::max() / 4u);
-        const std::uint64_t requested_nev = resolved_nev(problem.requested_mode_count);
-        const std::uint64_t refined_nev = resolved_nev(refined_requested_mode_count);
-        const bool refined_nev_increased = refined_nev > requested_nev;
+        // A frequency window is assembled from many local shifts.  Asking
+        // every shift for the complete global mode count is needlessly
+        // expensive on the production Schur MatShell (each extra Ritz pair
+        // drives more GMRES/Poisson applications).  Start with a bounded
+        // local request and grow it only when the local accepted set fills
+        // the request.  The final certificate records the effective request;
+        // a saturated local solve is never silently treated as complete.
+        const std::uint32_t base_window_requested_mode_count =
+            std::min<std::uint32_t>(problem.requested_mode_count, 2u);
+        const std::uint32_t refinement_window_requested_mode_count =
+            std::min<std::uint32_t>(refined_requested_mode_count, 4u);
+        std::uint64_t requested_nev =
+            resolved_nev(base_window_requested_mode_count);
+        std::uint64_t refined_nev =
+            resolved_nev(refinement_window_requested_mode_count);
+        std::array<std::uint32_t, pass_count>
+            pass_effective_requested_mode_count{
+                base_window_requested_mode_count,
+                refinement_window_requested_mode_count};
         std::array<std::uint32_t, pass_count> pass_planned_subwindow_count{
             base_subwindow_count,
             refinement_subwindow_count};
         std::array<std::uint32_t, pass_count> pass_completed_subwindow_count{};
         std::array<std::uint32_t, pass_count> pass_failed_subwindow_count{};
         std::array<bool, pass_count> pass_cancelled{};
+        std::array<std::uint32_t, pass_count>
+            pass_local_coverage_uncertified_count{};
         std::uint64_t converged_total = 0;
         std::uint64_t finite_real_total = 0;
         std::uint64_t positive_total = 0;
@@ -3191,6 +3266,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         std::uint64_t outer_iterations_total = 0;
         bool window_interrupted = false;
         bool window_failed = false;
+        bool window_local_coverage_failed = false;
         char window_failure_reason[96]{};
         std::uint32_t window_empty_subwindow_count = 0;
         out_result->window_subwindow_count =
@@ -3243,6 +3319,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
         const double window_width = problem.frequency_max_hz - problem.frequency_min_hz;
         const double refinement_spacing =
             window_width / static_cast<double>(refinement_partition_count);
+        const double base_spacing =
+            window_width / static_cast<double>(base_subwindow_count);
         const double refinement_first_shift_hz =
             problem.frequency_min_hz - 0.5 * refinement_spacing;
         const double refinement_last_shift_hz =
@@ -3251,14 +3329,31 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             problem.frequency_min_hz - refinement_first_shift_hz;
         const double upper_coverage_margin_hz =
             refinement_last_shift_hz - problem.frequency_max_hz;
+        const auto window_started_at = std::chrono::steady_clock::now();
         for (std::uint32_t pass_index = 0;
              pass_index < pass_count && !window_interrupted;
              ++pass_index) {
             const std::uint32_t subwindow_count =
                 pass_planned_subwindow_count[pass_index];
+            const std::uint32_t pass_initial_requested_mode_count =
+                pass_index == 0u
+                    ? base_window_requested_mode_count
+                    : std::min<std::uint32_t>(
+                          refined_requested_mode_count,
+                          std::max<std::uint32_t>(
+                              refinement_window_requested_mode_count,
+                              pass_effective_requested_mode_count[0] + 1u));
+            pass_effective_requested_mode_count[pass_index] = std::max(
+                pass_effective_requested_mode_count[pass_index],
+                pass_initial_requested_mode_count);
             for (std::uint32_t subwindow_index = 0;
                  subwindow_index < subwindow_count;
                  ++subwindow_index) {
+                const auto subwindow_started_at = std::chrono::steady_clock::now();
+                const std::uint32_t current_subwindow =
+                    1u + (pass_index == 0u
+                              ? subwindow_index
+                              : base_subwindow_count + subwindow_index);
                 PoissonAirboxEigenBlockProblem shifted_problem = problem;
                 shifted_problem.target_kind = "nearest_frequency";
                 shifted_problem.target_frequency_hz = pass_index == 0u
@@ -3269,17 +3364,297 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     : problem.frequency_min_hz +
                         (static_cast<double>(subwindow_index) - 0.5) *
                             refinement_spacing;
-                shifted_problem.requested_mode_count = pass_index == 0u
-                    ? problem.requested_mode_count
-                    : refined_requested_mode_count;
+                const std::uint32_t maximum_subwindow_requested_mode_count =
+                    pass_index == 0u
+                        ? problem.requested_mode_count
+                        : refined_requested_mode_count;
+                std::uint32_t subwindow_requested_mode_count =
+                    pass_initial_requested_mode_count;
+                const double local_half_width_hz = pass_index == 0u
+                    ? 0.5 * base_spacing
+                    : refinement_spacing;
+                const double local_frequency_min_hz = std::max(
+                    problem.frequency_min_hz,
+                    shifted_problem.target_frequency_hz - local_half_width_hz);
+                const double local_frequency_max_hz = std::min(
+                    problem.frequency_max_hz,
+                    shifted_problem.target_frequency_hz + local_half_width_hz);
+                const double required_local_coverage_radius_hz = std::max(
+                    std::abs(
+                        local_frequency_min_hz -
+                        shifted_problem.target_frequency_hz),
+                    std::abs(
+                        local_frequency_max_hz -
+                        shifted_problem.target_frequency_hz));
+                shifted_problem.progress_window_phase =
+                    pass_index == 0u ? "base" : "refinement";
+                shifted_problem.progress_current_subwindow = current_subwindow;
+                shifted_problem.progress_total_subwindows =
+                    base_subwindow_count + refinement_subwindow_count;
+                shifted_problem.progress_subwindow_elapsed_seconds = 0.0;
+                shifted_problem.progress_window_elapsed_seconds =
+                    std::chrono::duration<double>(
+                        subwindow_started_at - window_started_at)
+                        .count();
+                poisson_airbox_modal_emit_progress(
+                    shifted_problem,
+                    pass_index == 0u
+                        ? "frequency_window_base_subwindow"
+                        : "frequency_window_refinement_subwindow",
+                    "production_cpu",
+                    0u,
+                    0u,
+                    0u,
+                    0u,
+                    0.0);
                 auto shifted_result_storage =
                     std::make_unique<PoissonAirboxModalEigenResult>();
+                FrequencyDomainStatus shifted_status =
+                    FrequencyDomainStatus::solve_error;
+                std::uint32_t subwindow_retry_count = 0u;
+                std::size_t final_local_accepted_mode_count = 0u;
+                double final_selected_coverage_radius_hz = 0.0;
+                double final_selected_frequency_min_hz = 0.0;
+                double final_selected_frequency_max_hz = 0.0;
+                bool final_result_truncated_at_requested_count = false;
+                bool final_lower_edge_covered = false;
+                bool final_upper_edge_covered = false;
+                bool final_rejection_stage_clean = false;
+                bool final_raw_ritz_pool_saturated = false;
+                bool final_accepted_candidate_pool_saturated = false;
+                bool final_candidate_pool_saturated = false;
+                bool final_split_spectrum_exhausted = false;
+                bool final_request_limit_reached = false;
+                bool final_nev_limit_reached = false;
+                std::uint64_t final_rejection_stage_count = 0u;
+                bool final_local_coverage_certified = false;
+                for (;;) {
+                    shifted_problem.requested_mode_count =
+                        subwindow_requested_mode_count;
+                    shifted_problem.progress_subwindow_elapsed_seconds =
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - subwindow_started_at)
+                            .count();
+                    shifted_result_storage =
+                        std::make_unique<PoissonAirboxModalEigenResult>();
+                    shifted_status = solve_poisson_airbox_modal_eigen_cpu_schur(
+                        shifted_problem,
+                        shifted_result_storage.get());
+                    const PoissonAirboxModalEigenResult &attempted_result =
+                        *shifted_result_storage;
+                    std::size_t local_accepted_mode_count = 0u;
+                    double selected_coverage_radius_hz = 0.0;
+                    double selected_frequency_min_hz =
+                        std::numeric_limits<double>::infinity();
+                    double selected_frequency_max_hz =
+                        -std::numeric_limits<double>::infinity();
+                    for (const PoissonAirboxModalEigenResult::AcceptedMode &mode :
+                         attempted_result.accepted_modes) {
+                        const double local_tolerance_hz = std::max(
+                            1.0,
+                            1.0e-8 * std::max({
+                                std::abs(mode.frequency_hz),
+                                std::abs(local_frequency_min_hz),
+                                std::abs(local_frequency_max_hz)}));
+                        if (mode.frequency_hz >=
+                                local_frequency_min_hz - local_tolerance_hz &&
+                            mode.frequency_hz <=
+                                local_frequency_max_hz + local_tolerance_hz) {
+                            ++local_accepted_mode_count;
+                        }
+                        selected_coverage_radius_hz = std::max(
+                            selected_coverage_radius_hz,
+                            std::abs(
+                                mode.frequency_hz -
+                                shifted_problem.target_frequency_hz));
+                        selected_frequency_min_hz = std::min(
+                            selected_frequency_min_hz,
+                            mode.frequency_hz);
+                        selected_frequency_max_hz = std::max(
+                            selected_frequency_max_hz,
+                            mode.frequency_hz);
+                    }
+                    const double local_coverage_tolerance_hz = std::max(
+                        1.0,
+                        1.0e-8 * std::max({
+                            std::abs(shifted_problem.target_frequency_hz),
+                            std::abs(local_frequency_min_hz),
+                            std::abs(local_frequency_max_hz),
+                            required_local_coverage_radius_hz}));
+                    const std::uint64_t attempted_nev =
+                        resolved_nev(subwindow_requested_mode_count);
+                    const bool accepted_result_truncated_at_requested_count =
+                        shifted_status == FrequencyDomainStatus::ok &&
+                        (attempted_result.accepted_modes.size() >=
+                             subwindow_requested_mode_count ||
+                         attempted_result.full_residual_accepted_count >=
+                             subwindow_requested_mode_count);
+                    const bool raw_ritz_result_truncated_at_requested_count =
+                        shifted_status == FrequencyDomainStatus::ok &&
+                        attempted_result.converged_eigenpair_count >=
+                            attempted_nev;
+                    // EPS can converge more Ritz pairs than the requested
+                    // NEV.  On a small contract fixture, reaching the full
+                    // split operator dimension is an exhaustive spectrum,
+                    // not a truncated candidate pool.  Production meshes are
+                    // far larger than the bounded local NEV, so they must
+                    // still prove both local edges independently.
+                    const bool split_spectrum_exhausted =
+                        shifted_status == FrequencyDomainStatus::ok &&
+                        static_cast<std::uint64_t>(
+                            attempted_result.converged_eigenpair_count) ==
+                            split_dimension;
+                    const bool result_truncated_at_requested_count =
+                        !split_spectrum_exhausted &&
+                        (accepted_result_truncated_at_requested_count ||
+                         raw_ritz_result_truncated_at_requested_count);
+                    const bool request_limit_reached =
+                        subwindow_requested_mode_count >=
+                            maximum_subwindow_requested_mode_count;
+                    const bool nev_limit_reached =
+                        attempted_nev >= maximum_nev;
+                    const bool selected_frequency_range_available =
+                        !attempted_result.accepted_modes.empty() &&
+                        std::isfinite(selected_frequency_min_hz) &&
+                        std::isfinite(selected_frequency_max_hz);
+                    const bool lower_edge_covered =
+                        selected_frequency_range_available &&
+                        selected_frequency_min_hz <=
+                            local_frequency_min_hz +
+                                local_coverage_tolerance_hz;
+                    const bool upper_edge_covered =
+                        selected_frequency_range_available &&
+                        selected_frequency_max_hz +
+                                local_coverage_tolerance_hz >=
+                            local_frequency_max_hz;
+                    // A rejected or unreadable converged Ritz pair can hide a
+                    // physical mode inside the local interval.  Its frequency
+                    // is not always recoverable after the failing stage, so
+                    // completeness must stay fail-closed rather than treating
+                    // a short accepted list as proof that the spectrum ended.
+                    const std::uint64_t rejection_stage_count =
+                        static_cast<std::uint64_t>(
+                            attempted_result.raw_ritz_retrieval_failed_count) +
+                        attempted_result.raw_ritz_nonfinite_count +
+                        attempted_result.raw_ritz_complex_rejected_count +
+                        attempted_result.action_residual_evaluation_failed_count +
+                        attempted_result.q_vector_extraction_failed_count +
+                        attempted_result.full_vector_reconstruction_failed_count +
+                        attempted_result.full_vector_nonfinite_count +
+                        attempted_result.full_residual_evaluation_failed_count +
+                        attempted_result.full_residual_rejected_count;
+                    const bool rejection_stage_clean =
+                        rejection_stage_count == 0u;
+                    const bool local_coverage_certified =
+                        shifted_status == FrequencyDomainStatus::ok &&
+                        rejection_stage_clean &&
+                        (!result_truncated_at_requested_count ||
+                         (lower_edge_covered && upper_edge_covered));
+                    final_local_accepted_mode_count =
+                        local_accepted_mode_count;
+                    final_selected_coverage_radius_hz =
+                        selected_coverage_radius_hz;
+                    final_selected_frequency_min_hz =
+                        selected_frequency_range_available
+                            ? selected_frequency_min_hz
+                            : 0.0;
+                    final_selected_frequency_max_hz =
+                        selected_frequency_range_available
+                            ? selected_frequency_max_hz
+                            : 0.0;
+                    final_result_truncated_at_requested_count =
+                        result_truncated_at_requested_count;
+                    final_lower_edge_covered = lower_edge_covered;
+                    final_upper_edge_covered = upper_edge_covered;
+                    final_rejection_stage_clean = rejection_stage_clean;
+                    final_raw_ritz_pool_saturated =
+                        raw_ritz_result_truncated_at_requested_count;
+                    final_accepted_candidate_pool_saturated =
+                        accepted_result_truncated_at_requested_count;
+                    final_candidate_pool_saturated =
+                        result_truncated_at_requested_count;
+                    final_split_spectrum_exhausted =
+                        split_spectrum_exhausted;
+                    final_request_limit_reached = request_limit_reached;
+                    final_nev_limit_reached = nev_limit_reached;
+                    final_rejection_stage_count = rejection_stage_count;
+                    final_local_coverage_certified =
+                        local_coverage_certified;
+                    const bool local_request_saturated =
+                        shifted_status == FrequencyDomainStatus::ok &&
+                        !local_coverage_certified &&
+                        (result_truncated_at_requested_count ||
+                         rejection_stage_count > 0u) &&
+                        !request_limit_reached &&
+                        !nev_limit_reached;
+                    if (!local_request_saturated) {
+                        break;
+                    }
+                    const std::uint32_t next_requested_mode_count =
+                        std::min<std::uint32_t>(
+                            maximum_subwindow_requested_mode_count,
+                            std::max<std::uint32_t>(
+                                subwindow_requested_mode_count + 1u,
+                                subwindow_requested_mode_count * 2u));
+                    if (next_requested_mode_count <= subwindow_requested_mode_count) {
+                        break;
+                    }
+                    if (resolved_nev(next_requested_mode_count) <= attempted_nev) {
+                        final_nev_limit_reached = true;
+                        break;
+                    }
+                    subwindow_requested_mode_count = next_requested_mode_count;
+                    pass_effective_requested_mode_count[pass_index] =
+                        std::max(
+                            pass_effective_requested_mode_count[pass_index],
+                            subwindow_requested_mode_count);
+                    ++subwindow_retry_count;
+                }
+                pass_effective_requested_mode_count[pass_index] = std::max(
+                    pass_effective_requested_mode_count[pass_index],
+                    subwindow_requested_mode_count);
                 PoissonAirboxModalEigenResult &shifted_result =
                     *shifted_result_storage;
-                const FrequencyDomainStatus shifted_status =
-                    solve_poisson_airbox_modal_eigen_cpu_schur(
-                        shifted_problem,
-                        &shifted_result);
+                const bool subwindow_coverage_uncertified =
+                    shifted_status == FrequencyDomainStatus::ok &&
+                    !final_local_coverage_certified;
+                if (subwindow_coverage_uncertified) {
+                    ++pass_local_coverage_uncertified_count[pass_index];
+                }
+                // The lower-NEV base pass is intentionally exploratory.  A
+                // clean but one-sided base interval is allowed only as an
+                // explicit deferral to the higher-NEV overlapping refinement
+                // pass.  Rejected Ritz evidence is fatal in either pass, and
+                // unresolved refinement coverage is always fatal.
+                const bool coverage_deferred_to_refinement =
+                    pass_index == 0u &&
+                    subwindow_coverage_uncertified &&
+                    final_rejection_stage_clean;
+                const bool subwindow_coverage_failed =
+                    subwindow_coverage_uncertified &&
+                    (!final_rejection_stage_clean || pass_index != 0u);
+                const auto subwindow_finished_at = std::chrono::steady_clock::now();
+                const double subwindow_elapsed_seconds =
+                    std::chrono::duration<double>(
+                        subwindow_finished_at - subwindow_started_at)
+                        .count();
+                shifted_problem.progress_subwindow_elapsed_seconds =
+                    subwindow_elapsed_seconds;
+                shifted_problem.progress_window_elapsed_seconds =
+                    std::chrono::duration<double>(
+                        subwindow_finished_at - window_started_at)
+                        .count();
+                poisson_airbox_modal_emit_progress(
+                    shifted_problem,
+                    "frequency_window_subwindow_complete",
+                    "production_cpu",
+                    shifted_result.outer_iterations,
+                    shifted_result.raw_ritz_in_window_count,
+                    shifted_result.accepted_mode_count,
+                    static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                        shifted_result.poisson_iteration_count,
+                        std::numeric_limits<std::uint32_t>::max())),
+                    shifted_result.eigen_residual_relative);
                 out_result->operator_context_setup_count =
                     window_operator_context.operator_context_setup_count;
                 out_result->poisson_factorization_setup_count =
@@ -3334,6 +3709,30 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     "\"full_residual_rejected_count\":%u,"
                     "\"full_residual_accepted_count\":%u,"
                     "\"accepted_mode_count\":%zu,"
+                    "\"local_frequency_min_hz\":%.17g,"
+                    "\"local_frequency_max_hz\":%.17g,"
+                    "\"local_accepted_mode_count\":%zu,"
+                    "\"required_local_coverage_radius_hz\":%.17g,"
+                    "\"selected_coverage_radius_hz\":%.17g,"
+                    "\"selected_frequency_min_hz\":%.17g,"
+                    "\"selected_frequency_max_hz\":%.17g,"
+                    "\"result_truncated_at_requested_count\":%s,"
+                    "\"raw_ritz_pool_saturated\":%s,"
+                    "\"accepted_candidate_pool_saturated\":%s,"
+                    "\"candidate_pool_saturated\":%s,"
+                    "\"split_spectrum_exhausted\":%s,"
+                    "\"request_limit_reached\":%s,"
+                    "\"nev_limit_reached\":%s,"
+                    "\"rejection_stage_count\":%llu,"
+                    "\"lower_edge_covered\":%s,"
+                    "\"upper_edge_covered\":%s,"
+                    "\"rejection_stage_clean\":%s,"
+                    "\"local_coverage_certified\":%s,"
+                    "\"coverage_deferred_to_refinement\":%s,"
+                    "\"coverage_failure_at_limit\":%s,"
+                    "\"requested_mode_count\":%u,"
+                    "\"retry_count\":%u,"
+                    "\"elapsed_seconds\":%.17g,"
                     "\"stop_reason\":\"%s\",\"raw_ritz_classification\":%s,"
                     "\"accepted_frequencies_hz\":[",
                     pass_index == 0u && subwindow_index == 0u ? "" : ",",
@@ -3341,8 +3740,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     subwindow_index,
                     shifted_problem.target_frequency_hz,
                     static_cast<unsigned long long>(
-                        pass_index == 0u ? requested_nev : refined_nev),
-                    shifted_status == FrequencyDomainStatus::ok ? "ok" : "failed",
+                        resolved_nev(subwindow_requested_mode_count)),
+                    shifted_status == FrequencyDomainStatus::ok &&
+                            !subwindow_coverage_failed
+                        ? "ok"
+                        : "failed",
                     shifted_result.converged_eigenpair_count,
                     shifted_result.raw_ritz_in_window_count,
                     shifted_result.raw_ritz_in_window_count,
@@ -3356,7 +3758,39 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     shifted_result.full_residual_rejected_count,
                     shifted_result.full_residual_accepted_count,
                     in_window_modes.size(),
-                    shifted_result.stop_reason[0] != '\0'
+                    local_frequency_min_hz,
+                    local_frequency_max_hz,
+                    final_local_accepted_mode_count,
+                    required_local_coverage_radius_hz,
+                    final_selected_coverage_radius_hz,
+                    final_selected_frequency_min_hz,
+                    final_selected_frequency_max_hz,
+                    final_result_truncated_at_requested_count ? "true" : "false",
+                    final_raw_ritz_pool_saturated ? "true" : "false",
+                    final_accepted_candidate_pool_saturated ? "true" : "false",
+                    final_candidate_pool_saturated ? "true" : "false",
+                    final_split_spectrum_exhausted ? "true" : "false",
+                    final_request_limit_reached ? "true" : "false",
+                    final_nev_limit_reached ? "true" : "false",
+                    static_cast<unsigned long long>(final_rejection_stage_count),
+                    final_lower_edge_covered ? "true" : "false",
+                    final_upper_edge_covered ? "true" : "false",
+                    final_rejection_stage_clean ? "true" : "false",
+                    final_local_coverage_certified ? "true" : "false",
+                    coverage_deferred_to_refinement ? "true" : "false",
+                    subwindow_coverage_failed &&
+                            (final_request_limit_reached ||
+                             final_nev_limit_reached)
+                        ? "true"
+                        : "false",
+                    subwindow_requested_mode_count,
+                    subwindow_retry_count,
+                    subwindow_elapsed_seconds,
+                    subwindow_coverage_failed
+                        ? "frequency_window_local_coverage_not_certified"
+                        : coverage_deferred_to_refinement
+                        ? "frequency_window_local_coverage_deferred_to_refinement"
+                        : shifted_result.stop_reason[0] != '\0'
                         ? shifted_result.stop_reason
                         : (shifted_status == FrequencyDomainStatus::ok
                                ? "converged"
@@ -3373,7 +3807,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         in_window_modes[accepted_index]->frequency_hz);
                 }
                 append_subwindow_json("%s", "]}");
-                if (shifted_status != FrequencyDomainStatus::ok) {
+                if (shifted_status != FrequencyDomainStatus::ok ||
+                    subwindow_coverage_failed) {
                     if (shifted_status == FrequencyDomainStatus::interrupted) {
                         window_interrupted = true;
                         pass_cancelled[pass_index] = true;
@@ -3381,12 +3816,17 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         ++out_result->window_failed_subwindow_count;
                         ++pass_failed_subwindow_count[pass_index];
                         window_failed = true;
+                        window_local_coverage_failed =
+                            window_local_coverage_failed ||
+                            subwindow_coverage_failed;
                     }
                     if (window_failure_reason[0] == '\0') {
                         copy_message(
                             window_failure_reason,
                             sizeof(window_failure_reason),
-                            shifted_result.stop_reason[0] != '\0'
+                            subwindow_coverage_failed
+                                ? "frequency_window_local_coverage_not_certified"
+                                : shifted_result.stop_reason[0] != '\0'
                                 ? shifted_result.stop_reason
                                 : (shifted_status ==
                                            FrequencyDomainStatus::interrupted
@@ -3397,6 +3837,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                         break;
                     }
                     continue;
+                }
+                if (!window_template_initialized) {
+                    *window_template_storage = shifted_result;
+                    window_template_initialized = true;
                 }
                 ++out_result->window_completed_subwindow_count;
                 ++pass_completed_subwindow_count[pass_index];
@@ -3451,7 +3895,6 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                     if (!duplicate) {
                         window_candidates.push_back(WindowCandidate{
                             mode,
-                            shifted_result,
                             pass_index});
                     }
                 }
@@ -3468,6 +3911,9 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 }
             }
         }
+        requested_nev = resolved_nev(pass_effective_requested_mode_count[0]);
+        refined_nev = resolved_nev(pass_effective_requested_mode_count[1]);
+        const bool refined_nev_increased = refined_nev > requested_nev;
         out_result->window_empty_subwindow_count = window_empty_subwindow_count;
         finalize_subwindow_json();
         if (!subwindow_json_complete) {
@@ -3529,7 +3975,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
-                refined_requested_mode_count,
+                pass_effective_requested_mode_count[1],
                 static_cast<unsigned long long>(refined_nev),
                 pass_state(0u),
                 pass_planned_subwindow_count[0],
@@ -3873,7 +4319,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 problem.frequency_max_hz,
                 problem.requested_mode_count,
                 static_cast<unsigned long long>(requested_nev),
-                refined_requested_mode_count,
+                pass_effective_requested_mode_count[1],
                 static_cast<unsigned long long>(refined_nev),
                 discovered_mode_count,
                 pass_state(0u),
@@ -3981,8 +4427,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                 sizeof(cluster_ranks_json),
                 "[]");
         }
-        auto aggregate_storage = std::make_unique<PoissonAirboxModalEigenResult>(
-            window_candidates.front().source);
+        auto aggregate_storage = std::make_unique<PoissonAirboxModalEigenResult>();
+        if (window_template_initialized) {
+            *aggregate_storage = *window_template_storage;
+        }
         PoissonAirboxModalEigenResult &aggregate = *aggregate_storage;
         aggregate.accepted_modes.clear();
         aggregate.accepted_modes.reserve(window_candidates.size());
@@ -4082,11 +4530,14 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             window_operator_context.poisson_factorization_setup_count;
         aggregate.shift_solver_setup_count =
             window_operator_context.shift_solver_setup_count;
+        const bool refinement_local_coverage_complete =
+            pass_local_coverage_uncertified_count[1] == 0u;
         aggregate.window_complete =
             !window_failed && !window_interrupted &&
             base_pass_complete && refinement_pass_complete &&
             mode_coverage_complete && !refinement_disagreement &&
-            coverage_margins_positive && cluster_json_complete;
+            coverage_margins_positive && cluster_json_complete &&
+            refinement_local_coverage_complete;
         const char *window_certificate_status = aggregate.window_complete
             ? "certified"
             : (window_failed ? "failed" : "not_certified");
@@ -4094,6 +4545,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             ? "window_complete"
             : (window_interrupted
                    ? "cancel_requested"
+                   : (window_local_coverage_failed
+                          ? "frequency_window_local_coverage_not_certified"
                    : (!subwindow_json_complete
                           ? "frequency_window_schedule_summary_truncated"
                           : (window_failed ||
@@ -4102,7 +4555,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
                                  ? "frequency_window_subwindow_failed"
                                  : (refinement_disagreement
                                         ? "frequency_window_refinement_disagreement"
-                                        : "frequency_window_incomplete_mode_coverage"))));
+                                        : "frequency_window_incomplete_mode_coverage")))));
         if (window_interrupted) {
             perturbation_result = "cancelled";
             min_subspace_overlap = 0.0;
@@ -4146,7 +4599,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_schur(
             problem.frequency_max_hz,
             problem.requested_mode_count,
             static_cast<unsigned long long>(requested_nev),
-            refined_requested_mode_count,
+            pass_effective_requested_mode_count[1],
             static_cast<unsigned long long>(refined_nev),
             discovered_mode_count,
             aggregate.accepted_mode_count,
@@ -5127,7 +5580,8 @@ FrequencyDomainStatus certify_poisson_airbox_schur_matshell_cpu(
         "PA-E3 Schur MatShell certification requires PETSc/SLEPc",
         "slepc_not_available");
 #else
-    PoissonAirboxModalEigenResult sparse_reference{};
+    auto sparse_reference_storage = std::make_unique<PoissonAirboxModalEigenResult>();
+    PoissonAirboxModalEigenResult &sparse_reference = *sparse_reference_storage;
     FrequencyDomainStatus reference_status =
         solve_poisson_airbox_modal_eigen_cpu_slepc(problem, &sparse_reference);
     if (reference_status != FrequencyDomainStatus::ok) {

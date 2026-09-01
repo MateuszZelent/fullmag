@@ -195,6 +195,8 @@ pub(super) fn merge_poisson_airbox_modal_result_diagnostics(
         ("gauge_policy", &["gauge_policy"][..]),
         ("q_dof_count", &["q_dof_count"][..]),
         ("phi_dof_count", &["phi_dof_count"][..]),
+        ("magnetic_pair_count", &["magnetic_pair_count"][..]),
+        ("airbox_pair_count", &["airbox_pair_count"][..]),
         ("augmented_dof_count", &["augmented_dof_count"][..]),
         ("augmented_phi_dof_count", &["augmented_phi_dof_count"][..]),
         ("residual_tolerance", &["residual_tolerance"][..]),

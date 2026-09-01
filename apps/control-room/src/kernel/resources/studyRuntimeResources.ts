@@ -576,7 +576,14 @@ export function frequencyDomainTextArtifactRevision(
 export function frequencyDomainJsonArtifactRevision(
   data: Pick<
     FrequencyDomainJsonArtifactResource,
-    "artifact_path" | "content_digest" | "missing_reason" | "revision" | "status"
+    | "artifact_path"
+    | "content_digest"
+    | "mesh_generation_id"
+    | "missing_reason"
+    | "revision"
+    | "run_id"
+    | "stage_id"
+    | "status"
   > | null,
 ): string | null {
   if (!data) return null;
@@ -585,6 +592,9 @@ export function frequencyDomainJsonArtifactRevision(
     data.artifact_path,
     data.revision ?? "",
     data.content_digest ?? "",
+    data.run_id ?? "",
+    data.stage_id ?? "",
+    data.mesh_generation_id ?? "",
     data.missing_reason ?? "",
   ].join(":");
 }

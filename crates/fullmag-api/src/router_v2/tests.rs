@@ -26692,12 +26692,50 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     set_running_stage_execution(&state, 17).await;
     let source_artifact_dir = repo_root.join("artifacts");
-    let spectrum = br#"{"schema_version":"eigen_spectrum.v2","samples":[],"marker":"persisted"}"#;
+    let candidate_identity = serde_json::json!({
+        "schema_version": "frequency_domain_candidate_identity.v1",
+        "mesh_id": "periodic-antidot",
+        "mesh_generation_id": "mesh-generation-persisted",
+        "topology_fingerprint": "sha256:topology-persisted",
+        "equilibrium_artifact_sha256": "sha256:equilibrium-persisted",
+        "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        "device": "cpu",
+        "source_identity": {"source_snapshot_sha256": "sha256:source-persisted"}
+    });
+    let spectrum = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_spectrum.v2",
+        "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        "solve_succeeded": true,
+        "fields_available": true,
+        "spectrum_completeness": "complete_window",
+        "window_complete": true,
+        "candidate_identity": candidate_identity.clone(),
+        "samples": [],
+        "marker": "persisted"
+    }))
+    .expect("spectrum fixture should serialize");
+    let spectrum_revision = format!("sha256:{:x}", Sha256::digest(&spectrum));
+    let mode_metadata = serde_json::to_vec(&serde_json::json!({
+        "schema_version": "eigen_mode.v2",
+        "sample_index": 0,
+        "raw_mode_index": 0,
+        "candidate_identity": candidate_identity,
+        "source_spectrum_revision": spectrum_revision
+    }))
+    .expect("mode metadata fixture should serialize");
     let mode_bytes = b"exact-mode-payload-bytes";
     fs::create_dir_all(source_artifact_dir.join("eigen/modes/sample_0000"))
         .expect("source eigen artifact directory should exist");
-    fs::write(source_artifact_dir.join("eigen/spectrum.v2.json"), spectrum)
-        .expect("source spectrum should be written");
+    fs::write(
+        source_artifact_dir.join("eigen/spectrum.v2.json"),
+        &spectrum,
+    )
+    .expect("source spectrum should be written");
+    fs::write(
+        source_artifact_dir.join("eigen/modes/sample_0000/mode_0000.json"),
+        &mode_metadata,
+    )
+    .expect("source mode metadata should be written");
     fs::write(
         source_artifact_dir.join("eigen/modes/sample_0000/mode_0000.bin"),
         mode_bytes,
@@ -26732,8 +26770,15 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
         preflight
             .documents
             .get("runs/test-run/artifacts/eigen/spectrum.v2.json"),
-        Some(&spectrum.to_vec()),
+        Some(&spectrum),
         "the exact spectrum metadata must be embedded in the fms"
+    );
+    assert_eq!(
+        preflight
+            .documents
+            .get("runs/test-run/artifacts/eigen/modes/sample_0000/mode_0000.json"),
+        Some(&mode_metadata),
+        "the exact mode metadata and candidate binding must be embedded in the fms"
     );
     assert_eq!(
         preflight
@@ -26837,6 +26882,19 @@ async fn solved_session_export_restores_frequency_artifacts_after_source_history
     let spectrum_resource = body_json(spectrum_response).await;
     assert_eq!(spectrum_resource["status"], "ready");
     assert_eq!(spectrum_resource["payload"]["marker"], "persisted");
+    assert_eq!(
+        spectrum_resource["payload"]["candidate_identity"]["mesh_generation_id"],
+        "mesh-generation-persisted"
+    );
+    assert_eq!(
+        spectrum_resource["payload"]["spectrum_completeness"],
+        "complete_window"
+    );
+    assert_eq!(spectrum_resource["payload"]["window_complete"], true);
+    assert_eq!(
+        spectrum_resource["content_digest"],
+        format!("sha256:{:x}", Sha256::digest(&spectrum))
+    );
 
     let command_response = app
         .oneshot(
@@ -42759,6 +42817,44 @@ async fn frequency_domain_artifact_rejects_malformed_typed_payload() {
 }
 
 #[tokio::test]
+async fn frequency_domain_artifact_identity_uses_top_level_fem_mesh_generation() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let snapshot = snapshot.as_mut().expect("session snapshot should exist");
+        snapshot.stage_execution = None;
+        snapshot.live_state = None;
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+    }
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should be created");
+    fs::write(
+        eigen_dir.join("spectrum.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "samples": [],
+        }))
+        .expect("spectrum fixture should serialize"),
+    )
+    .expect("spectrum fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["mesh_generation_id"], "42");
+    assert!(payload["stage_id"].is_null());
+}
+
+#[tokio::test]
 async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let eigen_dir = artifact_dir.join("eigen");
@@ -42830,6 +42926,20 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         snapshot.mesh_revision = 9;
         snapshot.fem_mesh = Some(current_mesh);
     }
+    set_running_stage_execution(&state, 10).await;
+    {
+        let mut snapshot = state.current_live_state.write().await;
+        let execution = snapshot
+            .as_mut()
+            .and_then(|snapshot| snapshot.stage_execution.as_mut())
+            .expect("stage execution should exist");
+        execution.stages[0].stage_id = Some("eigen-stage".into());
+        execution.stages[0].kind = Some("flat_eigenmodes".into());
+        execution.stages[0].mesh_generation_id = Some("mesh-generation-eigen".into());
+        execution.stages[1].stage_id = Some("later-active-stage".into());
+        execution.stages[1].kind = Some("relax".into());
+        execution.stages[1].mesh_generation_id = Some("mesh-generation-later".into());
+    }
     write_response_sweep_bundle(&artifact_dir, &frequency_domain_response_sweep_fixture(2))
         .expect("response sweep bundle should be written");
     let progress_path = artifact_dir.join("response").join("progress.v1.json");
@@ -42859,6 +42969,21 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
         eigen_dir.join("spectrum.v2.json"),
         serde_json::to_vec(&serde_json::json!({
             "schema_version": "eigen_spectrum.v2",
+            "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+            "solve_succeeded": true,
+            "fields_available": true,
+            "spectrum_completeness": "selected_only",
+            "window_complete": false,
+            "candidate_identity": {
+                "schema_version": "frequency_domain_candidate_identity.v1",
+                "mesh_id": "periodic-antidot",
+                "mesh_generation_id": "mesh-generation-artifact",
+                "topology_fingerprint": "sha256:topology",
+                "equilibrium_artifact_sha256": "sha256:equilibrium",
+                "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+                "device": "cpu",
+                "source_identity": {"source_snapshot_sha256": "sha256:source"}
+            },
             "samples": [{
                 "sample_index": 0,
                 "path_s": 0.0,
@@ -43136,7 +43261,19 @@ async fn frequency_domain_artifact_resources_report_ready_and_missing_states() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["status"], "ready");
     assert_eq!(payload["artifact_path"], "eigen/spectrum.v2.json");
+    assert_eq!(payload["session_id"], "test-session");
+    assert_eq!(payload["run_id"], "test-run");
+    assert_eq!(payload["stage_id"], "eigen-stage");
+    assert_eq!(payload["mesh_generation_id"], "mesh-generation-eigen");
     assert_eq!(payload["payload"]["schema_version"], "eigen_spectrum.v2");
+    assert_eq!(payload["payload"]["solve_succeeded"], true);
+    assert_eq!(payload["payload"]["fields_available"], true);
+    assert_eq!(payload["payload"]["spectrum_completeness"], "selected_only");
+    assert_eq!(payload["payload"]["window_complete"], false);
+    assert_eq!(
+        payload["payload"]["candidate_identity"]["mesh_generation_id"],
+        "mesh-generation-artifact"
+    );
     assert_eq!(
         payload["payload"]["samples"][0]["modes"][0]["raw_mode_index"],
         3

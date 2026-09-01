@@ -39,7 +39,8 @@ web-build-static:
 		echo "Neither pnpm nor corepack is available on PATH." >&2; \
 		exit 127; \
 	fi; \
-	if [ ! -d "$$WEB_APP_DIR/node_modules" ] && [ ! -d "node_modules" ]; then \
+	if [ ! -f "$$WEB_APP_DIR/node_modules/.bin/next" ] || \
+		[ ! -f "$$WEB_APP_DIR/node_modules/next/dist/bin/next" ]; then \
 		$$PNPM_CMD install --dir "$$WEB_APP_DIR"; \
 	fi; \
 	rm -rf "$$WEB_APP_DIR/.next" "$$WEB_APP_DIR/out" .fullmag/local/web.new; \

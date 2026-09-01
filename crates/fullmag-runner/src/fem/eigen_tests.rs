@@ -1487,6 +1487,26 @@ fn native_modal_progress_json_maps_to_runtime_progress() {
 }
 
 #[test]
+fn native_modal_window_progress_exposes_phase_and_global_subwindow_position() {
+    let event = native_modal_progress_event(
+        r#"{"schema_version":"fem_frequency_domain_progress.v1","solver_phase":"solving_shift_invert","window_phase":"refinement","current_subwindow":23,"total_subwindows":50,"candidate_mode_count":8,"accepted_mode_count":4,"outer_iteration":17,"max_outer_iterations":300,"current_residual_relative_l2":2.5e-10,"subwindow_elapsed_seconds":12.5,"window_elapsed_seconds":640.0}"#,
+        NATIVE_CPU_MODAL_WINDOW_SOLVER_KIND,
+        5_156,
+        10_312,
+        8,
+    )
+    .expect("valid native window progress should map");
+
+    assert_eq!(event.phase, "solving_native_frequency_window_refinement");
+    assert_eq!(event.iteration, Some(23));
+    assert_eq!(event.max_iterations, Some(50));
+    assert!((event.percent - 55.7).abs() < 1.0e-12);
+    assert_eq!(event.candidate_modes, 8);
+    assert_eq!(event.computed_modes, 4);
+    assert_eq!(event.residual, Some(2.5e-10));
+}
+
+#[test]
 fn bias_field_sweep_relax_each_always_starts_from_plan_initial_state() {
     let mut plan = minimal_native_modal_plan();
     plan.equilibrium = EquilibriumSourceIR::Provided;
@@ -1990,7 +2010,7 @@ fn bias_field_sweep_executor_error_finalizes_completed_prefix_without_terminal_s
 }
 
 #[test]
-fn bias_field_sweep_kittel_oracle_request_fails_closed() {
+fn bias_field_sweep_kittel_oracle_request_accepts_physical_k0_adapter_contract() {
     let mut plan = minimal_native_modal_plan();
     plan.bias_field_samples = vec![bias_field_sample(
         0,
@@ -2014,11 +2034,8 @@ fn bias_field_sweep_kittel_oracle_request_fails_closed() {
         }],
     });
 
-    let error = validate_bias_field_sweep_oracle_contract(&plan)
-        .expect_err("unimplemented Kittel postsolve must fail closed");
-    assert!(error
-        .message
-        .contains("bias_field_sweep_kittel_postsolve_oracle_unavailable"));
+    validate_bias_field_sweep_oracle_contract(&plan)
+        .expect("physical K0 Kittel sweep has a postsolve adapter contract");
 }
 
 fn bias_field_sample(
@@ -4230,6 +4247,19 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     }
     let summary = serde_json::json!({
         "solver_kind": "k0_poisson_airbox_gpu_petsc_slepc",
+        "solver_diagnostics": {
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
+            "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_gpu_petsc_slepc.v1",
+            "solve_succeeded": true,
+            "fields_available": true,
+            "spectrum_completeness": "selected_only",
+            "window_complete": false,
+            "execution_lane": "production_gpu",
+            "resolved_execution": {"device": "gpu"},
+            "equilibrium_artifact_sha256": provenance["equilibrium_artifact_sha256"],
+            "source_mesh_topology_sha256": provenance["source_mesh_topology_sha256"],
+        },
         "modes": [legacy_mode.clone()],
     });
     let mut artifacts = vec![json_artifact("eigen/modes/mode_0000.json", &legacy_mode)
@@ -4251,6 +4281,18 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     assert!(spectrum_v2["samples"][0]["modes"][0]
         .get("component_participation")
         .is_none());
+    assert_eq!(spectrum_v2["solve_succeeded"], true);
+    assert_eq!(spectrum_v2["fields_available"], true);
+    assert_eq!(spectrum_v2["spectrum_completeness"], "selected_only");
+    assert_eq!(spectrum_v2["window_complete"], false);
+    assert_eq!(
+        spectrum_v2["candidate_identity"]["device"],
+        serde_json::json!("gpu")
+    );
+    assert_eq!(
+        spectrum_v2["candidate_identity"]["topology_fingerprint"],
+        plan.mesh.topology_fingerprint_v6()
+    );
     let spectrum_v3 = artifacts
         .iter()
         .find(|artifact| artifact.relative_path == "eigen/spectrum.v3.json")
@@ -4261,6 +4303,27 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
         spectrum_v3["samples"][0]["modes"][0]["component_participation"]["status"],
         "unavailable"
     );
+    let manifest = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
+        .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+        .expect("frequency-domain manifest must be emitted");
+    assert_eq!(
+        manifest["equilibrium_identity"],
+        provenance["equilibrium_artifact_sha256"]
+    );
+    assert_eq!(
+        manifest["mesh_identity"],
+        crate::artifacts::solver_mesh_signature(&plan.mesh)
+    );
+    assert_eq!(manifest["boundary_context"], "finite_open");
+    assert_eq!(
+        manifest["k_sampling"],
+        serde_json::json!({
+            "kind": "single",
+            "vector_rad_per_m": [0.0, 0.0, 0.0],
+        })
+    );
 
     let nested = artifacts
         .iter()
@@ -4270,6 +4333,23 @@ fn native_eigen_v2_mode_metadata_preserves_operator_provenance() {
     for key in provenance.as_object().expect("provenance object").keys() {
         assert_eq!(nested[key], provenance[key], "nested mode lost {key}");
     }
+    assert_eq!(
+        nested["candidate_identity"],
+        spectrum_v2["candidate_identity"]
+    );
+    assert_eq!(
+        nested["source_spectrum_revision"],
+        serde_json::json!(format!(
+            "sha256:{:x}",
+            Sha256::digest(
+                &artifacts
+                    .iter()
+                    .find(|artifact| artifact.relative_path == "eigen/spectrum.v2.json")
+                    .expect("spectrum artifact")
+                    .bytes
+            )
+        ))
+    );
     assert_eq!(
         nested["source_mesh_identity"],
         serde_json::json!({
@@ -4311,6 +4391,30 @@ fn native_eigen_v2_rejects_requested_mode_without_cartesian_complex_payload() {
     .expect_err("a requested field export without payload must fail closed");
 
     assert!(error.message.contains("requested mode 0"));
+}
+
+#[test]
+fn native_eigen_v2_rejects_production_k0_without_split_publication_statuses() {
+    let plan = minimal_native_modal_plan();
+    let summary = serde_json::json!({
+        "solver_kind": "k0_poisson_airbox_cpu_schur_slepc",
+        "solver_diagnostics": {
+            "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+            "engine_id": "native_fem.frequency_domain.k0_poisson_airbox_cpu_schur_slepc.v1",
+        },
+        "modes": [],
+    });
+
+    let error = write_eigen_v2_bundle(
+        &plan,
+        &summary,
+        &std::collections::BTreeSet::new(),
+        &mut Vec::new(),
+        0,
+    )
+    .expect_err("production K0 publication must fail closed without split statuses");
+
+    assert!(error.message.contains("solve_succeeded"));
 }
 
 #[test]

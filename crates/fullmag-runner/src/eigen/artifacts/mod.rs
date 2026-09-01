@@ -25,10 +25,13 @@ pub use fmr::{
     FmrPeakSource, FmrPeakSourceKind, FmrPeakUncertainty, FmrPeaksArtifact, ResonanceFitArtifact,
     ResonanceFitsArtifact,
 };
-pub(crate) use kittel::k0_kittel_validation_auxiliary_artifacts;
 pub use kittel::{
     build_kittel_fit_artifact, write_kittel_fit_artifact, KittelFitArtifact,
     KittelFitParameterArtifact, KittelFitPointArtifact,
+};
+pub(crate) use kittel::{
+    k0_kittel_validation_auxiliary_artifacts,
+    k0_kittel_validation_auxiliary_artifacts_from_bias_field_sweep,
 };
 pub use modal_manifest::{
     write_branch_bundle, write_frequency_domain_eigen_manifest, write_path_bundle,

@@ -182,6 +182,30 @@ pub(super) fn pa_e4b_airbox_size_m(plan: &FemEigenPlanIR) -> Result<f64, RunErro
 /// based on the open-axis extent of the actual mesh; the public airbox
 /// `factor` controls domain construction/metadata and is not an additional
 /// multiplier for the boundary condition.
+fn robin_reference_extent_m(
+    min_corner: [f64; 3],
+    max_corner: [f64; 3],
+    periodic_axis: [bool; 3],
+) -> f64 {
+    let open_axis_extent = (0..3)
+        .filter(|axis| !periodic_axis[*axis])
+        .map(|axis| max_corner[axis] - min_corner[axis])
+        .filter(|extent| extent.is_finite() && *extent > 0.0)
+        .fold(0.0_f64, f64::max);
+    if open_axis_extent > 0.0 {
+        open_axis_extent
+    } else {
+        // A fully periodic mesh has no distinguished open axis.  Preserve a
+        // deterministic fallback for that invalid-for-airbox configuration,
+        // while ensuring a normal x/y-PBC, open-z mesh never uses its periodic
+        // cell width to set the Robin length scale.
+        (0..3)
+            .map(|axis| max_corner[axis] - min_corner[axis])
+            .filter(|extent| extent.is_finite() && *extent > 0.0)
+            .fold(0.0_f64, f64::max)
+    }
+}
+
 pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option<f64>, RunError> {
     let Some(config) = plan.air_box_config.as_ref() else {
         return Ok(None);
@@ -214,23 +238,48 @@ pub(super) fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option
             }
         }
     }
-    let reference_extent = (0..3)
-        .filter(|axis| !periodic_axis[*axis])
-        .map(|axis| max_corner[axis] - min_corner[axis])
-        .filter(|extent| extent.is_finite() && *extent > 0.0)
-        .fold(0.0_f64, f64::max)
-        .max(
-            (0..3)
-                .map(|axis| max_corner[axis] - min_corner[axis])
-                .filter(|extent| extent.is_finite() && *extent > 0.0)
-                .fold(0.0_f64, f64::max),
-        );
+    let reference_extent = robin_reference_extent_m(min_corner, max_corner, periodic_axis);
     if !(reference_extent.is_finite() && reference_extent > 0.0) {
         return Err(RunError {
             message: "shared-domain Robin beta requires a positive mesh extent".to_string(),
         });
     }
     Ok(Some(coefficient_factor / (reference_extent * 0.5)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::robin_reference_extent_m;
+
+    #[test]
+    fn robin_reference_extent_ignores_periodic_cell_width() {
+        let extent = robin_reference_extent_m(
+            [-80.0e-9, -40.0e-9, -25.0e-9],
+            [80.0e-9, 40.0e-9, 25.0e-9],
+            [true, true, false],
+        );
+        assert!((extent - 50.0e-9).abs() < 1.0e-18);
+    }
+
+    #[test]
+    fn robin_reference_extent_uses_largest_open_axis() {
+        let extent = robin_reference_extent_m(
+            [-1.0, -5.0, -2.0],
+            [1.0, 5.0, 2.0],
+            [true, false, false],
+        );
+        assert!((extent - 10.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn robin_reference_extent_has_deterministic_all_periodic_fallback() {
+        let extent = robin_reference_extent_m(
+            [-1.0, -2.0, -3.0],
+            [1.0, 2.0, 3.0],
+            [true, true, true],
+        );
+        assert!((extent - 6.0).abs() < 1.0e-12);
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -281,6 +281,7 @@ pub(super) fn solve_real_symmetric_eigenpairs_sparse(
                 max_iterations: Some(lobpcg.max_iterations),
                 residual: Some(lobpcg.max_residual),
                 warning: sparse_lobpcg_progress_warning(plan, solver_modes, num_modes),
+                ..Default::default()
             },
         );
         if let Err(error) = result {

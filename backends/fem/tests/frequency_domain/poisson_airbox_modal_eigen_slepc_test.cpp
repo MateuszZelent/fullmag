@@ -94,6 +94,37 @@ bool contains(const char *haystack, const char *needle)
     return haystack != nullptr && std::strstr(haystack, needle) != nullptr;
 }
 
+std::size_t count_occurrences(const char *haystack, const char *needle)
+{
+    if (haystack == nullptr || needle == nullptr || needle[0] == '\0') {
+        return 0u;
+    }
+    std::size_t count = 0u;
+    const char *cursor = haystack;
+    while ((cursor = std::strstr(cursor, needle)) != nullptr) {
+        ++count;
+        cursor += std::strlen(needle);
+    }
+    return count;
+}
+
+bool json_object_after_contains(
+    const char *haystack,
+    const char *object_anchor,
+    const char *needle)
+{
+    if (haystack == nullptr || object_anchor == nullptr || needle == nullptr) {
+        return false;
+    }
+    const char *object_begin = std::strstr(haystack, object_anchor);
+    if (object_begin == nullptr) {
+        return false;
+    }
+    const char *object_end = std::strchr(object_begin, '}');
+    const char *match = std::strstr(object_begin, needle);
+    return object_end != nullptr && match != nullptr && match < object_end;
+}
+
 int always_cancel(void *)
 {
     return 1;
@@ -1443,6 +1474,186 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
           "certified window must never hide a truncated schedule summary");
 }
 
+void FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated()
+{
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
+        {0.25e9, 1.0e9, 2.0e9, 3.0e9, 4.0e9,
+         5.0e9, 6.0e9, 7.0e9, 8.0e9, 9.0e9});
+    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        0.5e9,
+        8.5e9,
+        8);
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        result.error_message);
+    check(result.window_complete && result.accepted_mode_count == 8u,
+          "distributed eight-mode window must remain complete");
+    check(count_occurrences(
+              result.executed_subwindows_json,
+              "\"local_accepted_mode_count\":") == 50u,
+          "every planned subwindow must publish its local accepted-mode count");
+    check(count_occurrences(
+              result.executed_subwindows_json,
+              "\"retry_count\":0") == 50u,
+          "a globally saturated result must not trigger a local adaptive retry");
+    check(!contains(result.executed_subwindows_json, "\"retry_count\":1"),
+          "distributed local subwindows must not repeat the SLEPc solve");
+    check(contains(result.window_certificate_json, "\"requested_nev\":8") &&
+              contains(result.window_certificate_json, "\"refined_nev\":16"),
+          "window certificate must publish the effective base/refinement nev");
+}
+
+void FrequencyWindowRetriesWhenALocalIntervalIsSaturated()
+{
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
+        {0.20e9, 1.10e9, 1.15e9, 1.20e9, 2.50e9, 4.80e9});
+    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        0.5e9,
+        4.5e9,
+        4);
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        result.error_message);
+    check(result.window_complete && result.accepted_mode_count == 4u,
+          "locally dense frequency window must remain complete after adaptive retry");
+    check(contains(result.executed_subwindows_json, "\"retry_count\":1"),
+          "a locally saturated base subwindow must retry with a larger request");
+    check(contains(result.executed_subwindows_json,
+                   "\"local_accepted_mode_count\":3,\"required_local_coverage_radius_hz\":"),
+          "the retried subwindow must publish the final local accepted-mode count");
+    const double requested_nev = json_number_after(
+        result.window_certificate_json,
+        "\"requested_nev\":");
+    const double refined_nev = json_number_after(
+        result.window_certificate_json,
+        "\"refined_nev\":");
+    check(requested_nev == 16.0 && refined_nev > requested_nev,
+          "refinement must start above the effective base request after retry");
+    const double refined_requested_mode_count = json_number_after(
+        result.window_certificate_json,
+        "\"refined_requested_mode_count\":");
+    check(refined_requested_mode_count >= 5.0 &&
+              refined_requested_mode_count <= 8.0,
+          "certificate must publish the bounded effective refinement request");
+}
+
+void FrequencyWindowRetriesUntilBothClippedEdgesAreCovered()
+{
+    const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
+        {0.35e9, 0.38e9, 0.40e9, 0.42e9,
+         0.55e9, 1.50e9, 2.50e9, 4.45e9,
+         4.58e9, 4.60e9, 4.62e9, 4.65e9});
+    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        0.5e9,
+        4.5e9,
+        4);
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+            fd::FrequencyDomainStatus::ok,
+        result.error_message);
+    check(result.window_complete && result.accepted_mode_count == 4u,
+          "edge-covered frequency window must publish all four in-window modes");
+
+    const char *lower_edge =
+        "\"pass\":\"refinement\",\"subwindow_index\":0,";
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              lower_edge,
+              "\"local_frequency_min_hz\":500000000,\"local_frequency_max_hz\":562500000"),
+          "lower refinement edge must publish its clipped local interval");
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              lower_edge,
+              "\"local_accepted_mode_count\":1"),
+          "lower refinement edge must recover its in-window mode");
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              lower_edge,
+              "\"requested_mode_count\":8,\"retry_count\":1"),
+          "lower refinement edge must grow the request until coverage is certified");
+
+    const char *upper_edge =
+        "\"pass\":\"refinement\",\"subwindow_index\":33,";
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              upper_edge,
+              "\"local_frequency_min_hz\":4437500000,\"local_frequency_max_hz\":4500000000"),
+          "upper refinement edge must publish its clipped local interval");
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              upper_edge,
+              "\"local_accepted_mode_count\":1"),
+          "upper refinement edge must recover its in-window mode");
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              upper_edge,
+              "\"requested_mode_count\":8,\"retry_count\":1"),
+          "upper refinement edge must grow the request until coverage is certified");
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              lower_edge,
+              "\"lower_edge_covered\":true,\"upper_edge_covered\":true"),
+          "lower refinement subwindow must certify both interval endpoints independently");
+    check(json_object_after_contains(
+              result.executed_subwindows_json,
+              upper_edge,
+              "\"lower_edge_covered\":true,\"upper_edge_covered\":true"),
+          "upper refinement subwindow must certify both interval endpoints independently");
+}
+
+void FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges()
+{
+    std::vector<double> one_sided_frequencies_hz;
+    one_sided_frequencies_hz.reserve(64u);
+    for (std::uint32_t index = 0u; index < 64u; ++index) {
+        one_sided_frequencies_hz.push_back(
+            1.00e9 + static_cast<double>(index) * 0.01e9);
+    }
+    const WindowSpectrumFixture fixture =
+        make_window_spectrum_fixture(one_sided_frequencies_hz);
+    const fd::PoissonAirboxEigenBlockProblem problem = fixture.problem(
+        0.5e9,
+        4.5e9,
+        4);
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(
+        fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+            fd::FrequencyDomainStatus::solve_error,
+        "a one-sided saturated local spectrum must fail the complete-window gate");
+    check(!result.window_complete,
+          "uncovered local interval endpoints must never publish window_complete=true");
+    check(std::strcmp(
+              result.stop_reason,
+              "frequency_window_local_coverage_not_certified") == 0,
+          "local coverage failure must publish a stable fail-closed stop reason");
+    check(contains(result.executed_subwindows_json,
+                   "\"lower_edge_covered\":false"),
+          "one-sided local evidence must expose the uncovered lower endpoint");
+    check(contains(result.executed_subwindows_json,
+                   "\"local_coverage_certified\":false,"),
+          "maximum local NEV without two-sided coverage must remain uncertified");
+    check(contains(result.executed_subwindows_json,
+                   "\"split_spectrum_exhausted\":false"),
+          "the negative fixture must not pass through full-spectrum exhaustion");
+    check(contains(result.executed_subwindows_json,
+                   "\"coverage_failure_at_limit\":true") &&
+              contains(result.executed_subwindows_json,
+                       "\"requested_mode_count\":8,\"retry_count\":1"),
+          "the failing refinement subwindow must exhaust the bounded adaptive request before failing");
+    check(contains(result.window_certificate_json, "\"status\":\"failed\"") &&
+              !contains(result.window_certificate_json, "\"status\":\"certified\""),
+          "local coverage failure must fail the global certificate");
+}
+
 void FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace()
 {
     const WindowSpectrumFixture fixture = make_window_spectrum_fixture(
@@ -1461,6 +1672,9 @@ void FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace()
           "degenerate frequency cluster must be certified as a complete invariant subspace");
     check(result.accepted_mode_count == 2u,
           "degenerate frequency cluster must preserve its physical rank");
+    check(contains(result.executed_subwindows_json,
+                   "\"split_spectrum_exhausted\":true"),
+          "a complete bounded split spectrum must certify empty local intervals without false truncation");
     check(contains(result.window_certificate_json, "\"cluster_ranks\":[2]"),
           "degenerate frequency certificate must publish rank two");
     check(json_number_after(result.window_certificate_json,
@@ -2272,8 +2486,8 @@ void SolvesSharedDomainGpuValidationModalFixture()
     check(contains(result.diagnostics_json, "\"validation_only\":true"),
           "bounded GPU modal diagnostics must identify the validation-only lane");
     check(contains(result.diagnostics_json,
-                   "\"persistent_solver_context\":true"),
-          "GPU modal K0 diagnostics must publish persistent context");
+                   "\"persistent_solver_context\":false"),
+          "bounded GPU validation diagnostics must report a non-persistent context");
     check(contains(result.diagnostics_json,
                    "\"cpu_fallback\":\"disabled\""),
           "GPU modal K0 diagnostics must reject CPU fallback");
@@ -2422,6 +2636,10 @@ int main()
     }
     if (std::getenv("FULLMAG_N2_CW1_FOCUSED") != nullptr) {
         FrequencyWindowPublishesCompleteCertificateForSyntheticFixture();
+        FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
+        FrequencyWindowRetriesWhenALocalIntervalIsSaturated();
+        FrequencyWindowRetriesUntilBothClippedEdgesAreCovered();
+        FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges();
         FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace();
         FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster();
         FrequencyWindowEmptyFailurePreservesFlagsAndCounts();
@@ -2451,6 +2669,10 @@ int main()
     RejectsFrequencyWindowOnFullCoupledAdapter();
     PublishesCanonicalResidualFieldsAndSolverReasons();
     FrequencyWindowPublishesCompleteCertificateForSyntheticFixture();
+    FrequencyWindowDoesNotRetryWhenOnlyTheGlobalRequestIsSaturated();
+    FrequencyWindowRetriesWhenALocalIntervalIsSaturated();
+    FrequencyWindowRetriesUntilBothClippedEdgesAreCovered();
+    FrequencyWindowFailsClosedWhenMaximumRequestCannotCoverBothEdges();
     FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace();
     FrequencyWindowFailsClosedWhenRequestSplitsDegenerateCluster();
     FrequencyWindowEmptyFailurePreservesFlagsAndCounts();

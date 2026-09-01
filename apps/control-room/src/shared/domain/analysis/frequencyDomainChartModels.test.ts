@@ -86,9 +86,9 @@ describe("frequencyDomainChartModels", () => {
       }),
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 3, y: 2.5e9 },
+      { rowIndex: 0, x: 3, y: 2.5 },
     ]);
-    expect(model.series[0]?.unit).toBe("Hz");
+    expect(model.series[0]?.unit).toBe("GHz");
     expect(model.series[0]?.xUnit).toBe("1");
   });
 
@@ -151,8 +151,8 @@ describe("frequencyDomainChartModels", () => {
       }),
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 1.481196536e9 },
-      { rowIndex: 1, x: 1, y: 2.25e9 },
+      { rowIndex: 0, x: 0, y: 1.481196536 },
+      { rowIndex: 1, x: 1, y: 2.25 },
     ]);
   });
 
@@ -177,8 +177,8 @@ describe("frequencyDomainChartModels", () => {
       { displayModeIndex: 1, modeId: "mode-beta", rawModeIndex: 99 },
     ]);
     expect(model.series[0]?.points).toEqual([
-      { rowIndex: 0, x: 0, y: 3e9 },
-      { rowIndex: 1, x: 1, y: 4e9 },
+      { rowIndex: 0, x: 0, y: 3 },
+      { rowIndex: 1, x: 1, y: 4 },
     ]);
   });
 
@@ -278,9 +278,11 @@ describe("frequencyDomainChartModels", () => {
           {
             branch_id: "b0",
             frequency_hz: 2.5e9,
+            mode_id: "sample-0002/mode-0003",
             mode_field_id: "field-0",
             mode_field_resource_key: fieldVectorResourceKey("field-0"),
             raw_mode_index: 3,
+            sample_id: "sample-0002",
             sample_index: 2,
           },
         ],
@@ -290,21 +292,37 @@ describe("frequencyDomainChartModels", () => {
     expect(buildEigenModeSelectionRef(model.points[0]!, {
       analysisRunId: "run-1",
       analysisStageId: "stage-1",
+      artifactRevision: 17,
       artifactPath: "eigen/spectrum.v2.json",
       calculationMode: "fmr_modal",
+      equilibriumId: "equilibrium-1",
+      kContextKind: "gamma",
+      representation: "complex-vector-xyz",
+      studyProduct: "modal_eigen",
+      wavevectorKf: [0, 0, 0],
     })).toEqual({
       analysisRunId: "run-1",
       analysisStageId: "stage-1",
+      artifactRevision: "17",
       artifactPath: "eigen/spectrum.v2.json",
       branchId: "b0",
       calculationMode: "fmr_modal",
+      equilibriumId: "equilibrium-1",
       fieldId: "field-0",
+      frequencyHz: 2.5e9,
+      kContextKind: "gamma",
       kind: "results.eigen.mode",
+      modeId: "sample-0002/mode-0003",
       modeIndex: 3,
       nodeId: "results:eigen:sample:2:mode:3",
+      representation: "complex-vector-xyz",
       resourceRef: fieldVectorResourceKey("field-0"),
+      sampleId: "sample-0002",
       sampleIndex: 2,
+      source: "eigen-mode",
+      studyProduct: "modal_eigen",
       type: "frequency-domain",
+      wavevectorKf: [0, 0, 0],
     });
   });
 
@@ -1274,14 +1292,38 @@ describe("frequencyDomainChartModels", () => {
       kind: "results.frequency_response.sweep",
       ref: { kind: "results.frequency_response.sweep", type: "frequency-domain" },
     })).toBeNull();
-    expect(frequencyDomainChartRouteOverrideFromSelection({
+    const selection = {
       kind: "anything",
       ref: {
         calculationMode: "frequency_response",
         kind: "anything",
         type: "frequency-domain",
       },
-    } as never)).toEqual({ mode: "frequency_response", primaryChart: "response-sweep" });
+    } as never;
+    const route = frequencyDomainChartRouteOverrideFromSelection(selection);
+    expect(route).toEqual({ mode: "frequency_response", primaryChart: "response-sweep" });
+    expect(frequencyDomainChartRouteOverrideFromSelection(selection)).toBe(route);
+  });
+
+  it("uses authoritative artifact owner metadata without rewriting manifest payloads", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      boundary_context: "floquet_periodic",
+      equilibrium_artifact_sha256: "sha256:equilibrium-1",
+      k_sampling: { kind: "single", vector_rad_per_m: [0, 0, 0] },
+      study_product: "modal_eigen",
+    }, {
+      meshGenerationId: "mesh-generation-1",
+      runId: "run-1",
+      stageId: "stage-1",
+    });
+
+    expect(context).toMatchObject({
+      equilibriumId: "sha256:equilibrium-1",
+      meshId: "mesh-generation-1",
+      runId: "run-1",
+      stageId: "stage-1",
+    });
+    expect(context.classification?.kContext.kind).toBe("gamma");
   });
 
   it("keeps a claimed response map unavailable without a typed map resource adapter", () => {
