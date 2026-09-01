@@ -711,7 +711,7 @@ UI nie zamienia prądu i gęstości prądu. Semantic ID, dimension i unit są ja
 
 ```text
 geometry:film:thickness
-gometry:antidot:diameter
+geometry:antidot:diameter
 geometry:waveguide:width
 ```
 
