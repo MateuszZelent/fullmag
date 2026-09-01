@@ -473,10 +473,13 @@ impl InteractiveRuntime {
             crate::artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
         )?;
         let artifact_writer = Some(artifact_pipeline.sender());
+        let runtime_outputs = crate::runtime_outputs_with_table_autosave(problem, plan);
+        let mut runtime_plan = plan.clone();
+        runtime_plan.output_plan.outputs = runtime_outputs;
 
         let executed_result = self.backend.execute_streaming(
             problem,
-            plan,
+            &runtime_plan,
             until_seconds,
             field_every_n,
             display_selection,

@@ -71,7 +71,7 @@ class SincLayerContractTests(unittest.TestCase):
                 self.assertEqual(ir["materials"][0]["damping"], 0.01)
                 self.assertEqual(ir["study"]["dynamics"]["integrator"], "rk45")
                 self.assertEqual(ir["study"]["dynamics"]["gyromagnetic_ratio"], 2.211e5)
-                self.assertEqual(ir["study"]["dynamics"]["adaptive_timestep"]["atol"], 1e-7)
+                self.assertEqual(ir["study"]["dynamics"]["adaptive_timestep"]["atol"], 1e-5)
                 self.assertEqual(ir["study"]["dynamics"]["adaptive_timestep"]["dt_initial"], 1e-12)
                 self.assertEqual(ir["field_drives"][0]["target"], {"kind": "global"})
                 self.assertEqual(ir["field_drives"][0]["direction"], [0.0, 1.0, 0.0])

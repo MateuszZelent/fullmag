@@ -2188,7 +2188,7 @@ pub(crate) fn require_resolved_runtime_sampling(
     Ok(())
 }
 
-fn runtime_outputs_with_table_autosave(
+pub(crate) fn runtime_outputs_with_table_autosave(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Vec<OutputIR> {
@@ -3705,11 +3705,12 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
+    let runtime_outputs = runtime_outputs_with_table_autosave(problem, &plan);
 
     let executed_result = runtime.execute_with_live_preview_streaming(
         fdm,
         until_seconds,
-        &plan.output_plan.outputs,
+        &runtime_outputs,
         fdm.grid.cells,
         field_every_n,
         display_selection,
@@ -3810,11 +3811,12 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         artifact_pipeline::DEFAULT_ARTIFACT_PIPELINE_CAPACITY,
     )?;
     let artifact_writer = Some(artifact_pipeline.sender());
+    let runtime_outputs = runtime_outputs_with_table_autosave(problem, &plan);
 
     let executed_result = runtime.execute_with_live_preview_streaming(
         fem,
         until_seconds,
-        &plan.output_plan.outputs,
+        &runtime_outputs,
         field_every_n,
         artifact_writer,
         display_selection,
@@ -5499,6 +5501,37 @@ mod tests {
             interactive_source
                 .contains("crate::require_resolved_runtime_sampling(problem, plan)?;"),
             "direct InteractiveRuntime::execute_planned_streaming calls must fail closed"
+        );
+    }
+
+    #[test]
+    fn interactive_streaming_promotes_table_autosave_to_runtime_scalar_schedule() {
+        let lib_source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read lib.rs");
+        let production = lib_source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("lib.rs should contain production code");
+        assert_eq!(
+            production
+                .matches(
+                    "let runtime_outputs = runtime_outputs_with_table_autosave(problem, &plan);"
+                )
+                .count(),
+            2,
+            "interactive FDM and FEM streaming must promote table autosave to a scalar runtime schedule"
+        );
+        let interactive_runtime_source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interactive/runtime.rs"
+        ))
+        .expect("read unified interactive runtime");
+        assert!(
+            interactive_runtime_source
+                .contains("let runtime_outputs = crate::runtime_outputs_with_table_autosave(problem, plan);")
+                && interactive_runtime_source.contains("let mut runtime_plan = plan.clone();")
+                && interactive_runtime_source.contains("runtime_plan.output_plan.outputs = runtime_outputs;"),
+            "unified interactive streaming must promote table autosave before backend dispatch"
         );
     }
 

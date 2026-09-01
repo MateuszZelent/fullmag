@@ -135,7 +135,7 @@ def _configure_common_physics(study: fm.StudyBuilder, backend: str) -> None:
         dt_initial=1e-12,
         dt_min=1e-15,
         dt_max=2e-12,
-        max_err=1e-7,
+        max_err=1e-5,
         gamma=2.211e5,
     )
     study.runtime_metadata(

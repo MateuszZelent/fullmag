@@ -1,0 +1,107 @@
+{
+  "schema": "fullmag.fem_gpu.performance_remediation_docs.v1",
+  "base_commit": "4c7897f218eb0c32612db1f43a844502a316b4f6",
+  "audit_commit": "7faa259c5597ba447c413f2aea0ff66d6110b297",
+  "branch": "docs/fem-gpu-performance-remediation-2026-09-01",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 8499,
+      "lines": 208,
+      "words": 1035
+    },
+    {
+      "path": "01-runtime-truth-build-and-instrumentation.md",
+      "bytes": 10846,
+      "lines": 375,
+      "words": 1030
+    },
+    {
+      "path": "02-exchange-operator-remediation.md",
+      "bytes": 10814,
+      "lines": 422,
+      "words": 1272
+    },
+    {
+      "path": "03-rk-pipeline-and-synchronization-remediation.md",
+      "bytes": 10541,
+      "lines": 432,
+      "words": 1233
+    },
+    {
+      "path": "04-adaptive-error-controller-remediation.md",
+      "bytes": 3839,
+      "lines": 167,
+      "words": 457
+    },
+    {
+      "path": "05-demag-hypre-remediation.md",
+      "bytes": 5361,
+      "lines": 227,
+      "words": 618
+    },
+    {
+      "path": "06-effective-field-reductions-and-memory-remediation.md",
+      "bytes": 4435,
+      "lines": 199,
+      "words": 529
+    },
+    {
+      "path": "07-relaxation-preconditioning-remediation.md",
+      "bytes": 4100,
+      "lines": 199,
+      "words": 488
+    },
+    {
+      "path": "08-operator-planner-partial-assembly-and-autotuning.md",
+      "bytes": 3130,
+      "lines": 151,
+      "words": 377
+    },
+    {
+      "path": "09-pr-sequence-tests-and-definition-of-done.md",
+      "bytes": 4018,
+      "lines": 195,
+      "words": 509
+    },
+    {
+      "path": "10-finding-coverage-matrix.md",
+      "bytes": 5213,
+      "lines": 57,
+      "words": 823
+    }
+  ],
+  "finding_ids": [
+    "EX-01",
+    "EX-02",
+    "EX-03",
+    "EX-04",
+    "EX-05",
+    "EX-06",
+    "EX-07",
+    "EX-08",
+    "RK-01",
+    "RK-02",
+    "RK-03",
+    "RK-04",
+    "RK-05",
+    "RK-06",
+    "AD-01",
+    "AD-02",
+    "AD-03",
+    "DM-01",
+    "DM-02",
+    "DM-03",
+    "DM-04",
+    "DM-05",
+    "HF-01",
+    "HF-02",
+    "RD-01",
+    "RL-01",
+    "RT-01",
+    "MEM-01",
+    "BL-01",
+    "PA-01",
+    "NEW-HYPRE-01"
+  ]
+}
