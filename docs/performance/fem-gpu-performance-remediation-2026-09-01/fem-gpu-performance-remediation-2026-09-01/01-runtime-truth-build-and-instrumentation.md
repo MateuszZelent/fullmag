@@ -13,6 +13,14 @@ Aktualny kod ma:
 - `fullmag_fem_transfer_audit`, który liczy transfery i wybrane synchronizacje,
 - fazowe eventy CUDA dla exchange, demag i RHS.
 
+Istnieją ponadto `fullmag_fem_step_stats`, wersjonowana telemetria endpoint
+cache oraz transactional execution receipt. RT-01 nie oznacza więc braku
+fail-closed dowodu wykonania: `gpu_rk_plan_is_strict_device_resident` oraz
+`validate_strict_fem_gpu_execution_receipt` już odrzucają host, hybrid,
+unknown, brak wymaganej maski i bulk compute transfer. Luką jest brak jednego
+spójnego snapshotu **rzeczywiście wykonanej pracy** i niepełne pokrycie
+bezpośrednich synchronizacji, np. normalizatora.
+
 Brakuje jednak jednego wersjonowanego snapshotu odpowiadającego na pytania:
 
 - ile pełnych RHS wykonano,
@@ -96,12 +104,6 @@ Dodać nowy append-only snapshot:
 #define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_VERSION 1u
 
 typedef enum {
-    FULLMAG_FEM_GPU_EXECUTION_CLASS_UNKNOWN = 0,
-    FULLMAG_FEM_GPU_EXECUTION_CLASS_DEVICE_RESIDENT = 1,
-    FULLMAG_FEM_GPU_EXECUTION_CLASS_HYBRID_CPU_POISSON = 2,
-} fullmag_fem_gpu_execution_class_v1;
-
-typedef enum {
     FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_UNKNOWN = 0,
     FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CSR_COMPONENT_SPLIT = 1,
     FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CSR_FUSED_XYZ = 2,
@@ -153,6 +155,14 @@ typedef struct {
     uint64_t reductions_device_time_ns;
 } fullmag_fem_gpu_performance_snapshot_v1;
 ```
+
+Nie deklarować ponownie `fullmag_fem_gpu_execution_class_v1`: ten enum już
+jest częścią `FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1` w
+`native/include/fullmag_fem.h` i obejmuje również klasy host-solver oraz CPU.
+Snapshot ma używać istniejących wartości albo osobnego, jednoznacznie nazwanego
+pola trybu operatora. Zachowanie API dla backendu CPU (`ERR_UNAVAILABLE` lub
+`ERR_INVALID`) należy najpierw ustalić w kontrakcie RED; nie opisywać go jako
+stanu istniejącego.
 
 Funkcja:
 
@@ -207,7 +217,7 @@ commit_step():
 Liczników pracy nie wolno cofać po reject; licznik wyniku zaakceptowanego musi
 wskazywać koszt całego kroku wraz z odrzuconymi próbami.
 
-## 5. Jednoznaczne logowanie resolved execution
+## 5. Zachowanie istniejącego strict receipt i rozszerzenie artefaktu
 
 Właściciel planowania nadal ustala required/resolved masks, a receipt
 potwierdza wykonanie. Runner powinien po pierwszym zaakceptowanym kroku
@@ -239,7 +249,7 @@ hot_loop_compute_d2h_bytes=0
 - istniejący moduł provenance/manifest runnera — serializacja bez duplikowania
   logiki planera.
 
-### Fail-closed
+### Istniejący fail-closed invariant
 
 Dla `requested_execution=strict` zakończyć przebieg błędem, gdy:
 
@@ -252,19 +262,26 @@ hot_loop_compute_h2d_bytes != 0
 hot_loop_compute_d2h_bytes != 0
 ```
 
-Control scalar D2H może być dozwolony jako osobna kategoria, ale jego liczba
-i synchronizacje muszą być jawne.
+Warunki te są już egzekwowane przez plan/receipt/runner. Nowa praca ma je
+zachować, dodać snapshot liczników i objąć audytem bezpośrednie readbacki oraz
+synchronizacje, których obecny `fullmag_fem_transfer_audit` nie widzi. Control
+scalar D2H pozostaje osobną dozwoloną kategorią, ale jego liczba i
+synchronizacje muszą być jawne.
 
 ## 6. Walidacja architektury CUDA
 
-Źródło obecnie wymusza niepuste `CMAKE_CUDA_ARCHITECTURES`, a
-`crates/fullmag-fem-sys/build.rs` przekazuje `FULLMAG_CUDA_ARCHITECTURES`.
-To nie dowodzi zawartości finalnego `.so`.
+CMake ustawia domyślną listę architektur CUDA, gdy CUDA jest dostępna, a
+`crates/fullmag-fem-sys/build.rs` warunkowo przekazuje niepusty override
+`FULLMAG_CUDA_ARCHITECTURES`. To nie dowodzi zawartości finalnego `.so`.
+`scripts/inspect_cuda_architectures.py` i jego testy już obsługują
+`--cuda-required` oraz `--require-native-cubin`; brakującym elementem jest
+automatyczne powiązanie compute capability rzeczywistego GPU z natywnym
+cubinem finalnego managed bundle oraz immutable manifest/receipt tego gate'u.
 
 ### Zmiany
 
-- rozszerzyć istniejący `scripts/test_inspect_cuda_architectures.py`,
-- użyć lub rozbudować skrypt inspekcji finalnego runtime bundle,
+- zachować istniejące testy `scripts/test_inspect_cuda_architectures.py`,
+- podłączyć istniejący inspektor do kwalifikacji finalnego runtime bundle,
 - zapisać w `manifest.json`:
   - lista cubin `sm_*`,
   - obecne PTX `compute_*`,
@@ -313,18 +330,21 @@ Dodać `backends/fem/tests/gpu_performance_snapshot_contract.cpp`:
 - reject zwiększa physical work,
 - commit atomowo publikuje last completed step.
 
-### RED 2 — strict execution
+### REGRESSION 2 — strict execution
 
-Rozszerzyć `gpu_strict_execution_contract.cpp`:
+Zachować i w razie potrzeby rozszerzyć istniejące kontrakty
+`gpu_strict_execution_contract.cpp`, `gpu_execution_receipt_contract.cpp` oraz
+Rust `validate_strict_fem_gpu_execution_receipt`:
 
 - explicit hybrid jest odrzucony,
 - host mask jest odrzucona,
 - unknown mask jest odrzucona,
 - control scalar nie jest błędnie zaliczany do bulk D2H.
 
-### RED 3 — final architecture
+### REGRESSION 3 — final architecture
 
-Rozszerzyć test skryptu:
+Istniejący test skryptu pokrywa poniższe przypadki; RED ma dotyczyć
+automatycznego gate'u finalnego managed manifestu:
 
 - fixture tylko `sm_52` musi failować dla `--require-native-cubin sm_89`,
 - fixture `sm_89` przechodzi,
@@ -350,19 +370,27 @@ Każdy rekord JSON:
 {
   "commit": "4c7897f218eb0c32612db1f43a844502a316b4f6",
   "gpu": {"name": "...", "compute_capability": "...", "driver": "..."},
-  "mesh": {"nodes": 142953, "cells": 810601, "facets": 77674},
+  "mesh": {"digest": "...", "nodes": "MEASURED", "cells": "MEASURED", "facets": "MEASURED"},
   "solver": {"integrator": "rk23", "rtol": 1e-12},
   "performance": {"snapshot": "fullmag_fem_gpu_performance_snapshot_v1"},
   "wall": {
     "warmup_steps": 8,
     "measured_steps": 64,
-    "median_step_ms": 0.0,
-    "p95_step_ms": 0.0
+    "median_step_ms": "MEASURED",
+    "p95_step_ms": "MEASURED"
   }
 }
 ```
 
-Nie porównywać przebiegów z różnymi mesh digestami.
+Powyższy JSON jest schematem, nie wynikiem. Liczby siatki i czasy muszą pochodzić
+z receipt dokładnego przebiegu; placeholder nie może zostać zaakceptowany jako
+baseline. Nie porównywać przebiegów z różnymi mesh digestami.
+
+Repo ma już `verify-fem-gpu-performance-regression` i
+`capture-fem-gpu-pre-remediation-performance-baseline`, lecz ich fixture to
+`box500` z Heun/NCG. Nie są dowodem dla SP4 mixed-P1 RK23. Nowy cel ma użyć
+`fem-sp4-run` lub `fem-managed-headless`; `fem-gpu-headless` pozostaje
+diagnostyczny.
 
 ## 9. Definition of Done
 

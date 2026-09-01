@@ -2,6 +2,15 @@
 
 **Ustalenia:** RL-01 oraz RD-01/RK-02 w NCG i PG-BB.
 
+**Status po weryfikacji:** CPU exchange-mass preconditioner i brak analogicznego
+preconditionera GPU NCG są potwierdzone. Nie wynika z tego, że preconditioner
+GPU skróci time-to-`tolA`; to pozostaje `NOT VERIFIED`. GPU ma już poprawny
+unpreconditioned PR+, tangent transport, restart, fallback i persistent state.
+Diagonal/Chebyshev/PCG, device Armijo packet i device PG-BB control poniżej są
+projektami, nie istniejącymi API. Istniejący managed target
+`verify-fem-gpu-relaxation-preconditioner-qualification` i jego evidence należy
+rozszerzyć lub zastąpić, nie dublować.
+
 ## 1. CPU jako kontrakt
 
 CPU NCG używa `relaxation::exchange_mass_preconditioned_gradient` z operatorem:
@@ -101,7 +110,7 @@ Tylko jeśli wcześniejsze nie poprawiają time-to-tolA:
 
 Nie przepinać demag workspace do innego operatora.
 
-## 6. Poprawne PR+
+## 6. Zachowanie poprawnego PR+ po dodaniu preconditionera
 
 Preconditioned PR+:
 
@@ -112,7 +121,8 @@ Preconditioned PR+:
 {\langle g_k,z_k\rangle_E}\right).
 \]
 
-GPU musi:
+Obecny unpreconditioned PR+ jest poprawny dla gradientu surowego. Po dodaniu
+`z=P^{-1}g` GPU musi:
 
 1. zachować `z_k`,
 2. przetransportować do nowej przestrzeni stycznej,

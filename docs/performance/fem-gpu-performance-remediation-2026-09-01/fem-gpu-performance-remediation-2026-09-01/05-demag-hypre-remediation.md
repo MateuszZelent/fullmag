@@ -3,6 +3,13 @@
 **Ustalenia:** DM-01, DM-02, DM-03, DM-04, DM-05 oraz podwójne ustawianie
 polityki HYPRE wykryte na aktualnym `master`.
 
+**Status po weryfikacji:** DM-01, DM-02 i duplikacja setterów HYPRE są
+potwierdzone. DM-03 jest projektem: dziś recovery ma sześć osobnych map/CSR i
+trzy kernele. DM-04 jest częściowy, ponieważ timingi host API/device/wait oraz
+iteracje już istnieją, ale brak profilu AMG levels i aktualnego benchmarku.
+DM-05 jest hipotezą kwalifikacyjną; wszystkie purpose używają dziś wspólnego
+`ctx.demag.solver.relative_tolerance`. Nowe requesty/enumy poniżej nie istnieją.
+
 ## 1. Co zachować
 
 - persistent Hypre matrix/vectors/solver/preconditioner,
@@ -14,6 +21,8 @@ polityki HYPRE wykryte na aktualnym `master`.
 - phase telemetry.
 
 Nie zastępować eventów globalnym `cudaDeviceSynchronize`.
+Twierdzenie dotyczy stage hot path. Ścieżki wizualizacji i scalar readback mają
+osobne synchronizacje i nie są dowodem pełnego grafu bez fence.
 
 ## 2. Jeden właściciel polityki HYPRE
 
@@ -193,6 +202,10 @@ time-to-tolA. Dopiero po kwalifikacji dodać opcjonalne wersjonowane publiczne
 pole. Brak pola = identyczny rtol.
 
 ## 8. Warm start i endpoint cache
+
+Persistent solver i warm/fresh counters już istnieją. Nie istnieje natomiast
+jeden ogólny token endpointu dla RK/HYPRE/PGBB; `FemGpuAcceptedEvaluationToken`
+dotyczy GPU NCG. Poniższe punkty są wymaganiami docelowymi.
 
 - fresh-zero po invalidation/failure zgodnie z kontraktem;
 - endpoint reuse zachowuje exact solution endpointu;

@@ -2,6 +2,14 @@
 
 **Ustalenia:** AD-01, AD-02, AD-03.
 
+**Status po weryfikacji:** aktualny
+`adaptive_error_norm_blocks_kernel` zawsze przyjmuje k0…k6, liczy dot/`acos`
+per node i zapisuje trzy kanały, po czym runtime wykonuje trzy globalne
+redukcje maximum. Diagnozy są potwierdzone źródłowo. Wszystkie policy kinds,
+typed partials, wyspecjalizowane kernele i device decision poniżej są
+niezaimplementowanymi celami; ich przewaga wydajnościowa pozostaje
+`NOT VERIFIED`.
+
 ## 1. Obecny koszt
 
 Jeden ogólny kernel:

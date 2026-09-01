@@ -9,7 +9,11 @@ compatibility path, managed GPU A/B i nie zmienia tolerancji razem z kernelem.
 
 ### PR-00 — baseline i snapshot
 
-Runtime performance owner, ABI v1, strict artifact, cubin gate, benchmark.
+Runtime performance owner, ABI v1 i SP4 managed benchmark. Zachować istniejący
+strict receipt, execution masks, transfer audit, step stats, endpoint telemetry
+i phase event ownership; nie implementować ich ponownie. Podłączyć istniejący
+`--require-native-cubin` do automatycznego GPU compute-capability gate finalnego
+managed manifestu.
 
 ### PR-01 — HYPRE owner + conditional RHS norm
 
@@ -126,11 +130,13 @@ just verify-fem-demag-poisson-contract
 just verify-fem-time-domain-native-contract
 just verify-fem-relaxation-runtime
 just verify-fem-relaxation-cpu-gpu-consistency-smoke
-just fem-gpu-headless tests/standard_problems/mumag/sp4/fem/problem.py
+just fem-sp4-run gpu <output_dir>
 ```
 
 Jeżeli target zmienił nazwę, użyć aktualnego odpowiednika z `just --list`.
 Nie zastępować host buildem.
+`fem-managed-headless` jest alternatywnym managed entrypointem.
+`fem-gpu-headless` jest ścieżką ad hoc/diagnostyczną i nie spełnia tej bramki.
 
 ## 6. Dokumenty przy merge
 

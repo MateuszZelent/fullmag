@@ -2,6 +2,13 @@
 
 **Ustalenia:** HF-01, HF-02, RD-01, MEM-01 oraz część RK-04/RK-05.
 
+**Status po weryfikacji:** HF-01/HF-02 są potwierdzone jako obecne
+component-split passes; `has_ext=true` jest dziś przekazywane bezwarunkowo.
+Typed reducers, maski materializacji i fused compose nie istnieją. MEM-01 jest
+częściowy: generyczny scalar readback ma pinned host buffer i pageable fallback,
+ale nie ma odrębnego `GpuRkAttemptControlPacket`. Wpływ wszystkich fuzji na
+rejestry, occupancy i wall time pozostaje `NOT VERIFIED`.
+
 ## 1. HF-01 — fused bazowe H_eff xyz
 
 ### Stan
@@ -150,7 +157,9 @@ Benchmark strict może wymagać `control_packet_pinned=true`.
 
 ## 6. D2D buffer role migration
 
-Każde `gpu_rk_copy_component_device` raportuje 3×N×sizeof(double).
+Każde `gpu_rk_copy_component_device` wykonuje 3×N×sizeof(double), ale obecnie
+nie raportuje osobnego licznika. Telemetria transakcji agreguje journal `m+k0`,
+czyli 6×N×sizeof(double). Nowy snapshot ma rozdzielić przyczynę kopii.
 
 Kolejność:
 

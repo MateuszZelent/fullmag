@@ -1,14 +1,36 @@
 # Plan naprawczy wydajności FEM GPU
 
-- **Status:** gotowy do realizacji etapami; kod solvera nie został jeszcze zmieniony.
+- **Status:** skorygowany po audycie źródłowym `HEAD`; plan implementacyjny, nie
+  dowód wydajności ani kwalifikacja produkcyjna.
 - **Repozytorium:** `MateuszZelent/fullmag`
-- **Gałąź dokumentacyjna:** `docs/fem-gpu-performance-remediation-2026-09-01`
+- **Gałąź dokumentacyjna pochodzenia:** `docs/fem-gpu-performance-remediation-2026-09-01`
 - **Rewizja bazowa planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 - **Rewizja pierwotnego audytu:** `7faa259c5597ba447c413f2aea0ff66d6110b297`
+- **Rewizja weryfikacji kodu:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
 - **Data:** 2026-09-01
 - **Lane:** natywny FEM GPU, MFEM 4.9, HYPRE 3.1.0, CUDA.
 - **Przypadek referencyjny:** µMAG SP4 FEM, `mixed_p1`, `layers=1`, `mesh=medium`,
   `airbox=baseline`, `device=gpu`, double precision.
+
+## 0. Zakres i status dowodów
+
+Pakiet został ponownie sprawdzony względem kodu, testów kontraktowych i
+`justfile`. Nie uruchomiono aktualnego managed runtime na GPU, dlatego wyniki
+wydajności, parytet urządzenia i kwalifikacja naukowa pozostają `NOT VERIFIED`.
+Szczegółowy werdykt dla każdego ID znajduje się w
+[10-finding-coverage-matrix.md](10-finding-coverage-matrix.md).
+
+Stosowane statusy:
+
+- `POTWIERDZONE` — diagnoza wynika bezpośrednio z aktualnego kodu;
+- `CZĘŚCIOWO` — część mechanizmu już istnieje albo teza wymaga zawężenia;
+- `NIEPRAWDA` — opis stanu obecnego jest sprzeczny z kodem;
+- `NOT VERIFIED` — oczekiwany wpływ wydajnościowy lub zachowanie runtime nie
+  ma aktualnego, immutable receipt z managed GPU.
+
+Pseudokod, nowe pliki, typy i testy w dokumentach 01–09 są celami
+implementacyjnymi, o ile nie oznaczono ich jako istniejące. Ścieżki zaczynające
+się od `gpu/` lub `cpu/` są względne wobec `backends/fem/`.
 
 ## 1. Cel
 
@@ -65,9 +87,11 @@ czas do `tolA` w relaksacji albo czas symulacji 1 ns przy tej samej dokładnośc
 | [09-pr-sequence-tests-and-definition-of-done.md](09-pr-sequence-tests-and-definition-of-done.md) | kolejność PR, managed gates, rollout, rollback i finalne DoD |
 | [10-finding-coverage-matrix.md](10-finding-coverage-matrix.md) | pełne mapowanie ustalenie → kod → test → telemetria → PR |
 
-## 4. Docelowy graf wykonania RK23
+## 4. Źródłowy i docelowy graf wykonania RK23
 
-Stan obecny po rozgrzaniu FSAL:
+Stan obecny dla zaakceptowanej, adaptacyjnej próby BS23 po rozgrzaniu FSAL,
+wyprowadzony z grafu wywołań w `rk_stage_schedule.cu` i
+`rk_final_refresh.cu`:
 
 ```text
 backup D2D
@@ -100,14 +124,15 @@ attempt transaction
        restore transaction i powtórz próbę
 ```
 
-Docelowy budżet no-reject dla adaptacyjnego RK23:
+Docelowy budżet no-reject dla adaptacyjnego RK23. Liczby są bramką
+implementacyjną, a nie zmierzonym baseline SP4:
 
 | Licznik | Przed | P0 |
 |---|---:|---:|
 | pełne RHS | 4 | 3 |
-| Poisson demag solve | 4 | 3 |
+| Poisson demag solve | 4 przy aktywnym demag | 3 przy aktywnym demag |
 | exchange sparse launches | 12 | 3 |
-| stage demag energy kernel + reduce | 8 | 0 |
+| stage demag energy kernel + reduce | zależne od aktywnego demag | 0 |
 | normalizer host fences | 3 | 0 |
 | adaptive host fences | 1 | 1 |
 | final-stat host fences | 1 | 0 lub 1 zależnie od output/control mask |
@@ -116,9 +141,11 @@ Docelowy budżet no-reject dla adaptacyjnego RK23:
 
 ### Fala A — prawda i baseline
 
-- wersjonowana telemetria wykonanej pracy,
-- fail-closed strict-device gate,
-- final binary CUDA architecture validation,
+- scalenie istniejących statystyk kroku, endpoint cache, transfer audit,
+  execution receipt i fazowych timerów w wersjonowany snapshot pracy,
+- zachowanie i rozszerzenie istniejącego fail-closed strict-device receipt,
+- podłączenie istniejącego `--require-native-cubin` do kwalifikacji finalnego
+  managed runtime dla wykrytego compute capability,
 - stabilny benchmark SP4 i mikrobenchmark operatorów.
 
 Nie optymalizować przed zapisaniem baseline.
@@ -180,16 +207,24 @@ export FULLMAG_SP4_RELAX_MAX_STEPS=64
 export FULLMAG_FEM_STEP_PROFILE=1
 ```
 
-Autorytatywna ścieżka:
+Autorytatywna ścieżka managed runtime:
 
 ```bash
 just rebuild-fem-runtime
 just ensure-managed-fem-runtime
-just fem-gpu-headless tests/standard_problems/mumag/sp4/fem/problem.py
+just fem-sp4-run gpu <output_dir>
 ```
 
-Receptura benchmarkowa powinna zostać dodana jako osobny cel `just`, żeby
-baseline i warianty uruchamiały identyczny kontener, runtime, skrypt i zmienne.
+Alternatywnie skrypt może zostać uruchomiony przez aktualny cel
+`fem-managed-headless`. `fem-gpu-headless` buduje i uruchamia binarium ad hoc;
+jest przydatne diagnostycznie, ale nie stanowi managed-runtime proof.
+
+Istniejące cele `verify-fem-gpu-performance-regression` i
+`capture-fem-gpu-pre-remediation-performance-baseline` dotyczą przypadku
+`box500`, a nie tej dokładnej konfiguracji SP4. Należy dodać osobny cel SP4,
+który utrwali source/runtime identity, ProblemIR i mesh digest, liczniki
+rzeczywistej pracy oraz medianę/p95. Przykładowe liczby siatki i zerowe czasy
+nie są baseline i nie mogą trafić do zaakceptowanego artefaktu.
 
 ## 7. Warunki zakończenia całego programu
 

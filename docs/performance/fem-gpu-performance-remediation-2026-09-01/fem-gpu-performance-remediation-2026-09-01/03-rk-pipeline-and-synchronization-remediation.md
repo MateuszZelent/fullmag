@@ -2,6 +2,18 @@
 
 **Ustalenia:** RK-01, RK-02, RK-03, RK-04, RK-05, RK-06.
 
+**Status po weryfikacji:** wszystkie sześć diagnoz ma potwierdzenie w grafie
+źródłowym, ale proponowane packet, endpoint token, fused predictor, metric mode,
+role buforów i API v2 nie istnieją. Obecny adaptive readback już kopiuje trzy
+scalary jednym `cudaMemcpyAsync` i jednym fence; luka polega na wielu
+wcześniejszych normalizer readbackach oraz braku typowanego packetu. Wpływ na
+wall time pozostaje `NOT VERIFIED`.
+
+Źródłowy budżet warm BS23 adaptive to 4 RHS (trzy stage, w tym endpoint k3,
+oraz obowiązkowy final refresh), trzy normalizacje i jeden adaptive scalar
+readback. DP54 odtwarza accepted endpoint osobno od stanu użytego dla k6;
+różnica bitowa nie została zmierzona.
+
 ## 1. Granice własności
 
 - plan i legality: `gpu/cuda/integrators/rk/rk_plan.cpp`,
@@ -293,6 +305,10 @@ Token invalidować przy:
 - DP54 exact state identity.
 
 ## 6. RK-04 — LLG metric wyłącznie dla konsumenta
+
+Obecnie fused LLG RHS zawsze wyznacza per-node metric i block maxima dla
+każdego RHS. Globalna redukcja maksimum jest wykonywana podczas finalizacji;
+nie opisywać tego jako pełnej globalnej redukcji „na każdym stage”.
 
 Dodać:
 

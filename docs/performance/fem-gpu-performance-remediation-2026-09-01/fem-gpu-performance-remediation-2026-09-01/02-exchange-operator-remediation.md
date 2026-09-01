@@ -2,6 +2,13 @@
 
 **Ustalenia:** EX-01, EX-02, EX-03, EX-04, EX-05, EX-06, EX-07, EX-08.
 
+**Status po weryfikacji:** diagnozy EX-01, EX-02, EX-07 i EX-08 są
+potwierdzone w źródle. EX-03 jest częściowy: istnieje akumulacja double-double,
+ale nie dwa typowane tryby. EX-04 i korzyści plannerów są `NOT VERIFIED`.
+EX-05 już failuje przed strict GPU step dla consistent mass. EX-06 potwierdza
+obecną `LEGACY` assembly, lecz PA pozostaje celem. Wszystkie nowe typy, pliki i
+testy poniżej są projektowane.
+
 ## 1. Aktualny przepływ
 
 `cpu/mfem/interactions/exchange_operator.cpp` montuje `BilinearForm` na poziomie
@@ -69,8 +76,9 @@ struct FemGpuExchangeDeviceState {
 - zmienić `gpu/cuda/exchange/exchange_plan.hpp/.cpp`,
 - zmienić `gpu/cuda/exchange/exchange_kernels.hpp/.cu`,
 - zmienić `gpu/cuda/integrators/rk/rk_exchange_dispatch.cu`,
-- utworzyć `gpu/cuda/exchange/exchange_operator_builder.hpp/.cpp`,
-- delegować z `cpu/mfem/interactions/exchange_operator.cpp`,
+- wydzielić backend-neutralny host artifact z istniejącego właściciela
+  `cpu/mfem/interactions/exchange_operator.cpp`; moduł CUDA nie może stać się
+  drugim właścicielem MFEM assembly,
 - zaktualizować energy/direct-energy consumers,
 - zaktualizować CMake i testy source ownership.
 
@@ -373,8 +381,9 @@ liczy `visited_nnz`, a test potwierdza koszt `O(nnz_reduced + N)`.
 
 ## 9. EX-05 — consistent mass
 
-Krótkoterminowo strict GPU z `use_consistent_mass=true` failuje przed krokiem
-i publikuje przyczynę.
+Strict GPU z `use_consistent_mass=true` już failuje przed krokiem w
+`gpu/cuda/exchange/exchange_plan.cpp::gpu_exchange_plan_stage_exchange` i
+publikuje przyczynę. To zachowanie należy zachować podczas przebudowy.
 
 Docelowy osobny moduł:
 
@@ -393,7 +402,8 @@ Nie łączyć z fused lumped CSR w jednym PR.
 
 ## 10. EX-06 — partial assembly
 
-P1 tetra pozostaje najpierw fused CSR. PA jest osobnym operator kind,
+Aktualny P1 tetra używa component-split legacy CSR. P1 tetra ma przejść
+najpierw przez kwalifikację fused CSR. PA jest osobnym operator kind,
 capability i benchmarkiem. Szczegóły w dokumencie 08.
 
 ## 11. Testy i DoD

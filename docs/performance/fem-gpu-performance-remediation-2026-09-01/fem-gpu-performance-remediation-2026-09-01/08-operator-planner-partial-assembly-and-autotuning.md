@@ -2,6 +2,12 @@
 
 **Ustalenie:** PA-01 oraz docelowa decyzja dla EX-04/EX-06.
 
+**Status po weryfikacji:** aktualny `GpuExchangePlan` rozwiązuje wyłącznie
+`legacy_sparse_gpu`; nie ma typed operator planner, profili, cuSPARSE SpMM ani
+produkcyjnego PA exchange. `backends/fem/examples/pa_benchmark.cpp` mierzy
+ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie emituje opisanego
+JSON. Cały wybór wariantu oraz break-even pozostają `NOT VERIFIED`.
+
 ## 1. Problem
 
 Jeden assembled CSR nie jest uniwersalny dla regularnych pryzmatów, wyższych
@@ -12,10 +18,10 @@ reprodukowalność. Planner ma wybierać tylko warianty zakwalifikowane offline.
 
 ```cpp
 enum class GpuExchangeOperatorKind : uint32_t {
-    FusedGraphCsr,
-    PeriodicReducedFusedGraphCsr,
+    FusedXyzCsr,
+    PeriodicReducedFusedXyzCsr,
     CusparseSpmm,
-    MfemPartialAssembly,
+    PartialAssembly,
 };
 
 enum class GpuExchangeRowMapping : uint32_t {
@@ -33,6 +39,11 @@ struct GpuExchangeResolvedPlan {
     const char *qualification_id;
 };
 ```
+
+To jest ten sam canonical enum co w dokumencie 02; nie wolno definiować dwóch
+wariantów nazw. `qualification_id` musi mieć owned/fixed-size representation
+wewnętrzne oraz wersjonowaną reprezentację provenance/ABI, a nie niezarządzany
+`const char *` przekraczający granicę C ABI.
 
 Przykład qualification ID:
 
