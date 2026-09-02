@@ -2038,6 +2038,18 @@ fn build_dsf_index(
 
 fn legacy_gamma_provenance(payload: &SpinWaveGammaResource) -> BTreeMap<String, String> {
     let (sampling_clock, uniformity_proof) = time_sampling_metadata(&payload.time_s, &payload.time_unit);
+    let response_components = payload
+        .transverse_components
+        .iter()
+        .take(2)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let response_components = if response_components.is_empty() {
+        "unavailable".to_string()
+    } else {
+        response_components
+    };
     BTreeMap::from([
         ("legacy_schema".to_string(), payload.schema_version.clone()),
         ("sampling_clock".to_string(), sampling_clock),
@@ -2048,12 +2060,7 @@ fn legacy_gamma_provenance(payload: &SpinWaveGammaResource) -> BTreeMap<String, 
         ("nyquist_hz".to_string(), payload.nyquist_hz.to_string()),
         (
             "response_components".to_string(),
-            format!(
-                "{} / {} (primary: {})",
-                payload.transverse_components[0],
-                payload.transverse_components[1],
-                payload.response_component,
-            ),
+            format!("{response_components} (primary: {})", payload.response_component),
         ),
         (
             "source_drive".to_string(),
@@ -2399,6 +2406,7 @@ fn build_manifest(
 
 fn projection_descriptor_title(projection_id: &str) -> String {
     match projection_id {
+        "dsf-map" => "Dynamic structure factor".to_string(),
         "response-spectrum" => "Response spectrum".to_string(),
         "spectral-features" => "Spectral features".to_string(),
         "susceptibility" => "Susceptibility".to_string(),
@@ -3333,7 +3341,10 @@ mod tests {
         .expect("legacy Gamma payload should be indexable");
 
         assert_eq!(index.projections.len(), 3);
-        assert_eq!(index.manifest.item_kinds, vec![AnalysisResultItemKind::SpectralFeature]);
+        assert!(matches!(
+            index.manifest.item_kinds.as_slice(),
+            [AnalysisResultItemKind::SpectralFeature]
+        ));
         assert_eq!(index.manifest.projections[0].title, "Response spectrum");
         assert_eq!(index.manifest.projections[1].title, "Spectral features");
         assert_eq!(index.manifest.projections[2].title, "Susceptibility");

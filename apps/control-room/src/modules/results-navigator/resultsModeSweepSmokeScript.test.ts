@@ -37,6 +37,8 @@ describe("Results mode sweep smoke script", () => {
     expect(smokeScript).toContain("200%");
     expect(smokeScript).toContain("Mocha");
     expect(smokeScript).toContain("Latte");
+    expect(smokeScript).toContain('page.emulateMedia({ reducedMotion: "reduce" })');
+    expect(smokeScript).toContain("mediaMatches");
     expect(smokeScript).toContain("NOT VERIFIED");
     expect(smokeScript).toContain("isContextLost");
   });

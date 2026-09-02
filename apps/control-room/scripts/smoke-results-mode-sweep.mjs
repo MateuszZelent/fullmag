@@ -209,6 +209,7 @@ async function chooseAnalysisSubview(page, label) {
 async function verifyThemesAndZoom(page) {
   await page.locator(".fm-ribbon__tab").filter({ hasText: /^Results$/ }).click();
   await page.locator(".fm-results-navigator").waitFor({ state: "visible", timeout: timeoutMs });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ height: 1000, width: 1280 });
   const themes = {};
   for (const [name, value] of [["Mocha", "dark"], ["Latte", "light"]]) {
@@ -228,8 +229,25 @@ async function verifyThemesAndZoom(page) {
   }));
   assert.equal(zoom.documentFitsZoomedViewport, true, "Results UI overflows beyond the 200% zoom viewport.");
   assert.equal(zoom.rootFitsZoomedViewport, true, "Results root is clipped at 200% zoom.");
+  const reducedMotion = await page.locator(".fm-results-navigator").evaluate((root) => {
+    const styles = [root, ...root.querySelectorAll("*")].map((element) => getComputedStyle(element));
+    const durationsInMs = styles.flatMap((style) => [style.animationDuration, style.transitionDuration])
+      .flatMap((value) => value.split(",").map((duration) => {
+        const trimmed = duration.trim();
+        if (trimmed.endsWith("ms")) return Number.parseFloat(trimmed);
+        if (trimmed.endsWith("s")) return Number.parseFloat(trimmed) * 1_000;
+        return 0;
+      }))
+      .filter(Number.isFinite);
+    return {
+      mediaMatches: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      maxDurationMs: Math.max(0, ...durationsInMs),
+    };
+  });
+  assert.equal(reducedMotion.mediaMatches, true, "Reduced-motion media emulation was not applied.");
+  assert.ok(reducedMotion.maxDurationMs <= 1, "Results controls retain a non-reduced animation or transition.");
   await page.evaluate(() => { document.body.style.zoom = ""; });
-  return { themes, zoom200: zoom };
+  return { themes, zoom200: zoom, reducedMotion };
 }
 
 async function installResultsFixtureRoutes(page) {

@@ -151,7 +151,21 @@ function resultProjectionTitle(
   productKind: AnalysisResultProductKind | null,
   projectionId: string | undefined,
 ): string {
-  if (productKind === "time_domain_spectrum") return "Spectral features";
-  if (productKind === "dynamic_structure_factor") return "Dynamic structure factor";
+  if (productKind === "time_domain_spectrum") {
+    switch (projectionId) {
+      case "response-spectrum":
+        return "Response spectrum";
+      case "susceptibility":
+        return "Susceptibility";
+      case "spectral-features":
+      default:
+        return "Spectral features";
+    }
+  }
+  if (productKind === "dynamic_structure_factor") {
+    return projectionId === "dsf-map"
+      ? "Dynamic structure factor"
+      : projectionId ?? "Dynamic structure factor";
+  }
   return projectionId ?? "Analysis result projection";
 }
