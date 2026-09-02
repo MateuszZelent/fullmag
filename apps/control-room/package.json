@@ -44,6 +44,7 @@
     "smoke:inspector": "node scripts/smoke-inspector.mjs",
     "smoke:frozen-spins": "node scripts/smoke-frozen-spins.mjs",
     "smoke:analysis-plots": "node scripts/smoke-analysis-plots.mjs",
+    "smoke:results-mode-sweep": "node scripts/smoke-results-mode-sweep.mjs",
     "smoke:analysis-quick-chart": "node scripts/smoke-analysis-quick-chart.mjs",
     "smoke:live-charts": "node scripts/smoke-live-charts.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
