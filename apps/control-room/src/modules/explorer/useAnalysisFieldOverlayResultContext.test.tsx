@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 
@@ -11,12 +11,17 @@ import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayR
 
 function ResultContextBridge({
   controller,
+  onPaint,
   runId,
 }: {
   controller: AnalysisFieldOverlayController;
+  onPaint: (fieldId: string) => void;
   runId: string | null;
 }) {
   useAnalysisFieldOverlayResultContext(controller, runId);
+  useLayoutEffect(() => {
+    onPaint(controller.getRenderableSnapshot()?.fieldId ?? "none");
+  }, [controller, onPaint, runId]);
   return null;
 }
 
@@ -45,16 +50,20 @@ describe("useAnalysisFieldOverlayResultContext", () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
+    const paintedFieldIds: string[] = [];
+    const onPaint = (fieldId: string) => paintedFieldIds.push(fieldId);
 
     try {
       await act(async () => {
-        root.render(<ResultContextBridge controller={controller} runId="run-1" />);
+        root.render(<ResultContextBridge controller={controller} onPaint={onPaint} runId="run-1" />);
       });
       expect(controller.getRenderableSnapshot()?.fieldId).toBe("field-owned");
 
+      paintedFieldIds.length = 0;
       await act(async () => {
-        root.render(<ResultContextBridge controller={controller} runId="run-2" />);
+        root.render(<ResultContextBridge controller={controller} onPaint={onPaint} runId="run-2" />);
       });
+      expect(paintedFieldIds).toEqual(["none"]);
       expect(controller.getContextSnapshot().status).toBe("foreign");
       expect(controller.getRenderableSnapshot()).toBeNull();
     } finally {

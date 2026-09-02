@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 import type { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 
@@ -8,7 +8,7 @@ export function useAnalysisFieldOverlayResultContext(
   controller: AnalysisFieldOverlayController,
   resultRunId: string | null,
 ): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     controller.setResultContext(resultRunId);
   }, [controller, resultRunId]);
 }
