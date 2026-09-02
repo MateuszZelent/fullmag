@@ -1,11 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { act, createElement, useLayoutEffect, useSyncExternalStore } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vitest";
 
+import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import type { KernelApi } from "@/kernel/types";
+import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { createAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import {
   analysisResultSelectionFromProjectionPoint,
   analysisResultProjectionMatchesSelection,
   analysisResultSelectionOwnsOverlay,
+  useAnalysisResultProjectionController,
 } from "./useAnalysisResultProjectionController";
 import {
   analysisResultSelectionRef,
@@ -13,6 +20,26 @@ import {
   type AnalysisResultProjectionResource,
 } from "@/shared/domain/analysis/results";
 import type { AnalysisResultProjectionSelection } from "./components/AnalysisResultProjectionSurface";
+
+let mockSelectedResultSelection: ReturnType<typeof resultSelection> | null = null;
+const mockSelectionListeners = new Set<() => void>();
+
+vi.mock("@/kernel/resources/analysisResultResources", () => ({
+  useAnalysisResultDatasetManifestResource: () => ({ data: null }),
+  useAnalysisResultProjectionResource: () => ({ data: null, status: "idle" }),
+}));
+
+vi.mock("@/kernel/selection/useSelection", () => ({
+  useSelectionSelector: (selector: (selection: { ref: typeof mockSelectedResultSelection }) => unknown) =>
+    useSyncExternalStore(
+      (listener) => {
+        mockSelectionListeners.add(listener);
+        return () => mockSelectionListeners.delete(listener);
+      },
+      () => selector({ ref: mockSelectedResultSelection }),
+      () => selector({ ref: mockSelectedResultSelection }),
+    ),
+}));
 
 const projectionIdentity = {
   dataset_id: "result:dataset-1",
@@ -83,6 +110,28 @@ function resultOverlay(): AnalysisFieldOverlayState {
   };
 }
 
+function ProjectionOverlayBridge({
+  kernel,
+  onLayoutOverlay,
+}: {
+  kernel: KernelApi;
+  onLayoutOverlay: (fieldId: string) => void;
+}) {
+  const observedSelection = useSelectionSelector((selection) => selection.ref);
+  useAnalysisResultProjectionController(kernel);
+  useLayoutEffect(() => {
+    onLayoutOverlay(kernel.analysisFieldOverlay.getRenderableSnapshot()?.fieldId ?? "none");
+  }, [kernel.analysisFieldOverlay, observedSelection, onLayoutOverlay]);
+  return null;
+}
+
+function setMockSelectedResultSelection(
+  selection: ReturnType<typeof resultSelection> | null,
+): void {
+  mockSelectedResultSelection = selection;
+  mockSelectionListeners.forEach((listener) => listener());
+}
+
 describe("analysis result projection overlay ownership", () => {
   it("keeps a typed result overlay owned by the selected dataset item", () => {
     expect(analysisResultSelectionOwnsOverlay(resultSelection(), resultOverlay())).toBe(true);
@@ -96,6 +145,45 @@ describe("analysis result projection overlay ownership", () => {
         resultOverlay(),
       ),
     ).toBe(false);
+  });
+
+  it("clears a foreign overlay before the layout snapshot after selection changes", async () => {
+    const controller = new AnalysisFieldOverlayController();
+    const kernel = {
+      analysisFieldOverlay: controller,
+      selection: { set: vi.fn() },
+    } as unknown as KernelApi;
+    controller.setResultContext("run-1");
+    controller.set(resultOverlay());
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    const layoutOverlayIds: string[] = [];
+    const onLayoutOverlay = (fieldId: string) => layoutOverlayIds.push(fieldId);
+
+    try {
+      setMockSelectedResultSelection(resultSelection());
+      await act(async () => {
+        root.render(
+          createElement(ProjectionOverlayBridge, {
+            kernel,
+            onLayoutOverlay,
+          }),
+        );
+      });
+      expect(controller.getRenderableSnapshot()?.fieldId).toBe("analysis:eigen:sample-1:mode-1");
+
+      layoutOverlayIds.length = 0;
+      await act(async () => {
+        setMockSelectedResultSelection({ ...resultSelection(), datasetRevision: "dataset-revision-2" });
+      });
+
+      expect(layoutOverlayIds).toEqual(["none"]);
+      expect(controller.getRenderableSnapshot()).toBeNull();
+    } finally {
+      setMockSelectedResultSelection(null);
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 });
 

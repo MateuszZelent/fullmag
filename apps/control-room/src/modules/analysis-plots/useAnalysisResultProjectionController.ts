@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo } from "react";
 
 import {
   useAnalysisResultDatasetManifestResource,
@@ -60,7 +60,7 @@ export function useAnalysisResultProjectionController(
     )
       ? resultProjection.data
       : null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!selectedResultSelection) return;
     const activeOverlay = kernel.analysisFieldOverlay.getSnapshot();
     if (
