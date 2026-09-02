@@ -45,12 +45,16 @@ const catalog = {
   total_count: 1,
 } as AnalysisResultDatasetCatalogResource;
 
-const manifest = {
+const manifest: AnalysisResultDatasetManifestResource = {
   axes: [{
     axis_id: "sample",
     cardinality: SAMPLE_COUNT,
     label: "Sample",
+    ordering: "ascending",
+    preferred_display_units: [],
+    projections: [],
     role: "outer",
+    semantic_id: "sample_index",
     unit_si: null,
     value_kind: "categorical",
   }],
@@ -169,7 +173,7 @@ describe("results mode sweep bounded benchmark", () => {
     const queries = visiblePages.map(({ samples }) => buildResultDatasetItemPageQuery({
       axisFilters: {},
       branchId: null,
-      cursor: samples.cursor,
+      cursor: samples.cursor ?? null,
       frequencyMax: "",
       frequencyMin: "",
       itemFieldFilter: "all",
