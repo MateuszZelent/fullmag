@@ -9,12 +9,19 @@ import type {
 
 import type { FieldVectorQuery } from "../api/apiTypes";
 import type { ModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
+import {
+  isAnalysisResultFieldOverlayIntent,
+  type AnalysisResultFieldOverlayIntent,
+} from "./AnalysisResultFieldOverlayIntent";
 import type {
   SurfaceColorSource,
   VisualizationGeometryScope,
 } from "./ObjectVisualizationController";
 
-export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
+export type AnalysisFieldOverlaySource =
+  | "eigen-mode"
+  | "frequency-response"
+  | "time-domain-response";
 export type AnalysisFieldOverlayRepresentation = "complex-vector-xyz";
 export type AnalysisFieldOverlayKContextKind =
   | "finite_open"
@@ -56,6 +63,8 @@ export interface AnalysisFieldOverlayState {
   modeIndex?: number;
   /** Stable eigenmode identity verified against the published mode resources. */
   modeIntent?: ModeFieldOverlayIntent;
+  /** Stable result-dataset field identity verified against the item resource. */
+  analysisResultFieldIntent?: AnalysisResultFieldOverlayIntent;
   query: FieldVectorQuery;
   sampleIndex?: number;
   source: AnalysisFieldOverlaySource;
@@ -66,7 +75,10 @@ export interface AnalysisFieldOverlayState {
   phasorConvention?: PhasorConvention;
   provenance?: {
     artifactRevision?: number | string;
+    datasetId?: string;
+    datasetRevision?: string;
     equilibriumId?: string;
+    fieldRevision?: string;
     kContextKind?: AnalysisFieldOverlayKContextKind;
     normalization?: string;
     observableId?: string;
@@ -280,6 +292,46 @@ function overlayOwnerIdentityIssue(
   if (!nonEmptyString(overlay.fieldId)) return "Active analysis overlay field identity is missing.";
   if (!nonEmptyString(overlay.query.view)) return "Active analysis overlay view representation is missing.";
   if (!Number.isFinite(phaseRad)) return "Active analysis overlay phase is invalid.";
+
+  if (overlay.analysisResultFieldIntent) {
+    const intent = overlay.analysisResultFieldIntent;
+    if (!isAnalysisResultFieldOverlayIntent(intent)) {
+      return "Active analysis result field intent is invalid.";
+    }
+    if (overlay.source !== intent.source || overlay.fieldId !== intent.fieldId) {
+      return "Active analysis result field source and identity do not match.";
+    }
+    if (
+      !nonEmptyString(intent.datasetId) ||
+      !nonEmptyString(intent.datasetRevision) ||
+      !nonEmptyString(intent.sampleId) ||
+      !nonEmptyString(intent.itemId) ||
+      !nonEmptyString(intent.fieldRevision) ||
+      intent.fieldRef.status !== "ready" ||
+      intent.fieldRef.field_id !== intent.fieldId ||
+      intent.fieldRef.field_revision !== intent.fieldRevision ||
+      !nonEmptyString(intent.fieldRef.resource_key) ||
+      intent.fieldRef.representation !== "complex-vector-xyz" ||
+      !intent.fieldRef.mesh_ref ||
+      !nonEmptyString(intent.fieldRef.mesh_ref.mesh_id) ||
+      !nonEmptyString(intent.fieldRef.mesh_ref.mesh_revision) ||
+      !nonEmptyString(intent.fieldRef.mesh_ref.topology_fingerprint)
+    ) {
+      return "Active analysis result field dataset, item, field, or mesh identity is incomplete.";
+    }
+    if (
+      provenance?.datasetId !== intent.datasetId ||
+      provenance?.datasetRevision !== intent.datasetRevision ||
+      provenance?.fieldRevision !== intent.fieldRevision
+    ) {
+      return "Active analysis result field provenance does not match its selected dataset revision.";
+    }
+    if (provenance?.representation !== "complex-vector-xyz") {
+      return "Active analysis result field representation is missing or is not a spatial complex XYZ vector.";
+    }
+    return null;
+  }
+
   if (!hasArtifactRevision) return "Active analysis overlay artifact revision is missing.";
   if (!nonEmptyString(provenance?.equilibriumId)) return "Active analysis overlay equilibrium identity is missing.";
   if (!nonEmptyString(provenance?.resourceRef)) return "Active analysis overlay field resource identity is missing.";
@@ -298,13 +350,15 @@ function overlayOwnerIdentityIssue(
     if (!Number.isInteger(overlay.sampleIndex) || !Number.isInteger(overlay.modeIndex)) {
       return "Active analysis overlay modal sample or mode identity is missing.";
     }
-  } else {
+  } else if (overlay.source === "frequency-response") {
     if (provenance?.studyProduct !== "driven_response") {
       return "Active analysis overlay source does not match its driven study product.";
     }
     if (!Number.isInteger(overlay.frequencyIndex) || !Number.isFinite(overlay.frequencyHz)) {
       return "Active analysis overlay frequency sample identity is incomplete.";
     }
+  } else {
+    return "Active time-domain response field is missing its result-dataset identity.";
   }
 
   const kContextKind = provenance?.kContextKind;
@@ -392,6 +446,10 @@ function analysisFieldOverlayStateEquals(
     left.label === right.label &&
     (left.modeIndex ?? null) === (right.modeIndex ?? null) &&
     modeFieldOverlayIntentEquals(left.modeIntent, right.modeIntent) &&
+    analysisResultFieldOverlayIntentEquals(
+      left.analysisResultFieldIntent,
+      right.analysisResultFieldIntent,
+    ) &&
     (left.sampleIndex ?? null) === (right.sampleIndex ?? null) &&
     left.source === right.source &&
     (left.visualizationPhaseRad ?? null) ===
@@ -425,6 +483,33 @@ function modeFieldOverlayIntentEquals(
   );
 }
 
+function analysisResultFieldOverlayIntentEquals(
+  left: AnalysisResultFieldOverlayIntent | undefined,
+  right: AnalysisResultFieldOverlayIntent | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.sourceKind === right.sourceKind &&
+    left.source === right.source &&
+    left.analysisRunId === right.analysisRunId &&
+    left.analysisStageId === right.analysisStageId &&
+    left.datasetId === right.datasetId &&
+    left.datasetRevision === right.datasetRevision &&
+    left.sampleId === right.sampleId &&
+    left.itemId === right.itemId &&
+    left.itemKind === right.itemKind &&
+    left.fieldId === right.fieldId &&
+    left.fieldRevision === right.fieldRevision &&
+    left.fieldRef.resource_key === right.fieldRef.resource_key &&
+    left.fieldRef.mesh_ref?.mesh_id === right.fieldRef.mesh_ref?.mesh_id &&
+    left.fieldRef.mesh_ref?.mesh_revision ===
+      right.fieldRef.mesh_ref?.mesh_revision &&
+    left.fieldRef.mesh_ref?.topology_fingerprint ===
+      right.fieldRef.mesh_ref?.topology_fingerprint
+  );
+}
+
 function analysisFieldOverlayProvenanceEquals(
   left: AnalysisFieldOverlayState["provenance"],
   right: AnalysisFieldOverlayState["provenance"],
@@ -437,6 +522,9 @@ function analysisFieldOverlayProvenanceEquals(
     (left.kContextKind ?? null) === (right.kContextKind ?? null) &&
     (left.normalization ?? null) === (right.normalization ?? null) &&
     (left.observableId ?? null) === (right.observableId ?? null) &&
+    (left.datasetId ?? null) === (right.datasetId ?? null) &&
+    (left.datasetRevision ?? null) === (right.datasetRevision ?? null) &&
+    (left.fieldRevision ?? null) === (right.fieldRevision ?? null) &&
     (left.representation ?? null) === (right.representation ?? null) &&
     (left.resourceRef ?? null) === (right.resourceRef ?? null) &&
     (left.runId ?? null) === (right.runId ?? null) &&

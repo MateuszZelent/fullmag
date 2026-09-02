@@ -358,7 +358,10 @@ export interface ExplorerNode {
   fmrPeakIndex?: number;
   frequencyHz?: number;
   frequencyIndex?: number;
-  analysisFieldSource?: "eigen-mode" | "frequency-response";
+  analysisFieldSource?:
+    | "eigen-mode"
+    | "frequency-response"
+    | "time-domain-response";
   analysisFieldView?: string;
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;

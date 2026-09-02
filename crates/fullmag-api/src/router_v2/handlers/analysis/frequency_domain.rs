@@ -476,6 +476,10 @@ pub struct FrequencyDomainFieldSweepUnitsPayload {
 pub struct FrequencyDomainFieldSweepTopologyPayload {
     pub mesh_id: String,
     pub topology_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
     pub indexing: String,
     pub sample_axis: String,
     pub mode_axis: String,

@@ -814,6 +814,7 @@ export function selectionRefEquals(
         recordEquals(left.axisFilters ?? {}, right.axisFilters ?? {}) &&
         nullableStringEquals(left.fieldId, right.fieldId) &&
         nullableStringEquals(left.fieldRevision, right.fieldRevision) &&
+        analysisResultFieldRefEquals(left.fieldRef, right.fieldRef) &&
         nullableStringEquals(left.projectionId, right.projectionId) &&
         nullableStringEquals(left.projectionRevision, right.projectionRevision) &&
         (left.projectionOrdinal ?? null) === (right.projectionOrdinal ?? null)
@@ -1284,6 +1285,25 @@ export function selectionRefEquals(
         centroidEquals(left.wavevectorKf, right.wavevectorKf)
       );
   }
+}
+
+function analysisResultFieldRefEquals(
+  left: AnalysisResultSelectionRef["fieldRef"],
+  right: AnalysisResultSelectionRef["fieldRef"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.field_id === right.field_id &&
+    left.field_revision === right.field_revision &&
+    left.resource_key === right.resource_key &&
+    left.status === right.status &&
+    left.quantity_id === right.quantity_id &&
+    left.representation === right.representation &&
+    left.mesh_ref?.mesh_id === right.mesh_ref?.mesh_id &&
+    left.mesh_ref?.mesh_revision === right.mesh_ref?.mesh_revision &&
+    left.mesh_ref?.topology_fingerprint === right.mesh_ref?.topology_fingerprint
+  );
 }
 
 export function selectionSnapshotEquals(

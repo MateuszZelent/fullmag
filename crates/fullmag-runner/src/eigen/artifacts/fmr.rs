@@ -377,6 +377,8 @@ fn fmr_artifact_topology() -> ServerArtifactTopology {
     ServerArtifactTopology {
         mesh_id: "topology:not_provided".to_string(),
         topology_revision: "topology:not_provided".to_string(),
+        topology_fingerprint: None,
+        mesh_generation_id: None,
         indexing: "frequency_index".to_string(),
         sample_axis: "frequency_index".to_string(),
         mode_axis: "not_applicable".to_string(),

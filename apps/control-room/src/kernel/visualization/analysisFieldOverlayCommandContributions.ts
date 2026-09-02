@@ -6,6 +6,10 @@ import type {
 import type { FieldVectorQuery } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { SelectionRef } from "../selection/selectionTypes";
+import {
+  analysisResultFieldOverlayAdapter,
+  createAnalysisResultFieldOverlayIntent,
+} from "./AnalysisResultFieldOverlayIntent";
 import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 
 import type {
@@ -236,6 +240,14 @@ function selectedFrequencyDomainRef(context: CommandContext): Extract<
   return ref?.type === "frequency-domain" ? ref : null;
 }
 
+function selectedAnalysisResultRef(context: CommandContext): Extract<
+  SelectionRef,
+  { type: "analysis-result" }
+> | null {
+  const ref = context.selection?.get().ref;
+  return ref?.type === "analysis-result" ? ref : null;
+}
+
 function selectedOverlayIdentityRef(context: CommandContext): Extract<
   SelectionRef,
   { type: "frequency-domain" | "mode-visualization" }
@@ -248,7 +260,12 @@ function selectedOverlayIdentityRef(context: CommandContext): Extract<
 
 function fieldIdFromContext(context: CommandContext): string | null {
   const input = overlayCommandInput(context);
-  return stringValue(input.fieldId) ?? selectedFrequencyDomainRef(context)?.fieldId ?? null;
+  return (
+    stringValue(input.fieldId) ??
+    selectedFrequencyDomainRef(context)?.fieldId ??
+    selectedAnalysisResultRef(context)?.fieldId ??
+    null
+  );
 }
 
 function sourceFromSelectionRef(
@@ -273,6 +290,14 @@ function sourceFromSelectionRef(
   return null;
 }
 
+function sourceFromAnalysisResultRef(
+  ref: Extract<SelectionRef, { type: "analysis-result" }> | null,
+): AnalysisFieldOverlaySource | null {
+  return ref?.itemKind
+    ? analysisResultFieldOverlayAdapter(ref.itemKind).source
+    : null;
+}
+
 function selectedFieldMatchesSource(
   context: CommandContext,
   source: AnalysisFieldOverlaySource,
@@ -280,6 +305,11 @@ function selectedFieldMatchesSource(
   const input = overlayCommandInput(context);
   const inputSource = overlaySourceFromContext(context, source);
   if (input.fieldId !== undefined) return inputSource === source;
+
+  const selectedResultSource = sourceFromAnalysisResultRef(
+    selectedAnalysisResultRef(context),
+  );
+  if (selectedResultSource !== null) return selectedResultSource === source;
 
   const selectedSource = sourceFromSelectionRef(selectedFrequencyDomainRef(context));
   return selectedSource === null || selectedSource === source;
@@ -298,6 +328,16 @@ function unsupported3DPlotReason(context: CommandContext): string | null {
   ) {
     return "Frequency-domain 3D field requires a spatial XYZ field; this payload is local tangent-space and needs tangent-to-XYZ reconstruction first.";
   }
+
+  const resultRef = selectedAnalysisResultRef(context);
+  if (resultRef) {
+    if (!resultRef.fieldId || !resultRef.fieldRevision || !resultRef.fieldRef) {
+      return "Selected result item has no published spatial field reference.";
+    }
+    if (!createAnalysisResultFieldOverlayIntent(resultRef)) {
+      return "Selected result field is unsupported until its complex XYZ field and immutable mesh reference are verified.";
+    }
+  }
   return null;
 }
 
@@ -306,7 +346,9 @@ function overlaySourceFromContext(
   fallback: AnalysisFieldOverlaySource,
 ): AnalysisFieldOverlaySource {
   const source = overlayCommandInput(context).source;
-  return source === "eigen-mode" || source === "frequency-response"
+  return source === "eigen-mode" ||
+    source === "frequency-response" ||
+    source === "time-domain-response"
     ? source
     : fallback;
 }
@@ -322,7 +364,15 @@ function overlayLabelFromContext(
   const selection = context.selection?.get();
   if (selection?.label) return selection.label;
 
-  return source === "eigen-mode" ? "Eigen mode field" : "Response field";
+  const resultRef = selectedAnalysisResultRef(context);
+  if (resultRef?.itemKind) {
+    const adapter = analysisResultFieldOverlayAdapter(resultRef.itemKind);
+    if (adapter.source === source) return adapter.label;
+  }
+
+  if (source === "eigen-mode") return "Eigen mode field";
+  if (source === "time-domain-response") return "Time-domain response field";
+  return "Response field";
 }
 
 function overlayQueryFromContext(
@@ -373,10 +423,15 @@ function overlayStateFromContext(
     activeOverlay?.query.phase_rad ??
     0;
   const selectedRef = selectedFrequencyDomainRef(context);
+  const selectedResultRef = selectedAnalysisResultRef(context);
   const modeIntent =
     resolvedSource === "eigen-mode"
       ? createModeFieldOverlayIntent(selectedRef)
       : null;
+  const analysisResultFieldIntent = createAnalysisResultFieldOverlayIntent(
+    selectedResultRef,
+  );
+  const resultSource = analysisResultFieldIntent?.source ?? resolvedSource;
   const identityRef = selectedOverlayIdentityRef(context);
   const activeIdentityOverlay =
     identityRef?.type === "mode-visualization" &&
@@ -396,21 +451,33 @@ function overlayStateFromContext(
     (identityRef?.wavevectorKf ? [...identityRef.wavevectorKf] as [number, number, number] : null) ??
     activeIdentityOverlay?.wavevectorKf;
   const artifactRevision =
-    identityRef?.artifactRevision ?? input.artifactRevision ?? undefined;
+    analysisResultFieldIntent?.datasetRevision ??
+    identityRef?.artifactRevision ??
+    input.artifactRevision ??
+    undefined;
   const equilibriumId =
     identityRef?.equilibriumId ?? stringValue(input.equilibriumId) ?? undefined;
   const kContextKind =
     identityRef?.kContextKind ?? kContextKindValue(input.kContextKind) ?? undefined;
   const resourceRef =
-    identityRef?.resourceRef ?? stringValue(input.resourceRef) ?? undefined;
+    analysisResultFieldIntent?.fieldRef.resource_key ??
+    identityRef?.resourceRef ??
+    stringValue(input.resourceRef) ??
+    undefined;
   const representation =
     representationValue(identityRef?.representation) ??
     representationValue(input.representation) ??
-    undefined;
+    (analysisResultFieldIntent ? "complex-vector-xyz" : undefined);
   const runId =
-    identityRef?.analysisRunId ?? stringValue(input.runId) ?? undefined;
+    analysisResultFieldIntent?.analysisRunId ??
+    identityRef?.analysisRunId ??
+    stringValue(input.runId) ??
+    undefined;
   const stageId =
-    identityRef?.analysisStageId ?? stringValue(input.stageId) ?? undefined;
+    analysisResultFieldIntent?.analysisStageId ??
+    identityRef?.analysisStageId ??
+    stringValue(input.stageId) ??
+    undefined;
   const studyProduct =
     identityRef?.studyProduct ?? stringValue(input.studyProduct) ?? undefined;
   const normalization =
@@ -440,11 +507,14 @@ function overlayStateFromContext(
       ? { modeIndex: numberValue(input.modeIndex) ?? identityRef?.modeIndex }
       : {}),
     ...(modeIntent?.fieldId === fieldId ? { modeIntent } : {}),
+    ...(analysisResultFieldIntent?.fieldId === fieldId
+      ? { analysisResultFieldIntent }
+      : {}),
     ...(phasorConvention ? { phasorConvention } : {}),
     query: defaultView == null
       ? overlayQueryFromContext(context, phaseRad)
       : overlayQueryWithDefaultViewFromContext(context, defaultView, phaseRad),
-    source: resolvedSource,
+    source: resultSource,
     ...((numberValue(input.sampleIndex) ?? identityRef?.sampleIndex) !== undefined
       ? { sampleIndex: numberValue(input.sampleIndex) ?? identityRef?.sampleIndex }
       : {}),
@@ -453,7 +523,10 @@ function overlayStateFromContext(
       ? {
           provenance: {
             artifactRevision,
+            datasetId: analysisResultFieldIntent?.datasetId,
+            datasetRevision: analysisResultFieldIntent?.datasetRevision,
             equilibriumId,
+            fieldRevision: analysisResultFieldIntent?.fieldRevision,
             kContextKind,
             normalization,
             observableId:
@@ -464,7 +537,15 @@ function overlayStateFromContext(
             resourceRef,
             runId,
             stageId,
-            studyProduct,
+            studyProduct:
+              analysisResultFieldIntent?.itemKind === "eigen_mode"
+                ? "modal_eigen"
+                : analysisResultFieldIntent?.itemKind ===
+                    "driven_frequency_point"
+                  ? "driven_response"
+                  : analysisResultFieldIntent
+                    ? "time_domain_spectrum"
+                    : studyProduct,
           },
         }
       : {}),
@@ -476,7 +557,9 @@ function rebindTargetFromContext(
   context: CommandContext,
 ): AnalysisFieldOverlayState | null {
   const ref = selectedFrequencyDomainRef(context);
-  const source = sourceFromSelectionRef(ref);
+  const resultRef = selectedAnalysisResultRef(context);
+  const source =
+    sourceFromSelectionRef(ref) ?? sourceFromAnalysisResultRef(resultRef);
   return source ? overlayStateFromContext(context, source) : null;
 }
 
@@ -742,9 +825,13 @@ function plotCommand(
         return unsupportedReason;
       }
       if (!selectedFieldMatchesSource(context, source)) {
-        return source === "eigen-mode"
-          ? "Selected analysis field is not a modal eigen field."
-          : "Selected analysis field is not a driven response field.";
+        if (source === "eigen-mode") {
+          return "Selected analysis field is not a modal eigen field.";
+        }
+        if (source === "frequency-response") {
+          return "Selected analysis field is not a driven response field.";
+        }
+        return "Selected analysis field is not a time-domain response field.";
       }
       return fieldIdFromContext(context) ? null : "No analysis field is selected.";
     },
@@ -779,13 +866,17 @@ function plotCommand(
           commandId: id,
           fieldRef: {
             fieldId: state.fieldId,
-            resourceKey: `data/fields/${encodeURIComponent(state.fieldId)}`,
+            resourceKey:
+              state.analysisResultFieldIntent?.fieldRef.resource_key ??
+              `data/fields/${encodeURIComponent(state.fieldId)}`,
           },
           selection: {
             resourceKey:
               selection?.ref?.type === "frequency-domain"
                 ? selection.ref.resourceRef ?? state.fieldId
-                : state.fieldId,
+                : selection?.ref?.type === "analysis-result"
+                  ? selection.ref.fieldRef?.resource_key ?? state.fieldId
+                  : state.fieldId,
             rowIds: selection?.nodeId ? [selection.nodeId] : [],
             semanticTarget: selection?.kind ?? source,
           },
@@ -924,6 +1015,35 @@ export const ANALYSIS_FIELD_OVERLAY_COMMANDS: CommandContribution[] = [
     "Plot response field phase-rotated real in 3D",
     "frequency-response",
     DEFAULT_ANALYSIS_FIELD_VIEW,
+  ),
+  plotCommand(
+    "analysis.time-domain.plot-response-field-3d",
+    "Plot time-domain response field in 3D",
+    "time-domain-response",
+  ),
+  plotCommand(
+    "analysis.time-domain.plot-response-field-3d-real",
+    "Plot time-domain response field real in 3D",
+    "time-domain-response",
+    "real",
+  ),
+  plotCommand(
+    "analysis.time-domain.plot-response-field-3d-imag",
+    "Plot time-domain response field imag in 3D",
+    "time-domain-response",
+    "imag",
+  ),
+  plotCommand(
+    "analysis.time-domain.plot-response-field-3d-abs",
+    "Plot time-domain response field complex magnitude in 3D",
+    "time-domain-response",
+    "abs",
+  ),
+  plotCommand(
+    "analysis.time-domain.plot-response-field-3d-phase",
+    "Plot time-domain response field phase in 3D",
+    "time-domain-response",
+    "phase",
   ),
   {
     id: "analysis.frequency-domain.rebind-3d-overlay",

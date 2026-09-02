@@ -9,10 +9,13 @@ import {
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { isAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import {
   analysisResultSelectionForProjection,
   analysisResultSelectionRef,
   buildAnalysisResultProjectionChartModel,
+  type AnalysisResultDatasetManifestResource,
+  type AnalysisResultProjectionResource,
   type AnalysisResultSelectionRef,
 } from "@/shared/domain/analysis/results";
 
@@ -49,6 +52,14 @@ export function useAnalysisResultProjectionController(
     selectedResultSelection?.datasetId,
     resultProjectionId,
   );
+  const renderableResultProjection =
+    analysisResultProjectionMatchesSelection(
+      resultProjection.data,
+      selectedResultSelection,
+      resultManifest.data,
+    )
+      ? resultProjection.data
+      : null;
   useEffect(() => {
     if (!selectedResultSelection) return;
     const activeOverlay = kernel.analysisFieldOverlay.getSnapshot();
@@ -60,22 +71,34 @@ export function useAnalysisResultProjectionController(
     }
   }, [kernel.analysisFieldOverlay, selectedResultSelection]);
   const resultProjectionModel = useMemo(
-    () => buildAnalysisResultProjectionChartModel(resultProjection.data),
-    [resultProjection.data],
+    () => buildAnalysisResultProjectionChartModel(renderableResultProjection),
+    [renderableResultProjection],
   );
   const onResultProjectionPointSelect = useCallback(
     (entry: AnalysisResultProjectionSelection) => {
-      if (!selectedResultSelection || !resultProjection.data) return;
+      if (!selectedResultSelection || !renderableResultProjection) return;
+      const preservesFieldIdentity =
+        entry.itemId === selectedResultSelection.itemId &&
+        entry.sampleId === selectedResultSelection.sampleId;
       const selection = analysisResultSelectionRef({
         branchId: entry.branchId ?? undefined,
         datasetId: selectedResultSelection.datasetId,
         datasetRevision: selectedResultSelection.datasetRevision,
+        ...(preservesFieldIdentity
+          ? {
+              displayIndex: selectedResultSelection.displayIndex,
+              fieldId: selectedResultSelection.fieldId,
+              fieldRef: selectedResultSelection.fieldRef,
+              fieldRevision: selectedResultSelection.fieldRevision,
+              sampleIndex: selectedResultSelection.sampleIndex,
+            }
+          : {}),
         focus: entry.itemId ? "item" : "sample",
         itemId: entry.itemId ?? undefined,
         itemKind: selectedResultSelection.itemKind,
-        projectionId: resultProjection.data.projection_id,
+        projectionId: renderableResultProjection.projection_id,
         projectionOrdinal: entry.ordinal,
-        projectionRevision: resultProjection.data.projection_revision,
+        projectionRevision: renderableResultProjection.projection_revision,
         runId: selectedResultSelection.runId,
         sampleId: entry.sampleId ?? undefined,
         stageId: selectedResultSelection.stageId,
@@ -91,7 +114,7 @@ export function useAnalysisResultProjectionController(
         "analysis-plots",
       );
     },
-    [kernel.selection, resultProjection.data, selectedResultSelection],
+    [kernel.selection, renderableResultProjection, selectedResultSelection],
   );
   const onResultProjectionSelect = useCallback(
     (projectionId: string) => {
@@ -121,17 +144,71 @@ export function useAnalysisResultProjectionController(
     onProjectionSelect: onResultProjectionSelect,
     onPointSelect: onResultProjectionPointSelect,
     projections: resultManifest.data?.projections ?? [],
-    resource: resultProjection.data,
+    resource: renderableResultProjection,
     selectedSelection: selectedResultSelection,
     selectedProjectionId: resultProjectionId,
     status: resultProjection.status,
   };
 }
 
+export function analysisResultProjectionMatchesSelection(
+  projection:
+    | Pick<
+        AnalysisResultProjectionResource,
+        "dataset_id" | "dataset_revision" | "run_id"
+      >
+    | null
+    | undefined,
+  selection:
+    | Pick<AnalysisResultSelectionRef, "datasetId" | "datasetRevision" | "runId">
+    | null
+    | undefined,
+  manifest:
+    | Pick<
+        AnalysisResultDatasetManifestResource,
+        "dataset_id" | "dataset_revision" | "run_id"
+      >
+    | null
+    | undefined,
+): boolean {
+  return Boolean(
+    projection &&
+      selection &&
+      manifest &&
+      projection.run_id === selection.runId &&
+      projection.dataset_id === selection.datasetId &&
+      projection.dataset_revision === selection.datasetRevision &&
+      projection.run_id === manifest.run_id &&
+      projection.dataset_id === manifest.dataset_id &&
+      projection.dataset_revision === manifest.dataset_revision,
+  );
+}
+
 export function analysisResultSelectionOwnsOverlay(
   selection: AnalysisResultSelectionRef,
   overlay: AnalysisFieldOverlayState,
 ): boolean {
+  if (overlay.analysisResultFieldIntent) {
+    const intent = overlay.analysisResultFieldIntent;
+    return Boolean(
+      isAnalysisResultFieldOverlayIntent(intent) &&
+        intent.analysisRunId === selection.runId &&
+        intent.analysisStageId === selection.stageId &&
+        intent.datasetId === selection.datasetId &&
+        intent.datasetRevision === selection.datasetRevision &&
+        intent.sampleId === selection.sampleId &&
+        intent.itemId === selection.itemId &&
+        intent.itemKind === selection.itemKind &&
+        intent.fieldId === selection.fieldId &&
+        intent.fieldRevision === selection.fieldRevision &&
+        intent.fieldRef.resource_key === selection.fieldRef?.resource_key &&
+        intent.fieldRef.mesh_ref?.mesh_id === selection.fieldRef?.mesh_ref?.mesh_id &&
+        intent.fieldRef.mesh_ref?.mesh_revision ===
+          selection.fieldRef?.mesh_ref?.mesh_revision &&
+        intent.fieldRef.mesh_ref?.topology_fingerprint ===
+          selection.fieldRef?.mesh_ref?.topology_fingerprint,
+    );
+  }
   const intent = overlay.modeIntent;
   return Boolean(
     intent &&

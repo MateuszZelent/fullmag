@@ -119,6 +119,7 @@ import {
   useRenderableAnalysisFieldOverlay,
   type AnalysisFieldOverlayAppearanceState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { isAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
 import { useModeCompositionPhaseClock } from "@/kernel/visualization/ModeCompositionPhaseClock";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
@@ -309,6 +310,35 @@ export function resolveViewport3DAirboxVectorSampleBudget(
       Math.floor(requestedBudget),
       Math.floor(availableAirOnlyNodeCount),
     ),
+  );
+}
+
+function analysisResultOverlayMatchesSelection(
+  overlay: ReturnType<typeof useRenderableAnalysisFieldOverlay>,
+  selection: Selection,
+): boolean {
+  const intent = overlay?.analysisResultFieldIntent;
+  const ref = selection.ref;
+  if (!intent) return true;
+  if (!isAnalysisResultFieldOverlayIntent(intent) || ref?.type !== "analysis-result") {
+    return false;
+  }
+  return (
+    ref.runId === intent.analysisRunId &&
+    ref.stageId === intent.analysisStageId &&
+    ref.datasetId === intent.datasetId &&
+    ref.datasetRevision === intent.datasetRevision &&
+    ref.sampleId === intent.sampleId &&
+    ref.itemId === intent.itemId &&
+    ref.itemKind === intent.itemKind &&
+    ref.fieldId === intent.fieldId &&
+    ref.fieldRevision === intent.fieldRevision &&
+    ref.fieldRef?.resource_key === intent.fieldRef.resource_key &&
+    ref.fieldRef?.mesh_ref?.mesh_id === intent.fieldRef.mesh_ref?.mesh_id &&
+    ref.fieldRef?.mesh_ref?.mesh_revision ===
+      intent.fieldRef.mesh_ref?.mesh_revision &&
+    ref.fieldRef?.mesh_ref?.topology_fingerprint ===
+      intent.fieldRef.mesh_ref?.topology_fingerprint
   );
 }
 import {
@@ -2629,7 +2659,29 @@ export function useViewport3DSceneModel({
 }) {
   const primitiveDraftOverlay = usePrimitiveDraftOverlay();
   const { analysisFieldOverlay } = useKernel();
-  const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const analysisOverlaySnapshot =
+    useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
+  const analysisOverlay = useMemo(
+    () =>
+      analysisResultOverlayMatchesSelection(
+        analysisOverlaySnapshot,
+        selection,
+      )
+        ? analysisOverlaySnapshot
+        : null,
+    [analysisOverlaySnapshot, selection],
+  );
+  useEffect(() => {
+    if (
+      analysisOverlaySnapshot?.analysisResultFieldIntent &&
+      !analysisResultOverlayMatchesSelection(
+        analysisOverlaySnapshot,
+        selection,
+      )
+    ) {
+      analysisFieldOverlay.clear();
+    }
+  }, [analysisFieldOverlay, analysisOverlaySnapshot, selection]);
   const modeCompositionController = useModeCompositionControllerResource();
   const modeCompositionPhaseClock = useModeCompositionPhaseClock(
     modeCompositionController.controller.resource,
@@ -3166,16 +3218,25 @@ export function useViewport3DSceneModel({
     }
     return {
       domainGenerationId: fieldCompatibleTopologyRenderModel.meshGenerationId,
+      meshId: sharedDomainManifest.data?.mesh_id ?? null,
       meshTopologyHash: fieldCompatibleTopologyRenderModel.meshTopologyHash,
       meshTopologyRevision: String(fieldCompatibleTopologyRenderModel.meshRevision),
       pointCount: fieldCompatibleTopologyRenderModel.nodeCount,
     };
-  }, [fieldCompatibleTopologyRenderModel]);
+  }, [
+    fieldCompatibleTopologyRenderModel,
+    sharedDomainManifest.data?.mesh_id,
+  ]);
   const modeFieldOverlay = useModeFieldOverlayIntentResource({
-    enabled: Boolean(analysisOverlay?.modeIntent),
-    intent: analysisOverlay?.modeIntent,
+    enabled: Boolean(
+      analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent,
+    ),
+    intent:
+      analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent,
     topology: modeFieldOverlayTopology,
   });
+  const analysisFieldIntent =
+    analysisOverlay?.analysisResultFieldIntent ?? analysisOverlay?.modeIntent;
   const clipCrossSectionQuery = useMemo(() => {
     const query = resolveCrossSectionQueryFromVisualizationState(renderingState);
     return {
@@ -4123,7 +4184,7 @@ export function useViewport3DSceneModel({
   const fdmInstanceModelNeedsFieldVector =
     fdmVoxelMagnitudeThreshold > 0 || fdmTopographyEnabled;
   const primaryFieldVectorEnabled =
-    !analysisOverlay?.modeIntent &&
+    !analysisFieldIntent &&
     Boolean(fdmDomain || fieldCompatibleTopologyRenderModel) &&
     (Boolean(analysisOverlay) ||
       (viewport3DFieldQuantityAvailable(
@@ -4430,7 +4491,7 @@ export function useViewport3DSceneModel({
     primaryFieldQuantityId,
     analysisComplexFieldQuery,
     Boolean(analysisOverlay) &&
-      !analysisOverlay?.modeIntent &&
+      !analysisFieldIntent &&
       analysisComplexProjectionEnabled &&
       fieldVectorEnabled,
   );
@@ -4514,14 +4575,14 @@ export function useViewport3DSceneModel({
     ],
   );
   const analysisComplexField = useMemo(() => {
-    if (analysisOverlay?.modeIntent) return modeFieldOverlay.field;
+    if (analysisFieldIntent) return modeFieldOverlay.field;
     return analysisComplexProjectionEnabled
       ? asDecodedComplexFieldVector(analysisComplexFieldVector.data)
       : null;
   }, [
     analysisComplexFieldVector.data,
     analysisComplexProjectionEnabled,
-    analysisOverlay?.modeIntent,
+    analysisFieldIntent,
     modeFieldOverlay.field,
   ]);
   const fdmUsesPrimaryField = sameViewport3DQuantityId(
@@ -5994,7 +6055,7 @@ export function useViewport3DSceneModel({
             legacyResponseOverlayActive:
               analysisOverlay?.source === "frequency-response",
             modeOverlay:
-              analysisOverlay?.modeIntent &&
+              analysisFieldIntent &&
               modeFieldOverlay.phasorAmplitudeMax !== null
                 ? {
                     phasorAmplitudeMax: modeFieldOverlay.phasorAmplitudeMax,
@@ -6036,7 +6097,7 @@ export function useViewport3DSceneModel({
     analysisOverlay?.floquetSpatialConvention,
     analysisOverlay?.phasorConvention,
     analysisOverlay?.wavevectorKf,
-    analysisOverlay?.modeIntent,
+    analysisFieldIntent,
     analysisOverlay?.source,
     modeFieldOverlay.metadata?.availableViews,
     modeFieldOverlay.phasorAmplitudeMax,

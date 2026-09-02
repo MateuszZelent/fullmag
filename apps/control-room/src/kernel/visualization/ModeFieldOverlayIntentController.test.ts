@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { FrequencyDomainFieldResource } from "../api/apiTypes";
+import type {
+  AnalysisResultFieldRef,
+  FrequencyDomainFieldResource,
+} from "../api/apiTypes";
 import type { DecodedFieldVector } from "../api/codecs";
+import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
-import { createModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
+import {
+  createModeFieldOverlayIntent,
+  type ModeFieldOverlayTopologyIdentity,
+} from "./ModeFieldOverlayIntent";
+import { createAnalysisResultFieldOverlayIntent } from "./AnalysisResultFieldOverlayIntent";
 import { ModeFieldOverlayIntentController } from "./ModeFieldOverlayIntentController";
 
 function intent(modeId: string, modeIndex: number) {
@@ -59,6 +67,49 @@ function binary(fieldId: string): DecodedFieldVector {
     quantityId: fieldId,
     valueCount: 6,
     values: new Float64Array(6).fill(1),
+  };
+}
+
+const resultFieldRef: AnalysisResultFieldRef = {
+  field_id: "analysis:eigen:sample-result:mode-result",
+  field_revision: "sha256:result-field-v1",
+  mesh_ref: {
+    mesh_id: "mesh:result",
+    mesh_revision: "mesh-revision-1",
+    topology_fingerprint: "sha256:result-topology-v1",
+  },
+  quantity_id: "m",
+  representation: "complex-vector-xyz",
+  resource_key: "data/fields/analysis-result-mode",
+  status: "ready",
+};
+
+function resultIntent() {
+  return createAnalysisResultFieldOverlayIntent(
+    analysisResultSelectionRef({
+      datasetId: "result:dataset",
+      datasetRevision: "sha256:dataset-v1",
+      fieldId: resultFieldRef.field_id,
+      fieldRef: resultFieldRef,
+      fieldRevision: resultFieldRef.field_revision,
+      focus: "item",
+      itemId: "mode-result",
+      itemKind: "eigen_mode",
+      runId: "run-result",
+      sampleId: "sample-result",
+      stageId: "stage-result",
+    }),
+  )!;
+}
+
+function resultBinary(fieldId: string): DecodedFieldVector {
+  return {
+    ...binary(fieldId),
+    domainGenerationId: "result-generation",
+    grid: [1, 1, 1],
+    meshTopologyHash: "sha256:result-topology-v1",
+    meshTopologyRevision: "mesh-revision-1",
+    quantityId: fieldId,
   };
 }
 
@@ -124,6 +175,41 @@ describe("ModeFieldOverlayIntentController", () => {
     await expect(run).resolves.toBe("cancelled");
     expect(binarySignal?.aborted).toBe(true);
     expect(controller.getSnapshot()).toMatchObject({ field: null, status: "idle" });
+  });
+
+  it("loads a typed result field through the shared topology gate", async () => {
+    const controller = new ModeFieldOverlayIntentController();
+    const active = resultIntent();
+    expect(active.sourceKind).toBe("analysis-result");
+    if (active.sourceKind !== "analysis-result") {
+      throw new Error("Expected an analysis-result overlay intent");
+    }
+    const resultTopology: ModeFieldOverlayTopologyIdentity = {
+      domainGenerationId: "result-generation",
+      meshId: "mesh:result",
+      meshTopologyHash: "sha256:result-topology-v1",
+      meshTopologyRevision: "mesh-revision-1",
+      pointCount: 1,
+    };
+
+    await expect(
+      controller.activate(
+        active,
+        {
+          loadMetadata: async () => ({
+            data: active.fieldRef,
+            revision: active.fieldRevision,
+          }),
+          loadBinary: async (metadata) => resultBinary(metadata.fieldId),
+        },
+        resultTopology,
+      ),
+    ).resolves.toBe("ready");
+    expect(controller.getSnapshot()).toMatchObject({
+      intent: active,
+      metadata: { fieldId: resultFieldRef.field_id },
+      status: "ready",
+    });
   });
 });
 

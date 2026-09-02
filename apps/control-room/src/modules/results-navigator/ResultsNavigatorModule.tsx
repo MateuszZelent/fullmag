@@ -3,7 +3,6 @@
 import { useCallback, useMemo, useState } from "react";
 
 import {
-  useAnalysisResultAxisValuesResource,
   useAnalysisResultBranchesResource,
   useAnalysisResultDatasetCatalogResource,
   useAnalysisResultDatasetManifestResource,
@@ -28,10 +27,21 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import {
+  analysisResultFieldOverlayAdapter,
+  createAnalysisResultFieldOverlayIntent,
+} from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 
 import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
 import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
-import { buildResultDatasetBrowserModel } from "./resultDatasetBrowserModel";
+import {
+  buildResultDatasetBrowserModel,
+  buildResultDatasetItemPageQuery,
+  resultDatasetFilterErrorMessage,
+  resultPageForDataset,
+  type ResultDatasetItemStatusFilter,
+} from "./resultDatasetBrowserModel";
 import {
   analysisResultSelectionRef,
   type AnalysisResultSelectionRef,
@@ -120,23 +130,50 @@ export default function ResultsNavigatorModule({
   const stageExecution = useStageExecutionResource();
   const resultRunId = currentRun.data?.run_id ?? null;
   const [resultDatasetSearch, setResultDatasetSearch] = useState("");
+  const [resultCatalogPageState, setResultCatalogPageState] = useState<{
+    cursor: string | null;
+    key: string;
+  }>({ cursor: null, key: "" });
   const [resultItemFieldFilter, setResultItemFieldFilter] = useState<
     "all" | "true" | "false"
   >("all");
   const [resultItemSort, setResultItemSort] = useState("display_index_asc");
+  const [resultItemStatusFilter, setResultItemStatusFilter] =
+    useState<ResultDatasetItemStatusFilter>("all");
+  const [resultItemFrequencyMin, setResultItemFrequencyMin] = useState("");
+  const [resultItemFrequencyMax, setResultItemFrequencyMax] = useState("");
+  const [resultItemResidualMax, setResultItemResidualMax] = useState("");
+  const resultCatalogPageKey = resultDatasetSearch.trim();
+  const resultCatalogCursor =
+    resultCatalogPageState.key === resultCatalogPageKey
+      ? resultCatalogPageState.cursor
+      : null;
   const resultCatalogQuery = useMemo(
     () => ({
+      ...(resultCatalogCursor ? { cursor: resultCatalogCursor } : {}),
       limit: 50,
       sort: "dataset_id_asc",
       ...(resultDatasetSearch.trim()
         ? { search: resultDatasetSearch.trim() }
         : {}),
     }),
-    [resultDatasetSearch],
+    [resultCatalogCursor, resultDatasetSearch],
   );
   const resultCatalog = useAnalysisResultDatasetCatalogResource(resultRunId, {
     query: resultCatalogQuery,
   });
+  const resultCatalogHasItems = (resultCatalog.data?.items.length ?? 0) > 0;
+  const resultCatalogSearchActive = resultDatasetSearch.trim().length > 0;
+  const resultDatasetBrowserVisible =
+    resultCatalogHasItems ||
+    resultCatalogSearchActive ||
+    resultCatalog.status === "loading" ||
+    resultCatalog.status === "stale" ||
+    resultCatalog.status === "error";
+  const legacyResultsFallbackEnabled =
+    Boolean(resultRunId) &&
+    !resultDatasetBrowserVisible &&
+    resultCatalog.status === "ready";
   const selectedResultDatasetId = useSelectionSelector((selection) => {
     const ref = selection.ref;
     return ref?.type === "analysis-result" && ref.runId === resultRunId
@@ -149,6 +186,12 @@ export default function ResultsNavigatorModule({
       ? ref.sampleId ?? null
       : null;
   });
+  const selectedResultSelection = useSelectionSelector(
+    (selection): AnalysisResultSelectionRef | null => {
+      const ref = selection.ref;
+      return ref?.type === "analysis-result" ? ref : null;
+    },
+  );
   const resultDatasetId =
     selectedResultDatasetId ?? resultCatalog.data?.items[0]?.dataset_id ?? null;
   const selectedResultAxisFilterKey = useSelectionSelector((selection) => {
@@ -168,6 +211,10 @@ export default function ResultsNavigatorModule({
   const [resultAxisFilters, setResultAxisFilters] = useState<Record<string, string>>({});
   const [resultAxisFilterDatasetId, setResultAxisFilterDatasetId] =
     useState<string | null>(null);
+  const [resultBranchFilter, setResultBranchFilter] = useState<string | null>(null);
+  const [resultBranchFilterDatasetId, setResultBranchFilterDatasetId] =
+    useState<string | null>(null);
+  const [resultFollowedBranchId, setResultFollowedBranchId] = useState<string | null>(null);
   const effectiveResultAxisFilters = useMemo(
     () =>
       resultAxisFilterDatasetId === resultDatasetId
@@ -180,19 +227,44 @@ export default function ResultsNavigatorModule({
       selectedResultAxisFilters,
     ],
   );
+  const resultManifest = useAnalysisResultDatasetManifestResource(
+    resultRunId,
+    resultDatasetId,
+  );
+  const resultServerFiltering =
+    resultManifest.data?.capabilities.server_filtering === true;
+  const resultServerSorting =
+    resultManifest.data?.capabilities.server_sorting === true;
   const resultAxisQuery = useMemo<AnalysisResultPageQuery>(
     () =>
-      Object.fromEntries(
-        Object.entries(effectiveResultAxisFilters).map(([axisId, token]) => [
-          `coordinate.${axisId}`,
-          token,
-        ]),
-      ) as AnalysisResultPageQuery,
-    [effectiveResultAxisFilters],
+      resultServerFiltering
+        ? (Object.fromEntries(
+            Object.entries(effectiveResultAxisFilters).map(([axisId, token]) => [
+              `coordinate.${axisId}`,
+              token,
+            ]),
+          ) as AnalysisResultPageQuery)
+        : {},
+    [effectiveResultAxisFilters, resultServerFiltering],
   );
   const resultAxisFiltersKey = axisFiltersKey(effectiveResultAxisFilters);
+  const effectiveResultBranchId =
+    resultManifest.data?.capabilities.branch_tracking &&
+    resultBranchFilterDatasetId === resultDatasetId
+      ? resultBranchFilter
+      : null;
+  const effectiveFollowedBranchId =
+    resultManifest.data?.capabilities.branch_tracking &&
+    resultBranchFilterDatasetId === resultDatasetId
+      ? resultFollowedBranchId
+      : null;
   const resultSamplePageKey = `${resultDatasetId ?? "none"}:${selectedResultSampleId ?? "all"}:${resultAxisFiltersKey}`;
-  const resultItemPageKey = `${resultSamplePageKey}:${resultItemFieldFilter}:${resultItemSort}`;
+  const resultItemPageKey = `${resultSamplePageKey}:${resultServerFiltering ? resultItemFieldFilter : "all"}:${resultServerSorting ? resultItemSort : "display_index_asc"}:${resultServerFiltering ? resultItemStatusFilter : "all"}:${resultServerFiltering ? resultItemFrequencyMin : ""}:${resultServerFiltering ? resultItemFrequencyMax : ""}:${resultServerFiltering ? resultItemResidualMax : ""}:${resultServerFiltering ? effectiveResultBranchId ?? "all-branches" : "all-branches"}`;
+  const resultItemFilterError = resultDatasetFilterErrorMessage(
+    resultItemFrequencyMin,
+    resultItemFrequencyMax,
+    resultItemResidualMax,
+  );
   const resultBranchPageKey = resultDatasetId ?? "none";
   const [samplePageState, setSamplePageState] = useState<{
     cursor: string | null;
@@ -212,22 +284,6 @@ export default function ResultsNavigatorModule({
     itemPageState.key === resultItemPageKey ? itemPageState.cursor : null;
   const branchCursor =
     branchPageState.key === resultBranchPageKey ? branchPageState.cursor : null;
-  const resultManifest = useAnalysisResultDatasetManifestResource(
-    resultRunId,
-    resultDatasetId,
-  );
-  const resultAxisId =
-    resultManifest.data?.axes.find((axis) =>
-      ["outer_sweep", "parameter", "material", "geometry", "field"].includes(
-        axis.role,
-      ),
-    )?.axis_id ?? null;
-  const resultAxisValues = useAnalysisResultAxisValuesResource(
-    resultRunId,
-    resultDatasetId,
-    resultAxisId,
-    { query: { limit: 256 } },
-  );
   const resultSamples = useAnalysisResultSamplesResource(
     resultRunId,
     resultDatasetId,
@@ -243,16 +299,20 @@ export default function ResultsNavigatorModule({
     resultRunId,
     resultDatasetId,
     {
-      query: {
-        limit: 50,
-        ...resultAxisQuery,
-        ...(itemCursor ? { cursor: itemCursor } : {}),
-        ...(selectedResultSampleId ? { sample_id: selectedResultSampleId } : {}),
-        ...(resultItemFieldFilter === "all"
-          ? {}
-          : { has_field: resultItemFieldFilter === "true" }),
-        sort: resultItemSort,
-      },
+      query: buildResultDatasetItemPageQuery({
+        axisFilters: effectiveResultAxisFilters,
+        branchId: effectiveResultBranchId,
+        cursor: itemCursor,
+        frequencyMax: resultItemFrequencyMax,
+        frequencyMin: resultItemFrequencyMin,
+        itemFieldFilter: resultItemFieldFilter,
+        itemStatusFilter: resultItemStatusFilter,
+        itemSort: resultItemSort,
+        residualMax: resultItemResidualMax,
+        sampleId: selectedResultSampleId,
+        serverFiltering: resultServerFiltering,
+        serverSorting: resultServerSorting,
+      }),
     },
   );
   const resultBranches = useAnalysisResultBranchesResource(
@@ -263,39 +323,73 @@ export default function ResultsNavigatorModule({
       query: {
         limit: 50,
         ...(branchCursor ? { cursor: branchCursor } : {}),
-        sort: "branch_id_asc",
+        ...(resultServerSorting ? { sort: "branch_id_asc" } : {}),
       },
     },
   );
-  const manifest = useFrequencyDomainManifestResource();
-  const spectrum = useFrequencyDomainEigenSpectrumResource();
-  const branches = useFrequencyDomainEigenBranchesResource();
-  const dispersion = useFrequencyDomainEigenDispersionResource();
-  const fieldSweep = useFrequencyDomainEigenFieldSweepResource();
-  const fmrPeaks = useFrequencyDomainFmrPeaksResource();
-  const fmrResonanceFits = useFrequencyDomainFmrResonanceFitsResource();
-  const fmrKittelFit = useFrequencyDomainFmrKittelFitResource();
-  const response = useFrequencyDomainResponseSweepResource();
-  const responseProgress = useFrequencyDomainResponseProgressResource();
-  const responseDiagnostics = useFrequencyDomainResponseDiagnosticsResource();
+  const verifiedResultSamples = resultPageForDataset(
+    resultSamples.data,
+    resultManifest.data,
+  );
+  const verifiedResultItems = resultPageForDataset(
+    resultItems.data,
+    resultManifest.data,
+  );
+  const verifiedResultBranches = resultPageForDataset(
+    resultBranches.data,
+    resultManifest.data,
+  );
+  const manifest = useFrequencyDomainManifestResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const spectrum = useFrequencyDomainEigenSpectrumResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const branches = useFrequencyDomainEigenBranchesResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const dispersion = useFrequencyDomainEigenDispersionResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const fieldSweep = useFrequencyDomainEigenFieldSweepResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const fmrPeaks = useFrequencyDomainFmrPeaksResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const fmrResonanceFits = useFrequencyDomainFmrResonanceFitsResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const fmrKittelFit = useFrequencyDomainFmrKittelFitResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const response = useFrequencyDomainResponseSweepResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const responseProgress = useFrequencyDomainResponseProgressResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
+  const responseDiagnostics = useFrequencyDomainResponseDiagnosticsResource({
+    enabled: legacyResultsFallbackEnabled,
+  });
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
 
   const resultBrowserModel = useMemo(
     () =>
       buildResultDatasetBrowserModel({
         catalog: resultCatalog.data,
-        branches: resultBranches.data,
-        items: resultItems.data,
+        branches: verifiedResultBranches,
+        items: verifiedResultItems,
         manifest: resultManifest.data,
-        samples: resultSamples.data,
+        samples: verifiedResultSamples,
         selectedDatasetId: selectedResultDatasetId,
       }),
     [
       resultCatalog.data,
-      resultBranches.data,
-      resultItems.data,
+      verifiedResultBranches,
+      verifiedResultItems,
       resultManifest.data,
-      resultSamples.data,
+      verifiedResultSamples,
       selectedResultDatasetId,
     ],
   );
@@ -434,6 +528,11 @@ export default function ResultsNavigatorModule({
           : {};
       setResultAxisFilters({ ...nextAxisFilters });
       setResultAxisFilterDatasetId(selection.datasetId);
+      if (selection.datasetId !== selectedResultDatasetId) {
+        setResultBranchFilter(null);
+        setResultBranchFilterDatasetId(selection.datasetId);
+        setResultFollowedBranchId(null);
+      }
       const nextSelection = selectionWithAxisFilters(
         selection,
         nextAxisFilters,
@@ -459,10 +558,70 @@ export default function ResultsNavigatorModule({
       selectedResultDatasetId,
     ],
   );
+  const onResultDatasetSearchChange = useCallback((value: string) => {
+    const key = value.trim();
+    setResultDatasetSearch(value);
+    setResultCatalogPageState({ cursor: null, key });
+  }, []);
+  const onResultBranchFilterChange = useCallback(
+    (branchId: string | null) => {
+      const manifestData = resultManifest.data;
+      if (
+        !manifestData?.capabilities.branch_tracking ||
+        !manifestData.capabilities.server_filtering
+      ) {
+        return;
+      }
+      setResultBranchFilter(branchId);
+      setResultBranchFilterDatasetId(manifestData.dataset_id);
+      setResultFollowedBranchId(null);
+    },
+    [resultManifest.data],
+  );
+  const onFollowResultBranch = useCallback(
+    (branchId: string | null) => {
+      const manifestData = resultManifest.data;
+      if (
+        !manifestData?.capabilities.branch_tracking ||
+        !manifestData.capabilities.server_filtering
+      ) {
+        return;
+      }
+      setResultBranchFilter(branchId);
+      setResultBranchFilterDatasetId(manifestData.dataset_id);
+      setResultFollowedBranchId(branchId);
+      if (!branchId) return;
+      const selection = analysisResultSelectionRef({
+        axisFilters: effectiveResultAxisFilters,
+        branchId,
+        datasetId: manifestData.dataset_id,
+        datasetRevision: manifestData.dataset_revision,
+        focus: "branch",
+        runId: manifestData.run_id,
+        stageId: manifestData.stage_id,
+      });
+      kernel.selection.set(
+        {
+          kind: selection.kind,
+          label: branchId,
+          nodeId: selection.nodeId,
+          objectId: null,
+          ref: selection,
+        },
+        moduleId,
+      );
+    },
+    [
+      effectiveResultAxisFilters,
+      kernel.selection,
+      moduleId,
+      resultManifest.data,
+    ],
+  );
   const onAxisFilterChange = useCallback(
     (axisId: string, token: string | null) => {
       const manifestData = resultManifest.data;
-      if (!manifestData) return;
+      if (!manifestData?.capabilities.server_filtering) return;
       const nextAxisFilters = { ...effectiveResultAxisFilters };
       if (token) nextAxisFilters[axisId] = token;
       else delete nextAxisFilters[axisId];
@@ -494,6 +653,30 @@ export default function ResultsNavigatorModule({
       resultManifest.data,
     ],
   );
+  const onOpenResultAnalysis = useCallback(() => {
+    void kernel.commands.execute(
+      "analysis-plots.open",
+      createCommandContext("explorer", kernel, {
+        sourceDetail: "results-dataset-browser",
+      }),
+    );
+  }, [kernel]);
+  const onPlotResultField = useCallback(
+    (selection: AnalysisResultSelectionRef) => {
+      const intent = createAnalysisResultFieldOverlayIntent(selection);
+      if (!intent) return;
+      void kernel.commands.execute(
+        analysisResultFieldOverlayAdapter(intent.itemKind).plotCommandId,
+        createCommandContext("explorer", kernel, {
+          sourceDetail: "results-dataset-browser",
+        }),
+      );
+    },
+    [kernel],
+  );
+  const onInspectResultProvenance = useCallback(() => {
+    kernel.layout.setFocusedSlot("panel-right");
+  }, [kernel.layout]);
 
   return (
     <section aria-label="Results" className="fm-results-navigator">
@@ -503,40 +686,78 @@ export default function ResultsNavigatorModule({
           {nodes[0]?.status ?? "missing"}
         </span>
       </header>
-      {resultCatalog.data ? (
+      {resultDatasetBrowserVisible ? (
         <ResultDatasetBrowser
-          branchesPage={resultBranches.data}
+          branchesPage={verifiedResultBranches}
+          branchesResourceStatus={resultBranches.status}
+          catalogResourceStatus={resultCatalog.status}
+          catalogPage={resultCatalog.data}
           manifest={resultManifest.data}
+          manifestResourceStatus={resultManifest.status}
+          serverFiltering={resultServerFiltering}
+          serverSorting={resultServerSorting}
           model={resultBrowserModel}
           datasetSearch={resultDatasetSearch}
           itemFieldFilter={resultItemFieldFilter}
           itemSort={resultItemSort}
-          onDatasetSearchChange={setResultDatasetSearch}
+          onCatalogPageChange={(cursor) =>
+            setResultCatalogPageState({ cursor, key: resultCatalogPageKey })
+          }
+          onDatasetSearchChange={onResultDatasetSearchChange}
           axisFilters={effectiveResultAxisFilters}
-          axisValues={resultAxisValues.data}
           onAxisFilterChange={onAxisFilterChange}
+          branchFilter={effectiveResultBranchId}
+          onBranchFilterChange={onResultBranchFilterChange}
           onBranchPageChange={(cursor) =>
             setBranchPageState({ cursor, key: resultBranchPageKey })
           }
+          followedBranchId={effectiveFollowedBranchId}
+          onFollowBranch={onFollowResultBranch}
+          onInspectProvenance={onInspectResultProvenance}
           onItemFieldFilterChange={setResultItemFieldFilter}
+          itemFrequencyMax={resultItemFrequencyMax}
+          itemFrequencyMin={resultItemFrequencyMin}
+          itemFilterError={resultItemFilterError}
+          itemResidualMax={resultItemResidualMax}
+          itemStatusFilter={resultItemStatusFilter}
+          onItemFrequencyMaxChange={setResultItemFrequencyMax}
+          onItemFrequencyMinChange={setResultItemFrequencyMin}
+          onItemResidualMaxChange={setResultItemResidualMax}
+          onItemStatusFilterChange={setResultItemStatusFilter}
           onSelect={onSelectResult}
           onItemPageChange={(cursor) =>
             setItemPageState({ cursor, key: resultItemPageKey })
           }
           onItemSortChange={setResultItemSort}
+          onOpenAnalysis={onOpenResultAnalysis}
+          onPlotField={onPlotResultField}
           onSamplePageChange={(cursor) =>
             setSamplePageState({ cursor, key: resultSamplePageKey })
           }
-          itemsPage={resultItems.data}
-          samplesPage={resultSamples.data}
-          selectedDatasetId={resultBrowserModel.selectedDatasetId}
+          itemsPage={verifiedResultItems}
+          itemsResourceStatus={resultItems.status}
+          samplesPage={verifiedResultSamples}
+          samplesResourceStatus={resultSamples.status}
+          selectedDatasetId={resultDatasetId}
+          selectedSelection={selectedResultSelection}
         />
       ) : (
-        <ResultsNavigatorTree
-          nodes={nodes}
-          onSelect={onSelect}
-          selectedNodeId={selectedNodeId}
-        />
+        <>
+          {legacyResultsFallbackEnabled ? (
+            <p
+              className="fm-results-navigator__compatibility-status"
+              role="status"
+            >
+              Typed result index has no published datasets; showing the bounded
+              legacy frequency-domain compatibility view.
+            </p>
+          ) : null}
+          <ResultsNavigatorTree
+            nodes={nodes}
+            onSelect={onSelect}
+            selectedNodeId={selectedNodeId}
+          />
+        </>
       )}
     </section>
   );

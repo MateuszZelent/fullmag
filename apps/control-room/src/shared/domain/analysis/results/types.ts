@@ -9,6 +9,7 @@ import type {
   AnalysisResultCoordinateResource,
   AnalysisResultDatasetCatalogResource,
   AnalysisResultDatasetManifestResource,
+  AnalysisResultFieldRef,
   AnalysisResultItemKind,
   AnalysisResultItemPageResource,
   AnalysisResultProjectionResource,
@@ -33,6 +34,7 @@ export type {
   AnalysisResultCoordinateResource,
   AnalysisResultDatasetCatalogResource,
   AnalysisResultDatasetManifestResource,
+  AnalysisResultFieldRef,
   AnalysisResultItemKind,
   AnalysisResultItemPageResource,
   AnalysisResultProjectionResource,
@@ -79,13 +81,16 @@ export interface AnalysisResultSelectionRef extends AnalysisResultDatasetIdentit
   focus: AnalysisResultSelectionFocus;
   itemKind?: AnalysisResultItemKind;
   sampleId?: string;
+  sampleIndex?: number;
   itemId?: string;
+  displayIndex?: number;
   branchId?: string;
   axisId?: string;
   axisValueToken?: string;
   axisFilters?: Readonly<Record<string, string>>;
   fieldId?: string;
   fieldRevision?: string;
+  fieldRef?: AnalysisResultFieldRef;
   projectionId?: string;
   projectionRevision?: string;
   projectionOrdinal?: number;

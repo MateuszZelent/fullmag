@@ -9778,6 +9778,12 @@
           "indexing": {
             "type": "string"
           },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mesh_id": {
             "type": "string"
           },
@@ -9794,6 +9800,12 @@
           },
           "sample_axis": {
             "type": "string"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "topology_revision": {
             "type": "string"

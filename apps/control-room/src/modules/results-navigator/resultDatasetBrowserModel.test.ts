@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildResultDatasetBrowserModel,
+  buildResultDatasetItemPageQuery,
   formatResultFrequency,
+  formatResultResidual,
+  resultDatasetFilterErrorMessage,
+  resultPageForDataset,
   resultDatasetCoordinateKey,
 } from "./resultDatasetBrowserModel";
 
@@ -117,7 +121,30 @@ describe("result dataset browser model", () => {
         cursor: null,
         dataset_id: "dataset:modal",
         dataset_revision: "sha256:dataset",
-        items: [],
+        items: [
+          {
+            coordinates: [
+              {
+                axis_id: "bias-field",
+                category: null,
+                entity_ref: null,
+                label: "mu0 Hx = 75 mT",
+                scalar_si: null,
+                token: "bias:75mT",
+                vector3_si: [0, 0, 0],
+              },
+            ],
+            equilibrium_ref: null,
+            item_count: 1,
+            items_resource: "/items?sample_id=sample:stable-1",
+            linearization_ref: null,
+            mesh_ref: null,
+            sample_id: "sample:stable-1",
+            sample_index: 0,
+            source_revision: "sha256:sample",
+            status,
+          },
+        ],
         limit: 50,
         next_cursor: null,
         run_id: "run:1",
@@ -131,6 +158,8 @@ describe("result dataset browser model", () => {
     expect(model.items[0]?.itemId).toBe("mode:stable-1");
     expect(model.items[0]?.fieldAvailable).toBe(false);
     expect(model.branches[0]?.branchId).toBe("branch:stable-1");
+    expect(model.samples[0]?.label).toBe("mu0 Hx = 75 mT");
+    expect(model.items[0]?.label).toBe("mode:stable-1");
   });
 
   it("uses tokens for coordinate keys and bounded frequency labels", () => {
@@ -139,5 +168,93 @@ describe("result dataset browser model", () => {
     );
     expect(formatResultFrequency(2.5e9)).toBe("2.5000 GHz");
     expect(formatResultFrequency(null)).toBe("—");
+    expect(formatResultResidual(2.1e-10)).toBe("2.10e-10");
+    expect(formatResultResidual(null)).toBe("—");
+  });
+
+  it("rejects result pages from a different immutable dataset revision", () => {
+    const manifest = {
+      dataset_id: "dataset:modal",
+      dataset_revision: "sha256:current",
+      run_id: "run:1",
+    } as const;
+    const page = {
+      dataset_id: "dataset:modal",
+      dataset_revision: "sha256:current",
+      run_id: "run:1",
+      rows: ["current"],
+    } as const;
+
+    expect(resultPageForDataset(page, manifest)).toBe(page);
+    expect(
+      resultPageForDataset(
+        { ...page, dataset_revision: "sha256:stale" },
+        manifest,
+      ),
+    ).toBeNull();
+    expect(
+      resultPageForDataset({ ...page, run_id: "run:foreign" }, manifest),
+    ).toBeNull();
+    expect(
+      resultPageForDataset({ ...page, dataset_id: "dataset:foreign" }, manifest),
+    ).toBeNull();
+  });
+
+  it("validates numeric item filters before building a server query", () => {
+    expect(resultDatasetFilterErrorMessage("1e9", "2e9", "0.1")).toBeNull();
+    expect(resultDatasetFilterErrorMessage("2e9", "1e9", "")).toBe(
+      "Frequency minimum must not exceed frequency maximum.",
+    );
+    expect(resultDatasetFilterErrorMessage("", "", "-0.1")).toBe(
+      "Residual maximum must not be negative.",
+    );
+    expect(resultDatasetFilterErrorMessage("not-a-number", "", "")).toBe(
+      "Frequency minimum must be a finite number.",
+    );
+  });
+
+  it("builds bounded item queries with independent sample scope and capabilities", () => {
+    const query = buildResultDatasetItemPageQuery({
+      axisFilters: { "bias-field": "bias:75mT" },
+      branchId: "branch:1",
+      cursor: "cursor:1",
+      frequencyMax: "2e9",
+      frequencyMin: "1e9",
+      itemFieldFilter: "true",
+      itemStatusFilter: "ready",
+      itemSort: "frequency_asc",
+      residualMax: "0.1",
+      sampleId: "sample:1",
+      serverFiltering: true,
+      serverSorting: true,
+    });
+    expect(query).toMatchObject({
+      "coordinate.bias-field": "bias:75mT",
+      branch_id: "branch:1",
+      cursor: "cursor:1",
+      frequency_max_hz: 2e9,
+      frequency_min_hz: 1e9,
+      has_field: true,
+      limit: 50,
+      sample_id: "sample:1",
+      sort: "frequency_asc",
+      status: "ready",
+    });
+
+    const capabilityLimitedQuery = buildResultDatasetItemPageQuery({
+      axisFilters: { "bias-field": "bias:75mT" },
+      branchId: "branch:1",
+      cursor: null,
+      frequencyMax: "2e9",
+      frequencyMin: "1e9",
+      itemFieldFilter: "true",
+      itemStatusFilter: "ready",
+      itemSort: "frequency_asc",
+      residualMax: "0.1",
+      sampleId: "sample:1",
+      serverFiltering: false,
+      serverSorting: false,
+    });
+    expect(capabilityLimitedQuery).toEqual({ limit: 50, sample_id: "sample:1" });
   });
 });

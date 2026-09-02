@@ -8,6 +8,7 @@ import {
   parseLiveChartSelectionIdentity,
   serializeLiveChartSelectionIdentity,
 } from "./selectionTypes";
+import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import { SelectionController } from "./SelectionController";
 
@@ -113,6 +114,61 @@ describe("SelectionController", () => {
         ref: { ...livePoint.ref, revision: 8 },
       },
       "live-charts",
+    );
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an analysis result field resource and mesh identity as selection identity", () => {
+    const { bus, controller } = setup();
+    const listener = vi.fn();
+    const fieldRef = {
+      field_id: "analysis:eigen:sample-0001:mode-0002",
+      field_revision: "sha256:field-v1",
+      mesh_ref: {
+        mesh_id: "mesh:one",
+        mesh_revision: "41",
+        topology_fingerprint: "sha256:topology-one",
+      },
+      quantity_id: "m",
+      representation: "complex-vector-xyz",
+      resource_key: "data/fields/field-v1",
+      status: "ready",
+    } as const;
+    const selection = {
+      kind: "analysis.result",
+      label: "Mode 2",
+      nodeId: null,
+      objectId: null,
+      ref: analysisResultSelectionRef({
+        datasetId: "dataset-one",
+        datasetRevision: "sha256:dataset-v1",
+        fieldRef,
+        fieldId: fieldRef.field_id,
+        fieldRevision: fieldRef.field_revision,
+        focus: "item",
+        itemId: "mode-2",
+        itemKind: "eigen_mode",
+        runId: "run-one",
+        sampleId: "sample-one",
+        stageId: "stage-one",
+      }),
+    };
+
+    controller.set(selection, "results-navigator");
+    bus.on("workspace:selection-changed", listener);
+    controller.set(
+      {
+        ...selection,
+        ref: analysisResultSelectionRef({
+          ...selection.ref!,
+          fieldRef: {
+            ...fieldRef,
+            resource_key: "data/fields/field-v2",
+          },
+        }),
+      },
+      "results-navigator",
     );
 
     expect(listener).toHaveBeenCalledTimes(1);

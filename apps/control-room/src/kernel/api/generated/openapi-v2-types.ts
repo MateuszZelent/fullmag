@@ -6371,11 +6371,13 @@ export interface components {
         };
         FrequencyDomainFieldSweepTopologyPayload: {
             indexing: string;
+            mesh_generation_id?: string | null;
             mesh_id: string;
             mode_axis: string;
             /** Format: int64 */
             node_count?: number | null;
             sample_axis: string;
+            topology_fingerprint?: string | null;
             topology_revision: string;
         };
         FrequencyDomainFieldSweepUnitsPayload: {

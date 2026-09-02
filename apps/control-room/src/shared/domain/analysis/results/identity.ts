@@ -139,9 +139,29 @@ export function analysisResultSelectionEquals(
     recordEquals(left.axisFilters, right.axisFilters) &&
     (left.fieldId ?? null) === (right.fieldId ?? null) &&
     (left.fieldRevision ?? null) === (right.fieldRevision ?? null) &&
+    fieldRefIdentityEquals(left.fieldRef, right.fieldRef) &&
     (left.projectionId ?? null) === (right.projectionId ?? null) &&
     (left.projectionRevision ?? null) === (right.projectionRevision ?? null) &&
     (left.projectionOrdinal ?? null) === (right.projectionOrdinal ?? null)
+  );
+}
+
+function fieldRefIdentityEquals(
+  left: AnalysisResultSelectionRef["fieldRef"],
+  right: AnalysisResultSelectionRef["fieldRef"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.field_id === right.field_id &&
+    left.field_revision === right.field_revision &&
+    left.resource_key === right.resource_key &&
+    left.status === right.status &&
+    left.representation === right.representation &&
+    left.quantity_id === right.quantity_id &&
+    left.mesh_ref?.mesh_id === right.mesh_ref?.mesh_id &&
+    left.mesh_ref?.mesh_revision === right.mesh_ref?.mesh_revision &&
+    left.mesh_ref?.topology_fingerprint === right.mesh_ref?.topology_fingerprint
   );
 }
 

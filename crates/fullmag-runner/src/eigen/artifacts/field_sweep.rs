@@ -212,6 +212,9 @@ pub fn build_frequency_domain_field_sweep_artifact(
     let topology_consistent = samples.windows(2).all(|window| {
         window[0].topology.mesh_id == window[1].topology.mesh_id
             && window[0].topology.topology_revision == window[1].topology.topology_revision
+            && window[0].topology.topology_fingerprint
+                == window[1].topology.topology_fingerprint
+            && window[0].topology.mesh_generation_id == window[1].topology.mesh_generation_id
     });
     if !topology_consistent && status == ServerArtifactStatus::Complete {
         status = ServerArtifactStatus::Partial;

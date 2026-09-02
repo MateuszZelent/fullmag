@@ -24,6 +24,7 @@ use crate::error::ApiError;
 use crate::router_v2::handlers::analysis::frequency_domain::{
     decode_frequency_domain_artifact_payload, FrequencyDomainJsonArtifactPayload,
     FrequencyDomainFieldSweepArtifactPayload, FrequencyDomainFieldSweepModePayload,
+    FrequencyDomainFieldSweepTopologyPayload,
     FrequencyDomainResponsePointPayload,
     FrequencyDomainResponseSweepArtifactPayload, FrequencyDomainSpectrumArtifactPayload,
     FrequencyDomainSpectrumModePayload, FrequencyDomainSpectrumV3ArtifactPayload,
@@ -1257,11 +1258,7 @@ fn build_field_sweep_index(
             label: Some(sample_label),
             status: sample_status.completeness.clone(),
         });
-        let mesh_ref = sample.topology.as_ref().map(|topology| AnalysisResultMeshRef {
-            mesh_id: topology.mesh_id.clone(),
-            mesh_revision: Some(topology.topology_revision.clone()),
-            topology_fingerprint: Some(topology.topology_revision.clone()),
-        });
+        let mesh_ref = sample.topology.as_ref().and_then(result_mesh_ref);
         let sample_modes = sample.modes.unwrap_or_default();
         let mut sample_item_count = 0_u64;
         for mode in sample_modes {
@@ -1383,7 +1380,15 @@ fn field_sweep_item(
 ) -> AnalysisResultSpectralItemSummary {
     let field_ready = mode.field_status.as_deref() == Some("ready")
         && mode.mode_field_id.is_some()
-        && mode.mode_field_resource_key.is_some();
+        && mode.mode_field_resource_key.is_some()
+        && mesh_ref.is_some();
+    let field_reason = if field_ready {
+        None
+    } else if mode.field_status.as_deref() == Some("ready") && mesh_ref.is_none() {
+        Some("field_mesh_identity_not_published")
+    } else {
+        Some("field_payload_not_published")
+    };
     let item_id = mode.mode_id.clone();
     let item_status = if mode.source_revision != dataset_source_revision {
         "stale"
@@ -1403,7 +1408,7 @@ fn field_sweep_item(
             "published",
             if field_ready { "ready" } else { "spectrum_only" },
             "unvalidated",
-            (!field_ready).then_some("field_payload_not_published"),
+            field_reason,
             None,
         ),
         quality: AnalysisResultQualitySummary {
@@ -1424,6 +1429,29 @@ fn field_sweep_item(
         source_revision: mode.source_revision,
         relations: Vec::new(),
     }
+}
+
+fn result_mesh_ref(
+    topology: &FrequencyDomainFieldSweepTopologyPayload,
+) -> Option<AnalysisResultMeshRef> {
+    let mesh_id = topology.mesh_id.trim();
+    let mesh_revision = topology.topology_revision.trim();
+    let topology_fingerprint = topology.topology_fingerprint.as_deref()?.trim();
+    if mesh_id.is_empty()
+        || mesh_id == "topology:not_provided"
+        || mesh_id == "topology:inconsistent"
+        || mesh_revision.is_empty()
+        || mesh_revision == "topology:not_provided"
+        || mesh_revision == "topology:inconsistent"
+        || topology_fingerprint.is_empty()
+    {
+        return None;
+    }
+    Some(AnalysisResultMeshRef {
+        mesh_id: mesh_id.to_string(),
+        mesh_revision: Some(mesh_revision.to_string()),
+        topology_fingerprint: Some(topology_fingerprint.to_string()),
+    })
 }
 
 fn build_spectrum_v3_index(
@@ -2803,6 +2831,14 @@ mod tests {
 
     #[test]
     fn field_sweep_items_keep_their_owner_identity_and_encode_resource_paths() {
+        let mesh_ref = Some(AnalysisResultMeshRef {
+            mesh_id: "mesh/test".to_string(),
+            mesh_revision: Some("mesh-rev-1".to_string()),
+            topology_fingerprint: Some(
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+            ),
+        });
         let item = field_sweep_item(
             "run/1",
             "dataset/1",
@@ -2824,7 +2860,7 @@ mod tests {
                 status: "ready".to_string(),
                 extra: FrequencyDomainArtifactExtras(BTreeMap::new()),
             },
-            None,
+            mesh_ref,
         );
 
         assert_eq!(item.sample_id, "sample/1");
@@ -2832,6 +2868,42 @@ mod tests {
         assert_eq!(
             item.detail_resource,
             "/v2/sessions/current/analysis/results/runs/run%2F1/datasets/dataset%2F1/items/mode%2F1",
+        );
+        assert_eq!(
+            item.field_ref
+                .as_ref()
+                .and_then(|field| field.mesh_ref.as_ref())
+                .and_then(|mesh| mesh.topology_fingerprint.as_deref()),
+            Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+
+        let spectrum_only = field_sweep_item(
+            "run/1",
+            "dataset/1",
+            "sample/1",
+            "revision-1",
+            FrequencyDomainFieldSweepModePayload {
+                sample_id: "sample/1".to_string(),
+                mode_id: "mode/without-mesh".to_string(),
+                raw_mode_index: 4,
+                branch_id: None,
+                frequency_hz: 2.5e9,
+                angular_frequency_rad_per_s: 2.5e9,
+                mode_artifact_path: None,
+                mode_field_id: Some("field-2".to_string()),
+                mode_field_resource_key: Some("data/fields/field-2".to_string()),
+                residual_relative_l2: None,
+                source_revision: "revision-1".to_string(),
+                field_status: Some("ready".to_string()),
+                status: "ready".to_string(),
+                extra: FrequencyDomainArtifactExtras(BTreeMap::new()),
+            },
+            None,
+        );
+        assert!(spectrum_only.field_ref.is_none());
+        assert_eq!(
+            spectrum_only.status.reason_code.as_deref(),
+            Some("field_mesh_identity_not_published")
         );
     }
 

@@ -5,6 +5,7 @@ import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { LayoutController } from "../layout/LayoutController";
 import { SelectionController } from "../selection/SelectionController";
+import { analysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 import { AnalysisFieldOverlayController } from "./AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./analysisFieldOverlayCommandContributions";
@@ -17,7 +18,145 @@ function commandRegistry(): CommandRegistry {
   return commands;
 }
 
+const analysisResultFieldRef = {
+  field_id: "analysis:eigen:sample-0001:mode-0002",
+  field_revision: "sha256:field-v1",
+  mesh_ref: {
+    mesh_id: "mesh:shared-domain",
+    mesh_revision: "41",
+    topology_fingerprint: "sha256:topology-v1",
+  },
+  quantity_id: "m",
+  representation: "complex-vector-xyz",
+  resource_key: "data/fields/analysis-eigen-sample-0001-mode-0002",
+  status: "ready",
+} as const;
+
+function analysisResultSelection(
+  itemKind: "eigen_mode" | "spectral_feature" = "eigen_mode",
+) {
+  return analysisResultSelectionRef({
+    datasetId: "result:run-result:stage-result:modal-eigen",
+    datasetRevision: "sha256:dataset-v1",
+    fieldId: analysisResultFieldRef.field_id,
+    fieldRef: analysisResultFieldRef,
+    fieldRevision: analysisResultFieldRef.field_revision,
+    focus: "item",
+    itemId: itemKind === "eigen_mode" ? "mode-0002" : "peak-0002",
+    itemKind,
+    runId: "run-result",
+    sampleId: "sample-0001",
+    sampleIndex: 1,
+    stageId: "stage-result",
+  });
+}
+
 describe("analysis field overlay commands", () => {
+  it("hands a result item field reference to the shared eigen overlay intent", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = analysisResultSelection();
+    selection.set(
+      {
+        kind: "analysis.result",
+        label: "Mode 2",
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "results-navigator",
+    );
+
+    const result = await commands.execute("analysis.eigen.plot-mode-3d", {
+      analysisFieldOverlay: overlay,
+      selection,
+      source: "test",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      analysisResultFieldIntent: {
+        datasetId: ref.datasetId,
+        datasetRevision: ref.datasetRevision,
+        fieldId: analysisResultFieldRef.field_id,
+        fieldRevision: analysisResultFieldRef.field_revision,
+        itemId: ref.itemId,
+        source: "eigen-mode",
+      },
+      provenance: {
+        datasetId: ref.datasetId,
+        datasetRevision: ref.datasetRevision,
+        fieldRevision: analysisResultFieldRef.field_revision,
+        runId: ref.runId,
+        stageId: ref.stageId,
+      },
+      source: "eigen-mode",
+    });
+  });
+
+  it("fails closed for a spectrum-only result item", () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = analysisResultSelectionRef({
+      datasetId: "result:run-result:stage-result:modal-eigen",
+      datasetRevision: "sha256:dataset-v1",
+      focus: "item",
+      itemId: "mode-only",
+      itemKind: "eigen_mode",
+      runId: "run-result",
+      sampleId: "sample-0001",
+      stageId: "stage-result",
+    });
+    selection.set(
+      {
+        kind: "analysis.result",
+        label: "Spectrum only",
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "results-navigator",
+    );
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+
+    expect(commands.isEnabled("analysis.eigen.plot-mode-3d", context)).toBe(false);
+    expect(
+      commands.get("analysis.eigen.plot-mode-3d")?.disabledReason?.(context),
+    ).toBe("Selected result item has no published spatial field reference.");
+  });
+
+  it("maps a typed spectral feature field to the time-domain response source", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = analysisResultSelection("spectral_feature");
+    selection.set(
+      {
+        kind: "analysis.result",
+        label: "Spectral peak",
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "results-navigator",
+    );
+
+    const result = await commands.execute(
+      "analysis.time-domain.plot-response-field-3d-abs",
+      { analysisFieldOverlay: overlay, selection, source: "test" },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()).toMatchObject({
+      analysisResultFieldIntent: { itemKind: "spectral_feature", source: "time-domain-response" },
+      source: "time-domain-response",
+      provenance: { studyProduct: "time_domain_spectrum" },
+      query: { view: "abs" },
+    });
+  });
+
   it("plots an eigen mode field through the shared analysis field controller", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
@@ -40,10 +179,8 @@ describe("analysis field overlay commands", () => {
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toEqual({
       appearance: {
-        scalarColorPalette: "coolwarm",
         shaderVisible: true,
-        surfaceColorSource: "colormap",
-        vectorsVisible: false,
+        surfaceColorSource: "magnitude",
       },
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       label: "Mode 2",
@@ -88,10 +225,8 @@ describe("analysis field overlay commands", () => {
       expect(result.status).toBe("completed");
       expect(overlay.getSnapshot()?.query.view).toBe(expectedView);
       expect(overlay.getSnapshot()?.appearance).toMatchObject({
-        scalarColorPalette: "coolwarm",
         shaderVisible: true,
-        surfaceColorSource: "colormap",
-        vectorsVisible: false,
+        surfaceColorSource: "magnitude",
       });
     },
   );

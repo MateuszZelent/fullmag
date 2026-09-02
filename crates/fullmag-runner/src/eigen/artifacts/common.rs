@@ -329,6 +329,10 @@ pub struct ServerArtifactUnits {
 pub struct ServerArtifactTopology {
     pub mesh_id: String,
     pub topology_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
     pub indexing: String,
     pub sample_axis: String,
     pub mode_axis: String,
@@ -893,6 +897,8 @@ pub(super) fn empty_server_topology() -> ServerArtifactTopology {
     ServerArtifactTopology {
         mesh_id: "topology:not_provided".to_string(),
         topology_revision: "topology:not_provided".to_string(),
+        topology_fingerprint: None,
+        mesh_generation_id: None,
         indexing: "sample_index_then_raw_mode_index".to_string(),
         sample_axis: "sample_id".to_string(),
         mode_axis: "mode_id".to_string(),
@@ -906,6 +912,19 @@ pub(super) fn diagnostic_string_any(
 ) -> Option<String> {
     keys.iter()
         .find_map(|key| diagnostic_string(diagnostics, key))
+}
+
+pub(super) fn diagnostic_string_or_integer_any(
+    diagnostics: Option<&serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        let value = diagnostics?.get(key)?;
+        value
+            .as_str()
+            .map(ToOwned::to_owned)
+            .or_else(|| value.as_u64().map(|number| number.to_string()))
+    })
 }
 
 pub(super) fn is_canonical_sha256(value: &str) -> bool {
@@ -1069,7 +1088,7 @@ pub(super) fn topology_from_diagnostics(
     if let Some(value) = diagnostics {
         topology.mesh_id = diagnostic_string_any(Some(value), &["mesh_id", "topology_id"])
             .unwrap_or(topology.mesh_id);
-        topology.topology_revision = diagnostic_string_any(
+        topology.topology_revision = diagnostic_string_or_integer_any(
             Some(value),
             &[
                 "topology_revision",
@@ -1078,6 +1097,23 @@ pub(super) fn topology_from_diagnostics(
             ],
         )
         .unwrap_or(topology.topology_revision);
+        topology.topology_fingerprint = diagnostic_string_any(
+            Some(value),
+            &[
+                "topology_fingerprint",
+                "source_topology_fingerprint",
+                "source_mesh_topology_sha256",
+            ],
+        )
+        .filter(|fingerprint| is_canonical_sha256(fingerprint));
+        topology.mesh_generation_id = diagnostic_string_any(
+            Some(value),
+            &[
+                "mesh_generation_id",
+                "mesh_generation_identity",
+                "domain_generation_id",
+            ],
+        );
         topology.node_count = value
             .get("node_count")
             .and_then(serde_json::Value::as_u64)

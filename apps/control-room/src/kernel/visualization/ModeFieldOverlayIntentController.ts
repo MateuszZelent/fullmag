@@ -1,5 +1,9 @@
 import type { DecodedComplexFieldVector, DecodedFieldVector } from "../api/codecs";
-import type { FrequencyDomainFieldResource, ResourceRevision } from "../api/apiTypes";
+import type {
+  AnalysisResultFieldRef,
+  FrequencyDomainFieldResource,
+  ResourceRevision,
+} from "../api/apiTypes";
 
 import {
   type ModeFieldOverlayTopologyIdentity,
@@ -22,7 +26,7 @@ export interface ModeFieldOverlayIntentSnapshot {
 }
 
 export interface ModeFieldOverlayMetadataLoadResult {
-  readonly data: FrequencyDomainFieldResource;
+  readonly data: FrequencyDomainFieldResource | AnalysisResultFieldRef;
   readonly revision: ResourceRevision | null;
 }
 

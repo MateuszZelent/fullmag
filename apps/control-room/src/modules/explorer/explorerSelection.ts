@@ -9,6 +9,7 @@ import {
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
+import type { AnalysisFieldOverlaySource } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { PostprocessingDefinitionKind } from "@/shared/domain/analysis/postprocessingTypes";
 import { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
@@ -119,7 +120,7 @@ function extensionIdFromNode(node: ExplorerNode): string | undefined {
 
 function modeVisualizationSourceFromNode(
   node: ExplorerNode,
-): "eigen-mode" | "frequency-response" | null {
+): AnalysisFieldOverlaySource | null {
   if (node.analysisFieldSource) return node.analysisFieldSource;
   if (node.fieldId?.startsWith("analysis:eigen:")) return "eigen-mode";
   if (node.fieldId?.startsWith("analysis:frequency-response:")) {

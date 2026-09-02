@@ -4,11 +4,18 @@ import {
   type DecodedFieldVector,
 } from "../api/codecs";
 import type {
+  AnalysisResultFieldRef,
   FieldVectorQuery,
   FrequencyDomainFieldResource,
   ResourceRevision,
 } from "../api/apiTypes";
 import type { SelectionRef } from "../selection/selectionTypes";
+import {
+  type AnalysisResultFieldOverlayIntent,
+  type AnalysisResultFieldOverlayMetadata,
+  resolveAnalysisResultFieldOverlayMetadata,
+  validateAnalysisResultFieldOverlayBinary,
+} from "./AnalysisResultFieldOverlayIntent";
 
 type FrequencyDomainSelectionRef = Extract<
   SelectionRef,
@@ -29,18 +36,20 @@ export interface ModeFieldOverlayIntent {
 }
 
 export interface ResolvedModeFieldOverlayMetadata {
+  readonly analysisResultFieldRef?: AnalysisResultFieldRef;
   readonly artifactPath: string;
   readonly availableViews: readonly string[];
   readonly binaryQuery: FieldVectorQuery;
   readonly defaultPhaseRad: number;
   readonly fieldId: string;
   readonly intent: ModeFieldOverlayIntent;
-  readonly payloadValueCount: number;
+  readonly payloadValueCount: number | null;
   readonly resourceRevision: string;
 }
 
 export interface ModeFieldOverlayTopologyIdentity {
   readonly domainGenerationId: string | null;
+  readonly meshId?: string | null;
   readonly meshTopologyHash: string | null;
   readonly meshTopologyRevision: string | null;
   readonly pointCount: number;
@@ -103,27 +112,32 @@ export function createModeFieldOverlayIntent(
  */
 export function resolveModeFieldOverlayMetadata(
   intent: ModeFieldOverlayIntent,
-  metadata: FrequencyDomainFieldResource,
+  metadata: FrequencyDomainFieldResource | AnalysisResultFieldRef,
   resourceRevision: ResourceRevision | null,
 ): ResolvedModeFieldOverlayMetadata | null {
-  const fieldId = requiredString(metadata.field_id);
-  const artifactPath = requiredString(metadata.artifact_path);
+  if (isAnalysisResultFieldOverlayIntent(intent)) {
+    if (!("field_revision" in metadata)) return null;
+    return resolveAnalysisResultFieldOverlayMetadata(intent);
+  }
+  const legacyMetadata = metadata as FrequencyDomainFieldResource;
+  const fieldId = requiredString(legacyMetadata.field_id);
+  const artifactPath = requiredString(legacyMetadata.artifact_path);
   const revision = requiredRevision(resourceRevision);
-  const payloadValueCount = positiveInteger(metadata.payload_value_count);
-  const complexPairCount = positiveInteger(metadata.complex_pair_count);
-  const defaultPhaseRad = finiteNumber(metadata.default_phase_rad);
+  const payloadValueCount = positiveInteger(legacyMetadata.payload_value_count);
+  const complexPairCount = positiveInteger(legacyMetadata.complex_pair_count);
+  const defaultPhaseRad = finiteNumber(legacyMetadata.default_phase_rad);
 
   if (
-    metadata.status !== "ready" ||
-    metadata.schema_version !== "frequency_domain_mode_field.v1" ||
-    metadata.source_family !== "analysis/eigen" ||
-    metadata.quantity !== "delta_m" ||
-    metadata.value_kind !== "complex_spatial_vector" ||
-    metadata.component_basis !== "global_xyz" ||
-    metadata.component_count !== 3 ||
-    !stringArrayEquals(metadata.components, ["x", "y", "z"]) ||
-    metadata.payload_encoding !== "f64_interleaved_real_imag_xyz" ||
-    metadata.binary_layout !== "complex_f64_pairs_little_endian" ||
+    legacyMetadata.status !== "ready" ||
+    legacyMetadata.schema_version !== "frequency_domain_mode_field.v1" ||
+    legacyMetadata.source_family !== "analysis/eigen" ||
+    legacyMetadata.quantity !== "delta_m" ||
+    legacyMetadata.value_kind !== "complex_spatial_vector" ||
+    legacyMetadata.component_basis !== "global_xyz" ||
+    legacyMetadata.component_count !== 3 ||
+    !stringArrayEquals(legacyMetadata.components, ["x", "y", "z"]) ||
+    legacyMetadata.payload_encoding !== "f64_interleaved_real_imag_xyz" ||
+    legacyMetadata.binary_layout !== "complex_f64_pairs_little_endian" ||
     fieldId !== intent.fieldId ||
     !artifactPath ||
     !revision ||
@@ -132,15 +146,15 @@ export function resolveModeFieldOverlayMetadata(
     payloadValueCount !== complexPairCount * 2 ||
     payloadValueCount % 6 !== 0 ||
     defaultPhaseRad === null ||
-    !containsRequiredViews(metadata.available_views) ||
-    !metadata.available_views.includes(metadata.default_view)
+    !containsRequiredViews(legacyMetadata.available_views) ||
+    !legacyMetadata.available_views.includes(legacyMetadata.default_view)
   ) {
     return null;
   }
 
   return Object.freeze({
     artifactPath,
-    availableViews: Object.freeze([...metadata.available_views]),
+    availableViews: Object.freeze([...legacyMetadata.available_views]),
     binaryQuery: Object.freeze({
       component: "full",
       scope_kind: "full",
@@ -164,6 +178,14 @@ export function validateModeFieldOverlayBinary(
   field: DecodedFieldVector | null | undefined,
   topology: ModeFieldOverlayTopologyIdentity,
 ): ValidatedModeFieldOverlayBinary | null {
+  if (isAnalysisResultFieldOverlayIntent(metadata.intent)) {
+    const validated = validateAnalysisResultFieldOverlayBinary(
+      metadata as AnalysisResultFieldOverlayMetadata,
+      field,
+      topology,
+    );
+    return validated;
+  }
   const complex = asDecodedComplexFieldVector(field);
   if (
     !field ||
@@ -195,6 +217,15 @@ export function validateModeFieldOverlayBinary(
     complex,
     phasorAmplitudeMax: complexAmplitudeMax(complex),
   });
+}
+
+function isAnalysisResultFieldOverlayIntent(
+  intent: ModeFieldOverlayIntent,
+): intent is AnalysisResultFieldOverlayIntent {
+  return (
+    (intent as ModeFieldOverlayIntent & { sourceKind?: unknown }).sourceKind ===
+    "analysis-result"
+  );
 }
 
 function requiredString(value: unknown): string | null {

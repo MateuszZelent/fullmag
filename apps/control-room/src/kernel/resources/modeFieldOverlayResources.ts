@@ -4,6 +4,10 @@ import type { FrequencyDomainFieldResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import type { ResourceResult, ResourceStatus } from "./resourceTypes";
 import {
+  isAnalysisResultFieldOverlayIntent,
+  validateAnalysisResultFieldResponseMetadata,
+} from "../visualization/AnalysisResultFieldOverlayIntent";
+import {
   type ModeFieldOverlayIntent,
   type ModeFieldOverlayTopologyIdentity,
   type ResolvedModeFieldOverlayMetadata,
@@ -154,6 +158,22 @@ export function useModeFieldOverlayIntentResource({
       intent,
       {
         loadMetadata: async (activeIntent, signal) => {
+          if (isAnalysisResultFieldOverlayIntent(activeIntent)) {
+            const metadata = resolveModeFieldOverlayMetadata(
+              activeIntent,
+              activeIntent.fieldRef,
+              activeIntent.fieldRevision,
+            );
+            if (!metadata) {
+              throw new Error(
+                "Analysis result field reference failed validation.",
+              );
+            }
+            return {
+              data: activeIntent.fieldRef,
+              revision: activeIntent.fieldRevision,
+            };
+          }
           const data = await api.analysis.frequencyDomain.eigenModeFieldMeta(
             activeIntent.sampleIndex,
             activeIntent.modeIndex,
@@ -173,6 +193,17 @@ export function useModeFieldOverlayIntentResource({
           if (response.status !== "ready") {
             throw new Error(
               `Mode field binary resource returned ${response.status}.`,
+            );
+          }
+          if (
+            isAnalysisResultFieldOverlayIntent(metadata.intent) &&
+            !validateAnalysisResultFieldResponseMetadata(
+              metadata.intent,
+              response.responseMetadata,
+            )
+          ) {
+            throw new Error(
+              "Analysis result field binary revision failed validation.",
             );
           }
           return response.data;

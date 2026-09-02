@@ -1593,6 +1593,38 @@ fn field_sweep_writer_binds_to_published_spectrum_and_branches_bytes() {
 }
 
 #[test]
+fn field_sweep_topology_preserves_verified_mesh_identity_for_result_fields() {
+    let topology = topology_from_diagnostics(Some(&serde_json::json!({
+        "mesh_id": "mesh:test",
+        "topology_revision": "mesh-rev:1",
+        "topology_fingerprint":
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "mesh_generation_id": "generation:test",
+        "node_count": 12
+    })));
+
+    assert_eq!(topology.mesh_id, "mesh:test");
+    assert_eq!(topology.topology_revision, "mesh-rev:1");
+    assert_eq!(
+        topology.topology_fingerprint.as_deref(),
+        Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(topology.mesh_generation_id.as_deref(), Some("generation:test"));
+
+    let numeric_revision = topology_from_diagnostics(Some(&serde_json::json!({
+        "mesh_id": "mesh:test",
+        "mesh_revision": 17,
+        "source_mesh_topology_sha256":
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    })));
+    assert_eq!(numeric_revision.topology_revision, "17");
+    assert_eq!(
+        numeric_revision.topology_fingerprint.as_deref(),
+        Some("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    );
+}
+
+#[test]
 fn typed_artifact_revision_binds_execution_and_topology() {
     let mut result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
     result.samples[0].solver_diagnostics = Some(serde_json::json!({
