@@ -1,4 +1,5 @@
 import {
+  analysisResultCoordinateFromResource,
   analysisResultCoordinateKey,
   analysisResultUiStatus,
   analysisResultStatusLabel,
@@ -13,6 +14,7 @@ import type {
   AnalysisResultPageQuery,
   AnalysisResultSamplePageResource,
 } from "@/kernel/api/apiTypes";
+import type { AnalysisResultCoordinateRef } from "@/shared/domain/analysis/results";
 
 export interface ResultDatasetBrowserDatasetRow {
   runId: string;
@@ -44,6 +46,7 @@ export interface ResultDatasetBrowserSampleRow {
   statusLabel: string;
   itemCount: number;
   coordinates: readonly string[];
+  coordinateRefs: readonly AnalysisResultCoordinateRef[];
 }
 
 export interface ResultDatasetBrowserBranchRow {
@@ -70,6 +73,7 @@ export interface ResultDatasetBrowserItemRow {
   fieldAvailable: boolean;
   fieldId: string | null;
   fieldRef: AnalysisResultFieldRef | null;
+  coordinateRefs?: readonly AnalysisResultCoordinateRef[];
   selectable: boolean;
 }
 
@@ -315,21 +319,28 @@ export function buildResultDatasetBrowserModel({
     status: analysisResultUiStatus(dataset.status),
     statusLabel: analysisResultStatusLabel(dataset.status),
   }));
-  const sampleRows = (samples?.items ?? []).map((sample) => ({
-    coordinates: sample.coordinates.map((coordinate) =>
-      coordinateLabel(
-        `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`,
+  const sampleRows = (samples?.items ?? []).map((sample) => {
+    const coordinateRefs = sample.coordinates.map(analysisResultCoordinateFromResource);
+    return {
+      coordinates: sample.coordinates.map((coordinate) =>
+        coordinateLabel(
+          `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`,
+        ),
       ),
-    ),
-    itemCount: sample.item_count,
-    label: sampleLabel(sample),
-    sampleIndex: sample.sample_index ?? null,
-    sampleId: sample.sample_id,
-    status: analysisResultUiStatus(sample.status),
-    statusLabel: analysisResultStatusLabel(sample.status),
-  }));
+      coordinateRefs,
+      itemCount: sample.item_count,
+      label: sampleLabel(sample),
+      sampleIndex: sample.sample_index ?? null,
+      sampleId: sample.sample_id,
+      status: analysisResultUiStatus(sample.status),
+      statusLabel: analysisResultStatusLabel(sample.status),
+    };
+  });
   const sampleIndexById = new Map(
     sampleRows.map((sample) => [sample.sampleId, sample.sampleIndex]),
+  );
+  const sampleCoordinatesById = new Map(
+    sampleRows.map((sample) => [sample.sampleId, sample.coordinateRefs]),
   );
   const branchRows = (branches?.items ?? []).map((branch) => ({
     branchId: branch.branch_id,
@@ -340,11 +351,13 @@ export function buildResultDatasetBrowserModel({
   }));
   const itemRows = (items?.items ?? []).map((item) => {
     const status = analysisResultUiStatus(item.status);
+    const coordinateRefs = sampleCoordinatesById.get(item.sample_id);
     return {
       branchId: item.branch_id ?? null,
       fieldAvailable: item.field_ref?.status === "ready",
       fieldId: item.field_ref?.field_id ?? null,
       fieldRef: item.field_ref ?? null,
+      ...(coordinateRefs && coordinateRefs.length > 0 ? { coordinateRefs } : {}),
       displayIndex: item.display_index ?? null,
       frequencyHz: item.frequency_hz ?? null,
       itemId: item.item_id,

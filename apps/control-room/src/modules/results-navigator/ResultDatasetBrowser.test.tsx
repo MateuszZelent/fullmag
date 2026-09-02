@@ -222,7 +222,7 @@ describe("ResultDatasetBrowser", () => {
     expect(html).toContain('aria-label="Frequency minimum [Hz]"');
   });
 
-  it("keeps the item branch in the shared kernel selection", () => {
+  it("keeps the item branch and canonical coordinates in the shared kernel selection", () => {
     const item = buildResultDatasetBrowserModel({
       branches: null,
       catalog: null,
@@ -259,7 +259,36 @@ describe("ResultDatasetBrowser", () => {
         total_count: 1,
       },
       manifest,
-      samples: null,
+      samples: {
+        cursor: null,
+        dataset_id: manifest.dataset_id,
+        dataset_revision: manifest.dataset_revision,
+        items: [{
+          coordinates: [{
+            axis_id: "bias-field",
+            category: null,
+            entity_ref: null,
+            label: "mu0 Hx = 75 mT",
+            scalar_si: 0.075,
+            token: "bias:75mT",
+            vector3_si: null,
+          }],
+          equilibrium_ref: null,
+          item_count: 1,
+          items_resource: "/items?sample_id=sample-1",
+          linearization_ref: null,
+          mesh_ref: null,
+          sample_id: "sample-1",
+          sample_index: 0,
+          source_revision: "sha256:sample",
+          status,
+        }],
+        limit: 50,
+        next_cursor: null,
+        run_id: manifest.run_id,
+        schema_version: manifest.schema_version,
+        total_count: 1,
+      },
       selectedDatasetId: manifest.dataset_id,
     });
     const selection = resultDatasetItemSelection(manifest, item.items[0]!);
@@ -268,6 +297,12 @@ describe("ResultDatasetBrowser", () => {
     expect(selection.itemId).toBe("mode-1");
     expect(selection.fieldId).toBe("field:mode-1");
     expect(selection.fieldRevision).toBe("sha256:field");
+    expect(selection.coordinates).toMatchObject([{
+      axisId: "bias-field",
+      label: "mu0 Hx = 75 mT",
+      scalarSI: 0.075,
+      token: "bias:75mT",
+    }]);
   });
 
   it("loads server-paged values for every filterable axis instead of leaving a dead control", () => {

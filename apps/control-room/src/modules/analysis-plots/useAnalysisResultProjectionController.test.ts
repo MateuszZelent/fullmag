@@ -258,4 +258,34 @@ describe("analysis result projection point selection", () => {
       sampleId: "sample-dsf",
     });
   });
+
+  it("preserves canonical coordinates when a projection point changes the selected item", () => {
+    const coordinates = [{
+      axisId: "bias-field",
+      category: null,
+      entityRef: null,
+      label: "75 mT",
+      scalarSI: 0.075,
+      token: "bias:75mT",
+      vector3SI: [59683.1, 0, 0] as const,
+    }];
+    const selection = { ...resultSelection(), coordinates };
+
+    expect(
+      analysisResultSelectionFromProjectionPoint(
+        selection,
+        {
+          projection_id: "field-frequency-map",
+          projection_revision: "projection-revision-1",
+        },
+        {
+          branchId: "branch-2",
+          itemId: "mode-2",
+          itemKind: "eigen_mode",
+          ordinal: 2,
+          sampleId: "sample-2",
+        },
+      ).coordinates,
+    ).toEqual(coordinates);
+  });
 });

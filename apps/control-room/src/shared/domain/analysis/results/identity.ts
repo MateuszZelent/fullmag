@@ -137,12 +137,29 @@ export function analysisResultSelectionEquals(
     (left.axisId ?? null) === (right.axisId ?? null) &&
     (left.axisValueToken ?? null) === (right.axisValueToken ?? null) &&
     recordEquals(left.axisFilters, right.axisFilters) &&
+    coordinateRefsEqual(left.coordinates, right.coordinates) &&
     (left.fieldId ?? null) === (right.fieldId ?? null) &&
     (left.fieldRevision ?? null) === (right.fieldRevision ?? null) &&
     fieldRefIdentityEquals(left.fieldRef, right.fieldRef) &&
     (left.projectionId ?? null) === (right.projectionId ?? null) &&
     (left.projectionRevision ?? null) === (right.projectionRevision ?? null) &&
     (left.projectionOrdinal ?? null) === (right.projectionOrdinal ?? null)
+  );
+}
+
+function coordinateRefsEqual(
+  left: readonly AnalysisResultCoordinateRef[] | undefined,
+  right: readonly AnalysisResultCoordinateRef[] | undefined,
+): boolean {
+  const leftKeys = (left ?? [])
+    .map((coordinate) => analysisResultCoordinateKey(coordinate))
+    .sort();
+  const rightKeys = (right ?? [])
+    .map((coordinate) => analysisResultCoordinateKey(coordinate))
+    .sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index])
   );
 }
 
@@ -179,11 +196,11 @@ function recordEquals(
 
 export function analysisResultCursorFromSelection(
   selection: AnalysisResultSelectionRef,
-  coordinates: readonly AnalysisResultCoordinateRef[] = [],
+  coordinates?: readonly AnalysisResultCoordinateRef[],
 ): AnalysisResultCursor {
   return {
     branchId: selection.branchId ?? null,
-    coordinates,
+    coordinates: coordinates ?? selection.coordinates ?? [],
     datasetId: selection.datasetId,
     datasetRevision: selection.datasetRevision,
     fieldId: selection.fieldId ?? null,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   analysisResultDatasetIdentity,
+  analysisResultCursorFromSelection,
   analysisResultSelectionForProjection,
   analysisResultSelectionEquals,
   analysisResultSelectionRef,
@@ -83,5 +84,48 @@ describe("analysis result selection identity", () => {
 
     expect(first.nodeId).toBe(reordered.nodeId);
     expect(analysisResultSelectionEquals(first, reordered)).toBe(true);
+  });
+
+  it("keeps canonical coordinate tuples in selection cursors and equality", () => {
+    const coordinates = [
+      {
+        axisId: "thickness",
+        category: null,
+        entityRef: null,
+        label: "2 nm",
+        scalarSI: 2e-9,
+        token: "thickness:2nm",
+        vector3SI: null,
+      },
+      {
+        axisId: "bias-field",
+        category: null,
+        entityRef: null,
+        label: "75 mT",
+        scalarSI: null,
+        token: "bias:75mT",
+        vector3SI: [59683.1, 0, 0] as const,
+      },
+    ] as const;
+    const selection = analysisResultSelectionRef({
+      datasetId: "dataset-1",
+      datasetRevision: "revision-1",
+      coordinates,
+      focus: "sample",
+      runId: "run-1",
+      sampleId: "sample-1",
+      stageId: "stage-1",
+    });
+    const changed = analysisResultSelectionRef({
+      ...selection,
+      coordinates: coordinates.map((coordinate) =>
+        coordinate.axisId === "thickness"
+          ? { ...coordinate, token: "thickness:3nm" }
+          : coordinate,
+      ),
+    });
+
+    expect(analysisResultCursorFromSelection(selection).coordinates).toEqual(coordinates);
+    expect(analysisResultSelectionEquals(selection, changed)).toBe(false);
   });
 });

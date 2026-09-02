@@ -81,6 +81,7 @@ export interface AnalysisResultSelectionRef extends AnalysisResultDatasetIdentit
   kind: "analysis.result";
   nodeId: string;
   focus: AnalysisResultSelectionFocus;
+  coordinates?: readonly AnalysisResultCoordinateRef[];
   itemKind?: AnalysisResultItemKind;
   sampleId?: string;
   sampleIndex?: number;

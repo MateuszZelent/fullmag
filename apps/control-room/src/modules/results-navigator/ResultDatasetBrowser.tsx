@@ -161,6 +161,7 @@ export function resultDatasetItemSelection(
     focus: "item",
     itemId: item.itemId,
     itemKind: item.itemKindCode,
+    ...(item.coordinateRefs ? { coordinates: item.coordinateRefs } : {}),
     runId: manifest.run_id,
     sampleId: item.sampleId,
     sampleIndex: item.sampleIndex ?? undefined,
@@ -670,6 +671,9 @@ export function ResultDatasetBrowser({
                           onClick={() =>
                             onSelect(
                               analysisResultSelectionRef({
+                                ...(sample.coordinateRefs.length > 0
+                                  ? { coordinates: sample.coordinateRefs }
+                                  : {}),
                                 datasetId: manifest.dataset_id,
                                 datasetRevision: manifest.dataset_revision,
                                 focus: "sample",

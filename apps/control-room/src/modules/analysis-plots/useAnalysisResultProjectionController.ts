@@ -167,6 +167,9 @@ export function analysisResultSelectionFromProjectionPoint(
     ...(selectedResultSelection.axisFilters
       ? { axisFilters: selectedResultSelection.axisFilters }
       : {}),
+    ...(selectedResultSelection.coordinates
+      ? { coordinates: selectedResultSelection.coordinates }
+      : {}),
     projectionId: projection.projection_id,
     projectionOrdinal: entry.ordinal,
     projectionRevision: projection.projection_revision,
