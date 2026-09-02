@@ -972,6 +972,32 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain('value="current_state"');
   });
 
+  it("renders editable K0 bias-field sweep controls for eigenmodes", () => {
+    const draft = createDefaultStudyStageDraft("eigenmodes", 0);
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={{
+          ...draft,
+          biasFieldSamplesApm: "0, 0, 59683.1\\n0, 0, 119366.2",
+          bc: "periodic",
+          kVector: "0, 0, 0",
+          magnetostaticBc: "periodic_airbox_k0",
+        }}
+        index={0}
+        onUpdate={() => undefined}
+        validation={[]}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Bias field sweep samples"');
+    expect(html).toContain("A/m");
+    expect(html).toContain("one [Hx, Hy, Hz] vector per line");
+    expect(html).toContain('value="relax_each"');
+    expect(html).toContain('value="continuation"');
+    expect(html).toContain('value="initial_state"');
+    expect(html).toContain('value="previous_accepted_equilibrium"');
+  });
+
   it("renders expanded hysteresis authoring controls", () => {
     const draft = createDefaultStudyStageDraft("hysteresis", 0);
     const html = renderToStaticMarkup(

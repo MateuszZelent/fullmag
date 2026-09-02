@@ -499,6 +499,55 @@ function EigenmodesStageDraftFields({
   );
 }
 
+function BiasFieldSweepDraftFields({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  return (
+    <>
+      <FormField
+        label="Bias field sweep samples"
+        hint="Canonical unit A/m; enter one [Hx, Hy, Hz] vector per line. Leave empty for a single-field solve."
+        type="textarea"
+        rows={4}
+        value={draft.biasFieldSamplesApm}
+        onChange={(event) =>
+          onUpdate({ biasFieldSamplesApm: event.target.value })
+        }
+      />
+      <FormField
+        label="Bias field equilibrium policy"
+        hint="Each sample must publish its own accepted equilibrium before modal solve."
+        type="select"
+        value={draft.biasFieldEquilibriumPolicy}
+        onChange={(event) =>
+          onUpdate({ biasFieldEquilibriumPolicy: event.target.value })
+        }
+      >
+        <option value="relax_each">Relax each sample</option>
+        <option value="continuation">Continue from previous sample</option>
+      </FormField>
+      <FormField
+        label="Bias field continuation seed"
+        hint="The seed applies to the first sample; continuation then uses the previous accepted equilibrium."
+        type="select"
+        value={draft.biasFieldContinuationSeed}
+        onChange={(event) =>
+          onUpdate({ biasFieldContinuationSeed: event.target.value })
+        }
+      >
+        <option value="initial_state">Initial state</option>
+        <option value="previous_accepted_equilibrium">
+          Previous accepted equilibrium
+        </option>
+      </FormField>
+    </>
+  );
+}
+
 function EigenmodeTargetFields({
   draft,
   onUpdate,
@@ -757,6 +806,9 @@ function SpectralStageDraftFields({
     view === "k_sampling" ||
     view === "k_path" ||
     view === "k_grid";
+  const showBiasFieldSweep =
+    draft.kind === "eigenmodes" &&
+    (view === "overview" || view === "setup");
   return (
     <>
       {showOperator ? (
@@ -876,6 +928,9 @@ function SpectralStageDraftFields({
             />
           ) : null}
         </>
+      ) : null}
+      {showBiasFieldSweep ? (
+        <BiasFieldSweepDraftFields draft={draft} onUpdate={onUpdate} />
       ) : null}
       {showBoundary ? (
         <>
