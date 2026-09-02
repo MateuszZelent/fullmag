@@ -246,9 +246,10 @@ function coordinateLabel(
 function sampleLabel(
   sample: AnalysisResultSamplePageResource["items"][number],
 ): string {
-  const labels = sample.coordinates
-    .map((coordinate) => coordinate.label ?? coordinate.token)
-    .filter((label) => label.trim().length > 0);
+  const labels = sample.coordinates.flatMap((coordinate) => {
+    const label = coordinate.label ?? coordinate.token;
+    return label.trim().length > 0 ? [label] : [];
+  });
   return labels.join(" · ") || sample.sample_id;
 }
 
