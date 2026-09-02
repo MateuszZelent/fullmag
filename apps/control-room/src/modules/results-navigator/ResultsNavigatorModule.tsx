@@ -1,7 +1,16 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import {
+  useAnalysisResultAxisValuesResource,
+  useAnalysisResultBranchesResource,
+  useAnalysisResultDatasetCatalogResource,
+  useAnalysisResultDatasetManifestResource,
+  useAnalysisResultItemsResource,
+  useAnalysisResultSamplesResource,
+} from "@/kernel/resources/analysisResultResources";
+import type { AnalysisResultPageQuery } from "@/kernel/api/apiTypes";
 import {
   useCurrentRunResource,
   useFrequencyDomainEigenBranchesResource,
@@ -21,6 +30,12 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { ModuleProps } from "@/kernel/types";
 
 import { ResultsNavigatorTree } from "./ResultsNavigatorTree";
+import { ResultDatasetBrowser } from "./ResultDatasetBrowser";
+import { buildResultDatasetBrowserModel } from "./resultDatasetBrowserModel";
+import {
+  analysisResultSelectionRef,
+  type AnalysisResultSelectionRef,
+} from "@/shared/domain/analysis/results";
 import {
   buildFrequencyDomainResultsTree,
   mapNavigatorArtifactState,
@@ -29,6 +44,7 @@ import {
 import {
   navigatorArtifactFromResource,
   navigatorBranchesFromResource,
+  navigatorFieldSweepFromResource,
   navigatorFmrFromResource,
   navigatorKittelFitArtifactFromResource,
   navigatorManifestFromResource,
@@ -72,12 +88,185 @@ function resolveIdentity({
   };
 }
 
+function selectionWithAxisFilters(
+  selection: AnalysisResultSelectionRef,
+  axisFilters: Readonly<Record<string, string>>,
+): AnalysisResultSelectionRef {
+  const {
+    kind: _kind,
+    nodeId: _nodeId,
+    type: _type,
+    ...identity
+  } = selection;
+  return analysisResultSelectionRef({
+    ...identity,
+    axisFilters,
+  });
+}
+
+function axisFiltersKey(filters: Readonly<Record<string, string>>): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(filters).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  );
+}
+
 export default function ResultsNavigatorModule({
   kernel,
   moduleId,
 }: ModuleProps) {
   const currentRun = useCurrentRunResource();
   const stageExecution = useStageExecutionResource();
+  const resultRunId = currentRun.data?.run_id ?? null;
+  const [resultDatasetSearch, setResultDatasetSearch] = useState("");
+  const [resultItemFieldFilter, setResultItemFieldFilter] = useState<
+    "all" | "true" | "false"
+  >("all");
+  const [resultItemSort, setResultItemSort] = useState("display_index_asc");
+  const resultCatalogQuery = useMemo(
+    () => ({
+      limit: 50,
+      sort: "dataset_id_asc",
+      ...(resultDatasetSearch.trim()
+        ? { search: resultDatasetSearch.trim() }
+        : {}),
+    }),
+    [resultDatasetSearch],
+  );
+  const resultCatalog = useAnalysisResultDatasetCatalogResource(resultRunId, {
+    query: resultCatalogQuery,
+  });
+  const selectedResultDatasetId = useSelectionSelector((selection) => {
+    const ref = selection.ref;
+    return ref?.type === "analysis-result" && ref.runId === resultRunId
+      ? ref.datasetId
+      : null;
+  });
+  const selectedResultSampleId = useSelectionSelector((selection) => {
+    const ref = selection.ref;
+    return ref?.type === "analysis-result" && ref.datasetId === selectedResultDatasetId
+      ? ref.sampleId ?? null
+      : null;
+  });
+  const resultDatasetId =
+    selectedResultDatasetId ?? resultCatalog.data?.items[0]?.dataset_id ?? null;
+  const selectedResultAxisFilterKey = useSelectionSelector((selection) => {
+    const ref = selection.ref;
+    if (ref?.type !== "analysis-result" || ref.datasetId !== selectedResultDatasetId) {
+      return "{}";
+    }
+    if (ref.axisFilters) return axisFiltersKey(ref.axisFilters);
+    return ref.axisId && ref.axisValueToken
+      ? axisFiltersKey({ [ref.axisId]: ref.axisValueToken })
+      : "{}";
+  });
+  const selectedResultAxisFilters = useMemo(
+    () => JSON.parse(selectedResultAxisFilterKey) as Record<string, string>,
+    [selectedResultAxisFilterKey],
+  );
+  const [resultAxisFilters, setResultAxisFilters] = useState<Record<string, string>>({});
+  const [resultAxisFilterDatasetId, setResultAxisFilterDatasetId] =
+    useState<string | null>(null);
+  const effectiveResultAxisFilters = useMemo(
+    () =>
+      resultAxisFilterDatasetId === resultDatasetId
+        ? resultAxisFilters
+        : selectedResultAxisFilters,
+    [
+      resultAxisFilterDatasetId,
+      resultAxisFilters,
+      resultDatasetId,
+      selectedResultAxisFilters,
+    ],
+  );
+  const resultAxisQuery = useMemo<AnalysisResultPageQuery>(
+    () =>
+      Object.fromEntries(
+        Object.entries(effectiveResultAxisFilters).map(([axisId, token]) => [
+          `coordinate.${axisId}`,
+          token,
+        ]),
+      ) as AnalysisResultPageQuery,
+    [effectiveResultAxisFilters],
+  );
+  const resultAxisFiltersKey = axisFiltersKey(effectiveResultAxisFilters);
+  const resultSamplePageKey = `${resultDatasetId ?? "none"}:${selectedResultSampleId ?? "all"}:${resultAxisFiltersKey}`;
+  const resultItemPageKey = `${resultSamplePageKey}:${resultItemFieldFilter}:${resultItemSort}`;
+  const resultBranchPageKey = resultDatasetId ?? "none";
+  const [samplePageState, setSamplePageState] = useState<{
+    cursor: string | null;
+    key: string;
+  }>({ cursor: null, key: "" });
+  const [itemPageState, setItemPageState] = useState<{
+    cursor: string | null;
+    key: string;
+  }>({ cursor: null, key: "" });
+  const [branchPageState, setBranchPageState] = useState<{
+    cursor: string | null;
+    key: string;
+  }>({ cursor: null, key: "" });
+  const sampleCursor =
+    samplePageState.key === resultSamplePageKey ? samplePageState.cursor : null;
+  const itemCursor =
+    itemPageState.key === resultItemPageKey ? itemPageState.cursor : null;
+  const branchCursor =
+    branchPageState.key === resultBranchPageKey ? branchPageState.cursor : null;
+  const resultManifest = useAnalysisResultDatasetManifestResource(
+    resultRunId,
+    resultDatasetId,
+  );
+  const resultAxisId =
+    resultManifest.data?.axes.find((axis) =>
+      ["outer_sweep", "parameter", "material", "geometry", "field"].includes(
+        axis.role,
+      ),
+    )?.axis_id ?? null;
+  const resultAxisValues = useAnalysisResultAxisValuesResource(
+    resultRunId,
+    resultDatasetId,
+    resultAxisId,
+    { query: { limit: 256 } },
+  );
+  const resultSamples = useAnalysisResultSamplesResource(
+    resultRunId,
+    resultDatasetId,
+    {
+      query: {
+        limit: 50,
+        ...resultAxisQuery,
+        ...(sampleCursor ? { cursor: sampleCursor } : {}),
+      },
+    },
+  );
+  const resultItems = useAnalysisResultItemsResource(
+    resultRunId,
+    resultDatasetId,
+    {
+      query: {
+        limit: 50,
+        ...resultAxisQuery,
+        ...(itemCursor ? { cursor: itemCursor } : {}),
+        ...(selectedResultSampleId ? { sample_id: selectedResultSampleId } : {}),
+        ...(resultItemFieldFilter === "all"
+          ? {}
+          : { has_field: resultItemFieldFilter === "true" }),
+        sort: resultItemSort,
+      },
+    },
+  );
+  const resultBranches = useAnalysisResultBranchesResource(
+    resultRunId,
+    resultDatasetId,
+    {
+      enabled: Boolean(resultManifest.data?.capabilities.branch_tracking),
+      query: {
+        limit: 50,
+        ...(branchCursor ? { cursor: branchCursor } : {}),
+        sort: "branch_id_asc",
+      },
+    },
+  );
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const branches = useFrequencyDomainEigenBranchesResource();
@@ -90,6 +279,26 @@ export default function ResultsNavigatorModule({
   const responseProgress = useFrequencyDomainResponseProgressResource();
   const responseDiagnostics = useFrequencyDomainResponseDiagnosticsResource();
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+
+  const resultBrowserModel = useMemo(
+    () =>
+      buildResultDatasetBrowserModel({
+        catalog: resultCatalog.data,
+        branches: resultBranches.data,
+        items: resultItems.data,
+        manifest: resultManifest.data,
+        samples: resultSamples.data,
+        selectedDatasetId: selectedResultDatasetId,
+      }),
+    [
+      resultCatalog.data,
+      resultBranches.data,
+      resultItems.data,
+      resultManifest.data,
+      resultSamples.data,
+      selectedResultDatasetId,
+    ],
+  );
 
   const identity = useMemo(
     () =>
@@ -106,6 +315,12 @@ export default function ResultsNavigatorModule({
       const typedResponse = navigatorResponseFromResource(response.data);
       const typedFmr = navigatorFmrFromResource(fmrPeaks.data);
       const typedResonanceFits = navigatorResonanceFitsFromResource(fmrResonanceFits.data);
+      const typedFieldSweep = navigatorFieldSweepFromResource(fieldSweep.data, {
+        branches: typedBranches,
+        branchesRevision: navigatorArtifactFromResource(branches.data)?.resourceRevision,
+        spectrum: typedSpectrum,
+        spectrumRevision: navigatorArtifactFromResource(spectrum.data)?.resourceRevision,
+      });
       const resonanceFitsArtifact =
         navigatorResonanceFitsArtifactFromResource(fmrResonanceFits.data);
       const kittelFitArtifact =
@@ -173,6 +388,7 @@ export default function ResultsNavigatorModule({
           ...(typedFmr ? { payload: typedFmr } : {}),
         },
         response: typedResponse,
+        fieldSweep: typedFieldSweep,
         spectrum: typedSpectrum,
       } satisfies FrequencyDomainNavigatorInput;
     },
@@ -210,6 +426,74 @@ export default function ResultsNavigatorModule({
     },
     [kernel.selection, moduleId],
   );
+  const onSelectResult = useCallback(
+    (selection: AnalysisResultSelectionRef) => {
+      const nextAxisFilters =
+        selection.datasetId === selectedResultDatasetId
+          ? effectiveResultAxisFilters
+          : {};
+      setResultAxisFilters({ ...nextAxisFilters });
+      setResultAxisFilterDatasetId(selection.datasetId);
+      const nextSelection = selectionWithAxisFilters(
+        selection,
+        nextAxisFilters,
+      );
+      kernel.selection.set(
+        {
+          kind: nextSelection.kind,
+          label:
+            nextSelection.itemId ??
+            nextSelection.sampleId ??
+            nextSelection.datasetId,
+          nodeId: nextSelection.nodeId,
+          objectId: null,
+          ref: nextSelection,
+        },
+        moduleId,
+      );
+    },
+    [
+      effectiveResultAxisFilters,
+      kernel.selection,
+      moduleId,
+      selectedResultDatasetId,
+    ],
+  );
+  const onAxisFilterChange = useCallback(
+    (axisId: string, token: string | null) => {
+      const manifestData = resultManifest.data;
+      if (!manifestData) return;
+      const nextAxisFilters = { ...effectiveResultAxisFilters };
+      if (token) nextAxisFilters[axisId] = token;
+      else delete nextAxisFilters[axisId];
+      setResultAxisFilters(nextAxisFilters);
+      setResultAxisFilterDatasetId(manifestData.dataset_id);
+      const selection = analysisResultSelectionRef({
+        axisFilters: nextAxisFilters,
+        datasetId: manifestData.dataset_id,
+        datasetRevision: manifestData.dataset_revision,
+        focus: Object.keys(nextAxisFilters).length > 0 ? "slice" : "dataset",
+        runId: manifestData.run_id,
+        stageId: manifestData.stage_id,
+      });
+      kernel.selection.set(
+        {
+          kind: selection.kind,
+          label: selection.datasetId,
+          nodeId: selection.nodeId,
+          objectId: null,
+          ref: selection,
+        },
+        moduleId,
+      );
+    },
+    [
+      effectiveResultAxisFilters,
+      kernel.selection,
+      moduleId,
+      resultManifest.data,
+    ],
+  );
 
   return (
     <section aria-label="Results" className="fm-results-navigator">
@@ -219,11 +503,41 @@ export default function ResultsNavigatorModule({
           {nodes[0]?.status ?? "missing"}
         </span>
       </header>
-      <ResultsNavigatorTree
-        nodes={nodes}
-        onSelect={onSelect}
-        selectedNodeId={selectedNodeId}
-      />
+      {resultCatalog.data ? (
+        <ResultDatasetBrowser
+          branchesPage={resultBranches.data}
+          manifest={resultManifest.data}
+          model={resultBrowserModel}
+          datasetSearch={resultDatasetSearch}
+          itemFieldFilter={resultItemFieldFilter}
+          itemSort={resultItemSort}
+          onDatasetSearchChange={setResultDatasetSearch}
+          axisFilters={effectiveResultAxisFilters}
+          axisValues={resultAxisValues.data}
+          onAxisFilterChange={onAxisFilterChange}
+          onBranchPageChange={(cursor) =>
+            setBranchPageState({ cursor, key: resultBranchPageKey })
+          }
+          onItemFieldFilterChange={setResultItemFieldFilter}
+          onSelect={onSelectResult}
+          onItemPageChange={(cursor) =>
+            setItemPageState({ cursor, key: resultItemPageKey })
+          }
+          onItemSortChange={setResultItemSort}
+          onSamplePageChange={(cursor) =>
+            setSamplePageState({ cursor, key: resultSamplePageKey })
+          }
+          itemsPage={resultItems.data}
+          samplesPage={resultSamples.data}
+          selectedDatasetId={resultBrowserModel.selectedDatasetId}
+        />
+      ) : (
+        <ResultsNavigatorTree
+          nodes={nodes}
+          onSelect={onSelect}
+          selectedNodeId={selectedNodeId}
+        />
+      )}
     </section>
   );
 }

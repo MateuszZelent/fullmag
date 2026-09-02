@@ -251,6 +251,18 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_diagnostics_v1,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_frequency_point,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_field_meta,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_dataset_catalog,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_dataset_manifest,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_axis_values,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_samples,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_items,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_item,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_branches,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_branch,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_branch_points,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_relations,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_relation,
+        crate::router_v2::handlers::analysis::results::get_analysis_result_projection,
         crate::router_v2::handlers::analysis::response::get_magnetic_response_sweep_v1,
         crate::router_v2::handlers::analysis::spin_wave_response::get_spin_wave_gamma,
         crate::router_v2::handlers::analysis::spin_wave_response::get_dynamic_structure_factor,
@@ -836,6 +848,16 @@ use utoipa::OpenApi;
 pub struct ApiDoc;
 
 pub fn openapi_json() -> Value {
+    std::thread::Builder::new()
+        .name("fullmag-openapi-schema".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(openapi_json_on_large_stack)
+        .expect("OpenAPI schema thread should start")
+        .join()
+        .expect("OpenAPI schema thread should finish")
+}
+
+fn openapi_json_on_large_stack() -> Value {
     let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("OpenAPI v2 should serialize");
     add_platform_document_paths(&mut doc);
     add_session_collection_paths(&mut doc);

@@ -774,37 +774,70 @@ pub(super) fn build_native_field_sweep_artifact(
                         "native field sweep sample {sample_index} requires raw_mode_index"
                     ),
                 })?;
-            let Some(mode_field_id) = mode
+            let mode_field_id = mode
                 .get("mode_field_id")
                 .and_then(serde_json::Value::as_str)
-            else {
-                continue;
-            };
-            let mode_field_resource_key =
-                required_string_from_json(mode, "mode_field_resource_key", "spectrum mode")?;
+                .filter(|value| !value.trim().is_empty());
+            let mode_field_resource_key = mode
+                .get("mode_field_resource_key")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            if mode_field_id.is_some() != mode_field_resource_key.is_some() {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} mode {raw_mode_index} has an incomplete field reference"
+                    ),
+                });
+            }
             let branch_id = branch_ids_by_mode
                 .get(&(sample_index, raw_mode_index))
-                .copied()
-                .ok_or_else(|| RunError {
-                    message: format!("native field sweep sample {sample_index} mode {raw_mode_index} has no branch mapping"),
-                })?;
-            if !branch_ids.contains(&branch_id) {
-                branch_ids.push(branch_id);
+                .copied();
+            if mode_field_id.is_some() && branch_id.is_none() {
+                return Err(RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} mode {raw_mode_index} has no branch mapping"
+                    ),
+                });
             }
-            output_modes.push(serde_json::json!({
+            if let Some(branch_id) = branch_id {
+                if !branch_ids.contains(&branch_id) {
+                    branch_ids.push(branch_id);
+                }
+            }
+            let mut output_mode = serde_json::json!({
                 "sample_id": sample_id,
                 "mode_id": format!("sample-{sample_index:04}/mode-{raw_mode_index:04}"),
                 "raw_mode_index": raw_mode_index,
                 "branch_id": branch_id,
                 "frequency_hz": mode.get("frequency_hz").cloned().unwrap_or(serde_json::Value::Null),
                 "angular_frequency_rad_per_s": mode.get("angular_frequency_rad_per_s").cloned().unwrap_or(serde_json::Value::Null),
-                "mode_artifact_path": mode_metadata_path(sample_index as usize, raw_mode_index),
-                "mode_field_id": mode_field_id,
-                "mode_field_resource_key": mode_field_resource_key,
                 "residual_relative_l2": mode.get("residual_relative_l2").cloned().unwrap_or(serde_json::Value::Null),
                 "source_revision": spectrum_revision,
+                "field_status": if mode_field_id.is_some() { "ready" } else { "spectrum-only" },
                 "status": sample_status,
-            }));
+            });
+            if let Some(object) = output_mode.as_object_mut() {
+                if let (Some(mode_field_id), Some(mode_field_resource_key)) =
+                    (mode_field_id, mode_field_resource_key)
+                {
+                    object.insert(
+                        "mode_artifact_path".to_string(),
+                        serde_json::json!(mode_metadata_path(
+                            sample_index as usize,
+                            raw_mode_index
+                        )),
+                    );
+                    object.insert(
+                        "mode_field_id".to_string(),
+                        serde_json::json!(mode_field_id),
+                    );
+                    object.insert(
+                        "mode_field_resource_key".to_string(),
+                        serde_json::json!(mode_field_resource_key),
+                    );
+                }
+            }
+            output_modes.push(output_mode);
         }
         let first_mode = modes.first().ok_or_else(|| RunError {
             message: format!("native field sweep sample {sample_index} has no modes"),
@@ -816,7 +849,7 @@ pub(super) fn build_native_field_sweep_artifact(
                 "kind": "bias_field",
                 "coordinate": "bias_field_a_per_m",
                 "unit": "A/m",
-                "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}],
+                "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": MU0}],
             },
             "bias_field_a_per_m": bias_field_a_per_m,
             "bias_field_mu0_t": bias_field_a_per_m.map(|value| value * MU0),
@@ -868,7 +901,7 @@ pub(super) fn build_native_field_sweep_artifact(
         "stop_reason": if complete { serde_json::Value::Null } else { serde_json::json!(sweep_stop_reason.unwrap_or("incomplete")) },
         "requested_sample_count": requested_sample_count,
         "completed_sample_count": completed_sample_count,
-        "scan_axis": {"kind": "bias_field", "coordinate": "bias_field_a_per_m", "unit": "A/m", "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}]},
+        "scan_axis": {"kind": "bias_field", "coordinate": "bias_field_a_per_m", "unit": "A/m", "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": MU0}]},
         "units": {"frequency": "Hz", "angular_frequency": "rad/s", "bias_field": "A/m", "bias_field_display": "mu0 H (T)", "response_amplitude": null, "linewidth": null, "q_factor": null, "covariance": null},
         "topology": topology,
         "requested_execution": native_field_sweep_execution(diagnostics, "requested_execution"),

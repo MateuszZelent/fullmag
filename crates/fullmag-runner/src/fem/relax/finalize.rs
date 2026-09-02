@@ -216,7 +216,6 @@ fn max_scalar_amplitude(values: &[f64]) -> f64 {
 
 fn certify_native_linearization_recompute(
     plan: &FemPlanIR,
-    fem_mesh_generation_id: &Option<String>,
     accepted: &NativeEquilibriumEvaluation,
     recomputed: &NativeEquilibriumEvaluation,
 ) -> Result<RecomputedFemLinearizationCertificateV1, RunError> {
@@ -301,18 +300,8 @@ fn certify_native_linearization_recompute(
         });
     }
 
-    let mesh_topology_sha256 = fem_mesh_generation_id
-        .as_deref()
-        .filter(|digest| {
-            digest.strip_prefix("sha256:").is_some_and(|hex| {
-                hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
-        })
-        .ok_or_else(|| RunError {
-            message: "native_linearization_recompute_missing_stage_mesh_topology_sha256"
-                .to_string(),
-        })?
-        .to_string();
+    let mesh = crate::types::FemMeshPayload::from(plan);
+    let mesh_topology_sha256 = crate::types::fem_mesh_topology_fingerprint(&mesh);
     let identity =
         crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(plan)?;
     let mut certificate = RecomputedFemLinearizationCertificateV1 {
@@ -617,7 +606,6 @@ pub(crate) fn finalize_native_fem_relaxation(
     let recomputed_native_equilibrium = copy_native_equilibrium_evaluation(backend, node_count)?;
     let recomputed_linearization_certificate = certify_native_linearization_recompute(
         plan,
-        fem_mesh_generation_id,
         &accepted_native_equilibrium,
         &recomputed_native_equilibrium,
     )?;

@@ -14,6 +14,7 @@ import {
   navigatorKittelFitArtifactFromResource,
   navigatorResonanceFitsArtifactFromResource,
   navigatorResponseFromResource,
+  navigatorFieldSweepFromResource,
   navigatorSpectrumFromResource,
   type NavigatorBranchesPayload,
   type NavigatorFmrPayload,
@@ -33,6 +34,120 @@ const identity = {
 };
 
 const resultsNavigatorModuleUrl = new URL("./ResultsNavigatorModule.tsx", import.meta.url);
+
+function fieldSweepArtifact(
+  status: NavigatorArtifactDescriptor["status"] = "complete",
+): NavigatorArtifactDescriptor {
+  return {
+    artifactPath: "eigen/field_sweep.v1.json",
+    missingReason: null,
+    resourceKey: "analysis:eigen:field-sweep",
+    resourceRevision: "sha256:field-sweep-1",
+    schemaVersion: "eigen/field_sweep.v1",
+    status,
+  };
+}
+
+function fieldSweepResource(): FrequencyDomainJsonArtifactResource {
+  const scanAxis = {
+    coordinate: "bias_field_a_per_m",
+    display_conversions: [{ name: "mu0_H", scale: 1.2566370614e-6, unit: "T" }],
+    kind: "bias_field",
+    unit: "A/m",
+  };
+  const topology = {
+    indexing: "global_xyz",
+    mesh_id: "mesh:test",
+    mode_axis: "mode",
+    node_count: 4,
+    sample_axis: "sample",
+    topology_revision: "mesh-rev:1",
+  };
+  const samples = Array.from({ length: 15 }, (_, index) => {
+    const sampleId = `bias-field-sample-${String(index).padStart(4, "0")}`;
+    const modeId = `sample-${String(index).padStart(4, "0")}/mode-0000`;
+    return {
+      bias_field_a_per_m: [40_000 + index * 1_000, 0, 0],
+      bias_field_mu0_t: [(40_000 + index * 1_000) * 1.2566370614e-6, 0, 0],
+      branch_ids: [0],
+      linearization_state_sha256: `sha256:linearization-${index}`,
+      modes: [{
+        angular_frequency_rad_per_s: 2 * Math.PI * (1e9 + index * 1e8),
+        branch_id: 0,
+        frequency_hz: 1e9 + index * 1e8,
+        mode_artifact_path: `eigen/modes/sample_${String(index).padStart(4, "0")}/mode_0000.json`,
+        mode_field_id: `analysis:eigen:sample-${String(index).padStart(4, "0")}:mode-0000`,
+        mode_field_resource_key: `/v2/sessions/current/data/fields/analysis:eigen:sample-${String(index).padStart(4, "0")}:mode-0000/samples/vector`,
+        mode_id: modeId,
+        raw_mode_index: 0,
+        residual_relative_l2: 1e-8,
+        sample_id: sampleId,
+        source_revision: "sha256:spectrum-1",
+        status: "complete",
+      }],
+      operator_input_signature_sha256: `sha256:operator-${index}`,
+      equilibrium_artifact_sha256: `sha256:equilibrium-${index}`,
+      sample_id: sampleId,
+      sample_index: index,
+      scan_axis: scanAxis,
+      status: "complete",
+      topology,
+    };
+  });
+  return {
+    artifact_path: "eigen/field_sweep.v1.json",
+    missing_reason: null,
+    payload: {
+      artifact_id: "analysis:eigen:field-sweep",
+      completed_sample_count: 15,
+      complete: true,
+      content_sha256: "sha256:field-sweep-content",
+      cross_artifact_refs: [
+        { artifact: "eigen/spectrum.v2.json", relation: "source_spectrum", revision: "sha256:spectrum-1" },
+        { artifact: "eigen/branches.v2.json", relation: "source_branches", revision: "sha256:branches-1" },
+      ],
+      requested_execution: {
+        backend: "fem",
+        device: "cpu",
+        engine: "reference",
+        execution_mode: "native",
+        implementation_id: "fem.reference.v1",
+        precision: "double",
+        status: "complete",
+      },
+      requested_sample_count: 15,
+      resolved_execution: {
+        backend: "fem",
+        device: "cpu",
+        engine: "reference",
+        execution_mode: "native",
+        implementation_id: "fem.reference.v1",
+        precision: "double",
+        status: "complete",
+      },
+      revision: "sha256:field-sweep-1",
+      samples,
+      scan_axis: scanAxis,
+      schema_version: "eigen/field_sweep.v1",
+      scope_id: "scope:bias-field",
+      source: { artifact: "eigen/spectrum.v2.json", kind: "modal_eigensolve", revision: "sha256:spectrum-1" },
+      source_revision: "sha256:spectrum-1",
+      stage_id: "stage-a",
+      status: "complete",
+      topology,
+      units: {
+        angular_frequency: "rad/s",
+        bias_field: "A/m",
+        bias_field_display: "T",
+        frequency: "Hz",
+      },
+    },
+    resource_key: "analysis:eigen:field-sweep",
+    revision: "sha256:field-sweep-1",
+    schema_version: "eigen/field_sweep.v1",
+    status: "ready",
+  } as unknown as FrequencyDomainJsonArtifactResource;
+}
 
 function artifact(
   status: NavigatorArtifactDescriptor["status"] = "complete",
@@ -505,6 +620,140 @@ describe("results navigator model", () => {
       peakId: "peak-a",
       stableIdentityAvailable: true,
     });
+  });
+
+  it("adapts the full typed field sweep without using extra and preserves physical samples", () => {
+    const adapted = navigatorFieldSweepFromResource(fieldSweepResource());
+
+    expect(adapted?.samples).toHaveLength(15);
+    expect(adapted?.samples[0]).toMatchObject({
+      biasFieldAPerM: [40_000, 0, 0],
+      label: "μ₀ Hx = 50.3 mT",
+      sampleId: "bias-field-sample-0000",
+    });
+    expect(adapted?.samples[0]?.biasFieldMu0T?.[0]).toBeCloseTo(0.050265482456, 15);
+    expect(adapted?.axis).toMatchObject({
+      coordinate: "bias_field_a_per_m",
+      unit: "A/m",
+    });
+    expect(adapted?.axis?.displayConversions[0]).toMatchObject({
+      name: "mu0_H",
+      unit: "T",
+    });
+    expect(adapted?.samples[0]?.modes[0]).toMatchObject({
+      modeFieldId: "analysis:eigen:sample-0000:mode-0000",
+      modeFieldResourceKey: expect.stringContaining("/data/fields/"),
+      modeId: "sample-0000/mode-0000",
+      sampleId: "bias-field-sample-0000",
+    });
+  });
+
+  it("keeps a legacy minimal field sweep partial instead of promoting it to ready", () => {
+    const adapted = navigatorFieldSweepFromResource({
+      artifact_path: "eigen/field_sweep.v1.json",
+      missing_reason: null,
+      payload: {
+        samples: [],
+        schema_version: "eigen/field_sweep.v1",
+        status: "complete",
+      },
+      resource_key: "analysis:eigen:field-sweep",
+      revision: "sha256:legacy-field-sweep",
+      schema_version: "eigen/field_sweep.v1",
+      status: "ready",
+    } as unknown as FrequencyDomainJsonArtifactResource);
+
+    expect(adapted).toMatchObject({ complete: false, status: "incomplete" });
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        fieldSweep: adapted,
+        resources: {
+          branches: artifact(),
+          dispersion: artifact(),
+          fieldSweep: fieldSweepArtifact(),
+          response: artifact(),
+          spectrum: artifact(),
+        },
+      }),
+    );
+    expect(collectNodes(tree).find((node) => node.label === "Field Sweep")).toMatchObject({
+      status: "partial",
+    });
+  });
+
+  it("uses field-sweep samples as the modal source and binds mode fields to its revision", () => {
+    const adapted = navigatorFieldSweepFromResource(fieldSweepResource());
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        fieldSweep: adapted,
+        resources: {
+          branches: artifact(),
+          dispersion: artifact(),
+          fieldSweep: fieldSweepArtifact(),
+          response: artifact(),
+          spectrum: { ...artifact(), resourceRevision: "sha256:spectrum-1" },
+        },
+        spectrum: { samples: [sample(0)] },
+      }),
+    );
+    const nodes = collectNodes(tree);
+    const samples = nodes.filter((node) => node.kind === "results.frequency-domain.sample");
+    const mode = nodes.find((node) => node.label === "Mode sample-0000/mode-0000");
+
+    expect(samples).toHaveLength(15);
+    expect(samples[0]?.label).toBe("μ₀ Hx = 50.3 mT");
+    expect(mode).toMatchObject({
+      resourceKey: "analysis:eigen:field-sweep",
+      resourceRevision: "sha256:field-sweep-1",
+      selectionRef: {
+        artifactRevision: "sha256:field-sweep-1",
+        modeId: "sample-0000/mode-0000",
+        sampleId: "bias-field-sample-0000",
+      },
+      status: "ready",
+    });
+    expect(mode?.children?.find((child) => child.label === "Field")).toMatchObject({
+      resourceKey: expect.stringContaining("/data/fields/"),
+      status: "ready",
+    });
+  });
+
+  it("marks stale companion revisions partial without falling back to array positions", () => {
+    const adapted = navigatorFieldSweepFromResource(fieldSweepResource(), {
+      branches: { branches: [{ branchId: "0" }] },
+      branchesRevision: "sha256:branches-1",
+      spectrum: { samples: [sample(0)] },
+      spectrumRevision: "sha256:stale-spectrum",
+    });
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        fieldSweep: adapted,
+        resources: {
+          branches: artifact(),
+          dispersion: artifact(),
+          fieldSweep: fieldSweepArtifact(),
+          response: artifact(),
+          spectrum: { ...artifact(), resourceRevision: "sha256:stale-spectrum" },
+        },
+        spectrum: { samples: [sample(0)] },
+      }),
+    );
+
+    expect(adapted?.joins.spectrum).toBe("stale");
+    expect(collectNodes(tree).filter((node) => node.kind === "results.frequency-domain.sample"))
+      .toHaveLength(15);
+    expect(collectNodes(tree).find((node) => node.label === "Field Sweep")).toMatchObject({
+      status: "partial",
+      statusReason: expect.stringContaining("stale revisions"),
+    });
+  });
+
+  it("exposes typed field-sweep input in the Results module without transport-body parsing", () => {
+    const source = readFileSync(resultsNavigatorModuleUrl, "utf8");
+
+    expect(source).toContain("navigatorFieldSweepFromResource");
+    expect(source).toContain("fieldSweep: typedFieldSweep");
+    expect(source).not.toContain("payload.extra");
   });
 
   it("propagates loading state into semantic groups when the typed payload is pending", () => {

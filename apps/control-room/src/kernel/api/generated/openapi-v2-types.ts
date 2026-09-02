@@ -804,6 +804,198 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/axes/{axis_id}/values": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_axes_axis_id_values"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}/points": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id_points"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items_item_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/projections/{projection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_projections_projection_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations/{relation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations_relation_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/samples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_samples"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1": {
         parameters: {
             query?: never;
@@ -3850,6 +4042,373 @@ export interface components {
             visible: boolean;
             wireframe: components["schemas"]["BasicLayerState"];
         };
+        AnalysisResultAxisProjection: {
+            label: string;
+            operation: string;
+            projection_id: string;
+            unit: string;
+        };
+        AnalysisResultAxisResource: {
+            axis_id: string;
+            /** Format: int64 */
+            cardinality: number;
+            inline_values?: components["schemas"]["AnalysisResultAxisValueResource"][] | null;
+            label: string;
+            ordering: string;
+            preferred_display_units: string[];
+            projections: components["schemas"]["AnalysisResultAxisProjection"][];
+            role: string;
+            semantic_id: string;
+            symbol?: string | null;
+            unit_si?: string | null;
+            value_kind: string;
+            values_resource_key?: string | null;
+        };
+        AnalysisResultAxisValueResource: {
+            category?: string | null;
+            entity_ref?: string | null;
+            label?: string | null;
+            /** Format: double */
+            scalar_si?: number | null;
+            status: string;
+            token: string;
+            vector3_si?: number[] | null;
+        };
+        AnalysisResultAxisValuesResource: {
+            axis_id: string;
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            values: components["schemas"]["AnalysisResultAxisValueResource"][];
+        };
+        AnalysisResultBranchPageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultBranchSummaryResource"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultBranchPointPageResource: {
+            branch_id: string;
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultBranchPointResource"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultBranchPointResource: {
+            branch_id: string;
+            /** Format: double */
+            frequency_hz?: number | null;
+            item_id: string;
+            /** Format: int64 */
+            raw_mode_index?: number | null;
+            sample_id: string;
+            /** Format: int64 */
+            sample_index?: number | null;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultBranchResource: {
+            branch_id: string;
+            dataset_id: string;
+            dataset_revision: string;
+            label: string;
+            /** Format: int64 */
+            point_count: number;
+            points_resource: string;
+            run_id: string;
+            schema_version: string;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultBranchSummaryResource: {
+            branch_id: string;
+            label: string;
+            /** Format: int64 */
+            point_count: number;
+            points_resource: string;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultCoordinateResource: {
+            axis_id: string;
+            category?: string | null;
+            entity_ref?: string | null;
+            label?: string | null;
+            /** Format: double */
+            scalar_si?: number | null;
+            token: string;
+            vector3_si?: number[] | null;
+        };
+        AnalysisResultDatasetCapabilities: {
+            branch_tracking: boolean;
+            comparison: boolean;
+            export: boolean;
+            fields: boolean;
+            item_paging: boolean;
+            live_partial_results: boolean;
+            result_meshes: boolean;
+            sample_paging: boolean;
+            server_filtering: boolean;
+            server_sorting: boolean;
+        };
+        AnalysisResultDatasetCatalogResource: {
+            items: components["schemas"]["AnalysisResultDatasetSummaryResource"][];
+            next_cursor?: string | null;
+            revision: string;
+            run_id: string;
+            schema_version: string;
+            status: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultDatasetManifestResource: {
+            axes: components["schemas"]["AnalysisResultAxisResource"][];
+            capabilities: components["schemas"]["AnalysisResultDatasetCapabilities"];
+            dataset_id: string;
+            dataset_revision: string;
+            default_cursor: components["schemas"]["AnalysisResultDefaultCursor"];
+            description?: string | null;
+            item_index_resource: string;
+            item_kinds: components["schemas"]["AnalysisResultItemKind"][];
+            product_kind: components["schemas"]["AnalysisResultProductKind"];
+            projections: components["schemas"]["AnalysisResultProjectionDescriptor"][];
+            provenance: {
+                [key: string]: string;
+            };
+            run_id: string;
+            sample_index_resource: string;
+            schema_version: string;
+            source_artifacts: components["schemas"]["AnalysisResultSourceArtifactRef"][];
+            stage_id: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            title: string;
+            topology_policy: string;
+            units_policy: string;
+        };
+        AnalysisResultDatasetSummaryResource: {
+            dataset_id: string;
+            dataset_revision: string;
+            /** Format: int64 */
+            item_count: number;
+            manifest_resource_key: string;
+            product_kind: components["schemas"]["AnalysisResultProductKind"];
+            run_id: string;
+            /** Format: int64 */
+            sample_count: number;
+            stage_id: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            title: string;
+        };
+        AnalysisResultDefaultCursor: {
+            item_id?: string | null;
+            sample_id?: string | null;
+        };
+        AnalysisResultFieldRef: {
+            field_id: string;
+            field_revision: string;
+            mesh_ref?: null | components["schemas"]["AnalysisResultMeshRef"];
+            quantity_id?: string | null;
+            representation?: string | null;
+            resource_key: string;
+            status: string;
+        };
+        /** @enum {string} */
+        AnalysisResultItemKind: "eigen_mode" | "driven_frequency_point" | "spectral_feature" | "dsf_point";
+        AnalysisResultItemPageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultSpectralItemSummary"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+        };
+        AnalysisResultItemRelation: {
+            /** Format: double */
+            frequency_delta_hz?: number | null;
+            method?: string | null;
+            qualification: string;
+            relation: string;
+            /** Format: double */
+            score?: number | null;
+            source_revision: string;
+            target_dataset_id?: string | null;
+            target_item_id?: string | null;
+            target_revision?: string | null;
+            target_sample_id?: string | null;
+        };
+        AnalysisResultMeshRef: {
+            mesh_id: string;
+            mesh_revision?: string | null;
+            topology_fingerprint?: string | null;
+        };
+        /** @enum {string} */
+        AnalysisResultProductKind: "modal_eigen" | "driven_response" | "time_domain_spectrum" | "dynamic_structure_factor";
+        AnalysisResultProjectionDescriptor: {
+            kind: string;
+            projection_id: string;
+            resource_key: string;
+            selectable: boolean;
+            title: string;
+            x_axis_id?: string | null;
+            y_axis_id?: string | null;
+        };
+        AnalysisResultProjectionPoint: {
+            branch_id?: string | null;
+            item_id?: string | null;
+            /** Format: int64 */
+            ordinal: number;
+            sample_id?: string | null;
+            status: string;
+            /** Format: double */
+            value?: number | null;
+            /** Format: double */
+            x?: number | null;
+            /** Format: double */
+            y?: number | null;
+        };
+        AnalysisResultProjectionResource: {
+            axis_labels: {
+                [key: string]: string;
+            };
+            axis_mapping: {
+                [key: string]: string;
+            };
+            axis_units: {
+                [key: string]: string;
+            };
+            dataset_id: string;
+            dataset_revision: string;
+            fixed_coordinates: components["schemas"]["AnalysisResultCoordinateResource"][];
+            projection_id: string;
+            projection_revision: string;
+            run_id: string;
+            schema_version: string;
+            selection_index: components["schemas"]["AnalysisResultProjectionSelectionEntry"][];
+            series: components["schemas"]["AnalysisResultProjectionSeries"][];
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultProjectionSelectionEntry: {
+            branch_id?: string | null;
+            item_id?: string | null;
+            /** Format: int64 */
+            ordinal: number;
+            sample_id?: string | null;
+        };
+        AnalysisResultProjectionSeries: {
+            label: string;
+            points: components["schemas"]["AnalysisResultProjectionPoint"][];
+            series_id: string;
+        };
+        AnalysisResultQualitySummary: {
+            qualification: string;
+            /** Format: double */
+            residual_relative_l2?: number | null;
+            /** Format: double */
+            tracking_score?: number | null;
+        };
+        AnalysisResultRelationPageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultRelationResource"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+            unsupported_reason?: string | null;
+        };
+        AnalysisResultRelationResource: {
+            relation: components["schemas"]["AnalysisResultItemRelation"];
+            relation_id: string;
+            source_item_id: string;
+            source_sample_id: string;
+        };
+        AnalysisResultSampleIndexEntry: {
+            /** Format: int64 */
+            branch_count?: number | null;
+            coordinates: components["schemas"]["AnalysisResultCoordinateResource"][];
+            equilibrium_ref?: null | components["schemas"]["AnalysisResultSourceArtifactRef"];
+            /** Format: int64 */
+            item_count: number;
+            items_resource: string;
+            linearization_ref?: null | components["schemas"]["AnalysisResultSourceArtifactRef"];
+            mesh_ref?: null | components["schemas"]["AnalysisResultMeshRef"];
+            sample_id: string;
+            /** Format: int64 */
+            sample_index?: number | null;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+        };
+        AnalysisResultSamplePageResource: {
+            cursor?: string | null;
+            dataset_id: string;
+            dataset_revision: string;
+            items: components["schemas"]["AnalysisResultSampleIndexEntry"][];
+            limit: number;
+            next_cursor?: string | null;
+            run_id: string;
+            schema_version: string;
+            /** Format: int64 */
+            total_count: number;
+        };
+        AnalysisResultSourceArtifactRef: {
+            artifact: string;
+            relation: string;
+            revision: string;
+        };
+        AnalysisResultSpectralItemSummary: {
+            branch_id?: string | null;
+            detail_resource: string;
+            /** Format: int64 */
+            display_index?: number | null;
+            field_ref?: null | components["schemas"]["AnalysisResultFieldRef"];
+            /** Format: double */
+            frequency_hz?: number | null;
+            item_id: string;
+            item_kind: components["schemas"]["AnalysisResultItemKind"];
+            quality: components["schemas"]["AnalysisResultQualitySummary"];
+            relations: components["schemas"]["AnalysisResultItemRelation"][];
+            sample_id: string;
+            source_revision: string;
+            status: components["schemas"]["AnalysisResultStatusFacets"];
+            wavevector_kf?: number[] | null;
+        };
+        AnalysisResultStatusFacets: {
+            completeness: string;
+            detail?: string | null;
+            execution: string;
+            qualification: string;
+            reason_code?: string | null;
+            resource: string;
+        };
         ApiErrorDiagnosticResponse: {
             code: string;
             message: string;
@@ -5717,17 +6276,117 @@ export interface components {
         FrequencyDomainFieldSweepArtifactPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             artifact_id?: string | null;
             complete?: boolean | null;
+            /** Format: int64 */
+            completed_sample_count?: number | null;
+            content_sha256?: string | null;
+            cross_artifact_refs?: components["schemas"]["FrequencyDomainFieldSweepReferencePayload"][] | null;
             interrupted?: boolean | null;
+            requested_execution?: null | components["schemas"]["FrequencyDomainFieldSweepExecutionPayload"];
+            /** Format: int64 */
+            requested_sample_count?: number | null;
+            resolved_execution?: null | components["schemas"]["FrequencyDomainFieldSweepExecutionPayload"];
+            revision?: string | null;
+            run_id?: string | null;
+            runtime_id?: string | null;
             samples?: components["schemas"]["FrequencyDomainFieldSweepSamplePayload"][] | null;
+            scan_axis?: null | components["schemas"]["FrequencyDomainFieldSweepAxisPayload"];
             schema_version: string;
+            scope_id?: string | null;
+            source?: null | components["schemas"]["FrequencyDomainFieldSweepSourcePayload"];
+            source_revision?: string | null;
+            stage_id?: string | null;
             status?: string | null;
+            stop_reason?: string | null;
+            topology?: null | components["schemas"]["FrequencyDomainFieldSweepTopologyPayload"];
+            units?: null | components["schemas"]["FrequencyDomainFieldSweepUnitsPayload"];
+        };
+        FrequencyDomainFieldSweepAxisPayload: {
+            coordinate: string;
+            display_conversions: components["schemas"]["FrequencyDomainFieldSweepDisplayConversionPayload"][];
+            kind: string;
+            unit: string;
+        };
+        FrequencyDomainFieldSweepDisplayConversionPayload: {
+            name: string;
+            /** Format: double */
+            scale: number;
+            unit: string;
+        };
+        FrequencyDomainFieldSweepExecutionPayload: {
+            backend: string;
+            device: string;
+            engine: string;
+            execution_mode: string;
+            fallback_reason?: string | null;
+            fallback_used?: boolean | null;
+            implementation_id?: string | null;
+            precision: string;
+            status: string;
+        };
+        FrequencyDomainFieldSweepModePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
+            /** Format: double */
+            angular_frequency_rad_per_s: number;
+            /** Format: int64 */
+            branch_id?: number | null;
+            field_status?: string | null;
+            /** Format: double */
+            frequency_hz: number;
+            mode_artifact_path?: string | null;
+            mode_field_id?: string | null;
+            mode_field_resource_key?: string | null;
+            mode_id: string;
+            /** Format: int64 */
+            raw_mode_index: number;
+            /** Format: double */
+            residual_relative_l2?: number | null;
+            sample_id: string;
+            source_revision: string;
+            status: string;
+        };
+        FrequencyDomainFieldSweepReferencePayload: {
+            artifact: string;
+            relation: string;
+            revision: string;
         };
         FrequencyDomainFieldSweepSamplePayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             bias_field_a_per_m?: number[] | null;
+            bias_field_mu0_t?: number[] | null;
+            branch_ids?: number[] | null;
+            equilibrium_artifact_sha256?: string | null;
+            linearization_state_sha256?: string | null;
+            modes?: components["schemas"]["FrequencyDomainFieldSweepModePayload"][] | null;
+            operator_input_signature_sha256?: string | null;
             sample_id?: string | null;
             /** Format: int64 */
             sample_index?: number | null;
+            scan_axis?: null | components["schemas"]["FrequencyDomainFieldSweepAxisPayload"];
             status?: string | null;
+            stop_reason?: string | null;
+            topology?: null | components["schemas"]["FrequencyDomainFieldSweepTopologyPayload"];
+        };
+        FrequencyDomainFieldSweepSourcePayload: {
+            artifact: string;
+            kind: string;
+            revision: string;
+        };
+        FrequencyDomainFieldSweepTopologyPayload: {
+            indexing: string;
+            mesh_id: string;
+            mode_axis: string;
+            /** Format: int64 */
+            node_count?: number | null;
+            sample_axis: string;
+            topology_revision: string;
+        };
+        FrequencyDomainFieldSweepUnitsPayload: {
+            angular_frequency: string;
+            bias_field: string;
+            bias_field_display: string;
+            covariance?: string | null;
+            frequency: string;
+            linewidth?: string | null;
+            q_factor?: string | null;
+            response_amplitude?: string | null;
         };
         FrequencyDomainFmrPeakPayload: components["schemas"]["FrequencyDomainArtifactExtras"] & {
             /** Format: double */
@@ -13292,6 +13951,413 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HysteresisSettleTraceEntrySchema"][];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run-scoped result dataset catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultDatasetCatalogResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result dataset manifest */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultDatasetManifestResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_axes_axis_id_values: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                axis_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded result axis values */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultAxisValuesResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged tracked result branches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultBranchPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tracked result branch */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultBranchResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id_points: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged tracked result branch points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultBranchPointPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged result items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultItemPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items_item_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result item detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultSpectralItemSummary"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_projections_projection_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                projection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded result projection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultProjectionResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged result relations */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultRelationPageResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations_relation_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+                relation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Result relation */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultRelationResource"];
+                };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_samples: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                stage_id?: string;
+                product_kind?: string;
+                search?: string;
+                from_si?: number;
+                to_si?: number;
+                sample_id?: string;
+                item_kind?: string;
+                branch_id?: string;
+                status?: string;
+                has_field?: boolean;
+                has_fields?: boolean;
+                frequency_min_hz?: number;
+                frequency_max_hz?: number;
+                residual_max?: number;
+                sort?: string;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paged result samples */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisResultSamplePageResource"];
                 };
             };
         };

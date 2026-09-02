@@ -16,6 +16,7 @@ import type {
   AnalysisFieldOverlayRepresentation,
   AnalysisFieldOverlaySource,
 } from "../visualization/AnalysisFieldOverlayController";
+import type { AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
 
 type ObjectSelectionKind =
   | "object.root"
@@ -270,6 +271,7 @@ export type FdmDomainSelectionScope =
 export type SelectionRef =
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
+  | AnalysisResultSelectionRef
   | {
       constraintId: string;
       kind: "object.frozen-spins";
@@ -793,6 +795,29 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "analysis-result":
+      return (
+        right.type === "analysis-result" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.focus === right.focus &&
+        left.runId === right.runId &&
+        left.stageId === right.stageId &&
+        left.datasetId === right.datasetId &&
+        left.datasetRevision === right.datasetRevision &&
+        left.itemKind === right.itemKind &&
+        nullableStringEquals(left.sampleId, right.sampleId) &&
+        nullableStringEquals(left.itemId, right.itemId) &&
+        nullableStringEquals(left.branchId, right.branchId) &&
+        nullableStringEquals(left.axisId, right.axisId) &&
+        nullableStringEquals(left.axisValueToken, right.axisValueToken) &&
+        recordEquals(left.axisFilters ?? {}, right.axisFilters ?? {}) &&
+        nullableStringEquals(left.fieldId, right.fieldId) &&
+        nullableStringEquals(left.fieldRevision, right.fieldRevision) &&
+        nullableStringEquals(left.projectionId, right.projectionId) &&
+        nullableStringEquals(left.projectionRevision, right.projectionRevision) &&
+        (left.projectionOrdinal ?? null) === (right.projectionOrdinal ?? null)
+      );
     case "frozen-spins":
       return (
         right.type === "frozen-spins" &&

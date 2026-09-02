@@ -22,6 +22,12 @@ struct Context;
  */
 class DenseDemagBemOperator {
 public:
+    static constexpr uint32_t kDefaultDenseReferenceMaxBoundaryNodes = 4096u;
+
+    explicit DenseDemagBemOperator(
+        uint32_t max_boundary_nodes = kDefaultDenseReferenceMaxBoundaryNodes)
+        : max_boundary_nodes_(max_boundary_nodes) {}
+
     /*
      * Assemble the dense boundary integral matrix for an extracted surface.
      *
@@ -43,10 +49,12 @@ public:
 
     const std::vector<double> &matrix_row_major() const { return matrix_; }
     uint32_t size() const { return size_; }
+    uint32_t max_boundary_nodes() const { return max_boundary_nodes_; }
     const char *mode() const { return "dense_reference"; }
 
 private:
     uint32_t size_ = 0;
+    uint32_t max_boundary_nodes_ = kDefaultDenseReferenceMaxBoundaryNodes;
     std::vector<double> matrix_;
 };
 

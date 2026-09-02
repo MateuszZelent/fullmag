@@ -16,6 +16,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 import { buildScalarChartSeries } from "./chartTableModel";
 import { AnalysisFrequencySurface } from "./components/AnalysisFrequencySurface";
+import {
+  AnalysisResultProjectionSurface,
+  type AnalysisResultProjectionSurfaceProps,
+} from "./components/AnalysisResultProjectionSurface";
 import { AnalysisSurfaceTabs } from "./components/AnalysisSurfaceTabs";
 import { AnalysisTableSurface } from "./components/AnalysisTableSurface";
 import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
@@ -53,6 +57,7 @@ type AnalysisPlotsViewInput = {
   onSubviewChange?: (subview: AnalysisSubview) => void;
   onSurfaceChange?: (surface: AnalysisSurface) => void;
   range?: ChartValueRange | null;
+  resultProjection?: AnalysisResultProjectionSurfaceProps;
   selectedDatasetRef?: string | null;
   selectedPoint?: AnalysisChartCursorPoint | null;
   selectedSeriesIds?: readonly string[];
@@ -74,7 +79,7 @@ const EMPTY_CHART_SERIES: readonly ChartSeries[] = Object.freeze([]);
 const EMPTY_SURFACE_PROVENANCE: Partial<Record<AnalysisSurface, string>> =
   Object.freeze({});
 export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
-  const { activeSubview: requestedActiveSubview, activeSurface, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainComparisonModel, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onSubviewChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
+  const { activeSubview: requestedActiveSubview, activeSurface, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainComparisonModel, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onSubviewChange = () => undefined, onSurfaceChange = () => undefined, range = null, resultProjection, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
   const onPointSelect = props.onPointSelect ?? ignorePointSelection;
   const onDisplayUnitsChange = props.onDisplayUnitsChange ?? ignoreDisplayUnitsChange;
   const onRangeChange = props.onRangeChange ?? ignoreRangeSelection;
@@ -118,6 +123,7 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
 
   return <div className="fm-analysis-plots">
     <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} onSubviewChange={onSubviewChange} subviews={subviews} />
+    {resultProjection ? <AnalysisResultProjectionSurface {...resultProjection} /> : null}
     <section
       className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"
       data-analysis-surface={surfaceDescriptor.surface}

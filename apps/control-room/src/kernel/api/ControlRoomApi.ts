@@ -19,6 +19,18 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
   ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
+  ANALYSIS_RESULT_AXIS_VALUES_PATH,
+  ANALYSIS_RESULT_BRANCH_PATH,
+  ANALYSIS_RESULT_BRANCH_POINTS_PATH,
+  ANALYSIS_RESULT_BRANCHES_PATH,
+  ANALYSIS_RESULT_DATASET_PATH,
+  ANALYSIS_RESULT_DATASETS_PATH,
+  ANALYSIS_RESULT_ITEM_PATH,
+  ANALYSIS_RESULT_ITEMS_PATH,
+  ANALYSIS_RESULT_PROJECTION_PATH,
+  ANALYSIS_RESULT_RELATION_PATH,
+  ANALYSIS_RESULT_RELATIONS_PATH,
+  ANALYSIS_RESULT_SAMPLES_PATH,
   ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
@@ -222,6 +234,19 @@ import type {
   CommandResponse,
   CouplingListResource,
   DynamicStructureFactorResource,
+  AnalysisResultAxisValuesResource,
+  AnalysisResultBranchPageResource,
+  AnalysisResultBranchPointPageResource,
+  AnalysisResultBranchResource,
+  AnalysisResultDatasetCatalogResource,
+  AnalysisResultDatasetManifestResource,
+  AnalysisResultItemPageResource,
+  AnalysisResultPageQuery,
+  AnalysisResultProjectionResource,
+  AnalysisResultRelationPageResource,
+  AnalysisResultRelationResource,
+  AnalysisResultSamplePageResource,
+  AnalysisResultSpectralItemSummary,
   FieldDriveCreateRequest,
   FieldDriveDeleteRequest,
   FieldDriveListResource,
@@ -827,6 +852,168 @@ export class ControlRoomApi {
         this.requestJson<DynamicStructureFactorResource>(
           ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
           options,
+        ),
+    },
+    results: {
+      datasets: (
+        runId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultDatasetCatalogResource>(
+          ANALYSIS_RESULT_DATASETS_PATH,
+          options,
+          { path: { run_id: runId }, query },
+        ),
+      dataset: (
+        runId: string,
+        datasetId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultDatasetManifestResource>(
+          ANALYSIS_RESULT_DATASET_PATH,
+          options,
+          { path: { run_id: runId, dataset_id: datasetId } },
+        ),
+      axisValues: (
+        runId: string,
+        datasetId: string,
+        axisId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultAxisValuesResource>(
+          ANALYSIS_RESULT_AXIS_VALUES_PATH,
+          options,
+          {
+            path: { run_id: runId, dataset_id: datasetId, axis_id: axisId },
+            query,
+          },
+        ),
+      samples: (
+        runId: string,
+        datasetId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultSamplePageResource>(
+          ANALYSIS_RESULT_SAMPLES_PATH,
+          options,
+          { path: { run_id: runId, dataset_id: datasetId }, query },
+        ),
+      items: (
+        runId: string,
+        datasetId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultItemPageResource>(
+          ANALYSIS_RESULT_ITEMS_PATH,
+          options,
+          { path: { run_id: runId, dataset_id: datasetId }, query },
+        ),
+      item: (
+        runId: string,
+        datasetId: string,
+        itemId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultSpectralItemSummary>(
+          ANALYSIS_RESULT_ITEM_PATH,
+          options,
+          { path: { run_id: runId, dataset_id: datasetId, item_id: itemId } },
+        ),
+      branches: (
+        runId: string,
+        datasetId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultBranchPageResource>(
+          ANALYSIS_RESULT_BRANCHES_PATH,
+          options,
+          { path: { run_id: runId, dataset_id: datasetId }, query },
+        ),
+      branch: (
+        runId: string,
+        datasetId: string,
+        branchId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultBranchResource>(
+          ANALYSIS_RESULT_BRANCH_PATH,
+          options,
+          {
+            path: {
+              branch_id: branchId,
+              dataset_id: datasetId,
+              run_id: runId,
+            },
+          },
+        ),
+      branchPoints: (
+        runId: string,
+        datasetId: string,
+        branchId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultBranchPointPageResource>(
+          ANALYSIS_RESULT_BRANCH_POINTS_PATH,
+          options,
+          {
+            path: {
+              branch_id: branchId,
+              dataset_id: datasetId,
+              run_id: runId,
+            },
+            query,
+          },
+        ),
+      relations: (
+        runId: string,
+        datasetId: string,
+        query: AnalysisResultPageQuery = {},
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultRelationPageResource>(
+          ANALYSIS_RESULT_RELATIONS_PATH,
+          options,
+          { path: { run_id: runId, dataset_id: datasetId }, query },
+        ),
+      relation: (
+        runId: string,
+        datasetId: string,
+        relationId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultRelationResource>(
+          ANALYSIS_RESULT_RELATION_PATH,
+          options,
+          {
+            path: {
+              dataset_id: datasetId,
+              relation_id: relationId,
+              run_id: runId,
+            },
+          },
+        ),
+      projection: (
+        runId: string,
+        datasetId: string,
+        projectionId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<AnalysisResultProjectionResource>(
+          ANALYSIS_RESULT_PROJECTION_PATH,
+          options,
+          {
+            path: {
+              run_id: runId,
+              dataset_id: datasetId,
+              projection_id: projectionId,
+            },
+          },
         ),
     },
     eigen: {

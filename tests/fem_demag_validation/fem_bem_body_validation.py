@@ -108,7 +108,13 @@ def build_fem_bem_sphere_study(*, label: str, hmax: float):
     study.build_mesh()
     study.disable_exchange()
     study.demag(model="fredkin_koehler")
-    study.solver(max_error=1e-8, integrator="rk45")
+    study.fem_demag_solver(
+        solver="CG",
+        preconditioner="AMG",
+        rtol=1e-12,
+        max_iterations=500,
+    )
+    study.solver(max_error=1e-8, integrator="rk45", dt_max=DT)
     study.save("E_demag", every=1.0)
     return study, body
 

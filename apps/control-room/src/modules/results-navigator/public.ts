@@ -13,9 +13,11 @@ export {
 } from "./resultsNavigatorModel";
 export {
   navigatorBranchesFromResource,
+  navigatorFieldSweepFromResource,
   navigatorFmrFromResource,
   navigatorResponseFromResource,
   navigatorSpectrumFromResource,
+  formatFieldSweepSampleLabel,
 } from "./resultsNavigatorTypes";
 export {
   buildModalNodeId,

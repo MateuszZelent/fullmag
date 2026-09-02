@@ -356,6 +356,1609 @@
         ],
         "type": "object"
       },
+      "AnalysisResultAxisProjection": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "projection_id": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "projection_id",
+          "label",
+          "unit",
+          "operation"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultAxisResource": {
+        "properties": {
+          "axis_id": {
+            "type": "string"
+          },
+          "cardinality": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "inline_values": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultAxisValueResource"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "ordering": {
+            "type": "string"
+          },
+          "preferred_display_units": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "projections": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultAxisProjection"
+            },
+            "type": "array"
+          },
+          "role": {
+            "type": "string"
+          },
+          "semantic_id": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit_si": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value_kind": {
+            "type": "string"
+          },
+          "values_resource_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "axis_id",
+          "role",
+          "value_kind",
+          "semantic_id",
+          "label",
+          "preferred_display_units",
+          "ordering",
+          "cardinality",
+          "projections"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultAxisValueResource": {
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scalar_si": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "vector3_si": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "token",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultAxisValuesResource": {
+        "properties": {
+          "axis_id": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultAxisValueResource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "axis_id",
+          "limit",
+          "total_count",
+          "values"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultBranchPageResource": {
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultBranchSummaryResource"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupported_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "limit",
+          "total_count",
+          "items"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultBranchPointPageResource": {
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultBranchPointResource"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupported_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "branch_id",
+          "limit",
+          "total_count",
+          "items"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultBranchPointResource": {
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "frequency_hz": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "raw_mode_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sample_id": {
+            "type": "string"
+          },
+          "sample_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          }
+        },
+        "required": [
+          "branch_id",
+          "sample_id",
+          "item_id",
+          "status",
+          "source_revision"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultBranchResource": {
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "point_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "points_resource": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "branch_id",
+          "label",
+          "point_count",
+          "status",
+          "source_revision",
+          "points_resource"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultBranchSummaryResource": {
+        "properties": {
+          "branch_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "point_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "points_resource": {
+            "type": "string"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          }
+        },
+        "required": [
+          "branch_id",
+          "label",
+          "point_count",
+          "status",
+          "source_revision",
+          "points_resource"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultCoordinateResource": {
+        "properties": {
+          "axis_id": {
+            "type": "string"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entity_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scalar_si": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "token": {
+            "type": "string"
+          },
+          "vector3_si": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "axis_id",
+          "token"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultDatasetCapabilities": {
+        "properties": {
+          "branch_tracking": {
+            "type": "boolean"
+          },
+          "comparison": {
+            "type": "boolean"
+          },
+          "export": {
+            "type": "boolean"
+          },
+          "fields": {
+            "type": "boolean"
+          },
+          "item_paging": {
+            "type": "boolean"
+          },
+          "live_partial_results": {
+            "type": "boolean"
+          },
+          "result_meshes": {
+            "type": "boolean"
+          },
+          "sample_paging": {
+            "type": "boolean"
+          },
+          "server_filtering": {
+            "type": "boolean"
+          },
+          "server_sorting": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sample_paging",
+          "item_paging",
+          "server_filtering",
+          "server_sorting",
+          "branch_tracking",
+          "fields",
+          "result_meshes",
+          "comparison",
+          "export",
+          "live_partial_results"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultDatasetCatalogResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultDatasetSummaryResource"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupported_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "revision",
+          "status",
+          "items",
+          "total_count"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultDatasetManifestResource": {
+        "properties": {
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultAxisResource"
+            },
+            "type": "array"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/AnalysisResultDatasetCapabilities"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "default_cursor": {
+            "$ref": "#/components/schemas/AnalysisResultDefaultCursor"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_index_resource": {
+            "type": "string"
+          },
+          "item_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultItemKind"
+            },
+            "type": "array"
+          },
+          "product_kind": {
+            "$ref": "#/components/schemas/AnalysisResultProductKind"
+          },
+          "projections": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultProjectionDescriptor"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sample_index_resource": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultSourceArtifactRef"
+            },
+            "type": "array"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          },
+          "title": {
+            "type": "string"
+          },
+          "topology_policy": {
+            "type": "string"
+          },
+          "units_policy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "dataset_id",
+          "dataset_revision",
+          "run_id",
+          "stage_id",
+          "product_kind",
+          "title",
+          "status",
+          "source_artifacts",
+          "axes",
+          "item_kinds",
+          "projections",
+          "capabilities",
+          "default_cursor",
+          "topology_policy",
+          "units_policy",
+          "provenance",
+          "sample_index_resource",
+          "item_index_resource"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultDatasetSummaryResource": {
+        "properties": {
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "item_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "manifest_resource_key": {
+            "type": "string"
+          },
+          "product_kind": {
+            "$ref": "#/components/schemas/AnalysisResultProductKind"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sample_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stage_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "dataset_revision",
+          "run_id",
+          "stage_id",
+          "product_kind",
+          "title",
+          "status",
+          "sample_count",
+          "item_count",
+          "manifest_resource_key"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultDefaultCursor": {
+        "properties": {
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sample_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "AnalysisResultFieldRef": {
+        "properties": {
+          "field_id": {
+            "type": "string"
+          },
+          "field_revision": {
+            "type": "string"
+          },
+          "mesh_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResultMeshRef"
+              }
+            ]
+          },
+          "quantity_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "representation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_id",
+          "field_revision",
+          "resource_key",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultItemKind": {
+        "enum": [
+          "eigen_mode",
+          "driven_frequency_point",
+          "spectral_feature",
+          "dsf_point"
+        ],
+        "type": "string"
+      },
+      "AnalysisResultItemPageResource": {
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultSpectralItemSummary"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "limit",
+          "total_count",
+          "items"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultItemRelation": {
+        "properties": {
+          "frequency_delta_hz": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "score": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "target_dataset_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_sample_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "relation",
+          "source_revision",
+          "qualification"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultMeshRef": {
+        "properties": {
+          "mesh_id": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mesh_id"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultProductKind": {
+        "enum": [
+          "modal_eigen",
+          "driven_response",
+          "time_domain_spectrum",
+          "dynamic_structure_factor"
+        ],
+        "type": "string"
+      },
+      "AnalysisResultProjectionDescriptor": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "projection_id": {
+            "type": "string"
+          },
+          "resource_key": {
+            "type": "string"
+          },
+          "selectable": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "x_axis_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "y_axis_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "projection_id",
+          "kind",
+          "title",
+          "resource_key",
+          "selectable"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultProjectionPoint": {
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ordinal": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "x": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "y": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ordinal",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultProjectionResource": {
+        "properties": {
+          "axis_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "axis_mapping": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "axis_units": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "fixed_coordinates": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultCoordinateResource"
+            },
+            "type": "array"
+          },
+          "projection_id": {
+            "type": "string"
+          },
+          "projection_revision": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "selection_index": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultProjectionSelectionEntry"
+            },
+            "type": "array"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultProjectionSeries"
+            },
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          },
+          "unsupported_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "projection_id",
+          "projection_revision",
+          "axis_labels",
+          "axis_mapping",
+          "axis_units",
+          "fixed_coordinates",
+          "series",
+          "selection_index",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultProjectionSelectionEntry": {
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ordinal": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ordinal"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultProjectionSeries": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultProjectionPoint"
+            },
+            "type": "array"
+          },
+          "series_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "series_id",
+          "label",
+          "points"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultQualitySummary": {
+        "properties": {
+          "qualification": {
+            "type": "string"
+          },
+          "residual_relative_l2": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tracking_score": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "qualification"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultRelationPageResource": {
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultRelationResource"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsupported_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "limit",
+          "total_count",
+          "items"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultRelationResource": {
+        "properties": {
+          "relation": {
+            "$ref": "#/components/schemas/AnalysisResultItemRelation"
+          },
+          "relation_id": {
+            "type": "string"
+          },
+          "source_item_id": {
+            "type": "string"
+          },
+          "source_sample_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "relation_id",
+          "source_item_id",
+          "source_sample_id",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultSampleIndexEntry": {
+        "properties": {
+          "branch_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "coordinates": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultCoordinateResource"
+            },
+            "type": "array"
+          },
+          "equilibrium_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResultSourceArtifactRef"
+              }
+            ]
+          },
+          "item_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items_resource": {
+            "type": "string"
+          },
+          "linearization_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResultSourceArtifactRef"
+              }
+            ]
+          },
+          "mesh_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResultMeshRef"
+              }
+            ]
+          },
+          "sample_id": {
+            "type": "string"
+          },
+          "sample_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          }
+        },
+        "required": [
+          "sample_id",
+          "coordinates",
+          "status",
+          "item_count",
+          "source_revision",
+          "items_resource"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultSamplePageResource": {
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "dataset_revision": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultSampleIndexEntry"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "total_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "run_id",
+          "dataset_id",
+          "dataset_revision",
+          "limit",
+          "total_count",
+          "items"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultSourceArtifactRef": {
+        "properties": {
+          "artifact": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact",
+          "revision",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultSpectralItemSummary": {
+        "properties": {
+          "branch_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail_resource": {
+            "type": "string"
+          },
+          "display_index": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResultFieldRef"
+              }
+            ]
+          },
+          "frequency_hz": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "item_kind": {
+            "$ref": "#/components/schemas/AnalysisResultItemKind"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/AnalysisResultQualitySummary"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisResultItemRelation"
+            },
+            "type": "array"
+          },
+          "sample_id": {
+            "type": "string"
+          },
+          "source_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisResultStatusFacets"
+          },
+          "wavevector_kf": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "item_id",
+          "item_kind",
+          "sample_id",
+          "status",
+          "quality",
+          "detail_resource",
+          "source_revision",
+          "relations"
+        ],
+        "type": "object"
+      },
+      "AnalysisResultStatusFacets": {
+        "properties": {
+          "completeness": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "execution": {
+            "type": "string"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "execution",
+          "completeness",
+          "qualification"
+        ],
+        "type": "object"
+      },
       "ApiErrorDiagnosticResponse": {
         "properties": {
           "code": {
@@ -7671,9 +9274,78 @@
                   "null"
                 ]
               },
+              "completed_sample_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "content_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cross_artifact_refs": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainFieldSweepReferencePayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "interrupted": {
                 "type": [
                   "boolean",
+                  "null"
+                ]
+              },
+              "requested_execution": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepExecutionPayload"
+                  }
+                ]
+              },
+              "requested_sample_count": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "resolved_execution": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepExecutionPayload"
+                  }
+                ]
+              },
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "run_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "runtime_id": {
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -7686,13 +9358,77 @@
                   "null"
                 ]
               },
+              "scan_axis": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepAxisPayload"
+                  }
+                ]
+              },
               "schema_version": {
                 "type": "string"
+              },
+              "scope_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepSourcePayload"
+                  }
+                ]
+              },
+              "source_revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stage_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "stop_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "topology": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepTopologyPayload"
+                  }
+                ]
+              },
+              "units": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepUnitsPayload"
+                  }
                 ]
               }
             },
@@ -7702,6 +9438,205 @@
             "type": "object"
           }
         ]
+      },
+      "FrequencyDomainFieldSweepAxisPayload": {
+        "properties": {
+          "coordinate": {
+            "type": "string"
+          },
+          "display_conversions": {
+            "items": {
+              "$ref": "#/components/schemas/FrequencyDomainFieldSweepDisplayConversionPayload"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "coordinate",
+          "unit",
+          "display_conversions"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainFieldSweepDisplayConversionPayload": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "unit",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainFieldSweepExecutionPayload": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string"
+          },
+          "fallback_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fallback_used": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "implementation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precision": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "execution_mode",
+          "engine",
+          "status"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainFieldSweepModePayload": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FrequencyDomainArtifactExtras"
+          },
+          {
+            "properties": {
+              "angular_frequency_rad_per_s": {
+                "format": "double",
+                "type": "number"
+              },
+              "branch_id": {
+                "format": "int64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "field_status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "frequency_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "mode_artifact_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode_field_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode_field_resource_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mode_id": {
+                "type": "string"
+              },
+              "raw_mode_index": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "residual_relative_l2": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "sample_id": {
+                "type": "string"
+              },
+              "source_revision": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "sample_id",
+              "mode_id",
+              "raw_mode_index",
+              "frequency_hz",
+              "angular_frequency_rad_per_s",
+              "source_revision",
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FrequencyDomainFieldSweepReferencePayload": {
+        "properties": {
+          "artifact": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "relation",
+          "artifact",
+          "revision"
+        ],
+        "type": "object"
       },
       "FrequencyDomainFieldSweepSamplePayload": {
         "allOf": [
@@ -7720,6 +9655,54 @@
                   "null"
                 ]
               },
+              "bias_field_mu0_t": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "branch_ids": {
+                "items": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "equilibrium_artifact_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "linearization_state_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "modes": {
+                "items": {
+                  "$ref": "#/components/schemas/FrequencyDomainFieldSweepModePayload"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "operator_input_signature_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "sample_id": {
                 "type": [
                   "string",
@@ -7734,16 +9717,143 @@
                   "null"
                 ]
               },
+              "scan_axis": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepAxisPayload"
+                  }
+                ]
+              },
               "status": {
                 "type": [
                   "string",
                   "null"
+                ]
+              },
+              "stop_reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "topology": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FrequencyDomainFieldSweepTopologyPayload"
+                  }
                 ]
               }
             },
             "type": "object"
           }
         ]
+      },
+      "FrequencyDomainFieldSweepSourcePayload": {
+        "properties": {
+          "artifact": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "artifact",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainFieldSweepTopologyPayload": {
+        "properties": {
+          "indexing": {
+            "type": "string"
+          },
+          "mesh_id": {
+            "type": "string"
+          },
+          "mode_axis": {
+            "type": "string"
+          },
+          "node_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sample_axis": {
+            "type": "string"
+          },
+          "topology_revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mesh_id",
+          "topology_revision",
+          "indexing",
+          "sample_axis",
+          "mode_axis"
+        ],
+        "type": "object"
+      },
+      "FrequencyDomainFieldSweepUnitsPayload": {
+        "properties": {
+          "angular_frequency": {
+            "type": "string"
+          },
+          "bias_field": {
+            "type": "string"
+          },
+          "bias_field_display": {
+            "type": "string"
+          },
+          "covariance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "frequency": {
+            "type": "string"
+          },
+          "linewidth": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "q_factor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_amplitude": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "frequency",
+          "angular_frequency",
+          "bias_field",
+          "bias_field_display"
+        ],
+        "type": "object"
       },
       "FrequencyDomainFmrPeakPayload": {
         "allOf": [
@@ -34735,6 +36845,1496 @@
               }
             },
             "description": "Settle trace for a point"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultDatasetCatalogResource"
+                }
+              }
+            },
+            "description": "Run-scoped result dataset catalog"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultDatasetManifestResource"
+                }
+              }
+            },
+            "description": "Result dataset manifest"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/axes/{axis_id}/values": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_axes_axis_id_values",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "axis_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultAxisValuesResource"
+                }
+              }
+            },
+            "description": "Bounded result axis values"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultBranchPageResource"
+                }
+              }
+            },
+            "description": "Paged tracked result branches"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultBranchResource"
+                }
+              }
+            },
+            "description": "Tracked result branch"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}/points": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_branches_branch_id_points",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultBranchPointPageResource"
+                }
+              }
+            },
+            "description": "Paged tracked result branch points"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultItemPageResource"
+                }
+              }
+            },
+            "description": "Paged result items"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items/{item_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_items_item_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultSpectralItemSummary"
+                }
+              }
+            },
+            "description": "Result item detail"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/projections/{projection_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_projections_projection_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "projection_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultProjectionResource"
+                }
+              }
+            },
+            "description": "Bounded result projection"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultRelationPageResource"
+                }
+              }
+            },
+            "description": "Paged result relations"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations/{relation_id}": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_relations_relation_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "relation_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultRelationResource"
+                }
+              }
+            },
+            "description": "Result relation"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/samples": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_results_runs_run_id_datasets_dataset_id_samples",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dataset_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "product_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_si",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "item_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_field",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "has_fields",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_min_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frequency_max_hz",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "residual_max",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisResultSamplePageResource"
+                }
+              }
+            },
+            "description": "Paged result samples"
           }
         },
         "tags": [

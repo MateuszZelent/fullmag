@@ -59,6 +59,54 @@ export const ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1",
 );
 
+export const ANALYSIS_RESULT_DATASETS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets",
+);
+
+export const ANALYSIS_RESULT_DATASET_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}",
+);
+
+export const ANALYSIS_RESULT_AXIS_VALUES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/axes/{axis_id}/values",
+);
+
+export const ANALYSIS_RESULT_SAMPLES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/samples",
+);
+
+export const ANALYSIS_RESULT_ITEMS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items",
+);
+
+export const ANALYSIS_RESULT_ITEM_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/items/{item_id}",
+);
+
+export const ANALYSIS_RESULT_BRANCHES_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches",
+);
+
+export const ANALYSIS_RESULT_BRANCH_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}",
+);
+
+export const ANALYSIS_RESULT_BRANCH_POINTS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/branches/{branch_id}/points",
+);
+
+export const ANALYSIS_RESULT_RELATIONS_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations",
+);
+
+export const ANALYSIS_RESULT_RELATION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/relations/{relation_id}",
+);
+
+export const ANALYSIS_RESULT_PROJECTION_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/results/runs/{run_id}/datasets/{dataset_id}/projections/{projection_id}",
+);
+
 export const ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge",
 );

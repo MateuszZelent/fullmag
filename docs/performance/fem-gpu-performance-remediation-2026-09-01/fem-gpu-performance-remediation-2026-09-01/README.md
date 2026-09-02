@@ -6,7 +6,7 @@
 - **Gałąź dokumentacyjna pochodzenia:** `docs/fem-gpu-performance-remediation-2026-09-01`
 - **Rewizja bazowa planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 - **Rewizja pierwotnego audytu:** `7faa259c5597ba447c413f2aea0ff66d6110b297`
-- **Rewizja weryfikacji kodu:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+- **Rewizja weryfikacji kodu:** `c3f49db708868f3649a3e894416d230269718920`
 - **Data:** 2026-09-01
 - **Lane:** natywny FEM GPU, MFEM 4.9, HYPRE 3.1.0, CUDA.
 - **Przypadek referencyjny:** µMAG SP4 FEM, `mixed_p1`, `layers=1`, `mesh=medium`,
@@ -137,6 +137,16 @@ implementacyjną, a nie zmierzonym baseline SP4:
 | adaptive host fences | 1 | 1 |
 | final-stat host fences | 1 | 0 lub 1 zależnie od output/control mask |
 
+Priorytet poniżej jest klasyfikacją inżynierską wynikającą ze struktury kodu,
+nie rankingiem udziału w wall time:
+
+| Klasa | Ustalenia | Podstawa |
+|---|---|---|
+| Błąd skalowania | EX-01 | pełny skan `source_row=0..N` dla każdego wiersza |
+| Gwarantowane usunięcie pracy | RK-03, DM-01, DM-02, RK-01, EX-02 | graf wywołań i liczniki pracy |
+| Kandydat sprzętowy | EX-03, EX-04, DM-04, DM-05, RL-01, PA-01 | wymaga A/B na rzeczywistym GPU |
+| Refaktor architektoniczny | RK-05, HF-02, RD-01 | samodzielnie nie gwarantuje skrócenia czasu |
+
 ## 5. Fale realizacji
 
 ### Fala A — prawda i baseline
@@ -144,8 +154,10 @@ implementacyjną, a nie zmierzonym baseline SP4:
 - scalenie istniejących statystyk kroku, endpoint cache, transfer audit,
   execution receipt i fazowych timerów w wersjonowany snapshot pracy,
 - zachowanie i rozszerzenie istniejącego fail-closed strict-device receipt,
-- podłączenie istniejącego `--require-native-cubin` do kwalifikacji finalnego
-  managed runtime dla wykrytego compute capability,
+- zachowanie istniejącego gate'u exportera dla Ada
+  (`FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY=8.9`, `fullmag_fem=sm_89`,
+  `hypre=sm_89`) oraz zastąpienie stałego `sm_89` mapowaniem z wykrytego
+  compute capability, związanym z digestem finalnego bundle i benchmark receipt,
 - stabilny benchmark SP4 i mikrobenchmark operatorów.
 
 Nie optymalizować przed zapisaniem baseline.

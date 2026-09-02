@@ -274,14 +274,20 @@ CMake ustawia domyślną listę architektur CUDA, gdy CUDA jest dostępna, a
 `crates/fullmag-fem-sys/build.rs` warunkowo przekazuje niepusty override
 `FULLMAG_CUDA_ARCHITECTURES`. To nie dowodzi zawartości finalnego `.so`.
 `scripts/inspect_cuda_architectures.py` i jego testy już obsługują
-`--cuda-required` oraz `--require-native-cubin`; brakującym elementem jest
-automatyczne powiązanie compute capability rzeczywistego GPU z natywnym
-cubinem finalnego managed bundle oraz immutable manifest/receipt tego gate'u.
+`--cuda-required` oraz `--require-native-cubin`. Ponadto
+`scripts/export_fem_gpu_runtime.sh` już waliduje finalny bundle przez
+`validate_managed_fem_runtime_bundle.py`, domyślnie wymaga compute capability
+`8.9` oraz cubinów `fullmag_fem=sm_89` i `hypre=sm_89`. Brakującym elementem
+jest uogólnione mapowanie wykrytego `major.minor` na `sm_xy` zamiast stałego
+`sm_89` oraz immutable receipt łączący wynik gate'u z digestem dokładnego
+bundle i benchmarkiem.
 
 ### Zmiany
 
 - zachować istniejące testy `scripts/test_inspect_cuda_architectures.py`,
-- podłączyć istniejący inspektor do kwalifikacji finalnego runtime bundle,
+- zachować istniejącą walidację finalnego bundle w exporterze,
+- wyprowadzać wymagany cubin z wykrytego compute capability; nie wymagać
+  `sm_89` dla H100 ani innego nie-Ada GPU,
 - zapisać w `manifest.json`:
   - lista cubin `sm_*`,
   - obecne PTX `compute_*`,
@@ -343,8 +349,9 @@ Rust `validate_strict_fem_gpu_execution_receipt`:
 
 ### REGRESSION 3 — final architecture
 
-Istniejący test skryptu pokrywa poniższe przypadki; RED ma dotyczyć
-automatycznego gate'u finalnego managed manifestu:
+Istniejące testy inspektora i walidatora bundle pokrywają poniższe przypadki;
+RED ma dotyczyć mapowania compute capability na wymagania wszystkich bibliotek
+i związania wyniku z immutable benchmark receipt:
 
 - fixture tylko `sm_52` musi failować dla `--require-native-cubin sm_89`,
 - fixture `sm_89` przechodzi,

@@ -3,22 +3,22 @@
   "base_commit": "4c7897f218eb0c32612db1f43a844502a316b4f6",
   "audit_commit": "7faa259c5597ba447c413f2aea0ff66d6110b297",
   "generation_branch": "docs/fem-gpu-performance-remediation-2026-09-01",
-  "verified_commit": "cdb3c135901b950871291610c6ba45e62f8cb90a",
+  "verified_commit": "c3f49db708868f3649a3e894416d230269718920",
   "verified_date": "2026-09-01",
   "verification_scope": "source_contracts_and_justfile_only",
   "managed_gpu_runtime": "NOT VERIFIED",
   "files": [
     {
       "path": "README.md",
-      "bytes": 10585,
-      "lines": 243,
-      "words": 1279
+      "bytes": 11288,
+      "lines": 255,
+      "words": 1377
     },
     {
       "path": "01-runtime-truth-build-and-instrumentation.md",
-      "bytes": 13011,
-      "lines": 403,
-      "words": 1262
+      "bytes": 13446,
+      "lines": 410,
+      "words": 1312
     },
     {
       "path": "02-exchange-operator-remediation.md",
@@ -64,15 +64,15 @@
     },
     {
       "path": "09-pr-sequence-tests-and-definition-of-done.md",
-      "bytes": 4398,
-      "lines": 201,
-      "words": 555
+      "bytes": 4512,
+      "lines": 202,
+      "words": 571
     },
     {
       "path": "10-finding-coverage-matrix.md",
-      "bytes": 8441,
+      "bytes": 8512,
       "lines": 65,
-      "words": 1072
+      "words": 1082
     }
   ],
   "finding_ids": [

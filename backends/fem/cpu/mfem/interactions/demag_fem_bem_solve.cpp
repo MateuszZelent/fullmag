@@ -60,7 +60,11 @@ bool context_compute_demag_fem_bem(
         workspace->fresh_initial_guess_required = false;
     }
     mfem::Vector rhs_neumann(rhs->Size());
-    if (!prepare_demag_fem_bem_neumann_rhs(*rhs, rhs_neumann, error)) {
+    if (!prepare_demag_fem_bem_neumann_rhs(
+            *rhs,
+            workspace->neumann_gauge_tdofs,
+            rhs_neumann,
+            error)) {
         return false;
     }
     const uint64_t assemble_ns = elapsed_ns(assemble_start);

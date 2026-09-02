@@ -2,24 +2,59 @@
 
 **Data audytu:** 1 września 2026  
 **Repozytorium:** `MateuszZelent/fullmag`  
-**Audytowany stan kodu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`  
-**Stan `master` przy zapisie raportu:** `cdb3c135901b950871291610c6ba45e62f8cb90a` — commit potomny dodał wyłącznie dane walidacyjne CSV FEM/BEM i nie zmienił audytowanego kodu solverów.  
+**Pierwotnie audytowany stan kodu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
+
+**Stan zweryfikowany podczas konsolidacji:** `c3f49db708868f3649a3e894416d230269718920`
+
+**Zakres porównania Git:** pomiędzy tymi commitami nie zmieniły się audytowane źródła natywnego backendu FEM CPU/MFEM. Commit `cdb3c135901b950871291610c6ba45e62f8cb90a` nie dodał jednak wyłącznie CSV: zmienił również m.in. pliki runnera, testy i dokumentację. Poprzedni opis provenance był zatem nieprawidłowy, mimo że zasadnicze ustalenia dotyczące natywnego solvera pozostały aktualne.
 **Zakres:** natywny backend FEM CPU/MFEM, dynamika LLG, relaksacja, demagnetyzacja Poisson i FEM/BEM, wymiana, DMI, warstwa uruchomieniowa, PETSc/SLEPc oraz gotowość do pracy na komputerach dwuprocesorowych i klastrach HPC.
 
-> **Status dowodu:** jest to szczegółowy audyt statyczny kodu i konfiguracji kompilacji. Nie uruchomiono jeszcze kontrolowanych benchmarków na docelowej maszynie dwuprocesorowej ani wielowęzłowym klastrze. W związku z tym raport identyfikuje przyczyny źródłowe i priorytety, ale nie przypisuje niezmierzonych wartości przyspieszenia. Repozytorium samo deklaruje, że zaakceptowany zestaw bazowych wyników FEM CPU nadal nie został zapisany.
+> **Status dowodu:** jest to skonsolidowany audyt statyczny kodu, konfiguracji kompilacji i istniejącego okablowania benchmarkowego. Uwzględnia pierwotny raport repozytoryjny oraz niezależny raport `fem-cpu-parallelism-audit-2026-09-01.md`. Nie uruchomiono kontrolowanych benchmarków na docelowej maszynie dwuprocesorowej ani wielowęzłowym klastrze. Wszelkie skutki czasowe, skalowanie, contention, nasycenie pamięci i przewidywane przyspieszenia mają status `NOT VERIFIED`, dopóki nie powstanie source-pinned managed-runtime receipt i zaakceptowany baseline.
+
+## 0. Metoda konsolidacji i klasyfikacja ustaleń
+
+- `CONFIRMED` — bezpośrednio potwierdzone w bieżącym źródle lub konfiguracji;
+- `PARTIAL` — rdzeń tezy jest poprawny, lecz wymaga zawężenia albo ma wyjątek;
+- `INCORRECT` — teza lub instrukcja nie odpowiada bieżącemu kodowi;
+- `NOT VERIFIED` — hipoteza wydajnościowa bez kontrolowanego pomiaru runtime.
+
+### 0.1. Macierz konsolidacyjna obu raportów
+
+| Obszar | Werdykt | Dowód źródłowy | Skorygowany wniosek |
+|---|---|---|---|
+| Provenance pierwotnego raportu | `INCORRECT` | `git diff 4c7897f...c3f49db...`; `git show cdb3c135...` | Audytowane źródła natywnego FEM nie zmieniły się, ale `cdb3c135...` nie był commitem „wyłącznie CSV”. |
+| Publiczne żądanie liczby wątków | `PARTIAL` | `packages/fullmag-py/src/fullmag/model/problem.py::RuntimeSelection::threads`; `packages/fullmag-py/src/fullmag/world.py::StudyBuilder::threads`; `crates/fullmag-authoring/src/scene.rs::StudyRuntimeSelection::requested_cpu_threads`; `crates/fullmag-runner/src/lib.rs::configured_cpu_threads`; `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts` | Pole istnieje, jest serializowane i steruje warstwą Rust/Rayon; UI je odczytuje/zapisuje, ale wartość nie jest przekazywana jako jednoznaczna polityka do natywnego ABI OpenMP. |
+| Precedencja natywnego OpenMP | `CONFIRMED` | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp::requested_cpu_threads` | Numeryczne `OMP_NUM_THREADS` wygrywa z numerycznym `FULLMAG_CPU_THREADS`; wyjątkiem jest `FULLMAG_CPU_THREADS=auto`. |
+| Linux: ręczne 30 wątków przez `fem-managed-headless` | `INCORRECT` | `justfile::fem-managed-headless` | Receptura bezwarunkowo ustawia `FULLMAG_CPU_THREADS=auto`; pierwotna komenda nie dowodzi wykonania 30 wątków. |
+| Windows: wątki i pinning | `PARTIAL` | `compose.windows.yaml`; `scripts/windows/run_fullmag_fem.ps1` → implementacja zgodnościowa `run_fullmag_wsl.ps1` | Compose ustawia `FULLMAG_CPU_THREADS` i `OMP_NUM_THREADS`, ale launcher nie przekazuje jawnie `OMP_PLACES` ani `OMP_PROC_BIND`; pełny receipt jest konieczny. |
+| MFEM OpenMP w obrazie CPU | `PARTIAL` | `docker/fem-cpu/Dockerfile`; `backends/fem/cpu/mfem/runtime/mfem_context.cpp::context_initialize_mfem` | MFEM/Hypre są zbudowane z OpenMP, lecz build bez CUDA wybiera `Device("cpu")`; build CUDA-capable ma osobną ścieżkę konfiguracji urządzenia. |
+| Distributed magnetic FEM | `PARTIAL` | `backends/fem/cpu/mfem/runtime/mpi_init.hpp::fullmag_serial_comm`; `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` | Główny solver magnetyczny nie dzieli domeny i używa `MPI_COMM_SELF`; transport ma referencyjne użycie `ParMesh`, gather/serial solve/broadcast, ale nie stanowi distributed magnetic FEM. |
+| NUMA/affinity | `CONFIRMED` statycznie | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp`; `crates/fullmag-engine/src/hpc_runtime.rs::HpcRuntimeConfig::apply` | Natywny solver nie egzekwuje topologii ani NUMA. Istnieje niepodłączony, doradczy scaffold Rust/Rayon; wpływ NUMA jest `NOT VERIFIED`. |
+| Exchange dependency fingerprint | `CONFIRMED` | `exchange_field.cpp::compute_exchange_for_magnetization`; `exchange_operator.cpp::make_exchange_operator_dependency_key` | Pełny content fingerprint jest liczony w hot path; koszt czasowy pozostaje `NOT VERIFIED`. |
+| Exchange allocation/reuse | `PARTIAL` | `exchange_mass_projection.cpp::apply_exchange_component_mass_projection` | Tymczasowe `reduced_*` dotyczą periodycznej lumped-mass; consistent-mass ma persistent workspace. Trzy solve komponentowe pozostają osobne. |
+| Podwójny klucz demag | `PARTIAL` | `demag.cpp::compute_demag_field_for_magnetization`; `demag_poisson_solve.cpp::context_compute_demag_poisson` | Dwa sprawdzenia występują w zwykłej świeżej ścieżce Poisson/Airbox, nie w każdym wywołaniu i nie w FEM/BEM. |
+| Elementowy coefficient materialny | `CONFIRMED` | `runtime/mfem_context.cpp::AdapterBackedElementwiseCoefficient::Eval` | Callback wykonuje liniowe `std::find` po aktywnych elementach; należy zastąpić mapą O(1) i zweryfikować wpływ pomiarem. |
+| Recovery: limit 256 MiB | `CONFIRMED` jako błąd modelu kosztu | `demag_poisson_recovery.cpp::recover_demag_poisson_field`; `DemagRecoveryWorkspace::Scratch` | Heurystyka zakłada pełny bufor `field_len + node_count` na wątek, którego `Scratch` nie alokuje, przez co może sztucznie zmniejszać zespół recovery. |
+| Recovery: physics i visual | `CONFIRMED` | `demag_poisson_recovery.cpp::recover_demag_poisson_field` | Oba pola są alokowane i akumulowane w tej ścieżce; potrzebna jest jawna polityka/evaluation intent, jeżeli visual output nie jest konsumowany. |
+| DMI per-thread residual | `CONFIRMED` | `dmi_workspace.cpp`; `dmi_bulk.cpp`; `dmi_interfacial.cpp` | Istnieje `threads × 3N` residual i redukcja szeregowa; twierdzenie o dominacji kosztu jest `NOT VERIFIED`. |
+| RK/LLG i adaptacja | `PARTIAL` | `integrators/llg_rhs.cpp::llg_rhs_aos`; `rk_explicit_step.cpp`; `adaptive_dt.cpp` | Osobne skany istnieją, lecz torque i damping są scalone; guard obejmuje aktywne, niezamrożone węzły, nie każdy DOF. |
+| FEM/BEM | `PARTIAL` | `demag_fem_bem_operator.cpp`; `demag_fem_bem_linear_solve.cpp` | Operator jest gęsty; build ma także składnik `O(N_b N_triangle)`. Ścieżka Hypre utrzymuje cache po setupie, a przewaga BLAS/NUMA pozostaje `NOT VERIFIED`. |
+| Tangent-plane implicit | `PARTIAL` | `tangent_plane_implicit.cpp::MatrixFreeTangentPlaneOperator::Mult` | Każde `Mult()` może wykonać świeży demag; dokładna liczba wywołań i wpływ na czas wymagają instrumentacji, nie przybliżenia „około k” jako faktu. |
+| PETSc/SLEPc | `CONFIRMED` statycznie | `cpu_sparse_direct_engine.cpp`; `slepc_modal_eigen.cpp`; `docker/fem-cpu/Dockerfile` | Wybrane adaptery są sekwencyjne i używają `PETSC_COMM_SELF`; SLEPc jest wyłączone w kanonicznym obrazie CPU. Runtime scaling: `NOT VERIFIED`. |
+| Istniejące benchmarki CPU | `PARTIAL` | `scripts/benchmark_permalloy_fem_demag.py`; `scripts/bench_fem_cpu_scaling.sh`; `docs/performance/fem_cpu_baselines.md` | Wiring istnieje, lecz brak zaakceptowanego baseline. Starszy skrypt nie ma 1 wątku, tłumi błędy przez `|| true`, ma jedną próbę i nie może być gate’em kwalifikacyjnym. |
 
 ---
 
 ## 1. Najważniejszy wniosek
 
-Obecny backend FEM CPU **nie jest jeszcze solverem hybrydowym MPI + OpenMP** i nie potrafi rozdzielić jednej symulacji na dwa procesory, dwa gniazda NUMA ani wiele węzłów klastra w znaczeniu domenowego skalowania FEM.
+Obecny backend FEM CPU **nie jest jeszcze solverem hybrydowym MPI + OpenMP** i nie potrafi rozdzielić jednej symulacji magnetycznej między rangi, sockety ani węzły w znaczeniu domenowego skalowania FEM. Pojedynczy proces OpenMP może objąć logiczne CPU z obu socketów, ale bez kontroli partycjonowania domeny, affinity, NUMA i first-touch nie jest to równoważne skalowaniu hybrydowemu.
 
 Aktualnie występują cztery różne, częściowo niespójne warstwy równoległości:
 
-1. **OpenMP w kilku ręcznie oznaczonych pętlach**, głównie DMI, fragmentach rekonstrukcji pola demagnetyzującego i obliczaniu energii.
+1. **OpenMP w kilku ręcznie oznaczonych pętlach**, głównie DMI, fragmentach rekonstrukcji i energii demag oraz operatorze FEM/BEM.
 2. **Hypre skompilowane z OpenMP**, lecz używane na pełnej, szeregowej macierzy opakowanej komunikatorem `MPI_COMM_SELF`.
-3. **MFEM skompilowane z OpenMP**, ale kanoniczny CPU-only runtime tworzy `mfem::Device("cpu")`, a nie `mfem::Device("omp")`.
-4. **MPI obecne jako zależność techniczna Hypre**, ale bez `ParMesh`, `ParFiniteElementSpace`, rozdzielonych true DOF i komunikacji halo.
+3. **MFEM skompilowane z OpenMP**, ale build CPU bez CUDA tworzy `mfem::Device("cpu")`, a nie `mfem::Device("omp")`.
+4. **MPI obecne jako zależność techniczna Hypre** w głównym solverze magnetycznym, ale bez jego `ParMesh`, `ParFiniteElementSpace`, rozdzielonych true DOF i komunikacji halo. Referencyjna ścieżka transportowa używająca `ParMesh` nie zmienia tego wniosku.
 
 Dlatego samo ustawienie 20, 30, 64 lub 128 wątków nie może zapewnić wysokiego wykorzystania CPU. Duża część ścieżki krytycznej nadal pozostaje szeregowa, pamięciowa albo wykonuje kosztowną pracę, której nie powinno być w pętli czasowej.
 
@@ -27,7 +62,7 @@ Dlatego samo ustawienie 20, 30, 64 lub 128 wątków nie może zapewnić wysokieg
 
 | Cel | Stan obecny | Wniosek |
 |---|---|---|
-| Wybrać ręcznie 20/30 wątków | Technicznie możliwe przez zmienne środowiskowe, ale konfiguracja Windows może po cichu zatrzymać wykonanie na 16 wątkach | Wymaga naprawy precedencji oraz pierwszoklasowego pola w planie/API/UI |
+| Wybrać ręcznie 20/30 wątków | Pole `requested_cpu_threads` istnieje w Python/API/UI i warstwie Rust, ale natywny C++ rozwiązuje osobną politykę env; Windows może po cichu zatrzymać OpenMP na 16 wątkach | Wymaga połączenia istniejącego pola z natywnym ABI, naprawy precedencji i receipt requested/effective |
 | Użyć obu CPU w komputerze dwuprocesorowym | Jeden proces może rozciągnąć OpenMP na oba sockety, ale nie ma kontroli NUMA, pinningu ani first-touch | Może to zwiększyć użycie CPU, lecz także pogorszyć czas wykonania przez zdalny dostęp do pamięci |
 | Użyć wielu węzłów HPC dla jednej symulacji | Nieobsługiwane | Potrzebna jest przebudowa na `ParMesh`/`ParFiniteElementSpace` i rozdzielone operatory |
 
@@ -36,9 +71,9 @@ Dlatego samo ustawienie 20, 30, 64 lub 128 wątków nie może zapewnić wysokieg
 | ID | Priorytet | Problem | Skutek |
 |---|---:|---|---|
 | CPU-001 | P0 | `OMP_NUM_THREADS` ma pierwszeństwo przed `FULLMAG_CPU_THREADS`; Windows ustawia domyślnie `OMP_NUM_THREADS=16` | Żądanie 20/30 wątków może być ignorowane |
-| CPU-002 | P0 | CPU-only runtime wymusza `mfem::Device("cpu")` | MFEM nie korzysta z backendu `omp`; większość operatorów pozostaje szeregowa |
+| CPU-002 | P0 | Build CPU bez `FULLMAG_HAS_CUDA_RUNTIME` wymusza `mfem::Device("cpu")` | MFEM nie korzysta w tej kompilacji z backendu `omp`; większość operatorów pozostaje szeregowa |
 | CPU-003 | P0 | Pełne hashowanie siatki, geometrii i materiałów w hot path | Koszt O(N) przed wieloma wywołaniami wymiany i demagnetyzacji |
-| CPU-004 | P0 | Demag wylicza klucz zależności wielokrotnie dla jednego świeżego solve | Powtarzana praca szeregowa w każdym etapie RK |
+| CPU-004 | P0 | Zwykła świeża ścieżka Poisson/Airbox wylicza klucz zależności dwukrotnie | Powtarzana praca szeregowa przy każdym takim apply; udział czasu `NOT VERIFIED` |
 | CPU-005 | P1 | Brak topologii CPU, affinity, NUMA, first-touch i rozróżnienia rdzeni fizycznych od SMT | Słabe lub niestabilne skalowanie na 2 socketach |
 | CPU-006 | P1 | AoS↔SoA, normalizacja, maski, redukcje i składanie pola wykonują wiele osobnych pętli szeregowych | Niski poziom użycia CPU i duży ruch pamięci |
 | CPU-007 | P1 | RHS Poissona jest składany od nowa metodą elementową w każdym etapie | Powtarzana praca na stałej siatce, mimo liniowości operatora względem `m` |
@@ -50,6 +85,11 @@ Dlatego samo ustawienie 20, 30, 64 lub 128 wątków nie może zapewnić wysokieg
 | CPU-013 | P3 | Brak rozdzielonej siatki, własności DOF, redukcji globalnych i I/O rangowego | Brak solvera wielowęzłowego |
 | CPU-014 | P2 | FEM/BEM przechowuje i mnoży gęsty operator O(N_b²) | Słaba złożoność dla dużej granicy |
 | CPU-015 | P1 | Tangent-plane implicit może wykonywać pełny solve demag wewnątrz każdego `GMRES::Mult` | Zagnieżdżony bardzo kosztowny solver w każdej iteracji Krylova |
+| CPU-016 | P0 | Istniejące `requested_cpu_threads` steruje Rust/Rayon, lecz nie jest jednym źródłem prawdy dla natywnego OpenMP | Receipt control-plane może nie opisywać faktycznego zespołu C++ |
+| CPU-017 | P0 | `fem-managed-headless` wymusza `FULLMAG_CPU_THREADS=auto`, a stary skrypt skalowania tłumi błędy przez `|| true` | Ręczny sweep może mierzyć inny zespół niż żądany albo zaakceptować nieudany run |
+| CPU-018 | P0 | Recovery ogranicza zespół limitem 256 MiB wyliczonym z bufora nieobecnego w `Scratch` | Możliwe sztuczne obniżenie liczby wątków; wpływ runtime `NOT VERIFIED` |
+| CPU-019 | P1 | `AdapterBackedElementwiseCoefficient::Eval` wykonuje `std::find` w callbacku kwadraturowym | Powtarzane wyszukiwanie liniowe; udział czasu `NOT VERIFIED` |
+| CPU-020 | P1 | Recovery zawsze buduje pola physics i visual | Dodatkowy ruch pamięci, gdy visual output nie jest potrzebny; wpływ `NOT VERIFIED` |
 
 ---
 
@@ -66,13 +106,13 @@ Wykorzystanie wszystkich logicznych procesorów nie oznacza automatycznie najlep
 
 Podstawowe miary powinny być następujące:
 
-\[
+$$
 S(p)=\frac{T(1)}{T(p)},
 \qquad
 E(p)=\frac{S(p)}{p},
-\]
+$$
 
-gdzie \(T(p)\) jest czasem rozwiązania dla \(p\) wątków lub rang. Dodatkowo należy raportować:
+gdzie $T(p)$ jest czasem rozwiązania dla $p$ wątków lub rang. Dodatkowo należy raportować:
 
 - czas do osiągnięcia zadanej dokładności fizycznej;
 - liczbę iteracji solvera liniowego;
@@ -117,7 +157,7 @@ W tej architekturze:
 - pole efektywne jest składane przez serię osobnych przejść po całym polu;
 - integrator wykonuje kolejne osobne pętle do tworzenia etapów, kandydata, błędu, normalizacji i redukcji;
 - Hypre otrzymuje pełną macierz szeregową na `MPI_COMM_SELF`;
-- runner nie posiada pierwszoklasowej polityki zasobów CPU/MPI.
+- runner posiada `requested_cpu_threads` i resolver Rust/Rayon, ale natywny plan ABI nie przenosi tej wartości jako jednego źródła prawdy dla C++ OpenMP; polityka MPI/NUMA nadal nie jest pierwszoklasowa.
 
 Ta organizacja jest poprawna jako referencyjny backend szeregowy, lecz nie jest jeszcze architekturą zoptymalizowaną pod pamięć, NUMA i MPI.
 
@@ -125,16 +165,18 @@ Ta organizacja jest poprawna jako referencyjny backend szeregowy, lecz nie jest 
 
 ## 4. Audyt wyboru liczby wątków
 
-### 4.1. Rzeczywista precedencja ustawień
+### 4.1. Dwie niespójne precedencje ustawień
 
-W `backends/fem/cpu/mfem/runtime/cpu_threads.cpp::requested_cpu_threads()` obowiązuje:
+W natywnym `backends/fem/cpu/mfem/runtime/cpu_threads.cpp::requested_cpu_threads()` obowiązuje:
 
 1. `FULLMAG_CPU_THREADS=auto`;
 2. dodatnia wartość `OMP_NUM_THREADS`;
 3. dodatnia wartość `FULLMAG_CPU_THREADS`;
 4. automatyczne wykrycie przez `omp_get_num_procs()` albo `hardware_concurrency()`.
 
-To jest nieintuicyjne. Zmienna specyficzna dla Fullmag powinna mieć wyższy priorytet niż ogólny fallback OpenMP.
+Wyjątkiem jest `FULLMAG_CPU_THREADS=auto`, który ma najwyższy priorytet i może użyć `FULLMAG_CPU_THREADS_AUTO_RESOLVED`. Dla wartości liczbowych precedencja jest nieintuicyjna: zmienna specyficzna dla Fullmag powinna mieć wyższy priorytet niż ogólny fallback OpenMP.
+
+Warstwa Rust ma już odrębny resolver. `crates/fullmag-runner/src/lib.rs::configured_cpu_threads()` wybiera `ProblemIR.requested_cpu_threads`, następnie env, a na końcu wartość domyślną i konfiguruje budżet Rayon. Natywny opis planu przekazywany do FEM nie zawiera jednak tego pola, więc C++ ponownie rozwiązuje liczbę wątków z env. Problemem nie jest zatem brak publicznego parametru, lecz **brak jednego źródła prawdy pomiędzy planem/Rust a natywnym OpenMP**.
 
 W `compose.windows.yaml` usługa CPU ustawia równocześnie:
 
@@ -159,6 +201,8 @@ Dla trybu `auto` kod stosuje:
 - do 50 000 węzłów **lub** 400 000 elementów: maksymalnie 16 wątków;
 - powyżej: brak limitu.
 
+`FULLMAG_CPU_THREADS_AUTO_RESOLVED` może dostarczyć zewnętrznie rozstrzygniętą wartość, a ścieżka GPU ogranicza hostowy zespół do jednego wątku. Te wyjątki należy zachować w testach kontraktu.
+
 Problemy:
 
 1. Progi nie są poparte zaakceptowaną bazą benchmarków.
@@ -171,11 +215,13 @@ Problemy:
 
 ### 4.3. Ryzyko wielu kontekstów w jednym procesie
 
-`omp_set_num_threads()` oraz konfiguracja `mfem::Device` są zasobami procesu, podczas gdy wynik jest przechowywany w `Context`. Jeżeli dwa konteksty zostaną utworzone z inną polityką wątków:
+`omp_set_num_threads()` oraz konfiguracja `mfem::Device` są zasobami procesu, podczas gdy wynik jest przechowywany w `Context`. Jeżeli dwa konteksty zostaną utworzone z inną polityką wątków, statyczna analiza wskazuje ryzyko, że:
 
 - późniejsza inicjalizacja może zmienić globalne ustawienie OpenMP;
 - telemetria wcześniejszego kontekstu może nie odpowiadać realnemu wykonaniu;
 - równoległe symulacje mogą się wzajemnie oversubskrybować.
+
+Scenariusz dwóch równoległych kontekstów nie został uruchomieniowo zweryfikowany.
 
 Potrzebny jest procesowy `CpuResourceManager`, który:
 
@@ -184,7 +230,16 @@ Potrzebny jest procesowy `CpuResourceManager`, który:
 - blokuje sprzeczne ustawienia globalne albo uruchamia symulacje w osobnych procesach;
 - publikuje jeden receipt zasobów.
 
-### 4.4. Wymagany kontrakt konfiguracji
+### 4.4. Istniejący kontrakt i wymagane domknięcie
+
+Publiczna powierzchnia nie startuje od zera. Istnieją:
+
+- `RuntimeSelection::threads()` i `StudyBuilder::threads()` w Python DSL;
+- `StudyRuntimeSelection::requested_cpu_threads` w authoring/scene;
+- serializacja do `ProblemIR` i provenance;
+- `configured_cpu_threads()` w runnerze.
+
+Brakuje przekazania rozstrzygniętej polityki do natywnego ABI, natywnego receipt obserwowanego zespołu oraz wspólnej polityki affinity/NUMA/BLAS/Hypre. Docelowa precedencja całego stosu powinna być następująca:
 
 Docelowa precedencja:
 
@@ -240,9 +295,11 @@ Receipt wykonania powinien zawierać co najmniej:
 }
 ```
 
-### 4.5. Tymczasowe uruchomienie 30 wątków
+### 4.5. Stan ręcznego uruchomienia 30 wątków
 
-Do czasu wdrożenia pierwszoklasowego parametru należy ustawić **obie** zmienne:
+Nie ma obecnie jednej zweryfikowanej receptury, która dla dowolnego skryptu gwarantuje 30 wątków, przenosi affinity do kontenera i publikuje kompletny receipt.
+
+Na Windows ustawienie obu wartości na hoście jest konieczne, ale niewystarczające jako dowód:
 
 ```powershell
 $env:FULLMAG_CPU_THREADS = "30"
@@ -251,19 +308,20 @@ $env:RAYON_NUM_THREADS = "30"
 $env:OMP_PLACES = "cores"
 $env:OMP_PROC_BIND = "spread"
 
-# Następnie zwykły launcher Fullmag FEM dla Windows.
+# Następnie kanoniczny scripts/windows/run_fullmag_fem.ps1.
+# Launcher nie przekazuje obecnie OMP_PLACES/OMP_PROC_BIND jawnie do kontenera,
+# dlatego effective affinity musi pozostać NOT VERIFIED bez receipt runtime.
 ```
 
-Linux/container:
+Pierwotna instrukcja Linux/container była błędna:
 
 ```bash
-FULLMAG_CPU_THREADS=30 \
-OMP_NUM_THREADS=30 \
-RAYON_NUM_THREADS=30 \
-OMP_PLACES=cores \
-OMP_PROC_BIND=spread \
 just fem-managed-headless cpu path/to/problem.py
 ```
+
+`justfile::fem-managed-headless` bezwarunkowo ustawia `FULLMAG_CPU_THREADS=auto`, więc poprzedzające je `FULLMAG_CPU_THREADS=30` zostaje nadpisane. `just bench-profile 30` ustawia wartość liczbową dla dedykowanego fixture, ale odziedziczone `OMP_NUM_THREADS` nadal może wygrać w C++. Receptura `fem-managed-container-headless` zachowuje `FULLMAG_CPU_THREADS`, lecz nie przenosi całej polityki OMP/affinity i używa innego profilu kontenera. Żadnej z tych ścieżek nie należy przedstawiać jako produkcyjnego dowodu ręcznego 30-thread bez sprawdzenia `requested/effective/observed`.
+
+Wymagana poprawka P0 to parametr receptury/launchera, jawne przekazanie całej polityki oraz fail-closed assertion, że obserwowany zespół odpowiada żądaniu. Do czasu jej wdrożenia ręczny test może być wyłącznie diagnostyczny.
 
 Należy porównać `OMP_PROC_BIND=close` i `spread`. Dla jednej domeny NUMA często korzystniejszy jest `close`; dla dwóch socketów i dobrze rozłożonej pamięci `spread` może być lepszy. Nie wolno uznać jednej wartości za uniwersalną bez pomiaru.
 
@@ -278,18 +336,19 @@ Obraz `docker/fem-cpu/Dockerfile` buduje:
 ```text
 MFEM_USE_MPI=YES
 MFEM_USE_OPENMP=YES
+MFEM_USE_CUDA=NO
 MFEM_USE_METIS=NO
 MFEM_USE_CEED=NO
 MFEM_USE_HYPRE=YES
 ```
 
-Jednocześnie gałąź CPU-only w `context_initialize_mfem()` tworzy:
+Jednocześnie gałąź kompilacji bez `FULLMAG_HAS_CUDA_RUNTIME` w `context_initialize_mfem()` tworzy:
 
 ```cpp
 global_device = new mfem::Device("cpu");
 ```
 
-i ignoruje ewentualne `FULLMAG_FEM_MFEM_DEVICE=omp`.
+i ignoruje ewentualne `FULLMAG_FEM_MFEM_DEVICE=omp`. Nie wolno uogólniać tego na build CUDA-capable: jego gałąź korzysta z `configured_mfem_device_string(ctx)`.
 
 Zgodnie z dokumentacją MFEM backend `cpu` jest domyślnym backendem szeregowym na każdej randze, natomiast `omp` aktywuje backend OpenMP. Zmiana na `omp` jest więc koniecznym krokiem kwalifikacyjnym, ale nie wystarczającym:
 
@@ -317,16 +376,16 @@ Zgodnie z dokumentacją MFEM backend `cpu` jest domyślnym backendem szeregowym 
 
 ---
 
-## 6. Brak rzeczywistego MPI dla jednej symulacji
+## 6. Brak distributed MPI w głównym solverze magnetycznym
 
-`backends/fem/cpu/mfem/runtime/mpi_init.hpp` zawiera jednoznaczny kontrakt:
+`backends/fem/cpu/mfem/runtime/mpi_init.hpp` zawiera jednoznaczny kontrakt dla głównego solvera magnetycznego:
 
 - Fullmag FEM jest obecnie solverem szeregowym;
 - szeregowa `mfem::SparseMatrix` jest opakowana w `HypreParMatrix`;
 - komunikatorem jest `MPI_COMM_SELF`;
 - partycja `{0,N}` jest poprawna tylko dla jednego procesu.
 
-Nie znaleziono produkcyjnego użycia:
+W głównej ścieżce dynamiki/demag/relaksacji nie znaleziono produkcyjnego użycia:
 
 - `mfem::ParMesh`;
 - `mfem::ParFiniteElementSpace`;
@@ -337,9 +396,13 @@ Nie znaleziono produkcyjnego użycia:
 - globalnych redukcji na `MPI_COMM_WORLD`;
 - rangowego checkpointingu i I/O.
 
+Wyjątek zakresowy: `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp` przyjmuje `mfem::ParMesh`, a `transport/conservative_current_view.cpp::build_mpi_global_current_view()` realizuje referencyjny przepływ gather-to-rank0/serial solve/broadcast. To nie jest distributed magnetic FEM i nie rozdziela głównego stanu magnetyzacji, ale sprawia, że absolutne twierdzenie „w backendzie nie ma `ParMesh`” było nieprawidłowe.
+
+`ensure_mpi_initialized()` żąda `MPI_THREAD_FUNNELED`, gdy samo inicjalizuje MPI, lecz nie waliduje wartości `provided` ani poziomu MPI zainicjalizowanego wcześniej przez kod zewnętrzny. Raport nie może więc twierdzić, że poziom ten jest bezwarunkowo gwarantowany.
+
 ### 6.1. Co stanie się po `mpirun -n 2`
 
-Uruchomienie dwóch rang nie rozdzieli jednej macierzy. Każda ranga otrzyma własny `MPI_COMM_SELF` i pełny problem. W najlepszym przypadku zostaną wykonane dwie niezależne kopie. W najgorszym przypadku wystąpi konflikt w artefaktach, portach lub globalnym stanie procesu.
+Uruchomienie dwóch rang nie rozdzieli jednej macierzy głównego solvera. Każda ranga otrzyma własny `MPI_COMM_SELF` i pełny problem. Statycznie potwierdzony jest brak domain split; dokładne zachowanie launchera, liczba pełnych kopii oraz ewentualne konflikty artefaktów lub portów mają status `NOT VERIFIED` bez kontrolowanego uruchomienia `mpirun`.
 
 Nie należy reklamować obecnych testów `n=2` jako dowodu distributed FEM. Mogą one dowodzić jedynie, że kod nie używa błędnie `MPI_COMM_WORLD` dla szeregowego wrappera.
 
@@ -403,6 +466,8 @@ Minimalna architektura:
 - affinity workerów.
 
 Duże wektory są zwykle alokowane/zerowane szeregowo. Polityka first-touch umieszcza wtedy większość stron na NUMA node procesu inicjalizującego. Gdy OpenMP rozciągnie pracę na drugi socket, połowa workerów może stale czytać i zapisywać zdalną pamięć.
+
+To jest mechanizm ryzyka, nie wynik pomiaru tej aplikacji. Repozytorium zawiera `crates/fullmag-engine/src/hpc_runtime.rs::HpcRuntimeConfig`, lecz jego `numa_node` jest wyłącznie doradczy, `apply()` konfiguruje tylko globalny Rayon, a moduł nie jest podłączony do natywnego FEM. Nie jest to egzekwowana polityka NUMA/affinity.
 
 ### 7.2. Miejsca szczególnie wrażliwe na first-touch
 
@@ -476,18 +541,28 @@ Tryb B wymaga już rozdzielonej domeny MPI. Dopóki jej nie ma, dwóch procesów
 - warunki brzegowe;
 - periodyczność.
 
-`compute_exchange_field()` wywołuje ten mechanizm w trakcie ewaluacji pola. Dla stałej siatki i stałych materiałów oznacza to pełne szeregowe skanowanie danych przed właściwym operatorem.
+`compute_exchange_for_magnetization()` wywołuje ten mechanizm w trakcie ewaluacji pola. Jest to content fingerprint FNV-64, nie monotoniczna rewizja; `hash_periodic_data()` dodatkowo tworzy i sortuje tymczasowy wektor markerów. Dla stałej siatki i stałych materiałów oznacza to pełne szeregowe skanowanie danych przed właściwym operatorem. Jego udział w czasie kroku ma status `NOT VERIFIED`.
 
 ### 8.2. Demag
 
-Analogiczny klucz zależności Poissona skanuje geometrię, topologię, materiały, granice, periodyczność i politykę solvera. Jest wywoływany:
+Analogiczny klucz zależności Poissona skanuje geometrię, topologię, maski magnetyczne, `Ms`, granice/Robin, periodyczność, realizację, urządzenie i politykę solvera. W zwykłej ścieżce świeżego Poisson/Airbox jest wywoływany:
 
 - na poziomie ogólnej demagnetyzacji;
 - ponownie w ścieżce Poisson solve.
 
-W efekcie jeden świeży solve może wykonać dwa pełne hashe.
+W efekcie jeden świeży solve Poisson/Airbox może wykonać dwa pełne hashe. Bezpośrednie wywołanie `context_compute_demag_poisson()` ma jedno sprawdzenie, a FEM/BEM nie używa tego klucza; poprzednie uogólnienie na każdy demag było zbyt szerokie.
 
-### 8.3. Poprawny model invalidacji
+### 8.3. Wyszukiwanie aktywnego elementu w callbacku coefficientu
+
+`runtime/mfem_context.cpp::AdapterBackedElementwiseCoefficient::Eval()` wyznacza ordinal elementu, po czym przy każdej ewaluacji wykonuje:
+
+```cpp
+std::find(active.begin(), active.end(), ordinal)
+```
+
+To jest liniowe wyszukiwanie w callbacku używanym podczas kwadratury. Jest to potwierdzona praca zależna od liczby aktywnych elementów, ale jej udział w całym assembly jest `NOT VERIFIED`. Bezpieczna korekta to precomputed maska albo tablica ordinal→active/material o dostępie O(1), z testami dla mieszanych regionów, elementów niemagnetycznych i wszystkich obsługiwanych topologii.
+
+### 8.4. Poprawny model invalidacji
 
 Zamiast hashowania danych w hot path należy utrzymywać monotoniczne rewizje:
 
@@ -512,7 +587,7 @@ Pełny hash należy zachować:
 - w metadanych artefaktu;
 - w testach wykrywających nielegalną mutację bez podbicia rewizji.
 
-### 8.4. Testy wymagane
+### 8.5. Testy wymagane
 
 - zmiana `A` invaliduje exchange;
 - zmiana `Ms`/boundary invaliduje odpowiedni operator;
@@ -541,17 +616,15 @@ MFEM używa trzech skalarnych pól:
 mx[0..N), my[0..N), mz[0..N)
 ```
 
-Adapter wykonuje wielokrotnie:
+Ścieżka wejściowa adaptera wykonuje zależnie od callera:
 
 - walidację map periodycznych;
 - sprawdzanie równości reprezentantów;
 - deinterleave AoS;
 - kopię do `GridFunction`;
-- `GetTrueDofs`/`SetFromTrueDofs`;
-- ponowny pack;
-- normalizację;
-- zerowanie węzłów niemagnetycznych;
-- projekcję periodyczną.
+- kopię do `GridFunction`.
+
+Ścieżka wyjściowa wykonuje `GetTrueDofs`/`SetFromTrueDofs` i pack. Normalizacja, zerowanie węzłów niemagnetycznych oraz projekcja periodyczna są osobnym post-processingiem uruchamianym przez wybranych callerów. Nie należy sumować tych operacji jako bezwarunkowego kosztu każdego pojedynczego adapter call.
 
 Znaczna część tych pętli nie ma OpenMP.
 
@@ -583,8 +656,7 @@ Należy przy tym zachować dokładny kontrakt porządku DOF i periodyczności.
 W ścieżce LLG/RK pozostają osobne skany dla:
 
 - normalizacji;
-- obliczenia torque;
-- tłumienia;
+- obliczenia torque i tłumienia, połączonych w `llg_rhs_aos`;
 - wyzerowania niemagnetycznych/frozen DOF;
 - maksymalnej amplitudy RHS;
 - utworzenia kolejnego etapu;
@@ -594,7 +666,7 @@ W ścieżce LLG/RK pozostają osobne skany dla:
 - strażnika kąta;
 - porównania endpointu.
 
-Te operacje są proste arytmetycznie i dobrze nadają się do OpenMP/SIMD, ale są wrażliwe na deterministyczność redukcji.
+Te operacje są proste arytmetycznie i są kandydatami do OpenMP/SIMD, ale rzeczywisty zysk jest `NOT VERIFIED`, a redukcje są wrażliwe na deterministyczność.
 
 ### 10.2. Fuzja pętli
 
@@ -620,7 +692,7 @@ Daje to stabilniejszy przebieg niż standardowa redukcja o nieokreślonej kolejn
 
 ### 10.3. Adaptacyjna kontrola błędu
 
-Aktualna norma masowa i guard kąta wykonują drogie operacje na każdym DOF. Możliwości:
+Aktualna norma masowa i guard kąta wykonują operacje na aktywnych, niezamrożonych węzłach, nie na każdym DOF. Guard wykonuje `acos` dla kwalifikujących się węzłów. Możliwości do zmierzenia:
 
 - jedna wspólna pętla dla normy błędu, finite check i guard;
 - porównanie iloczynu skalarnego z `cos(theta_max)` zamiast `acos` dla decyzji;
@@ -630,7 +702,7 @@ Aktualna norma masowa i guard kąta wykonują drogie operacje na każdym DOF. Mo
 
 ### 10.4. Endpoint refresh
 
-Pełne `std::equal` pola i dodatkowe odświeżenie zaakceptowanego endpointu mogą powodować:
+Pełne `std::equal` pola występuje przy ważnym FSAL final-stage cache, a dodatkowe odświeżenie zaakceptowanego endpointu występuje przy cache miss. W tych warunkach mogą powodować:
 
 - pełny skan O(N);
 - dodatkową ewaluację pola;
@@ -702,12 +774,12 @@ Integrator zwykle potrzebuje pola, ale nie musi w każdym wewnętrznym etapie pr
 2. Konwersja AoS/SoA jest szeregowa.
 3. Legacy sparse operator ogranicza wykorzystanie backendu MFEM.
 4. Lumped projection jest szeregową pętlą.
-5. Ścieżka periodyczna tworzy i zeruje tymczasowe wektory dla każdego komponentu.
+5. Periodyczna ścieżka lumped-mass tworzy i zeruje `reduced_tmp`, `reduced_mass` i `reduced_ms` dla każdego komponentu; periodyczna consistent-mass ma persistent `periodic_mass_rhs/solution/residual`.
 6. Consistent-mass:
    - wykonuje trzy oddzielne CG;
    - startuje od zera;
    - ma stałą tolerancję niezależną od błędu zewnętrznego;
-   - wykonuje dodatkowe residual SpMV.
+   - wykonuje dodatkowe residual SpMV w gałęzi periodycznej.
 7. Klucz zależności jest budowany w hot path.
 
 ### 12.3. Zalecenia
@@ -738,23 +810,23 @@ Integrator zwykle potrzebuje pola, ale nie musi w każdym wewnętrznym etapie pr
 
 ## 13. Demagnetyzacja Poissona
 
-Demag zwykle dominuje pełną dynamikę FEM, dlatego największe przyspieszenie będzie pochodzić z usunięcia powtarzanej pracy, a nie tylko zwiększania zespołu OpenMP.
+Demag jest kandydatem na dominującą fazę pełnej dynamiki FEM, ale jego dominacja i oczekiwane przyspieszenie mają status `NOT VERIFIED` bez phase baseline. Usunięcie statycznie potwierdzonej powtarzanej pracy należy mierzyć przed i po zmianie, zamiast zakładać jej udział.
 
 ### 13.1. RHS jest liniowy względem magnetyzacji
 
-Dla stałej siatki, materiałów i warunków brzegowych dyskretny RHS można zapisać w postaci:
+Dla stałej siatki, przestrzeni FE/potencjału, masek magnetycznych, `Ms` i warunków brzegowych dyskretny RHS można zapisać w postaci:
 
-\[
+$$
 b(m) = B_x m_x + B_y m_y + B_z m_z,
-\]
+$$
 
 albo jako jeden operator blokowy:
 
-\[
+$$
 b(m)=B\,m.
-\]
+$$
 
-Obecna ścieżka ponownie wykonuje integrację elementową i restrykcję true DOF przy każdym etapie RK. To jest niepotrzebne, jeżeli operator \(B\) został już złożony i nie zmieniły się zależności.
+Obecna ścieżka ponownie wykonuje integrację elementową i restrykcję true DOF przy każdym etapie RK. Preassembly jest matematycznie uzasadnionym kandydatem, jeżeli operator $B$ został już złożony i nie zmieniły się wymienione zależności; musi jednak obsłużyć obecne elementowe i nodalne warianty `Ms` oraz przejść oracle.
 
 ### 13.2. Zalecana przebudowa RHS
 
@@ -783,9 +855,9 @@ Problemy:
 
 - pełna macierz jest opakowana w `HypreParMatrix` na `MPI_COMM_SELF`;
 - kopie RHS/solution są szeregowe;
-- accepted solution jest kopiowane dla rollbacku;
-- część setupu może być odtwarzana przy niepotrzebnej invalidacji;
-- fixed Krylov parameters nie są strojone względem problemu;
+- accepted solution jest kopiowane dla rollbacku, gdy istnieje cached solution; pierwszy solve nie wykonuje tej kopii;
+- mismatch dependency niszczy workspace i wymusza rebuild; czy invalidacja jest nadmiarowa, wymaga testu mutacji;
+- parametry Krylova są stałe względem konfiguracji runu; wpływ strojenia jest `NOT VERIFIED`;
 - brak baseline potwierdzającego rzeczywistą liczbę cache hitów.
 
 Zalecenia:
@@ -793,7 +865,7 @@ Zalecenia:
 - revision key;
 - podwójny bufor potencjału zamiast pełnego backup copy;
 - delayed commit transakcji;
-- persistent Hypre vectors;
+- zachowanie istniejących persistent Hypre vectors i domknięcie reuse w pozostałych ścieżkach;
 - jawny licznik setup rebuild reason;
 - polityka solvera wybierana benchmarkiem;
 - tryb mixed/flexible tolerance zależny od etapu zewnętrznego, ale wyłącznie po walidacji fizyki.
@@ -804,20 +876,20 @@ Aktualna rekonstrukcja:
 
 - ponownie pobiera elementy i transformations;
 - liczy shape derivatives na stałej geometrii;
-- akumuluje nodal output atomikami;
+- w gałęzi równoległej akumuluje nodal output atomikami; serial fallback zapisuje bez atomików;
 - wykonuje dodatkowe pętle walidacyjne;
 - tworzy pola physics/visual;
 - może od razu liczyć energię.
 
-Problemy z atomikami rosną przy zagęszczonej siatce, gdzie wiele elementów zapisuje do tych samych węzłów.
+Potencjalne contention atomików przy zagęszczonej siatce ma status `NOT VERIFIED` i wymaga osobnego pomiaru fazy recovery.
 
 Lepsze warianty:
 
 1. **Preassembled recovery operator**
-   \[
+   $$
    h = G \phi,
-   \]
-   gdzie \(G\) jest stałym operatorem gradientu/projekcji.
+   $$
+   gdzie $G$ jest stałym operatorem gradientu/projekcji.
 2. **Node gather**
    - precompute node→element adjacency;
    - każdy wątek jest właścicielem zakresu węzłów;
@@ -829,6 +901,10 @@ Lepsze warianty:
    - lokalne bufory dla kafla, nie pełne `threads × 3N`.
 
 Należy usunąć heurystykę ograniczającą liczbę wątków na podstawie hipotetycznego pełnego bufora per thread, jeżeli rzeczywista implementacja go nie alokuje. Polityka pamięci musi opierać się na faktycznym `workspace_bytes_per_thread`.
+
+Konkretnie obecny kod oblicza `sizeof(double) * (field_len + node_count)` na wątek i zmniejsza `recover_threads`, dopóki hipotetyczny scratch przekracza 256 MiB. `DemagRecoveryWorkspace::Scratch` nie zawiera pełnych pól `4N`, więc jest to potwierdzony błąd modelu kosztu, choć jego wpływ na zmierzony wall time pozostaje `NOT VERIFIED`.
+
+Recovery bezwarunkowo alokuje i akumuluje zarówno `h_demag_xyz`, jak i `h_visual_xyz`. Należy dodać jawny intent `physics_only|physics_and_visual`; wyłączenie visual wymaga jednak zachowania kontraktu quantity/cache/state I/O i walidacji naukowej.
 
 ### 13.5. Energia
 
@@ -845,19 +921,19 @@ Należy jawnie przekazywać `EvaluationIntent` i nie wykonywać rekonstrukcyjnej
 
 ## 14. Demagnetyzacja FEM/BEM
 
-Aktualna implementacja przechowuje gęsty operator graniczny. Dla \(N_b\) granicznych DOF:
+Aktualna implementacja przechowuje gęsty operator graniczny. Dla $N_b$ granicznych DOF:
 
-- pamięć: \(O(N_b^2)\);
-- budowa: \(O(N_b^2)\);
-- apply: \(O(N_b^2)\).
+- pamięć: $O(N_b^2)$;
+- inicjalizacja gęstej macierzy: $O(N_b^2)$, a pełna budowa obejmuje także przejście po trójkątach dla każdego wiersza, tj. składnik $O(N_b N_\triangle)$, oraz pracę elementową;
+- apply: $O(N_b^2)$.
 
 OpenMP może przyspieszyć wiersze, ale nie zmieni złożoności.
 
 ### 14.1. Problemy krótkoterminowe
 
-- szeregowe `assign` dużej macierzy powoduje first-touch na jednym NUMA node;
-- ręczny GEMV może przegrywać z dopracowanym BLAS;
-- solver/preconditioner mogą być odtwarzane;
+- szeregowe `assign` dużej macierzy może prowadzić do first-touch na jednym NUMA node; faktyczna lokalizacja stron jest `NOT VERIFIED`;
+- ręczny GEMV istnieje, ale jego przewaga lub przegrana względem BLAS jest `NOT VERIFIED`;
+- serialna ścieżka tworzy solver/preconditioner oraz bufory `candidate/check` per call; ścieżka Hypre utrzymuje operator, preconditioner, solver i wektory po pierwszym setupie;
 - wybór Hypre zależy od stanu inicjalizacji MPI, co może kierować czyste uruchomienie do ścieżki szeregowej;
 - nadal używany jest `MPI_COMM_SELF`.
 
@@ -898,11 +974,11 @@ DMI jest jednym z nielicznych miejsc z jawną równoległością elementową. Je
 
 Dla 30 wątków pamięć residuali wynosi:
 
-\[
+$$
 30 \times 3N \times 8\ \text{bajtów},
-\]
+$$
 
-bez uwzględnienia pozostałych pól. Dla dużego N koszt zerowania i redukcji może przewyższyć pętlę elementową. Szeregowa redukcja staje się częścią Amdahla.
+bez uwzględnienia pozostałych pól. Zerowanie i redukcja są częścią szeregową, ale teza, że dla dużego N przewyższają pętlę elementową albo dominują w prawie Amdahla, ma status `NOT VERIFIED`.
 
 ### 15.3. Zalecenia
 
@@ -953,7 +1029,7 @@ Hypre jest tylko opt-in przez zmienną środowiskową. Po wybraniu Hypre ścież
 - robi to dla kolejnych komponentów;
 - nadal używa `MPI_COMM_SELF`.
 
-To kasuje znaczną część korzyści preconditionera.
+Cache macierzy preconditionera istnieje, ale Hypre solve nie utrzymuje analogicznego cache obiektów solve. Wpływ odtwarzania na całkowity czas i teza o „skasowaniu znacznej części korzyści” mają status `NOT VERIFIED`.
 
 ### 16.3. Plan naprawy
 
@@ -1000,9 +1076,9 @@ Gdy aktywne są matrix-free termy DMI/demag, `MatrixFreeTangentPlaneOperator::Mu
 - ponownie oblicza DMI;
 - może wykonać świeży solve demag Poissona;
 - składa wynik;
-- robi to dla każdej iteracji GMRES.
+- robi to dla każdego wywołania `Mult()` zainicjowanego przez GMRES.
 
-Jeżeli GMRES wykonuje \(k\) iteracji, jedna próba line search może wywołać około \(k\) pełnych solve demag, poza zwykłymi snapshotami. To jest algorytmiczny blocker, nie problem samego OpenMP.
+Każde wywołanie `MatrixFreeTangentPlaneOperator::Mult()` może wykonać jeden świeży solve demag. Dokładna liczba demag applies zależy od rzeczywistej sekwencji wywołań operatora, restartów i zachowania solvera; nie wolno raportować „około $k$” jako gwarantowanego faktu. Jest to statycznie widoczne zagnieżdżenie kosztownego operatora, ale jego wpływ czasowy ma status `NOT VERIFIED`.
 
 ### 17.2. Wymagana przebudowa
 
@@ -1041,7 +1117,7 @@ Dopóki ten punkt nie zostanie naprawiony, tangent-plane implicit nie powinien b
 Ścieżka `cpu_sparse_direct_engine.cpp`:
 
 - przyjmuje macierze wejściowe jako gęste row-major;
-- skanuje \(N^2\);
+- skanuje $N^2$;
 - buduje real-split CSR dla każdej częstotliwości;
 - tworzy `MatCreateSeqAIJ(PETSC_COMM_SELF, ...)`;
 - tworzy sekwencyjne wektory;
@@ -1049,7 +1125,7 @@ Dopóki ten punkt nie zostanie naprawiony, tangent-plane implicit nie powinien b
 - używa `KSPPREONLY + PCLU`;
 - niszczy wszystko po solve;
 - blokuje globalnym mutexem;
-- oblicza true residual przez gęstą pętlę \(O(N^2)\).
+- oblicza true residual przez gęstą pętlę $O(N^2)$.
 
 Ta ścieżka nie jest produkcyjnym skalowalnym sparse direct solverem.
 
@@ -1154,6 +1230,20 @@ Istniejący `scripts/benchmark_permalloy_fem_demag.py` jest dobrym początkiem:
 - ustawia jednocześnie `FULLMAG_CPU_THREADS`, `OMP_NUM_THREADS` i `RAYON_NUM_THREADS`;
 - zbiera fazy demag i iteracje.
 
+Nie jest jeszcze gate'em kwalifikacyjnym: domyślnie wykonuje jedną próbę na przypadek, więc nie dostarcza rozkładu powtórzeń ani p95, a jego receipt nie obejmuje całej topologii/NUMA/affinity i source/image identity wymaganej do produkcyjnego porównania.
+
+Repozytorium zawiera też `scripts/bench_fem_cpu_scaling.sh`, którego nie wolno używać jako źródła zaakceptowanego baseline w obecnej postaci:
+
+- domyślny sweep to `4,8,20,40`, bez 1 wątku;
+- ustawia tylko `FULLMAG_CPU_THREADS`, więc odziedziczone `OMP_NUM_THREADS` może wygrać;
+- używa `|| true`, przez co nieudany run nie zamyka benchmarku;
+- mierzy pełny czas procesu, bez odseparowania setup/warm steady-state;
+- wykonuje pojedynczą próbę i liczy speedup względem 4 wątków;
+- nie ma fizycznego correctness gate;
+- domyślnie zapisuje do repozytoryjnego `bench_results/`, co jest sprzeczne z polityką zewnętrznych build/cache/artifact roots na Windows.
+
+Skrypt wymaga naprawy albo jawnego wycofania przed użyciem w kwalifikacji.
+
 Brakuje jednak:
 
 - committowanego, zatwierdzonego raportu;
@@ -1183,8 +1273,8 @@ Pliki:
 - `crates/fullmag-runner/src/fem/execution.rs`
 - `crates/fullmag-runner/src/solver_profile.rs`
 - `compose.windows.yaml`
-- `scripts/windows/run_fullmag_wsl.ps1`
-- `scripts/windows/run_fullmag_fem.ps1`
+- `scripts/windows/run_fullmag_fem.ps1` jako kanoniczny launcher;
+- `scripts/windows/run_fullmag_wsl.ps1` wyłącznie jako bieżąca implementacja historycznego aliasu zgodności.
 - Python API/plan schema i UI resource controls.
 
 Zmiany:
@@ -1274,7 +1364,7 @@ Wymagania:
 
 - demag potential;
 - trial/accepted fields;
-- Hypre vectors;
+- Hypre vectors tylko w ścieżkach, które nie mają już persistent workspace; główny Poisson utrzymuje je obecnie;
 - relaxation scratch;
 - periodic reduced arrays;
 - PETSc objects, gdy feature włączony.
@@ -1292,17 +1382,17 @@ Wymagania:
 
 ### P2.1. Preassembled demag RHS
 
-\[
+$$
 b=B\,m
-\]
+$$
 
 z oracle przeciw obecnej integracji elementowej.
 
 ### P2.2. Preassembled recovery
 
-\[
+$$
 h=G\,\phi
-\]
+$$
 
 z eliminacją atomików i geometry recomputation.
 
@@ -1331,9 +1421,9 @@ z eliminacją atomików i geometry recomputation.
 - równoległość frequency groups;
 - brak dense residual w produkcji.
 
-## P3 — rzeczywisty dual-socket przez hybrydę
+## P3 — kwalifikowany dual-socket i hybryda
 
-Warunek wejściowy: distributed FEM core.
+Jednoprocesowe OpenMP może technicznie objąć dwa sockety i powinno zostać zmierzone po P1/P2, ale nie daje kontroli własności domeny ani komunikacji. Distributed FEM core jest warunkiem wejściowym dla rekomendowanego wariantu hybrydowego rank-per-socket, nie dla samego eksperymentu jednoprocesowego.
 
 - jedna ranga na socket;
 - local memory binding;
@@ -1363,11 +1453,13 @@ Warunek wejściowy: distributed FEM core.
 
 | Plik/moduł | Problem | Zmiana |
 |---|---|---|
-| `runtime/cpu_threads.cpp` | błędna precedencja, brak topologii | nowy resolver, cpuset/hwloc, jawne konflikty |
+| Python/authoring/runner `requested_cpu_threads` | istniejące pole nie dociera jako jedna polityka do natywnego OpenMP | rozszerzyć typed FEM plan/ABI i receipt, nie tworzyć drugiego publicznego parametru |
+| `runtime/cpu_threads.cpp` | osobna natywna precedencja, brak topologii | wspólny resolver, cpuset/hwloc, jawne konflikty |
 | `compose.windows.yaml` | domyślne OMP=16 blokuje Fullmag=30 | jedna zmienna źródłowa albo zsynchronizowane wartości |
-| Windows launchers | brak parametru | `-CpuThreads`, `-Affinity`, `-UseSmt`, `-NumaPolicy` |
-| `runtime/mfem_context.cpp` | hardcoded `"cpu"` | kwalifikowany `omp`, capability receipt |
-| `runtime/mpi_init.hpp` | wyłącznie COMM_SELF | pozostawić jako `SerialHypreLane`, zbudować osobny distributed runtime |
+| Windows launchers | publiczne `threads` istnieje, ale launcher nie przenosi kompletnej polityki | `-CpuThreads`, `-Affinity`, `-UseSmt`, `-NumaPolicy` albo równoważny typed contract |
+| `runtime/mfem_context.cpp` | hardcoded `"cpu"` w buildzie bez CUDA | kwalifikowany `omp`, capability receipt |
+| `AdapterBackedElementwiseCoefficient::Eval` | liniowe `std::find` w callbacku kwadraturowym | precomputed O(1) ordinal map/maska z testami mieszanych regionów |
+| `runtime/mpi_init.hpp` | `MPI_COMM_SELF` w głównym solverze magnetycznym | pozostawić jako `SerialHypreLane`, zbudować osobny distributed runtime |
 | exchange dependency | pełny hash | revision set |
 | demag dependency | pełny/duplikowany hash | revision set i pojedyncza walidacja |
 | `runtime/aos_field.cpp` | wiele kopii i skanów | generation cache, direct copy, fused OMP |
@@ -1377,7 +1469,7 @@ Warunek wejściowy: distributed FEM core.
 | `interactions/effective_field.cpp` | wiele passów/zeroing | active-set, fused composition, intent |
 | exchange projection | 3 serial solves/allocations | block RHS, persistent scratch, warm start |
 | demag RHS | per-stage element assembly | preassembled B |
-| demag recovery | atomiki/recompute | preassembled G lub node gather |
+| demag recovery | atomiki/recompute, fałszywy cap 256 MiB, zawsze physics+visual | poprawić realny scratch model, dodać evaluation intent, potem preassembled G lub node gather |
 | demag Hypre | serial copies/backups | persistent vectors, double buffer |
 | DMI workspace | T×N memory + serial reduction | blocked/colored accumulation |
 | relaxation math | allocations/serial reductions | persistent workspace, `_into`, OMP |
@@ -1386,6 +1478,7 @@ Warunek wejściowy: distributed FEM core.
 | FEM/BEM | dense O(N²), first-touch | parallel touch, BLAS, potem compression |
 | sparse direct FD | dense input, SeqAIJ, rebuild | CSR input, reuse, MPIAIJ/distributed package |
 | modal/eigen | PETSC_COMM_SELF | distributed communicator/matrices |
+| `scripts/bench_fem_cpu_scaling.sh` | brak 1T, `|| true`, jedna próba, niewiarygodna env precedence | naprawić fail-closed i receipt albo wycofać |
 | solver profiler | brak hardware/NUMA | topology and aggregate CPU metrics |
 
 ---
@@ -1459,17 +1552,17 @@ Po MPI:
 
 Strong scaling:
 
-\[
+$$
 T(1), T(2), T(4), T(8)\ \text{węzłów}
-\]
+$$
 
 przy stałym problemie.
 
 Weak scaling:
 
-\[
+$$
 \frac{N_\mathrm{DOF}}{\text{rank}} \approx \text{const}.
-\]
+$$
 
 Raportować:
 
@@ -1546,7 +1639,7 @@ Nie należy wymagać „100% CPU” jako gate.
    To usuwa obecny błąd użytkowy i pozwala mierzyć właściwy eksperyment.
 
 2. **Usunąć hashowanie zależności z hot path.**  
-   Niskie ryzyko fizyczne, pewne usunięcie pracy O(N).
+   Przy kompletnym kontrakcie mutacji usuwa statycznie widoczną pracę O(N); wpływ na wall time jest `NOT VERIFIED`.
 
 3. **Zbudować zaakceptowany benchmark 1…all cores.**  
    Bez niego dalsze optymalizacje są zgadywaniem.
@@ -1599,9 +1692,9 @@ Nie należy automatycznie opatrywać wszystkich pętli `#pragma omp`. Obiekty z 
 
 Możliwe mnożenie:
 
-\[
+$$
 N_\mathrm{MPI}\times N_\mathrm{OMP}\times N_\mathrm{BLAS}\times N_\mathrm{Rayon}.
-\]
+$$
 
 Jedna warstwa musi być właścicielem budżetu. Dla operatorów MFEM/Hypre zwykle:
 
@@ -1655,48 +1748,31 @@ prawidłowa kontrola zasobów
 -> hybrid MPI + OpenMP
 ```
 
-Po etapach P0–P2 Fullmag powinien być w stanie sensownie wykorzystać jeden wielordzeniowy socket i część maszyn dwusocketowych. Dopiero P3–P4 stworzą produkcyjny solver jednej symulacji na wielu socketach i węzłach HPC.
+Po etapach P0–P2 należy zmierzyć, czy Fullmag sensownie wykorzystuje jeden wielordzeniowy socket i czy jednoprocesowe wykonanie na części maszyn dwusocketowych skraca wall time. Tego wyniku nie wolno przewidywać jako potwierdzonego. Dopiero P3–P4 mogą stworzyć produkcyjny solver jednej symulacji z kontrolowanym podziałem między rangi/sockety i węzły HPC.
 
 ---
 
 ## 28. Najważniejsze dowody w repozytorium
 
-- `backends/fem/cpu/mfem/runtime/cpu_threads.cpp`
-- `backends/fem/cpu/mfem/runtime/mfem_context.cpp`
-- `backends/fem/cpu/mfem/runtime/mpi_init.hpp`
-- `docker/fem-cpu/Dockerfile`
-- `compose.windows.yaml`
-- `backends/fem/cpu/mfem/runtime/aos_field.cpp`
-- `backends/fem/cpu/mfem/interactions/exchange_operator.cpp`
-- `backends/fem/cpu/mfem/interactions/exchange_field.cpp`
-- `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp`
-- `backends/fem/cpu/mfem/interactions/demag.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp`
-- `backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp`
-- `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`
-- `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`
-- `backends/fem/cpu/mfem/interactions/dmi_workspace.cpp`
-- `backends/fem/cpu/mfem/interactions/effective_field.cpp`
-- `backends/fem/cpu/mfem/integrators/llg_rhs.cpp`
-- `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp`
-- `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp`
-- `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp`
-- `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp`
-- `backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp`
-- `backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp`
-- `backends/fem/cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp`
-- `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp`
-- `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp`
-- `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp`
-- `crates/fullmag-runner/src/fem/execution.rs`
-- `crates/fullmag-runner/src/solver_profile.rs`
-- `scripts/benchmark_permalloy_fem_demag.py`
-- `docs/performance/fem_cpu_baselines.md`
+| Obszar | Ścieżka i stabilny symbol | Co potwierdza |
+|---|---|---|
+| Natychmiastowa polityka wątków | `backends/fem/cpu/mfem/runtime/cpu_threads.cpp::requested_cpu_threads`; `::auto_cpu_thread_cap_for_context`; `::configure_fem_host_runtime_threads` | precedencję env, limity auto i procesowe ustawienie OpenMP |
+| Publiczna polityka wątków | `packages/fullmag-py/src/fullmag/model/problem.py::RuntimeSelection::threads`; `packages/fullmag-py/src/fullmag/world.py::StudyBuilder::threads`; `crates/fullmag-authoring/src/scene.rs::StudyRuntimeSelection::requested_cpu_threads`; `crates/fullmag-runner/src/lib.rs::configured_cpu_threads`; `apps/control-room/src/modules/inspector/panels/StudyGlobalAuthoringModel.ts::createStudyGlobalDraft`; `::buildStudyGlobalMergePatch` | istniejące pole planu/API/UI oraz odrębny resolver Rust/Rayon |
+| MFEM Device i coefficient | `backends/fem/cpu/mfem/runtime/mfem_context.cpp::context_initialize_mfem`; `::AdapterBackedElementwiseCoefficient::Eval` | wybór `cpu` w buildzie bez CUDA i liniowe wyszukiwanie aktywnego elementu |
+| MPI głównego solvera | `backends/fem/cpu/mfem/runtime/mpi_init.hpp::fullmag_serial_comm`; `::ensure_mpi_initialized` | `MPI_COMM_SELF` oraz brak walidacji dostarczonego poziomu wątkowego MPI |
+| Wyjątek transportowy MPI | `backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp`; `backends/fem/cpu/mfem/transport/conservative_current_view.cpp::build_mpi_global_current_view` | referencyjne użycie `ParMesh`/gather, nie distributed magnetic FEM |
+| Scaffold HPC | `crates/fullmag-engine/src/hpc_runtime.rs::HpcRuntimeConfig::apply` | doradczy `numa_node` i konfigurację Rayon bez egzekwowania natywnego NUMA |
+| AoS/SoA | `backends/fem/cpu/mfem/runtime/aos_field.cpp` | oddzielne adaptery input/output i post-processing |
+| Exchange | `backends/fem/cpu/mfem/interactions/exchange_field.cpp::compute_exchange_for_magnetization`; `backends/fem/cpu/mfem/interactions/exchange_operator.cpp::make_exchange_operator_dependency_key`; `backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp::apply_exchange_component_mass_projection` | dependency fingerprint, trzy komponenty i zakres persistent/per-call workspace |
+| Poisson dependency/RHS | `backends/fem/cpu/mfem/interactions/demag.cpp::compute_demag_field_for_magnetization`; `backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp`; `backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp`; `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp::context_compute_demag_poisson` | dwa checki w zwykłej ścieżce Airbox i ponowne elementowe RHS |
+| Poisson solve/recovery | `backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp`; `backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp::recover_demag_poisson_field`; `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | istniejący cache Hypre, błędny model 256 MiB, atomiki oraz pola physics/visual |
+| FEM/BEM | `backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp`; `backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp`; `backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp` | gęsty operator, wybór Hypre, cache i per-call bufory |
+| DMI | `backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp`; `backends/fem/cpu/mfem/interactions/dmi_bulk.cpp`; `backends/fem/cpu/mfem/interactions/dmi_workspace.cpp` | OpenMP elementowe, residual `threads × 3N` i redukcję szeregową |
+| LLG/RK | `backends/fem/cpu/mfem/integrators/llg_rhs.cpp::llg_rhs_aos`; `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp`; `backends/fem/cpu/mfem/integrators/adaptive_dt.cpp` | serialne skany, zakres guardu i warunkowy endpoint refresh |
+| Relaksacja/TPI | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp`; `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp`; `backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp`; `backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp::MatrixFreeTangentPlaneOperator::Mult` | domyślny serialny preconditioner, per-solve Hypre oraz fresh demag w `Mult` |
+| Frequency domain | `backends/fem/cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp`; `backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp` | dense→CSR, `PETSC_COMM_SELF`, globalny mutex i nieukończony production sparse payload |
+| Build/runtime | `docker/fem-cpu/Dockerfile`; `compose.windows.yaml`; `scripts/windows/run_fullmag_fem.ps1`; `scripts/windows/run_fullmag_wsl.ps1`; `justfile::fem-managed-headless` | feature flags, kanoniczny launcher i jego alias implementacyjny, domyślne env oraz granice przekazywania polityki do kontenera |
+| Benchmark/telemetria | `scripts/benchmark_permalloy_fem_demag.py`; `scripts/bench_fem_cpu_scaling.sh`; `crates/fullmag-runner/src/solver_profile.rs`; `docs/performance/fem_cpu_baselines.md` | istniejące wiring i liczniki, ale brak zaakceptowanego baseline |
 
 ---
 
@@ -1706,7 +1782,7 @@ Po etapach P0–P2 Fullmag powinien być w stanie sensownie wykorzystać jeden w
    <https://mfem.org/howto/assembly_levels/>
 
 2. MFEM — `mfem::Device`:  
-   <https://docs.mfem.org/4.9/classmfem_1_1Device.html>
+   <https://docs.mfem.org/4.7/classmfem_1_1Device.html>
 
 3. MFEM — `ParMesh`:  
    <https://docs.mfem.org/4.7/classmfem_1_1ParMesh.html>
@@ -1720,31 +1796,30 @@ Po etapach P0–P2 Fullmag powinien być w stanie sensownie wykorzystać jeden w
 6. OpenMP — `OMP_PLACES`:  
    <https://www.openmp.org/spec-html/5.1/openmpse62.html>
 
-7. PETSc — równoległa macierz `MATMPIAIJ`:  
-   <https://petsc.org/release/manualpages/Mat/MATMPIAIJ/>
+7. PETSc — sekwencyjna macierz [`MatCreateSeqAIJ`](https://petsc.org/release/manualpages/Mat/MatCreateSeqAIJ/).
 
-8. PETSc — wybór typu macierzy zależnie od communicatora:  
-   <https://petsc.org/release/manualpages/Mat/MatSetFromOptions/>
+8. PETSc — macierz dobierana do communicatora [`MatCreateAIJ`](https://petsc.org/release/manualpages/Mat/MatCreateAIJ/).
 
 ---
 
-## 30. Status rekomendowanych działań
+## 30. Status rekomendowanych działań i poziomu dowodu
 
-| Działanie | Status w audytowanym commitcie |
-|---|---|
-| ręczny parametr threads w planie/API/UI | brak |
-| spójna precedencja Fullmag/OMP | brak |
-| topology/cpuset/NUMA receipt | brak |
-| MFEM `omp` w CPU-only runtime | brak |
-| revision-based operator invalidation | brak |
-| zaakceptowany CPU baseline | brak |
-| preassembled Poisson RHS | brak |
-| preassembled demag recovery | brak |
-| persistent setup we wszystkich ścieżkach relaksacji | częściowo |
-| dual-socket NUMA policy | brak |
-| `ParMesh` distributed FEM | brak |
-| PETSc/SLEPc distributed matrices | brak |
-| task-level benchmark sweep 10/20/30/40 | istnieje |
-| phase-level demag telemetry | istnieje |
-| ręczne OpenMP w DMI/recovery/energy | częściowo istnieje |
-| cache macierzy/AMG głównego Poissona | istnieje częściowo |
+| Działanie/zdolność | Source/contract | Managed runtime | Accepted baseline |
+|---|---|---|---|
+| ręczny parametr threads w planie/API/UI | istnieje | natywny OpenMP nie jest spójnie sterowany | brak |
+| spójna precedencja Fullmag/OMP | brak | `NOT VERIFIED` | brak |
+| topology/cpuset/NUMA receipt | brak | `NOT VERIFIED` | brak |
+| MFEM `omp` w buildzie CPU bez CUDA | brak — hardcoded `cpu` | `NOT VERIFIED` | brak |
+| revision-based operator invalidation | brak | `NOT VERIFIED` | brak |
+| preassembled Poisson RHS | brak | `NOT VERIFIED` | brak |
+| preassembled demag recovery | brak | `NOT VERIFIED` | brak |
+| persistent setup w głównym Poisson | częściowo istnieje, w tym Hypre vectors/AMG | testy kontraktowe istnieją; bieżący run nie wykonany | brak cache-hit baseline |
+| persistent setup we wszystkich ścieżkach relaksacji | częściowo | `NOT VERIFIED` | brak |
+| dual-socket NUMA policy | brak; Rust scaffold nie egzekwuje NUMA | `NOT VERIFIED` | brak |
+| `ParMesh` w głównym solverze magnetycznym | brak; transport ma referencyjny wyjątek | `NOT VERIFIED` | brak |
+| PETSc/SLEPc distributed matrices | brak w audytowanych adapterach | SLEPc wyłączone w kanonicznym CPU image | brak |
+| task-level benchmark sweep 10/20/30/40 | skrypt istnieje | brak kwalifikującego receipt w tym audycie | brak |
+| starszy `bench_fem_cpu_scaling.sh` | istnieje, lecz jest niekwalifikujący | nie wykonano | brak |
+| phase-level demag telemetry | source/contract istnieje | bieżący run `NOT VERIFIED` | brak |
+| ręczne OpenMP w DMI/recovery/energy/FEM-BEM | częściowo istnieje | poprawność i team size w tym audycie `NOT VERIFIED` | brak scaling baseline |
+| cache macierzy/AMG głównego Poissona | istnieje częściowo | bieżący cache-hit run `NOT VERIFIED` | brak |

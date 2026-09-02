@@ -12,7 +12,7 @@
 - **Gałąź dokumentacyjna pochodzenia:** `docs/fem-gpu-performance-remediation-2026-09-01`
 - **Rewizja bazowa planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 - **Rewizja pierwotnego audytu:** `7faa259c5597ba447c413f2aea0ff66d6110b297`
-- **Rewizja weryfikacji kodu:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+- **Rewizja weryfikacji kodu:** `c3f49db708868f3649a3e894416d230269718920`
 - **Data:** 2026-09-01
 - **Lane:** natywny FEM GPU, MFEM 4.9, HYPRE 3.1.0, CUDA.
 - **Przypadek referencyjny:** µMAG SP4 FEM, `mixed_p1`, `layers=1`, `mesh=medium`,
@@ -143,6 +143,16 @@ implementacyjną, a nie zmierzonym baseline SP4:
 | adaptive host fences | 1 | 1 |
 | final-stat host fences | 1 | 0 lub 1 zależnie od output/control mask |
 
+Priorytet poniżej jest klasyfikacją inżynierską wynikającą ze struktury kodu,
+nie rankingiem udziału w wall time:
+
+| Klasa | Ustalenia | Podstawa |
+|---|---|---|
+| Błąd skalowania | EX-01 | pełny skan `source_row=0..N` dla każdego wiersza |
+| Gwarantowane usunięcie pracy | RK-03, DM-01, DM-02, RK-01, EX-02 | graf wywołań i liczniki pracy |
+| Kandydat sprzętowy | EX-03, EX-04, DM-04, DM-05, RL-01, PA-01 | wymaga A/B na rzeczywistym GPU |
+| Refaktor architektoniczny | RK-05, HF-02, RD-01 | samodzielnie nie gwarantuje skrócenia czasu |
+
 ## 5. Fale realizacji
 
 ### Fala A — prawda i baseline
@@ -150,8 +160,10 @@ implementacyjną, a nie zmierzonym baseline SP4:
 - scalenie istniejących statystyk kroku, endpoint cache, transfer audit,
   execution receipt i fazowych timerów w wersjonowany snapshot pracy,
 - zachowanie i rozszerzenie istniejącego fail-closed strict-device receipt,
-- podłączenie istniejącego `--require-native-cubin` do kwalifikacji finalnego
-  managed runtime dla wykrytego compute capability,
+- zachowanie istniejącego gate'u exportera dla Ada
+  (`FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY=8.9`, `fullmag_fem=sm_89`,
+  `hypre=sm_89`) oraz zastąpienie stałego `sm_89` mapowaniem z wykrytego
+  compute capability, związanym z digestem finalnego bundle i benchmark receipt,
 - stabilny benchmark SP4 i mikrobenchmark operatorów.
 
 Nie optymalizować przed zapisaniem baseline.
@@ -530,14 +542,20 @@ CMake ustawia domyślną listę architektur CUDA, gdy CUDA jest dostępna, a
 `crates/fullmag-fem-sys/build.rs` warunkowo przekazuje niepusty override
 `FULLMAG_CUDA_ARCHITECTURES`. To nie dowodzi zawartości finalnego `.so`.
 `scripts/inspect_cuda_architectures.py` i jego testy już obsługują
-`--cuda-required` oraz `--require-native-cubin`; brakującym elementem jest
-automatyczne powiązanie compute capability rzeczywistego GPU z natywnym
-cubinem finalnego managed bundle oraz immutable manifest/receipt tego gate'u.
+`--cuda-required` oraz `--require-native-cubin`. Ponadto
+`scripts/export_fem_gpu_runtime.sh` już waliduje finalny bundle przez
+`validate_managed_fem_runtime_bundle.py`, domyślnie wymaga compute capability
+`8.9` oraz cubinów `fullmag_fem=sm_89` i `hypre=sm_89`. Brakującym elementem
+jest uogólnione mapowanie wykrytego `major.minor` na `sm_xy` zamiast stałego
+`sm_89` oraz immutable receipt łączący wynik gate'u z digestem dokładnego
+bundle i benchmarkiem.
 
 ### Zmiany
 
 - zachować istniejące testy `scripts/test_inspect_cuda_architectures.py`,
-- podłączyć istniejący inspektor do kwalifikacji finalnego runtime bundle,
+- zachować istniejącą walidację finalnego bundle w exporterze,
+- wyprowadzać wymagany cubin z wykrytego compute capability; nie wymagać
+  `sm_89` dla H100 ani innego nie-Ada GPU,
 - zapisać w `manifest.json`:
   - lista cubin `sm_*`,
   - obecne PTX `compute_*`,
@@ -599,8 +617,9 @@ Rust `validate_strict_fem_gpu_execution_receipt`:
 
 ### REGRESSION 3 — final architecture
 
-Istniejący test skryptu pokrywa poniższe przypadki; RED ma dotyczyć
-automatycznego gate'u finalnego managed manifestu:
+Istniejące testy inspektora i walidatora bundle pokrywają poniższe przypadki;
+RED ma dotyczyć mapowania compute capability na wymagania wszystkich bibliotek
+i związania wyniku z immutable benchmark receipt:
 
 - fixture tylko `sm_52` musi failować dla `--require-native-cubin sm_89`,
 - fixture `sm_89` przechodzi,
@@ -2600,9 +2619,10 @@ compatibility path, managed GPU A/B i nie zmienia tolerancji razem z kernelem.
 
 Runtime performance owner, ABI v1 i SP4 managed benchmark. Zachować istniejący
 strict receipt, execution masks, transfer audit, step stats, endpoint telemetry
-i phase event ownership; nie implementować ich ponownie. Podłączyć istniejący
-`--require-native-cubin` do automatycznego GPU compute-capability gate finalnego
-managed manifestu.
+i phase event ownership; nie implementować ich ponownie. Zachować istniejący
+Ada-specific gate exportera (`8.9`, `fullmag_fem=sm_89`, `hypre=sm_89`), a
+stałe wymaganie `sm_89` zastąpić mapowaniem wykrytego compute capability i
+zapisać wynik z digestem bundle w immutable benchmark receipt.
 
 ### PR-01 — HYPRE owner + conditional RHS norm
 
@@ -2799,7 +2819,7 @@ Produkcja:
 
 **Baza planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 
-**Zweryfikowano względem:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+**Zweryfikowano względem:** `c3f49db708868f3649a3e894416d230269718920`
 
 **Zakres:** kod, testy kontraktowe i `justfile`; managed GPU runtime oraz wyniki
 wydajnościowe: `NOT VERIFIED`.
@@ -2837,7 +2857,7 @@ dokumentach 01–09 są planem, dopóki dowód poniżej nie wskazuje ich istnien
 | RL-01 | `POTWIERDZONE` | CPU `exchange_mass_preconditioned_gradient`; GPU `relaxation/nonlinear_cg.cpp` jawnie unpreconditioned | GPU PR+ jest dziś poprawny dla raw gradient; zysk diagonal/Chebyshev/PCG nieudowodniony | `NOT VERIFIED` | PR-13 |
 | RT-01 | `NIEPRAWDA` w pierwotnym brzmieniu | `rk_plan.cpp::gpu_rk_plan_is_strict_device_resident`, `runtime/execution_receipt.cpp`, Rust `validate_strict_fem_gpu_execution_receipt` już failują dla hybrid/host/unknown/masks/transfers | Rzeczywista luka: brak scalonego work snapshotu i niepełne liczenie bezpośrednich sync/readback | `NOT VERIFIED` | PR-00 |
 | MEM-01 | `CZĘŚCIOWO` | Normalizer używa stack scalar; reduction workspace ma pinned host scalar buffer z pageable fallback | Dedykowany pinned attempt-control packet nie istnieje | `NOT VERIFIED` | PR-04 |
-| BL-01 | `CZĘŚCIOWO` | `inspect_cuda_architectures.py` i test już mają `--require-native-cubin`; manifest zapisuje cubin/PTX/device data | Brak automatycznego final-bundle CC→native-cubin qualification receipt; historyczne `sm_52` nie dowodzi `sm_89` | `NOT VERIFIED` | PR-00 |
+| BL-01 | `CZĘŚCIOWO` | Inspektor i walidator bundle mają `--require-native-cubin`; `export_fem_gpu_runtime.sh` już wymaga domyślnie `8.9`, `fullmag_fem=sm_89` i `hypre=sm_89` | Brak ogólnego wykryte CC→`sm_xy` zamiast stałego `sm_89` oraz immutable benchmark receipt; historyczne `sm_52` nie dowodzi aktualnego `sm_89` | `NOT VERIFIED` | PR-00 |
 | PA-01 | `POTWIERDZONE` | `exchange_plan.hpp::GpuExchangePlan` rozwiązuje tylko `legacy_sparse_gpu` | Typed planner, profiles, SpMM i exchange PA nie istnieją; enum musi być jeden dla 02/08 | `NOT VERIFIED` | PR-15 |
 | NEW-HYPRE-01 | `POTWIERDZONE` | `runtime/hypre_device_policy.cpp` i `demag_poisson/hypre_device_solver.cpp::configure_hypre_device_vendor_kernels` dublują process-wide setters | Usunąć lokalne global setters; solver-local tolerancje/iteracje pozostają w solver owner | `NOT VERIFIED` | PR-01 |
 

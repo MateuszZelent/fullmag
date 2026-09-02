@@ -42919,6 +42919,71 @@ fn openapi_frequency_domain_fmr_and_field_sweep_resources_are_registered() {
     }
 }
 
+#[test]
+fn openapi_field_sweep_schema_exposes_typed_dataset_and_sample_contract() {
+    let value = crate::openapi_v2::openapi_json();
+    let schemas = value
+        .get("components")
+        .and_then(|value| value.get("schemas"))
+        .and_then(|value| value.as_object())
+        .expect("OpenAPI schemas must be present");
+
+    for (schema_name, fields) in [
+        (
+            "FrequencyDomainFieldSweepArtifactPayload",
+            &[
+                "source",
+                "source_revision",
+                "revision",
+                "requested_sample_count",
+                "completed_sample_count",
+                "scan_axis",
+                "units",
+                "topology",
+                "requested_execution",
+                "resolved_execution",
+                "cross_artifact_refs",
+            ][..],
+        ),
+        (
+            "FrequencyDomainFieldSweepSamplePayload",
+            &[
+                "sample_id",
+                "sample_index",
+                "scan_axis",
+                "bias_field_a_per_m",
+                "bias_field_mu0_t",
+                "topology",
+                "branch_ids",
+                "modes",
+            ][..],
+        ),
+        (
+            "FrequencyDomainFieldSweepModePayload",
+            &[
+                "sample_id",
+                "mode_id",
+                "raw_mode_index",
+                "frequency_hz",
+                "angular_frequency_rad_per_s",
+                "mode_artifact_path",
+                "mode_field_id",
+                "mode_field_resource_key",
+                "source_revision",
+                "status",
+            ][..],
+        ),
+    ] {
+        let properties = schema_property_names(schemas, schema_name);
+        for field in fields {
+            assert!(
+                properties.contains(*field),
+                "{schema_name} must expose typed field `{field}`"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn frequency_domain_artifact_revision_changes_for_same_length_content_change() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
@@ -43024,10 +43089,95 @@ async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
     let fmr_dir = artifact_dir.join("fmr");
     fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
     fs::create_dir_all(&fmr_dir).expect("fmr artifact directory should exist");
+    let field_sweep_payload = serde_json::json!({
+        "schema_version": "eigen/field_sweep.v1",
+        "artifact_id": "analysis:eigen:field-sweep",
+        "source": {
+            "kind": "modal_eigensolve",
+            "artifact": "eigen/spectrum.v2.json",
+            "revision": "sha256:spectrum"
+        },
+        "source_revision": "sha256:spectrum",
+        "revision": "sha256:field-sweep",
+        "requested_sample_count": 1,
+        "completed_sample_count": 1,
+        "complete": true,
+        "scan_axis": {
+            "kind": "bias_field",
+            "coordinate": "bias_field_a_per_m",
+            "unit": "A/m",
+            "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": 0.0000012566370614}]
+        },
+        "units": {
+            "frequency": "Hz",
+            "angular_frequency": "rad/s",
+            "bias_field": "A/m",
+            "bias_field_display": "T"
+        },
+        "topology": {
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "indexing": "global_xyz",
+            "sample_axis": "sample",
+            "mode_axis": "mode",
+            "node_count": 4
+        },
+        "requested_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "resolved_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "samples": [{
+            "sample_id": "bias-field-sample-0000",
+            "sample_index": 0,
+            "bias_field_a_per_m": [40000.0, 0.0, 0.0],
+            "bias_field_mu0_t": [0.050265482456, 0.0, 0.0],
+            "topology": {
+                "mesh_id": "mesh:test",
+                "topology_revision": "mesh-rev:1",
+                "indexing": "global_xyz",
+                "sample_axis": "sample",
+                "mode_axis": "mode",
+                "node_count": 4
+            },
+            "branch_ids": [0],
+            "modes": [{
+                "sample_id": "bias-field-sample-0000",
+                "mode_id": "sample-0000/mode-0000",
+                "raw_mode_index": 0,
+                "branch_id": 0,
+                "frequency_hz": 1000000000.0,
+                "angular_frequency_rad_per_s": 6283185307.179586,
+                "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
+                "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+                "mode_field_resource_key": "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector",
+                "residual_relative_l2": 0.00000001,
+                "source_revision": "sha256:spectrum",
+                "field_status": "ready",
+                "status": "complete"
+            }],
+            "status": "complete"
+        }],
+        "cross_artifact_refs": [
+            {"relation": "source_spectrum", "artifact": "eigen/spectrum.v2.json", "revision": "sha256:spectrum"},
+            {"relation": "source_branches", "artifact": "eigen/branches.v2.json", "revision": "sha256:branches"}
+        ]
+    });
     let fixtures = [
         (
             "eigen/field_sweep.v1.json",
-            serde_json::json!({"schema_version":"eigen/field_sweep.v1","samples":[]}),
+            field_sweep_payload,
             "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
         ),
         (
@@ -43076,6 +43226,114 @@ async fn frequency_domain_field_sweep_and_fmr_resources_serve_typed_payloads() {
             "GET {uri} must expose revision"
         );
     }
+}
+
+#[tokio::test]
+async fn frequency_domain_field_sweep_rejects_unpaired_typed_field_reference() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let eigen_dir = artifact_dir.join("eigen");
+    fs::create_dir_all(&eigen_dir).expect("eigen artifact directory should exist");
+    let payload = serde_json::json!({
+        "schema_version": "eigen/field_sweep.v1",
+        "artifact_id": "analysis:eigen:field-sweep",
+        "source": {
+            "kind": "modal_eigensolve",
+            "artifact": "eigen/spectrum.v2.json",
+            "revision": "sha256:spectrum"
+        },
+        "source_revision": "sha256:spectrum",
+        "revision": "sha256:field-sweep",
+        "requested_sample_count": 1,
+        "completed_sample_count": 1,
+        "scan_axis": {
+            "kind": "bias_field",
+            "coordinate": "bias_field_a_per_m",
+            "unit": "A/m",
+            "display_conversions": [{"name": "mu0_H", "unit": "T", "scale": 0.0000012566370614}]
+        },
+        "units": {
+            "frequency": "Hz",
+            "angular_frequency": "rad/s",
+            "bias_field": "A/m",
+            "bias_field_display": "T"
+        },
+        "topology": {
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "indexing": "global_xyz",
+            "sample_axis": "sample",
+            "mode_axis": "mode",
+            "node_count": 4
+        },
+        "requested_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "resolved_execution": {
+            "backend": "fem",
+            "device": "cpu",
+            "precision": "double",
+            "execution_mode": "native",
+            "engine": "reference",
+            "status": "complete"
+        },
+        "samples": [{
+            "sample_id": "bias-field-sample-0000",
+            "sample_index": 0,
+            "scan_axis": {
+                "kind": "bias_field",
+                "coordinate": "bias_field_a_per_m",
+                "unit": "A/m",
+                "display_conversions": []
+            },
+            "bias_field_a_per_m": [40000.0, 0.0, 0.0],
+            "bias_field_mu0_t": [0.0502654824574, 0.0, 0.0],
+            "topology": {
+                "mesh_id": "mesh:test",
+                "topology_revision": "mesh-rev:1",
+                "indexing": "global_xyz",
+                "sample_axis": "sample",
+                "mode_axis": "mode",
+                "node_count": 4
+            },
+            "branch_ids": [0],
+            "modes": [{
+                "sample_id": "bias-field-sample-0000",
+                "mode_id": "sample-0000/mode-0000",
+                "raw_mode_index": 0,
+                "frequency_hz": 1000000000.0,
+                "angular_frequency_rad_per_s": 6283185307.179586,
+                "mode_artifact_path": "eigen/modes/sample_0000/mode_0000.json",
+                "mode_field_id": "analysis:eigen:sample-0000:mode-0000",
+                "source_revision": "sha256:spectrum",
+                "status": "complete"
+            }],
+            "status": "complete"
+        }],
+        "cross_artifact_refs": []
+    });
+    fs::write(
+        eigen_dir.join("field_sweep.v1.json"),
+        serde_json::to_vec(&payload).expect("field sweep fixture should serialize"),
+    )
+    .expect("field sweep fixture should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]

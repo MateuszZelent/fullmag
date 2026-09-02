@@ -435,10 +435,123 @@ pub struct FrequencyDomainTrackingDiagnosticsPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepAxisPayload {
+    pub kind: String,
+    pub coordinate: String,
+    pub unit: String,
+    pub display_conversions: Vec<FrequencyDomainFieldSweepDisplayConversionPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepDisplayConversionPayload {
+    pub name: String,
+    pub unit: String,
+    pub scale: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepSourcePayload {
+    pub kind: String,
+    pub artifact: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepUnitsPayload {
+    pub frequency: String,
+    pub angular_frequency: String,
+    pub bias_field: String,
+    pub bias_field_display: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_amplitude: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linewidth: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub q_factor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub covariance: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepTopologyPayload {
+    pub mesh_id: String,
+    pub topology_revision: String,
+    pub indexing: String,
+    pub sample_axis: String,
+    pub mode_axis: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_count: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepExecutionPayload {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub execution_mode: String,
+    pub engine: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implementation_id: Option<String>,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_used: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepReferencePayload {
+    pub relation: String,
+    pub artifact: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainFieldSweepModePayload {
+    pub sample_id: String,
+    pub mode_id: String,
+    pub raw_mode_index: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<u64>,
+    pub frequency_hz: f64,
+    pub angular_frequency_rad_per_s: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_artifact_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_resource_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub residual_relative_l2: Option<f64>,
+    pub source_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_status: Option<String>,
+    pub status: String,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FrequencyDomainFieldSweepArtifactPayload {
     pub schema_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<FrequencyDomainFieldSweepSourcePayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -446,7 +559,25 @@ pub struct FrequencyDomainFieldSweepArtifactPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interrupted: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_sample_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_sample_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_axis: Option<FrequencyDomainFieldSweepAxisPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub units: Option<FrequencyDomainFieldSweepUnitsPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology: Option<FrequencyDomainFieldSweepTopologyPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_execution: Option<FrequencyDomainFieldSweepExecutionPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_execution: Option<FrequencyDomainFieldSweepExecutionPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub samples: Option<Vec<FrequencyDomainFieldSweepSamplePayload>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cross_artifact_refs: Option<Vec<FrequencyDomainFieldSweepReferencePayload>>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -460,7 +591,25 @@ pub struct FrequencyDomainFieldSweepSamplePayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bias_field_a_per_m: Option<[f64; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub bias_field_mu0_t: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scan_axis: Option<FrequencyDomainFieldSweepAxisPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub equilibrium_artifact_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linearization_state_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_input_signature_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology: Option<FrequencyDomainFieldSweepTopologyPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_ids: Option<Vec<u64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<Vec<FrequencyDomainFieldSweepModePayload>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
 }
@@ -1847,7 +1996,7 @@ fn frequency_domain_artifact_content_digest(
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
-fn decode_frequency_domain_artifact_payload(
+pub(crate) fn decode_frequency_domain_artifact_payload(
     artifact_path: &str,
     value: Value,
 ) -> Result<FrequencyDomainJsonArtifactPayload, ApiError> {
@@ -1982,7 +2131,329 @@ fn decode_frequency_domain_artifact_payload(
     if let FrequencyDomainJsonArtifactPayload::SpectrumV3(spectrum) = &payload {
         validate_frequency_domain_spectrum_v3(spectrum)?;
     }
+    if let FrequencyDomainJsonArtifactPayload::FieldSweep(field_sweep) = &payload {
+        validate_frequency_domain_field_sweep(field_sweep)?;
+    }
     Ok(payload)
+}
+
+fn validate_frequency_domain_field_sweep(
+    field_sweep: &FrequencyDomainFieldSweepArtifactPayload,
+) -> Result<(), ApiError> {
+    let has_typed_contract = field_sweep.source.is_some()
+        || field_sweep.source_revision.is_some()
+        || field_sweep.revision.is_some()
+        || field_sweep.scan_axis.is_some()
+        || field_sweep.units.is_some()
+        || field_sweep.topology.is_some()
+        || field_sweep.requested_execution.is_some()
+        || field_sweep.resolved_execution.is_some()
+        || field_sweep.cross_artifact_refs.is_some();
+    if !has_typed_contract {
+        return Ok(());
+    }
+
+    let Some(source) = field_sweep.source.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing typed source provenance",
+        ));
+    };
+    let Some(source_revision) = field_sweep.source_revision.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing source_revision",
+        ));
+    };
+    let Some(revision) = field_sweep.revision.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing dataset revision",
+        ));
+    };
+    let Some(requested_sample_count) = field_sweep.requested_sample_count else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing requested_sample_count",
+        ));
+    };
+    let Some(completed_sample_count) = field_sweep.completed_sample_count else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing completed_sample_count",
+        ));
+    };
+    let Some(scan_axis) = field_sweep.scan_axis.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing typed scan_axis",
+        ));
+    };
+    let Some(units) = field_sweep.units.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing typed units",
+        ));
+    };
+    let Some(topology) = field_sweep.topology.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing typed topology",
+        ));
+    };
+    let Some(requested_execution) = field_sweep.requested_execution.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing requested_execution provenance",
+        ));
+    };
+    let Some(resolved_execution) = field_sweep.resolved_execution.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing resolved_execution provenance",
+        ));
+    };
+    let Some(samples) = field_sweep.samples.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing typed samples",
+        ));
+    };
+    let Some(cross_artifact_refs) = field_sweep.cross_artifact_refs.as_ref() else {
+        return Err(ApiError::internal(
+            "eigen field sweep is missing cross_artifact_refs",
+        ));
+    };
+
+    if source.kind.trim().is_empty()
+        || source.artifact.trim().is_empty()
+        || source.revision.trim().is_empty()
+        || source_revision.trim().is_empty()
+        || revision.trim().is_empty()
+    {
+        return Err(ApiError::internal(
+            "eigen field sweep has incomplete source or revision provenance",
+        ));
+    }
+    if source.revision != *source_revision {
+        return Err(ApiError::internal(
+            "eigen field sweep source revision does not match source provenance",
+        ));
+    }
+    if completed_sample_count > requested_sample_count {
+        return Err(ApiError::internal(
+            "eigen field sweep completed_sample_count exceeds requested_sample_count",
+        ));
+    }
+    if field_sweep.complete == Some(true)
+        && (completed_sample_count != requested_sample_count
+            || samples.len() as u64 != completed_sample_count)
+    {
+        return Err(ApiError::internal(
+            "complete eigen field sweep has inconsistent sample counts",
+        ));
+    }
+
+    validate_field_sweep_axis(scan_axis, "eigen field sweep scan_axis")?;
+    if units.frequency.trim().is_empty()
+        || units.angular_frequency.trim().is_empty()
+        || units.bias_field.trim().is_empty()
+        || units.bias_field_display.trim().is_empty()
+    {
+        return Err(ApiError::internal(
+            "eigen field sweep has incomplete units metadata",
+        ));
+    }
+    validate_field_sweep_topology(topology, "eigen field sweep topology")?;
+    validate_field_sweep_execution(requested_execution, "requested_execution")?;
+    validate_field_sweep_execution(resolved_execution, "resolved_execution")?;
+
+    let mut sample_ids = BTreeSet::new();
+    let mut mode_ids = BTreeSet::new();
+    for sample in samples {
+        let Some(sample_id) = sample.sample_id.as_ref() else {
+            return Err(ApiError::internal(
+                "eigen field sweep contains a sample without sample_id",
+            ));
+        };
+        if sample_id.trim().is_empty() || !sample_ids.insert(sample_id) {
+            return Err(ApiError::internal(
+                "eigen field sweep contains missing or duplicate sample_id",
+            ));
+        }
+        if let Some(axis) = sample.scan_axis.as_ref() {
+            validate_field_sweep_axis(axis, "eigen field sweep sample scan_axis")?;
+        }
+        if let Some(field) = sample.bias_field_a_per_m {
+            if field.iter().any(|value| !value.is_finite()) {
+                return Err(ApiError::internal(
+                    "eigen field sweep contains non-finite bias_field_a_per_m",
+                ));
+            }
+        }
+        if let Some(field) = sample.bias_field_mu0_t {
+            if field.iter().any(|value| !value.is_finite()) {
+                return Err(ApiError::internal(
+                    "eigen field sweep contains non-finite bias_field_mu0_t",
+                ));
+            }
+        }
+        if let Some(sample_topology) = sample.topology.as_ref() {
+            validate_field_sweep_topology(sample_topology, "eigen field sweep sample topology")?;
+        }
+        if let Some(modes) = sample.modes.as_ref() {
+            for mode in modes {
+                if mode.sample_id != *sample_id || mode.mode_id.trim().is_empty() {
+                    return Err(ApiError::internal(
+                        "eigen field sweep mode has invalid sample or mode identity",
+                    ));
+                }
+                if !mode_ids.insert((sample_id, &mode.mode_id)) {
+                    return Err(ApiError::internal(
+                        "eigen field sweep contains duplicate mode_id",
+                    ));
+                }
+                if !mode.frequency_hz.is_finite()
+                    || !mode.angular_frequency_rad_per_s.is_finite()
+                    || mode.source_revision.trim().is_empty()
+                    || mode.status.trim().is_empty()
+                {
+                    return Err(ApiError::internal(
+                        "eigen field sweep contains invalid mode metadata",
+                    ));
+                }
+                if mode.source_revision != *source_revision {
+                    return Err(ApiError::internal(
+                        "eigen field sweep mode source revision does not match dataset source_revision",
+                    ));
+                }
+                if let Some(residual) = mode.residual_relative_l2 {
+                    if !residual.is_finite() || residual < 0.0 {
+                        return Err(ApiError::internal(
+                            "eigen field sweep contains invalid residual_relative_l2",
+                        ));
+                    }
+                }
+                let has_field_reference = match (
+                    &mode.mode_field_id,
+                    &mode.mode_field_resource_key,
+                ) {
+                    (Some(field_id), Some(resource_key))
+                        if !field_id.trim().is_empty() && !resource_key.trim().is_empty() => true,
+                    (None, None) => false,
+                    _ => {
+                        return Err(ApiError::internal(
+                            "eigen field sweep mode field identity and resource key must be published together",
+                        ))
+                    }
+                };
+                let has_mode_artifact = match &mode.mode_artifact_path {
+                    Some(path) if !path.trim().is_empty() => true,
+                    None => false,
+                    Some(_) => {
+                        return Err(ApiError::internal(
+                            "eigen field sweep mode mode_artifact_path must not be empty",
+                        ))
+                    }
+                };
+                if has_field_reference != has_mode_artifact {
+                    return Err(ApiError::internal(
+                        "eigen field sweep mode artifact path and field reference must be published together",
+                    ));
+                }
+                if let Some(field_status) = mode.field_status.as_ref() {
+                    if field_status.trim().is_empty() {
+                        return Err(ApiError::internal(
+                            "eigen field sweep mode field_status must not be empty",
+                        ));
+                    }
+                    let normalized_status = field_status.trim().to_ascii_lowercase();
+                    if (normalized_status == "spectrum-only" && has_field_reference)
+                        || (normalized_status == "ready" && !has_field_reference)
+                    {
+                        return Err(ApiError::internal(
+                            "eigen field sweep mode field_status contradicts field availability",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    for reference in cross_artifact_refs {
+        if reference.relation.trim().is_empty()
+            || reference.artifact.trim().is_empty()
+            || reference.revision.trim().is_empty()
+        {
+            return Err(ApiError::internal(
+                "eigen field sweep contains incomplete cross-artifact reference",
+            ));
+        }
+        if reference.relation == "source_spectrum" && reference.revision != *source_revision {
+            return Err(ApiError::internal(
+                "eigen field sweep source_spectrum revision does not match source_revision",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_field_sweep_axis(
+    axis: &FrequencyDomainFieldSweepAxisPayload,
+    label: &str,
+) -> Result<(), ApiError> {
+    if axis.kind.trim().is_empty()
+        || axis.coordinate.trim().is_empty()
+        || axis.unit.trim().is_empty()
+    {
+        return Err(ApiError::internal(format!(
+            "{label} has incomplete identity"
+        )));
+    }
+    for conversion in &axis.display_conversions {
+        if conversion.name.trim().is_empty()
+            || conversion.unit.trim().is_empty()
+            || !conversion.scale.is_finite()
+            || conversion.scale == 0.0
+        {
+            return Err(ApiError::internal(format!(
+                "{label} contains invalid display conversion"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_field_sweep_topology(
+    topology: &FrequencyDomainFieldSweepTopologyPayload,
+    label: &str,
+) -> Result<(), ApiError> {
+    if topology.mesh_id.trim().is_empty()
+        || topology.topology_revision.trim().is_empty()
+        || topology.indexing.trim().is_empty()
+        || topology.sample_axis.trim().is_empty()
+        || topology.mode_axis.trim().is_empty()
+    {
+        return Err(ApiError::internal(format!(
+            "{label} has incomplete identity"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_field_sweep_execution(
+    execution: &FrequencyDomainFieldSweepExecutionPayload,
+    label: &str,
+) -> Result<(), ApiError> {
+    if execution.backend.trim().is_empty()
+        || execution.device.trim().is_empty()
+        || execution.precision.trim().is_empty()
+        || execution.execution_mode.trim().is_empty()
+        || execution.engine.trim().is_empty()
+        || execution.status.trim().is_empty()
+        || execution
+            .implementation_id
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        || execution
+            .fallback_reason
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(ApiError::internal(format!(
+            "eigen field sweep {label} has incomplete execution provenance"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_frequency_domain_spectrum_v3(

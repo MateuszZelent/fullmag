@@ -1480,7 +1480,7 @@ fn field_sweep_builder_preserves_sample_and_mode_identity_and_marks_missing_hand
     assert_eq!(artifact.samples[0].bias_field_a_per_m, [40_000.0, 0.0, 0.0]);
     assert_eq!(
         artifact.samples[0].modes[0].mode_field_id,
-        "analysis:eigen:sample-0000:mode-0000"
+        Some("analysis:eigen:sample-0000:mode-0000".to_string())
     );
     assert_eq!(
         artifact.samples[0]
@@ -1515,6 +1515,35 @@ fn partial_field_sweep_uses_declared_requested_count_and_completed_statuses() {
     assert_eq!(artifact.completed_sample_count, 1);
     assert_eq!(artifact.status, ServerArtifactStatus::Partial);
     assert!(!artifact.complete);
+}
+
+#[test]
+fn field_sweep_is_spectrum_only_when_cartesian_complex_mode_payload_is_missing() {
+    let mut result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+    result.samples[0].solver_diagnostics = Some(serde_json::json!({
+        "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+        "mesh_id": "mesh:test",
+        "topology_revision": "mesh-rev:1",
+        "operator_input_signature_sha256": "sha256:operator",
+        "status": "completed"
+    }));
+    result.samples[0].modes[0].lifted_real = None;
+    result.samples[0].modes[0].lifted_imag = None;
+
+    let artifact = build_frequency_domain_field_sweep_artifact(&result)
+        .expect("field sweep builder should not fail")
+        .expect("field sweep should still preserve spectrum metadata");
+    let mode = &artifact.samples[0].modes[0];
+
+    assert_eq!(mode.mode_field_id, None);
+    assert_eq!(mode.mode_field_resource_key, None);
+    assert_eq!(
+        serde_json::to_value(mode)
+            .expect("spectrum-only mode should serialize")
+            .get("mode_artifact_path"),
+        None
+    );
+    assert_eq!(mode.field_status, "spectrum-only");
 }
 
 #[test]

@@ -6,16 +6,19 @@
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
+#include "fullmag_fem.h"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #endif
 
 #include <cmath>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -90,6 +93,113 @@ void fem_bem_rejects_one_iteration_candidate_without_publishing_it() {
           "FEM/BEM failure includes maximum iterations");
     fullmag::fem::destroy_fem_bem_hypre_cache(cache);
 }
+
+void fem_bem_neumann_rhs_zeros_every_gauge_dof() {
+    mfem::Vector source(5);
+    for (int i = 0; i < source.Size(); ++i) {
+        source(i) = 10.0 + static_cast<double>(i);
+    }
+    mfem::Vector neumann;
+    std::string error;
+    const std::vector<int> gauges = {1, 3};
+    check(
+        fullmag::fem::prepare_demag_fem_bem_neumann_rhs(
+            source,
+            gauges,
+            neumann,
+            error),
+        error.c_str());
+    for (int i = 0; i < neumann.Size(); ++i) {
+        const double expected = (i == 1 || i == 3) ? 0.0 : source(i);
+        check_near(neumann(i), expected, 0.0, "all Neumann gauge DOFs are zeroed");
+    }
+}
+
+void fem_bem_neumann_rhs_rejects_invalid_gauge_lists() {
+    mfem::Vector source(3);
+    source = 1.0;
+    const std::vector<std::vector<int>> invalid_gauges = {
+        {},
+        {3},
+        {2, 1},
+        {1, 1},
+    };
+    for (const auto &gauges : invalid_gauges) {
+        mfem::Vector neumann;
+        std::string error;
+        check(
+            !fullmag::fem::prepare_demag_fem_bem_neumann_rhs(
+                source,
+                gauges,
+                neumann,
+                error),
+            "invalid FEM/BEM gauge list must be rejected");
+        check(!error.empty(), "invalid FEM/BEM gauge list must explain the error");
+    }
+}
+
+void fem_bem_workspace_pins_one_gauge_per_disconnected_component() {
+    mfem::Mesh mesh(3, 8, 2, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}, {3.0, 0.0, 0.0}, {4.0, 0.0, 0.0},
+        {3.0, 1.0, 0.0}, {3.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    int first_tet[] = {0, 1, 2, 3};
+    int second_tet[] = {4, 5, 6, 7};
+    mesh.AddTet(first_tet, 1);
+    mesh.AddTet(second_tet, 1);
+    mesh.FinalizeTetMesh(1, 0, true);
+
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    fullmag::fem::Context ctx;
+    ctx.base_plan.fe_order = 1u;
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mfem_context.fes = &fes;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.GetNV());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
+    ctx.mesh.nodes_xyz.reserve(static_cast<size_t>(mesh.GetNV()) * 3u);
+    for (int node = 0; node < mesh.GetNV(); ++node) {
+        const double *vertex = mesh.GetVertex(node);
+        ctx.mesh.nodes_xyz.insert(ctx.mesh.nodes_xyz.end(), vertex, vertex + 3);
+    }
+    ctx.mesh.cell_types = {
+        FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4,
+    };
+    ctx.mesh.cell_offsets = {0u};
+    ctx.mesh.cell_global_ordinals = {0u, 1u};
+    ctx.mesh.cell_markers = {1u, 1u};
+    ctx.mesh.magnetic_element_mask = {1u, 1u};
+    ctx.mesh.magnetic_node_mask.assign(static_cast<size_t>(mesh.GetNV()), 1u);
+    for (int element = 0; element < mesh.GetNE(); ++element) {
+        mfem::Array<int> vertices_for_element;
+        mesh.GetElementVertices(element, vertices_for_element);
+        for (int node : vertices_for_element) {
+            ctx.mesh.cell_nodes.push_back(static_cast<uint32_t>(node));
+        }
+        ctx.mesh.cell_offsets.push_back(
+            static_cast<uint32_t>(ctx.mesh.cell_nodes.size()));
+    }
+
+    std::string error;
+    check(
+        fullmag::fem::initialize_demag_fem_bem_workspace(ctx, error),
+        error.c_str());
+    auto *workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
+    check(workspace != nullptr, "disconnected FEM/BEM workspace must be published");
+    check(
+        workspace->neumann_gauge_tdofs.size() == 2u,
+        "each disconnected magnetic component must receive one Neumann gauge");
+    check(
+        workspace->neumann_gauge_tdofs[0] != workspace->neumann_gauge_tdofs[1],
+        "disconnected magnetic components must receive distinct gauge DOFs");
+    fullmag::fem::context_destroy_demag_fem_bem(ctx);
+}
 #endif
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -121,18 +231,55 @@ void unit_tet_context(fullmag::fem::Context &ctx) {
         0.0, 0.0, 1.0,
     };
     ctx.mesh.cell_nodes = {0, 1, 2, 3};
+    ctx.mesh.cell_types = {FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0, 4};
+    ctx.mesh.cell_global_ordinals = {0};
     ctx.mesh.cell_markers = {1};
     ctx.mesh.magnetic_element_mask = {1};
     ctx.mesh.magnetic_node_mask = {1, 1, 1, 1};
-    ctx.mesh.facet_nodes = {
-        0, 2, 1,
-        0, 1, 3,
-        0, 3, 2,
-        1, 2, 3,
+    const std::vector<std::array<uint32_t, 3>> facets = {
+        {{0, 2, 1}},
+        {{0, 1, 3}},
+        {{0, 3, 2}},
+        {{1, 2, 3}},
     };
-    ctx.mesh.facet_markers = {1, 1, 1, 1};
+    ctx.mesh.n_boundary_faces = static_cast<uint32_t>(facets.size());
+    ctx.mesh.facet_offsets = {0};
+    for (size_t i = 0; i < facets.size(); ++i) {
+        ctx.mesh.facet_types.push_back(FULLMAG_FEM_FACET_TRI3);
+        ctx.mesh.facet_roles.push_back(FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+        ctx.mesh.facet_global_ordinals.push_back(static_cast<uint64_t>(i));
+        ctx.mesh.facet_markers.push_back(1);
+        for (uint32_t node : facets[i]) {
+            ctx.mesh.facet_nodes.push_back(node);
+        }
+        ctx.mesh.facet_offsets.push_back(static_cast<uint32_t>(ctx.mesh.facet_nodes.size()));
+    }
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {1.0, 1.0, 1.0, 1.0};
+}
+
+void set_tet_facets(
+    fullmag::fem::Context &ctx,
+    const std::vector<std::array<uint32_t, 3>> &facets)
+{
+    ctx.mesh.n_boundary_faces = static_cast<uint32_t>(facets.size());
+    ctx.mesh.facet_types.clear();
+    ctx.mesh.facet_roles.clear();
+    ctx.mesh.facet_offsets = {0};
+    ctx.mesh.facet_nodes.clear();
+    ctx.mesh.facet_global_ordinals.clear();
+    ctx.mesh.facet_markers.clear();
+    for (size_t i = 0; i < facets.size(); ++i) {
+        ctx.mesh.facet_types.push_back(FULLMAG_FEM_FACET_TRI3);
+        ctx.mesh.facet_roles.push_back(FULLMAG_FEM_FACET_ROLE_EXTERIOR);
+        ctx.mesh.facet_global_ordinals.push_back(static_cast<uint64_t>(i));
+        ctx.mesh.facet_markers.push_back(1);
+        for (uint32_t node : facets[i]) {
+            ctx.mesh.facet_nodes.push_back(node);
+        }
+        ctx.mesh.facet_offsets.push_back(static_cast<uint32_t>(ctx.mesh.facet_nodes.size()));
+    }
 }
 
 void boundary_surface_extracts_closed_body_only_tet() {
@@ -157,6 +304,230 @@ void boundary_surface_extracts_closed_body_only_tet() {
             1.0,
             1e-12,
             "boundary normal unit length");
+    }
+}
+
+void boundary_surface_rejects_incomplete_explicit_facets() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    set_tet_facets(ctx, {{{0, 2, 1}}});
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+
+    check(
+        !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        "incomplete explicit FEM/BEM boundary must be rejected");
+    check(error.find("complete") != std::string::npos ||
+              error.find("missing") != std::string::npos,
+          "incomplete explicit boundary error is descriptive");
+}
+
+void boundary_surface_rejects_duplicate_explicit_facets() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    set_tet_facets(ctx, {{{0, 2, 1}, {0, 2, 1}, {0, 1, 3}, {0, 3, 2}, {1, 2, 3}}});
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+
+    check(
+        !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        "duplicate explicit FEM/BEM boundary must be rejected");
+    check(error.find("duplicate") != std::string::npos,
+          "duplicate explicit boundary error is descriptive");
+}
+
+void boundary_surface_rejects_internal_explicit_facet() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 5;
+    ctx.mesh.n_elements = 2;
+    ctx.mesh.nodes_xyz = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, -1.0,
+    };
+    ctx.mesh.cell_types = {FULLMAG_FEM_CELL_TET4, FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0u, 4u, 8u};
+    ctx.mesh.cell_nodes = {
+        0u, 1u, 2u, 3u,
+        0u, 1u, 2u, 4u,
+    };
+    ctx.mesh.cell_global_ordinals = {0u, 1u};
+    ctx.mesh.cell_markers = {1u, 1u};
+    ctx.mesh.magnetic_element_mask = {1u, 1u};
+    set_tet_facets(ctx, {{{0u, 1u, 2u}}});
+
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(
+        !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        "an explicit interior FEM/BEM facet must be rejected");
+    check(error.find("interior") != std::string::npos ||
+              error.find("nonmanifold") != std::string::npos,
+          "interior explicit boundary error is descriptive");
+}
+
+void boundary_surface_rejects_extra_explicit_facet() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    ctx.mesh.n_nodes = 5;
+    ctx.mesh.nodes_xyz.insert(ctx.mesh.nodes_xyz.end(), {2.0, 2.0, 2.0});
+    ctx.mesh.magnetic_node_mask.push_back(0u);
+    set_tet_facets(
+        ctx,
+        {{
+            {0u, 2u, 1u},
+            {0u, 1u, 3u},
+            {0u, 3u, 2u},
+            {1u, 2u, 3u},
+            {0u, 1u, 4u},
+        }});
+
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(
+        !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        "an extra explicit FEM/BEM facet must be rejected");
+    check(error.find("not owned") != std::string::npos ||
+              error.find("extra") != std::string::npos,
+          "extra explicit boundary error is descriptive");
+}
+
+void boundary_surface_rejects_inconsistent_mesh_buffers() {
+    for (int variant = 0; variant < 4; ++variant) {
+        fullmag::fem::Context ctx;
+        unit_tet_context(ctx);
+        if (variant == 0) {
+            ctx.mesh.cell_types.clear();
+        } else if (variant == 1) {
+            ctx.mesh.cell_offsets = {0u};
+        } else if (variant == 2) {
+            ctx.mesh.cell_nodes.pop_back();
+        } else {
+            ctx.mesh.magnetic_element_mask = {1u, 1u};
+        }
+        fullmag::fem::DemagBoundarySurface surface;
+        std::string error;
+        check(
+            !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+            "inconsistent FEM/BEM mesh buffers must be rejected");
+        check(!error.empty(), "inconsistent FEM/BEM mesh buffers must explain the error");
+    }
+}
+
+void boundary_surface_rejects_bad_geometry() {
+    fullmag::fem::Context nonfinite;
+    unit_tet_context(nonfinite);
+    nonfinite.mesh.nodes_xyz[0] = std::numeric_limits<double>::quiet_NaN();
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(
+        !fullmag::fem::build_demag_boundary_surface(nonfinite, surface, error),
+        "non-finite FEM/BEM geometry must be rejected");
+
+    fullmag::fem::Context degenerate;
+    unit_tet_context(degenerate);
+    degenerate.mesh.nodes_xyz[11] = 0.0;
+    fullmag::fem::DemagBoundarySurface degenerate_surface;
+    error.clear();
+    check(
+        !fullmag::fem::build_demag_boundary_surface(degenerate, degenerate_surface, error),
+        "degenerate FEM/BEM geometry must be rejected");
+}
+
+void boundary_surface_accepts_complete_permuted_reversed_facets() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    set_tet_facets(ctx, {{{1, 3, 2}, {3, 1, 0}, {2, 0, 3}, {1, 0, 2}}});
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+
+    check(
+        fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        error.c_str());
+    check(surface.triangles.size() == 4, "permuted/reversed complete boundary triangle count");
+}
+
+void boundary_surface_rejects_nonmanifold_volume_faces() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 6;
+    ctx.mesh.n_elements = 3;
+    ctx.mesh.nodes_xyz = {
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+        0.0, 0.0, -1.0,
+        0.0, 0.0, 2.0,
+    };
+    ctx.mesh.cell_types = {
+        FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4,
+        FULLMAG_FEM_CELL_TET4,
+    };
+    ctx.mesh.cell_offsets = {0, 4, 8, 12};
+    ctx.mesh.cell_nodes = {
+        0, 1, 2, 3,
+        0, 1, 2, 4,
+        0, 1, 2, 5,
+    };
+    ctx.mesh.cell_global_ordinals = {0, 1, 2};
+    ctx.mesh.cell_markers = {1, 1, 1};
+    ctx.mesh.magnetic_element_mask = {1, 1, 1};
+
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(
+        !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        "a volume face with three active owners must be rejected");
+    check(error.find("nonmanifold") != std::string::npos,
+          "nonmanifold volume error is descriptive");
+}
+
+void boundary_surface_rejects_non_tet_active_topology() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    ctx.mesh.cell_types = {FULLMAG_FEM_CELL_PRISM6};
+    ctx.mesh.cell_offsets = {0, 6};
+    ctx.mesh.cell_nodes = {0, 1, 2, 3, 0, 1};
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+
+    check(
+        !fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+        "active non-tet topology must be rejected by FEM/BEM");
+    check(error.find("TET4") != std::string::npos ||
+              error.find("tetra") != std::string::npos,
+          "non-tet topology error is descriptive");
+}
+
+void boundary_surface_is_scale_invariant() {
+    for (double factor : {1.0e-100, 1.0e100}) {
+        fullmag::fem::Context ctx;
+        unit_tet_context(ctx);
+        for (double &coordinate : ctx.mesh.nodes_xyz) {
+            coordinate *= factor;
+        }
+        fullmag::fem::DemagBoundarySurface surface;
+        std::string error;
+        check(
+            fullmag::fem::build_demag_boundary_surface(ctx, surface, error),
+            error.c_str());
+        for (size_t face = 0; face < surface.triangles.size(); ++face) {
+            const auto normal = surface.unit_normals[face];
+            check(std::isfinite(surface.triangle_areas[face]) &&
+                      surface.triangle_areas[face] > 0.0,
+                  "scaled boundary triangle area remains finite and positive");
+            check(std::isfinite(normal[0]) && std::isfinite(normal[1]) &&
+                      std::isfinite(normal[2]),
+                  "scaled boundary normal remains finite");
+            check_near(
+                std::hypot(std::hypot(normal[0], normal[1]), normal[2]),
+                1.0,
+                1e-12,
+                "scaled boundary normal remains unit length");
+        }
     }
 }
 
@@ -185,6 +556,21 @@ void dense_bem_operator_is_finite_and_has_constant_sanity() {
         sum += value;
     }
     check_near(sum, static_cast<double>(op.size()), 5e-3 * op.size(), "dense BEM constant sanity");
+}
+
+void dense_bem_rejects_boundary_limit_before_allocation() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(fullmag::fem::build_demag_boundary_surface(ctx, surface, error), error.c_str());
+
+    fullmag::fem::DenseDemagBemOperator op(3u);
+    check(
+        !op.build(ctx, surface, error),
+        "dense BEM must reject a boundary larger than its configured limit");
+    check(error.find("max_boundary_nodes") != std::string::npos,
+          "dense BEM limit error names the configured limit");
 }
 
 void fem_bem_energy_matches_demag_energy_contract() {
@@ -547,6 +933,9 @@ void fem_bem_workspace_lifecycle_is_owned_by_workspace_module() {
         workspace_header.find("bool ready") != std::string::npos,
         "FEM/BEM runtime state must own readiness");
     check(
+        workspace_header.find("neumann_gauge_tdofs") != std::string::npos,
+        "FEM/BEM workspace must own all Neumann gauge true DOFs");
+    check(
         context_header.find("DemagFemBemRuntimeState demag_fem_bem") != std::string::npos,
         "Context must store FEM/BEM demag runtime through its owner");
     check(
@@ -563,6 +952,10 @@ void fem_bem_workspace_lifecycle_is_owned_by_workspace_module() {
         "void context_destroy_demag_fem_bem(",
         "std::make_unique<mfem::H1_FECollection>",
         "AddDomainIntegrator(new mfem::DiffusionIntegrator())",
+        "collect_neumann_gauge_nodes(",
+        "build_node_to_true_dof_map(",
+        "workspace->neumann_gauge_tdofs.reserve",
+        "for (int tdof : workspace->neumann_gauge_tdofs)",
         "eliminate_row_col_zero(*workspace->dirichlet_op, tdof)",
         "ctx.demag_fem_bem.workspace = workspace.release()",
         "ctx.demag_fem_bem.ready = true",
@@ -649,7 +1042,8 @@ void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
         "bool prepare_demag_fem_bem_neumann_rhs(",
         "neumann_rhs.SetSize(source_rhs.Size())",
         "neumann_data[i] = src_data[i]",
-        "neumann_data[0] = 0.0",
+        "for (int gauge_tdof : gauge_tdofs)",
+        "neumann_data[gauge_tdof] = 0.0",
     };
     for (const char *symbol : symbols) {
         check(
@@ -666,9 +1060,23 @@ void fem_bem_neumann_rhs_is_owned_by_rhs_module() {
 int main() {
 #if FULLMAG_HAS_MFEM_STACK
     fem_bem_rejects_one_iteration_candidate_without_publishing_it();
+    fem_bem_neumann_rhs_zeros_every_gauge_dof();
+    fem_bem_neumann_rhs_rejects_invalid_gauge_lists();
+    fem_bem_workspace_pins_one_gauge_per_disconnected_component();
 #endif
     boundary_surface_extracts_closed_body_only_tet();
+    boundary_surface_rejects_incomplete_explicit_facets();
+    boundary_surface_rejects_duplicate_explicit_facets();
+    boundary_surface_rejects_internal_explicit_facet();
+    boundary_surface_rejects_extra_explicit_facet();
+    boundary_surface_rejects_inconsistent_mesh_buffers();
+    boundary_surface_rejects_bad_geometry();
+    boundary_surface_accepts_complete_permuted_reversed_facets();
+    boundary_surface_rejects_nonmanifold_volume_faces();
+    boundary_surface_rejects_non_tet_active_topology();
+    boundary_surface_is_scale_invariant();
     dense_bem_operator_is_finite_and_has_constant_sanity();
+    dense_bem_rejects_boundary_limit_before_allocation();
     fem_bem_energy_matches_demag_energy_contract();
     fem_bem_energy_is_owned_by_energy_module();
     fem_bem_aggregate_header_documents_submodule_boundaries();

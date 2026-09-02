@@ -1,0 +1,210 @@
+{
+  "document": {
+    "path": "docs/physics/fem_demag_fem_bem.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "NOT VERIFIED",
+      "reason": "Brak ścisłego device-resident operatora FK GPU; lane pozostaje NOT VERIFIED."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "FK jest realizacją FEM body-only; FDM ma osobne realizacje demagnetyzacji."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FK jest realizacją FEM body-only; FDM ma osobne realizacje demagnetyzacji."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fem-bem-magnetostatics",
+      "symbols": ["Hdemag", "M", "u"],
+      "sources": ["surface", "operator"]
+    },
+    {
+      "id": "eq-fem-bem-energy",
+      "symbols": ["Ed", "mu0", "Ms", "m", "Hdemag"],
+      "sources": ["energy"]
+    },
+    {
+      "id": "eq-fem-bem-harmonic-correction",
+      "symbols": ["u", "u1", "u2", "Hdemag", "Omega_m"],
+      "sources": ["potential"]
+    },
+    {
+      "id": "eq-poisson-robin-truncation",
+      "symbols": ["u", "M", "Omega_m"],
+      "sources": ["planner-accuracy"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Omega_m",
+      "latex": "\\Omega_m",
+      "meaning": "domena magnetyczna",
+      "si_unit": "\\mathrm{m^3}"
+    },
+    {
+      "id": "m",
+      "latex": "\\mathbf m",
+      "meaning": "zredukowana magnetyzacja",
+      "si_unit": "1"
+    },
+    {
+      "id": "Ms",
+      "latex": "M_s",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "M",
+      "latex": "\\mathbf M",
+      "meaning": "magnetyzacja",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "u",
+      "latex": "u",
+      "meaning": "potencjał skalarny",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "u1",
+      "latex": "u_1",
+      "meaning": "potencjał skalarny",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "u2",
+      "latex": "u_2",
+      "meaning": "potencjał skalarny",
+      "si_unit": "\\mathrm A"
+    },
+    {
+      "id": "Hdemag",
+      "latex": "\\mathbf H_\\mathrm{demag}",
+      "meaning": "pole demagnetyzujące",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "mu0",
+      "latex": "\\mu_0",
+      "meaning": "przenikalność próżni",
+      "si_unit": "\\mathrm{H\\,m^{-1}}"
+    },
+    {
+      "id": "Ed",
+      "latex": "E_\\mathrm d",
+      "meaning": "energia demagnetyzacji",
+      "si_unit": "\\mathrm J"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-demag",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Demag",
+      "responsibility": "Publiczny wybór modelu demagnetyzacji i zgodność aliasu realization."
+    },
+    {
+      "id": "ir-resolved",
+      "path": "crates/fullmag-ir/src/plan.rs",
+      "symbol": "ResolvedFemDemagIR",
+      "responsibility": "Kanoniczna planner-resolved realizacja FEM demagnetyzacji."
+    },
+    {
+      "id": "planner-accuracy",
+      "path": "crates/fullmag-plan/src/fem.rs",
+      "symbol": "validate_fem_demag_accuracy_contract",
+      "responsibility": "Fail-closed profil dokładności Poisson all-tet/P2."
+    },
+    {
+      "id": "surface",
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp",
+      "symbol": "build_demag_boundary_surface",
+      "responsibility": "Typed TET4 boundary extraction, orientacja i watertight checks."
+    },
+    {
+      "id": "operator",
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp",
+      "symbol": "class DenseDemagBemOperator",
+      "responsibility": "Dense reference BEM, kontrola rozmiaru i apply."
+    },
+    {
+      "id": "workspace",
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp",
+      "symbol": "initialize_demag_fem_bem_workspace",
+      "responsibility": "P1 workspace, mapowanie true DOF i gauge składowych."
+    },
+    {
+      "id": "rhs",
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp",
+      "symbol": "prepare_demag_fem_bem_neumann_rhs",
+      "responsibility": "Kopiowanie RHS i zerowanie wszystkich gauge DOF."
+    },
+    {
+      "id": "potential",
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp",
+      "symbol": "combine_demag_fem_bem_total_potential",
+      "responsibility": "Złożenie potencjałów u1 i u2."
+    },
+    {
+      "id": "energy",
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_energy.cpp",
+      "symbol": "demag_fem_bem_energy_from_field",
+      "responsibility": "Energia demagnetyzacji w jednostkach SI."
+    },
+    {
+      "id": "contract-test",
+      "path": "backends/fem/tests/demag_fem_bem_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Wykonywalny kontrakt topologii, geometrii, operatora i modułów."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "Demag.model",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "airbox, bem, fredkin_koehler lub fmm",
+        "meaning": "żądany model demagnetyzacji",
+        "backend_support": "FEM CPU",
+        "problem_ir": "energy_terms[kind=demag].realization"
+      },
+      {
+        "python": "Demag.variant",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "auto, dirichlet lub robin wyłącznie dla airbox",
+        "meaning": "wariant modelu airbox",
+        "backend_support": "FEM CPU",
+        "problem_ir": "energy_terms[kind=demag].realization"
+      },
+      {
+        "python": "Demag.realization",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "istniejąca nazwa realization; nie łączyć z model",
+        "meaning": "zgodność wsteczna wyboru realizacji",
+        "backend_support": "FEM CPU",
+        "problem_ir": "energy_terms[kind=demag].realization"
+      }
+    ]
+  }
+}

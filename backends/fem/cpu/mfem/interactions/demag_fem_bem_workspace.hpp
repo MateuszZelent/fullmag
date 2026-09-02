@@ -45,6 +45,7 @@ struct DemagFemBemWorkspace {
     std::unique_ptr<mfem::Vector> boundary_values_global;
     std::unique_ptr<mfem::Vector> laplace_rhs;
     std::vector<int> boundary_tdofs;
+    std::vector<int> neumann_gauge_tdofs;
     int last_u1_iterations = 0;
     int last_u2_iterations = 0;
     double last_u1_residual = 0.0;

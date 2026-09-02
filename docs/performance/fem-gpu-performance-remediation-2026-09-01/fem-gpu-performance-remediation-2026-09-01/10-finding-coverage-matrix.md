@@ -2,7 +2,7 @@
 
 **Baza planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 
-**Zweryfikowano względem:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+**Zweryfikowano względem:** `c3f49db708868f3649a3e894416d230269718920`
 
 **Zakres:** kod, testy kontraktowe i `justfile`; managed GPU runtime oraz wyniki
 wydajnościowe: `NOT VERIFIED`.
@@ -40,7 +40,7 @@ dokumentach 01–09 są planem, dopóki dowód poniżej nie wskazuje ich istnien
 | RL-01 | `POTWIERDZONE` | CPU `exchange_mass_preconditioned_gradient`; GPU `relaxation/nonlinear_cg.cpp` jawnie unpreconditioned | GPU PR+ jest dziś poprawny dla raw gradient; zysk diagonal/Chebyshev/PCG nieudowodniony | `NOT VERIFIED` | PR-13 |
 | RT-01 | `NIEPRAWDA` w pierwotnym brzmieniu | `rk_plan.cpp::gpu_rk_plan_is_strict_device_resident`, `runtime/execution_receipt.cpp`, Rust `validate_strict_fem_gpu_execution_receipt` już failują dla hybrid/host/unknown/masks/transfers | Rzeczywista luka: brak scalonego work snapshotu i niepełne liczenie bezpośrednich sync/readback | `NOT VERIFIED` | PR-00 |
 | MEM-01 | `CZĘŚCIOWO` | Normalizer używa stack scalar; reduction workspace ma pinned host scalar buffer z pageable fallback | Dedykowany pinned attempt-control packet nie istnieje | `NOT VERIFIED` | PR-04 |
-| BL-01 | `CZĘŚCIOWO` | `inspect_cuda_architectures.py` i test już mają `--require-native-cubin`; manifest zapisuje cubin/PTX/device data | Brak automatycznego final-bundle CC→native-cubin qualification receipt; historyczne `sm_52` nie dowodzi `sm_89` | `NOT VERIFIED` | PR-00 |
+| BL-01 | `CZĘŚCIOWO` | Inspektor i walidator bundle mają `--require-native-cubin`; `export_fem_gpu_runtime.sh` już wymaga domyślnie `8.9`, `fullmag_fem=sm_89` i `hypre=sm_89` | Brak ogólnego wykryte CC→`sm_xy` zamiast stałego `sm_89` oraz immutable benchmark receipt; historyczne `sm_52` nie dowodzi aktualnego `sm_89` | `NOT VERIFIED` | PR-00 |
 | PA-01 | `POTWIERDZONE` | `exchange_plan.hpp::GpuExchangePlan` rozwiązuje tylko `legacy_sparse_gpu` | Typed planner, profiles, SpMM i exchange PA nie istnieją; enum musi być jeden dla 02/08 | `NOT VERIFIED` | PR-15 |
 | NEW-HYPRE-01 | `POTWIERDZONE` | `runtime/hypre_device_policy.cpp` i `demag_poisson/hypre_device_solver.cpp::configure_hypre_device_vendor_kernels` dublują process-wide setters | Usunąć lokalne global setters; solver-local tolerancje/iteracje pozostają w solver owner | `NOT VERIFIED` | PR-01 |
 

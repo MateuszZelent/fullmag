@@ -898,6 +898,54 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::analysis::get_frequency_domain_response_field_meta),
         )
         .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets",
+            get(handlers::analysis::get_analysis_result_dataset_catalog),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/axes/:axis_id/values",
+            get(handlers::analysis::get_analysis_result_axis_values),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/samples",
+            get(handlers::analysis::get_analysis_result_samples),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/items/:item_id",
+            get(handlers::analysis::get_analysis_result_item),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/items",
+            get(handlers::analysis::get_analysis_result_items),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/branches",
+            get(handlers::analysis::get_analysis_result_branches),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/branches/:branch_id",
+            get(handlers::analysis::get_analysis_result_branch),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/branches/:branch_id/points",
+            get(handlers::analysis::get_analysis_result_branch_points),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/relations",
+            get(handlers::analysis::get_analysis_result_relations),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/relations/:relation_id",
+            get(handlers::analysis::get_analysis_result_relation),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id/projections/:projection_id",
+            get(handlers::analysis::get_analysis_result_projection),
+        )
+        .route(
+            "/v2/sessions/current/analysis/results/runs/:run_id/datasets/:dataset_id",
+            get(handlers::analysis::get_analysis_result_dataset_manifest),
+        )
+        .route(
             "/v2/sessions/current/analysis/hysteresis/:stage_id/points",
             get(handlers::analysis::get_points),
         )

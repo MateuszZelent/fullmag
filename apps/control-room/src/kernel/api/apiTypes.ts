@@ -245,6 +245,8 @@ export type FrequencyDomainSpectrumArtifactPayload =
   components["schemas"]["FrequencyDomainSpectrumArtifactPayload"];
 export type FrequencyDomainBranchesArtifactPayload =
   components["schemas"]["FrequencyDomainBranchesArtifactPayload"];
+export type FrequencyDomainFieldSweepArtifactPayload =
+  components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
 export type FrequencyDomainResponseSweepArtifactPayload =
   components["schemas"]["FrequencyDomainResponseSweepArtifactPayload"];
 export type FrequencyDomainFmrPeaksArtifactPayload =
@@ -368,6 +370,92 @@ export type SpinWaveGammaResource =
   components["schemas"]["SpinWaveGammaResource"];
 export type DynamicStructureFactorResource =
   components["schemas"]["DynamicStructureFactorResource"];
+export type AnalysisResultProductKind =
+  components["schemas"]["AnalysisResultProductKind"];
+export type AnalysisResultItemKind =
+  components["schemas"]["AnalysisResultItemKind"];
+export type AnalysisResultAxisProjection =
+  components["schemas"]["AnalysisResultAxisProjection"];
+export type AnalysisResultAxisValueResource =
+  components["schemas"]["AnalysisResultAxisValueResource"];
+export type AnalysisResultAxisResource =
+  components["schemas"]["AnalysisResultAxisResource"];
+export type AnalysisResultCoordinateResource =
+  components["schemas"]["AnalysisResultCoordinateResource"];
+export type AnalysisResultMeshRef =
+  components["schemas"]["AnalysisResultMeshRef"];
+export type AnalysisResultStatusFacets =
+  components["schemas"]["AnalysisResultStatusFacets"];
+export type AnalysisResultDatasetCapabilities =
+  components["schemas"]["AnalysisResultDatasetCapabilities"];
+export type AnalysisResultProjectionDescriptor =
+  components["schemas"]["AnalysisResultProjectionDescriptor"];
+export type AnalysisResultDefaultCursor =
+  components["schemas"]["AnalysisResultDefaultCursor"];
+export type AnalysisResultDatasetSummaryResource =
+  components["schemas"]["AnalysisResultDatasetSummaryResource"];
+export type AnalysisResultDatasetCatalogResource =
+  components["schemas"]["AnalysisResultDatasetCatalogResource"];
+export type AnalysisResultDatasetManifestResource =
+  components["schemas"]["AnalysisResultDatasetManifestResource"];
+export type AnalysisResultSampleIndexEntry =
+  components["schemas"]["AnalysisResultSampleIndexEntry"];
+export type AnalysisResultFieldRef =
+  components["schemas"]["AnalysisResultFieldRef"];
+export type AnalysisResultQualitySummary =
+  components["schemas"]["AnalysisResultQualitySummary"];
+export type AnalysisResultItemRelation =
+  components["schemas"]["AnalysisResultItemRelation"];
+export type AnalysisResultSpectralItemSummary =
+  components["schemas"]["AnalysisResultSpectralItemSummary"];
+export type AnalysisResultSamplePageResource =
+  components["schemas"]["AnalysisResultSamplePageResource"];
+export type AnalysisResultItemPageResource =
+  components["schemas"]["AnalysisResultItemPageResource"];
+export type AnalysisResultBranchPointResource =
+  components["schemas"]["AnalysisResultBranchPointResource"];
+export type AnalysisResultBranchSummaryResource =
+  components["schemas"]["AnalysisResultBranchSummaryResource"];
+export type AnalysisResultBranchPageResource =
+  components["schemas"]["AnalysisResultBranchPageResource"];
+export type AnalysisResultBranchResource =
+  components["schemas"]["AnalysisResultBranchResource"];
+export type AnalysisResultBranchPointPageResource =
+  components["schemas"]["AnalysisResultBranchPointPageResource"];
+export type AnalysisResultRelationResource =
+  components["schemas"]["AnalysisResultRelationResource"];
+export type AnalysisResultRelationPageResource =
+  components["schemas"]["AnalysisResultRelationPageResource"];
+export type AnalysisResultProjectionSelectionEntry =
+  components["schemas"]["AnalysisResultProjectionSelectionEntry"];
+export type AnalysisResultProjectionPoint =
+  components["schemas"]["AnalysisResultProjectionPoint"];
+export type AnalysisResultProjectionSeries =
+  components["schemas"]["AnalysisResultProjectionSeries"];
+export type AnalysisResultProjectionResource =
+  components["schemas"]["AnalysisResultProjectionResource"];
+export type AnalysisResultAxisValuesResource =
+  components["schemas"]["AnalysisResultAxisValuesResource"];
+export interface AnalysisResultPageQuery {
+  cursor?: string;
+  limit?: number;
+  stage_id?: string;
+  product_kind?: AnalysisResultProductKind;
+  search?: string;
+  from_si?: number;
+  to_si?: number;
+  sample_id?: string;
+  item_kind?: AnalysisResultItemKind;
+  branch_id?: string;
+  status?: string;
+  has_field?: boolean;
+  has_fields?: boolean;
+  frequency_min_hz?: number;
+  frequency_max_hz?: number;
+  residual_max?: number;
+  sort?: string;
+  [coordinate: `coordinate.${string}`]: string | undefined;
+}
 export type FieldDriveListResource =
   components["schemas"]["FieldDriveListResource"];
 export type PhysicsGraphResource =

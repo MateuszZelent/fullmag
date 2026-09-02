@@ -51,6 +51,7 @@ import { EigenModeInspectorPanel } from "./panels/frequency-domain/EigenModeInsp
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrModalSpectrumInspectorPanel";
 import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrResponseSweepInspectorPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
+import { AnalysisResultInspectorPanel } from "./panels/analysis-results/AnalysisResultInspectorPanel";
 import { FrozenSpinsInspectorPanel } from "./panels/constraint/FrozenSpinsInspectorPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
@@ -1410,6 +1411,12 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     component: StudyStageSaveStateInspectorPanel,
   },
   ...frequencyDomainPanels,
+  {
+    id: "analysis-result",
+    title: "Analysis result",
+    selectionKinds: ["analysis.result"],
+    component: AnalysisResultInspectorPanel,
+  },
   {
     id: "field-quantity",
     title: "Field Quantity",

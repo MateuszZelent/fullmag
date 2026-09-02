@@ -20,8 +20,14 @@ import type {
   FieldVectorResponseMetadata,
   LiveStatusResource,
   SimulationPreparationResource,
+  AnalysisResultPageQuery,
 } from "./apiTypes";
-import { SESSIONS_PATH, SIMULATION_PREPARATION_PATH } from "./apiPaths";
+import {
+  ANALYSIS_RESULT_BRANCH_POINTS_PATH,
+  ANALYSIS_RESULT_ITEMS_PATH,
+  SESSIONS_PATH,
+  SIMULATION_PREPARATION_PATH,
+} from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 import { activeLaneCapabilityFixture } from "../resources/activeLaneCapabilityFixture.testSupport";
@@ -892,6 +898,57 @@ describe("ControlRoomApi", () => {
     expect(observedInit?.method).toBe("GET");
     expect(headers.get("x-request-id")).toBe("req-1");
     expect(headers.get("x-fullmag-contract-version")).toBeNull();
+  });
+
+  it("keeps result dataset requests on the typed resource facade", async () => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => jsonResponse({}));
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-results",
+    });
+    const query = {
+      has_field: true,
+      limit: 25,
+      sample_id: "sample/1",
+    } as AnalysisResultPageQuery;
+
+    await api.analysis.results.items("run/1", "dataset/1", query);
+
+    const observedUrl = new URL(String(fetchImpl.mock.calls[0]?.[0]));
+    expect(observedUrl.pathname).toBe(
+      ANALYSIS_RESULT_ITEMS_PATH.replace("{run_id}", "run%2F1")
+        .replace("{dataset_id}", "dataset%2F1"),
+    );
+    expect(Object.fromEntries(observedUrl.searchParams)).toMatchObject({
+      has_field: "true",
+      limit: "25",
+      sample_id: "sample/1",
+    });
+  });
+
+  it("encodes branch path segments through the typed result facade", async () => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL) => jsonResponse({}));
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-branch",
+    });
+
+    await api.analysis.results.branchPoints(
+      "run/1",
+      "dataset/1",
+      "branch/7",
+      { limit: 10 },
+    );
+
+    const observedUrl = new URL(String(fetchImpl.mock.calls[0]?.[0]));
+    expect(observedUrl.pathname).toBe(
+      ANALYSIS_RESULT_BRANCH_POINTS_PATH.replace("{run_id}", "run%2F1")
+        .replace("{dataset_id}", "dataset%2F1")
+        .replace("{branch_id}", "branch%2F7"),
+    );
+    expect(observedUrl.searchParams.get("limit")).toBe("10");
   });
 
   it("creates a scratch session through the typed sessions facade", async () => {

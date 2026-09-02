@@ -14,6 +14,8 @@ import type {
   FrequencyDomainNavigatorInput,
   NavigatorArtifactDescriptor,
   NavigatorBranchDescriptor,
+  NavigatorFieldSweepModeDescriptor,
+  NavigatorFieldSweepSampleDescriptor,
   NavigatorModeDescriptor,
   NavigatorNodeStatus,
   NavigatorPage,
@@ -104,6 +106,26 @@ function capabilityStatus(
   value: string | null | undefined,
 ): NavigatorNodeStatus {
   return stateFromToken(value, "missing");
+}
+
+function fieldSweepArtifactStatus(
+  payload: FrequencyDomainNavigatorInput["fieldSweep"],
+  artifact: NavigatorArtifactDescriptor | null | undefined,
+): NavigatorNodeStatus {
+  const envelopeStatus = mapNavigatorArtifactState(artifact);
+  if (!payload) return envelopeStatus;
+  const declaredStatus = stateFromToken(payload.status, envelopeStatus);
+  const completenessStatus = payload.complete === false && declaredStatus === "ready"
+    ? "partial"
+    : declaredStatus;
+  const companionStatus = [payload.joins.spectrum, payload.joins.branches].includes("stale")
+    ? "partial"
+    : null;
+  return combineStatuses([
+    envelopeStatus,
+    completenessStatus,
+    ...(companionStatus ? [companionStatus as NavigatorNodeStatus] : []),
+  ]);
 }
 
 function combineStatuses(
@@ -204,7 +226,16 @@ function modeNode(
   parentId: string,
   input: FrequencyDomainNavigatorInput,
 ): ResultsNavigatorNode {
-  const identity = selectionIdentity(input, input.resources.spectrum);
+  const modalResource = input.fieldSweep
+    ? input.resources.fieldSweep
+    : input.resources.spectrum;
+  const typedMode = input.fieldSweep && "fieldAvailability" in mode
+    ? mode as NavigatorFieldSweepModeDescriptor
+    : null;
+  const typedModeStatus = typedMode
+    ? stateFromToken(typedMode.status, "partial")
+    : null;
+  const identity = selectionIdentity(input, modalResource);
   const id = mode.modeId && identity
     ? buildModalNodeId(
         modalSelectionRef({
@@ -217,7 +248,7 @@ function modeNode(
         }),
       )
     : nodePath(parentId, "mode", String(mode.rawModeIndex));
-  const stableRef = mode.modeId && identity
+  const stableRef = mode.modeId && sample.stableIdentityAvailable !== false && identity
     ? modalSelectionRef({
         ...identity,
         ...(mode.branchId ? { branchId: mode.branchId } : {}),
@@ -227,25 +258,47 @@ function modeNode(
         sampleIndex: sample.sampleIndex,
       })
     : undefined;
-  const status = stableRef ? "ready" : "partial";
+  const status: NavigatorNodeStatus = stableRef
+    ? typedModeStatus ?? "ready"
+    : "partial";
   const detailNodes = stableRef
     ? ([
         ["Metadata", "results.frequency-domain.mode-metadata", "metadata"],
         ["Field", "results.frequency-domain.mode-field", "field"],
         ["Residuals", "results.frequency-domain.mode-residuals", "residuals"],
-      ] as const).map(([label, kind, detail]) =>
-        node({
+      ] as const).map(([label, kind, detail]) => {
+        const detailStatus: NavigatorNodeStatus = typedMode
+          ? typedModeStatus !== "ready"
+            ? typedModeStatus ?? "partial"
+            : detail === "metadata"
+              ? typedMode.frequencyHz != null ? "ready" : "partial"
+              : detail === "residuals"
+                ? typedMode.residualNorm != null ? "ready" : "partial"
+                : typedMode.fieldAvailability === "available" ? "ready" : "partial"
+          : "unsupported";
+        const detailResourceKey = detail === "field" && typedMode?.modeFieldResourceKey
+          ? typedMode.modeFieldResourceKey
+          : `analysis:eigen:sample:${sample.sampleId}:mode:${mode.modeId}:${detail}`;
+        const detailReason = typedMode
+          ? detail === "field" && typedMode.fieldAvailability !== "available"
+            ? "Mode is spectrum-only; no verified Cartesian complex field payload is published."
+          : detailStatus !== "ready"
+              ? `Published mode ${detail} metadata is incomplete.`
+              : undefined
+          : `Published mode ${detail} resource is not available on the current transport.`;
+        return node({
           id: nodePath(id, detail),
           inspectorId: "frequency-domain/eigen/mode",
           kind,
           label,
           parentId: id,
-          resourceKey: `analysis:eigen:sample:${sample.sampleId}:mode:${mode.modeId}:${detail}`,
+          resourceKey: detailResourceKey,
+          resourceRevision: modalResource?.resourceRevision ?? undefined,
           selectionRef: modalDetailSelectionRef({ ...stableRef, detail }),
-          status: "unsupported",
-          statusReason: `Published mode ${detail} resource is not available on the current transport.`,
-        }),
-      )
+          status: detailStatus,
+          ...(detailReason ? { statusReason: detailReason } : {}),
+        });
+      })
     : [];
   return node({
     ...(detailNodes.length > 0 ? { children: detailNodes } : {}),
@@ -254,8 +307,9 @@ function modeNode(
     kind: "results.frequency-domain.mode",
     label: mode.modeId ? `Mode ${mode.modeId}` : `Mode ${mode.rawModeIndex}`,
     parentId,
-    resourceKey: `analysis:eigen:sample:${sample.sampleId}:modes`,
-    resourceRevision: input.resources.spectrum?.resourceRevision ?? undefined,
+    resourceKey: modalResource?.resourceKey
+      ?? `analysis:eigen:sample:${sample.sampleId}:modes`,
+    resourceRevision: modalResource?.resourceRevision ?? undefined,
     ...(stableRef ? { selectionRef: stableRef } : {}),
     status,
     ...(stableRef ? {} : { statusReason: "Published mode is missing stable modeId." }),
@@ -270,7 +324,17 @@ function sampleNode(
   const sampleId = nodePath(parentId, "sample", sample.sampleId);
   const modesId = nodePath(sampleId, "modes");
   const modes = sample.modes.map((mode) => modeNode(sample, mode, modesId, input));
-  const modesStatus = combineStatuses(modes.map((item) => item.status));
+  const modalResource = input.fieldSweep
+    ? input.resources.fieldSweep
+    : input.resources.spectrum;
+  const modeNodesStatus = combineStatuses(modes.map((item) => item.status));
+  const typedSample = input.fieldSweep && "biasFieldAPerM" in sample
+    ? sample as NavigatorFieldSweepSampleDescriptor
+    : null;
+  const sampleStatus = typedSample
+    ? stateFromToken(typedSample.status, modeNodesStatus)
+    : modeNodesStatus;
+  const modesStatus = combineStatuses([modeNodesStatus, sampleStatus]);
   const modesNode = node({
     children: modes,
     collection: collection(modes.length),
@@ -279,7 +343,9 @@ function sampleNode(
     kind: "results.frequency-domain.modes",
     label: "Modes",
     parentId: sampleId,
-    resourceKey: `analysis:eigen:sample:${sample.sampleId}:modes`,
+    resourceKey: modalResource?.resourceKey
+      ?? `analysis:eigen:sample:${sample.sampleId}:modes`,
+    resourceRevision: modalResource?.resourceRevision ?? undefined,
     status: modesStatus,
   });
   return node({
@@ -289,9 +355,15 @@ function sampleNode(
     kind: "results.frequency-domain.sample",
     label: sample.label ?? `Sample ${sample.sampleId}`,
     parentId,
-    resourceKey: `analysis:eigen:sample:${sample.sampleId}`,
+    resourceKey: modalResource?.resourceKey
+      ?? `analysis:eigen:sample:${sample.sampleId}`,
+    resourceRevision: modalResource?.resourceRevision ?? undefined,
     status: modes.length > 0 ? modesStatus : "partial",
-    ...(modes.length === 0 ? { statusReason: "Sample contains no published modes." } : {}),
+    ...(typedSample?.stopReason
+      ? { statusReason: typedSample.stopReason }
+      : modes.length === 0
+        ? { statusReason: "Sample contains no published modes." }
+        : {}),
   });
 }
 
@@ -423,11 +495,25 @@ function buildFrequencyDomainTree(
     parentId: modalId,
     resourceKey: "analysis:eigen:field-sweep",
     selectionRef: viewSelection(input, input.resources.fieldSweep, "field-sweep"),
-    statusOverride: input.resources.states?.fieldSweep,
+    statusOverride:
+      input.resources.states?.fieldSweep
+      ?? (input.resources.fieldSweep
+          ? input.fieldSweep
+          ? fieldSweepArtifactStatus(input.fieldSweep, input.resources.fieldSweep)
+          : mapNavigatorArtifactState(input.resources.fieldSweep) === "ready"
+            ? "partial"
+            : mapNavigatorArtifactState(input.resources.fieldSweep)
+        : undefined),
     ...(input.resources.fieldSweep ? {} : { missingStatus: "unsupported" as const }),
-    statusReason: input.resources.fieldSweep
-      ? undefined
-      : "No typed bias-field sweep artifact is published.",
+    statusReason: input.resources.fieldSweep && !input.fieldSweep
+      ? input.resources.fieldSweep.missingReason
+        ?? "Typed field-sweep payload is not available on this transport."
+      : input.fieldSweep &&
+          [input.fieldSweep.joins.spectrum, input.fieldSweep.joins.branches].includes("stale")
+        ? "Field Sweep companions have stale revisions; only stable Field Sweep identities are shown."
+        : input.resources.fieldSweep
+          ? undefined
+          : "No typed bias-field sweep artifact is published.",
   });
   const dispersion = artifactNode({
     artifact: input.resources.dispersion,
@@ -440,15 +526,19 @@ function buildFrequencyDomainTree(
     statusOverride: input.resources.states?.dispersion,
   });
   const samplesId = nodePath(modalId, "samples");
-  const samples = input.spectrum?.samples ?? [];
+  const modalSamples = input.fieldSweep ?? input.spectrum;
+  const modalSamplesResource = input.fieldSweep
+    ? input.resources.fieldSweep
+    : input.resources.spectrum;
+  const samples = modalSamples?.samples ?? [];
   const sampleNodes = samples.map((sample) => sampleNode(sample, samplesId, input));
-  const samplesStatus = input.resources.spectrum
-    ? input.spectrum
+  const samplesStatus = modalSamplesResource
+    ? modalSamples
       ? sampleNodes.length > 0
         ? combineStatuses(sampleNodes.map((item) => item.status))
         : "partial"
       : "partial"
-    : input.resources.states?.spectrum ?? "missing";
+    : input.resources.states?.[input.fieldSweep ? "fieldSweep" : "spectrum"] ?? "missing";
   const samplesNode = node({
     children: sampleNodes,
     collection: collection(sampleNodes.length),
@@ -457,10 +547,10 @@ function buildFrequencyDomainTree(
     kind: "results.frequency-domain.samples",
     label: "Samples",
     parentId: modalId,
-    resourceKey: input.resources.spectrum?.resourceKey ?? "analysis:eigen:spectrum",
-    resourceRevision: input.resources.spectrum?.resourceRevision ?? undefined,
+    resourceKey: modalSamplesResource?.resourceKey ?? "analysis:eigen:spectrum",
+    resourceRevision: modalSamplesResource?.resourceRevision ?? undefined,
     status: samplesStatus,
-    ...(samplesStatus === "partial" && !input.spectrum
+    ...(samplesStatus === "partial" && !modalSamples
       ? { statusReason: "Typed sample payload is not available on this transport." }
       : {}),
   });
@@ -915,6 +1005,7 @@ export type {
   FrequencyDomainNavigatorInput,
   NavigatorArtifactDescriptor,
   NavigatorBranchesPayload,
+  NavigatorFieldSweepPayload,
   NavigatorFmrPayload,
   NavigatorModeDescriptor,
   NavigatorResponsePayload,
@@ -924,6 +1015,7 @@ export type {
 
 export {
   navigatorBranchesFromResource,
+  navigatorFieldSweepFromResource,
   navigatorFmrFromResource,
   navigatorKittelFitArtifactFromResource,
   navigatorResonanceFitsArtifactFromResource,

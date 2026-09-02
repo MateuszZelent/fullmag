@@ -23,6 +23,8 @@ struct DemagBoundarySurface {
     std::vector<std::array<uint32_t, 3>> triangles;
     std::vector<std::array<double, 3>> unit_normals;
     std::vector<double> triangle_areas;
+    // Characteristic active-mesh length used by scale-aware geometry checks.
+    double characteristic_length = 0.0;
 };
 
 /*

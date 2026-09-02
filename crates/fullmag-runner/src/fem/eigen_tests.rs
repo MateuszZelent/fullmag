@@ -4524,6 +4524,57 @@ fn native_field_sweep_binds_published_sources_and_has_own_content_digest() {
     );
 }
 
+#[test]
+fn native_field_sweep_preserves_spectrum_only_modes_without_field_refs() {
+    let spectrum = serde_json::json!({
+        "samples": [{
+            "sample_index": 7,
+            "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+            "mesh_id": "mesh:periodic-airbox",
+            "topology_revision": "sha256:mesh-revision",
+            "modes": [{
+                "raw_mode_index": 2,
+                "frequency_hz": 6.1e9,
+                "angular_frequency_rad_per_s": std::f64::consts::TAU * 6.1e9,
+                "residual_relative_l2": 1.0e-10,
+                "equilibrium_artifact_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "linearization_state_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "operator_input_signature_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            }]
+        }]
+    });
+    let branches = serde_json::json!({"branches": []});
+    let diagnostics = serde_json::json!({
+        "requested_execution": {"backend": "fem", "device": "cpu"},
+        "resolved_execution": {"backend": "fem", "device": "cpu"}
+    });
+    let artifacts = vec![
+        json_artifact("eigen/spectrum.v2.json", &spectrum)
+            .expect("spectrum fixture should serialize"),
+        json_artifact("eigen/branches.v2.json", &branches)
+            .expect("branches fixture should serialize"),
+    ];
+
+    let artifact = build_native_field_sweep_artifact(
+        &spectrum,
+        &branches,
+        &diagnostics,
+        &artifacts,
+        1,
+        RunStatus::Completed,
+        None,
+    )
+    .expect("spectrum-only native field sweep should be serializable");
+    let mode = &artifact["samples"][0]["modes"][0];
+
+    assert_eq!(mode["mode_id"], "sample-0007/mode-0002");
+    assert_eq!(mode["field_status"], "spectrum-only");
+    assert!(mode.get("mode_artifact_path").is_none());
+    assert!(mode.get("mode_field_id").is_none());
+    assert!(mode.get("mode_field_resource_key").is_none());
+    assert!(mode["branch_id"].is_null());
+}
+
 fn scope_observables(node_count: usize, max_torque_apm: f64) -> EffectiveFieldObservables {
     let zeros = vec![[0.0, 0.0, 0.0]; node_count];
     let x_field = vec![[1.0, 0.0, 0.0]; node_count];

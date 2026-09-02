@@ -404,6 +404,12 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("routes analysis-result selections to the typed result inspector", () => {
+    expect(resolveInspectorPanel({ kind: "analysis.result" })?.id).toBe(
+      "analysis-result",
+    );
+  });
+
   it("routes the Results root to a Results overview rather than Field Quantity", () => {
     expect(resolveInspectorPanel({ kind: "results.root" })?.component.name).toBe(
       "ResultsOverviewInspectorPanel",
