@@ -14,13 +14,22 @@ export interface AnalysisResultInspectorRelationRow extends AnalysisResultInspec
 }
 
 export interface AnalysisResultInspectorModel {
+  axes: readonly AnalysisResultInspectorRow[];
   metadata: readonly AnalysisResultInspectorRow[];
+  provenance: readonly AnalysisResultInspectorRow[];
   relations: readonly AnalysisResultInspectorRelationRow[];
+  sources: readonly AnalysisResultInspectorRow[];
 }
 
 type InspectorManifest = Pick<
   AnalysisResultDatasetManifestResource,
-  "dataset_id" | "dataset_revision" | "product_kind" | "provenance" | "status"
+  | "axes"
+  | "dataset_id"
+  | "dataset_revision"
+  | "product_kind"
+  | "provenance"
+  | "source_artifacts"
+  | "status"
 >;
 type InspectorItem = Pick<AnalysisResultSpectralItemSummary, "relations" | "source_revision">;
 type InspectorRelation = AnalysisResultSpectralItemSummary["relations"][number];
@@ -50,9 +59,59 @@ export function buildAnalysisResultInspectorModel({
   manifest: InspectorManifest | null;
 }): AnalysisResultInspectorModel {
   return {
+    axes: axisRows(manifest),
     metadata: metadataRows(manifest),
+    provenance: provenanceRows(manifest),
     relations: relationRows(manifest, item),
+    sources: sourceRows(manifest),
   };
+}
+
+function axisRows(
+  manifest: InspectorManifest | null,
+): readonly AnalysisResultInspectorRow[] {
+  if (!manifest) return [];
+  return manifest.axes.map((axis) => ({
+    label: axis.label,
+    mono: true,
+    value: [
+      axis.role,
+      axis.value_kind,
+      `${axis.cardinality} values`,
+      axis.unit_si ?? "dimensionless",
+      `semantic=${axis.semantic_id}`,
+    ].join(" · "),
+  }));
+}
+
+function sourceRows(
+  manifest: InspectorManifest | null,
+): readonly AnalysisResultInspectorRow[] {
+  if (!manifest) return [];
+  return manifest.source_artifacts.map((source) => ({
+    label: source.relation,
+    mono: true,
+    value: `${source.artifact} · ${source.revision}`,
+  }));
+}
+
+function provenanceRows(
+  manifest: InspectorManifest | null,
+): readonly AnalysisResultInspectorRow[] {
+  if (!manifest) return [];
+  return Object.entries(manifest.provenance)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([key, value]) => value.trim()
+      ? [{ label: provenanceLabel(key), mono: true, value }]
+      : []);
+}
+
+function provenanceLabel(key: string): string {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
 }
 
 function metadataRows(manifest: InspectorManifest | null): readonly AnalysisResultInspectorRow[] {

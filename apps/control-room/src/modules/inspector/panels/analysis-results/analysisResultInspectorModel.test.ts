@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 
 import { buildAnalysisResultInspectorModel } from "./analysisResultInspectorModel";
 
+const axis = {
+  axis_id: "bias-field",
+  cardinality: 15,
+  inline_values: null,
+  label: "Bias field",
+  ordering: "source_order",
+  preferred_display_units: ["mT"],
+  projections: [],
+  role: "outer_sweep",
+  semantic_id: "bias_field_a_per_m",
+  symbol: "μ₀Hₓ",
+  unit_si: "A/m",
+  value_kind: "vector3",
+  values_resource_key: "/axes/bias-field/values",
+};
+
 const status = {
   completeness: "ready",
   execution: "published",
@@ -11,10 +27,16 @@ const status = {
 
 function manifest(productKind: "time_domain_spectrum" | "dynamic_structure_factor", provenance: Record<string, string>) {
   return {
+    axes: [axis],
     dataset_id: "dataset:time-domain",
     dataset_revision: "sha256:dataset-current",
     product_kind: productKind,
     provenance,
+    source_artifacts: [{
+      artifact: "analysis/time-series.zarr",
+      relation: "adapter_source",
+      revision: "sha256:source-current",
+    }],
     status,
   };
 }
@@ -139,6 +161,36 @@ describe("analysis result inspector model", () => {
         mono: true,
         status: "ready",
         value: "dataset:peaks · sample:1 · peak:12 · sha256:peaks · peak_extraction.v1 · validated",
+      },
+    ]);
+  });
+
+  it("publishes axis identity and source artifact provenance for every dataset", () => {
+    const model = buildAnalysisResultInspectorModel({
+      item: null,
+      manifest: {
+        ...manifest("time_domain_spectrum", { sampling_clock: "N=128; dt=1e-12 s" }),
+        axes: [axis],
+        source_artifacts: [{
+          artifact: "analysis/time-series.zarr",
+          relation: "canonical_time_series",
+          revision: "sha256:time-series",
+        }],
+      },
+    });
+
+    expect(model.axes).toEqual([
+      {
+        label: "Bias field",
+        mono: true,
+        value: "outer_sweep · vector3 · 15 values · A/m · semantic=bias_field_a_per_m",
+      },
+    ]);
+    expect(model.sources).toEqual([
+      {
+        label: "canonical_time_series",
+        mono: true,
+        value: "analysis/time-series.zarr · sha256:time-series",
       },
     ]);
   });

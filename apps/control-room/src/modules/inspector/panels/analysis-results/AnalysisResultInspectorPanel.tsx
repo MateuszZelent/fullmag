@@ -131,6 +131,10 @@ export function AnalysisResultInspectorPanel({
           ? sample.status
           : manifest.status;
   const diagnostics = [
+    ...(manifestData?.status.reason_code
+      ? [`Result status: ${manifestData.status.reason_code}`]
+      : []),
+    ...(manifestData?.status.detail ? [manifestData.status.detail] : []),
     ...(projection.data?.unsupported_reason
       ? [`Projection unsupported: ${projection.data.unsupported_reason}`]
       : []),
@@ -238,9 +242,24 @@ function AnalysisResultMetadata({
 }) {
   return (
     <>
+      {model.axes.length > 0 ? (
+        <InspectorGroup title="Dataset axes">
+          {model.axes.map((row) => <FieldRow key={row.label} {...row} />)}
+        </InspectorGroup>
+      ) : null}
       {model.metadata.length > 0 ? (
         <InspectorGroup title="Time-domain metadata">
           {model.metadata.map((row) => <FieldRow key={row.label} {...row} />)}
+        </InspectorGroup>
+      ) : null}
+      {model.provenance.length > 0 ? (
+        <InspectorGroup title="Published provenance">
+          {model.provenance.map((row) => <FieldRow key={`${row.label}:${row.value}`} {...row} />)}
+        </InspectorGroup>
+      ) : null}
+      {model.sources.length > 0 ? (
+        <InspectorGroup title="Source artifacts">
+          {model.sources.map((row) => <FieldRow key={`${row.label}:${row.value}`} {...row} />)}
         </InspectorGroup>
       ) : null}
       <InspectorGroup title="Item relations">
