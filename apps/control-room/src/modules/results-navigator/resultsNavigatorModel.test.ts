@@ -84,6 +84,7 @@ function fieldSweepResource(): FrequencyDomainJsonArtifactResource {
         sample_id: sampleId,
         source_revision: "sha256:spectrum-1",
         status: "complete",
+        field_status: "ready",
       }],
       operator_input_signature_sha256: `sha256:operator-${index}`,
       equilibrium_artifact_sha256: `sha256:equilibrium-${index}`,
@@ -147,6 +148,33 @@ function fieldSweepResource(): FrequencyDomainJsonArtifactResource {
     schema_version: "eigen/field_sweep.v1",
     status: "ready",
   } as unknown as FrequencyDomainJsonArtifactResource;
+}
+
+function fieldSweepCompanions(resource: FrequencyDomainJsonArtifactResource): {
+  branches: NavigatorBranchesPayload;
+  spectrum: NavigatorSpectrumPayload;
+} {
+  const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+  return {
+    branches: {
+      branches: [{ branchId: "0", modeCount: 1, stableIdentityAvailable: true }],
+    },
+    spectrum: {
+      samples: (payload.samples ?? []).map((sample, samplePosition) => ({
+        label: `Sample ${sample.sample_id ?? samplePosition}`,
+        modes: (sample.modes ?? []).map((mode, modePosition) => ({
+          branchId: mode.branch_id == null ? null : String(mode.branch_id),
+          displayModeIndex: mode.raw_mode_index ?? modePosition,
+          frequencyHz: mode.frequency_hz,
+          modeId: mode.mode_id,
+          rawModeIndex: mode.raw_mode_index ?? modePosition,
+        })),
+        sampleId: sample.sample_id ?? `sample-${samplePosition}`,
+        sampleIndex: sample.sample_index ?? samplePosition,
+        stableIdentityAvailable: sample.sample_id != null,
+      })),
+    },
+  };
 }
 
 function artifact(
@@ -710,6 +738,190 @@ describe("results navigator model", () => {
     });
   });
 
+  it("does not expose a spectrum-only mode field even when typed refs are present", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const firstSample = payload.samples?.[0];
+    const firstMode = firstSample?.modes?.[0];
+    if (!firstSample || !firstMode) throw new Error("field-sweep fixture is empty");
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: {
+        ...payload,
+        samples: [
+          {
+            ...firstSample,
+            modes: [{ ...firstMode, field_status: "spectrum-only" }],
+          },
+          ...(payload.samples?.slice(1) ?? []),
+        ],
+      },
+    });
+
+    expect(adapted?.samples[0]?.modes[0]).toMatchObject({
+      fieldAvailability: "unavailable",
+      modeFieldId: null,
+      modeFieldResourceKey: null,
+    });
+    expect(adapted?.samples[0]?.fieldAvailableCount).toBe(0);
+  });
+
+  it("fails closed for duplicate field-sweep sample and mode IDs", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const samples = payload.samples ?? [];
+    const firstSample = samples[0];
+    const firstMode = firstSample?.modes?.[0];
+    if (!firstSample || !firstMode || !samples[1]) {
+      throw new Error("field-sweep fixture is incomplete");
+    }
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: {
+        ...payload,
+        samples: samples.map((sample, index) => index < 2
+          ? {
+              ...sample,
+              sample_id: "duplicate-sample",
+              ...(index === 0
+                ? {
+                    modes: [
+                      ...(sample.modes ?? []),
+                      {
+                        ...firstMode,
+                        mode_field_id: "analysis:eigen:duplicate:mode-0001",
+                        mode_field_resource_key: "data/fields/analysis:eigen:duplicate:mode-0001",
+                        raw_mode_index: 1,
+                      },
+                    ],
+                  }
+                : {}),
+            }
+          : sample),
+      },
+    });
+
+    expect(adapted?.samples[0]?.stableIdentityAvailable).toBe(false);
+    expect(adapted?.samples[1]?.stableIdentityAvailable).toBe(false);
+    expect(adapted?.samples[0]?.sampleId).not.toBe(adapted?.samples[1]?.sampleId);
+    expect(adapted?.samples[0]?.modes.map((mode) => mode.modeId)).toEqual([null, null]);
+    expect(adapted?.samples[0]?.fieldAvailableCount).toBe(0);
+  });
+
+  it("does not join a field-sweep sample when a stable mode ID is missing", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const companions = fieldSweepCompanions(resource);
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: {
+        ...payload,
+        samples: (payload.samples ?? []).map((sample, samplePosition) => samplePosition === 0
+          ? {
+              ...sample,
+              modes: (sample.modes ?? []).map((mode, modePosition) => modePosition === 0
+                ? { ...mode, mode_id: "" }
+                : mode),
+            }
+          : sample),
+      },
+    }, {
+      spectrum: companions.spectrum,
+      spectrumRevision: "sha256:spectrum-1",
+    });
+
+    expect(adapted?.joins.spectrum).toBe("stale");
+  });
+
+  it("fails closed when the field-sweep source revision is missing", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const companions = fieldSweepCompanions(resource);
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: { ...payload, source_revision: null },
+    }, {
+      branches: companions.branches,
+      branchesRevision: "sha256:branches-1",
+      spectrum: companions.spectrum,
+      spectrumRevision: "sha256:spectrum-1",
+    });
+
+    expect(adapted?.joins).toEqual({ branches: "stale", spectrum: "stale" });
+  });
+
+  it("fails closed when companion source revisions are missing", () => {
+    const resource = fieldSweepResource();
+    const companions = fieldSweepCompanions(resource);
+
+    const adapted = navigatorFieldSweepFromResource(resource, {
+      branches: companions.branches,
+      branchesRevision: null,
+      spectrum: companions.spectrum,
+      spectrumRevision: null,
+    });
+
+    expect(adapted?.joins).toEqual({ branches: "stale", spectrum: "stale" });
+  });
+
+  it("fails closed when a known source relation is malformed", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const companions = fieldSweepCompanions(resource);
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: {
+        ...payload,
+        cross_artifact_refs: [
+          ...(payload.cross_artifact_refs ?? []),
+          { artifact: "eigen/spectrum-legacy.v2.json", relation: "source_spectrum" },
+        ],
+      },
+    } as unknown as FrequencyDomainJsonArtifactResource, {
+      spectrum: companions.spectrum,
+      spectrumRevision: "sha256:spectrum-1",
+    });
+
+    expect(adapted?.sourceSpectrumRevision).toBeNull();
+    expect(adapted?.joins.spectrum).toBe("stale");
+  });
+
+  it("fails closed when a field-sweep mode source revision differs from the source", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+    const companions = fieldSweepCompanions(resource);
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: {
+        ...payload,
+        samples: (payload.samples ?? []).map((sample, samplePosition) => samplePosition === 0
+          ? {
+              ...sample,
+              modes: (sample.modes ?? []).map((mode, modePosition) => modePosition === 0
+                ? { ...mode, source_revision: "sha256:stale-mode" }
+                : mode),
+            }
+          : sample),
+      },
+    }, {
+      spectrum: companions.spectrum,
+      spectrumRevision: "sha256:spectrum-1",
+    });
+
+    expect(adapted?.joins.spectrum).toBe("stale");
+    expect(adapted?.samples[0]?.modes[0]).toMatchObject({
+      fieldAvailability: "unavailable",
+      modeFieldId: null,
+      modeFieldResourceKey: null,
+    });
+  });
+
   it("keeps a legacy minimal field sweep partial instead of promoting it to ready", () => {
     const adapted = navigatorFieldSweepFromResource({
       artifact_path: "eigen/field_sweep.v1.json",
@@ -741,6 +953,18 @@ describe("results navigator model", () => {
     expect(collectNodes(tree).find((node) => node.label === "Field Sweep")).toMatchObject({
       status: "partial",
     });
+  });
+
+  it("does not expose complete status when a typed payload is explicitly incomplete", () => {
+    const resource = fieldSweepResource();
+    const payload = resource.payload as components["schemas"]["FrequencyDomainFieldSweepArtifactPayload"];
+
+    const adapted = navigatorFieldSweepFromResource({
+      ...resource,
+      payload: { ...payload, complete: false, status: "complete" },
+    });
+
+    expect(adapted).toMatchObject({ complete: false, status: "partial" });
   });
 
   it("uses field-sweep samples as the modal source and binds mode fields to its revision", () => {

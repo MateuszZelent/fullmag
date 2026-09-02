@@ -624,6 +624,19 @@ function finiteTuple(value: unknown): readonly [number, number, number] | null {
     : null;
 }
 
+function duplicateStableIds(values: readonly unknown[]): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    const id = nonEmptyString(value);
+    if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id),
+  );
+}
+
 function fieldSweepAxisFromPayload(
   axis: FrequencyDomainFieldSweepArtifactPayload["scan_axis"],
 ): NavigatorFieldSweepAxis | null {
@@ -729,12 +742,31 @@ function fieldSweepModeFromPayload(
     NonNullable<FrequencyDomainFieldSweepArtifactPayload["samples"]>[number]["modes"]
   >[number],
   sampleId: string,
+  stableSampleId: string | null,
+  sourceRevision: string | null,
   position: number,
+  duplicateModeIds: ReadonlySet<string>,
 ): NavigatorFieldSweepModeDescriptor {
   const rawModeIndex = Math.max(0, Math.trunc(finiteNumber(mode.raw_mode_index) ?? position));
+  const modeId = nonEmptyString(mode.mode_id);
   const modeFieldId = nonEmptyString(mode.mode_field_id);
   const modeFieldResourceKey = nonEmptyString(mode.mode_field_resource_key);
-  const hasFieldIdentity = Boolean(modeFieldId && modeFieldResourceKey);
+  const modeSourceRevision = nonEmptyString(mode.source_revision);
+  const fieldStatus = normalizedStatusToken(mode.field_status);
+  const sourceRevisionMatches = sourceRevision == null || modeSourceRevision === sourceRevision;
+  const hasStableModeIdentity = Boolean(
+    stableSampleId
+      && nonEmptyString(mode.sample_id) === stableSampleId
+      && modeId
+      && !duplicateModeIds.has(modeId),
+  );
+  const hasFieldIdentity = Boolean(
+    hasStableModeIdentity
+      && sourceRevisionMatches
+      && (fieldStatus === "" || fieldStatus === "ready")
+      && modeFieldId
+      && modeFieldResourceKey,
+  );
   return {
     angularFrequencyRadPerS: finiteNumber(mode.angular_frequency_rad_per_s),
     branchId: mode.branch_id == null ? null : String(mode.branch_id),
@@ -745,11 +777,11 @@ function fieldSweepModeFromPayload(
     modeArtifactPath: nonEmptyString(mode.mode_artifact_path),
     modeFieldId: hasFieldIdentity ? modeFieldId : null,
     modeFieldResourceKey: hasFieldIdentity ? modeFieldResourceKey : null,
-    modeId: nonEmptyString(mode.mode_id),
-    modeSourceRevision: nonEmptyString(mode.source_revision),
+    modeId: hasStableModeIdentity ? modeId : null,
+    modeSourceRevision,
     rawModeIndex,
     residualNorm: finiteNumber(mode.residual_relative_l2),
-    sampleId: nonEmptyString(mode.sample_id) ?? sampleId,
+    sampleId,
     status: nonEmptyString(mode.status) ?? "unknown",
   };
 }
@@ -792,10 +824,25 @@ function fieldSweepSampleFromPayload(
   axis: NavigatorFieldSweepAxis | null,
   topology: NavigatorFieldSweepTopology | null,
   sourceRevision: string | null,
+  duplicateSampleIds: ReadonlySet<string>,
 ): NavigatorFieldSweepSampleDescriptor {
-  const sampleId = nonEmptyString(sample.sample_id) ?? `sample-${position}`;
+  const publishedSampleId = nonEmptyString(sample.sample_id);
+  const stableSampleId = publishedSampleId && !duplicateSampleIds.has(publishedSampleId)
+    ? publishedSampleId
+    : null;
+  const sampleId = stableSampleId ?? `sample-${position}`;
+  const duplicateModeIds = duplicateStableIds(
+    (sample.modes ?? []).map((mode) => mode.mode_id),
+  );
   const modes = (sample.modes ?? []).map((mode, modePosition) =>
-    fieldSweepModeFromPayload(mode, sampleId, modePosition),
+    fieldSweepModeFromPayload(
+      mode,
+      sampleId,
+      stableSampleId,
+      sourceRevision,
+      modePosition,
+      duplicateModeIds,
+    ),
   );
   const sampleAxis = fieldSweepAxisFromPayload(sample.scan_axis) ?? axis;
   const sampleTopology = fieldSweepTopologyFromPayload(sample.topology) ?? topology;
@@ -819,7 +866,7 @@ function fieldSweepSampleFromPayload(
     sampleIndex: Math.max(0, Math.trunc(finiteNumber(sample.sample_index) ?? position)),
     scanAxis: sampleAxis,
     sourceRevision,
-    stableIdentityAvailable: nonEmptyString(sample.sample_id) != null,
+    stableIdentityAvailable: stableSampleId != null,
     status: nonEmptyString(sample.status) ?? "unknown",
     stopReason: nonEmptyString(sample.stop_reason),
     topology: sampleTopology,
@@ -830,17 +877,33 @@ function fieldSweepSamplesMatchSpectrum(
   samples: readonly NavigatorFieldSweepSampleDescriptor[],
   spectrum: NavigatorSpectrumPayload,
 ): boolean {
+  if (
+    spectrum.samples.some(
+      (sample) =>
+        sample.stableIdentityAvailable === false || !nonEmptyString(sample.sampleId),
+    )
+    || duplicateStableIds(spectrum.samples.map((sample) => sample.sampleId)).size > 0
+  ) {
+    return false;
+  }
   const bySampleId = new Map(spectrum.samples.map((sample) => [sample.sampleId, sample]));
   return samples.every((sample) => {
-    if (sample.stableIdentityAvailable === false) return false;
+    if (
+      sample.stableIdentityAvailable === false
+      || sample.modes.some(
+        (mode) => mode.modeId == null || mode.modeSourceRevision !== sample.sourceRevision,
+      )
+    ) {
+      return false;
+    }
     const companion = bySampleId.get(sample.sampleId);
+    if (!companion) return false;
+    const companionModeIds = companion.modes
+      .map((mode) => mode.modeId)
+      .filter((modeId): modeId is string => modeId != null);
     return Boolean(
-      companion
-        && sample.modes.every(
-          (mode) =>
-            mode.modeId == null
-              || companion.modes.some((companionMode) => companionMode.modeId === mode.modeId),
-        ),
+      duplicateStableIds(companionModeIds).size === 0
+        && sample.modes.every((mode) => companionModeIds.includes(mode.modeId!)),
     );
   });
 }
@@ -849,6 +912,15 @@ function fieldSweepSamplesMatchBranches(
   samples: readonly NavigatorFieldSweepSampleDescriptor[],
   branches: NavigatorBranchesPayload,
 ): boolean {
+  if (
+    branches.branches.some(
+      (branch) =>
+        branch.stableIdentityAvailable === false || !nonEmptyString(branch.branchId),
+    )
+    || duplicateStableIds(branches.branches.map((branch) => branch.branchId)).size > 0
+  ) {
+    return false;
+  }
   const branchIds = new Set(branches.branches.map((branch) => branch.branchId));
   return samples.every((sample) =>
     [...sample.branchIds, ...sample.modes.flatMap((mode) => mode.branchId ? [mode.branchId] : [])]
@@ -863,8 +935,20 @@ function fieldSweepJoinState(
   matches: boolean,
 ): NavigatorFieldSweepJoinState {
   if (!companionAvailable) return "unavailable";
-  if (!sourceRevision || !companionRevision) return "not_checked";
+  if (!sourceRevision || !companionRevision) return "stale";
   return sourceRevision === companionRevision && matches ? "compatible" : "stale";
+}
+
+function singleCrossArtifactRevision(
+  references: readonly NavigatorFieldSweepReference[],
+  relation: string,
+  malformedRelations: ReadonlySet<string> = new Set(),
+): string | null {
+  if (malformedRelations.has(relation)) return null;
+  const revisions = references
+    .filter((reference) => reference.relation === relation)
+    .map((reference) => reference.revision);
+  return revisions.length === 1 ? revisions[0]! : null;
 }
 
 export interface NavigatorFieldSweepCompanions {
@@ -884,27 +968,67 @@ export function navigatorFieldSweepFromResource(
   const hasTypedContract = hasCompleteFieldSweepContract(payload);
   const axis = fieldSweepAxisFromPayload(payload.scan_axis);
   const sourceRevision = nonEmptyString(payload.source_revision);
-  const samples = (payload.samples ?? []).map((sample, position) =>
+  const payloadSamples = payload.samples ?? [];
+  const duplicateSampleIds = duplicateStableIds(
+    payloadSamples.map((sample) => sample.sample_id),
+  );
+  const samples = payloadSamples.map((sample, position) =>
     fieldSweepSampleFromPayload(
       sample,
       position,
       axis,
       fieldSweepTopologyFromPayload(payload.topology),
       sourceRevision,
+      duplicateSampleIds,
     ),
   );
+  const malformedCrossArtifactRelations = new Set<string>();
   const crossArtifactRefs = (payload.cross_artifact_refs ?? [])
     .map((reference) => {
       const artifact = nonEmptyString(reference.artifact);
       const relation = nonEmptyString(reference.relation);
       const revision = nonEmptyString(reference.revision);
+      if (
+        relation
+        && (relation === "source_spectrum" || relation === "source_branches")
+        && (!artifact || !revision)
+      ) {
+        malformedCrossArtifactRelations.add(relation);
+      }
       return artifact && relation && revision ? { artifact, relation, revision } : null;
     })
     .filter((reference): reference is NavigatorFieldSweepReference => reference != null);
-  const sourceSpectrumRevision =
-    crossArtifactRefs.find((reference) => reference.relation === "source_spectrum")?.revision ?? null;
-  const sourceBranchesRevision =
-    crossArtifactRefs.find((reference) => reference.relation === "source_branches")?.revision ?? null;
+  const source = fieldSweepSourceFromPayload(payload.source);
+  const sourceSpectrumRevision = singleCrossArtifactRevision(
+    crossArtifactRefs,
+    "source_spectrum",
+    malformedCrossArtifactRelations,
+  );
+  const sourceBranchesRevision = singleCrossArtifactRevision(
+    crossArtifactRefs,
+    "source_branches",
+    malformedCrossArtifactRelations,
+  );
+  const sourceRevisionIsConsistent = Boolean(
+    source
+      && sourceRevision
+      && source.revision === sourceRevision,
+  );
+  const spectrumJoinRevision = sourceRevisionIsConsistent
+    && sourceSpectrumRevision === sourceRevision
+    ? sourceSpectrumRevision
+    : null;
+  const branchesJoinRevision = sourceRevisionIsConsistent
+    ? sourceBranchesRevision
+    : null;
+  const stableIdentitiesAreValid = samples.every(
+    (sample) =>
+      sample.stableIdentityAvailable !== false
+      && sample.sourceRevision != null
+      && sample.modes.every(
+        (mode) => mode.modeId != null && mode.modeSourceRevision === sample.sourceRevision,
+      ),
+  );
   const datasetRevision =
     nonEmptyString(payload.revision) ?? artifactResourceRevision(resource);
 
@@ -919,7 +1043,7 @@ export function navigatorFieldSweepFromResource(
     interrupted: payload.interrupted ?? null,
     joins: {
       branches: fieldSweepJoinState(
-        sourceBranchesRevision,
+        branchesJoinRevision,
         companions.branchesRevision,
         companions.branches != null,
         companions.branches == null
@@ -927,7 +1051,7 @@ export function navigatorFieldSweepFromResource(
           : fieldSweepSamplesMatchBranches(samples, companions.branches),
       ),
       spectrum: fieldSweepJoinState(
-        sourceSpectrumRevision,
+        spectrumJoinRevision,
         companions.spectrumRevision,
         companions.spectrum != null,
         companions.spectrum == null
@@ -941,12 +1065,19 @@ export function navigatorFieldSweepFromResource(
     runId: nonEmptyString(payload.run_id),
     samples,
     scopeId: nonEmptyString(payload.scope_id),
-    source: fieldSweepSourceFromPayload(payload.source),
+    source,
     sourceBranchesRevision,
     sourceRevision,
     sourceSpectrumRevision,
     stageId: nonEmptyString(payload.stage_id),
-    status: hasTypedContract ? nonEmptyString(payload.status) : "incomplete",
+    status: hasTypedContract
+      && payload.complete === true
+      && sourceRevisionIsConsistent
+      && stableIdentitiesAreValid
+      ? nonEmptyString(payload.status)
+      : hasTypedContract
+        ? "partial"
+        : "incomplete",
     stopReason: nonEmptyString(payload.stop_reason),
     topology: fieldSweepTopologyFromPayload(payload.topology),
     units: fieldSweepUnitsFromPayload(payload.units),
