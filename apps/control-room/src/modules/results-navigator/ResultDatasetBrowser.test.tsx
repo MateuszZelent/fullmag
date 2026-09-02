@@ -102,6 +102,8 @@ describe("ResultDatasetBrowser", () => {
     browserBranches: Parameters<typeof buildResultDatasetBrowserModel>[0]["branches"] = null,
     serverFiltering = true,
     serverSorting = true,
+    axisDisplayUnits: Readonly<Record<string, string>> = {},
+    onAxisDisplayUnitChange = () => undefined,
   ): string {
     const model = buildResultDatasetBrowserModel({
       branches: browserBranches,
@@ -115,6 +117,7 @@ describe("ResultDatasetBrowser", () => {
     return renderToStaticMarkup(
       <ResultDatasetBrowser
         axisFilters={{}}
+        axisDisplayUnits={axisDisplayUnits}
         branchFilter={null}
         branchesPage={browserBranches}
         branchesResourceStatus="ready"
@@ -134,6 +137,7 @@ describe("ResultDatasetBrowser", () => {
         manifestResourceStatus="ready"
         model={model}
         onAxisFilterChange={() => undefined}
+        onAxisDisplayUnitChange={onAxisDisplayUnitChange}
         onBranchFilterChange={() => undefined}
         onBranchPageChange={() => undefined}
         onCatalogPageChange={() => undefined}
@@ -294,6 +298,52 @@ describe("ResultDatasetBrowser", () => {
     expect(html).toContain('aria-label="Bias field search"');
     expect(html).toContain('data-slot="select-trigger"');
     expect(html).not.toContain("Values are paged by the server");
+  });
+
+  it("renders the selected display unit without changing the canonical axis selector", () => {
+    const displayManifest: AnalysisResultDatasetManifestResource = {
+      ...manifest,
+      axes: [
+        {
+          axis_id: "bias-field",
+          cardinality: 1,
+          inline_values: [
+            {
+              category: null,
+              entity_ref: null,
+              label: "mu0 Hx = 75 mT",
+              scalar_si: 0.075,
+              status: "ready",
+              token: "bias:75mT",
+              vector3_si: null,
+            },
+          ],
+          label: "Bias field",
+          ordering: "source_order",
+          preferred_display_units: ["mT", "T"],
+          projections: [],
+          role: "outer_sweep",
+          semantic_id: "bias_field_t",
+          symbol: "mu0 Hx",
+          unit_si: "T",
+          value_kind: "scalar",
+          values_resource_key: null,
+        },
+      ],
+    };
+    const onDisplayUnitChange = vi.fn();
+    const html = renderBrowser(
+      null,
+      displayManifest,
+      null,
+      true,
+      true,
+      { "bias-field": "mT" },
+      onDisplayUnitChange,
+    );
+
+    expect(html).toContain('aria-label="Bias field display unit"');
+    expect(html).toContain("Bias field: 1 mT");
   });
 
   it("exposes follow-branch action only through the tracked branch resource", () => {

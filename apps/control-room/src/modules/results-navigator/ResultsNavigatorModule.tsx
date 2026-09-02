@@ -43,6 +43,7 @@ import {
   type ResultDatasetItemStatusFilter,
 } from "./resultDatasetBrowserModel";
 import {
+  analysisResultAxisPresentation,
   analysisResultSelectionRef,
   type AnalysisResultSelectionRef,
 } from "@/shared/domain/analysis/results";
@@ -209,6 +210,7 @@ export default function ResultsNavigatorModule({
     [selectedResultAxisFilterKey],
   );
   const [resultAxisFilters, setResultAxisFilters] = useState<Record<string, string>>({});
+  const [resultAxisDisplayUnits, setResultAxisDisplayUnits] = useState<Record<string, string>>({});
   const [resultAxisFilterDatasetId, setResultAxisFilterDatasetId] =
     useState<string | null>(null);
   const [resultBranchFilter, setResultBranchFilter] = useState<string | null>(null);
@@ -529,6 +531,7 @@ export default function ResultsNavigatorModule({
       setResultAxisFilters({ ...nextAxisFilters });
       setResultAxisFilterDatasetId(selection.datasetId);
       if (selection.datasetId !== selectedResultDatasetId) {
+        setResultAxisDisplayUnits({});
         setResultBranchFilter(null);
         setResultBranchFilterDatasetId(selection.datasetId);
         setResultFollowedBranchId(null);
@@ -653,6 +656,17 @@ export default function ResultsNavigatorModule({
       resultManifest.data,
     ],
   );
+  const onAxisDisplayUnitChange = useCallback(
+    (axisId: string, unit: string) => {
+      const manifestData = resultManifest.data;
+      const axis = manifestData?.axes.find((candidate) => candidate.axis_id === axisId);
+      if (!axis) return;
+      const presentation = analysisResultAxisPresentation(axis);
+      if (!presentation.displayUnits.includes(unit)) return;
+      setResultAxisDisplayUnits((current) => ({ ...current, [axisId]: unit }));
+    },
+    [resultManifest.data],
+  );
   const onOpenResultAnalysis = useCallback(() => {
     void kernel.commands.execute(
       "analysis-plots.open",
@@ -705,7 +719,9 @@ export default function ResultsNavigatorModule({
           }
           onDatasetSearchChange={onResultDatasetSearchChange}
           axisFilters={effectiveResultAxisFilters}
+          axisDisplayUnits={resultAxisDisplayUnits}
           onAxisFilterChange={onAxisFilterChange}
+          onAxisDisplayUnitChange={onAxisDisplayUnitChange}
           branchFilter={effectiveResultBranchId}
           onBranchFilterChange={onResultBranchFilterChange}
           onBranchPageChange={(cursor) =>

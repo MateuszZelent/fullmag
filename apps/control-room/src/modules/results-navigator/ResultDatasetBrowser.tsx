@@ -29,6 +29,10 @@ import {
   type ResultDatasetBrowserModel,
   type ResultDatasetItemStatusFilter,
 } from "./resultDatasetBrowserModel";
+import {
+  analysisResultAxisPresentation,
+  formatAnalysisResultAxisValue,
+} from "@/shared/domain/analysis/results/axisPresentation";
 import { Input } from "@/shared/ui/Input";
 import {
   Select,
@@ -56,6 +60,7 @@ export interface ResultDatasetBrowserProps {
   samplesPage: AnalysisResultSamplePageResource | null;
   samplesResourceStatus: ResourceStatus;
   axisFilters: Readonly<Record<string, string>>;
+  axisDisplayUnits?: Readonly<Record<string, string>>;
   branchFilter: string | null;
   datasetSearch: string;
   itemFieldFilter: "all" | "true" | "false";
@@ -71,6 +76,7 @@ export interface ResultDatasetBrowserProps {
   onDatasetSearchChange: (value: string) => void;
   onCatalogPageChange: (cursor: string | null) => void;
   onAxisFilterChange: (axisId: string, token: string | null) => void;
+  onAxisDisplayUnitChange?: (axisId: string, unit: string) => void;
   onBranchFilterChange: (branchId: string | null) => void;
   onBranchPageChange: (cursor: string | null) => void;
   onFollowBranch: (branchId: string | null) => void;
@@ -208,6 +214,8 @@ export function ResultDatasetBrowser({
   followedBranchId,
   serverFiltering,
   serverSorting,
+  axisDisplayUnits = {},
+  onAxisDisplayUnitChange,
 }: ResultDatasetBrowserProps) {
   const selectedDatasetSelection =
     manifest &&
@@ -370,11 +378,13 @@ export function ResultDatasetBrowser({
                       ) ?? null
                     }
                     axisFilters={axisFilters}
+                    displayUnit={axisDisplayUnits[axis.axisId] ?? null}
                     datasetId={manifest.dataset_id}
                     datasetRevision={manifest.dataset_revision}
                     disabled={!serverFiltering}
                     key={`${manifest.dataset_id}:${manifest.dataset_revision}:${axis.axisId}`}
                     onAxisFilterChange={onAxisFilterChange}
+                    onAxisDisplayUnitChange={onAxisDisplayUnitChange}
                     runId={manifest.run_id}
                   />
                 ))}
@@ -767,7 +777,9 @@ function ResultDatasetAxisControl({
   axisResource,
   datasetId,
   datasetRevision,
+  displayUnit,
   disabled,
+  onAxisDisplayUnitChange,
   onAxisFilterChange,
   runId,
 }: {
@@ -776,7 +788,9 @@ function ResultDatasetAxisControl({
   axisResource: AnalysisResultAxisResource | null;
   datasetId: string;
   datasetRevision: string;
+  displayUnit: string | null;
   disabled: boolean;
+  onAxisDisplayUnitChange?: (axisId: string, unit: string) => void;
   onAxisFilterChange: (axisId: string, token: string | null) => void;
   runId: string;
 }) {
@@ -788,8 +802,11 @@ function ResultDatasetAxisControl({
     return (
       <ResultDatasetAxisCard
         axis={axis}
+        axisResource={axisResource}
         axisFilters={axisFilters}
+        displayUnit={displayUnit}
         disabled={disabled}
+        onAxisDisplayUnitChange={onAxisDisplayUnitChange}
         onAxisFilterChange={onAxisFilterChange}
         values={inlineValues ?? null}
       />
@@ -799,9 +816,12 @@ function ResultDatasetAxisControl({
     <PagedResultDatasetAxisControl
       axis={axis}
       axisFilters={axisFilters}
+      axisResource={axisResource}
       datasetId={datasetId}
       datasetRevision={datasetRevision}
+      displayUnit={displayUnit}
       disabled={disabled}
+      onAxisDisplayUnitChange={onAxisDisplayUnitChange}
       onAxisFilterChange={onAxisFilterChange}
       runId={runId}
     />
@@ -811,17 +831,23 @@ function ResultDatasetAxisControl({
 function PagedResultDatasetAxisControl({
   axis,
   axisFilters,
+  axisResource,
   datasetId,
   datasetRevision,
+  displayUnit,
   disabled,
+  onAxisDisplayUnitChange,
   onAxisFilterChange,
   runId,
 }: {
   axis: ResultDatasetBrowserModel["axes"][number];
   axisFilters: Readonly<Record<string, string>>;
+  axisResource: AnalysisResultAxisResource | null;
   datasetId: string;
   datasetRevision: string;
+  displayUnit: string | null;
   disabled: boolean;
+  onAxisDisplayUnitChange?: (axisId: string, unit: string) => void;
   onAxisFilterChange: (axisId: string, token: string | null) => void;
   runId: string;
 }) {
@@ -866,9 +892,12 @@ function PagedResultDatasetAxisControl({
   return (
     <ResultDatasetAxisCard
       axis={axis}
+      axisResource={axisResource}
       axisFilters={axisFilters}
+      displayUnit={displayUnit}
       disabled={disabled}
       message={message}
+      onAxisDisplayUnitChange={onAxisDisplayUnitChange}
       onAxisFilterChange={onAxisFilterChange}
       onPageChange={setCursor}
       page={page}
@@ -882,9 +911,12 @@ function PagedResultDatasetAxisControl({
 
 function ResultDatasetAxisCard({
   axis,
+  axisResource,
   axisFilters,
+  displayUnit,
   disabled = false,
   message,
+  onAxisDisplayUnitChange,
   onAxisFilterChange,
   onPageChange,
   onSearchChange,
@@ -894,9 +926,12 @@ function ResultDatasetAxisCard({
   values,
 }: {
   axis: ResultDatasetBrowserModel["axes"][number];
+  axisResource: AnalysisResultAxisResource | null;
   axisFilters: Readonly<Record<string, string>>;
+  displayUnit: string | null;
   disabled?: boolean;
   message?: string | null;
+  onAxisDisplayUnitChange?: (axisId: string, unit: string) => void;
   onAxisFilterChange: (axisId: string, token: string | null) => void;
   onPageChange?: (cursor: string | null) => void;
   onSearchChange?: (value: string) => void;
@@ -905,6 +940,13 @@ function ResultDatasetAxisCard({
   searchable?: boolean;
   values: readonly AnalysisResultAxisValueResource[] | null;
 }) {
+  const presentation = axisResource
+    ? analysisResultAxisPresentation(axisResource, displayUnit)
+    : {
+        canonicalUnit: axis.unit,
+        displayUnit: displayUnit ?? axis.unit ?? "1",
+        displayUnits: axis.unit ? [axis.unit] : [],
+      };
   const selectedToken = axisFilters[axis.axisId] ?? "__all__";
   const hasSelectedToken = values?.some((value) => value.token === selectedToken);
   const selectedIndex = values?.findIndex((value) => value.token === selectedToken) ?? -1;
@@ -920,9 +962,26 @@ function ResultDatasetAxisCard({
       <div className="fm-results-dataset-browser__axis-heading">
         <span>
           {axis.label}: {axis.cardinality}
-          {axis.unit ? ` ${axis.unit}` : ""}
+          {presentation.displayUnit ? ` ${presentation.displayUnit}` : ""}
         </span>
         <small>Role: {axis.role}</small>
+        {presentation.displayUnits.length > 1 && onAxisDisplayUnitChange ? (
+          <Select
+            onValueChange={(value) => onAxisDisplayUnitChange(axis.axisId, value)}
+            value={presentation.displayUnit}
+          >
+            <SelectTrigger aria-label={`${axis.label} display unit`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {presentation.displayUnits.map((unit) => (
+                <SelectItem key={unit} value={unit}>
+                  {unit}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
         {searchable && onSearchChange ? (
           <Input
             aria-label={`${axis.label} search`}
@@ -953,7 +1012,9 @@ function ResultDatasetAxisCard({
                   key={value.token}
                   value={value.token}
                 >
-                  {value.label ?? value.token}
+                  {axisResource
+                    ? formatAnalysisResultAxisValue(axisResource, value, presentation.displayUnit)
+                    : value.label ?? value.token}
                 </SelectItem>
               ))}
             </SelectContent>
