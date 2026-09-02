@@ -301,6 +301,68 @@ describe("results navigator model", () => {
     expect(firstMode?.id).toBe(reorderedMode?.id);
   });
 
+  it("labels response points with physical frequency while keeping point identity stable", () => {
+    const first = buildFrequencyDomainResultsTree(
+      input({
+        response: {
+          points: [{ frequencyHz: 750e6, frequencyIndex: 0, pointId: "point-a" }],
+        },
+      }),
+    );
+    const updated = buildFrequencyDomainResultsTree(
+      input({
+        response: {
+          points: [{ frequencyHz: 800e6, frequencyIndex: 7, pointId: "point-a" }],
+        },
+      }),
+    );
+
+    const firstPoint = collectNodes(first).find(
+      (node) => node.selectionRef?.kind === "response-point",
+    );
+    const updatedPoint = collectNodes(updated).find(
+      (node) => node.selectionRef?.kind === "response-point",
+    );
+
+    expect(firstPoint?.label).toBe("750 MHz");
+    expect(updatedPoint?.label).toBe("800 MHz");
+    expect(firstPoint?.id).toBe(updatedPoint?.id);
+    expect(firstPoint?.selectionRef).toMatchObject({
+      frequencyIndex: 0,
+      kind: "response-point",
+      pointId: "point-a",
+    });
+    expect(updatedPoint?.selectionRef).toMatchObject({
+      frequencyIndex: 7,
+      kind: "response-point",
+      pointId: "point-a",
+    });
+  });
+
+  it("keeps explicit locator fallbacks for missing or non-finite response frequencies", () => {
+    const tree = buildFrequencyDomainResultsTree(
+      input({
+        response: {
+          points: [
+            { frequencyIndex: 0, pointId: "point-missing" },
+            { frequencyHz: Number.NaN, frequencyIndex: 1, pointId: "point-nan" },
+            { frequencyHz: Number.POSITIVE_INFINITY, frequencyIndex: 2, pointId: null },
+          ],
+        },
+      }),
+    );
+    const responsePoints = collectNodes(tree).filter(
+      (node) => node.kind === "results.frequency-domain.response-point",
+    );
+
+    expect(responsePoints.map((node) => node.label)).toEqual([
+      "Point point-missing",
+      "Point point-nan",
+      "Frequency 2",
+    ]);
+    expect(responsePoints.map((node) => node.label).join(" ")).not.toMatch(/NaN|Infinity/);
+  });
+
   it("publishes semantic mode and response detail nodes without inventing unavailable field payloads", () => {
     const tree = buildFrequencyDomainResultsTree(
       input({ response: { points: [{ frequencyIndex: 0, pointId: "point-a" }] } }),
@@ -429,7 +491,7 @@ describe("results navigator model", () => {
     const nodes = collectNodes(tree);
     expect(nodes.find((node) => node.label === "Mode mode-0")?.status).toBe("ready");
     expect(nodes.find((node) => node.label === "Branch branch-a")?.status).toBe("ready");
-    expect(nodes.find((node) => node.label === "Point point-a")?.status).toBe("ready");
+    expect(nodes.find((node) => node.label === "1 GHz")?.status).toBe("ready");
     expect(nodes.find((node) => node.label === "Peak peak-a")?.status).toBe("ready");
   });
 

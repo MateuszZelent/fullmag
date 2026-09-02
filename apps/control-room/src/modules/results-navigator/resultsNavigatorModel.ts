@@ -1,3 +1,5 @@
+import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
+
 import {
   branchSelectionRef,
   buildModalNodeId,
@@ -19,6 +21,7 @@ import type {
   NavigatorModeDescriptor,
   NavigatorNodeStatus,
   NavigatorPage,
+  NavigatorResponsePointDescriptor,
   NavigatorResourceResult,
   NavigatorSampleDescriptor,
   ResultsNavigatorNode,
@@ -218,6 +221,14 @@ function viewSelection(
         viewId,
       })
     : undefined;
+}
+
+function responsePointLabel(point: NavigatorResponsePointDescriptor): string {
+  return point.frequencyHz != null && Number.isFinite(point.frequencyHz)
+    ? formatFrequencyHz(point.frequencyHz)
+    : point.pointId
+      ? `Point ${point.pointId}`
+      : `Frequency ${point.frequencyIndex}`;
 }
 
 function modeNode(
@@ -643,7 +654,7 @@ function buildFrequencyDomainTree(
       id: pointId,
       inspectorId: "frequency-domain/response/point",
       kind: "results.frequency-domain.response-point",
-      label: point.pointId ? `Point ${point.pointId}` : `Frequency ${point.frequencyIndex}`,
+      label: responsePointLabel(point),
       parentId: pointsId,
       resourceKey: `analysis:frequency-domain:response:point:${point.pointId ?? point.frequencyIndex}`,
       resourceRevision: input.resources.response?.resourceRevision ?? undefined,
