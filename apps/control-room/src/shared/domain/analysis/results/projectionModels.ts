@@ -33,14 +33,10 @@ export function buildAnalysisResultProjectionChartModel(
   const series = resource.series.map((sourceSeries) => {
     const seriesId = `${resource.projection_id}:${sourceSeries.series_id}`;
     const visiblePoints = boundedProjectionPoints(sourceSeries.points);
-    selectionBySeriesId[seriesId] = visiblePoints.map(
-      (point) => selectionByOrdinal.get(point.ordinal) ?? {
-        ordinal: point.ordinal,
-        sample_id: point.sample_id,
-        item_id: point.item_id,
-        branch_id: point.branch_id,
-      },
-    );
+    selectionBySeriesId[seriesId] = visiblePoints.flatMap((point) => {
+      const selection = selectionByOrdinal.get(point.ordinal);
+      return selection ? [selection] : [];
+    });
     return {
       dataRevision: resource.projection_revision,
       id: seriesId,

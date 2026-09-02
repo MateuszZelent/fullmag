@@ -60,6 +60,16 @@ describe("analysis result projection chart model", () => {
     expect(model.series[0]?.points[0]?.y).toBe(Number.NaN);
   });
 
+  it("does not manufacture a selection for a point absent from the selection index", () => {
+    const model = buildAnalysisResultProjectionChartModel({
+      ...projection,
+      selection_index: [],
+    });
+
+    expect(model.series[0]?.points).toHaveLength(2);
+    expect(model.selectionBySeriesId["field-frequency-map:branch:0"]).toEqual([]);
+  });
+
   it("uses the spin-wave chart resource kind for time-domain result products", () => {
     const model = buildAnalysisResultProjectionChartModel(
       projection,
