@@ -9,7 +9,10 @@ import {
   useAnalysisResultItemsResource,
   useAnalysisResultSamplesResource,
 } from "@/kernel/resources/analysisResultResources";
-import type { AnalysisResultPageQuery } from "@/kernel/api/apiTypes";
+import type {
+  AnalysisResultDatasetManifestResource,
+  AnalysisResultPageQuery,
+} from "@/kernel/api/apiTypes";
 import {
   useCurrentRunResource,
   useFrequencyDomainEigenBranchesResource,
@@ -121,6 +124,29 @@ function axisFiltersKey(filters: Readonly<Record<string, string>>): string {
       Object.entries(filters).sort(([left], [right]) => left.localeCompare(right)),
     ),
   );
+}
+
+export function resultSelectionForAnalysis(
+  manifest: AnalysisResultDatasetManifestResource | null,
+  selection: AnalysisResultSelectionRef | null,
+): AnalysisResultSelectionRef | null {
+  if (!manifest) return null;
+  if (
+    selection &&
+    selection.runId === manifest.run_id &&
+    selection.stageId === manifest.stage_id &&
+    selection.datasetId === manifest.dataset_id &&
+    selection.datasetRevision === manifest.dataset_revision
+  ) {
+    return selection;
+  }
+  return analysisResultSelectionRef({
+    datasetId: manifest.dataset_id,
+    datasetRevision: manifest.dataset_revision,
+    focus: "dataset",
+    runId: manifest.run_id,
+    stageId: manifest.stage_id,
+  });
 }
 
 export default function ResultsNavigatorModule({
@@ -668,13 +694,20 @@ export default function ResultsNavigatorModule({
     [resultManifest.data],
   );
   const onOpenResultAnalysis = useCallback(() => {
+    const selectionForAnalysis = resultSelectionForAnalysis(
+      resultManifest.data,
+      selectedResultSelection,
+    );
+    if (selectionForAnalysis && selectionForAnalysis !== selectedResultSelection) {
+      onSelectResult(selectionForAnalysis);
+    }
     void kernel.commands.execute(
       "analysis-plots.open",
       createCommandContext("explorer", kernel, {
         sourceDetail: "results-dataset-browser",
       }),
     );
-  }, [kernel]);
+  }, [kernel, onSelectResult, resultManifest.data, selectedResultSelection]);
   const onPlotResultField = useCallback(
     (selection: AnalysisResultSelectionRef) => {
       const intent = createAnalysisResultFieldOverlayIntent(selection);

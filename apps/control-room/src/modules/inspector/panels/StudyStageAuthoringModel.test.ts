@@ -220,6 +220,44 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("serializes an ordered 15-point K0 bias-field sweep in canonical A/m", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      biasFieldContinuationSeed: "initial_state",
+      biasFieldEquilibriumPolicy: "continuation",
+      biasFieldSamplesApm: Array.from(
+        { length: 15 },
+        (_, index) => `${40_000 + index * 1_000}, 0, 0`,
+      ).join("\n"),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      includeDemag: true,
+      kVector: "0, 0, 0",
+      magnetostaticBc: "periodic_airbox_k0",
+    };
+
+    const stage = studyStageDraftToSceneStage(draft);
+
+    expect(stage).toMatchObject({
+      bias_field_sweep: {
+        continuation_seed: "initial_state",
+        equilibrium_policy: "continuation",
+        ordering: "declared",
+      },
+      eigen_bias_field_sweep: {
+        continuation_seed: "initial_state",
+        equilibrium_policy: "continuation",
+        ordering: "declared",
+      },
+    });
+    expect(
+      (stage.bias_field_sweep as { samples_a_per_m: number[][] }).samples_a_per_m,
+    ).toHaveLength(15);
+    expect(
+      (stage.bias_field_sweep as { samples_a_per_m: number[][] }).samples_a_per_m[14],
+    ).toEqual([54_000, 0, 0]);
+  });
+
   it("serializes an add-field-drive instruction with the complete antenna payload", () => {
     const draft = createDefaultStudyStageDraft("add_field_drive", 1);
 
