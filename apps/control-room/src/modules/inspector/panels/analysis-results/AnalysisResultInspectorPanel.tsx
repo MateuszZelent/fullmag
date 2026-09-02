@@ -7,6 +7,8 @@ import {
   useAnalysisResultProjectionResource,
   useAnalysisResultSamplesResource,
 } from "@/kernel/resources/analysisResultResources";
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import { useKernel } from "@/kernel/KernelContext";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import {
@@ -18,6 +20,7 @@ import {
   FrequencyDomainModeDisplayControls,
   useFrequencyDomainModeDisplaySettings,
 } from "../FrequencyDomainModeDisplayControls";
+import { ModeVisualizationPhaseControl } from "../ModeVisualizationInspectorPanel";
 import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
@@ -252,6 +255,7 @@ function AnalysisResultFieldControls({
 }: {
   selectionRef: AnalysisResultSelectionRef;
 }) {
+  const kernel = useKernel();
   const fieldIntent = createAnalysisResultFieldOverlayIntent(selectionRef);
   const adapter = selectionRef.itemKind
     ? analysisResultFieldOverlayAdapter(selectionRef.itemKind)
@@ -275,6 +279,29 @@ function AnalysisResultFieldControls({
   );
   const fieldStatus = selectionRef.fieldRef?.status ?? "not_published";
   const meshRef = selectionRef.fieldRef?.mesh_ref;
+  const phaseRad =
+    activeOverlayOwned
+      ? activeOverlay?.visualizationPhaseRad ?? activeOverlay?.query.phase_rad ?? 0
+      : 0;
+
+  const setPhase = (value: string): void => {
+    const nextPhaseRad = Number(value);
+    if (!activeOverlayOwned || !Number.isFinite(nextPhaseRad)) return;
+    void kernel.commands.execute(
+      "analysis.frequency-domain.set-3d-phase",
+      createCommandContext("inspector", kernel, {
+        sourceDetail: "analysis-result",
+      }),
+      { phaseRad: nextPhaseRad },
+    );
+  };
+
+  const setAnimation = (
+    animation: NonNullable<AnalysisFieldOverlayState["animation"]>,
+  ): void => {
+    if (!activeOverlayOwned) return;
+    kernel.analysisFieldOverlay.update({ animation });
+  };
 
   return (
     <InspectorGroup
@@ -311,6 +338,20 @@ function AnalysisResultFieldControls({
             Plot {adapter.label} in 3D
           </button>
         </div>
+      ) : null}
+      {fieldIntent && adapter ? (
+        <InspectorGroup title="Phase and animation">
+          <ModeVisualizationPhaseControl
+            animate={activeOverlay?.animation?.animatePhase ?? false}
+            animationDirection={activeOverlay?.animation?.direction ?? 1}
+            animationLoop={activeOverlay?.animation?.loop ?? true}
+            animationRateHz={activeOverlay?.animation?.animationRateHz ?? 1}
+            disabled={!activeOverlayOwned}
+            onAnimationChange={setAnimation}
+            onSetPhase={setPhase}
+            phaseRad={String(phaseRad)}
+          />
+        </InspectorGroup>
       ) : null}
       {fieldIntent && adapter ? (
         <FrequencyDomainModeDisplayControls
