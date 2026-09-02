@@ -70,6 +70,7 @@ export interface ResultDatasetBrowserItemRow {
   fieldAvailable: boolean;
   fieldId: string | null;
   fieldRef: AnalysisResultFieldRef | null;
+  selectable: boolean;
 }
 
 export interface ResultDatasetBrowserModel {
@@ -264,6 +265,10 @@ function itemLabel(
     return `Spectral feature ${item.display_index + 1}`;
   }
   if (item.item_kind === "dsf_point" && item.display_index != null) {
+    const wavevector = item.wavevector_kf?.[0];
+    if (item.frequency_hz != null && wavevector != null) {
+      return `DSF @ k=${formatResultWavevector(wavevector)}, f=${formatResultFrequency(item.frequency_hz)}`;
+    }
     return `DSF point ${item.display_index + 1}`;
   }
   return item.item_id;
@@ -332,23 +337,27 @@ export function buildResultDatasetBrowserModel({
     status: analysisResultUiStatus(branch.status),
     statusLabel: analysisResultStatusLabel(branch.status),
   }));
-  const itemRows = (items?.items ?? []).map((item) => ({
-    branchId: item.branch_id ?? null,
-    fieldAvailable: item.field_ref?.status === "ready",
-    fieldId: item.field_ref?.field_id ?? null,
-    fieldRef: item.field_ref ?? null,
-    displayIndex: item.display_index ?? null,
-    frequencyHz: item.frequency_hz ?? null,
-    itemId: item.item_id,
-    itemKind: itemKindLabel(item.item_kind),
-    itemKindCode: item.item_kind,
-    label: itemLabel(item),
-    sampleId: item.sample_id,
-    sampleIndex: sampleIndexById.get(item.sample_id) ?? null,
-    residualRelativeL2: item.quality.residual_relative_l2 ?? null,
-    status: analysisResultUiStatus(item.status),
-    statusLabel: analysisResultStatusLabel(item.status),
-  }));
+  const itemRows = (items?.items ?? []).map((item) => {
+    const status = analysisResultUiStatus(item.status);
+    return {
+      branchId: item.branch_id ?? null,
+      fieldAvailable: item.field_ref?.status === "ready",
+      fieldId: item.field_ref?.field_id ?? null,
+      fieldRef: item.field_ref ?? null,
+      displayIndex: item.display_index ?? null,
+      frequencyHz: item.frequency_hz ?? null,
+      itemId: item.item_id,
+      itemKind: itemKindLabel(item.item_kind),
+      itemKindCode: item.item_kind,
+      label: itemLabel(item),
+      sampleId: item.sample_id,
+      sampleIndex: sampleIndexById.get(item.sample_id) ?? null,
+      residualRelativeL2: item.quality.residual_relative_l2 ?? null,
+      selectable: status !== "unsupported" && status !== "error" && status !== "missing",
+      status,
+      statusLabel: analysisResultStatusLabel(item.status),
+    };
+  });
   return {
     axes: axisRows(manifest?.axes),
     branches: branchRows,
@@ -372,6 +381,11 @@ export function formatResultFrequency(frequencyHz: number | null): string {
   if (Math.abs(frequencyHz) >= 1e9) return `${(frequencyHz / 1e9).toFixed(4)} GHz`;
   if (Math.abs(frequencyHz) >= 1e6) return `${(frequencyHz / 1e6).toFixed(4)} MHz`;
   return `${frequencyHz.toFixed(3)} Hz`;
+}
+
+export function formatResultWavevector(wavevectorRadPerM: number | null): string {
+  if (wavevectorRadPerM == null || !Number.isFinite(wavevectorRadPerM)) return "—";
+  return `${wavevectorRadPerM.toExponential(3)} rad/m`;
 }
 
 export function formatResultResidual(residual: number | null): string {

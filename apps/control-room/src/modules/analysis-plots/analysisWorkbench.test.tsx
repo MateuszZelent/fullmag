@@ -87,7 +87,10 @@ vi.mock("./SpinWaveGammaView", () => ({
   SpinWaveGammaView: () => <div data-analysis-panel="dynamics.temporal-fft">Response FFT sampling parameters</div>,
 }));
 
-import { AnalysisPlotsView } from "./AnalysisPlotsView";
+import {
+  AnalysisPlotsView,
+  resultProjectionSelectionFromLegacyPoint,
+} from "./AnalysisPlotsView";
 import { useAnalysisPlotsController } from "./useAnalysisPlotsController";
 
 const props = {
@@ -107,6 +110,23 @@ function tableFixture(tableId: string, revision: number) {
 }
 
 describe("Analysis workbench", () => {
+  it("maps legacy FFT/DSF clicks to the canonical result point identity", () => {
+    expect(
+      resultProjectionSelectionFromLegacyPoint({
+        itemId: "legacy:dsf:2:4",
+        itemKind: "dsf_point",
+        ordinal: 204,
+        sampleId: "dsf-sample-0000",
+      }),
+    ).toEqual({
+      branchId: null,
+      itemId: "legacy:dsf:2:4",
+      itemKind: "dsf_point",
+      ordinal: 204,
+      sampleId: "dsf-sample-0000",
+    });
+  });
+
   it("exposes the five physics-first workbench surfaces", () => {
     const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="dynamics" />);
     for (const label of ["Dynamics", "Resonance &amp; FMR", "Dispersion", "Hysteresis", "Comparison"]) expect(html).toContain(`>${label}</button>`);

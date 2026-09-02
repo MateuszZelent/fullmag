@@ -31,7 +31,8 @@ use crate::router_v2::handlers::analysis::frequency_domain::{
     FrequencyDomainSpectrumV3ModePayload,
 };
 use crate::router_v2::handlers::analysis::spin_wave_response::{
-    DynamicStructureFactorResource, SpinWaveGammaResource, SpinWavePeakResource,
+    dynamic_structure_factor_axis_indices, DynamicStructureFactorResource,
+    SpinWaveGammaResource, SpinWavePeakResource, MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
 };
 use crate::types::AppState;
 
@@ -40,7 +41,6 @@ pub const ANALYSIS_RESULT_INDEX_SCHEMA_VERSION: &str =
 const DEFAULT_PAGE_LIMIT: usize = 100;
 const MAX_PAGE_LIMIT: usize = 500;
 const MAX_INLINE_AXIS_VALUES: usize = 256;
-const MAX_PROJECTION_POINTS: usize = 10_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1700,6 +1700,7 @@ fn build_gamma_index(
 ) -> Result<ResultDatasetIndex, ApiError> {
     let dataset_id = format!("result:{run_id}:{stage_id}:time-domain-spectrum");
     let sample_id = "gamma-spectrum-sample-0000".to_string();
+    let provenance = legacy_gamma_provenance(&payload);
     let peaks = payload.peaks;
     let items = peaks.iter().map(|peak| AnalysisResultSpectralItemSummary {
         item_id: format!("legacy:gamma:peak:{}", peak.index),
@@ -1743,7 +1744,8 @@ fn build_gamma_index(
         &payload.frequency_unit,
         &status,
     );
-    let manifest = build_manifest(dataset_id, dataset_revision, run_id, stage_id, AnalysisResultProductKind::TimeDomainSpectrum, "LLG Gamma spectrum", Some("Bounded legacy adapter; peaks are spectral features, never eigenmodes"), status, source_artifacts, axes, vec![AnalysisResultItemKind::SpectralFeature], &projections, &[sample.clone()], &items, "shared_across_dataset", "Hz");
+    let mut manifest = build_manifest(dataset_id, dataset_revision, run_id, stage_id, AnalysisResultProductKind::TimeDomainSpectrum, "LLG Gamma spectrum", Some("Bounded legacy adapter; peaks are spectral features, never eigenmodes"), status, source_artifacts, axes, vec![AnalysisResultItemKind::SpectralFeature], &projections, &[sample.clone()], &items, "shared_across_dataset", "Hz");
+    manifest.provenance.extend(provenance);
     Ok(ResultDatasetIndex { manifest, samples: vec![sample], items, axis_values: BTreeMap::from([(String::from("frequency"), values)]), projections })
 }
 
@@ -1820,12 +1822,22 @@ fn build_dsf_index(
 ) -> Result<ResultDatasetIndex, ApiError> {
     let dataset_id = format!("result:{run_id}:{stage_id}:dynamic-structure-factor");
     let sample_id = "dsf-sample-0000".to_string();
-    let count = payload.frequency_count.min(MAX_PROJECTION_POINTS / payload.wavevector_count.max(1));
+    let provenance = legacy_dsf_provenance(&payload);
+    let (frequency_indices, wavevector_indices) = dynamic_structure_factor_axis_indices(
+        payload.frequency_count,
+        payload.wavevector_count,
+        MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
+    );
     let mut items = Vec::new();
-    for frequency_index in 0..count {
-        for wavevector_index in 0..payload.wavevector_count.min(MAX_PROJECTION_POINTS / count.max(1)) {
+    for &frequency_index in &frequency_indices {
+        for &wavevector_index in &wavevector_indices {
             let ordinal = (frequency_index * payload.wavevector_count + wavevector_index) as u64;
             let item_id = format!("legacy:dsf:{frequency_index}:{wavevector_index}");
+            let invalid_probe = payload
+                .invalid_probe_mask
+                .get(wavevector_index)
+                .copied()
+                .unwrap_or(true);
             items.push(AnalysisResultSpectralItemSummary {
                 item_id: item_id.clone(),
                 item_kind: AnalysisResultItemKind::DsfPoint,
@@ -1834,7 +1846,11 @@ fn build_dsf_index(
                 frequency_hz: payload.frequency_hz.get(frequency_index).copied(),
                 wavevector_kf: payload.k_rad_per_m.get(wavevector_index).map(|value| [*value, 0.0, 0.0]),
                 branch_id: None,
-                status: status_facets("partial", "published", "partial", "legacy", Some("legacy_dsf_adapter"), None),
+                status: if invalid_probe {
+                    status_facets("unsupported", "published", "unsupported", "legacy", Some("invalid_spatial_probe"), None)
+                } else {
+                    status_facets("partial", "published", "partial", "legacy", Some("legacy_dsf_adapter"), None)
+                },
                 quality: AnalysisResultQualitySummary { residual_relative_l2: None, tracking_score: None, qualification: "legacy".to_string() },
                 field_ref: None,
                 detail_resource: item_path(run_id, &dataset_id, &sample_id, &item_id),
@@ -1853,14 +1869,14 @@ fn build_dsf_index(
         .frequency_hz
         .iter()
         .enumerate()
-        .take(count)
+        .filter(|(index, _)| frequency_indices.contains(index))
         .map(|(index, value)| AnalysisResultAxisValueResource { token: format!("frequency:{index}"), scalar_si: Some(*value), vector3_si: None, category: None, entity_ref: None, label: Some(format_frequency(*value)), status: "partial".to_string() })
         .collect::<Vec<_>>();
     let wavevector_values = payload
         .k_rad_per_m
         .iter()
         .enumerate()
-        .take(payload.wavevector_count)
+        .filter(|(index, _)| wavevector_indices.contains(index))
         .map(|(index, value)| AnalysisResultAxisValueResource { token: format!("wavevector:{index}"), scalar_si: Some(*value), vector3_si: None, category: None, entity_ref: None, label: Some(format!("k[{index}]")), status: "partial".to_string() })
         .collect::<Vec<_>>();
     let axes = vec![
@@ -1877,8 +1893,98 @@ fn build_dsf_index(
         &payload,
         &status,
     );
-    let manifest = build_manifest(dataset_id, dataset_revision, run_id, stage_id, AnalysisResultProductKind::DynamicStructureFactor, "Dynamic structure factor", Some("Bounded legacy adapter; dense tiles remain in the native data plane"), status, source_artifacts, axes, vec![AnalysisResultItemKind::DsfPoint], &projections, &[sample.clone()], &items, "shared_across_dataset", &payload.frequency_unit);
+    let mut manifest = build_manifest(dataset_id, dataset_revision, run_id, stage_id, AnalysisResultProductKind::DynamicStructureFactor, "Dynamic structure factor", Some("Bounded legacy adapter; dense tiles remain in the native data plane"), status, source_artifacts, axes, vec![AnalysisResultItemKind::DsfPoint], &projections, &[sample.clone()], &items, "shared_across_dataset", &payload.frequency_unit);
+    manifest.provenance.extend(provenance);
     Ok(ResultDatasetIndex { manifest, samples: vec![sample], items, axis_values: BTreeMap::from([(String::from("frequency"), frequency_values), (String::from("wavevector"), wavevector_values)]), projections })
+}
+
+fn legacy_gamma_provenance(payload: &SpinWaveGammaResource) -> BTreeMap<String, String> {
+    let (sampling_clock, uniformity_proof) = time_sampling_metadata(&payload.time_s, &payload.time_unit);
+    BTreeMap::from([
+        ("legacy_schema".to_string(), payload.schema_version.clone()),
+        ("sampling_clock".to_string(), sampling_clock),
+        ("uniformity_proof".to_string(), uniformity_proof),
+        ("window".to_string(), payload.window.clone()),
+        ("detrend".to_string(), payload.detrend.clone()),
+        ("normalization".to_string(), payload.normalization.clone()),
+        ("nyquist_hz".to_string(), payload.nyquist_hz.to_string()),
+        (
+            "response_components".to_string(),
+            format!(
+                "{} / {} (primary: {})",
+                payload.transverse_components[0],
+                payload.transverse_components[1],
+                payload.response_component,
+            ),
+        ),
+        (
+            "source_drive".to_string(),
+            "not published by legacy artifact".to_string(),
+        ),
+    ])
+}
+
+fn legacy_dsf_provenance(payload: &DynamicStructureFactorResource) -> BTreeMap<String, String> {
+    let (sampling_clock, uniformity_proof) = time_sampling_metadata(&payload.time_s, "s");
+    let invalid_probe_count = payload.invalid_probe_mask.iter().filter(|invalid| **invalid).count();
+    BTreeMap::from([
+        ("legacy_schema".to_string(), payload.schema_version.clone()),
+        ("sampling_clock".to_string(), sampling_clock),
+        ("uniformity_proof".to_string(), uniformity_proof),
+        (
+            "window".to_string(),
+            "legacy artifact (window kind not encoded)".to_string(),
+        ),
+        ("normalization".to_string(), payload.normalization.clone()),
+        ("spatial_axis".to_string(), payload.propagation_axis.clone()),
+        ("source_observable".to_string(), payload.source_observable.clone()),
+        (
+            "source_drive".to_string(),
+            format!("{} [{}]", payload.source_observable, payload.source_unit),
+        ),
+        ("phase_convention".to_string(), payload.phase_convention.clone()),
+        (
+            "mesh_probe_signature".to_string(),
+            payload.mesh_probe_signature.clone(),
+        ),
+        (
+            "array_bounds".to_string(),
+            format!(
+                "{} × {} cells; original {} × {}; {} invalid probes",
+                payload.frequency_count,
+                payload.wavevector_count,
+                payload.original_frequency_count,
+                payload.original_wavevector_count,
+                invalid_probe_count,
+            ),
+        ),
+    ])
+}
+
+fn time_sampling_metadata(time_s: &[f64], unit: &str) -> (String, String) {
+    let sample_count = time_s.len();
+    let Some(first_pair) = time_s.windows(2).next() else {
+        return (
+            format!("N={sample_count}; dt unavailable {unit}"),
+            "not certified: fewer than two samples".to_string(),
+        );
+    };
+    let dt = first_pair[1] - first_pair[0];
+    let tolerance = dt.abs() * 1e-9 + f64::EPSILON;
+    let uniform = dt.is_finite()
+        && dt > 0.0
+        && time_s.iter().all(|value| value.is_finite())
+        && time_s.windows(2).all(|pair| {
+            ((pair[1] - pair[0]) - dt).abs() <= tolerance
+        });
+    (
+        format!("N={sample_count}; dt={dt:.6e} {unit}"),
+        if uniform {
+            "certified by bounded legacy adapter".to_string()
+        } else {
+            "not certified: nonuniform or invalid time axis".to_string()
+        },
+    )
 }
 
 fn build_dsf_projection(
@@ -1888,26 +1994,26 @@ fn build_dsf_projection(
     payload: &DynamicStructureFactorResource,
     status: &AnalysisResultStatusFacets,
 ) -> BTreeMap<String, AnalysisResultProjectionResource> {
-    let frequency_count = payload
-        .frequency_count
-        .min(MAX_PROJECTION_POINTS / payload.wavevector_count.max(1));
-    let wavevector_count = payload
-        .wavevector_count
-        .min(MAX_PROJECTION_POINTS / frequency_count.max(1));
-    let points = (0..frequency_count)
+    let (frequency_indices, wavevector_indices) = dynamic_structure_factor_axis_indices(
+        payload.frequency_count,
+        payload.wavevector_count,
+        MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
+    );
+    let points = frequency_indices
+        .iter()
         .flat_map(|frequency_index| {
-            (0..wavevector_count).filter_map(move |wavevector_index| {
-                let ordinal = (frequency_index * payload.wavevector_count + wavevector_index) as u64;
+            wavevector_indices.iter().filter_map(move |wavevector_index| {
+                let ordinal = (*frequency_index * payload.wavevector_count + *wavevector_index) as u64;
                 let is_invalid_probe = payload
                     .invalid_probe_mask
-                    .get(wavevector_index)
+                    .get(*wavevector_index)
                     .copied()
                     .unwrap_or(true);
-                let flat_index = frequency_index
+                let flat_index = (*frequency_index)
                     .checked_mul(payload.wavevector_count)?
-                    .checked_add(wavevector_index)?;
-                let x = payload.k_rad_per_m.get(wavevector_index).copied();
-                let y = payload.frequency_hz.get(frequency_index).copied();
+                    .checked_add(*wavevector_index)?;
+                let x = payload.k_rad_per_m.get(*wavevector_index).copied();
+                let y = payload.frequency_hz.get(*frequency_index).copied();
                 let value = payload.power.get(flat_index).copied();
                 Some(AnalysisResultProjectionPoint {
                     ordinal,
@@ -3067,5 +3173,56 @@ mod tests {
         assert_eq!(projection.axis_units.get("y").map(String::as_str), Some("index"));
         assert_eq!(projection.selection_index.len(), 1);
         assert_eq!(projection.series[0].points[0].x, Some(2.5e9));
+    }
+
+    #[test]
+    fn legacy_dsf_index_preserves_provenance_and_rejects_invalid_probes() {
+        let payload = DynamicStructureFactorResource {
+            schema_version: "dynamic_structure_factor.1d.v1".to_string(),
+            artifact_ref: "analysis/dynamic_structure_factor.1d.v1.json".to_string(),
+            bounded: false,
+            original_frequency_count: 2,
+            original_wavevector_count: 2,
+            wavevector_unit: "rad/m".to_string(),
+            frequency_unit: "Hz".to_string(),
+            x_m: vec![0.0, 1.0],
+            time_s: vec![0.0, 1.0e-12, 2.0e-12],
+            k_rad_per_m: vec![0.0, 1.0e6],
+            frequency_hz: vec![1.0e9, 2.0e9],
+            power: vec![1.0, 2.0, 3.0, 4.0],
+            spectrum_real: vec![0.0; 4],
+            spectrum_imag: vec![0.0; 4],
+            source_power: vec![1.0; 4],
+            source_spectrum_real: vec![0.0; 4],
+            source_spectrum_imag: vec![0.0; 4],
+            source_observable: "H_drive_y".to_string(),
+            source_unit: "A/m".to_string(),
+            component: "my".to_string(),
+            propagation_axis: "x".to_string(),
+            phase_convention: "exp[-i(k*x-2*pi*f*t)]".to_string(),
+            normalization: "canonical".to_string(),
+            spatial_window: vec![1.0; 2],
+            temporal_window: vec![1.0; 3],
+            spatial_window_power_sum: 2.0,
+            temporal_window_power_sum: 3.0,
+            mesh_probe_signature: "mesh-probe-1".to_string(),
+            invalid_probe_mask: vec![false, true],
+            excluded_absorber_ranges_m: Vec::new(),
+            frequency_count: 2,
+            wavevector_count: 2,
+        };
+
+        let index = build_dsf_index(payload, "sha256:source".to_string(), "run-1", "stage-1")
+            .expect("legacy DSF payload should be indexable");
+        assert_eq!(index.items.len(), 4);
+        assert_eq!(index.items[0].item_id, "legacy:dsf:0:0");
+        assert_eq!(index.items[0].status.completeness, "partial");
+        assert_eq!(index.items[1].item_id, "legacy:dsf:0:1");
+        assert_eq!(index.items[1].status.completeness, "unsupported");
+        assert_eq!(index.items[1].status.reason_code.as_deref(), Some("invalid_spatial_probe"));
+        assert_eq!(index.projections["dsf-map"].selection_index.len(), 2);
+        assert_eq!(index.manifest.provenance["sampling_clock"], "N=3; dt=1.000000e-12 s");
+        assert_eq!(index.manifest.provenance["uniformity_proof"], "certified by bounded legacy adapter");
+        assert_eq!(index.manifest.provenance["source_drive"], "H_drive_y [A/m]");
     }
 }

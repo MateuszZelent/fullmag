@@ -24,10 +24,14 @@ import { AnalysisSurfaceTabs } from "./components/AnalysisSurfaceTabs";
 import { AnalysisTableSurface } from "./components/AnalysisTableSurface";
 import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
 import { SpinWaveGammaView } from "./SpinWaveGammaView";
+import type { DynamicStructureFactorPointSelection } from "./dynamicStructureFactorModel";
 import { formatXAxisLabel, tableRowsLike, tableWindowTableId } from "./analysisWorkbenchModel";
 import type { ChartSeries } from "./chartTableModel";
 import type { AnalysisFrequencyPresentationState } from "./hooks/useAnalysisFrequencyData";
 import type { ChartValueRange } from "./chartTableModel";
+import type { SpinWaveGammaFeatureSelection } from "./spinWaveGammaModel";
+import type { AnalysisResultProjectionSelection } from "./components/AnalysisResultProjectionSurface";
+import type { AnalysisResultItemKind } from "@/shared/domain/analysis/results";
 import type { FmrModalDrivenComparisonModel } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { ANALYSIS_COMPARISON_UNAVAILABLE_REASON } from "./analysisComparison";
 
@@ -120,6 +124,12 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
   const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f";
   const isFrequencySubview = activeSubview === "dispersion.modal" || activeSubview === "dispersion.driven-map" || activeSubview === "dispersion.branches" || activeSubview === "resonance.eigenmodes" || activeSubview === "resonance.frequency-response" || activeSubview === "resonance.modal-driven";
   const isHysteresisSubview = activeSubview === "hysteresis.loop" || activeSubview === "hysteresis.branches";
+  const onGammaFeatureSelect = resultProjection?.productKind === "time_domain_spectrum"
+    ? (selection: SpinWaveGammaFeatureSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+    : undefined;
+  const onDsfPointSelect = resultProjection?.productKind === "dynamic_structure_factor"
+    ? (selection: DynamicStructureFactorPointSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+    : undefined;
 
   return <div className="fm-analysis-plots">
     <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} onSubviewChange={onSubviewChange} subviews={subviews} />
@@ -136,8 +146,8 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
         </Select> : null}
       </header>
       {activeSubview === "dynamics.time-traces" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : datasetPrompt) : null}
-      {activeSubview === "dynamics.temporal-fft" ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
-      {isDynamicStructureFactorSubview ? <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
+      {activeSubview === "dynamics.temporal-fft" ? <SpinWaveGammaView onFeatureSelect={onGammaFeatureSelect} resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
+      {isDynamicStructureFactorSubview ? <DynamicStructureFactorView onPointSelect={onDsfPointSelect} resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
       {isFrequencySubview ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} comparisonModel={activeSubview === "resonance.modal-driven" ? frequencyDomainComparisonModel : undefined} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
       {isHysteresisSubview ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
       {activeSubview === "comparison.sources" ? <div className="fm-analysis-plots__comparison fm-analysis-plots__empty" role="status">
@@ -152,6 +162,21 @@ function ignorePointSelection(): void {}
 function ignoreRangeSelection(): void {}
 function ignoreSeriesSelection(): void {}
 function ignoreDisplayUnitsChange(): void {}
+
+export function resultProjectionSelectionFromLegacyPoint(selection: {
+  itemId: string;
+  itemKind: AnalysisResultItemKind;
+  ordinal: number;
+  sampleId: string;
+}): AnalysisResultProjectionSelection {
+  return {
+    branchId: null,
+    itemId: selection.itemId,
+    itemKind: selection.itemKind,
+    ordinal: selection.ordinal,
+    sampleId: selection.sampleId,
+  };
+}
 
 function resolveActiveSubview(
   surface: AnalysisSurface,

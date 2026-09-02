@@ -71,8 +71,12 @@ export function useAnalysisResultProjectionController(
     }
   }, [kernel.analysisFieldOverlay, selectedResultSelection]);
   const resultProjectionModel = useMemo(
-    () => buildAnalysisResultProjectionChartModel(renderableResultProjection),
-    [renderableResultProjection],
+    () =>
+      buildAnalysisResultProjectionChartModel(
+        renderableResultProjection,
+        resultManifest.data?.product_kind ?? null,
+      ),
+    [renderableResultProjection, resultManifest.data?.product_kind],
   );
   const onResultProjectionPointSelect = useCallback(
     (entry: AnalysisResultProjectionSelection) => {
@@ -95,7 +99,10 @@ export function useAnalysisResultProjectionController(
           : {}),
         focus: entry.itemId ? "item" : "sample",
         itemId: entry.itemId ?? undefined,
-        itemKind: selectedResultSelection.itemKind,
+        itemKind: entry.itemKind ?? selectedResultSelection.itemKind,
+        ...(selectedResultSelection.axisFilters
+          ? { axisFilters: selectedResultSelection.axisFilters }
+          : {}),
         projectionId: renderableResultProjection.projection_id,
         projectionOrdinal: entry.ordinal,
         projectionRevision: renderableResultProjection.projection_revision,
@@ -144,6 +151,7 @@ export function useAnalysisResultProjectionController(
     onProjectionSelect: onResultProjectionSelect,
     onPointSelect: onResultProjectionPointSelect,
     projections: resultManifest.data?.projections ?? [],
+    productKind: resultManifest.data?.product_kind ?? null,
     resource: renderableResultProjection,
     selectedSelection: selectedResultSelection,
     selectedProjectionId: resultProjectionId,

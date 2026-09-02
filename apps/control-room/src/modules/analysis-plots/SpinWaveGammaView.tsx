@@ -63,19 +63,20 @@ export function SpinWaveGammaView({
           {resource.peaks.map((peak, rank) => {
             const selection = spinWaveGammaFeatureSelection(peak);
             return <div
-              aria-label={`Select spectral feature ${peak.index}`}
+              aria-disabled={!onFeatureSelect || undefined}
+              aria-label={onFeatureSelect ? `Select spectral feature ${peak.index}` : `Spectral feature ${peak.index}`}
               className="fm-analysis-plots__column-row"
               data-result-item-id={selection.itemId}
               key={peak.index}
-              onClick={() => onFeatureSelect?.(selection)}
-              onKeyDown={(event) => {
+              onClick={onFeatureSelect ? () => onFeatureSelect(selection) : undefined}
+              onKeyDown={onFeatureSelect ? (event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  onFeatureSelect?.(selection);
+                  onFeatureSelect(selection);
                 }
-              }}
+              } : undefined}
               role="row"
-              tabIndex={0}
+              tabIndex={onFeatureSelect ? 0 : -1}
             >
               <span role="cell">{rank + 1}</span><span role="cell">{peak.index}</span><span role="cell">{peak.frequency_hz.toExponential(5)}</span><span role="cell">{peak.power.toExponential(3)}</span>
             </div>;

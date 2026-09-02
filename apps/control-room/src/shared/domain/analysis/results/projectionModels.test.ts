@@ -59,4 +59,15 @@ describe("analysis result projection chart model", () => {
     });
     expect(model.series[0]?.points[0]?.y).toBe(Number.NaN);
   });
+
+  it("uses the spin-wave chart resource kind for time-domain result products", () => {
+    const model = buildAnalysisResultProjectionChartModel(
+      projection,
+      "time_domain_spectrum",
+    );
+    expect(model.series[0]?.source.kind).toBe("analysis.spin_wave");
+    expect(model.series[0]?.sourceIdentity?.provenance).toBe(
+      "analysis-result-projection:time_domain_spectrum",
+    );
+  });
 });

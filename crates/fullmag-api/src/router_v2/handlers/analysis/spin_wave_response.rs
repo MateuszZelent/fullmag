@@ -11,6 +11,8 @@ use crate::artifacts::{read_json_artifact_value, require_current_live_artifact_d
 use crate::error::ApiError;
 use crate::types::AppState;
 
+pub(crate) const MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS: usize = 4096;
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SpinWavePeakResource {
     pub index: usize,
@@ -121,7 +123,10 @@ pub async fn get_dynamic_structure_factor(
 ) -> Result<Json<DynamicStructureFactorResource>, ApiError> {
     let Json(resource) =
         read_typed_artifact(&state, "analysis/dynamic_structure_factor.1d.v1.json").await?;
-    Ok(Json(bound_dynamic_structure_factor(resource, 4096)))
+    Ok(Json(bound_dynamic_structure_factor(
+        resource,
+        MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS,
+    )))
 }
 
 fn bound_dynamic_structure_factor(
@@ -133,21 +138,11 @@ fn bound_dynamic_structure_factor(
     if original_nf.saturating_mul(original_nk) <= max_cells {
         return resource;
     }
-    let mut f_stride = 1usize;
-    let mut k_stride = 1usize;
-    while original_nf
-        .div_ceil(f_stride)
-        .saturating_mul(original_nk.div_ceil(k_stride))
-        > max_cells
-    {
-        if original_nf / f_stride >= original_nk / k_stride {
-            f_stride += 1;
-        } else {
-            k_stride += 1;
-        }
-    }
-    let f_indices = (0..original_nf).step_by(f_stride).collect::<Vec<_>>();
-    let k_indices = (0..original_nk).step_by(k_stride).collect::<Vec<_>>();
+    let (f_indices, k_indices) = dynamic_structure_factor_axis_indices(
+        original_nf,
+        original_nk,
+        max_cells,
+    );
     let project = |values: &[f64]| {
         f_indices
             .iter()
@@ -188,6 +183,30 @@ fn bound_dynamic_structure_factor(
     resource.original_wavevector_count = original_nk;
     resource.bounded = true;
     resource
+}
+
+pub(crate) fn dynamic_structure_factor_axis_indices(
+    frequency_count: usize,
+    wavevector_count: usize,
+    max_cells: usize,
+) -> (Vec<usize>, Vec<usize>) {
+    let mut f_stride = 1usize;
+    let mut k_stride = 1usize;
+    while frequency_count
+        .div_ceil(f_stride)
+        .saturating_mul(wavevector_count.div_ceil(k_stride))
+        > max_cells
+    {
+        if frequency_count / f_stride >= wavevector_count / k_stride {
+            f_stride += 1;
+        } else {
+            k_stride += 1;
+        }
+    }
+    (
+        (0..frequency_count).step_by(f_stride).collect(),
+        (0..wavevector_count).step_by(k_stride).collect(),
+    )
 }
 
 async fn read_typed_artifact<T>(
@@ -259,5 +278,11 @@ mod tests {
             ),
             (100, 100)
         );
+        let (frequency_indices, wavevector_indices) =
+            dynamic_structure_factor_axis_indices(100, 100, MAX_DYNAMIC_STRUCTURE_FACTOR_CELLS);
+        assert_eq!(frequency_indices.len(), bounded.frequency_count);
+        assert_eq!(wavevector_indices.len(), bounded.wavevector_count);
+        assert_eq!(frequency_indices.get(1), Some(&2));
+        assert_eq!(wavevector_indices.get(1), Some(&2));
     }
 }

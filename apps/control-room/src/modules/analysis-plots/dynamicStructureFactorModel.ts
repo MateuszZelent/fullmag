@@ -28,6 +28,31 @@ export interface DynamicStructureFactorPointSelection {
 const MAX_HEATMAP_CELLS = 4096;
 const LEGACY_DSF_SAMPLE_ID = "dsf-sample-0000";
 
+function dynamicStructureFactorSourceIndices(
+  frequencyCount: number,
+  wavevectorCount: number,
+): { frequency: number[]; wavevector: number[] } {
+  let frequencyStride = 1;
+  let wavevectorStride = 1;
+  while (
+    Math.ceil(frequencyCount / frequencyStride) * Math.ceil(wavevectorCount / wavevectorStride) >
+    MAX_HEATMAP_CELLS
+  ) {
+    if (frequencyCount / frequencyStride >= wavevectorCount / wavevectorStride) frequencyStride += 1;
+    else wavevectorStride += 1;
+  }
+  return {
+    frequency: indicesWithStride(frequencyCount, frequencyStride),
+    wavevector: indicesWithStride(wavevectorCount, wavevectorStride),
+  };
+}
+
+function indicesWithStride(count: number, stride: number): number[] {
+  const indices: number[] = [];
+  for (let index = 0; index < count; index += stride) indices.push(index);
+  return indices;
+}
+
 export function dynamicStructureFactorPointSelection(
   resource: DynamicStructureFactorResource | null,
   frequencyIndex: number,
@@ -35,7 +60,20 @@ export function dynamicStructureFactorPointSelection(
 ): DynamicStructureFactorPointSelection | null {
   if (!resource || !Number.isInteger(frequencyIndex) || !Number.isInteger(wavevectorIndex)) return null;
   if (frequencyIndex < 0 || frequencyIndex >= resource.frequency_count || wavevectorIndex < 0 || wavevectorIndex >= resource.wavevector_count) return null;
-  if (resource.invalid_probe_mask[wavevectorIndex]) return null;
+  if (resource.invalid_probe_mask?.[wavevectorIndex] !== false) return null;
+  const originalFrequencyCount = resource.original_frequency_count || resource.frequency_count;
+  const originalWavevectorCount = resource.original_wavevector_count || resource.wavevector_count;
+  const sourceIndices = dynamicStructureFactorSourceIndices(
+    originalFrequencyCount,
+    originalWavevectorCount,
+  );
+  if (
+    sourceIndices.frequency.length !== resource.frequency_count ||
+    sourceIndices.wavevector.length !== resource.wavevector_count
+  ) return null;
+  const sourceFrequencyIndex = sourceIndices.frequency[frequencyIndex];
+  const sourceWavevectorIndex = sourceIndices.wavevector[wavevectorIndex];
+  if (sourceFrequencyIndex == null || sourceWavevectorIndex == null) return null;
   const frequencyHz = resource.frequency_hz[frequencyIndex];
   const kRadPerM = resource.k_rad_per_m[wavevectorIndex];
   const power = resource.power[frequencyIndex * resource.wavevector_count + wavevectorIndex];
@@ -43,10 +81,10 @@ export function dynamicStructureFactorPointSelection(
   return {
     frequencyHz,
     frequencyIndex,
-    itemId: `legacy:dsf:${frequencyIndex}:${wavevectorIndex}`,
+    itemId: `legacy:dsf:${sourceFrequencyIndex}:${sourceWavevectorIndex}`,
     itemKind: "dsf_point",
     kRadPerM,
-    ordinal: frequencyIndex * resource.wavevector_count + wavevectorIndex,
+    ordinal: sourceFrequencyIndex * originalWavevectorCount + sourceWavevectorIndex,
     power,
     sampleId: LEGACY_DSF_SAMPLE_ID,
     wavevectorIndex,

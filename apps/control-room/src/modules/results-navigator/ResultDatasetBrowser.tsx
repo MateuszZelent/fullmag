@@ -720,6 +720,7 @@ export function ResultDatasetBrowser({
                           className="fm-results-dataset-browser__row"
                           data-result-row="true"
                           data-status={item.status}
+                          disabled={!item.selectable}
                           onClick={() =>
                             onSelect(resultDatasetItemSelection(manifest, item))
                           }

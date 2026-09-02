@@ -4,6 +4,8 @@ import type { KernelApi } from "@/kernel/types";
 import type {
   AnalysisResultProjectionDescriptor,
   AnalysisResultProjectionResource,
+  AnalysisResultItemKind,
+  AnalysisResultProductKind,
   AnalysisResultSelectionRef,
 } from "@/shared/domain/analysis/results";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
@@ -26,6 +28,7 @@ export interface AnalysisResultProjectionSurfaceProps {
   onProjectionSelect: (projectionId: string) => void;
   onPointSelect: (selection: AnalysisResultProjectionSelection) => void;
   projections: readonly AnalysisResultProjectionDescriptor[];
+  productKind: AnalysisResultProductKind | null;
   resource: AnalysisResultProjectionResource | null;
   selectedSelection: AnalysisResultSelectionRef | null;
   selectedProjectionId: string | null;
@@ -35,6 +38,7 @@ export interface AnalysisResultProjectionSurfaceProps {
 export interface AnalysisResultProjectionSelection {
   branchId: string | null;
   itemId: string | null;
+  itemKind?: AnalysisResultItemKind | null;
   ordinal: number;
   sampleId: string | null;
 }
@@ -45,6 +49,7 @@ export function AnalysisResultProjectionSurface({
   onProjectionSelect,
   onPointSelect,
   projections,
+  productKind,
   resource,
   selectedSelection,
   selectedProjectionId,
@@ -77,7 +82,7 @@ export function AnalysisResultProjectionSurface({
         trust: "unknown",
       }}
       subtitle={subtitle}
-      title={resource?.projection_id ?? "Analysis result projection"}
+      title={resultProjectionTitle(productKind, resource?.projection_id)}
       toolbar={
         projections.length > 0 ? (
           <Select
@@ -128,6 +133,7 @@ export function AnalysisResultProjectionSurface({
               onPointSelect({
                 branchId: entry.branch_id ?? null,
                 itemId: entry.item_id ?? null,
+                itemKind: selectedSelection?.itemKind ?? null,
                 ordinal: entry.ordinal,
                 sampleId: entry.sample_id ?? null,
               });
@@ -139,4 +145,13 @@ export function AnalysisResultProjectionSurface({
       ) : null}
     </ChartSection>
   );
+}
+
+function resultProjectionTitle(
+  productKind: AnalysisResultProductKind | null,
+  projectionId: string | undefined,
+): string {
+  if (productKind === "time_domain_spectrum") return "Spectral features";
+  if (productKind === "dynamic_structure_factor") return "Dynamic structure factor";
+  return projectionId ?? "Analysis result projection";
 }

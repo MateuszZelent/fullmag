@@ -126,6 +126,38 @@ describe("dynamicStructureFactorModel", () => {
     expect(dynamicStructureFactorPointSelection(resource, 0, 0)).toBeNull();
   });
 
+  it("rejects a DSF selection when the probe mask is incomplete", () => {
+    const resource = {
+      frequency_count: 1,
+      frequency_hz: [1e9],
+      invalid_probe_mask: [],
+      k_rad_per_m: [10],
+      power: [1],
+      wavevector_count: 1,
+    } as never;
+
+    expect(dynamicStructureFactorPointSelection(resource, 0, 0)).toBeNull();
+  });
+
+  it("keeps legacy identity on the source grid after bounded rendering", () => {
+    const resource = {
+      bounded: true,
+      frequency_count: 50,
+      frequency_hz: Array.from({ length: 50 }, (_, index) => index * 2 + 1),
+      invalid_probe_mask: Array.from({ length: 100 }, () => false),
+      k_rad_per_m: Array.from({ length: 100 }, (_, index) => index),
+      original_frequency_count: 100,
+      original_wavevector_count: 100,
+      power: Array.from({ length: 50 * 50 }, () => 1),
+      wavevector_count: 50,
+    } as never;
+
+    expect(dynamicStructureFactorPointSelection(resource, 1, 1)).toMatchObject({
+      itemId: "legacy:dsf:2:2",
+      ordinal: 202,
+    });
+  });
+
   it("renders bounded DSF cells with stable keyboard selection targets", () => {
     const resource = {
       frequency_count: 1,
@@ -140,7 +172,7 @@ describe("dynamicStructureFactorModel", () => {
       wavevector_unit: "rad/m",
     } as never;
 
-    const html = renderToStaticMarkup(createElement(DynamicStructureFactorView, { resource, status: "ready" }));
+    const html = renderToStaticMarkup(createElement(DynamicStructureFactorView, { onPointSelect: () => undefined, resource, status: "ready" }));
 
     expect(html).toContain('data-result-item-id="legacy:dsf:0:0"');
     expect(html).toContain('data-result-item-id="legacy:dsf:0:1"');

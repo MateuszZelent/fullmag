@@ -157,9 +157,51 @@ describe("result dataset browser model", () => {
     expect(model.selectedDatasetId).toBe("dataset:modal");
     expect(model.items[0]?.itemId).toBe("mode:stable-1");
     expect(model.items[0]?.fieldAvailable).toBe(false);
+    expect(model.items[0]?.selectable).toBe(true);
     expect(model.branches[0]?.branchId).toBe("branch:stable-1");
     expect(model.samples[0]?.label).toBe("mu0 Hx = 75 mT");
     expect(model.items[0]?.label).toBe("mode:stable-1");
+  });
+
+  it("does not make an invalid DSF probe selectable", () => {
+    const model = buildResultDatasetBrowserModel({
+      catalog: null,
+      branches: null,
+      items: {
+        cursor: null,
+        dataset_id: "dataset:dsf",
+        dataset_revision: "revision:dsf",
+        items: [{
+          detail_resource: "/items/invalid",
+          display_index: 3,
+          frequency_hz: 2.0e9,
+          item_id: "legacy:dsf:1:3",
+          item_kind: "dsf_point",
+          quality: { qualification: "legacy" },
+          relations: [],
+          sample_id: "dsf-sample-0000",
+          source_revision: "revision:dsf",
+          status: {
+            completeness: "unsupported",
+            execution: "published",
+            qualification: "legacy",
+            reason_code: "invalid_spatial_probe",
+            resource: "unsupported",
+          },
+          wavevector_kf: [4.0, 0, 0],
+        }],
+        limit: 50,
+        next_cursor: null,
+        run_id: "run:1",
+        schema_version: "analysis-result-index.v1",
+        total_count: 1,
+      },
+      manifest: null,
+      samples: null,
+      selectedDatasetId: null,
+    });
+    expect(model.items[0]?.selectable).toBe(false);
+    expect(model.items[0]?.label).toContain("DSF @ k=");
   });
 
   it("uses tokens for coordinate keys and bounded frequency labels", () => {

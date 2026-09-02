@@ -61,17 +61,19 @@ export function DynamicStructureFactorView({
         {cells.map((cell) => {
           const selection = dynamicStructureFactorPointSelection(resource, cell.frequencyIndex, cell.wavevectorIndex);
           const itemId = `legacy:dsf:${cell.frequencyIndex}:${cell.wavevectorIndex}`;
+          const resultItemId = selection?.itemId ?? itemId;
+          const selectable = Boolean(selection && onPointSelect);
           const activate = () => {
-            if (selection) onPointSelect?.(selection);
+            if (selection && onPointSelect) onPointSelect(selection);
           };
           return <span
-            aria-disabled={!selection || undefined}
-            aria-label={selection ? `Select DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}` : `Unavailable DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}`}
+            aria-disabled={!selectable || undefined}
+            aria-label={selectable ? `Select DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}` : `Unavailable DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}`}
             className="fm-analysis-plots__heatmap-cell"
-            data-result-item-id={itemId}
+            data-result-item-id={resultItemId}
             key={itemId}
-            onClick={selection ? activate : undefined}
-            onKeyDown={selection ? (event) => {
+            onClick={selectable ? activate : undefined}
+            onKeyDown={selectable ? (event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 activate();
@@ -79,7 +81,7 @@ export function DynamicStructureFactorView({
             } : undefined}
             role="gridcell"
             style={{ opacity: Math.max(0.04, scale === "log" ? cell.logNormalizedPower : cell.normalizedPower) }}
-            tabIndex={selection ? 0 : -1}
+            tabIndex={selectable ? 0 : -1}
             title={`k=${cell.kRadPerM.toExponential(4)} rad/m, f=${cell.frequencyHz.toExponential(4)} Hz, ${spectrum === "source" ? "|H|²" : "S"}=${cell.power.toExponential(4)}`}
           />;
         })}

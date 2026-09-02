@@ -1,6 +1,7 @@
 import type {
   AnalysisResultProjectionResource,
   AnalysisResultProjectionSelectionEntry,
+  AnalysisResultProductKind,
 } from "./types";
 import type { ChartSeries } from "../chartSeries";
 
@@ -13,6 +14,7 @@ export interface AnalysisResultProjectionChartModel {
 
 export function buildAnalysisResultProjectionChartModel(
   resource: AnalysisResultProjectionResource | null | undefined,
+  productKind: AnalysisResultProductKind | null = null,
 ): AnalysisResultProjectionChartModel {
   if (!resource) return { series: [], selectionBySeriesId: {} };
 
@@ -23,6 +25,11 @@ export function buildAnalysisResultProjectionChartModel(
     string,
     readonly AnalysisResultProjectionSelectionEntry[]
   > = {};
+  const sourceKind =
+    productKind === "time_domain_spectrum" ||
+    productKind === "dynamic_structure_factor"
+      ? "analysis.spin_wave"
+      : "analysis.frequency_domain";
   const series = resource.series.map((sourceSeries) => {
     const seriesId = `${resource.projection_id}:${sourceSeries.series_id}`;
     const visiblePoints = boundedProjectionPoints(sourceSeries.points);
@@ -46,7 +53,7 @@ export function buildAnalysisResultProjectionChartModel(
       })),
       quantity: resource.axis_labels.y ?? resource.axis_mapping.y ?? "result",
       source: {
-        kind: "analysis.frequency_domain" as const,
+        kind: sourceKind,
         resourceKey: `analysis:results:${resource.run_id}:${resource.dataset_id}:${resource.projection_id}`,
         tableId: seriesId,
       },
@@ -56,7 +63,7 @@ export function buildAnalysisResultProjectionChartModel(
         contentDigest: resource.projection_revision,
         device: null,
         precision: null,
-        provenance: "analysis-result-projection",
+        provenance: `analysis-result-projection:${productKind ?? "frequency_domain"}`,
         qualification: resource.status.qualification,
         runId: resource.run_id,
         schemaVersion: resource.schema_version,

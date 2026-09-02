@@ -123,7 +123,7 @@ describe("spinWaveGammaModel", () => {
       window: "hann",
     } as never;
 
-    const html = renderToStaticMarkup(createElement(SpinWaveGammaView, { resource, status: "ready" }));
+    const html = renderToStaticMarkup(createElement(SpinWaveGammaView, { onFeatureSelect: () => undefined, resource, status: "ready" }));
 
     expect(html).toContain('aria-label="Select spectral feature 7"');
     expect(html).toContain('data-result-item-id="legacy:gamma:peak:7"');

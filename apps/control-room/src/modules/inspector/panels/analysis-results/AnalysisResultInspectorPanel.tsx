@@ -22,7 +22,10 @@ import { ScientificInspectorTemplate } from "../../components/ScientificInspecto
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { InspectorPanelProps } from "../../inspectorTypes";
-import type { AnalysisResultSelectionRef } from "@/shared/domain/analysis/results";
+import {
+  analysisResultProvenanceRows,
+  type AnalysisResultSelectionRef,
+} from "@/shared/domain/analysis/results";
 
 function display(value: string | number | null | undefined): string {
   if (value == null || value === "") return "Unavailable";
@@ -138,6 +141,7 @@ export function AnalysisResultInspectorPanel({
       ? ["The selected field is marked unsupported by the result adapter."]
       : []),
   ];
+  const analysisProvenance = analysisResultProvenanceRows(manifestData);
 
   return (
     <>
@@ -207,6 +211,7 @@ export function AnalysisResultInspectorPanel({
           { label: "Field revision", mono: true, value: display(resultRef.fieldRevision ?? itemData?.field_ref?.field_revision) },
           { label: "Resource transport", value: transportStatus },
           { label: "Selection source", value: selection.moduleSource },
+          ...analysisProvenance,
         ]}
         status={{
           availability: status?.completeness ?? "unknown",
