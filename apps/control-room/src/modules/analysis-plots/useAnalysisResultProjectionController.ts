@@ -99,7 +99,9 @@ export function useAnalysisResultProjectionController(
           : {}),
         focus: entry.itemId ? "item" : "sample",
         itemId: entry.itemId ?? undefined,
-        itemKind: entry.itemKind ?? selectedResultSelection.itemKind,
+        itemKind: entry.itemId
+          ? entry.itemKind ?? selectedResultSelection.itemKind
+          : undefined,
         ...(selectedResultSelection.axisFilters
           ? { axisFilters: selectedResultSelection.axisFilters }
           : {}),
