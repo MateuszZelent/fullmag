@@ -1,390 +1,135 @@
-# Raport Task 1 — frozen spins: ADR, kontrakt fizyczny i kwalifikacja
+# Raport Task 1 — odtwarzalny baseline FEM/BEM GPU
 
 ## Status
 
-`DONE_WITH_CONCERNS`
-
-Sześć wymaganych artefaktów Task 1 zostało utworzonych. Bezpośredni walidator
-noty naukowej, jego 23 testy, test granicy bieżącego Python API, skan
-niedomkniętych markerów, sprawdzenie whitespace i strict Sphinx zakończyły się
-powodzeniem. Dwa repo-wide guardy `public_docs` są czerwone wyłącznie na
-istniejących stronach poza zakresem Task 1; nie zostały naprawione, aby nie
-naruszyć zamrożonego zakresu i cudzych zmian.
-
-Nie wykonano `git add`, `git commit`, `git push` ani modyfikacji kodu.
-
-## Zrealizowany zakres
-
-Utworzono:
-
-1. `docs/adr/0026-frozen-spins-constraint-and-selection-model.md`
-2. `docs/physics/0996-frozen-spins-constraint.md`
-3. `docs/physics/0996-frozen-spins-constraint.source-map.json`
-4. `docs/specs/selection-expr-v1.md`
-5. `docs/specs/frozen-spins-v1.md`
-6. `docs/validation/frozen-spins-qualification-matrix.md`
-
-Raport wykonania:
-
-7. `.superpowers/sdd/task-1-report.md`
-
-Istniejąca modyfikacja `.superpowers/sdd/progress.md` była obecna przed Task 1
-i nie została dotknięta.
-
-## Zamknięte decyzje
-
-### Semantyka i IR
-
-- `FrozenSpins` jest osobnym `MagnetizationConstraintIR`, nie parametrem
-  materiałowym ani właściwością `ObjectRegionIR`.
-- `ProblemIR` ma docelowo top-level `selections[]` i
-  `magnetization_constraints[]`; Python stage sugar obniża się do top-level
-  definicji z activation scope.
-- Publiczne wersje to `selection_expr.v1` i `frozen_spins.v1`; ADR przyjmuje
-  docelowy bump `ProblemIR 0.3.0 -> 0.4.0` z addytywną migracją pustych
-  kolekcji.
-- Typed AST odrzuca `eval`, lambdy i stringowe programy. Zwykłe float `==` nie
-  należy do V1; używa się `approx` lub `between`.
-- Publiczny `disk` obniża się do skończonego cylindra. `through_object` wymaga
-  obiektu, skończonych bounds i przecięcia z jego domeną.
-
-### Capture i runtime
-
-- V1 wspiera `static` i `snapshot_at_activation`.
-- `capture_current_at_activation` materializuje maskę i przechwytuje referencję
-  atomowo z tej samej stabilnej rewizji, po zwykłej normalizacji/walidacji
-  stanu stage i przed pierwszą próbą kroku.
-- Constraint obowiązuje od początku zarówno w relaksacji, jak i dynamice.
-- Backend maskuje pełny RHS dopiero po LLG, STT, SOT, termice i pozostałych
-  źródłach, odtwarza referencję po każdym kandydacie i liczy autorytatywne
-  redukcje po swobodnych DOF.
-- Energia i pola pozostają pełnodomenowe; frozen spiny nadal wpływają na free
-  DOF.
-- TPI używa essential true DOF albo równoważnej eliminacji w operatorze.
-- All-frozen kończy się bez iteracji z
-  `stop_reason="all_active_dofs_frozen"`.
-
-### Dyskretyzacja, pamięć i produkt
-
-- FDM otrzymuje osobny `frozen_mask`; `region_mask` nie może go zastępować.
-- Authoritative FEM preview i solver używają magnetic true DOF. Node/centroid
-  preview może być tylko jawnie nieautorytatywny.
-- Referencyjna reprezentacja runtime V1 jest dense: `u8` maska i dense
-  trójskładnikowa referencja w precyzji backendu, z osobnym no-mask fast path.
-- API pozostaje resource-first: cienki status, rewizjonowane resources i
-  binarna data plane dla ciężkiej maski.
-- Requested intent i resolved execution są zachowywane osobno; forced lane nie
-  może wykonać cichego fallbacku ani pominąć constraintu.
-
-## Kontrakt naukowy
-
-Nota definiuje i mapuje:
-
-- $F \subseteq A$ oraz $U=A\setminus F$;
-- $\mathbf m_i(t)=\mathbf m_i^\star$ na $F$;
-- constrained energy $E_c(\mathbf m_U)=E(\mathbf m_U,\mathbf m_F^\star)$;
-- pełny złożony RHS wraz z LLG, STT, SOT i termiką;
-- final-RHS masking;
-- candidate restore;
-- free-domain RHS i torque reductions;
-- TPI essential increment;
-- all-frozen, checkpoint, provenance i free/all telemetry.
-
-Każde równanie ma labelled MyST math, kompletną tabelę symboli i jednostek SI
-oraz source-map. Planowane równania wskazują wyłącznie na unikalne
-`DOC-ANCHOR` z `evidence_status=planned_contract`. Aktualne źródła kodu mapują
-jedynie istniejących właścicieli i luki: granicę wersji IR, dwa różne
-evaluatory geometrii, FEM membership preview, `ObjectRegion` i `fm.study`.
-
-Nie utworzono fałszywego immutable linku dla nowych, niecommitowanych plików.
-Ich indeks jawnie używa `worktree/uncommitted; path + anchor only`. Linki do
-aktualnych źródeł kodu używają pełnego audytowanego SHA
-`d9518082eaee2131c3e7160bd8ae952ed2f45899`.
-
-## Macierz kwalifikacji
-
-Macierz zawiera wymagane kolumny `IR`, `planner`, `runtime`, `scientific`,
-`managed`, `browser`. Wszystkie komórki wszystkich lane'ów zaczynają jako
-`UNQUALIFIED`, w tym:
-
-- FDM CPU/reference FP64;
-- FDM CUDA FP64 i FP32;
-- FDM multilayer CPU/reference i CUDA;
-- FEM CPU/MFEM FP64;
-- FEM GPU MFEM/hypre/libCEED/CUDA FP64.
-
-Osobna macierz algorytmów nie dziedziczy kwalifikacji między overdamped LLG,
-dynamiką, explicit/adaptive RK, ABM, PG-BB, NCG, TPI, STT, SOT, termiką i
-all-frozen. Dokument określa minimalny ledger dowodu z pełnym SHA, dokładną
-komendą, runtime/device identity, immutable artefaktem, oraclem, tolerancjami i
-reviewerem.
-
-## Weryfikacja
-
-### Bezpośrednie gate'y Task 1 — PASS
-
-1. Source-map validator:
-
-   ```text
-   python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .
-   exit 0
-   ```
-
-2. Testy walidatora:
-
-   ```text
-   python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
-   Ran 23 tests — OK
-   ```
-
-3. Bieżąca granica Python API:
-
-   ```text
-   env PYTHONPATH=packages/fullmag-py/src python3 -c <feature detection>
-   FrozenSpins: False
-   select: False
-   exit 0
-   ```
-
-4. Skan niedomkniętych markerów dokładnie dla plików wymaganych briefem:
-
-   ```text
-   rg -n "T[B]D|T[O]DO|do ustalenia" <cztery wymagane dokumenty>
-   0 wyników
-   ```
-
-5. Checkpoint whitespace:
-
-   ```text
-   git diff --check -- docs/adr docs/physics docs/specs docs/validation
-   exit 0
-   ```
-
-   Pliki są nowe i untracked, dlatego uzupełniający skan trailing whitespace
-   objął wszystkie sześć dokładnych ścieżek i zwrócił 0 wyników.
-
-6. Testy guardów dokumentacyjnych:
-
-   ```text
-   python3 -m unittest scripts/test_check_public_doc_examples.py -v
-   Ran 5 tests — OK
-
-   python3 -m unittest scripts/test_public_docs_information_architecture.py -v
-   Ran 22 tests — OK
-
-   python3 scripts/check_public_docs_boundary.py
-   public documentation boundary: passed
-   ```
-
-7. Strict Sphinx:
-
-   ```text
-   sphinx-build -b html -W -n --keep-going public_docs/site /tmp/fullmag-task1-sphinx-html
-   build succeeded
-   ```
-
-Nowa nota jest wewnętrzna pod `docs/physics`, a obecny Sphinx renderuje
-`public_docs/site`; dlatego nie istnieje rendered HTML tej konkretnej strony do
-przekazania drugiemu trybowi `validate_scientific_docs.py --rendered-html`.
-Bezpośrednia walidacja źródła i strict build dostępnego drzewa zostały wykonane.
-
-### Niezależne repo-wide gate'y — FAIL poza zakresem
-
-1. `python3 scripts/check_public_doc_examples.py --root public_docs/site`
-   zwraca exit 1 dla pięciu istniejących stron:
-
-   - `python-api/interactions/drift-diffusion-spin-torque.md`;
-   - `python-api/interactions/interfacial-dmi.md`;
-   - `python-api/interactions/magnetoelastic.md`;
-   - `python-api/interactions/spin-orbit-torque.md`;
-   - `python-api/interactions/spin-transfer-torque.md`.
-
-   Każda ma blok Python niespełniający pełnego wzorca
-   `fm.study(...)` + `study.stages.add_*`. Task 1 nie modyfikował
-   `public_docs/site`.
-
-2. `python3 scripts/public_docs_information_architecture.py --check --root
-   public_docs/site` zwraca exit 1 z istniejącymi rozjazdami `status` metadata
-   względem manifestu na wielu stronach `python-api` i `physics`. Testy samego
-   narzędzia przechodzą 22/22, a strict Sphinx przechodzi. Task 1 nie zmieniał
-   manifestu ani tych stron.
-
-Zgodnie z zamrożonym zakresem nie wykonano drive-by napraw tych gate'ów.
-
-## Samoocena i concerns
-
-1. W self-review wykryto, że `0014` jest już zajęty przez
-   `docs/adr/0014-native-fem-backend-modularization.md`. Controller rozstrzygnął
-   konflikt przez użycie pierwszego wolnego numeru `0026`; semantyka dokumentu
-   i wszystkie odwołania pozostały niezmienione.
-2. Nowe pliki pozostają untracked zgodnie z zakazem stage/commit. Z tego powodu
-   branch-diff validator `validate_changed_scientific_docs.py --base ... --head
-   HEAD` nie widzi ich; uruchomiono bezpośredni, właściwy walidator adjacent
-   source-map. Changed-page gate zadziała dopiero po włączeniu plików do
-   przyszłego commita przez właściciela.
-3. Nie ma dowodu runtime frozen spins. Każde twierdzenie wykonawcze jest opisane
-   jako target/planned, a wszystkie lane'y są `UNQUALIFIED`.
-4. Użycie capability w bieżącym `docs/specs/capability-matrix-v0.md`, OpenAPI,
-   generated transport i UI jest obowiązkiem kolejnych zadań. Task 1 definiuje
-   słownik, ale nie promuje aktualnych capabilities ani nie modyfikuje plików
-   poza listą briefu.
-
-## Wniosek
-
-Task 1 zamyka architekturę i publikacyjny kontrakt potrzebny kolejnym zadaniom.
-Można rozpocząć implementację typed selektora i constraintu bez otwartej
-niejednoznaczności dotyczącej właściciela semantyki, capture timing,
-free/all metrics, all-frozen, FEM true DOF, dense V1, snapshot V1 oraz zakresu
-relaksacja+dynamika. Nie wolno jednak traktować dokumentacji jako kwalifikacji
-któregokolwiek lane'u.
-
-## Poprawki po review Task 1
-
-### Zamknięte findings
-
-1. Default `membership` jest wyprowadzany deterministycznie z klasy AST:
-   geometry-only normalizuje się do jawnego `static`, a state-dependent do
-   jawnego `snapshot_at_activation`. Jawne `static` dla state-dependent AST
-   jest błędem; jawne `snapshot_at_activation` jest legalne dla obu klas.
-2. Publiczny `boundary` domyślnie jest `inclusive`; canonical IR zapisuje jawny
-   znormalizowany obiekt z wersjonowanymi tolerancjami `0.0` i `1e-12`.
-3. Zdefiniowano maszynę epoki aktywacji dla kolejnych i nieciągłych stage IDs,
-   inactive-to-active, ponownego capture oraz checkpoint resume bez recapture.
-4. `inactive_selection=warn_and_intersect` dotyczy wyłącznie raw authored
-   candidate mask. Bit poza aktywną domeną w resolved/runtime/checkpoint mask
-   jest twardym błędem inwariantu.
-5. `max_rhs_all` i `max_torque_all_Apm` mają jawne równania i powstają na $A$
-   z pełnego pre-constraint RHS/torque, z tego samego stanu i rewizji co
-   redukcje `free` po $U$: po candidate restore, przed final-RHS masking.
-6. Każdy overlap wymaga dokładnej równości resolved reference na wspólnych DOF
-   po konwersji do precyzji lane. Dotyczy to capture-current z różnych epok;
-   konflikt odrzuca całą aktywację atomowo.
-7. $\dot{\mathbf m}_i$ i $\mathbf m_i^{\mathrm{candidate}}$ mają osobne wpisy
-   w tabeli symboli i source-map z jednostkami odpowiednio
-   $\mathrm{s^{-1}}$ oraz $1$.
-8. $t$ oznacza wyłącznie czas fizyczny dynamiki w sekundach. PG-BB i NCG używają
-   bezwymiarowego indeksu iteracji $k$; nie mają pseudoczasu w sekundach.
-
-Wszystkie statusy w macierzy lane i algorytmów pozostają `UNQUALIFIED`.
-
-### Zmienione pliki
-
-- `docs/adr/0026-frozen-spins-constraint-and-selection-model.md` — zamknięte
-  defaulty, epoka, raw/resolved invariant, pipeline metryk i overlap.
-- `docs/physics/0996-frozen-spins-constraint.md` — równania `all`, dokładne
-  symbole/jednostki, czas kontra iteracja, default membership, epoka i błędy.
-- `docs/physics/0996-frozen-spins-constraint.source-map.json` — nowe równania,
-  symbole, anchor overlap i poprawiony kontrakt parametru `membership`.
-- `docs/specs/selection-expr-v1.md` — default `inclusive`, klasyfikacja
-  geometry-only/state-dependent oraz raw/resolved mask semantics.
-- `docs/specs/frozen-spins-v1.md` — maszyna epok i restartu, pipeline metryk,
-  dokładna zgodność overlap i znormalizowany payload geometry-only.
-- `docs/validation/frozen-spins-qualification-matrix.md` — przyszłe gate'y dla
-  wszystkich poprawek bez promocji statusu.
-- `.superpowers/sdd/task-1-report.md` — niniejszy fix ledger i dowód testów.
-
-### Dokładne focused validators po ostatniej zmianie
-
-1. Source-map validator:
-
-   ```text
-   python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .
-   <brak stdout/stderr>
-   exit 0
-   ```
-
-2. Testy walidatora:
-
-   ```text
-   python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
-   .......................
-   ----------------------------------------------------------------------
-   Ran 23 tests in 0.777s
-
-   OK
-   exit 0
-   ```
-
-3. Skan niedomkniętych markerów:
-
-   ```text
-   rg -n "T[B]D|T[O]DO|do ustalenia" docs/adr/0026-frozen-spins-constraint-and-selection-model.md docs/physics/0996-frozen-spins-constraint.md docs/specs/selection-expr-v1.md docs/specs/frozen-spins-v1.md
-   <brak wyników>
-   exit 1 (oczekiwany status `rg` przy braku dopasowań)
-   ```
-
-4. Checkpoint whitespace:
-
-   ```text
-   git diff --check -- docs/adr docs/physics docs/specs docs/validation
-   <brak stdout/stderr>
-   exit 0
-   ```
-
-Nie uruchamiano repo-wide guardów poza fix contract. Nie wykonano `git add`,
-`git commit` ani `git push`; niezwiązane zmiany współdzielonego worktree nie
-zostały dotknięte.
-
-## Poprawki po residual re-review Task 1
-
-### Zamknięte findings
-
-1. `selection_expr.v1` rozdziela teraz dwie fazy kontraktu. Publiczny authored
-   input Python/UI może pominąć `inside_geometry.boundary` i otrzymuje default
-   `inclusive`. Canonical normalized `SelectionExprIR` zawsze wymaga jawnego
-   obiektu `boundary`; brak pola na granicy deserializacji canonical IR jest
-   błędem schematu. Tabela required fields jest jawnie opisana jako tabela
-   canonical normalized IR.
-2. Równanie direct minimizer
-   $\mathbf m_i^{(k)}=\mathbf m_i^\star$ dla $i\in F$ znajduje się teraz pod
-   `DOC-ANCHOR:frozen-v1-constraint-model`, czyli dokładnie pod anchorem
-   wskazanym przez wpis `eq-frozen-minimizer-constraint` w source-map.
-
-Zmieniono wyłącznie:
-
-- `docs/specs/selection-expr-v1.md`;
-- `docs/specs/frozen-spins-v1.md`;
-- `.superpowers/sdd/task-1-report.md`.
-
-Statusy wszystkich lane'ów pozostają `UNQUALIFIED`.
-
-### Dokładne focused validators po residual re-review
-
-1. Source-map validator:
-
-   ```text
-   python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0996-frozen-spins-constraint.source-map.json --repo-root .
-   <brak stdout/stderr>
-   exit 0
-   ```
-
-2. Testy walidatora:
-
-   ```text
-   python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
-   .......................
-   ----------------------------------------------------------------------
-   Ran 23 tests in 0.757s
-
-   OK
-   exit 0
-   ```
-
-3. Skan niedomkniętych markerów:
-
-   ```text
-   rg -n "T[B]D|T[O]DO|do ustalenia" docs/adr/0026-frozen-spins-constraint-and-selection-model.md docs/physics/0996-frozen-spins-constraint.md docs/specs/selection-expr-v1.md docs/specs/frozen-spins-v1.md
-   <brak wyników>
-   exit 1 (oczekiwany status `rg` przy braku dopasowań)
-   ```
-
-4. Checkpoint whitespace:
-
-   ```text
-   git diff --check -- docs/adr docs/physics docs/specs docs/validation
-   <brak stdout/stderr>
-   exit 0
-   ```
-
-Nie uruchamiano innych gate'ów. Nie wykonano `git add`, `git commit` ani
-`git push`; niezwiązane pliki nie zostały dotknięte.
+**DONE_WITH_CONCERNS**
+
+Task 1 jest ukończony na poziomie źródła i wykonywalnego kontraktu natywnego.
+Zamrożony baseline został zachowany z wymaganymi SHA-256, podłączony do CMake,
+a kontrakty CPU oraz CUDA przeszły w repozytoryjnym kontenerze FEM. Nie udało
+się utworzyć ani zweryfikować zarządzanego bundle runtime z pełną tożsamością
+źródła, dlatego managed runtime i walidacja fizyczna pozostają `NOT VERIFIED`.
+
+## Commit
+
+- `9476914fe03c507b7693a18aef29ccb11cd29eaa` — `feat(fem): import reproducible GPU FEM-BEM baseline`
+
+Niniejszy raport zapisano po commicie implementacyjnym, aby mógł zawierać jego
+pełny, niekołowy identyfikator. Plik raportu nie należy do commitu powyżej.
+
+## Zmienione pliki
+
+- `backends/fem/CMakeLists.txt`
+- `backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp`
+- `backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp`
+- `backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp`
+- `backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp`
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp`
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem.hpp`
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp`
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu`
+- `backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp`
+- `backends/fem/tests/demag_fem_bem_gpu_contract.cpp`
+- `crates/fullmag-fem-sys/src/lib.rs`
+- `docs/audits/2026-09-02-fem-gpu-solver-audit.md`
+- `docs/physics/fem_demag_fem_bem.md`
+- `docs/physics/fem_demag_fem_bem.source-map.json`
+- `docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md`
+- `justfile`
+- `native/include/fullmag_fem.h`
+- `scripts/test_fem_gpu_full_potential_contract.py`
+- `.superpowers/sdd/task-1-report.md` — raport po commicie, niecommitowany
+
+`.superpowers/sdd/progress.md` był wcześniej zmodyfikowany przez koordynatora i
+nie został przeze mnie wystage'owany ani zawarty w commicie.
+
+## TDD i weryfikacja
+
+1. `python scripts/test_fem_gpu_full_potential_contract.py`
+   - RED przed podłączeniem baseline: exit `1`; brak
+     `gpu/cuda/demag_fem_bem/fem_bem.cpp` w CMake.
+   - po odzyskaniu hunków i podłączeniu CMake: exit `0`; `Ran 1 test`, `OK`.
+   - drugi RED po dodaniu kontraktu ABI: exit `1`; brak
+     `FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM = 3` w nagłówku C.
+   - po minimalnym rozszerzeniu enum C/Rust: exit `0`; `Ran 1 test`, `OK`.
+   - świeży wynik końcowy po implementacji: exit `0`; `Ran 1 test in 0.005s`,
+     `OK`. Test sprawdza osiem wymaganych SHA-256 oraz wpisy CMake i ABI.
+
+2. `just rebuild-fem-runtime`
+   - exit `1`, przed kompilacją;
+   - `mkdir: cannot create directory '/mnt': Permission denied`;
+   - `setsid: command not found`; recipe zakończyła się kodem `127`.
+
+3. `just ensure-managed-fem-runtime`
+   - exit `1`, przed kompilacją;
+   - `[managed_fem_build_policy] Windows worktree gitdir is unavailable in WSL: /mnt/c/git/fullmag/fullmag/.git/worktrees/fem-gpu-full-potential-20260902`;
+   - recipe zakończyła się kodem `2`.
+
+4. `just --shell "C:\\Program Files\\Git\\bin\\bash.exe" --shell-arg -lc verify-fem-demag-fem-bem-native-contract`
+   - pierwsze wywołanie w sandboxie: brak dostępu do named pipe Docker Desktop;
+   - pierwsze zatwierdzone wywołanie dotarło do 59% i ujawniło rzeczywisty błąd
+     kompilacji: niezadeklarowane
+     `FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM`;
+   - po TDD naprawie ABI końcowe wywołanie: exit `0`, build 100%;
+   - CTest: `fem_demag_fem_bem_contract` PASS (`1.49 s`) oraz
+     `fem_demag_fem_bem_gpu_contract` PASS (`0.39 s`), `2/2`, 100%, razem
+     `1.88 s`.
+
+5. `python .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/fem_demag_fem_bem.source-map.json --repo-root .`
+   - exit `0`.
+
+6. `python -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'`
+   - exit `0`; `Ran 29 tests in 13.907s`, `OK`.
+
+7. `rustfmt --edition 2021 --check crates/fullmag-fem-sys/src/lib.rs`
+   - exit `0`.
+
+8. `git diff --no-index --ignore-cr-at-eol <worktree-file> <shared-checkout-file>`
+   dla czterech odzyskanych plików operatora/workspace CPU
+   - exit `0` dla każdego; brak różnic treści po pominięciu CRLF/LF.
+
+9. `git diff --cached --check`
+   - wskazał wyłącznie dwie końcowe spacje w zamrożonym pliku
+     `docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md`;
+   - spacje pozostawiono świadomie, ponieważ zmiana złamałaby wymagany SHA-256
+     `6c978a7805d806df80f0801b9c3c685e2a56ff3541987158b21e2f4d86b5d674`;
+   - pozostały staged diff nie zawiera błędów whitespace.
+
+10. `sphinx-build --version`
+    - polecenie niedostępne w środowisku hosta; ścisły build Sphinx nie został
+      wykonany.
+
+## Self-review
+
+- Zakres commitu porównano z briefem; commit zawiera wyłącznie baseline Task 1,
+  task-specific hunki operatora/workspace, niezbędne podłączenie CMake/just,
+  minimalny wpis enum ABI oraz dokumentację kontraktu.
+- Zamrożone pliki GPU, test, audit i spec zachowują dokładne hashe wymagane przez
+  brief; weryfikuje to test manifestu.
+- CPU operator/workspace odzyskano semantycznie hunkami; nie kopiowano ogólnych
+  plików z brudnego checkoutu. Porównanie ignorujące wyłącznie końce linii nie
+  wykazało różnic treści.
+- `mfem_bridge.cpp` i `Context` nie otrzymały nowej fizyki ani stanu.
+- Dokumentacja rozdziela status `source/contract VERIFIED` od nieudowodnionych
+  `managed runtime` i `physics`, zgodnie z kontraktem publikacyjnym.
+- Dwa kontrakty wykonywalne przeszły po pełnym linkowaniu `fullmag_fem` w
+  kontenerze z CUDA 12.4.131 i MFEM; nie jest to jednak promocja capability ani
+  dowód produkcyjny.
+
+## Concerns
+
+1. `rebuild-fem-runtime` i `ensure-managed-fem-runtime` zatrzymały się na
+   ograniczeniach integracji Windows/WSL przed kompilacją. Nie ma świeżego
+   zarządzanego manifestu z pełnym SHA gałęzi ani runtime receipt; managed
+   runtime pozostaje `NOT VERIFIED`.
+2. Nie uruchomiono filmu 500 x 500 x 10 nm, parity CPU/GPU, porównania z FDM ani
+   MuMax3. Poprawność fizyczna i production qualification pozostają
+   `NOT VERIFIED`.
+3. Target GPU potwierdza wykonywalny kontrakt kernela w kontenerze, ale nie
+   zapisuje odrębnego, trwałego receipt z requested/resolved device, precision,
+   source identity i licznikami hot-loop.
+4. `sphinx-build` nie jest zainstalowany w środowisku hosta, więc nie wykonano
+   ścisłego renderowania Sphinx z warnings-as-errors; walidator źródła i jego
+   29 testów przeszły.
+5. Zamrożona specyfikacja zawiera dwie końcowe spacje wymagane do zachowania
+   dokładnego SHA-256; jest to znane, ograniczone odstępstwo od `git diff --check`.
