@@ -78,9 +78,54 @@ function boundedProjectionPoints(
   points: readonly AnalysisResultProjectionResource["series"][number]["points"][number][],
 ) {
   if (points.length <= MAX_RESULT_PROJECTION_POINTS) return points;
-  const stride = (points.length - 1) / (MAX_RESULT_PROJECTION_POINTS - 1);
-  return Array.from({ length: MAX_RESULT_PROJECTION_POINTS }, (_, index) =>
-    points[Math.round(index * stride)]!,
+
+  const gapIndices = points.reduce<number[]>((indices, point, index) => {
+    if (projectionPointIsGap(point)) indices.push(index);
+    return indices;
+  }, []);
+  if (gapIndices.length >= MAX_RESULT_PROJECTION_POINTS) {
+    return gapIndices
+      .slice(0, MAX_RESULT_PROJECTION_POINTS)
+      .map((index) => points[index]!);
+  }
+
+  const selectedIndices = new Set(gapIndices);
+  const validPointCount = points.length - gapIndices.length;
+  const remainingPointCount = MAX_RESULT_PROJECTION_POINTS - gapIndices.length;
+  if (validPointCount <= remainingPointCount) {
+    return points;
+  }
+
+  const stride =
+    remainingPointCount === 1
+      ? 0
+      : (validPointCount - 1) / (remainingPointCount - 1);
+  const selectedRanks = new Set(
+    Array.from({ length: remainingPointCount }, (_, rank) =>
+      Math.round(rank * stride),
+    ),
+  );
+  let validRank = 0;
+  points.forEach((point, index) => {
+    if (projectionPointIsGap(point)) return;
+    if (selectedRanks.has(validRank)) selectedIndices.add(index);
+    validRank += 1;
+  });
+
+  return points.filter((_, index) => selectedIndices.has(index));
+}
+
+function projectionPointIsGap(
+  point: AnalysisResultProjectionResource["series"][number]["points"][number],
+): boolean {
+  const x = point.x;
+  const y = point.y ?? point.value;
+  return (
+    point.status === "gap" ||
+    x == null ||
+    y == null ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y)
   );
 }
 

@@ -71,6 +71,46 @@ describe("analysis result projection chart model", () => {
     expect(model.selectionBySeriesId["field-frequency-map:branch:0"]).toEqual([]);
   });
 
+  it("keeps explicit branch gaps when bounding a large projection", () => {
+    const points = Array.from({ length: 10_000 }, (_, index) =>
+      index === 1
+        ? {
+            branch_id: "branch:0",
+            item_id: null,
+            ordinal: index,
+            sample_id: null,
+            status: "gap",
+            value: null,
+            x: null,
+            y: null,
+          }
+        : {
+            branch_id: "branch:0",
+            item_id: `item:${index}`,
+            ordinal: index,
+            sample_id: `sample:${index}`,
+            status: "ready",
+            value: index,
+            x: index,
+            y: index,
+          },
+    );
+
+    const model = buildAnalysisResultProjectionChartModel({
+      ...projection,
+      selection_index: [],
+      series: [{ ...projection.series[0]!, points }],
+    });
+
+    expect(model.series[0]?.points).toHaveLength(5_000);
+    expect(model.series[0]?.points).toContainEqual({
+      label: "point 1",
+      rowIndex: 1,
+      x: Number.NaN,
+      y: Number.NaN,
+    });
+  });
+
   it("uses the spin-wave chart resource kind for time-domain result products", () => {
     const model = buildAnalysisResultProjectionChartModel(
       projection,
