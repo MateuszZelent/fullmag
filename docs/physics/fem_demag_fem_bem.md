@@ -262,8 +262,9 @@ wszystkie te DOF-y. RHS kopiuje wspólny demag RHS i zeruje dokładnie tę list�
 
 ### 8.3. Dense CPU i diagnostyczny operator ACA H-matrix
 
-`AcaHMatrixDemagBemOperator` buduje medianowe drzewa klastrów węzłów
-docelowych i trójkątów źródłowych. Pary nieadmissible zapisują dokładne wpisy
+`AcaHMatrixDemagBemOperator` buduje jedno deterministyczne, medianowe drzewo
+klastrów węzłów brzegowych, współdzielone przez stronę docelową i źródłową
+każdej pary bloków. Pary nieadmissible zapisują dokładne wpisy
 Lindholma w blokach near. Pary admissible są kompresowane deterministycznym
 ACA do czynników $UV^T$ z limitem rzędu i kontrolą pivotu. Diagonalny wkład
 kątów bryłowych pozostaje jawny; globalna macierz $N_b^2$ nie jest
@@ -279,7 +280,11 @@ wierzchołka, zerowej krawędzi, niedozwolonego logarytmu lub niefinitycznego
 wyniku są błędem kontrolowanym.
 
 Dense reference ma złożoność i pamięć $O(N_b^2)$ i jest chroniony guardem
-przed `matrix_.assign`; pozostaje domyślnym wariantem CPU.
+przed `matrix_.assign`; pozostaje domyślnym wariantem CPU. Wspólna
+inicjalizacja FK tworzy tylko geometrię granicy, przestrzeń P1, gauge oraz
+operatory Neumanna i Dirichleta. Dopiero jawnie wybrana realizacja CPU buduje
+`DenseDemagBemOperator`; wymuszona realizacja GPU przechodzi bez jego alokacji
+i bez kosztu $O(N_b^2)$.
 Kontrola jakości hierarchii wykonuje ograniczoną, deterministyczną serię
 niezależnych probes/residual estimates. `relative_error_estimate` jest
 estymatą diagnostyczną, nie analityczną gwarancją błędu; przekroczenie
@@ -298,6 +303,12 @@ nalicza je jako compute host sync, a ścisły receipt `device_resident` odrzuca
 próbę. Dlatego source/kernel/initialize→apply contract jest VERIFIED, lecz
 managed strict receipt pozostaje NOT VERIFIED.
 
+Wskaźnik device workspace ma dokładnie jednego właściciela lifecycle:
+`DemagFemBemWorkspace` przechowuje callback destruktora dostarczony przez moduł
+CUDA. Reinicjalizacja FK oraz zwykły `context_destroy_mfem` wywołują go przed
+niszczeniem wspólnych operatorów MFEM, po czym zerują wskaźnik, readiness i
+accounting. Powtórny teardown jest no-op.
+
 (implementation-mapping)=
 ## 9. Mapa implementacji i własność modułów
 
@@ -307,7 +318,7 @@ managed strict receipt pozostaje NOT VERIFIED.
 | granica BEM | backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.hpp/.cpp | build_demag_boundary_surface |
 | dense default i diagnostyczny ACA H-matrix | backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp/.cpp | DenseDemagBemOperator oraz AcaHMatrixDemagBemOperator::build, apply |
 | RHS Neumanna | backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.hpp/.cpp | prepare_demag_fem_bem_neumann_rhs |
-| workspace i gauge | backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp/.cpp | DemagFemBemWorkspace, initialize_demag_fem_bem_workspace |
+| workspace, gauge i lifecycle CPU/GPU | backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp/.cpp | DemagFemBemWorkspace, initialize_demag_fem_bem_workspace, context_initialize_demag_fem_bem, destroy_attached_demag_fem_bem_gpu_workspace |
 | solve | backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.hpp/.cpp | context_compute_demag_fem_bem |
 | wartości brzegowe | backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.* | boundary transfer |
 | potencjał | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.* | potential combine |
@@ -409,11 +420,12 @@ na managed CPU i GPU.
 | crates/fullmag-plan/src/fem.rs | validate_fem_demag_accuracy_contract | fail-closed profil all-tet/P2 Poisson |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp | build_demag_boundary_surface | typed TET4 i watertight boundary |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp | class AcaHMatrixDemagBemOperator | diagnostyczny ACA H-matrix, eksport device i limit budżetu; dense pozostaje CPU default |
-| backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp | initialize_demag_fem_bem_workspace | przestrzeń P1 i wielokrotny gauge |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp | initialize_demag_fem_bem_workspace, context_initialize_demag_fem_bem, destroy_attached_demag_fem_bem_gpu_workspace | wspólna przestrzeń P1, wielokrotny gauge, CPU-only dense selection i teardown podpiętego GPU workspace |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp | prepare_demag_fem_bem_neumann_rhs | zerowanie gauge w RHS |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp | combine_demag_fem_bem_total_potential | suma potencjałów u1 i u2 |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_energy.cpp | demag_fem_bem_energy_from_field | energia demagnetyzacji |
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | gpu_demag_fem_bem_initialize | jednorazowy upload i trwały workspace CUDA/Hypre |
+| backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | destroy_owned_gpu_workspace | callback teardownu podpiętego GPU workspace wywoływany przed operatorami CPU i MFEM |
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu | fullmag_cuda_fem_bem_apply | device apply bloków near/far i mapowania P1 true DOF |
 | backends/fem/tests/demag_fem_bem_contract.cpp | main | wykonywalny kontrakt testowy |
 | backends/fem/tests/demag_fem_bem_gpu_contract.cpp | main | wykonywalny kontrakt CUDA near/far apply |

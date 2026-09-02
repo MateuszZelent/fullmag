@@ -64,10 +64,9 @@ Diagnostyczny ACA H-matrix nie zastępuje go bez osobnej bramy A/B i parity.
 
 ### Diagnostyczny operator ACA H-matrix CPU
 
-`AcaHMatrixDemagBemOperator` buduje dwa deterministyczne drzewa klastrów:
-
-1. drzewo węzłów docelowych dla wierszy operatora;
-2. drzewo trójkątów źródłowych dla całek Lindholma.
+`AcaHMatrixDemagBemOperator` buduje jedno deterministyczne drzewo klastrów
+węzłów brzegowych. To samo drzewo jest współdzielone przez klastry docelowe
+wierszy operatora i klastry źródłowe całek Lindholma.
 
 Para klastrów jest admissible, gdy:
 
@@ -132,6 +131,13 @@ CPU jako obejścia.
    workspace i telemetry.
 2. `backends/fem/gpu/cuda/demag_fem_bem/` — CUDA storage, kernels, upload,
    apply, lifecycle i device energy.
+
+Wspólny workspace FK składa geometrię granicy, przestrzeń P1, gauge oraz
+operatory rzadkie. Nie buduje globalnej macierzy BEM. Dense operator jest
+tworzony wyłącznie przy wyborze CPU, natomiast forced GPU buduje bezpośrednio
+ACA H-matrix. Podpięty GPU workspace ma callback destruktora należący do modułu
+CUDA; wspólny lifecycle wywołuje go przy reinicjalizacji i przed zniszczeniem
+operatorów MFEM przez `context_destroy_mfem`.
 3. `backends/fem/src/api.cpp` oraz `crates/fullmag-fem-sys` — tylko ABI
    capability/status/receipt; bez przenoszenia równań do ABI.
 4. `crates/fullmag-plan` i `crates/fullmag-runner` — requested/resolved

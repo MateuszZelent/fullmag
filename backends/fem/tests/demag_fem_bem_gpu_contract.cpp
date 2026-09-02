@@ -2,6 +2,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
+#include "cpu/mfem/runtime/mfem_context.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
@@ -111,7 +112,7 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
     check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
           "managed FEM/BEM GPU contract requires a CUDA device");
 
-    mfem::Mesh mesh(3, 4, 1, 0, 3);
+    auto *mesh = new mfem::Mesh(3, 4, 1, 0, 3);
     const double vertices[][3] = {
         {0.0, 0.0, 0.0},
         {1.0, 0.0, 0.0},
@@ -119,22 +120,24 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
         {0.0, 0.0, 1.0},
     };
     for (const auto &vertex : vertices) {
-        mesh.AddVertex(vertex);
+        mesh->AddVertex(vertex);
     }
     int tet[] = {0, 1, 2, 3};
-    mesh.AddTet(tet, 1);
-    mesh.FinalizeTetMesh(1, 0, true);
+    mesh->AddTet(tet, 1);
+    mesh->FinalizeTetMesh(1, 0, true);
 
-    mfem::H1_FECollection fec(1, 3);
-    mfem::FiniteElementSpace fes(&mesh, &fec);
+    auto *fec = new mfem::H1_FECollection(1, 3);
+    auto *fes = new mfem::FiniteElementSpace(mesh, fec);
     fullmag::fem::Context ctx;
     ctx.base_plan.fe_order = 1u;
-    ctx.mfem_context.mesh = &mesh;
-    ctx.mfem_context.fes = &fes;
-    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.GetNV());
-    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
-    for (int node = 0; node < mesh.GetNV(); ++node) {
-        const double *vertex = mesh.GetVertex(node);
+    ctx.mfem_context.mesh = mesh;
+    ctx.mfem_context.fec = fec;
+    ctx.mfem_context.fes = fes;
+    ctx.mfem_context.ready = true;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh->GetNV());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh->GetNE());
+    for (int node = 0; node < mesh->GetNV(); ++node) {
+        const double *vertex = mesh->GetVertex(node);
         ctx.mesh.nodes_xyz.insert(ctx.mesh.nodes_xyz.end(), vertex, vertex + 3);
     }
     ctx.mesh.cell_nodes = {0u, 1u, 2u, 3u};
@@ -154,14 +157,21 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
     ctx.demag.solver.relative_tolerance = 1.0e-10;
     ctx.demag.solver.max_iterations = 500;
     ctx.cpu_threads.effective_omp_threads = 1;
+    ctx.poisson_demag.gpu_demag_mode =
+        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM;
 
     std::vector<double> magnetization(12u, 0.0);
     for (size_t node = 0; node < 4u; ++node) {
         magnetization[3u * node] = 1.0;
     }
     std::string error;
-    check(fullmag::fem::context_initialize_demag_fem_bem(ctx, error),
-          "FEM/BEM GPU contract CPU workspace initialization");
+    check(fullmag::fem::context_initialize_demag_fem_bem(ctx, error, 3u),
+          "FEM/BEM GPU contract shared geometry/P1 workspace initialization");
+    auto *cpu_workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
+    check(cpu_workspace != nullptr &&
+              cpu_workspace->boundary_operator_build_count == 0u &&
+              cpu_workspace->cpu_boundary_operator == nullptr,
+          "forced GPU FEM/BEM setup must not build the dense CPU operator");
     check(fullmag::fem::gpu_state_initialize(
               ctx.gpu_state.device,
               ctx.mesh.n_nodes,
@@ -195,11 +205,10 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
               ctx.transfer_audit.audit,
               error),
           "FEM/BEM GPU contract runtime coefficient upload");
-    ctx.poisson_demag.gpu_demag_mode =
-        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM;
+    const uint64_t baseline_device_bytes =
+        ctx.gpu_state.device.lifecycle.device_bytes;
     check(fullmag::fem::gpu_demag_fem_bem_initialize(ctx, error),
           "FEM/BEM GPU full initialization must accept Fredkin-Koehler");
-    auto *cpu_workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
     auto *gpu_workspace = static_cast<fullmag::fem::GpuDemagFemBemWorkspace *>(
         cpu_workspace == nullptr ? nullptr : cpu_workspace->gpu_workspace);
     check(gpu_workspace != nullptr && gpu_workspace->ready,
@@ -259,9 +268,36 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
               receipt.execution_class == fullmag::fem::FemGpuExecutionClass::Unknown,
           "FEM/BEM strict receipt must not publish a false device-resident claim");
 
-    fullmag::fem::gpu_demag_fem_bem_destroy(ctx);
+    check(ctx.gpu_state.device.lifecycle.device_bytes > baseline_device_bytes,
+          "FEM/BEM GPU initialization must account nested device allocations");
+    check(fullmag::fem::context_initialize_demag_fem_bem(ctx, error, 3u),
+          "FEM/BEM shared workspace reinitialization must destroy the prior GPU workspace");
+    check(ctx.gpu_state.device.lifecycle.device_bytes == baseline_device_bytes,
+          "FEM/BEM reinitialization must release and unaccount the prior GPU workspace");
+    cpu_workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
+    check(cpu_workspace != nullptr &&
+              cpu_workspace->boundary_operator_build_count == 0u &&
+              cpu_workspace->cpu_boundary_operator == nullptr &&
+              cpu_workspace->gpu_workspace == nullptr,
+          "forced GPU FEM/BEM reinitialization must publish only shared geometry/P1 state");
+    check(fullmag::fem::gpu_demag_fem_bem_initialize(ctx, error),
+          "FEM/BEM GPU workspace must initialize after shared workspace reinitialization");
+    gpu_workspace = static_cast<fullmag::fem::GpuDemagFemBemWorkspace *>(
+        cpu_workspace->gpu_workspace);
+    check(gpu_workspace != nullptr && gpu_workspace->d_boundary_tdofs != nullptr,
+          "FEM/BEM GPU workspace must own device allocations after reinitialization");
+    check(ctx.gpu_state.device.lifecycle.device_bytes > baseline_device_bytes,
+          "FEM/BEM GPU reinitialization must account exactly one nested workspace");
+
+    fullmag::fem::context_destroy_mfem(ctx);
+    check(ctx.demag_fem_bem.workspace == nullptr && !ctx.demag_fem_bem.ready,
+          "normal MFEM teardown must clear FEM/BEM shared runtime state");
+    check(ctx.gpu_state.device.lifecycle.device_bytes == baseline_device_bytes,
+          "normal MFEM teardown must release and unaccount the nested GPU workspace");
+    fullmag::fem::context_destroy_mfem(ctx);
+    check(ctx.gpu_state.device.lifecycle.device_bytes == baseline_device_bytes,
+          "repeated normal MFEM teardown must not double-free or double-unaccount GPU state");
     fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
-    fullmag::fem::context_destroy_demag_fem_bem(ctx);
 }
 #endif
 #endif

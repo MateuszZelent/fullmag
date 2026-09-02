@@ -22,19 +22,22 @@ namespace fullmag::fem {
 
 struct Context;
 struct FemBemHypreCache;
+using DemagFemBemGpuWorkspaceDestroy = void (*)(Context &, void *);
 
 /*
  * Workspace and lifecycle for Fredkin-Koehler FEM/BEM demag.
  *
- * This module owns the body boundary surface, dense reference BEM operator, P1 scalar
- * potential space, stiffness operators, potential vectors, boundary true-DOF
+ * This module owns the body boundary surface, shared P1 scalar potential space,
+ * stiffness operators, potential vectors, boundary true-DOF
  * map, and setup/teardown of shared Poisson RHS and recovery workspaces used by
- * FEM/BEM. It does not assemble per-step RHS, apply the BEM operator, run sparse
- * solves, recover H_demag, compute energy, or orchestrate one demag update.
+ * FEM/BEM. CPU selection additionally owns the qualified dense reference BEM
+ * operator; GPU selection attaches its separately owned device workspace. It does
+ * not assemble per-step RHS, apply the BEM operator, run sparse solves, recover
+ * H_demag, compute energy, or orchestrate one demag update.
  */
 struct DemagFemBemWorkspace {
     DemagBoundarySurface surface;
-    DenseDemagBemOperator boundary_operator;
+    std::unique_ptr<DenseDemagBemOperator> cpu_boundary_operator;
     std::unique_ptr<mfem::FiniteElementCollection> potential_fec;
     std::unique_ptr<mfem::FiniteElementSpace> potential_fes;
     std::unique_ptr<mfem::BilinearForm> stiffness_form;
@@ -61,6 +64,7 @@ struct DemagFemBemWorkspace {
     FemBemHypreCache *u1_hypre_cache = nullptr;
     FemBemHypreCache *u2_hypre_cache = nullptr;
     void *gpu_workspace = nullptr;
+    DemagFemBemGpuWorkspaceDestroy gpu_workspace_destroy = nullptr;
     bool gpu_workspace_ready = false;
     uint64_t gpu_workspace_device_bytes = 0;
 };
@@ -81,8 +85,13 @@ DemagFemBemWorkspace *demag_fem_bem_workspace(Context &ctx);
 
 bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error);
 void destroy_demag_fem_bem_workspace(Context &ctx);
+void destroy_attached_demag_fem_bem_gpu_workspace(Context &ctx);
 
-bool context_initialize_demag_fem_bem(Context &ctx, std::string &error);
+bool context_initialize_demag_fem_bem(
+    Context &ctx,
+    std::string &error,
+    uint32_t max_dense_boundary_nodes =
+        DenseDemagBemOperator::kDefaultDenseReferenceMaxBoundaryNodes);
 void context_destroy_demag_fem_bem(Context &ctx);
 
 } // namespace fullmag::fem

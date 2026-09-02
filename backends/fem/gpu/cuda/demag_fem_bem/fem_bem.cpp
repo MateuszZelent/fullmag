@@ -510,10 +510,29 @@ void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
     workspace = {};
 }
 
+void destroy_owned_gpu_workspace(Context &ctx, void *opaque_workspace)
+{
+    auto *workspace = static_cast<GpuDemagFemBemWorkspace *>(opaque_workspace);
+    if (workspace == nullptr) {
+        return;
+    }
+    const uint64_t device_bytes = workspace->device_bytes;
+    destroy_gpu_workspace(*workspace);
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
+        ctx.gpu_state.device.lifecycle.device_bytes -= device_bytes;
+    }
+#else
+    (void)ctx;
+#endif
+    delete workspace;
+}
+
 } // namespace
 
 bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
 {
+    gpu_demag_fem_bem_destroy(ctx);
     if (!ctx.demag.enabled ||
         ctx.poisson_demag.gpu_demag_mode !=
             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
@@ -728,6 +747,7 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
         ctx.gpu_state.device.lifecycle.device_bytes += device_bytes;
         cpu_workspace->gpu_workspace_device_bytes = device_bytes;
         cpu_workspace->gpu_workspace = workspace.release();
+        cpu_workspace->gpu_workspace_destroy = &destroy_owned_gpu_workspace;
         cpu_workspace->gpu_workspace_ready = true;
         return true;
     } catch (const std::exception &exception) {
@@ -753,28 +773,7 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
 
 void gpu_demag_fem_bem_destroy(Context &ctx)
 {
-    auto *cpu_workspace = demag_fem_bem_workspace(ctx);
-    if (cpu_workspace == nullptr) {
-        return;
-    }
-    auto *workspace = static_cast<GpuDemagFemBemWorkspace *>(
-        cpu_workspace->gpu_workspace);
-    if (workspace == nullptr) {
-        cpu_workspace->gpu_workspace_ready = false;
-        cpu_workspace->gpu_workspace_device_bytes = 0;
-        return;
-    }
-    const uint64_t device_bytes = workspace->device_bytes;
-    destroy_gpu_workspace(*workspace);
-#if FULLMAG_HAS_CUDA_RUNTIME
-    if (device_bytes <= ctx.gpu_state.device.lifecycle.device_bytes) {
-        ctx.gpu_state.device.lifecycle.device_bytes -= device_bytes;
-    }
-#endif
-    delete workspace;
-    cpu_workspace->gpu_workspace = nullptr;
-    cpu_workspace->gpu_workspace_ready = false;
-    cpu_workspace->gpu_workspace_device_bytes = 0;
+    destroy_attached_demag_fem_bem_gpu_workspace(ctx);
 }
 
 bool gpu_demag_fem_bem_ready(const Context &ctx)

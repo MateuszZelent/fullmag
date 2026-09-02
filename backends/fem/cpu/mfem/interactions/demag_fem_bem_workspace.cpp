@@ -2,8 +2,8 @@
  * FEM/BEM demag workspace source contract.
  *
  * This source owns Fredkin-Koehler workspace lifecycle, FE spaces, stiffness
- * operators, dense boundary operator setup, shared Poisson RHS/recovery setup,
- * and teardown. It does not run per-step solves, transfer boundary values, combine potentials, recover fields, compute energy, or publish telemetry.
+ * operators, CPU-selected dense boundary operator setup, shared Poisson
+ * RHS/recovery setup, and teardown. It does not run per-step solves, transfer boundary values, combine potentials, recover fields, compute energy, or publish telemetry.
  */
 
 #include "cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
@@ -239,14 +239,6 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
             error = "FEM/BEM Fredkin-Koehler demag does not support periodic FEM meshes";
             return false;
         }
-        if (!workspace->boundary_operator.build(
-                ctx,
-                workspace->surface,
-                error)) {
-            return false;
-        }
-        workspace->boundary_operator_build_count = 1u;
-
         workspace->potential_fec =
             std::make_unique<mfem::H1_FECollection>(static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
         workspace->potential_fes =
@@ -373,6 +365,7 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
 
 void destroy_demag_fem_bem_workspace(Context &ctx)
 {
+    destroy_attached_demag_fem_bem_gpu_workspace(ctx);
     destroy_demag_poisson_rhs_workspace(ctx);
     destroy_demag_poisson_recovery_workspace(ctx);
     if (ctx.demag_fem_bem.workspace != nullptr) {
@@ -384,9 +377,49 @@ void destroy_demag_fem_bem_workspace(Context &ctx)
     ctx.demag_fem_bem.ready = false;
 }
 
-bool context_initialize_demag_fem_bem(Context &ctx, std::string &error)
+void destroy_attached_demag_fem_bem_gpu_workspace(Context &ctx)
 {
-    return initialize_demag_fem_bem_workspace(ctx, error);
+    auto *workspace = demag_fem_bem_workspace(ctx);
+    if (workspace == nullptr) {
+        return;
+    }
+    if (workspace->gpu_workspace != nullptr &&
+        workspace->gpu_workspace_destroy != nullptr) {
+        workspace->gpu_workspace_destroy(ctx, workspace->gpu_workspace);
+    }
+    workspace->gpu_workspace = nullptr;
+    workspace->gpu_workspace_destroy = nullptr;
+    workspace->gpu_workspace_ready = false;
+    workspace->gpu_workspace_device_bytes = 0;
+}
+
+bool context_initialize_demag_fem_bem(
+    Context &ctx,
+    std::string &error,
+    uint32_t max_dense_boundary_nodes)
+{
+    destroy_demag_fem_bem_workspace(ctx);
+    if (!initialize_demag_fem_bem_workspace(ctx, error)) {
+        destroy_demag_fem_bem_workspace(ctx);
+        return false;
+    }
+    if (ctx.poisson_demag.gpu_demag_mode ==
+        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return true;
+    }
+
+    auto *workspace = demag_fem_bem_workspace(ctx);
+    workspace->cpu_boundary_operator =
+        std::make_unique<DenseDemagBemOperator>(max_dense_boundary_nodes);
+    if (!workspace->cpu_boundary_operator->build(
+            ctx,
+            workspace->surface,
+            error)) {
+        destroy_demag_fem_bem_workspace(ctx);
+        return false;
+    }
+    workspace->boundary_operator_build_count = 1u;
+    return true;
 }
 
 void context_destroy_demag_fem_bem(Context &ctx)

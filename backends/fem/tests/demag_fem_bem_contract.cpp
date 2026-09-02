@@ -247,13 +247,20 @@ void fem_bem_full_cpu_solve_accepts_an_empty_boundary_output() {
     ctx.cpu_threads.effective_omp_threads = 1;
 
     std::string error;
+    check(!fullmag::fem::context_initialize_demag_fem_bem(ctx, error, 3u),
+          "CPU Fredkin-Koehler must enforce the injected dense boundary limit");
+    check(error.find("dense_reference_max_boundary_nodes") != std::string::npos &&
+              fullmag::fem::demag_fem_bem_workspace(ctx) == nullptr,
+          "CPU dense-limit failure must fail closed without publishing a workspace");
+    error.clear();
     if (!fullmag::fem::context_initialize_demag_fem_bem(ctx, error)) {
         std::fprintf(stderr, "FAIL: full FEM/BEM CPU initialization: %s\n", error.c_str());
         std::exit(1);
     }
     auto *workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
     check(workspace != nullptr &&
-              std::string(workspace->boundary_operator.mode()) == "dense_reference",
+              workspace->cpu_boundary_operator != nullptr &&
+              std::string(workspace->cpu_boundary_operator->mode()) == "dense_reference",
           "CPU Fredkin-Koehler default must remain the qualified dense reference operator");
     std::vector<double> magnetization(12u, 0.0);
     for (size_t node = 0; node < 4u; ++node) {
@@ -902,7 +909,7 @@ void fem_bem_compute_wrapper_is_owned_by_solve_module() {
         "bool context_compute_demag_fem_bem(",
         "prepare_demag_fem_bem_neumann_rhs(",
         "extract_demag_fem_bem_boundary_trace(",
-        "workspace->boundary_operator.apply(",
+        "workspace->cpu_boundary_operator->apply(",
         "prepare_demag_fem_bem_dirichlet_rhs(",
         "combine_demag_fem_bem_total_potential(",
         "recover_demag_poisson_field(",

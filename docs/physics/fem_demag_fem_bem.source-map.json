@@ -140,13 +140,13 @@
       "id": "operator",
       "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp",
       "symbol": "class AcaHMatrixDemagBemOperator",
-      "responsibility": "Diagnostyczny ACA H-matrix BEM, eksport danych device i apply; dense operator pozostaje domyślną realizacją CPU."
+      "responsibility": "Diagnostyczny ACA H-matrix BEM z jednym współdzielonym drzewem klastrów węzłów brzegowych, eksport danych device i apply; dense operator pozostaje domyślną realizacją CPU."
     },
     {
       "id": "gpu-operator",
       "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
       "symbol": "gpu_demag_fem_bem_initialize",
-      "responsibility": "Jednorazowy upload operatora i trwały workspace CUDA/Hypre dla Fredkina-Koehlera."
+      "responsibility": "Jednorazowy upload operatora, trwały workspace CUDA/Hypre i callback jego destruktora dla Fredkina-Koehlera."
     },
     {
       "id": "gpu-kernel",
@@ -157,8 +157,14 @@
     {
       "id": "workspace",
       "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp",
-      "symbol": "initialize_demag_fem_bem_workspace",
-      "responsibility": "P1 workspace, mapowanie true DOF i gauge składowych."
+      "symbol": "context_initialize_demag_fem_bem",
+      "responsibility": "Wspólny P1 workspace, mapowanie true DOF, gauge składowych i CPU-only dense selection."
+    },
+    {
+      "id": "workspace-lifecycle",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "destroy_owned_gpu_workspace",
+      "responsibility": "Callback teardownu podpiętego GPU workspace wywoływany przed operatorami CPU i MFEM."
     },
     {
       "id": "rhs",

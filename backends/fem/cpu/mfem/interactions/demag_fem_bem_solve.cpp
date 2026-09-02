@@ -96,7 +96,11 @@ bool context_compute_demag_fem_bem(
         return false;
     }
     std::vector<double> u2_boundary;
-    if (!workspace->boundary_operator.apply(u1_boundary, u2_boundary, error)) {
+    if (workspace->cpu_boundary_operator == nullptr) {
+        error = "CPU FEM/BEM demag solve requires the qualified dense boundary operator";
+        return false;
+    }
+    if (!workspace->cpu_boundary_operator->apply(u1_boundary, u2_boundary, error)) {
         return false;
     }
 
