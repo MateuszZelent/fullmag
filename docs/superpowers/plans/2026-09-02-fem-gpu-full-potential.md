@@ -59,7 +59,7 @@
 - Add: `docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md`
 
 **Interfaces:**
-- Consumes: `HierarchicalDemagBemOperator`, `DemagFemBemWorkspace`, `cudaStream_t` przekazany jako `void *`.
+- Consumes: `AcaHMatrixDemagBemOperator`, `DemagFemBemWorkspace`, `cudaStream_t` przekazany jako `void *`.
 - Produces: `GpuDemagFemBemWorkspace`, `gpu_demag_fem_bem_initialize`, `compute_device_demag_fem_bem_for_device_stage`, target `fem_demag_fem_bem_gpu_contract`.
 
 - [ ] **Step 1: Dodać czerwony test source-manifest**
