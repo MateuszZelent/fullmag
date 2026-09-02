@@ -50,6 +50,11 @@ export function DynamicStructureFactorView({
         <label>k cut <Select value={String(boundedWavevectorIndex)} onValueChange={(value) => setWavevectorIndex(Number(value))}><SelectTrigger aria-label="Wavevector cut"><SelectValue /></SelectTrigger><SelectContent>{resource?.k_rad_per_m.map((value, index) => <SelectItem key={`wavevector:${value}`} value={String(index)}>{value.toExponential(3)} rad/m</SelectItem>)}</SelectContent></Select></label>
         <label>f cut <Select value={String(boundedFrequencyIndex)} onValueChange={(value) => setFrequencyIndex(Number(value))}><SelectTrigger aria-label="Frequency cut"><SelectValue /></SelectTrigger><SelectContent>{resource?.frequency_hz.map((value, index) => <SelectItem key={`frequency:${value}`} value={String(index)}>{value.toExponential(3)} Hz</SelectItem>)}</SelectContent></Select></label>
       </div>
+      {resource?.bounded ? (
+        <p className="fm-analysis-plots__sampling-warning" role="status">
+          Showing a decimated projection; this is not the full JSON payload.
+        </p>
+      ) : null}
       <div
         className="fm-analysis-plots__heatmap"
         role="grid"
@@ -59,19 +64,25 @@ export function DynamicStructureFactorView({
         }}
       >
         {cells.map((cell) => {
-          const selection = dynamicStructureFactorPointSelection(resource, cell.frequencyIndex, cell.wavevectorIndex);
-          const itemId = `legacy:dsf:${cell.frequencyIndex}:${cell.wavevectorIndex}`;
-          const resultItemId = selection?.itemId ?? itemId;
+          const selection = dynamicStructureFactorPointSelection(
+            resource,
+            cell.frequencyIndex,
+            cell.wavevectorIndex,
+            spectrum,
+          );
+          const cellKey = `${cell.frequencyIndex}:${cell.wavevectorIndex}`;
           const selectable = Boolean(selection && onPointSelect);
           const activate = () => {
             if (selection && onPointSelect) onPointSelect(selection);
           };
           return <span
             aria-disabled={!selectable || undefined}
-            aria-label={selectable ? `Select DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}` : `Unavailable DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}`}
+            aria-label={selectable
+              ? `Select ${spectrum === "source" ? "Source H(k,f)" : "Response S(k,f)"} point ${cell.frequencyIndex}:${cell.wavevectorIndex}`
+              : `Unavailable ${spectrum === "source" ? "Source H(k,f)" : "Response S(k,f)"} point ${cell.frequencyIndex}:${cell.wavevectorIndex}`}
             className="fm-analysis-plots__heatmap-cell"
-            data-result-item-id={resultItemId}
-            key={itemId}
+            {...(selection ? { "data-result-item-id": selection.itemId } : {})}
+            key={cellKey}
             onClick={selectable ? activate : undefined}
             onKeyDown={selectable ? (event) => {
               if (event.key === "Enter" || event.key === " ") {
@@ -89,14 +100,14 @@ export function DynamicStructureFactorView({
       <div className="fm-analysis-plots__subchart">
         <header className="fm-analysis-plots__subchart-header"><h4>Frequency line cut</h4><span>k={resource?.k_rad_per_m[boundedWavevectorIndex]?.toExponential(4) ?? "-"} rad/m</span></header>
         <EChartsSurface dataStatus={status} onPointSelect={(point) => {
-          const selection = dynamicStructureFactorPointSelection(resource, point.point.rowIndex, boundedWavevectorIndex);
+          const selection = dynamicStructureFactorPointSelection(resource, point.point.rowIndex, boundedWavevectorIndex, spectrum);
           if (selection) onPointSelect?.(selection);
         }} series={dynamicStructureFactorFrequencyCut(resource, boundedWavevectorIndex, spectrum)} xAxisLabel={`frequency [${resource?.frequency_unit ?? "Hz"}]`} />
       </div>
       <div className="fm-analysis-plots__subchart">
         <header className="fm-analysis-plots__subchart-header"><h4>Wavevector line cut</h4><span>f={resource?.frequency_hz[boundedFrequencyIndex]?.toExponential(4) ?? "-"} Hz</span></header>
         <EChartsSurface dataStatus={status} onPointSelect={(point) => {
-          const selection = dynamicStructureFactorPointSelection(resource, boundedFrequencyIndex, point.point.rowIndex);
+          const selection = dynamicStructureFactorPointSelection(resource, boundedFrequencyIndex, point.point.rowIndex, spectrum);
           if (selection) onPointSelect?.(selection);
         }} series={dynamicStructureFactorWavevectorCut(resource, boundedFrequencyIndex, spectrum)} xAxisLabel={`wavevector [${resource?.wavevector_unit ?? "rad/m"}]`} />
       </div>

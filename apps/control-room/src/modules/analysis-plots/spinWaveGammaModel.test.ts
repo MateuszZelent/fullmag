@@ -101,6 +101,12 @@ describe("spinWaveGammaModel", () => {
     });
   });
 
+  it("fails closed for a non-finite or invalid legacy gamma peak", () => {
+    expect(spinWaveGammaFeatureSelection({ frequency_hz: Number.NaN, index: 7, power: 0.25 })).toBeNull();
+    expect(spinWaveGammaFeatureSelection({ frequency_hz: 12.5e9, index: -1, power: 0.25 })).toBeNull();
+    expect(spinWaveGammaFeatureSelection({ frequency_hz: 12.5e9, index: 7, power: -0.25 })).toBeNull();
+  });
+
   it("renders gamma peak rows as keyboard-activatable result selections", () => {
     const resource = {
       detrend: "linear",
@@ -128,5 +134,36 @@ describe("spinWaveGammaModel", () => {
     expect(html).toContain('aria-label="Select spectral feature 7"');
     expect(html).toContain('data-result-item-id="legacy:gamma:peak:7"');
     expect(html).toContain('tabindex="0"');
+  });
+
+  it("does not manufacture a selection identity for an invalid peak row", () => {
+    const resource = {
+      frequency_hz: [0],
+      frequency_unit: "Hz",
+      nyquist_hz: 5e11,
+      peaks: [{ frequency_hz: Number.NaN, index: 7, power: -1 }],
+      response_psd: [0],
+      response_trace: [0],
+      schema_version: "spin_wave_response.gamma.v1",
+      secondary_response_trace: [0],
+      source_psd: [0],
+      source_trace: [0],
+      source_unit: "A/m",
+      time_s: [0, 1e-12],
+      time_unit: "s",
+      trace_unit: "1",
+      transverse_components: ["my", "mz"],
+    } as never;
+
+    const html = renderToStaticMarkup(createElement(SpinWaveGammaView, {
+      onFeatureSelect: () => undefined,
+      resource,
+      status: "ready",
+    }));
+
+    expect(html).not.toContain('data-result-item-id="legacy:gamma:peak:7"');
+    expect(html).toContain('aria-label="Unavailable spectral feature 7"');
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain('tabindex="-1"');
   });
 });

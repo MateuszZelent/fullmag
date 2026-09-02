@@ -17,7 +17,16 @@ const LEGACY_GAMMA_SAMPLE_ID = "gamma-spectrum-sample-0000";
 
 export function spinWaveGammaFeatureSelection(
   peak: SpinWaveGammaResource["peaks"][number],
-): SpinWaveGammaFeatureSelection {
+): SpinWaveGammaFeatureSelection | null {
+  if (
+    !Number.isInteger(peak.index) ||
+    peak.index < 0 ||
+    !Number.isFinite(peak.frequency_hz) ||
+    !Number.isFinite(peak.power) ||
+    peak.power < 0
+  ) {
+    return null;
+  }
   return {
     frequencyHz: peak.frequency_hz,
     itemId: `legacy:gamma:peak:${peak.index}`,
