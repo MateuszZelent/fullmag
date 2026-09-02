@@ -4,6 +4,7 @@ import type { SpinWaveGammaResource } from "@/kernel/api/apiTypes";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { EChartsSurface } from "./components/EChartsSurface";
 import {
+  spinWaveGammaFeatureSelection,
   spinWaveGammaResponseTraceSeries,
   spinWaveGammaSeries,
   spinWaveGammaSourceTraceSeries,
@@ -13,9 +14,11 @@ import {
 export function SpinWaveGammaView({
   resource,
   status,
+  onFeatureSelect,
 }: {
   resource: SpinWaveGammaResource | null;
   status: string;
+  onFeatureSelect?: (selection: import("./spinWaveGammaModel").SpinWaveGammaFeatureSelection) => void;
 }) {
   const sampling = spinWaveGammaSamplingSummary(resource);
   const subtitle = resource
@@ -57,11 +60,26 @@ export function SpinWaveGammaView({
       {resource && resource.peaks.length > 0 ? (
         <div className="fm-analysis-plots__columns" role="table" aria-label="Gamma spectrum peaks">
           <div className="fm-analysis-plots__column-header" role="row"><span>#</span><span>bin</span><span>frequency [Hz]</span><span>power</span></div>
-          {resource.peaks.map((peak, rank) => (
-            <div className="fm-analysis-plots__column-row" role="row" key={peak.index}>
-              <span>{rank + 1}</span><span>{peak.index}</span><span>{peak.frequency_hz.toExponential(5)}</span><span>{peak.power.toExponential(3)}</span>
-            </div>
-          ))}
+          {resource.peaks.map((peak, rank) => {
+            const selection = spinWaveGammaFeatureSelection(peak);
+            return <div
+              aria-label={`Select spectral feature ${peak.index}`}
+              className="fm-analysis-plots__column-row"
+              data-result-item-id={selection.itemId}
+              key={peak.index}
+              onClick={() => onFeatureSelect?.(selection)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onFeatureSelect?.(selection);
+                }
+              }}
+              role="row"
+              tabIndex={0}
+            >
+              <span role="cell">{rank + 1}</span><span role="cell">{peak.index}</span><span role="cell">{peak.frequency_hz.toExponential(5)}</span><span role="cell">{peak.power.toExponential(3)}</span>
+            </div>;
+          })}
         </div>
       ) : null}
       <div className="fm-analysis-plots__status">

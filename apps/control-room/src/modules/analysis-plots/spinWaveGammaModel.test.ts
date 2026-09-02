@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "@/kernel/api/apiPaths";
 
-import { spinWaveGammaResponseTraceSeries, spinWaveGammaSamplingSummary, spinWaveGammaSeries, spinWaveGammaSourceTraceSeries } from "./spinWaveGammaModel";
+import { SpinWaveGammaView } from "./SpinWaveGammaView";
+import {
+  spinWaveGammaFeatureSelection,
+  spinWaveGammaResponseTraceSeries,
+  spinWaveGammaSamplingSummary,
+  spinWaveGammaSeries,
+  spinWaveGammaSourceTraceSeries,
+} from "./spinWaveGammaModel";
 
 describe("spinWaveGammaModel", () => {
   it("builds unit-aware response and source spectra", () => {
@@ -78,5 +87,46 @@ describe("spinWaveGammaModel", () => {
     } as never);
     expect(summary.status).toBe("nonuniform");
     expect(summary.message).toContain("Nonuniform");
+  });
+
+  it("builds stable result identity for a legacy gamma spectral feature", () => {
+    expect(spinWaveGammaFeatureSelection({ frequency_hz: 12.5e9, index: 7, power: 0.25 })).toEqual({
+      frequencyHz: 12.5e9,
+      itemId: "legacy:gamma:peak:7",
+      itemKind: "spectral_feature",
+      ordinal: 7,
+      peakIndex: 7,
+      power: 0.25,
+      sampleId: "gamma-spectrum-sample-0000",
+    });
+  });
+
+  it("renders gamma peak rows as keyboard-activatable result selections", () => {
+    const resource = {
+      detrend: "linear",
+      frequency_hz: [0, 12.5e9],
+      frequency_unit: "Hz",
+      nyquist_hz: 5e11,
+      peaks: [{ frequency_hz: 12.5e9, index: 7, power: 0.25 }],
+      response_psd: [0, 0.25],
+      response_trace: [0, 1],
+      schema_version: "spin_wave_response.gamma.v1",
+      secondary_response_trace: [0, 0],
+      source_psd: [0, 0],
+      source_trace: [0, 0],
+      source_unit: "A/m",
+      time_s: [0, 1e-12],
+      time_unit: "s",
+      trace_unit: "1",
+      transverse_components: ["my", "mz"],
+      weighting: "Ms_times_lumped_volume",
+      window: "hann",
+    } as never;
+
+    const html = renderToStaticMarkup(createElement(SpinWaveGammaView, { resource, status: "ready" }));
+
+    expect(html).toContain('aria-label="Select spectral feature 7"');
+    expect(html).toContain('data-result-item-id="legacy:gamma:peak:7"');
+    expect(html).toContain('tabindex="0"');
   });
 });

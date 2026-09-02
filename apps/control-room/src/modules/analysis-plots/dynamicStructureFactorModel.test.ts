@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH } from "@/kernel/api/apiPaths";
 
-import { dynamicStructureFactorCells, dynamicStructureFactorFrequencyCut, dynamicStructureFactorWavevectorCut } from "./dynamicStructureFactorModel";
+import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
+import {
+  dynamicStructureFactorCells,
+  dynamicStructureFactorFrequencyCut,
+  dynamicStructureFactorPointSelection,
+  dynamicStructureFactorWavevectorCut,
+} from "./dynamicStructureFactorModel";
 
 describe("dynamicStructureFactorModel", () => {
   it("preserves physical axes and bounds the rendered heatmap", () => {
@@ -80,5 +88,63 @@ describe("dynamicStructureFactorModel", () => {
       unit: "1",
       xUnit: "Hz",
     }]);
+  });
+
+  it("builds deterministic result identity for a selectable DSF point", () => {
+    const resource = {
+      frequency_count: 2,
+      frequency_hz: [1e9, 2e9],
+      invalid_probe_mask: [false, false],
+      k_rad_per_m: [10, 20],
+      power: [1, 2, 3, 4],
+      wavevector_count: 2,
+    } as never;
+
+    expect(dynamicStructureFactorPointSelection(resource, 1, 0)).toEqual({
+      frequencyHz: 2e9,
+      frequencyIndex: 1,
+      itemId: "legacy:dsf:1:0",
+      itemKind: "dsf_point",
+      kRadPerM: 10,
+      ordinal: 2,
+      power: 3,
+      sampleId: "dsf-sample-0000",
+      wavevectorIndex: 0,
+    });
+  });
+
+  it("rejects a DSF selection for an invalid probe", () => {
+    const resource = {
+      frequency_count: 1,
+      frequency_hz: [1e9],
+      invalid_probe_mask: [true],
+      k_rad_per_m: [10],
+      power: [1],
+      wavevector_count: 1,
+    } as never;
+
+    expect(dynamicStructureFactorPointSelection(resource, 0, 0)).toBeNull();
+  });
+
+  it("renders bounded DSF cells with stable keyboard selection targets", () => {
+    const resource = {
+      frequency_count: 1,
+      frequency_hz: [1e9],
+      frequency_unit: "Hz",
+      invalid_probe_mask: [false, true],
+      k_rad_per_m: [10, 20],
+      power: [1, 2],
+      schema_version: "dynamic_structure_factor.1d.v1",
+      source_power: [1, 2],
+      wavevector_count: 2,
+      wavevector_unit: "rad/m",
+    } as never;
+
+    const html = renderToStaticMarkup(createElement(DynamicStructureFactorView, { resource, status: "ready" }));
+
+    expect(html).toContain('data-result-item-id="legacy:dsf:0:0"');
+    expect(html).toContain('data-result-item-id="legacy:dsf:0:1"');
+    expect(html).toContain('aria-disabled="true"');
+    expect(html).toContain('tabindex="0"');
   });
 });

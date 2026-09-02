@@ -7,14 +7,22 @@ import { ChartSection } from "@/shared/analysis-charts/ChartSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 
 import { EChartsSurface } from "./components/EChartsSurface";
-import { dynamicStructureFactorCells, dynamicStructureFactorFrequencyCut, dynamicStructureFactorWavevectorCut } from "./dynamicStructureFactorModel";
+import {
+  dynamicStructureFactorCells,
+  dynamicStructureFactorFrequencyCut,
+  dynamicStructureFactorPointSelection,
+  dynamicStructureFactorWavevectorCut,
+  type DynamicStructureFactorPointSelection,
+} from "./dynamicStructureFactorModel";
 
 export function DynamicStructureFactorView({
   resource,
   status,
+  onPointSelect,
 }: {
   resource: DynamicStructureFactorResource | null;
   status: string;
+  onPointSelect?: (selection: DynamicStructureFactorPointSelection) => void;
 }) {
   const [scale, setScale] = useState<"linear" | "log">("log");
   const [spectrum, setSpectrum] = useState<"response" | "source">("response");
@@ -44,28 +52,51 @@ export function DynamicStructureFactorView({
       </div>
       <div
         className="fm-analysis-plots__heatmap"
-        role="img"
+        role="grid"
         aria-label={`${cells.length} sampled S(k,f) cells`}
         style={{
           gridTemplateColumns: `repeat(${Math.max(1, heatmapColumns)}, minmax(2px, 1fr))`,
         }}
       >
-        {cells.map((cell, index) => (
-          <span
+        {cells.map((cell) => {
+          const selection = dynamicStructureFactorPointSelection(resource, cell.frequencyIndex, cell.wavevectorIndex);
+          const itemId = `legacy:dsf:${cell.frequencyIndex}:${cell.wavevectorIndex}`;
+          const activate = () => {
+            if (selection) onPointSelect?.(selection);
+          };
+          return <span
+            aria-disabled={!selection || undefined}
+            aria-label={selection ? `Select DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}` : `Unavailable DSF point ${cell.frequencyIndex}:${cell.wavevectorIndex}`}
             className="fm-analysis-plots__heatmap-cell"
-            key={index}
+            data-result-item-id={itemId}
+            key={itemId}
+            onClick={selection ? activate : undefined}
+            onKeyDown={selection ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                activate();
+              }
+            } : undefined}
+            role="gridcell"
             style={{ opacity: Math.max(0.04, scale === "log" ? cell.logNormalizedPower : cell.normalizedPower) }}
+            tabIndex={selection ? 0 : -1}
             title={`k=${cell.kRadPerM.toExponential(4)} rad/m, f=${cell.frequencyHz.toExponential(4)} Hz, ${spectrum === "source" ? "|H|²" : "S"}=${cell.power.toExponential(4)}`}
-          />
-        ))}
+          />;
+        })}
       </div>
       <div className="fm-analysis-plots__subchart">
         <header className="fm-analysis-plots__subchart-header"><h4>Frequency line cut</h4><span>k={resource?.k_rad_per_m[boundedWavevectorIndex]?.toExponential(4) ?? "-"} rad/m</span></header>
-        <EChartsSurface dataStatus={status} series={dynamicStructureFactorFrequencyCut(resource, boundedWavevectorIndex, spectrum)} xAxisLabel={`frequency [${resource?.frequency_unit ?? "Hz"}]`} />
+        <EChartsSurface dataStatus={status} onPointSelect={(point) => {
+          const selection = dynamicStructureFactorPointSelection(resource, point.point.rowIndex, boundedWavevectorIndex);
+          if (selection) onPointSelect?.(selection);
+        }} series={dynamicStructureFactorFrequencyCut(resource, boundedWavevectorIndex, spectrum)} xAxisLabel={`frequency [${resource?.frequency_unit ?? "Hz"}]`} />
       </div>
       <div className="fm-analysis-plots__subchart">
         <header className="fm-analysis-plots__subchart-header"><h4>Wavevector line cut</h4><span>f={resource?.frequency_hz[boundedFrequencyIndex]?.toExponential(4) ?? "-"} Hz</span></header>
-        <EChartsSurface dataStatus={status} series={dynamicStructureFactorWavevectorCut(resource, boundedFrequencyIndex, spectrum)} xAxisLabel={`wavevector [${resource?.wavevector_unit ?? "rad/m"}]`} />
+        <EChartsSurface dataStatus={status} onPointSelect={(point) => {
+          const selection = dynamicStructureFactorPointSelection(resource, boundedFrequencyIndex, point.point.rowIndex);
+          if (selection) onPointSelect?.(selection);
+        }} series={dynamicStructureFactorWavevectorCut(resource, boundedFrequencyIndex, spectrum)} xAxisLabel={`wavevector [${resource?.wavevector_unit ?? "rad/m"}]`} />
       </div>
     </ChartSection>
   );

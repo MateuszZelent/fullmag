@@ -13,7 +13,45 @@ export interface StructureFactorCell {
   wavevectorIndex: number;
 }
 
+export interface DynamicStructureFactorPointSelection {
+  frequencyHz: number;
+  frequencyIndex: number;
+  itemId: string;
+  itemKind: "dsf_point";
+  kRadPerM: number;
+  ordinal: number;
+  power: number;
+  sampleId: string;
+  wavevectorIndex: number;
+}
+
 const MAX_HEATMAP_CELLS = 4096;
+const LEGACY_DSF_SAMPLE_ID = "dsf-sample-0000";
+
+export function dynamicStructureFactorPointSelection(
+  resource: DynamicStructureFactorResource | null,
+  frequencyIndex: number,
+  wavevectorIndex: number,
+): DynamicStructureFactorPointSelection | null {
+  if (!resource || !Number.isInteger(frequencyIndex) || !Number.isInteger(wavevectorIndex)) return null;
+  if (frequencyIndex < 0 || frequencyIndex >= resource.frequency_count || wavevectorIndex < 0 || wavevectorIndex >= resource.wavevector_count) return null;
+  if (resource.invalid_probe_mask[wavevectorIndex]) return null;
+  const frequencyHz = resource.frequency_hz[frequencyIndex];
+  const kRadPerM = resource.k_rad_per_m[wavevectorIndex];
+  const power = resource.power[frequencyIndex * resource.wavevector_count + wavevectorIndex];
+  if (!Number.isFinite(frequencyHz) || !Number.isFinite(kRadPerM) || !Number.isFinite(power)) return null;
+  return {
+    frequencyHz,
+    frequencyIndex,
+    itemId: `legacy:dsf:${frequencyIndex}:${wavevectorIndex}`,
+    itemKind: "dsf_point",
+    kRadPerM,
+    ordinal: frequencyIndex * resource.wavevector_count + wavevectorIndex,
+    power,
+    sampleId: LEGACY_DSF_SAMPLE_ID,
+    wavevectorIndex,
+  };
+}
 
 export function dynamicStructureFactorCells(
   resource: DynamicStructureFactorResource | null,

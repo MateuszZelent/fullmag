@@ -3,6 +3,32 @@ import { ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH } from "@/kernel/api/apiPaths";
 
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 
+export interface SpinWaveGammaFeatureSelection {
+  frequencyHz: number;
+  itemId: string;
+  itemKind: "spectral_feature";
+  ordinal: number;
+  peakIndex: number;
+  power: number;
+  sampleId: string;
+}
+
+const LEGACY_GAMMA_SAMPLE_ID = "gamma-spectrum-sample-0000";
+
+export function spinWaveGammaFeatureSelection(
+  peak: SpinWaveGammaResource["peaks"][number],
+): SpinWaveGammaFeatureSelection {
+  return {
+    frequencyHz: peak.frequency_hz,
+    itemId: `legacy:gamma:peak:${peak.index}`,
+    itemKind: "spectral_feature",
+    ordinal: peak.index,
+    peakIndex: peak.index,
+    power: peak.power,
+    sampleId: LEGACY_GAMMA_SAMPLE_ID,
+  };
+}
+
 function gammaSource() {
   return {
     kind: "analysis.spin_wave" as const,
