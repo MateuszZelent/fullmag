@@ -1194,3 +1194,11 @@ after the managed runtime can be rebuilt.
   document's 01–10 sections match their source documents (README link paths
   remain intentionally rebased for the combined location), and the manifest
   JSON parses successfully.
+
+## Results mode-sweep continuation (2026-09-02)
+
+- Stale result overlays are now cleared in the React layout phase when the
+  selected dataset/item changes; the regression is RED on the old effect and
+  GREEN at 9/9 with `useLayoutEffect`.
+- Commit `3c645b827` contains only the production hook and its regression test;
+  Control Room typecheck, ESLint, and the focused Results/Analysis suite pass.
