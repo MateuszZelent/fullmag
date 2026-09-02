@@ -3,9 +3,12 @@ import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type { AnalysisChartResourceRef } from "./chartCursorPoint";
 
 export interface ChartPoint {
+  branchId?: string | null;
+  itemId?: string | null;
   label?: string | null;
   linewidthHz?: number | null;
   rowIndex: number;
+  sampleId?: string | null;
   x: number;
   y: number;
 }

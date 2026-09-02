@@ -9,12 +9,14 @@ import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationP
 const renderedFormats: Array<string | null> = [];
 const renderedRequests: Array<{ chartId: string; format: string | null }> = [];
 const renderedRanges: Array<{ fromValue: number; toValue: number } | null> = [];
+const renderedProvenance: Array<Record<string, unknown> | undefined> = [];
 
 vi.mock("@/shared/analysis-charts/InteractiveChartSurface", () => ({
-  InteractiveChartSurface: ({ initialRange, requestedExportFormat, surface }: { initialRange: { fromValue: number; toValue: number } | null; requestedExportFormat: string | null; surface: { chartId: string } }) => {
+  InteractiveChartSurface: ({ initialRange, requestedExportFormat, surface }: { initialRange: { fromValue: number; toValue: number } | null; requestedExportFormat: string | null; surface: { chartId: string; provenance?: Record<string, unknown> } }) => {
     renderedFormats.push(requestedExportFormat);
     renderedRequests.push({ chartId: surface.chartId, format: requestedExportFormat });
     renderedRanges.push(initialRange);
+    renderedProvenance.push(surface.provenance);
     return <div />;
   },
   chartSeriesRenderModel: vi.fn(),
@@ -74,6 +76,41 @@ describe("Analysis chart export routing", () => {
     try {
       await act(async () => root.render(<EChartsSurface initialRange={{ fromValue: 1e-9, toValue: 2e-9 }} series={series} />));
       expect(renderedRanges).toContainEqual({ fromValue: 1e-9, toValue: 2e-9 });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("carries result projection export provenance into the shared chart surface", async () => {
+    renderedProvenance.length = 0;
+    const dom = installSimulationPreparationTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <EChartsSurface
+          exportProvenance={{
+            datasetId: "dataset-1",
+            datasetRevision: "dataset-revision-1",
+            fixedCoordinates: [],
+            projectionId: "response-spectrum",
+            projectionRevision: "projection-revision-1",
+            runId: "run-1",
+            selectionRefs: [],
+            stageId: "stage-1",
+          }}
+          series={series}
+        />,
+      ));
+
+      expect(renderedProvenance[0]).toMatchObject({
+        datasetId: "dataset-1",
+        datasetRevision: "dataset-revision-1",
+        projectionId: "response-spectrum",
+        projectionRevision: "projection-revision-1",
+        runId: "run-1",
+        stageId: "stage-1",
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();

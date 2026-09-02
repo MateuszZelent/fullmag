@@ -99,6 +99,67 @@ describe("chart export", () => {
     });
   });
 
+  it("exports result projection identity, fixed coordinates, and point selections", () => {
+    const resultModel: ChartRenderModel = {
+      ...model,
+      key: "result:dataset-1:response-spectrum",
+      provenance: {
+        ...model.provenance!,
+        datasetId: "dataset-1",
+        datasetRevision: "dataset-revision-1",
+        fixedCoordinates: [
+          {
+            axisId: "bias-field",
+            label: "mu0 Hx = 75 mT",
+            scalarSI: 0.075,
+            token: "bias:75mT",
+            vector3SI: null,
+          },
+        ],
+        projectionId: "response-spectrum",
+        projectionRevision: "projection-revision-1",
+        runId: "run-1",
+        selectionRefs: [
+          {
+            branchId: "branch-1",
+            itemId: "item-1",
+            ordinal: 3,
+            sampleId: "sample-1",
+          },
+        ],
+        stageId: "stage-1",
+      },
+      series: [{
+        ...model.series[0]!,
+        points: [{
+          ...model.series[0]!.points[0]!,
+          branchId: "branch-1",
+          itemId: "item-1",
+          sampleId: "sample-1",
+        }],
+      }],
+    };
+
+    expect(chartExportProvenance(resultModel, "2026-07-26T00:00:00.000Z")).toMatchObject({
+      datasetId: "dataset-1",
+      datasetRevision: "dataset-revision-1",
+      fixedCoordinates: [{ axisId: "bias-field", token: "bias:75mT" }],
+      projectionId: "response-spectrum",
+      projectionRevision: "projection-revision-1",
+      runId: "run-1",
+      selectionRefs: [{ branchId: "branch-1", itemId: "item-1", ordinal: 3, sampleId: "sample-1" }],
+      stageId: "stage-1",
+    });
+
+    const csv = serializeChartData(resultModel, "csv");
+    expect(csv).toContain(
+      "series_id,row_id,x,y,x_unit,y_unit,data_revision,decimation,dataset_id,dataset_revision,projection_id,projection_revision,sample_id,item_id,branch_id,coordinate_tokens",
+    );
+    expect(csv).toContain(
+      '"e,total",3,1e-9,-2.5e-18,s,J,7,minmax_lttb,dataset-1,dataset-revision-1,response-spectrum,projection-revision-1,sample-1,item-1,branch-1,bias-field=bias:75mT',
+    );
+  });
+
   it("revokes object URLs after initiating a download", async () => {
     const click = vi.fn();
     vi.stubGlobal("document", { createElement: () => ({ click, download: "", href: "" }) });

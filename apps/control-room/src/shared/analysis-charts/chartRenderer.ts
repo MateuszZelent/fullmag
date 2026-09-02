@@ -30,9 +30,27 @@ export type ChartRenderStatus =
   | "aborted";
 
 export interface ChartRenderPoint {
+  branchId?: string | null;
+  itemId?: string | null;
   rowIndex: number;
+  sampleId?: string | null;
   x: number;
   y: number;
+}
+
+export interface ChartRenderResultCoordinate {
+  axisId: string;
+  label: string | null;
+  scalarSI: number | null;
+  token: string;
+  vector3SI: readonly [number, number, number] | null;
+}
+
+export interface ChartRenderResultSelectionRef {
+  branchId: string | null;
+  itemId: string | null;
+  ordinal: number;
+  sampleId: string | null;
 }
 
 export interface ChartRenderSeries {
@@ -53,10 +71,16 @@ export interface ChartRenderModel {
     contentDigest?: string | null;
     dataRevision: string | number | null;
     decimation: string;
+    datasetId?: string | null;
+    datasetRevision?: string | null;
     descriptorId?: string;
     displayUnits?: Record<string, string>;
+    fixedCoordinates?: readonly ChartRenderResultCoordinate[];
+    projectionId?: string | null;
+    projectionRevision?: string | null;
     query: string;
     resourceKey: string;
+    selectionRefs?: readonly ChartRenderResultSelectionRef[];
     sessionId?: string | null;
     runId?: string | null;
     stageId?: string | null;
@@ -74,6 +98,18 @@ export interface ChartRenderModel {
   xAxis: { label: string; unit: string };
   yAxes: readonly { label: string; unit: string }[];
 }
+
+export type ChartResultExportContext = Pick<
+  NonNullable<ChartRenderModel["provenance"]>,
+  | "datasetId"
+  | "datasetRevision"
+  | "fixedCoordinates"
+  | "projectionId"
+  | "projectionRevision"
+  | "runId"
+  | "selectionRefs"
+  | "stageId"
+>;
 
 export type ChartRendererEventName = "click" | "dblclick" | "dataZoom" | "legendselectchanged";
 

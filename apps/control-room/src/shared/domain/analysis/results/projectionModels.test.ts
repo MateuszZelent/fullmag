@@ -43,8 +43,8 @@ describe("analysis result projection chart model", () => {
   it("keeps stable ordinal selection alongside bounded chart points", () => {
     const model = buildAnalysisResultProjectionChartModel(projection);
     expect(model.series[0]?.points).toEqual([
-      { label: "item:0", rowIndex: 10, x: 0.01, y: 1e9 },
-      { label: "item:1", rowIndex: 11, x: 0.02, y: Number.NaN },
+      { branchId: "branch:0", itemId: "item:0", label: "item:0", rowIndex: 10, sampleId: "sample:0", x: 0.01, y: 1e9 },
+      { branchId: "branch:0", itemId: "item:1", label: "item:1", rowIndex: 11, sampleId: "sample:1", x: 0.02, y: Number.NaN },
     ]);
     expect(model.selectionBySeriesId["field-frequency-map:branch:0"]?.map((entry) => entry.ordinal)).toEqual([10, 11]);
     expect(model.selectionBySeriesId["field-frequency-map:branch:0"]?.map((entry) => entry.item_kind)).toEqual(["eigen_mode", "eigen_mode"]);
@@ -104,8 +104,11 @@ describe("analysis result projection chart model", () => {
 
     expect(model.series[0]?.points).toHaveLength(5_000);
     expect(model.series[0]?.points).toContainEqual({
+      branchId: null,
+      itemId: null,
       label: "point 1",
       rowIndex: 1,
+      sampleId: null,
       x: Number.NaN,
       y: Number.NaN,
     });

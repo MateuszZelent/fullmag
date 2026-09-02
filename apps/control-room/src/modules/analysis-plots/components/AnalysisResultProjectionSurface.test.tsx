@@ -9,6 +9,7 @@ import {
 } from "@/shared/domain/analysis/results";
 
 const chartMocks = vi.hoisted(() => ({
+  exportProvenance: null as Record<string, unknown> | null,
   onPointSelect: null as
     | ((point: { seriesId: string; point: { rowIndex: number } }) => void)
     | null,
@@ -16,8 +17,10 @@ const chartMocks = vi.hoisted(() => ({
 
 vi.mock("./EChartsSurface", () => ({
   EChartsSurface: (props: {
+    exportProvenance?: Record<string, unknown>;
     onPointSelect?: (point: { seriesId: string; point: { rowIndex: number } }) => void;
   }) => {
+    chartMocks.exportProvenance = props.exportProvenance ?? null;
     chartMocks.onPointSelect = props.onPointSelect ?? null;
     return null;
   },
@@ -141,6 +144,16 @@ describe("AnalysisResultProjectionSurface", () => {
     );
     expect(html).toContain('aria-label="Fixed coordinates"');
     expect(html).toContain("bias-field=mu0 Hx = 75 mT");
+    expect(chartMocks.exportProvenance).toMatchObject({
+      datasetId: resource.dataset_id,
+      datasetRevision: resource.dataset_revision,
+      fixedCoordinates: [{ axisId: "bias-field", token: "bias:75mT" }],
+      projectionId: resource.projection_id,
+      projectionRevision: resource.projection_revision,
+      runId: resource.run_id,
+      selectionRefs: [{ itemId: "legacy:dsf:0:0", ordinal: 0, sampleId: "dsf-sample-0000" }],
+      stageId: "stage-1",
+    });
   });
 
   it("does not display a selected point from another projection revision", () => {

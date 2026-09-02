@@ -11,6 +11,9 @@ import {
 import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import type { ChartSeries } from "@/shared/domain/analysis/chartSeries";
 import type { InteractiveChartSurfaceIdentity } from "@/shared/analysis-charts/InteractiveChartSurface";
+import type {
+  ChartResultExportContext,
+} from "@/shared/analysis-charts/chartRenderer";
 
 import {
   chartCursorPointFromEChartsClick,
@@ -36,6 +39,7 @@ interface EChartsSurfaceProps {
   dataStatus?: string;
   descriptorId?: string;
   displayUnits?: Readonly<Record<string, string>>;
+  exportProvenance?: ChartResultExportContext;
   fitRequest?: number;
   initialRange?: ChartValueRange | null;
   onPointSelect?: (point: ChartCursorPoint) => void;
@@ -52,6 +56,7 @@ export function EChartsSurface({
   dataStatus,
   descriptorId,
   displayUnits,
+  exportProvenance,
   fitRequest,
   initialRange,
   onPointSelect,
@@ -66,8 +71,8 @@ export function EChartsSurface({
     ? "refreshing"
     : undefined;
   const surface = useMemo(
-    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits, descriptorId),
-    [chartId, dataStatus, descriptorId, displayUnits, presentation, series, xAxisLabel],
+    () => analysisChartSurfaceIdentity(series, xAxisLabel, dataStatus, presentation, chartId, displayUnits, descriptorId, exportProvenance),
+    [chartId, dataStatus, descriptorId, displayUnits, exportProvenance, presentation, series, xAxisLabel],
   );
 
   useEffect(() => () => cancelRangeCommit(rangeCommitTimerRef), [rangeCommitTimerRef]);
@@ -131,6 +136,7 @@ function analysisChartSurfaceIdentity(
   chartId?: string,
   displayUnits?: Readonly<Record<string, string>>,
   descriptorId?: string,
+  exportProvenance?: ChartResultExportContext,
 ): InteractiveChartSurfaceIdentity {
   return {
     ariaLabel: "Analysis chart",
@@ -147,6 +153,7 @@ function analysisChartSurfaceIdentity(
     },
     provenance: {
       ...series[0]?.sourceIdentity,
+      ...exportProvenance,
       dataRevision: series[0]?.dataRevision ?? null,
       decimation: "minmax_lttb",
       descriptorId: descriptorId ?? `analysis:data-table:${series[0]?.source.tableId ?? "default"}`,

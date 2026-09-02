@@ -42,8 +42,11 @@ export function buildAnalysisResultProjectionChartModel(
       id: seriesId,
       label: sourceSeries.label,
       points: visiblePoints.map((point) => ({
+        branchId: selectionByOrdinal.get(point.ordinal)?.branch_id ?? null,
+        itemId: selectionByOrdinal.get(point.ordinal)?.item_id ?? null,
         label: point.item_id ?? point.sample_id ?? `point ${point.ordinal}`,
         rowIndex: point.ordinal,
+        sampleId: selectionByOrdinal.get(point.ordinal)?.sample_id ?? null,
         x: point.x ?? Number.NaN,
         y: point.y ?? point.value ?? Number.NaN,
       })),

@@ -2,6 +2,11 @@ import { useMemo } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import type {
+  ChartRenderResultCoordinate,
+  ChartRenderResultSelectionRef,
+  ChartResultExportContext,
+} from "@/shared/analysis-charts/chartRenderer";
+import type {
   AnalysisResultProjectionDescriptor,
   AnalysisResultProjectionResource,
   AnalysisResultItemKind,
@@ -56,7 +61,8 @@ export function AnalysisResultProjectionSurface({
   status,
 }: AnalysisResultProjectionSurfaceProps) {
   const selectedOrdinal =
-    selectedSelection?.projectionId === resource?.projection_id &&
+    selectedSelection !== null &&
+    selectedSelection.projectionId === resource?.projection_id &&
     selectedSelection?.projectionRevision === resource?.projection_revision
       ? selectedSelection.projectionOrdinal ?? null
       : null;
@@ -72,6 +78,18 @@ export function AnalysisResultProjectionSurface({
     if (!point) return null;
     return point.item_id ?? point.sample_id ?? `point ${point.ordinal}`;
   }, [resource, selectedOrdinal]);
+  const exportProvenance = resource
+    ? {
+        datasetId: resource.dataset_id,
+        datasetRevision: resource.dataset_revision,
+        fixedCoordinates: resource.fixed_coordinates.map(resultCoordinate),
+        projectionId: resource.projection_id,
+        projectionRevision: resource.projection_revision,
+        runId: resource.run_id,
+        selectionRefs: projectionSelectionRefs(model),
+        stageId: selectedSelection?.stageId ?? null,
+      } satisfies ChartResultExportContext
+    : undefined;
 
   return (
     <ChartSection
@@ -142,6 +160,7 @@ export function AnalysisResultProjectionSurface({
                 sampleId: entry.sample_id ?? null,
               });
             }}
+            exportProvenance={exportProvenance}
             series={model.series}
             xAxisLabel={resource.axis_labels.x ?? resource.axis_mapping.x ?? "x"}
           />
@@ -160,6 +179,40 @@ export function AnalysisResultProjectionSurface({
       ) : null}
     </ChartSection>
   );
+}
+
+function resultCoordinate(
+  coordinate: AnalysisResultProjectionResource["fixed_coordinates"][number],
+): ChartRenderResultCoordinate {
+  const vector = coordinate.vector3_si;
+  return {
+    axisId: coordinate.axis_id,
+    label: coordinate.label ?? null,
+    scalarSI: coordinate.scalar_si ?? null,
+    token: coordinate.token,
+    vector3SI:
+      vector && vector.length === 3
+        ? [vector[0]!, vector[1]!, vector[2]!] as const
+        : null,
+  };
+}
+
+function projectionSelectionRefs(
+  model: AnalysisResultProjectionChartModel,
+): readonly ChartRenderResultSelectionRef[] {
+  const selections = new Map<number, ChartRenderResultSelectionRef>();
+  for (const series of model.series) {
+    for (const point of series.points) {
+      if (selections.has(point.rowIndex)) continue;
+      selections.set(point.rowIndex, {
+        branchId: point.branchId ?? null,
+        itemId: point.itemId ?? null,
+        ordinal: point.rowIndex,
+        sampleId: point.sampleId ?? null,
+      });
+    }
+  }
+  return [...selections.values()];
 }
 
 function resultProjectionTitle(
