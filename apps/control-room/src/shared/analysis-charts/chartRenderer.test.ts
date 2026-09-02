@@ -70,6 +70,24 @@ describe("chart renderer owner", () => {
     expect(option.yAxis).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Period [ns]" })]));
   });
 
+  it("keeps explicit invalid points as visual gaps instead of connecting branches", () => {
+    const option = chartRenderModelToEChartsOption({
+      ...model,
+      series: [{
+        ...model.series[0]!,
+        points: [
+          { rowIndex: 0, x: 1, y: 0.25 },
+          { rowIndex: 1, x: Number.NaN, y: Number.NaN },
+          { rowIndex: 2, x: 3, y: 0.5 },
+        ],
+      }],
+    });
+
+    expect(option.series).toEqual([
+      expect.objectContaining({ connectNulls: false }),
+    ]);
+  });
+
   it("computes axis scales without flattening every chart point into temporary arrays", () => {
     const source = readFileSync(new URL("./chartRenderer.ts", import.meta.url), "utf8");
     expect(source).not.toContain("model.series.flatMap");

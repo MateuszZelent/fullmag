@@ -2430,20 +2430,37 @@ fn build_modal_projections(
     items: &[AnalysisResultSpectralItemSummary],
     status: &AnalysisResultStatusFacets,
 ) -> BTreeMap<String, AnalysisResultProjectionResource> {
-    let mut by_branch: BTreeMap<String, Vec<AnalysisResultProjectionPoint>> = BTreeMap::new();
-    let sample_coordinate = |sample_id: &str| samples
+    let sample_metadata = samples
         .iter()
-        .find(|sample| sample.sample_id == sample_id)
-        .and_then(|sample| sample.coordinates.first())
-        .and_then(projection_scalar_for_coordinate);
+        .map(|sample| {
+            (
+                sample.sample_id.as_str(),
+                (
+                    sample.sample_index,
+                    sample
+                        .coordinates
+                        .first()
+                        .and_then(projection_scalar_for_coordinate),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut by_branch: BTreeMap<
+        String,
+        Vec<(Option<u64>, AnalysisResultProjectionPoint)>,
+    > = BTreeMap::new();
     let spectrum_projection = axis.axis_id == "frequency";
     for (ordinal, item) in items.iter().enumerate() {
         let Some(frequency) = item.frequency_hz else { continue };
         let branch = item.branch_id.clone().unwrap_or_else(|| format!("item:{}", item.item_id));
+        let (sample_index, sample_coordinate) = sample_metadata
+            .get(item.sample_id.as_str())
+            .copied()
+            .unwrap_or((None, None));
         let (x, y) = if spectrum_projection {
             (Some(frequency), item.display_index.map(|index| index as f64))
         } else {
-            (sample_coordinate(&item.sample_id), Some(frequency))
+            (sample_coordinate, Some(frequency))
         };
         if x.is_some_and(|value| !value.is_finite()) || y.is_some_and(|value| !value.is_finite()) {
             continue;
@@ -2451,16 +2468,68 @@ fn build_modal_projections(
         if x.is_none() || y.is_none() {
             continue;
         }
-        by_branch.entry(branch.clone()).or_default().push(AnalysisResultProjectionPoint { ordinal: ordinal as u64, x, y, value: Some(frequency), sample_id: Some(item.sample_id.clone()), item_id: Some(item.item_id.clone()), branch_id: item.branch_id.clone(), status: item.status.completeness.clone() });
+        by_branch.entry(branch).or_default().push((sample_index, AnalysisResultProjectionPoint { ordinal: ordinal as u64, x, y, value: Some(frequency), sample_id: Some(item.sample_id.clone()), item_id: Some(item.item_id.clone()), branch_id: item.branch_id.clone(), status: item.status.completeness.clone() }));
     }
-    let series = by_branch.into_iter().map(|(series_id, points)| AnalysisResultProjectionSeries { label: series_id.clone(), series_id, points }).collect::<Vec<_>>();
+    let mut next_gap_ordinal = u64::MAX;
+    let series = by_branch
+        .into_iter()
+        .map(|(series_id, mut indexed_points)| {
+            indexed_points.sort_by(|(left_index, left), (right_index, right)| {
+                left_index
+                    .unwrap_or(u64::MAX)
+                    .cmp(&right_index.unwrap_or(u64::MAX))
+                    .then_with(|| left.ordinal.cmp(&right.ordinal))
+            });
+            let mut previous_sample_index: Option<u64> = None;
+            let mut points = Vec::with_capacity(indexed_points.len());
+            for (sample_index, point) in indexed_points {
+                if let (Some(previous), Some(current)) =
+                    (previous_sample_index, sample_index)
+                {
+                    if current > previous.saturating_add(1) {
+                        points.push(AnalysisResultProjectionPoint {
+                            ordinal: next_gap_ordinal,
+                            x: None,
+                            y: None,
+                            value: None,
+                            sample_id: None,
+                            item_id: None,
+                            branch_id: Some(series_id.clone()),
+                            status: String::from("gap"),
+                        });
+                        next_gap_ordinal = next_gap_ordinal.saturating_sub(1);
+                    }
+                }
+                previous_sample_index = sample_index;
+                points.push(point);
+            }
+            AnalysisResultProjectionSeries {
+                label: series_id.clone(),
+                series_id,
+                points,
+            }
+        })
+        .collect::<Vec<_>>();
     let item_kinds_by_id = items
         .iter()
         .map(|item| (item.item_id.as_str(), item.item_kind.clone()))
         .collect::<BTreeMap<_, _>>();
-    let selection_index = series.iter().flat_map(|series| series.points.iter().map(|point| AnalysisResultProjectionSelectionEntry { ordinal: point.ordinal, sample_id: point.sample_id.clone(), item_id: point.item_id.clone(), item_kind: point.item_id.as_deref().and_then(|item_id| item_kinds_by_id.get(item_id).cloned()), branch_id: point.branch_id.clone() })).collect::<Vec<_>>();
+    let selection_index = series
+        .iter()
+        .flat_map(|series| {
+            series.points.iter().filter_map(|point| {
+                point.item_id.as_ref().map(|item_id| AnalysisResultProjectionSelectionEntry {
+                    ordinal: point.ordinal,
+                    sample_id: point.sample_id.clone(),
+                    item_id: Some(item_id.clone()),
+                    item_kind: item_kinds_by_id.get(item_id.as_str()).cloned(),
+                    branch_id: point.branch_id.clone(),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
     let projection_id = if spectrum_projection { "spectrum" } else if axis.axis_id == "drive-frequency" { "response-sweep" } else { "field-frequency-map" };
-    let projection_revision = digest_json(&selection_index);
+    let projection_revision = digest_json(&(series.clone(), &selection_index));
     let unsupported_reason = selection_index
         .is_empty()
         .then_some(if spectrum_projection {
@@ -3344,6 +3413,116 @@ mod tests {
             serde_json::Value::String("eigen_mode".to_string()),
         );
         assert_eq!(projection.series[0].points[0].x, Some(2.5e9));
+    }
+
+    #[test]
+    fn modal_sweep_projection_exposes_branch_gaps_without_selectable_placeholders() {
+        let axis = finalize_axis(
+            axis_resource(
+                "mu0_H",
+                "outer_sweep",
+                "scalar",
+                "mu0_H".to_string(),
+                "T".to_string(),
+                vec!["mT".to_string()],
+                Vec::new(),
+            ),
+            Vec::new(),
+            2,
+        );
+        let status = status_facets("ready", "published", "ready", "unvalidated", None, None);
+        let samples = [
+            AnalysisResultSampleIndexEntry {
+                sample_id: "sample-0".to_string(),
+                sample_index: Some(0),
+                coordinates: vec![AnalysisResultCoordinateResource {
+                    axis_id: "mu0_H".to_string(),
+                    token: "sample-0".to_string(),
+                    scalar_si: Some(0.05),
+                    vector3_si: None,
+                    category: None,
+                    entity_ref: None,
+                    label: Some("50 mT".to_string()),
+                }],
+                status: status.clone(),
+                item_count: 1,
+                branch_count: Some(1),
+                source_revision: "revision".to_string(),
+                equilibrium_ref: None,
+                linearization_ref: None,
+                mesh_ref: None,
+                items_resource: "items".to_string(),
+            },
+            AnalysisResultSampleIndexEntry {
+                sample_id: "sample-2".to_string(),
+                sample_index: Some(2),
+                coordinates: vec![AnalysisResultCoordinateResource {
+                    axis_id: "mu0_H".to_string(),
+                    token: "sample-2".to_string(),
+                    scalar_si: Some(0.075),
+                    vector3_si: None,
+                    category: None,
+                    entity_ref: None,
+                    label: Some("75 mT".to_string()),
+                }],
+                status: status.clone(),
+                item_count: 1,
+                branch_count: Some(1),
+                source_revision: "revision".to_string(),
+                equilibrium_ref: None,
+                linearization_ref: None,
+                mesh_ref: None,
+                items_resource: "items".to_string(),
+            },
+        ];
+        let item = |item_id: &str, sample_id: &str, display_index: u64, frequency_hz: f64| {
+            AnalysisResultSpectralItemSummary {
+                item_id: item_id.to_string(),
+                item_kind: AnalysisResultItemKind::EigenMode,
+                sample_id: sample_id.to_string(),
+                display_index: Some(display_index),
+                frequency_hz: Some(frequency_hz),
+                wavevector_kf: None,
+                branch_id: Some("branch-1".to_string()),
+                status: status.clone(),
+                quality: AnalysisResultQualitySummary {
+                    residual_relative_l2: None,
+                    tracking_score: Some(0.99),
+                    qualification: "unvalidated".to_string(),
+                },
+                field_ref: None,
+                detail_resource: "item".to_string(),
+                source_revision: "revision".to_string(),
+                relations: Vec::new(),
+            }
+        };
+
+        let projection = build_modal_projections(
+            "run",
+            "dataset",
+            "dataset-revision",
+            &axis,
+            &samples,
+            &[
+                item("mode-0", "sample-0", 0, 2.5e9),
+                item("mode-2", "sample-2", 0, 3.0e9),
+            ],
+            &status,
+        );
+        let projection = projection
+            .get("field-frequency-map")
+            .expect("field-frequency projection");
+
+        assert_eq!(projection.series[0].points.len(), 3);
+        assert_eq!(projection.series[0].points[1].status, "gap");
+        assert_eq!(projection.series[0].points[1].item_id, None);
+        assert_eq!(projection.series[0].points[1].x, None);
+        assert_eq!(projection.series[0].points[1].y, None);
+        assert_eq!(projection.selection_index.len(), 2);
+        assert!(projection
+            .selection_index
+            .iter()
+            .all(|entry| entry.item_id.is_some()));
     }
 
     #[test]

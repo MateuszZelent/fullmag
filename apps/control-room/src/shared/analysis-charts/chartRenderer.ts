@@ -275,6 +275,7 @@ export function chartRenderModelToEChartsOption(
 
     series: model.series.map((series) => ({
       // NOTE: No `sampling` property — data is already server-decimated.
+      connectNulls: false,
       data: series.points.map((point) => [point.x, point.y, point.rowIndex]),
       emphasis: {
         lineStyle: { width: 3 },
