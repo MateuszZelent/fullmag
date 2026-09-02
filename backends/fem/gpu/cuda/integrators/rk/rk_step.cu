@@ -15,6 +15,7 @@
 #include "gpu/cuda/integrators/rk/rk_final_refresh.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_preflight.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 
 #include <string>
 
@@ -71,9 +72,11 @@ bool gpu_rk_device_resident_step(
             accepted_attempt.rejected_attempts,
             accepted_attempt.total_stage_rhs_evaluations,
             accepted_attempt.fsal_reused,
+            preflight.is_rk23 || preflight.is_rk45,
             stats,
             reason)) {
         gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+        gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
         if (reason.empty()) {
             reason = "GPU RK accepted-step finalization failed without a diagnostic";
         }

@@ -17,6 +17,8 @@
 #include "fem_common.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
+#include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -46,33 +48,6 @@ void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
     amg.SetAggressiveCoarsening(policy.aggressive_coarsening);
     if (policy.strength_threshold_is_set) amg.SetStrengthThresh(policy.strength_threshold);
     if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
-}
-
-bool configure_hypre_device_vendor_kernels(std::string &error)
-{
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
-    if (HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE) != 0) {
-        error = "strict FEM GPU demag failed to select Hypre device memory";
-        return false;
-    }
-    if (HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE) != 0) {
-        error = "strict FEM GPU demag failed to select Hypre device execution";
-        return false;
-    }
-    if (HYPRE_SetSpTransUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-    if (HYPRE_SetSpMVUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-    if (HYPRE_SetSpGemmUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-#else
-    error = "strict FEM GPU demag requires a device-enabled Hypre build";
-    return false;
-#endif
-    return true;
 }
 
 bool configure_demag_poisson_hypre_preconditioner(
@@ -163,9 +138,6 @@ bool initialize_demag_poisson_hypre_device_solver(
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
-    if (!configure_hypre_device_vendor_kernels(error)) {
-        return false;
-    }
     const HypreDevicePolicySnapshot hypre_policy =
         configure_hypre_cuda_device_policy();
     if (!hypre_cuda_device_policy_is_available(hypre_policy)) {
@@ -365,10 +337,22 @@ bool validate_demag_poisson_hypre_device_solve(
     read_demag_poisson_hypre_solver_stats(
         ctx, workspace, iterations, residual, solver_reported_converged);
 
+    constexpr bool force_independent_validation = false;
+    const auto validation_needs = resolve_hypre_residual_validation_needs(
+        solver_reported_converged,
+        ctx.demag.solver.has_absolute_tolerance != 0,
+        force_independent_validation);
     bool residual_independently_certified = false;
     double absolute_residual = 0.0;
-    const double rhs_norm = workspace.b_par == nullptr ? 0.0 : workspace.b_par->Norml2();
-    if (!solver_reported_converged &&
+    double rhs_norm = 0.0;
+    if (validation_needs.rhs_norm && workspace.b_par != nullptr) {
+        rhs_norm = workspace.b_par->Norml2();
+        GpuPerformanceCounterDelta performance_delta{};
+        performance_delta.demag_rhs_norm_evaluations = 1;
+        performance_delta.demag_rhs_norm_sum = rhs_norm;
+        gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
+    }
+    if (validation_needs.independent_residual &&
         workspace.A_par != nullptr &&
         workspace.x_par != nullptr &&
         workspace.b_par != nullptr &&

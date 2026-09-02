@@ -1104,3 +1104,93 @@ recorded on recovery passed the positive, rank-two degeneracy, split-cluster
 disagreement, empty failure and cancellation cases; documentation validation
 was green (21/21). Managed runtime, full legacy monolithic binary, GPU parity
 and production qualification remained explicitly open.
+
+# Plan: FEM GPU performance remediation implementation (2026-09-01)
+
+- Worktree: `C:\git\fullmag\worktrees\fem-gpu-performance-remediation-implementation-20260901`
+- Branch: `codex/fem-gpu-performance-remediation-implementation-20260901`
+- Immutable base at worktree creation: `c3f49db708868f3649a3e894416d230269718920`
+- Commit policy: no commit, push, reset, stash, or cleanup performed.
+
+## Baseline ledger
+
+- `git status --short`: worktree contains only the task-scoped source,
+  contract, Rust ABI, and performance-documentation changes listed below; the
+  unrelated dirty main checkout was not modified.
+- `git diff --check`: no whitespace errors; Git emitted only the expected
+  LF/CRLF conversion warnings.
+- `just --list`: exit `0`.
+- The performance package manifest contains all 31 finding IDs and records
+  `verified_commit=c3f49db708868f3649a3e894416d230269718920`, with managed GPU
+  runtime still `NOT VERIFIED`.
+- The repository has a documented `rebuild-fem-runtime`/`ensure-managed-fem-runtime`
+  container route. No host-side FEM build was used as qualification evidence.
+
+## Current task status
+
+| Task | Source state | Qualification state |
+|---:|---|---|
+| 1 | unified transactional GPU performance snapshot, C ABI/Rust layout, attempt telemetry | managed compile/receipt pending |
+| 2 | single HYPRE device-policy owner and conditional residual-validation resolver | managed compile/runtime pending |
+| 3 | typed FieldOnly mode, fused/split demag recovery selection, timing hooks | parity/timing/managed pending |
+| 4 | deferred RK normalization and typed attempt packet | CUDA compile/rollback proof pending |
+| 5 | cosine/min rotation reduction and error-policy resolver | method specializations/managed parity pending |
+| 6 | endpoint token and fail-closed FSAL policy | DP54/periodic parity pending |
+| 7 | explicit metric mode and resolved `has_external_field` composition | typed reductions/output-mask integration pending |
+| 8 | row scale, fused XYZ exchange, deterministic CSR builder/planner types | qualified accuracy mode/planner wiring pending |
+| 9 | reduced periodic CSR/mass/lift and projection guards | energy/Armijo/PBC parity and complexity receipt pending |
+| 10 | deterministic exchange planner resolver (fail-closed) | benchmark/profile/capability wiring pending |
+| 11 | diagonal preconditioner builder/resolver (fail-closed) | NCG/PG-BB integration and qualification pending |
+| 12 | documentation/matrix corrections and explicit evidence boundaries | managed/scientific/production gates pending |
+
+The source changes intentionally do not promote unqualified advanced profiles,
+partial assembly, preconditioners, or periodic FSAL to a public validated
+capability. The remaining evidence lanes must be run on a clean source identity
+after the managed runtime can be rebuilt.
+
+## Verification wave (2026-09-02)
+
+- Canonical Windows FEM route passed: `just windows-build backend=fem
+  device=gpu frontend=static` exited `0` using Docker Desktop, CUDA `12.6.85`,
+  and the RTX 4080 SUPER (`sm_89`). This is compile/package evidence, not an
+  immutable managed-runtime receipt.
+- Seven focused CUDA/C++ contracts passed in the same GPU image: performance
+  snapshot ABI, HYPRE validation policy, exchange operator, demag FieldOnly,
+  adaptive error policy, RK attempt packet, and relaxation preconditioner.
+- Rust ABI and provenance-contract checks passed: `fullmag-fem-sys` 1/1 and
+  runner performance-snapshot filters 3/3.
+- `git diff --check` reported no whitespace errors (only expected LF/CRLF
+  conversion warnings); `just --list` exited `0`; manifest metrics match all
+  11 documented files; the manifest contains all 31 finding IDs.
+- Targeted `rustfmt --edition 2021 --check` for the three changed Rust files
+  passed. A whole-workspace `cargo fmt --all -- --check` still reports a
+  formatting delta in the untouched pre-existing `crates/fullmag-runner/src/lib.rs`;
+  it was not changed in this worktree.
+- The managed canonical Linux runtime remains `NOT VERIFIED`: the available
+  storage/export route does not currently satisfy the repository's required
+  loop-backed `canonical`/`native-2` profile. Therefore no managed receipt,
+  scientific CPU/GPU parity, benchmark speedup, or production qualification is
+  claimed.
+- During verification one invalid exchange negative case was corrected and the
+  preconditioner now rejects a negative exchange weight, preserving the
+  fail-closed contract.
+
+## Reduced exchange consumer completion (2026-09-02)
+
+- EX-01 source gap closed: periodic reduced CSR is now consumed by dedicated
+  CUDA kernels for final RK exchange energy and direct-minimizer exchange
+  energy difference (the Armijo input), with the full CSR path retained as the
+  non-periodic/fallback route.
+- Canonical Windows FEM GPU build was rerun after this change and exited `0`.
+- The seven focused CMake contracts were rebuilt and passed `7/7`, including
+  the exchange-operator contract; this proves CUDA compilation and source
+  contracts, not periodic physics parity or a managed runtime receipt.
+- The EX-01 status and coverage matrix were synchronized in both the source
+  documentation package and the combined document. Managed runtime,
+  field/energy/direct-energy parity, complexity receipt and benchmark remain
+  `NOT VERIFIED`.
+- Final documentation checks after synchronization: manifest metrics match all
+  11 files, the matrix has 31 unique IDs equal to the manifest, the combined
+  document's 01–10 sections match their source documents (README link paths
+  remain intentionally rebased for the combined location), and the manifest
+  JSON parses successfully.

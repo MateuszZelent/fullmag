@@ -44,14 +44,15 @@ bool gpu_rk_compute_llg_rhs(
     FemGpuComponentField &rhs,
     cudaStream_t stream,
     int n,
-    std::string &reason)
+    std::string &reason,
+    bool compute_metric)
 {
     auto &gpu = ctx.gpu_state.device;
     fullmag_cuda_llg_rhs_fused(
         m.x, m.y, m.z,
         gpu.fields.h_eff.x, gpu.fields.h_eff.y, gpu.fields.h_eff.z,
         rhs.x, rhs.y, rhs.z,
-        gpu.reductions.scalar_workspace,
+        compute_metric ? gpu.reductions.scalar_workspace : nullptr,
         gpu.materials.alpha,
         ctx.material_fields.material.gyromagnetic_ratio,
         ctx.material_fields.material.damping,

@@ -41,6 +41,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
@@ -181,6 +182,10 @@ bool apply_device_demag_tangent_with_potential_f64(
             ctx,
             ctx.gpu_state.device.rk.m_stage,
             ctx.gpu_state.cuda.compute_stream,
+            fullmag::fem::GpuDemagApplyRequest{
+                true,
+                fullmag::fem::GpuDemagEvaluationMode::FieldOnly,
+                fullmag::fem::GpuDemagSolvePurpose::FrequencyTangent},
             error)) {
         error = "device demag tangent-with-potential Poisson solve failed: " + error;
         return false;
@@ -4518,6 +4523,10 @@ int fullmag_fem_backend_begin_stage(
     ctx.zeeman.stage_start_time_s = stage_start_time_s;
     ctx.zeeman.regional_drive_revision += 1;
     ctx.stepper.workspace.fsal_valid = false;
+    ctx.gpu_state.device.rk.fsal_valid = false;
+    ctx.gpu_state.device.rk.endpoint_valid = false;
+    ctx.gpu_state.device.rk.endpoint_consumed = true;
+    ctx.gpu_state.device.rk.endpoint_operator_signature = 0;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
     ctx.poisson_demag.fresh_initial_guess_required =
@@ -4588,6 +4597,10 @@ int fullmag_fem_backend_reconfigure_regional_field_drives(
 #endif
     ctx.zeeman.regional_drive_revision += 1;
     ctx.stepper.workspace.fsal_valid = false;
+    ctx.gpu_state.device.rk.fsal_valid = false;
+    ctx.gpu_state.device.rk.endpoint_valid = false;
+    ctx.gpu_state.device.rk.endpoint_consumed = true;
+    ctx.gpu_state.device.rk.endpoint_operator_signature = 0;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
@@ -4605,6 +4618,9 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
 #if FULLMAG_HAS_CUDA_RUNTIME
     ctx.gpu_state.device.rk.fsal_valid = false;
 #endif
+    ctx.gpu_state.device.rk.endpoint_valid = false;
+    ctx.gpu_state.device.rk.endpoint_consumed = true;
+    ctx.gpu_state.device.rk.endpoint_operator_signature = 0;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
     handle->last_error.clear();
@@ -5604,6 +5620,44 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
     receipt.hot_loop_compute_d2h_bytes = snapshot.hot_loop_compute_d2h_bytes;
     receipt.hot_loop_compute_host_sync_count = snapshot.hot_loop_compute_host_sync_count;
     *out_receipt = receipt;
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_performance_snapshot_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_performance_snapshot_v1 *out_snapshot
+) {
+    if (out_snapshot == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v1 received null out_snapshot");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_performance_snapshot_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_snapshot->abi_version !=
+            FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION ||
+        out_snapshot->struct_size !=
+            sizeof(fullmag_fem_gpu_performance_snapshot_v1)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v1 received unsupported abi_version or struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto snapshot = fullmag::fem::gpu_performance_snapshot(
+        handle->context.gpu_state.performance_counters);
+    *out_snapshot = snapshot;
+    if (snapshot.available == 0u) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem GPU performance snapshot is unavailable for CPU execution");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
 }
 

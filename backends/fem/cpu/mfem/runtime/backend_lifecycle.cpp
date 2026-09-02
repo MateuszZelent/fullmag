@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -39,6 +40,7 @@ void destroy_backend_runtime(Context &ctx)
     context_destroy_mfem(ctx);
 #endif
     gpu_state_destroy(ctx.gpu_state.device);
+    gpu_performance_reset(ctx.gpu_state.performance_counters);
 }
 
 } // namespace fullmag::fem

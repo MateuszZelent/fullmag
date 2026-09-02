@@ -3154,6 +3154,23 @@ impl NativeFemBackend {
         runtime_info::NativeFemGpuExecutionReceipt::from_ffi(receipt)
     }
 
+    pub(crate) fn gpu_performance_snapshot(
+        &self,
+    ) -> Result<runtime_info::NativeFemGpuPerformanceSnapshot, RunError> {
+        let mut snapshot = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
+            abi_version: ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v1>() as u32,
+            ..Default::default()
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_gpu_performance_snapshot_v1(self.handle, &mut snapshot)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU performance snapshot read failed"));
+        }
+        runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
+    }
+
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
         let audit = self.transfer_audit()?;
         stats.hot_loop_h2d_bytes = audit.hot_loop_h2d_bytes;

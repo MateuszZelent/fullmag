@@ -1,5 +1,10 @@
 # 09. Kolejność PR, testy i Definition of Done
 
+W bieżącym worktree wykonano część zmian z PR-00–PR-13 (kontrakty źródłowe,
+fail-closed paths i testy kontraktowe). Poniższa kolejność nadal opisuje bramy
+kwalifikacyjne: bez managed GPU, parytetu naukowego i benchmarku żaden PR nie
+jest oznaczony jako produkcyjnie zamknięty.
+
 ## 1. Reguła
 
 Każdy PR ma jeden główny mechanizm, test/licznik przed optymalizacją,

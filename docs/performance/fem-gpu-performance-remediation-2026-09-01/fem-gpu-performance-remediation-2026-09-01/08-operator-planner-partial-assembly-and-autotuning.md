@@ -2,11 +2,13 @@
 
 **Ustalenie:** PA-01 oraz docelowa decyzja dla EX-04/EX-06.
 
-**Status po weryfikacji:** aktualny `GpuExchangePlan` rozwiązuje wyłącznie
-`legacy_sparse_gpu`; nie ma typed operator planner, profili, cuSPARSE SpMM ani
-produkcyjnego PA exchange. `backends/fem/examples/pa_benchmark.cpp` mierzy
-ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie emituje opisanego
-JSON. Cały wybór wariantu oraz break-even pozostają `NOT VERIFIED`.
+**Status po weryfikacji:** `exchange_operator.hpp/.cpp` dodaje jeden typed
+resolver dla legacy/fused/reduced/cuSPARSE/PA z fail-closed gates profilu,
+VRAM i runtime. Nie ma jeszcze produkcyjnego cuSPARSE SpMM ani PA exchange,
+a resolver nie jest podłączony do publicznego `GpuExchangePlan`. `pa_benchmark.cpp`
+ nadal mierzy ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie
+emituje opisanego JSON. Cały wybór wariantu oraz break-even pozostają
+`NOT VERIFIED`.
 
 ## 1. Problem
 
@@ -18,9 +20,10 @@ reprodukowalność. Planner ma wybierać tylko warianty zakwalifikowane offline.
 
 ```cpp
 enum class GpuExchangeOperatorKind : uint32_t {
-    FusedXyzCsr,
-    PeriodicReducedFusedXyzCsr,
-    CusparseSpmm,
+    LegacySparse,
+    FusedXYZ,
+    PeriodicReduced,
+    CuSparse,
     PartialAssembly,
 };
 

@@ -124,26 +124,59 @@ bool gpu_runtime_coefficients_upload(
 
     std::vector<uint32_t> reduced_node(node_count);
     std::vector<uint32_t> representative_node(node_count);
+    std::vector<uint32_t> reduced_representative_node(node_count);
     bool has_periodic_reduced_nodes = false;
+    uint64_t periodic_reduced_node_count = 0u;
     for (size_t node = 0; node < node_count; ++node) {
         reduced_node[node] = static_cast<uint32_t>(node);
         representative_node[node] = static_cast<uint32_t>(node);
+        reduced_representative_node[node] = static_cast<uint32_t>(node);
     }
-    if (periodic_reduced_node != nullptr &&
-        periodic_reduced_node_len == static_cast<uint64_t>(node_count)) {
+    if ((periodic_reduced_node == nullptr && periodic_reduced_node_len != 0u) ||
+        (periodic_reduced_node != nullptr &&
+            periodic_reduced_node_len != static_cast<uint64_t>(node_count))) {
+        error = "GPU periodic reduced node map length is invalid";
+        return false;
+    }
+    if ((periodic_representative_nodes == nullptr && periodic_representative_nodes_len != 0u) ||
+        periodic_representative_nodes_len > static_cast<uint64_t>(node_count)) {
+        error = "GPU periodic representative node map length is invalid";
+        return false;
+    }
+    if (periodic_reduced_node != nullptr) {
         std::copy(periodic_reduced_node, periodic_reduced_node + node_count, reduced_node.begin());
         for (size_t node = 0; node < node_count; ++node) {
             if (reduced_node[node] != static_cast<uint32_t>(node)) {
                 has_periodic_reduced_nodes = true;
-                break;
             }
         }
-        if (periodic_representative_nodes != nullptr) {
+        if (has_periodic_reduced_nodes) {
+            if (periodic_representative_nodes == nullptr ||
+                periodic_representative_nodes_len == 0u) {
+                error = "GPU periodic reduced node map requires representative nodes";
+                return false;
+            }
+            periodic_reduced_node_count = periodic_representative_nodes_len;
+            std::copy(
+                periodic_representative_nodes,
+                periodic_representative_nodes + periodic_representative_nodes_len,
+                reduced_representative_node.begin());
             for (size_t node = 0; node < node_count; ++node) {
                 const uint32_t reduced = reduced_node[node];
-                if (reduced < periodic_representative_nodes_len) {
-                    representative_node[node] =
-                        periodic_representative_nodes[static_cast<size_t>(reduced)];
+                if (reduced >= periodic_reduced_node_count) {
+                    error = "GPU periodic reduced node class is out of bounds";
+                    return false;
+                }
+                representative_node[node] =
+                    reduced_representative_node[static_cast<size_t>(reduced)];
+            }
+            for (uint64_t reduced = 0; reduced < periodic_reduced_node_count; ++reduced) {
+                const uint32_t representative =
+                    reduced_representative_node[static_cast<size_t>(reduced)];
+                if (representative >= node_count ||
+                    reduced_node[static_cast<size_t>(representative)] != reduced) {
+                    error = "GPU periodic representative node map is inconsistent";
+                    return false;
                 }
             }
         }
@@ -182,18 +215,25 @@ bool gpu_runtime_coefficients_upload(
         !cuda_ok(cudaMemcpy(mesh_regions.periodic_reduced_node, reduced_node.data(), u32_bytes, cudaMemcpyHostToDevice),
             "cudaMemcpy FemGpuState periodic_reduced_node host->device", error) ||
         !cuda_ok(cudaMemcpy(mesh_regions.periodic_representative_nodes, representative_node.data(), u32_bytes, cudaMemcpyHostToDevice),
-            "cudaMemcpy FemGpuState periodic_representative_nodes host->device", error)) {
+            "cudaMemcpy FemGpuState periodic_representative_nodes host->device", error) ||
+        !cuda_ok(cudaMemcpy(
+                mesh_regions.periodic_reduced_representative_nodes,
+                reduced_representative_node.data(),
+                u32_bytes,
+                cudaMemcpyHostToDevice),
+            "cudaMemcpy FemGpuState periodic reduced representative nodes host->device", error)) {
         return false;
     }
     record_host_to_device(
         audit,
         static_cast<uint64_t>(double_bytes) * 14ull +
             static_cast<uint64_t>(u8_bytes) +
-            static_cast<uint64_t>(u32_bytes) * 2ull);
+            static_cast<uint64_t>(u32_bytes) * 3ull);
     mesh_metrics.node_count = static_cast<uint64_t>(node_count);
     materials.node_count = static_cast<uint64_t>(node_count);
     mesh_regions.node_count = static_cast<uint64_t>(node_count);
     mesh_regions.has_periodic_reduced_nodes = has_periodic_reduced_nodes;
+    mesh_regions.periodic_reduced_node_count = periodic_reduced_node_count;
     runtime_coefficients.uploaded = true;
     return true;
 #else

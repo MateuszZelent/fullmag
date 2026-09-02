@@ -3,16 +3,17 @@
 **Ustalenia:** RK-01, RK-02, RK-03, RK-04, RK-05, RK-06.
 
 **Status po weryfikacji:** wszystkie sześć diagnoz ma potwierdzenie w grafie
-źródłowym, ale proponowane packet, endpoint token, fused predictor, metric mode,
-role buforów i API v2 nie istnieją. Obecny adaptive readback już kopiuje trzy
-scalary jednym `cudaMemcpyAsync` i jednym fence; luka polega na wielu
-wcześniejszych normalizer readbackach oraz braku typowanego packetu. Wpływ na
-wall time pozostaje `NOT VERIFIED`.
+źródłowym. Deferred normalizer validation, pinned attempt-control packet,
+endpoint token/FSAL oraz opcjonalny metric mode są już obecne w kodzie; typed
+buffer roles, output mask v2, publiczne API v2 i device-side PI decision nadal
+nie są gotowe. Adaptive readback ma jedną ścieżkę packet+fence, ale część
+legacy nadal istnieje. Wpływ na wall time pozostaje `NOT VERIFIED`.
 
-Źródłowy budżet warm BS23 adaptive to 4 RHS (trzy stage, w tym endpoint k3,
-oraz obowiązkowy final refresh), trzy normalizacje i jeden adaptive scalar
-readback. DP54 odtwarza accepted endpoint osobno od stanu użytego dla k6;
-różnica bitowa nie została zmierzona.
+Historyczny budżet przed remediacją dla warm BS23 adaptive to 4 RHS (trzy
+stage, w tym endpoint k3, oraz obowiązkowy final refresh), trzy normalizacje i
+jeden adaptive scalar readback. Bieżący kod ma warunkowe endpoint/FSAL reuse,
+deferred normalizację i jeden packet control, ale ich liczby oraz parytet DP54
+nie zostały jeszcze zmierzone w managed runtime.
 
 ## 1. Granice własności
 
@@ -41,9 +42,9 @@ Nie umieszczać logiki metod w `src/api.cpp`, runnerze ani `Context`.
 
 Jest wywoływana po każdym predyktorze.
 
-### Nowy stan
+### Stan wdrożony
 
-Utworzyć:
+Wprowadzono:
 
 ```text
 gpu/cuda/integrators/rk/rk_attempt_control_state.hpp
@@ -51,7 +52,7 @@ gpu/cuda/integrators/rk/rk_attempt_control_memory.cpp
 gpu/cuda/integrators/rk/rk_attempt_control_kernels.cu
 ```
 
-i osadzić stan w `FemGpuRkWorkspaceDeviceState`:
+i osadzono stan w `FemGpuRkWorkspaceDeviceState`:
 
 ```cpp
 enum GpuRkAttemptFlag : uint64_t {
@@ -66,7 +67,7 @@ struct GpuRkAttemptControlPacket {
     uint64_t flags;
     double error_norm;
     double max_norm_defect;
-    double min_normalized_spin_dot;
+    double max_spin_rotation;
     double suggested_dt;
     uint32_t decision;
     uint32_t reason;
@@ -85,20 +86,18 @@ współdzielone z energią i relaksacją.
 ### Nowa funkcja normalizacji
 
 ```cpp
-bool fullmag_cuda_normalize_vectors_deferred(
-    FemGpuComponentField target,
+void fullmag_cuda_normalize_vectors_deferred(
+    const FemGpuComponentField &target,
     const FemGpuComponentField &safe_fallback,
-    const uint8_t *magnetic_mask,
-    const uint8_t *frozen_mask,
-    const FemGpuComponentField *frozen_reference,
+    const uint8_t *magnetic_node_mask,
     GpuRkAttemptControlPacket *packet,
-    int n,
-    cudaStream_t stream,
-    std::string &reason);
+    int N,
+    cudaStream_t stream = nullptr,
+    GpuPerformanceCounterState *performance_counters = nullptr);
 ```
 
-Zwracane `false` oznacza wyłącznie błąd enqueue/launch. Nie oznacza wyniku
-walidacji danych.
+Funkcja nie zwraca wyniku walidacji danych; zapisuje flagi do packetu, a błędy
+enqueue/launch są sprawdzane przez istniejącego właściciela sekwencji CUDA.
 
 Kernel dla aktywnego węzła:
 
@@ -213,36 +212,26 @@ Następny PR przenosi decyzję na GPU.
 
 ### BS23
 
-Adaptacyjny BS23 oblicza:
+Adaptacyjny BS23 oblicza (historyczny przebieg przed reuse):
 
 \[
 k_3=f(t_{n+1},m_{n+1})
 \]
 
-po normalizacji kandydata, a final refresh ponownie liczy to samo RHS.
+po normalizacji kandydata; przed remediacją final refresh ponownie liczył to
+samo RHS.
 
-### Attempt-local token
+### Attempt-local token (stan wdrożony)
 
-Dodać do `rk_workspace_state.hpp`:
+W `rk_workspace_state.hpp` zapisano token przez pola endpointu:
 
 ```cpp
-enum class GpuRkEndpointMethod : uint32_t {
-    None,
-    Bs23,
-    Dp54,
-};
-
-struct GpuRkEndpointEvaluationToken {
-    bool valid = false;
-    bool consumed = false;
-    GpuRkEndpointMethod method = GpuRkEndpointMethod::None;
-    uint32_t derivative_slot = 0;
-    uint64_t target_step = 0;
-    uint64_t attempt_identity = 0;
-    uint64_t state_generation = 0;
-    uint64_t operator_signature = 0;
-    double evaluation_time_s = 0.0;
-};
+bool endpoint_valid = false;
+uint32_t endpoint_integrator = 0;
+uint64_t endpoint_generation = 0;
+double endpoint_time_seconds = 0.0;
+uint64_t endpoint_operator_signature = 0;
+bool endpoint_consumed = false;
 ```
 
 Token poświadcza, że:
@@ -285,6 +274,10 @@ publish endpoint token
 
 `dp54_accept_kernel` nie rekonstruuje endpointu w ścieżce adaptacyjnej.
 
+Ważne ograniczenie bezpieczeństwa: gdy aktywna jest mapa okresowa, GPU wymusza
+projekcję `m` przed RHS, ale FSAL pozostaje wyłączony do czasu dowodu bitowej
+tożsamości kandydata po projekcji z endpointem użytym do `k_6`/`k_3`.
+
 ### Invalidation
 
 Token invalidować przy:
@@ -306,9 +299,10 @@ Token invalidować przy:
 
 ## 6. RK-04 — LLG metric wyłącznie dla konsumenta
 
-Obecnie fused LLG RHS zawsze wyznacza per-node metric i block maxima dla
-każdego RHS. Globalna redukcja maksimum jest wykonywana podczas finalizacji;
-nie opisywać tego jako pełnej globalnej redukcji „na każdym stage”.
+Fused LLG RHS może pominąć per-node metric i block maxima dla pośredniego RHS;
+finalizacja jawnie żąda metryki. Globalna redukcja maksimum jest wykonywana
+podczas finalizacji; nie opisywać tego jako pełnej globalnej redukcji „na każdym
+stage”.
 
 Dodać:
 

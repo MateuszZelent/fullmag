@@ -3,12 +3,14 @@
 **Ustalenia:** DM-01, DM-02, DM-03, DM-04, DM-05 oraz podwójne ustawianie
 polityki HYPRE wykryte na aktualnym `master`.
 
-**Status po weryfikacji:** DM-01, DM-02 i duplikacja setterów HYPRE są
-potwierdzone. DM-03 jest projektem: dziś recovery ma sześć osobnych map/CSR i
-trzy kernele. DM-04 jest częściowy, ponieważ timingi host API/device/wait oraz
-iteracje już istnieją, ale brak profilu AMG levels i aktualnego benchmarku.
-DM-05 jest hipotezą kwalifikacyjną; wszystkie purpose używają dziś wspólnego
-`ctx.demag.solver.relative_tolerance`. Nowe requesty/enumy poniżej nie istnieją.
+**Status po weryfikacji:** DM-01 ma typed `FieldOnly` dla RK i frequency
+tangent, DM-02 ma warunkową walidację RHS norm/residual, a duplikacja setterów
+HYPRE została usunięta. DM-03 ma wspólny-pattern fused recovery z digestem i
+split fallback. DM-04 jest częściowy: timingi host API/device/wait/iteracji są
+zachowane i trafiają do snapshotu, ale brak profilu AMG levels i benchmarku.
+DM-05 pozostaje hipotezą kwalifikacyjną; purpose nadal używają wspólnego
+`ctx.demag.solver.relative_tolerance`. Managed/runtime parity jest
+`NOT VERIFIED`.
 
 ## 1. Co zachować
 
@@ -26,12 +28,12 @@ osobne synchronizacje i nie są dowodem pełnego grafu bez fence.
 
 ## 2. Jeden właściciel polityki HYPRE
 
-`runtime/hypre_device_policy.cpp` ma być jedynym właścicielem process-wide
-`HYPRE_Set*`. `hypre_device_solver.cpp` nadal posiada lokalne settery.
+`runtime/hypre_device_policy.cpp` jest jedynym właścicielem process-wide
+`HYPRE_Set*`; lokalne settery zostały usunięte z `hypre_device_solver.cpp`.
 
 Naprawa:
 
-1. usunąć `configure_hypre_device_vendor_kernels`;
+1. zachować usunięcie `configure_hypre_device_vendor_kernels`;
 2. po `mfem::Hypre::Init/InitDevice` wywołać wyłącznie
    `configure_hypre_cuda_device_policy`;
 3. zwalidować snapshot;
@@ -89,7 +91,7 @@ demag_stage_energy_evaluations += mode == FieldAndRecoveredEnergy
 
 ## 4. DM-02 — warunkowe `Norml2(rhs)`
 
-Utworzyć pure helper:
+Wprowadzony pure helper:
 
 ```text
 gpu/cuda/demag_poisson/hypre_validation_policy.hpp
@@ -203,8 +205,9 @@ pole. Brak pola = identyczny rtol.
 
 ## 8. Warm start i endpoint cache
 
-Persistent solver i warm/fresh counters już istnieją. Nie istnieje natomiast
-jeden ogólny token endpointu dla RK/HYPRE/PGBB; `FemGpuAcceptedEvaluationToken`
+Persistent solver i warm/fresh counters już istnieją. RK ma endpoint token
+związany z exact time/signature; nie ma jeszcze jednego ogólnego tokenu
+obejmującego równocześnie RK, HYPRE i PG-BB. `FemGpuAcceptedEvaluationToken`
 dotyczy GPU NCG. Poniższe punkty są wymaganiami docelowymi.
 
 - fresh-zero po invalidation/failure zgodnie z kontraktem;

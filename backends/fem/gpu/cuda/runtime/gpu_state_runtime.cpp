@@ -33,6 +33,7 @@ bool gpu_bootstrap_failed(Context &ctx, std::string &error) {
     context_destroy_mfem(ctx);
 #endif
     gpu_state_destroy(ctx.gpu_state.device);
+    gpu_performance_reset(ctx.gpu_state.performance_counters);
     error = preserved_error;
     return false;
 }
@@ -44,6 +45,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
 #if FULLMAG_HAS_CUDA_RUNTIME
     allocate_gpu_state = ctx.mfem_device.device_info_cache.is_gpu_enabled != 0;
 #endif
+    gpu_performance_reset(ctx.gpu_state.performance_counters);
     if (!gpu_state_initialize(
             ctx.gpu_state.device,
             ctx.mesh.n_nodes,
@@ -56,6 +58,15 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
+    gpu_performance_configure(
+        ctx.gpu_state.performance_counters,
+        allocate_gpu_state,
+        allocate_gpu_state
+            ? FULLMAG_FEM_GPU_EXECUTION_UNKNOWN
+            : FULLMAG_FEM_GPU_EXECUTION_CPU,
+        0u,
+        static_cast<uint32_t>(ctx.base_plan.integrator),
+        allocate_gpu_state ? ctx.mfem_device.gpu_device_index : -1);
 #if FULLMAG_HAS_CUDA_RUNTIME
     if (ctx.gpu_state.device.lifecycle.allocated) {
         ctx.gpu_state.cuda.snapshot_pool = std::make_shared<FemGpuSnapshotPoolState>();

@@ -36,12 +36,15 @@ set(FEM_SOURCES
     core/fem_state.cpp
     cpu/mfem/transport/steady_transport_c_api.cpp
     gpu/cuda/exchange/exchange_plan.cpp
+    gpu/cuda/exchange/exchange_operator.cpp
     gpu/cuda/exchange/exchange_upload.cpp
     gpu/cuda/fields/field_buffer_memory.cpp
     gpu/cuda/fields/field_buffer_upload.cpp
     gpu/cuda/demag_poisson/hypre_stream_interop.cpp
     gpu/cuda/integrators/rk/rk_fsal_policy.cpp
+    gpu/cuda/integrators/rk/rk_attempt_control_memory.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
+    gpu/cuda/integrators/rk/adaptive_error_policy.cpp
     gpu/cuda/integrators/rk/rk_snapshot.cpp
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
@@ -54,6 +57,7 @@ set(FEM_SOURCES
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
     gpu/cuda/relaxation/pgbb.cpp
+    gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp
     gpu/cuda/relaxation/relaxation_memory.cpp
     gpu/cuda/state/device_memory.cpp
     gpu/cuda/state/gpu_state.cpp
@@ -154,6 +158,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/field_refresh.cpp
     gpu/cuda/runtime/gpu_state_runtime.cpp
     gpu/cuda/runtime/execution_receipt.cpp
+    gpu/cuda/runtime/performance_counters.cpp
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
@@ -184,6 +189,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/slepc_modal_eigen.cpp
     cpu/frequency_domain/spectral_transform.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
+    gpu/cuda/demag_poisson/hypre_validation_policy.cpp
     gpu/cuda/runtime/hypre_device_policy.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
@@ -252,6 +258,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu
             gpu/cuda/integrators/rk/rk_attempt_loop.cu
             gpu/cuda/integrators/rk/rk_attempt_setup.cu
+            gpu/cuda/integrators/rk/rk_attempt_control_kernels.cu
             gpu/cuda/integrators/rk/rk_bs23_accept_kernel.cu
             gpu/cuda/integrators/rk/rk_component_copy.cu
             gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu
@@ -706,6 +713,37 @@ add_test(NAME fem_cuda_demag_robin_energy_contract COMMAND fem_cuda_demag_robin_
 add_executable(fem_cuda_demag_timing_contract tests/cuda_demag_timing_contract.cpp)
 add_test(NAME fem_cuda_demag_timing_contract COMMAND fem_cuda_demag_timing_contract)
 
+add_executable(
+    fem_cuda_demag_field_only_contract
+    tests/cuda_demag_field_only_contract.cpp
+)
+add_test(
+    NAME fem_cuda_demag_field_only_contract
+    COMMAND fem_cuda_demag_field_only_contract
+)
+
+add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)
+target_link_libraries(fem_adaptive_error_policy_contract PRIVATE fullmag_fem)
+target_include_directories(fem_adaptive_error_policy_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_adaptive_error_policy_contract COMMAND fem_adaptive_error_policy_contract)
+
+add_executable(
+    fem_hypre_validation_policy_contract
+    tests/hypre_validation_policy_contract.cpp
+)
+target_link_libraries(fem_hypre_validation_policy_contract PRIVATE fullmag_fem)
+target_include_directories(fem_hypre_validation_policy_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_hypre_validation_policy_contract
+    COMMAND fem_hypre_validation_policy_contract
+)
+
 add_executable(fem_cuda_periodic_demag_contract tests/cuda_periodic_demag_contract.cpp)
 target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE fullmag_fem)
 if(FULLMAG_USE_MFEM_STACK)
@@ -726,6 +764,41 @@ add_test(NAME fem_cuda_periodic_demag_contract COMMAND fem_cuda_periodic_demag_c
 
 add_executable(fem_cuda_periodic_exchange_contract tests/cuda_periodic_exchange_contract.cpp)
 add_test(NAME fem_cuda_periodic_exchange_contract COMMAND fem_cuda_periodic_exchange_contract)
+
+add_executable(fem_exchange_operator_contract tests/exchange_operator_contract.cpp)
+target_link_libraries(fem_exchange_operator_contract PRIVATE fullmag_fem)
+target_include_directories(fem_exchange_operator_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_exchange_operator_contract COMMAND fem_exchange_operator_contract)
+
+add_executable(
+    fem_gpu_relaxation_preconditioner_contract
+    tests/gpu_relaxation_preconditioner_contract.cpp
+)
+target_link_libraries(fem_gpu_relaxation_preconditioner_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_relaxation_preconditioner_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_relaxation_preconditioner_contract
+    COMMAND fem_gpu_relaxation_preconditioner_contract
+)
+
+add_executable(
+    fem_gpu_rk_attempt_control_packet_contract
+    tests/gpu_rk_attempt_control_packet_contract.cpp
+)
+target_include_directories(fem_gpu_rk_attempt_control_packet_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_rk_attempt_control_packet_contract
+    COMMAND fem_gpu_rk_attempt_control_packet_contract
+)
 
 add_executable(fem_transfer_audit tests/transfer_audit.cpp)
 target_link_libraries(fem_transfer_audit PRIVATE fullmag_fem)
@@ -1178,6 +1251,21 @@ target_include_directories(fem_gpu_execution_receipt_contract PRIVATE
 add_test(
     NAME fem_gpu_execution_receipt_contract
     COMMAND fem_gpu_execution_receipt_contract
+)
+
+add_executable(
+    fem_gpu_performance_snapshot_contract
+    tests/gpu_performance_snapshot_contract.cpp
+)
+target_link_libraries(fem_gpu_performance_snapshot_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_performance_snapshot_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/native/include
+)
+add_test(
+    NAME fem_gpu_performance_snapshot_contract
+    COMMAND fem_gpu_performance_snapshot_contract
 )
 
 add_executable(

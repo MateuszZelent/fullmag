@@ -31,6 +31,7 @@ bool gpu_rk_finalize_accepted_step(
     uint32_t rejected_attempts,
     uint32_t total_stage_rhs_evaluations,
     bool fsal_reused,
+    bool reuse_bs23_fsal_rhs,
     fullmag_fem_step_stats &stats,
     std::string &reason);
 

@@ -35,7 +35,11 @@ struct FemGpuMeshRegionDeviceState {
     double *frozen_reference_z = nullptr;
     uint64_t frozen_node_count = 0;
     uint32_t *periodic_reduced_node = nullptr;
+    // Node-indexed representative map retained for projection kernels.
     uint32_t *periodic_representative_nodes = nullptr;
+    // Reduced-row-indexed representative list used by reduced CSR operators.
+    uint32_t *periodic_reduced_representative_nodes = nullptr;
+    uint64_t periodic_reduced_node_count = 0;
 };
 
 } // namespace fullmag::fem

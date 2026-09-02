@@ -195,6 +195,41 @@ void destroy_scalar(DeviceCsrScalar &op)
 }
 #endif
 
+uint64_t csr_pattern_digest(const DeviceCsrScalar &op)
+{
+    uint64_t hash = 14695981039346656037ull;
+    fnv1a_string(hash, "fullmag.fem.gpu.demag.recovery.csr-pattern.v1");
+    fnv1a_u64(hash, op.rows);
+    fnv1a_u64(hash, op.nnz);
+    fnv1a_integral_vector(hash, op.row_offsets);
+    fnv1a_integral_vector(hash, op.col_indices);
+    return hash;
+}
+
+bool csr_pattern_equal(
+    const DeviceCsrScalar &lhs,
+    const DeviceCsrScalar &rhs)
+{
+    return lhs.rows == rhs.rows &&
+        lhs.nnz == rhs.nnz &&
+        lhs.row_offsets == rhs.row_offsets &&
+        lhs.col_indices == rhs.col_indices;
+}
+
+bool shared_xyz_csr_pattern(
+    const DeviceCsrScalar &x,
+    const DeviceCsrScalar &y,
+    const DeviceCsrScalar &z)
+{
+    const uint64_t digest = csr_pattern_digest(x);
+    if (digest != csr_pattern_digest(y) || digest != csr_pattern_digest(z)) {
+        return false;
+    }
+    // A digest is only a setup-time fast reject.  Never select the fused
+    // kernel without the exact row-offset/column-index comparison.
+    return csr_pattern_equal(x, y) && csr_pattern_equal(x, z);
+}
+
 int signed_dof_index(int dof)
 {
     return dof >= 0 ? dof : -1 - dof;
@@ -614,6 +649,8 @@ bool build_mixed_demag_operator_fingerprint(
         !fnv1a_device_csr_scalar(hash, workspace.robin_boundary_mass, "Robin boundary mass", error)) {
         return false;
     }
+    fnv1a_u64(hash, workspace.recovery_xyz_pattern_digest);
+    fnv1a_u64(hash, workspace.visual_recovery_xyz_pattern_digest);
     fnv1a_integral_vector(hash, workspace.ess_tdofs);
 
     std::ostringstream encoded;
@@ -1049,6 +1086,22 @@ bool build_mixed_demag_operators(
         return false;
     }
 
+    workspace.recovery_mode = shared_xyz_csr_pattern(
+        workspace.recovery_x,
+        workspace.recovery_y,
+        workspace.recovery_z)
+        ? GpuDemagRecoveryMode::SharedPatternFusedXyz
+        : GpuDemagRecoveryMode::SplitCsr;
+    workspace.recovery_xyz_pattern_digest = csr_pattern_digest(workspace.recovery_x);
+    workspace.visual_recovery_mode = shared_xyz_csr_pattern(
+        workspace.visual_recovery_x,
+        workspace.visual_recovery_y,
+        workspace.visual_recovery_z)
+        ? GpuDemagRecoveryMode::SharedPatternFusedXyz
+        : GpuDemagRecoveryMode::SplitCsr;
+    workspace.visual_recovery_xyz_pattern_digest =
+        csr_pattern_digest(workspace.visual_recovery_x);
+
     if (ctx.demag.realization == FULLMAG_FEM_DEMAG_AIRBOX_ROBIN &&
         ctx.poisson_demag.robin_effective_beta > 0.0 &&
         ctx.poisson_demag.robin_boundary_mass != nullptr) {
@@ -1171,6 +1224,10 @@ void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
     workspace.operator_fingerprint.clear();
     workspace.operator_build_count = 0;
     workspace.operator_upload_count = 0;
+    workspace.recovery_xyz_pattern_digest = 0;
+    workspace.recovery_mode = GpuDemagRecoveryMode::SplitCsr;
+    workspace.visual_recovery_xyz_pattern_digest = 0;
+    workspace.visual_recovery_mode = GpuDemagRecoveryMode::SplitCsr;
     workspace.device_bytes = 0;
     workspace.ready = false;
 }

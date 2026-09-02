@@ -2,31 +2,32 @@
 
 **Ustalenia:** AD-01, AD-02, AD-03.
 
-**Status po weryfikacji:** aktualny
-`adaptive_error_norm_blocks_kernel` zawsze przyjmuje k0…k6, liczy dot/`acos`
-per node i zapisuje trzy kanały, po czym runtime wykonuje trzy globalne
-redukcje maximum. Diagnozy są potwierdzone źródłowo. Wszystkie policy kinds,
-typed partials, wyspecjalizowane kernele i device decision poniżej są
-niezaimplementowanymi celami; ich przewaga wydajnościowa pozostaje
+**Status po weryfikacji:** diagnozy są potwierdzone źródłowo. Kernel nadal
+przyjmuje k0…k6 i pozostaje ogólny, ale obrót liczy przez dot/cosine, a runtime
+warunkowo redukuje kanały; rotation kończy się jednym device min i końcowym
+`acos`. Policy resolver istnieje. Typed partials, wyspecjalizowane kernele i
+device decision nie są jeszcze gotowe; przewaga wydajnościowa pozostaje
 `NOT VERIFIED`.
 
-## 1. Obecny koszt
+## 1. Koszt bazowy i stan bieżący
 
-Jeden ogólny kernel:
+Historyczny kernel bazowy:
 
 - przyjmuje `k0...k6`,
 - przyjmuje `b_hi` i `b_lo`,
 - wykonuje runtime branches,
 - liczy normę błędu, defekt normy i obrót,
-- wykonuje `acos` dla każdego węzła,
+- wykonywał `acos` dla każdego węzła,
 - zapisuje trzy tablice blokowe,
-- uruchamia trzy `DeviceReduce::Max`.
+- uruchamiał trzy `DeviceReduce::Max`.
 
-Także wtedy, gdy dodatkowe guardy są wyłączone.
+W bieżącym kodzie rotation używa dot/cosine i jednego device min; redukcje są
+warunkowe. Generic kernel nadal ma wspólne kanały i nie jest specjalizacją
+BS23/DP54.
 
 ## 2. Rozdzielenie metody i polityki
 
-Utworzyć:
+Pozostałe cele specjalizacji wymagają wydzielenia:
 
 ```text
 gpu/cuda/integrators/rk/adaptive_error_bs23.cu
@@ -73,7 +74,8 @@ d_i=\mathrm{clamp}
 \max_i\theta_i=\arccos(\min_i d_i).
 \]
 
-Redukować `min_dot`, wykonać jeden `acos` po redukcji. Dla samego progu:
+Redukować minimum dot/cosine, wykonać jeden `acos` po redukcji (wynik publikacji
+jest zapisywany jako `max_spin_rotation`). Dla samego progu:
 
 \[
 \theta_i\le\theta_\max\iff d_i\ge\cos(\theta_\max).

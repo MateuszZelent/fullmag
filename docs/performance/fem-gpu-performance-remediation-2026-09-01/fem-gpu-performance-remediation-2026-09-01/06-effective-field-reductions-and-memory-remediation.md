@@ -2,12 +2,12 @@
 
 **Ustalenia:** HF-01, HF-02, RD-01, MEM-01 oraz część RK-04/RK-05.
 
-**Status po weryfikacji:** HF-01/HF-02 są potwierdzone jako obecne
-component-split passes; `has_ext=true` jest dziś przekazywane bezwarunkowo.
-Typed reducers, maski materializacji i fused compose nie istnieją. MEM-01 jest
-częściowy: generyczny scalar readback ma pinned host buffer i pageable fallback,
-ale nie ma odrębnego `GpuRkAttemptControlPacket`. Wpływ wszystkich fuzji na
-rejestry, occupancy i wall time pozostaje `NOT VERIFIED`.
+**Status po weryfikacji:** HF-01/HF-02 nadal są component-split passes; `has_ext`
+jest już wyznaczane z rzeczywistego planu pola zewnętrznego, nie stałe.
+Typed reducers, maski materializacji i fused base compose nie istnieją. MEM-01
+ma dedykowany pinned `GpuRkAttemptControlPacket`, lecz generyczne readbacki
+nadal mają pageable fallback. Wpływ wszystkich fuzji na rejestry, occupancy i
+wall time pozostaje `NOT VERIFIED`.
 
 ## 1. HF-01 — fused bazowe H_eff xyz
 
