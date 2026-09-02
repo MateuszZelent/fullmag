@@ -34,6 +34,11 @@ import type { AnalysisResultProjectionSelection } from "./components/AnalysisRes
 import type { AnalysisResultItemKind } from "@/shared/domain/analysis/results";
 import type { FmrModalDrivenComparisonModel } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { ANALYSIS_COMPARISON_UNAVAILABLE_REASON } from "./analysisComparison";
+import {
+  legacyDsfPointSelectionRef,
+  legacyGammaFeatureSelectionRef,
+  legacyTimeDomainSelectionPatch,
+} from "./legacyTimeDomainSelection";
 
 type AnalysisPlotsViewInput = {
   activeSubview?: AnalysisSubview;
@@ -126,9 +131,27 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
   const isHysteresisSubview = activeSubview === "hysteresis.loop" || activeSubview === "hysteresis.branches";
   const onGammaFeatureSelect = resultProjection?.productKind === "time_domain_spectrum"
     ? (selection: SpinWaveGammaFeatureSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+    : spinWaveGamma
+      ? (selection: SpinWaveGammaFeatureSelection) => {
+          const ref = legacyGammaFeatureSelectionRef(
+            selection,
+            spinWaveGamma.schema_version,
+          );
+          if (!ref) return;
+          kernel.selection.set(legacyTimeDomainSelectionPatch(ref, "Legacy spectral feature"), "analysis-plots");
+        }
     : undefined;
   const onDsfPointSelect = resultProjection?.productKind === "dynamic_structure_factor"
     ? (selection: DynamicStructureFactorPointSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+    : dynamicStructureFactor
+      ? (selection: DynamicStructureFactorPointSelection) => {
+          const ref = legacyDsfPointSelectionRef(
+            selection,
+            dynamicStructureFactor.schema_version,
+          );
+          if (!ref) return;
+          kernel.selection.set(legacyTimeDomainSelectionPatch(ref, "Legacy DSF point"), "analysis-plots");
+        }
     : undefined;
 
   return <div className="fm-analysis-plots">

@@ -157,6 +157,52 @@ describe("analysis field overlay commands", () => {
     });
   });
 
+  it("keeps a legacy time-domain selection scoped to time-domain commands", () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    const ref = {
+      artifactPath: "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      artifactRevision: "spin_wave_response.gamma.v1:sha256:gamma-1",
+      availability: "partial",
+      executionState: "completed",
+      frequencyHz: 12.5e9,
+      frequencyIndex: 7,
+      kind: "results.time_domain.spectral_feature",
+      nodeId: "analysis:legacy:time-domain:legacy%3Agamma%3Apeak%3A7",
+      pointId: "legacy:gamma:peak:7",
+      resourceRef: "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      resourceState: "ready",
+      sampleId: "gamma-spectrum-sample-0000",
+      sampleIndex: 0,
+      source: "time-domain-response",
+      studyProduct: "time_domain_spectrum",
+      type: "frequency-domain",
+    } as const;
+    selection.set(
+      {
+        kind: ref.kind,
+        label: ref.pointId,
+        nodeId: ref.nodeId,
+        objectId: null,
+        ref,
+      },
+      "analysis-plots",
+    );
+    const context = { analysisFieldOverlay: overlay, selection, source: "test" } as const;
+
+    expect(
+      commands.get("analysis.eigen.plot-mode-3d")?.disabledReason?.(context),
+    ).toBe("Selected analysis field is not a modal eigen field.");
+    expect(
+      commands.get("analysis.frequency-response.plot-response-field-3d")?.disabledReason?.(context),
+    ).toBe("Selected analysis field is not a driven response field.");
+    expect(commands.isEnabled("analysis.time-domain.plot-response-field-3d", context)).toBe(false);
+    expect(
+      commands.get("analysis.time-domain.plot-response-field-3d")?.disabledReason?.(context),
+    ).toBe("No analysis field is selected.");
+  });
+
   it("plots an eigen mode field through the shared analysis field controller", async () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();

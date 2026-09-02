@@ -272,7 +272,11 @@ function sourceFromSelectionRef(
   ref: Extract<SelectionRef, { type: "frequency-domain" }> | null,
 ): AnalysisFieldOverlaySource | null {
   if (!ref) return null;
-  if (ref.source === "eigen-mode" || ref.source === "frequency-response") {
+  if (
+    ref.source === "eigen-mode" ||
+    ref.source === "frequency-response" ||
+    ref.source === "time-domain-response"
+  ) {
     return ref.source;
   }
   if (
@@ -286,6 +290,9 @@ function sourceFromSelectionRef(
     ref.fieldId?.startsWith("analysis:frequency-response:")
   ) {
     return "frequency-response";
+  }
+  if (ref.kind.startsWith("results.time_domain")) {
+    return "time-domain-response";
   }
   return null;
 }
