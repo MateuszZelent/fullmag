@@ -6,13 +6,13 @@
     {
       "solver": "FEM",
       "device": "CPU",
-      "status": "documented"
+      "status": "source/contract VERIFIED"
     },
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "NOT VERIFIED",
-      "reason": "Brak ścisłego device-resident operatora FK GPU; lane pozostaje NOT VERIFIED."
+      "status": "source/contract VERIFIED",
+      "reason": "Managed runtime i fizyka pozostają NOT VERIFIED."
     },
     {
       "solver": "FDM",
@@ -139,8 +139,20 @@
     {
       "id": "operator",
       "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp",
-      "symbol": "class DenseDemagBemOperator",
-      "responsibility": "Dense reference BEM, kontrola rozmiaru i apply."
+      "symbol": "class HierarchicalDemagBemOperator",
+      "responsibility": "Hierarchiczny H2 BEM, eksport danych device i apply; dense operator pozostaje oracle'em."
+    },
+    {
+      "id": "gpu-operator",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "symbol": "gpu_demag_fem_bem_initialize",
+      "responsibility": "Jednorazowy upload operatora i trwały workspace CUDA/Hypre dla Fredkina-Koehlera."
+    },
+    {
+      "id": "gpu-kernel",
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu",
+      "symbol": "fullmag_cuda_fem_bem_apply",
+      "responsibility": "Device apply bloków near i far z mapowaniem boundary row do P1 true DOF."
     },
     {
       "id": "workspace",
@@ -171,6 +183,12 @@
       "path": "backends/fem/tests/demag_fem_bem_contract.cpp",
       "symbol": "main",
       "responsibility": "Wykonywalny kontrakt topologii, geometrii, operatora i modułów."
+    },
+    {
+      "id": "gpu-contract-test",
+      "path": "backends/fem/tests/demag_fem_bem_gpu_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Wykonywalny kontrakt CUDA near/far apply i mapowania P1 true DOF."
     }
   ],
   "public_api": {

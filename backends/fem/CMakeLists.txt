@@ -194,6 +194,7 @@ set(FEM_SOURCES
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
     gpu/cuda/demag_poisson/stage_compute.cpp
+    gpu/cuda/demag_fem_bem/fem_bem.cpp
     cpu/frequency_domain/mfem_exchange_operator.cpp
     cpu/frequency_domain/mfem_linearized_operator.cpp
     cpu/frequency_domain/mfem_operator_context.cpp
@@ -311,6 +312,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
             gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
+            gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
@@ -1528,6 +1530,24 @@ target_include_directories(fem_demag_fem_bem_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_demag_fem_bem_contract COMMAND fem_demag_fem_bem_contract)
+
+add_executable(fem_demag_fem_bem_gpu_contract tests/demag_fem_bem_gpu_contract.cpp)
+target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_demag_fem_bem_gpu_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
+target_include_directories(fem_demag_fem_bem_gpu_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_demag_fem_bem_gpu_contract COMMAND fem_demag_fem_bem_gpu_contract)
 
 add_executable(fem_demag_contract tests/demag_contract.cpp)
 target_link_libraries(fem_demag_contract PRIVATE fullmag_fem)
