@@ -15,8 +15,8 @@ const projection: AnalysisResultProjectionResource = {
   run_id: "run:1",
   schema_version: "fullmag.analysis.result_dataset_index.v1",
   selection_index: [
-    { branch_id: "branch:0", item_id: "item:0", ordinal: 10, sample_id: "sample:0" },
-    { branch_id: "branch:0", item_id: "item:1", ordinal: 11, sample_id: "sample:1" },
+    { branch_id: "branch:0", item_id: "item:0", item_kind: "eigen_mode", ordinal: 10, sample_id: "sample:0" },
+    { branch_id: "branch:0", item_id: "item:1", item_kind: "eigen_mode", ordinal: 11, sample_id: "sample:1" },
   ],
   series: [
     {
@@ -47,6 +47,7 @@ describe("analysis result projection chart model", () => {
       { label: "item:1", rowIndex: 11, x: 0.02, y: Number.NaN },
     ]);
     expect(model.selectionBySeriesId["field-frequency-map:branch:0"]?.map((entry) => entry.ordinal)).toEqual([10, 11]);
+    expect(model.selectionBySeriesId["field-frequency-map:branch:0"]?.map((entry) => entry.item_kind)).toEqual(["eigen_mode", "eigen_mode"]);
     expect(model.series[0]?.xUnit).toBe("T");
     expect(model.series[0]?.unit).toBe("Hz");
   });

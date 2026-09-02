@@ -4316,6 +4316,7 @@ export interface components {
         AnalysisResultProjectionSelectionEntry: {
             branch_id?: string | null;
             item_id?: string | null;
+            item_kind?: null | components["schemas"]["AnalysisResultItemKind"];
             /** Format: int64 */
             ordinal: number;
             sample_id?: string | null;

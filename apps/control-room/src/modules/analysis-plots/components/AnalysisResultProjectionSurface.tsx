@@ -133,7 +133,7 @@ export function AnalysisResultProjectionSurface({
               onPointSelect({
                 branchId: entry.branch_id ?? null,
                 itemId: entry.item_id ?? null,
-                itemKind: selectedSelection?.itemKind ?? null,
+                itemKind: entry.item_kind ?? null,
                 ordinal: entry.ordinal,
                 sampleId: entry.sample_id ?? null,
               });

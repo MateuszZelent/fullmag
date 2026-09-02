@@ -1541,6 +1541,16 @@
               "null"
             ]
           },
+          "item_kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnalysisResultItemKind"
+              }
+            ]
+          },
           "ordinal": {
             "format": "int64",
             "minimum": 0,

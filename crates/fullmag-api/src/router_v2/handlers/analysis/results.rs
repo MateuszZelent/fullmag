@@ -394,6 +394,7 @@ pub struct AnalysisResultProjectionSelectionEntry {
     pub ordinal: u64,
     pub sample_id: Option<String>,
     pub item_id: Option<String>,
+    pub item_kind: Option<AnalysisResultItemKind>,
     pub branch_id: Option<String>,
 }
 
@@ -1819,6 +1820,7 @@ fn build_gamma_projection(
                 "response_psd",
                 &payload.frequency_unit,
                 &psd_unit,
+                None,
                 response_points,
                 "response spectrum has no finite frequency_hz/response_psd pairs",
                 status,
@@ -1837,6 +1839,7 @@ fn build_gamma_projection(
                 "response_psd",
                 &payload.frequency_unit,
                 &psd_unit,
+                Some(AnalysisResultItemKind::SpectralFeature),
                 feature_points,
                 "spectral features contain no finite published peaks",
                 status,
@@ -1855,6 +1858,7 @@ fn build_gamma_projection(
                 "susceptibility_abs",
                 &payload.frequency_unit,
                 &payload.susceptibility_unit,
+                None,
                 susceptibility_points,
                 "susceptibility has no finite published values",
                 status,
@@ -1900,6 +1904,7 @@ fn gamma_projection_resource(
     y_mapping: &str,
     x_unit: &str,
     y_unit: &str,
+    item_kind: Option<AnalysisResultItemKind>,
     points: Vec<AnalysisResultProjectionPoint>,
     empty_reason: &str,
     status: &AnalysisResultStatusFacets,
@@ -1910,6 +1915,7 @@ fn gamma_projection_resource(
             ordinal: point.ordinal,
             sample_id: point.sample_id.clone(),
             item_id: point.item_id.clone(),
+            item_kind: item_kind.clone().filter(|_| point.item_id.is_some()),
             branch_id: None,
         })
         .collect::<Vec<_>>();
@@ -2184,6 +2190,7 @@ fn build_dsf_projection(
             ordinal: point.ordinal,
             sample_id: point.sample_id.clone(),
             item_id: point.item_id.clone(),
+            item_kind: point.item_id.as_ref().map(|_| AnalysisResultItemKind::DsfPoint),
             branch_id: None,
         })
         .collect::<Vec<_>>();
@@ -2447,7 +2454,11 @@ fn build_modal_projections(
         by_branch.entry(branch.clone()).or_default().push(AnalysisResultProjectionPoint { ordinal: ordinal as u64, x, y, value: Some(frequency), sample_id: Some(item.sample_id.clone()), item_id: Some(item.item_id.clone()), branch_id: item.branch_id.clone(), status: item.status.completeness.clone() });
     }
     let series = by_branch.into_iter().map(|(series_id, points)| AnalysisResultProjectionSeries { label: series_id.clone(), series_id, points }).collect::<Vec<_>>();
-    let selection_index = series.iter().flat_map(|series| series.points.iter().map(|point| AnalysisResultProjectionSelectionEntry { ordinal: point.ordinal, sample_id: point.sample_id.clone(), item_id: point.item_id.clone(), branch_id: point.branch_id.clone() })).collect::<Vec<_>>();
+    let item_kinds_by_id = items
+        .iter()
+        .map(|item| (item.item_id.as_str(), item.item_kind.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let selection_index = series.iter().flat_map(|series| series.points.iter().map(|point| AnalysisResultProjectionSelectionEntry { ordinal: point.ordinal, sample_id: point.sample_id.clone(), item_id: point.item_id.clone(), item_kind: point.item_id.as_deref().and_then(|item_id| item_kinds_by_id.get(item_id).cloned()), branch_id: point.branch_id.clone() })).collect::<Vec<_>>();
     let projection_id = if spectrum_projection { "spectrum" } else if axis.axis_id == "drive-frequency" { "response-sweep" } else { "field-frequency-map" };
     let projection_revision = digest_json(&selection_index);
     let unsupported_reason = selection_index
@@ -2502,6 +2513,7 @@ fn build_response_projection(
             ordinal: ordinal as u64,
             sample_id: Some(item.sample_id.clone()),
             item_id: Some(item.item_id.clone()),
+            item_kind: Some(item.item_kind.clone()),
             branch_id: item.branch_id.clone(),
         })
         .collect::<Vec<_>>();
@@ -3327,6 +3339,10 @@ mod tests {
         assert_eq!(projection.axis_mapping.get("x").map(String::as_str), Some("frequency_hz"));
         assert_eq!(projection.axis_units.get("y").map(String::as_str), Some("index"));
         assert_eq!(projection.selection_index.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&projection.selection_index[0]).expect("selection entry JSON")["item_kind"],
+            serde_json::Value::String("eigen_mode".to_string()),
+        );
         assert_eq!(projection.series[0].points[0].x, Some(2.5e9));
     }
 
@@ -3353,16 +3369,28 @@ mod tests {
         assert_eq!(response.axis_units["x"], "Hz");
         assert_eq!(response.axis_units["y"], "1²");
         assert_eq!(response.selection_index[0].item_id, None);
+        assert_eq!(
+            serde_json::to_value(&response.selection_index[0]).expect("selection entry JSON")["item_kind"],
+            serde_json::Value::Null,
+        );
         assert_eq!(response.series[0].points.len(), 3);
 
         let features = &index.projections["spectral-features"];
         assert_eq!(features.axis_units["y"], "1²");
         assert_eq!(features.selection_index[0].item_id.as_deref(), Some("legacy:gamma:peak:2"));
+        assert_eq!(
+            serde_json::to_value(&features.selection_index[0]).expect("selection entry JSON")["item_kind"],
+            serde_json::Value::String("spectral_feature".to_string()),
+        );
         assert!(index.items.iter().any(|item| item.item_id == "legacy:gamma:peak:2"));
 
         let susceptibility = &index.projections["susceptibility"];
         assert_eq!(susceptibility.axis_units["y"], "m/A");
         assert_eq!(susceptibility.selection_index[0].item_id, None);
+        assert_eq!(
+            serde_json::to_value(&susceptibility.selection_index[0]).expect("selection entry JSON")["item_kind"],
+            serde_json::Value::Null,
+        );
     }
 
     #[test]
@@ -3479,6 +3507,11 @@ mod tests {
         assert_eq!(index.items[1].status.completeness, "unsupported");
         assert_eq!(index.items[1].status.reason_code.as_deref(), Some("invalid_spatial_probe"));
         assert_eq!(index.projections["dsf-map"].selection_index.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&index.projections["dsf-map"].selection_index[0])
+                .expect("selection entry JSON")["item_kind"],
+            serde_json::Value::String("dsf_point".to_string()),
+        );
         assert_eq!(index.manifest.provenance["sampling_clock"], "N=3; dt=1.000000e-12 s");
         assert_eq!(index.manifest.provenance["uniformity_proof"], "certified by bounded legacy adapter");
         assert_eq!(index.manifest.provenance["source_drive"], "H_drive_y [A/m]");
