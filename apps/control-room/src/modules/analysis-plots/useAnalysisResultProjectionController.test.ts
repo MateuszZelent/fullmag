@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { createAnalysisResultFieldOverlayIntent } from "@/kernel/visualization/AnalysisResultFieldOverlayIntent";
 import {
+  analysisResultSelectionFromProjectionPoint,
   analysisResultProjectionMatchesSelection,
   analysisResultSelectionOwnsOverlay,
 } from "./useAnalysisResultProjectionController";
@@ -11,6 +12,7 @@ import {
   type AnalysisResultDatasetManifestResource,
   type AnalysisResultProjectionResource,
 } from "@/shared/domain/analysis/results";
+import type { AnalysisResultProjectionSelection } from "./components/AnalysisResultProjectionSurface";
 
 const projectionIdentity = {
   dataset_id: "result:dataset-1",
@@ -139,5 +141,33 @@ describe("analysis result projection identity gate", () => {
         null,
       ),
     ).toBe(false);
+  });
+});
+
+describe("analysis result projection point selection", () => {
+  it("does not inherit the previous item kind when a new point has no typed kind", () => {
+    const selection = resultSelection();
+    const point: AnalysisResultProjectionSelection = {
+      branchId: "branch-dsf",
+      itemId: "dsf-point-1",
+      itemKind: null,
+      ordinal: 4,
+      sampleId: "sample-dsf",
+    };
+
+    expect(
+      analysisResultSelectionFromProjectionPoint(
+        selection,
+        {
+          projection_id: "dsf-map",
+          projection_revision: "projection-dsf-1",
+        },
+        point,
+      ),
+    ).toMatchObject({
+      itemId: "dsf-point-1",
+      itemKind: undefined,
+      sampleId: "sample-dsf",
+    });
   });
 });

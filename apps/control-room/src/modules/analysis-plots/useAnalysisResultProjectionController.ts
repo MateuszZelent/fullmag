@@ -81,37 +81,11 @@ export function useAnalysisResultProjectionController(
   const onResultProjectionPointSelect = useCallback(
     (entry: AnalysisResultProjectionSelection) => {
       if (!selectedResultSelection || !renderableResultProjection) return;
-      const preservesFieldIdentity =
-        entry.itemId === selectedResultSelection.itemId &&
-        entry.sampleId === selectedResultSelection.sampleId;
-      const selection = analysisResultSelectionRef({
-        branchId: entry.branchId ?? undefined,
-        datasetId: selectedResultSelection.datasetId,
-        datasetRevision: selectedResultSelection.datasetRevision,
-        ...(preservesFieldIdentity
-          ? {
-              displayIndex: selectedResultSelection.displayIndex,
-              fieldId: selectedResultSelection.fieldId,
-              fieldRef: selectedResultSelection.fieldRef,
-              fieldRevision: selectedResultSelection.fieldRevision,
-              sampleIndex: selectedResultSelection.sampleIndex,
-            }
-          : {}),
-        focus: entry.itemId ? "item" : "sample",
-        itemId: entry.itemId ?? undefined,
-        itemKind: entry.itemId
-          ? entry.itemKind ?? selectedResultSelection.itemKind
-          : undefined,
-        ...(selectedResultSelection.axisFilters
-          ? { axisFilters: selectedResultSelection.axisFilters }
-          : {}),
-        projectionId: renderableResultProjection.projection_id,
-        projectionOrdinal: entry.ordinal,
-        projectionRevision: renderableResultProjection.projection_revision,
-        runId: selectedResultSelection.runId,
-        sampleId: entry.sampleId ?? undefined,
-        stageId: selectedResultSelection.stageId,
-      });
+      const selection = analysisResultSelectionFromProjectionPoint(
+        selectedResultSelection,
+        renderableResultProjection,
+        entry,
+      );
       kernel.selection.set(
         {
           kind: selection.kind,
@@ -159,6 +133,47 @@ export function useAnalysisResultProjectionController(
     selectedProjectionId: resultProjectionId,
     status: resultProjection.status,
   };
+}
+
+export function analysisResultSelectionFromProjectionPoint(
+  selectedResultSelection: AnalysisResultSelectionRef,
+  projection: Pick<
+    AnalysisResultProjectionResource,
+    "projection_id" | "projection_revision"
+  >,
+  entry: AnalysisResultProjectionSelection,
+): AnalysisResultSelectionRef {
+  const preservesFieldIdentity =
+    entry.itemId === selectedResultSelection.itemId &&
+    entry.sampleId === selectedResultSelection.sampleId;
+  return analysisResultSelectionRef({
+    branchId: entry.branchId ?? undefined,
+    datasetId: selectedResultSelection.datasetId,
+    datasetRevision: selectedResultSelection.datasetRevision,
+    ...(preservesFieldIdentity
+      ? {
+          displayIndex: selectedResultSelection.displayIndex,
+          fieldId: selectedResultSelection.fieldId,
+          fieldRef: selectedResultSelection.fieldRef,
+          fieldRevision: selectedResultSelection.fieldRevision,
+          sampleIndex: selectedResultSelection.sampleIndex,
+        }
+      : {}),
+    focus: entry.itemId ? "item" : "sample",
+    itemId: entry.itemId ?? undefined,
+    itemKind: entry.itemId
+      ? entry.itemKind ?? (preservesFieldIdentity ? selectedResultSelection.itemKind : undefined)
+      : undefined,
+    ...(selectedResultSelection.axisFilters
+      ? { axisFilters: selectedResultSelection.axisFilters }
+      : {}),
+    projectionId: projection.projection_id,
+    projectionOrdinal: entry.ordinal,
+    projectionRevision: projection.projection_revision,
+    runId: selectedResultSelection.runId,
+    sampleId: entry.sampleId ?? undefined,
+    stageId: selectedResultSelection.stageId,
+  });
 }
 
 export function analysisResultProjectionMatchesSelection(
