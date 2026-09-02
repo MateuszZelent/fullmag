@@ -74,6 +74,7 @@ import {
 import {
   DispersionDrivenProvenanceResultInspector,
   DispersionModalProvenanceResultInspector,
+  LegacyTimeDomainResultInspector,
   ResonanceDrivenProvenanceResultInspector,
   ResonanceModalProvenanceResultInspector,
 } from "./panels/physics-first/PhysicsFirstResultInspectors";
@@ -408,6 +409,17 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "analysis.result" })?.id).toBe(
       "analysis-result",
     );
+  });
+
+  it("routes bounded legacy time-domain selections to their dedicated inspector", () => {
+    for (const kind of [
+      "results.time_domain.spectral_feature",
+      "results.time_domain.dsf_point",
+    ]) {
+      const panel = resolveInspectorPanel({ kind });
+      expect(panel?.id).toBe(`frequency-domain-${kind.replace(/[.:]/g, "-")}`);
+      expect(panel?.component).toBe(LegacyTimeDomainResultInspector);
+    }
   });
 
   it("routes the Results root to a Results overview rather than Field Quantity", () => {
