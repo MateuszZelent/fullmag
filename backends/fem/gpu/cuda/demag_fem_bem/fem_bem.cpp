@@ -1,7 +1,7 @@
 /*
  * Strict GPU Fredkin-Koehler FEM/BEM runtime.
  *
- * Setup owns one immutable hierarchical BEM upload and two persistent device
+ * Setup owns one immutable ACA H-matrix BEM upload and two persistent device
  * Hypre scalar systems. Stage compute owns only device kernels and device
  * vectors; it never downloads magnetization or potential values to execute
  * the CPU FEM/BEM implementation.
@@ -21,6 +21,7 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/hypre_device_policy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 #include "frequency_domain/canonical_digest.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -378,6 +379,7 @@ bool solve_linear_system(
         error = "strict FEM GPU Fredkin-Koehler solve requires a completed Hypre setup";
         return false;
     }
+    record_mfem_host_sync();
     if (!cuda_ok(
             cudaStreamSynchronize(stream),
             "synchronize Fredkin-Koehler RHS before Hypre",
@@ -417,6 +419,7 @@ bool solve_linear_system(
     if (!validate_demag_linear_solve_result(result, error)) {
         return false;
     }
+    record_mfem_host_sync();
     if (!cuda_ok(
             cudaStreamSynchronize(stream),
             "synchronize Fredkin-Koehler potential after Hypre",
@@ -478,7 +481,8 @@ bool build_source_operators(
             poisson.ess_tdof_list = std::move(ess_tdof_list);
         }
     } guard(ctx, cpu_workspace);
-    return build_mixed_demag_operators(ctx, gpu_workspace.source_operators, error);
+    return build_fredkin_koehler_demag_operators(
+        ctx, gpu_workspace.source_operators, error);
 }
 #endif
 
@@ -572,8 +576,17 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
             workspace->boundary_global_to_row[static_cast<size_t>(tdof)] =
                 static_cast<int32_t>(row);
         }
-        HierarchicalDemagBemDeviceData device_data;
-        if (!cpu_workspace->boundary_operator.export_device_data(device_data, error)) {
+        AcaHMatrixDemagBemOperator device_boundary_operator;
+        const AcaHMatrixDemagBemOptions device_boundary_options{};
+        if (!device_boundary_operator.build(
+                ctx,
+                cpu_workspace->surface,
+                device_boundary_options,
+                error)) {
+            return false;
+        }
+        AcaHMatrixDemagBemDeviceData device_data;
+        if (!device_boundary_operator.export_device_data(device_data, error)) {
             return false;
         }
         workspace->boundary_permutation = std::move(device_data.boundary_permutation);
@@ -584,12 +597,12 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
         workspace->far_u = std::move(device_data.far_u);
         workspace->far_v = std::move(device_data.far_v);
         workspace->near_entry_count = workspace->near_values.size();
-        workspace->far_row_count = cpu_workspace->boundary_operator.far_row_count();
-        workspace->near_block_count = cpu_workspace->boundary_operator.near_block_count();
-        workspace->far_block_count = cpu_workspace->boundary_operator.far_block_count();
-        workspace->max_rank = cpu_workspace->boundary_operator.max_rank_observed();
+        workspace->far_row_count = device_boundary_operator.far_row_count();
+        workspace->near_block_count = device_boundary_operator.near_block_count();
+        workspace->far_block_count = device_boundary_operator.far_block_count();
+        workspace->max_rank = device_boundary_operator.max_rank_observed();
         workspace->relative_error_estimate =
-            cpu_workspace->boundary_operator.relative_error_estimate();
+            device_boundary_operator.relative_error_estimate();
 
         if (!build_source_operators(ctx, *cpu_workspace, *workspace, error) ||
             !copy_sparse_matrix_to_device_scalar(
@@ -624,6 +637,12 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
                 workspace->boundary_global_to_row,
                 device_bytes,
                 "cudaMalloc/upload Fredkin-Koehler boundary DOF map",
+                error) ||
+            !upload_array(
+                workspace->d_boundary_tdofs,
+                workspace->boundary_tdofs,
+                device_bytes,
+                "cudaMalloc/upload Fredkin-Koehler boundary true DOFs",
                 error) ||
             !upload_array(
                 workspace->d_boundary_permutation,
@@ -697,7 +716,7 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
             "fullmag.fem.bem.gpu_operator.v1");
         digest.add_string(
             "boundary_operator_fingerprint",
-            cpu_workspace->boundary_operator.fingerprint());
+            device_boundary_operator.fingerprint());
         digest.add_string(
             "source_operator_fingerprint",
             workspace->source_operators.operator_fingerprint);
@@ -781,7 +800,9 @@ uint64_t gpu_demag_fem_bem_device_bytes(const Context &ctx)
 
 const char *gpu_demag_fem_bem_operator_mode(const Context &ctx)
 {
-    return gpu_demag_fem_bem_ready(ctx) ? "device_hypre_fem_bem" : "unsupported";
+    return gpu_demag_fem_bem_ready(ctx)
+        ? "device_hypre_fem_bem_aca_hmatrix"
+        : "unsupported";
 }
 
 bool compute_device_demag_fem_bem_for_device_stage(

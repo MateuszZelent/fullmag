@@ -7,29 +7,29 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-FEM_BEM_BASELINE_SHA256 = {
+FEM_BEM_TASK1_SHA256 = {
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp":
         "8fc1ca7ed78e59928fe322cf971cf8ea3c43b2b25f85b4575df1e0957ca20969",
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu":
-        "94ff6a12d90fbdb6fe7c0e6e37472760d47535a06a888a263108c87259f23550",
+        "034fb0b7b498fa2615b214e66d1a975f76447ff01819b9a1949b836c23fa7d24",
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp":
-        "d9df53f8cb4fb2b7c20f1933dbe603944f2bc7a17db5dbe1b0b0e91892422aa7",
+        "6ff5d292ddb5d83d61d51830022448d7982d2af93a7969c49373d4cdb3a0ef45",
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp":
-        "8980051c8a333b9d2abd6f2e5b1e79da27280cd8040dd4759f7c2ed96209fbf2",
+        "1962d18463c81bf63d0b71cc8f3ff31b29fc0aa8c51db05c36683e298c3da669",
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.hpp":
-        "b3220bd0db8d44512bb8fab0cb63110575bd64d9ad1f71ff49e415ac8a52b87d",
+        "f2c8e2d6983e010f6874f817daa29463a2a6e567bf554d2d74173286400cb92a",
     "backends/fem/tests/demag_fem_bem_gpu_contract.cpp":
-        "fe4a06a0a49ec528e7940e2f09b4db0c40843299e9419574bfef9b3f23d4d9bb",
+        "6e8b9b587fda704aa16fa09cecd822af2d9617eaa0b2732917e76c3ecbe90535",
     "docs/audits/2026-09-02-fem-gpu-solver-audit.md":
         "64a3ac03aa5e04485d83e0b7348b74be25f396617cc066ef91cb76469628b85b",
     "docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md":
-        "6c978a7805d806df80f0801b9c3c685e2a56ff3541987158b21e2f4d86b5d674",
+        "c9685af8ff4a9d2c41fbc78f3a3614d9e743a5ef9f868839c300a965d63c0fc6",
 }
 
 
 class FemGpuFullPotentialContractTests(unittest.TestCase):
     def test_fem_bem_baseline_is_tracked_and_wired(self) -> None:
-        for relative_path, expected_sha256 in FEM_BEM_BASELINE_SHA256.items():
+        for relative_path, expected_sha256 in FEM_BEM_TASK1_SHA256.items():
             path = ROOT / relative_path
             self.assertTrue(path.is_file(), relative_path)
             self.assertEqual(
@@ -52,6 +52,47 @@ class FemGpuFullPotentialContractTests(unittest.TestCase):
         )
         self.assertIn(enum_entry, native_header)
         self.assertIn(enum_entry, rust_ffi)
+
+        operator_header = (
+            ROOT
+            / "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp"
+        ).read_text(encoding="utf-8")
+        workspace_header = (
+            ROOT
+            / "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp"
+        ).read_text(encoding="utf-8")
+        gpu_source = (
+            ROOT / "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp"
+        ).read_text(encoding="utf-8")
+        poisson_operators = (
+            ROOT / "backends/fem/gpu/cuda/demag_poisson/operators.cpp"
+        ).read_text(encoding="utf-8")
+        transfer_audit = (
+            ROOT / "backends/fem/gpu/cuda/transfer/transfer_audit.cpp"
+        ).read_text(encoding="utf-8")
+        operator_source = (
+            ROOT
+            / "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("class AcaHMatrixDemagBemOperator", operator_header)
+        self.assertIn('return "hierarchical_aca_hmatrix"', operator_header)
+        self.assertIn("DenseDemagBemOperator boundary_operator", workspace_header)
+        self.assertIn("build_fredkin_koehler_demag_operators", gpu_source)
+        self.assertIn("workspace->d_boundary_tdofs", gpu_source)
+        self.assertIn("record_mfem_host_sync", gpu_source)
+        self.assertIn("allow_fredkin_koehler", poisson_operators)
+        self.assertIn("hot_loop_compute_host_sync_count += 1", transfer_audit)
+        for fingerprint_field in (
+            '"boundary_node_x"',
+            '"cell_type"',
+            '"cell_node"',
+            '"surface_triangle_node_0"',
+            '"max_memory_bytes"',
+            '"near_value"',
+            '"far_u_value"',
+            '"far_v_value"',
+        ):
+            self.assertIn(fingerprint_field, operator_source)
 
 
 if __name__ == "__main__":

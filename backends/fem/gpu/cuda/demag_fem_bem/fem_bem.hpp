@@ -77,7 +77,7 @@ struct GpuDemagFemBemWorkspace {
     std::vector<uint32_t> near_row_offsets;
     std::vector<uint32_t> near_column_indices;
     std::vector<double> near_values;
-    std::vector<HierarchicalDemagBemFarBlock> far_blocks;
+    std::vector<AcaHMatrixDemagBemFarBlock> far_blocks;
     std::vector<double> far_u;
     std::vector<double> far_v;
 
@@ -90,7 +90,7 @@ struct GpuDemagFemBemWorkspace {
     uint32_t *d_near_row_offsets = nullptr;
     uint32_t *d_near_column_indices = nullptr;
     double *d_near_values = nullptr;
-    HierarchicalDemagBemFarBlock *d_far_blocks = nullptr;
+    AcaHMatrixDemagBemFarBlock *d_far_blocks = nullptr;
     double *d_far_u = nullptr;
     double *d_far_v = nullptr;
 #endif

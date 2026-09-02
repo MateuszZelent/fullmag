@@ -64,6 +64,7 @@ void record_device_control_scalar_to_host(TransferAudit &audit, uint64_t bytes);
 void record_mfem_host_read(uint64_t bytes);
 void record_mfem_host_write(uint64_t bytes);
 void record_mfem_host_read_write(uint64_t bytes);
+void record_mfem_host_sync();
 
 /*
  * Return the current transfer-audit public counters.

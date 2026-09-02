@@ -116,6 +116,11 @@ bool build_mixed_demag_operators(
     GpuDemagPoissonWorkspace &workspace,
     std::string &error);
 
+bool build_fredkin_koehler_demag_operators(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error);
+
 // Compatibility entrypoint used by existing GPU lifecycle callers.
 bool build_p1_demag_operators(
     Context &ctx,

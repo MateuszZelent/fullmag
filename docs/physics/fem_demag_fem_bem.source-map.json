@@ -12,7 +12,7 @@
       "solver": "FEM",
       "device": "GPU",
       "status": "source/contract VERIFIED",
-      "reason": "Managed runtime i fizyka pozostają NOT VERIFIED."
+      "reason": "Kernel smoke i initialize-to-apply contract są VERIFIED; managed strict receipt i fizyka pozostają NOT VERIFIED."
     },
     {
       "solver": "FDM",
@@ -139,8 +139,8 @@
     {
       "id": "operator",
       "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp",
-      "symbol": "class HierarchicalDemagBemOperator",
-      "responsibility": "Hierarchiczny H2 BEM, eksport danych device i apply; dense operator pozostaje oracle'em."
+      "symbol": "class AcaHMatrixDemagBemOperator",
+      "responsibility": "Diagnostyczny ACA H-matrix BEM, eksport danych device i apply; dense operator pozostaje domyślną realizacją CPU."
     },
     {
       "id": "gpu-operator",

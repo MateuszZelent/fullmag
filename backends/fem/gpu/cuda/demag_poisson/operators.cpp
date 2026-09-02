@@ -663,9 +663,10 @@ bool build_mixed_demag_operator_fingerprint(
 } // namespace
 
 #if FULLMAG_HAS_MFEM_STACK
-bool build_mixed_demag_operators(
+static bool build_demag_operators_impl(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
+    bool allow_fredkin_koehler,
     std::string &error)
 {
     auto *potential_fes =
@@ -699,7 +700,8 @@ bool build_mixed_demag_operators(
         error = "strict FEM GPU demag requires unconstrained serial potential true DOFs";
         return false;
     }
-    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER &&
+        !allow_fredkin_koehler) {
         error = "strict FEM GPU demag does not support Fredkin-Koehler FEM/BEM demag";
         return false;
     }
@@ -1155,17 +1157,39 @@ bool build_mixed_demag_operators(
     return true;
 }
 #else
+static bool build_demag_operators_impl(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    bool allow_fredkin_koehler,
+    std::string &error)
+{
+    (void)ctx;
+    (void)workspace;
+    (void)allow_fredkin_koehler;
+    error = "strict FEM GPU demag requires MFEM stack support";
+    return false;
+}
+#endif
+
 bool build_mixed_demag_operators(
     Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     std::string &error)
 {
-    (void)ctx;
-    (void)workspace;
-    error = "strict FEM GPU demag requires MFEM stack support";
-    return false;
+    return build_demag_operators_impl(ctx, workspace, false, error);
 }
-#endif
+
+bool build_fredkin_koehler_demag_operators(
+    Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    std::string &error)
+{
+    if (ctx.demag.realization != FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
+        error = "Fredkin-Koehler GPU operator builder requires the Fredkin-Koehler realization";
+        return false;
+    }
+    return build_demag_operators_impl(ctx, workspace, true, error);
+}
 
 bool build_p1_demag_operators(Context &ctx, GpuDemagPoissonWorkspace &workspace, std::string &error)
 {

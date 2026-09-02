@@ -38,7 +38,7 @@ __global__ void fem_bem_apply_kernel(
 }
 
 __global__ void fem_bem_far_apply_kernel(
-    const HierarchicalDemagBemFarBlock *__restrict__ far_blocks,
+    const AcaHMatrixDemagBemFarBlock *__restrict__ far_blocks,
     const double *__restrict__ far_u,
     const double *__restrict__ far_v,
     const uint32_t *__restrict__ boundary_permutation,
@@ -51,7 +51,7 @@ __global__ void fem_bem_far_apply_kernel(
     if (block_index >= far_block_count) {
         return;
     }
-    const HierarchicalDemagBemFarBlock block = far_blocks[block_index];
+    const AcaHMatrixDemagBemFarBlock block = far_blocks[block_index];
     extern __shared__ double projected[];
     for (uint32_t factor = threadIdx.x;
          factor < block.rank;
@@ -133,7 +133,7 @@ void fullmag_cuda_fem_bem_apply(
     const uint32_t *near_row_offsets,
     const uint32_t *near_column_indices,
     const double *near_values,
-    const HierarchicalDemagBemFarBlock *far_blocks,
+    const AcaHMatrixDemagBemFarBlock *far_blocks,
     const double *far_u,
     const double *far_v,
     const uint32_t *boundary_permutation,

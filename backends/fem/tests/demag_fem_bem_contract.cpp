@@ -200,6 +200,84 @@ void fem_bem_workspace_pins_one_gauge_per_disconnected_component() {
         "disconnected magnetic components must receive distinct gauge DOFs");
     fullmag::fem::context_destroy_demag_fem_bem(ctx);
 }
+
+void fem_bem_full_cpu_solve_accepts_an_empty_boundary_output() {
+    mfem::Mesh mesh(3, 4, 1, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    int tet[] = {0, 1, 2, 3};
+    mesh.AddTet(tet, 1);
+    mesh.FinalizeTetMesh(1, 0, true);
+
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    fullmag::fem::Context ctx;
+    ctx.base_plan.fe_order = 1u;
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mfem_context.fes = &fes;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.GetNV());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
+    for (int node = 0; node < mesh.GetNV(); ++node) {
+        const double *vertex = mesh.GetVertex(node);
+        ctx.mesh.nodes_xyz.insert(ctx.mesh.nodes_xyz.end(), vertex, vertex + 3);
+    }
+    ctx.mesh.cell_nodes = {0u, 1u, 2u, 3u};
+    ctx.mesh.cell_types = {FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0u, 4u};
+    ctx.mesh.cell_global_ordinals = {0u};
+    ctx.mesh.cell_markers = {1u};
+    ctx.mesh.magnetic_element_mask = {1u};
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u};
+    ctx.mesh.node_volumes.assign(4u, 1.0 / 24.0);
+    ctx.integration_weights.mfem_lumped_mass = ctx.mesh.node_volumes;
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+    ctx.demag.enabled = true;
+    ctx.demag.realization = FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER;
+    ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+    ctx.demag.solver.relative_tolerance = 1.0e-12;
+    ctx.demag.solver.max_iterations = 500;
+    ctx.cpu_threads.effective_omp_threads = 1;
+
+    std::string error;
+    if (!fullmag::fem::context_initialize_demag_fem_bem(ctx, error)) {
+        std::fprintf(stderr, "FAIL: full FEM/BEM CPU initialization: %s\n", error.c_str());
+        std::exit(1);
+    }
+    auto *workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
+    check(workspace != nullptr &&
+              std::string(workspace->boundary_operator.mode()) == "dense_reference",
+          "CPU Fredkin-Koehler default must remain the qualified dense reference operator");
+    std::vector<double> magnetization(12u, 0.0);
+    for (size_t node = 0; node < 4u; ++node) {
+        magnetization[3u * node] = 1.0;
+    }
+    std::vector<double> field;
+    double energy = 0.0;
+    if (!fullmag::fem::context_compute_demag_fem_bem(
+            ctx,
+            magnetization,
+            field,
+            energy,
+            false,
+            nullptr,
+            error)) {
+        std::fprintf(stderr, "FAIL: full FEM/BEM CPU solve: %s\n", error.c_str());
+        std::exit(1);
+    }
+    check(field.size() == magnetization.size(),
+          "full FEM/BEM CPU solve must publish one field vector per node");
+    check(std::isfinite(energy),
+          "full FEM/BEM CPU solve must publish finite energy");
+    fullmag::fem::context_destroy_demag_fem_bem(ctx);
+}
 #endif
 
 std::string read_text_file(const std::filesystem::path &path) {
@@ -571,6 +649,47 @@ void dense_bem_rejects_boundary_limit_before_allocation() {
         "dense BEM must reject a boundary larger than its configured limit");
     check(error.find("max_boundary_nodes") != std::string::npos,
           "dense BEM limit error names the configured limit");
+}
+
+void aca_hmatrix_fingerprint_covers_geometry_and_options() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(fullmag::fem::build_demag_boundary_surface(ctx, surface, error), error.c_str());
+
+    fullmag::fem::AcaHMatrixDemagBemOptions options;
+    options.leaf_size = 1u;
+    fullmag::fem::AcaHMatrixDemagBemOperator op;
+    check(op.build(ctx, surface, options, error), error.c_str());
+    check(std::string(op.mode()) == "hierarchical_aca_hmatrix",
+          "ACA H-matrix diagnostic mode must not claim H2");
+    std::vector<double> input(op.size(), 1.0);
+    std::vector<double> output;
+    check(op.apply(input, output, error), error.c_str());
+    check(output.size() == input.size(),
+          "ACA H-matrix apply must safely size an empty output vector");
+
+    fullmag::fem::Context changed_geometry;
+    unit_tet_context(changed_geometry);
+    changed_geometry.mesh.nodes_xyz[9] += 0.125;
+    fullmag::fem::DemagBoundarySurface changed_surface;
+    check(fullmag::fem::build_demag_boundary_surface(
+              changed_geometry, changed_surface, error),
+          error.c_str());
+    fullmag::fem::AcaHMatrixDemagBemOperator changed_geometry_op;
+    check(changed_geometry_op.build(
+              changed_geometry, changed_surface, options, error),
+          error.c_str());
+    check(op.fingerprint() != changed_geometry_op.fingerprint(),
+          "ACA H-matrix fingerprint must change after a geometry perturbation");
+
+    auto changed_options = options;
+    changed_options.max_memory_bytes -= 1u;
+    fullmag::fem::AcaHMatrixDemagBemOperator changed_options_op;
+    check(changed_options_op.build(ctx, surface, changed_options, error), error.c_str());
+    check(op.fingerprint() != changed_options_op.fingerprint(),
+          "ACA H-matrix fingerprint must cover all build options");
 }
 
 void fem_bem_energy_matches_demag_energy_contract() {
@@ -1063,6 +1182,7 @@ int main() {
     fem_bem_neumann_rhs_zeros_every_gauge_dof();
     fem_bem_neumann_rhs_rejects_invalid_gauge_lists();
     fem_bem_workspace_pins_one_gauge_per_disconnected_component();
+    fem_bem_full_cpu_solve_accepts_an_empty_boundary_output();
 #endif
     boundary_surface_extracts_closed_body_only_tet();
     boundary_surface_rejects_incomplete_explicit_facets();
@@ -1077,6 +1197,7 @@ int main() {
     boundary_surface_is_scale_invariant();
     dense_bem_operator_is_finite_and_has_constant_sanity();
     dense_bem_rejects_boundary_limit_before_allocation();
+    aca_hmatrix_fingerprint_covers_geometry_and_options();
     fem_bem_energy_matches_demag_energy_contract();
     fem_bem_energy_is_owned_by_energy_module();
     fem_bem_aggregate_header_documents_submodule_boundaries();

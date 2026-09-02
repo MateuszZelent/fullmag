@@ -143,6 +143,21 @@ void record_host_read_write(TransferAudit &audit, uint64_t bytes)
     }
 }
 
+void record_host_sync(TransferAudit &audit)
+{
+    if (audit.hot_loop_depth <= 0) {
+        return;
+    }
+    audit.counters.hot_loop_host_sync_count += 1;
+    const bool exchange_interop = audit.exchange_interop_depth > 0;
+    if (exchange_interop) {
+        audit.counters.hot_loop_exchange_host_sync_count += 1;
+    } else {
+        audit.counters.hot_loop_compute_host_sync_count += 1;
+    }
+    mark_violation(audit, "HostSync", exchange_interop);
+}
+
 } // namespace
 
 void TransferAudit::reset_step_violation()
@@ -215,6 +230,13 @@ void record_mfem_host_read_write(uint64_t bytes)
 {
     if (current_audit != nullptr) {
         record_host_read_write(*current_audit, bytes);
+    }
+}
+
+void record_mfem_host_sync()
+{
+    if (current_audit != nullptr) {
+        record_host_sync(*current_audit);
     }
 }
 

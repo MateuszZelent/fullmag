@@ -1,14 +1,16 @@
 # Projekt: skalowalny Fredkin–Köhler FEM/BEM CPU i GPU
 
 **Data:** 2026-09-02  
-**Status:** zaakceptowany do implementacji w bieżącym zadaniu  
+**Status:** projekt docelowy; import źródła i diagnostyczny ACA H-matrix są
+zaimplementowane, lecz A/B, managed receipt i fizyka pozostają NOT VERIFIED
 **Zakres:** istniejący benchmark warstwy `500 x 500 x 10 nm`, body-only FK,
 FEM CPU i strict FEM GPU
 
 ## Cel
 
-Zastąpić produkcyjną zależność od gęstej macierzy BEM rzeczywistym operatorem
-hierarchicznym, zachowując dotychczasową semantykę Fredkina–Koehlera:
+Po kwalifikacji A/B zastąpić produkcyjną zależność od gęstej macierzy BEM
+skalowalnym operatorem; bieżący ACA H-matrix pozostaje diagnostyczny i zachowuje
+dotychczasową semantykę Fredkina–Koehlera:
 
 \[
 u=u_1+u_2,
@@ -57,13 +59,12 @@ właściwościami:
   parametrów kompresji i wersji kernela;
 - jawne `failure_reason`, gdy budowa albo kontrola błędu nie powiedzie się.
 
-`DenseDemagBemOperator` pozostaje implementacją `dense_reference`, dostępną
-wyłącznie dla małych testów i diagnostyki. Nie jest fallbackiem operatora
-hierarchicznego.
+`DenseDemagBemOperator` pozostaje kwalifikowanym domyślnym wariantem CPU.
+Diagnostyczny ACA H-matrix nie zastępuje go bez osobnej bramy A/B i parity.
 
-### Hierarchiczny operator CPU
+### Diagnostyczny operator ACA H-matrix CPU
 
-`HierarchicalDemagBemOperator` buduje dwa deterministyczne drzewa klastrów:
+`AcaHMatrixDemagBemOperator` buduje dwa deterministyczne drzewa klastrów:
 
 1. drzewo węzłów docelowych dla wierszy operatora;
 2. drzewo trójkątów źródłowych dla całek Lindholma.
@@ -99,7 +100,7 @@ Wartości w blokach near muszą być tym samym signed Lindholm kernel’em co w
 dense oracle. Aproksymacja far nie zmienia diagonalnego kąta bryłowego;
 diagonalny wkład jest przechowywany jawnie.
 
-### Hierarchiczny operator GPU
+### Diagnostyczny operator ACA H-matrix GPU
 
 `GpuDemagFemBemWorkspace` jest osobnym właścicielem CUDA. Po setupie na host
 pozostają wyłącznie metadane/provenance, a następujące bufory są device
@@ -127,7 +128,7 @@ CPU jako obejścia.
 
 ## Warstwy integracji
 
-1. `backends/fem/cpu/mfem/interactions/` — neutralny kontrakt, CPU hierarchy,
+1. `backends/fem/cpu/mfem/interactions/` — neutralny kontrakt, dense CPU default i diagnostyczny ACA H-matrix,
    workspace i telemetry.
 2. `backends/fem/gpu/cuda/demag_fem_bem/` — CUDA storage, kernels, upload,
    apply, lifecycle i device energy.
@@ -146,7 +147,7 @@ CPU jako obejścia.
 
 ### CPU operator
 
-- dense i hierarchy dają tę samą wartość dla małej, kompletnej siatki TET4 w
+- dense i ACA H-matrix dają tę samą wartość dla małej, kompletnej siatki TET4 w
   granicy ustalonej w options;
 - testy near/far, zero input, stały input, permutacji numeracji i skalowania
   długości zachowują kontrakt znaków/jednostek;
@@ -159,7 +160,7 @@ CPU jako obejścia.
 ### GPU operator
 
 - upload zachowuje fingerprint, liczbę bloków, rank i byte count;
-- CUDA apply jest zgodny z CPU hierarchy oraz dense oracle dla fixture’u
+- CUDA apply jest zgodny z CPU ACA H-matrix oraz dense oracle dla fixture’u
   testowego;
 - test wymusza awarię operatora/Hypre i potwierdza brak CPU call/fallback;
 - sanitizer/guard sprawdza zakresy bloków, brak write race i synchronizację;

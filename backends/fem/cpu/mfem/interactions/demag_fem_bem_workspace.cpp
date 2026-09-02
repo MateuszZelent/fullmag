@@ -2,7 +2,7 @@
  * FEM/BEM demag workspace source contract.
  *
  * This source owns Fredkin-Koehler workspace lifecycle, FE spaces, stiffness
- * operators, hierarchical boundary operator setup, shared Poisson RHS/recovery setup,
+ * operators, dense boundary operator setup, shared Poisson RHS/recovery setup,
  * and teardown. It does not run per-step solves, transfer boundary values, combine potentials, recover fields, compute energy, or publish telemetry.
  */
 
@@ -242,7 +242,6 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
         if (!workspace->boundary_operator.build(
                 ctx,
                 workspace->surface,
-                workspace->boundary_operator_options,
                 error)) {
             return false;
         }

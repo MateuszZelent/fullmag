@@ -1,6 +1,12 @@
 /* Device-resident CUDA contracts for the Fredkin-Koehler BEM apply. */
 
+#include "context.hpp"
+#include "cpu/mfem/interactions/demag_fem_bem.hpp"
+#include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -8,6 +14,10 @@
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
+#endif
+
+#if FULLMAG_HAS_MFEM_STACK
+#include <mfem.hpp>
 #endif
 
 namespace {
@@ -37,7 +47,7 @@ void device_bem_apply_is_device_resident() {
     const std::vector<uint32_t> near_offsets = {0u, 1u, 2u};
     const std::vector<uint32_t> near_columns = {0u, 1u};
     const std::vector<double> near_values = {2.0, 3.0};
-    const std::vector<fullmag::fem::HierarchicalDemagBemFarBlock> far_blocks = {
+    const std::vector<fullmag::fem::AcaHMatrixDemagBemFarBlock> far_blocks = {
         {0u, 2u, 0u, 2u, 1u, 0u, 0u},
     };
     const std::vector<double> far_u = {1.0, 2.0};
@@ -94,6 +104,166 @@ void device_bem_apply_is_device_resident() {
     cudaFree(d_u1_full);
     cudaFree(d_output);
 }
+
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_claim() {
+    int device_count = 0;
+    check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
+          "managed FEM/BEM GPU contract requires a CUDA device");
+
+    mfem::Mesh mesh(3, 4, 1, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    int tet[] = {0, 1, 2, 3};
+    mesh.AddTet(tet, 1);
+    mesh.FinalizeTetMesh(1, 0, true);
+
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    fullmag::fem::Context ctx;
+    ctx.base_plan.fe_order = 1u;
+    ctx.mfem_context.mesh = &mesh;
+    ctx.mfem_context.fes = &fes;
+    ctx.mesh.n_nodes = static_cast<uint32_t>(mesh.GetNV());
+    ctx.mesh.n_elements = static_cast<uint32_t>(mesh.GetNE());
+    for (int node = 0; node < mesh.GetNV(); ++node) {
+        const double *vertex = mesh.GetVertex(node);
+        ctx.mesh.nodes_xyz.insert(ctx.mesh.nodes_xyz.end(), vertex, vertex + 3);
+    }
+    ctx.mesh.cell_nodes = {0u, 1u, 2u, 3u};
+    ctx.mesh.cell_types = {FULLMAG_FEM_CELL_TET4};
+    ctx.mesh.cell_offsets = {0u, 4u};
+    ctx.mesh.cell_global_ordinals = {0u};
+    ctx.mesh.cell_markers = {1u};
+    ctx.mesh.magnetic_element_mask = {1u};
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u};
+    ctx.mesh.node_volumes.assign(4u, 1.0 / 24.0);
+    ctx.integration_weights.mfem_lumped_mass = ctx.mesh.node_volumes;
+    ctx.material_fields.material.saturation_magnetisation = 1.0;
+    ctx.demag.enabled = true;
+    ctx.demag.realization = FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER;
+    ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+    ctx.demag.solver.relative_tolerance = 1.0e-10;
+    ctx.demag.solver.max_iterations = 500;
+    ctx.cpu_threads.effective_omp_threads = 1;
+
+    std::vector<double> magnetization(12u, 0.0);
+    for (size_t node = 0; node < 4u; ++node) {
+        magnetization[3u * node] = 1.0;
+    }
+    std::string error;
+    check(fullmag::fem::context_initialize_demag_fem_bem(ctx, error),
+          "FEM/BEM GPU contract CPU workspace initialization");
+    check(fullmag::fem::gpu_state_initialize(
+              ctx.gpu_state.device,
+              ctx.mesh.n_nodes,
+              FULLMAG_FEM_INTEGRATOR_HEUN,
+              true,
+              true,
+              magnetization.data(),
+              magnetization.size(),
+              ctx.transfer_audit.audit,
+              error),
+          "FEM/BEM GPU contract device state initialization");
+    check(fullmag::fem::gpu_state_upload_runtime_coefficients(
+              ctx.gpu_state.device,
+              ctx.mesh.node_volumes.data(), ctx.mesh.node_volumes.size(),
+              nullptr, 0u, 1.0,
+              nullptr, 0u, 0.0,
+              nullptr, 0u, 0.02,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u, 1.0,
+              nullptr, 0u, 0.0,
+              nullptr, 0u, 0.0,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u,
+              nullptr, 0u,
+              ctx.mesh.magnetic_node_mask.data(), ctx.mesh.magnetic_node_mask.size(),
+              nullptr, 0u,
+              nullptr, 0u,
+              ctx.transfer_audit.audit,
+              error),
+          "FEM/BEM GPU contract runtime coefficient upload");
+    ctx.poisson_demag.gpu_demag_mode =
+        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM;
+    check(fullmag::fem::gpu_demag_fem_bem_initialize(ctx, error),
+          "FEM/BEM GPU full initialization must accept Fredkin-Koehler");
+    auto *cpu_workspace = fullmag::fem::demag_fem_bem_workspace(ctx);
+    auto *gpu_workspace = static_cast<fullmag::fem::GpuDemagFemBemWorkspace *>(
+        cpu_workspace == nullptr ? nullptr : cpu_workspace->gpu_workspace);
+    check(gpu_workspace != nullptr && gpu_workspace->ready,
+          "FEM/BEM GPU full initialization publishes a ready workspace");
+    check(gpu_workspace->d_boundary_tdofs != nullptr,
+          "FEM/BEM GPU full initialization uploads boundary true DOFs");
+    check(gpu_workspace->device_bytes > 0u,
+          "FEM/BEM GPU workspace accounts uploaded device bytes");
+
+    constexpr uint64_t demag_mask =
+        fullmag::fem::FEM_GPU_OPERATOR_DEMAG_RHS |
+        fullmag::fem::FEM_GPU_OPERATOR_DEMAG_SOLVE |
+        fullmag::fem::FEM_GPU_OPERATOR_DEMAG_RECOVERY |
+        fullmag::fem::FEM_GPU_OPERATOR_PRECONDITIONER;
+    fullmag::fem::gpu_execution_receipt_resolve_plan(
+        ctx.gpu_state.execution_receipt,
+        demag_mask,
+        demag_mask,
+        0u,
+        0u,
+        fullmag::fem::FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    const auto before = fullmag::fem::transfer_audit_snapshot(ctx);
+    fullmag::fem::gpu_execution_receipt_begin_attempt(
+        ctx.gpu_state.execution_receipt, before);
+    ctx.transfer_audit.audit.assert_no_hot_loop_host_sync = true;
+    ctx.transfer_audit.audit.assert_no_hot_loop_compute_sync = true;
+    {
+        fullmag::fem::TransferAuditScope hot_loop(
+            ctx.transfer_audit.audit,
+            fullmag::fem::TransferAuditScopeKind::HotLoop);
+        check(fullmag::fem::compute_device_demag_fem_bem_for_device_stage(
+                  ctx,
+                  ctx.gpu_state.device.magnetization.m,
+                  nullptr,
+                  true,
+                  false,
+                  error),
+              "FEM/BEM GPU initialize-to-apply device stage");
+    }
+    check(gpu_workspace->boundary_operator_apply_count == 1u,
+          "FEM/BEM GPU initialize-to-apply path executes one boundary operator");
+    const auto after = fullmag::fem::transfer_audit_snapshot(ctx);
+    check(after.hot_loop_compute_host_sync_count >
+              before.hot_loop_compute_host_sync_count,
+          "FEM/BEM GPU Hypre synchronization must be counted in the hot-loop audit");
+    check(ctx.transfer_audit.audit.hot_loop_violation,
+          "strict FEM/BEM GPU synchronization claim must fail closed");
+    check(!fullmag::fem::gpu_execution_receipt_update_attempt_transfer(
+              ctx.gpu_state.execution_receipt, after),
+          "device-resident receipt must reject audited FEM/BEM host synchronization");
+    const auto receipt = fullmag::fem::gpu_execution_receipt_snapshot(
+        ctx.gpu_state.execution_receipt);
+    check(!receipt.accounting_valid &&
+              receipt.execution_class == fullmag::fem::FemGpuExecutionClass::Unknown,
+          "FEM/BEM strict receipt must not publish a false device-resident claim");
+
+    fullmag::fem::gpu_demag_fem_bem_destroy(ctx);
+    fullmag::fem::gpu_state_destroy(ctx.gpu_state.device);
+    fullmag::fem::context_destroy_demag_fem_bem(ctx);
+}
+#endif
 #endif
 
 } // namespace
@@ -101,6 +271,9 @@ void device_bem_apply_is_device_resident() {
 int main() {
 #if FULLMAG_HAS_CUDA_RUNTIME
     device_bem_apply_is_device_resident();
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_claim();
+#endif
 #endif
     return 0;
 }

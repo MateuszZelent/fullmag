@@ -149,6 +149,7 @@ bool solve_demag_fem_bem_serial_system(
     DemagLinearSolveResult result;
     result.solver_kind = solver_kind;
     result.solver_reported_converged = solver_reported_converged;
+    result.residual_independently_certified = std::isfinite(absolute_residual);
     result.iterations = iterations;
     result.relative_residual = relative_residual;
     result.has_absolute_residual = true;
@@ -320,6 +321,7 @@ bool solve_demag_fem_bem_sparse_system(
     DemagLinearSolveResult result;
     result.solver_kind = solver_kind;
     result.solver_reported_converged = solver_reported_converged;
+    result.residual_independently_certified = std::isfinite(absolute_residual);
     result.iterations = iterations;
     result.relative_residual = relative_residual;
     result.has_absolute_residual = true;

@@ -1,6 +1,6 @@
 /*
  * FEM/BEM demag dense-operator source contract (dense reference and
- * hierarchical production operator).
+ * diagnostic ACA H-matrix operator).
  *
  * This source owns dense boundary-integral operator assembly, solid-angle
  * weights, and dense reference apply for extracted boundary surfaces.
@@ -597,7 +597,7 @@ bool DenseDemagBemOperator::apply(
 
 namespace {
 
-struct HierarchicalBemBox {
+struct AcaHMatrixBemBox {
     Vec3 lower = {
         std::numeric_limits<double>::infinity(),
         std::numeric_limits<double>::infinity(),
@@ -608,21 +608,21 @@ struct HierarchicalBemBox {
         -std::numeric_limits<double>::infinity()};
 };
 
-struct HierarchicalBemCluster {
+struct AcaHMatrixBemCluster {
     uint32_t begin = 0;
     uint32_t end = 0;
-    HierarchicalBemBox box;
+    AcaHMatrixBemBox box;
     int left = -1;
     int right = -1;
 };
 
-struct HierarchicalBemNearBlock {
+struct AcaHMatrixBemNearBlock {
     uint32_t target_cluster = 0;
     uint32_t source_cluster = 0;
     std::vector<double> values;
 };
 
-struct HierarchicalBemFarBlock {
+struct AcaHMatrixBemFarBlock {
     uint32_t target_cluster = 0;
     uint32_t source_cluster = 0;
     uint32_t rank = 0;
@@ -632,11 +632,11 @@ struct HierarchicalBemFarBlock {
     double relative_error = 0.0;
 };
 
-double box_diameter(const HierarchicalBemBox &box) {
+double box_diameter(const AcaHMatrixBemBox &box) {
     return stable_norm(sub(box.upper, box.lower));
 }
 
-double box_distance(const HierarchicalBemBox &lhs, const HierarchicalBemBox &rhs) {
+double box_distance(const AcaHMatrixBemBox &lhs, const AcaHMatrixBemBox &rhs) {
     double distance_squared = 0.0;
     for (int axis = 0; axis < 3; ++axis) {
         double gap = 0.0;
@@ -654,7 +654,7 @@ double box_distance(const HierarchicalBemBox &lhs, const HierarchicalBemBox &rhs
     return std::sqrt(distance_squared);
 }
 
-void include_box_point(HierarchicalBemBox &box, const Vec3 &point) {
+void include_box_point(AcaHMatrixBemBox &box, const Vec3 &point) {
     for (int axis = 0; axis < 3; ++axis) {
         const size_t index = static_cast<size_t>(axis);
         box.lower[index] = std::min(box.lower[index], point[index]);
@@ -662,9 +662,9 @@ void include_box_point(HierarchicalBemBox &box, const Vec3 &point) {
     }
 }
 
-class HierarchicalBemClusterBuilder {
+class AcaHMatrixBemClusterBuilder {
 public:
-    HierarchicalBemClusterBuilder(
+    AcaHMatrixBemClusterBuilder(
         const std::vector<Vec3> &coordinates,
         uint32_t leaf_size)
         : coordinates_(coordinates), leaf_size_(leaf_size) {}
@@ -678,12 +678,12 @@ public:
     }
 
     std::vector<uint32_t> permutation_;
-    std::vector<HierarchicalBemCluster> clusters_;
+    std::vector<AcaHMatrixBemCluster> clusters_;
 
 private:
     int build_range(uint32_t begin, uint32_t end) {
         const int cluster_id = static_cast<int>(clusters_.size());
-        clusters_.push_back(HierarchicalBemCluster{begin, end, {}, -1, -1});
+        clusters_.push_back(AcaHMatrixBemCluster{begin, end, {}, -1, -1});
         for (uint32_t offset = begin; offset < end; ++offset) {
             include_box_point(
                 clusters_[static_cast<size_t>(cluster_id)].box,
@@ -748,14 +748,14 @@ bool build_surface_node_face_adjacency(
     const size_t boundary_size = surface.boundary_nodes.size();
     adjacency.assign(boundary_size, {});
     if (surface.global_to_boundary.size() != mesh_node_count) {
-        error = "FEM/BEM hierarchical BEM received an invalid boundary-node map";
+        error = "FEM/BEM ACA H-matrix BEM received an invalid boundary-node map";
         return false;
     }
     for (size_t face = 0; face < surface.triangles.size(); ++face) {
         const auto &triangle = surface.triangles[face];
         for (uint32_t node : triangle) {
             if (node >= mesh_node_count) {
-                error = "FEM/BEM hierarchical BEM received an out-of-range surface node";
+                error = "FEM/BEM ACA H-matrix BEM received an out-of-range surface node";
                 return false;
             }
             const int32_t boundary_node =
@@ -763,7 +763,7 @@ bool build_surface_node_face_adjacency(
             if (boundary_node < 0 ||
                 static_cast<size_t>(boundary_node) >= boundary_size ||
                 surface.boundary_nodes[static_cast<size_t>(boundary_node)] != node) {
-                error = "FEM/BEM hierarchical BEM received an unmapped surface node";
+                error = "FEM/BEM ACA H-matrix BEM received an unmapped surface node";
                 return false;
             }
             auto &faces = adjacency[static_cast<size_t>(boundary_node)];
@@ -775,7 +775,7 @@ bool build_surface_node_face_adjacency(
     return true;
 }
 
-struct HierarchicalBemEntryEvaluator {
+struct AcaHMatrixBemEntryEvaluator {
     const Context &ctx;
     const DemagBoundarySurface &surface;
     const std::vector<std::vector<uint32_t>> &node_adjacency;
@@ -795,7 +795,7 @@ struct HierarchicalBemEntryEvaluator {
                 error);
             if (!valid || !std::isfinite(diagonal[row])) {
                 if (error.empty()) {
-                    error = "FEM/BEM hierarchical BEM solid-angle evaluation failed";
+                    error = "FEM/BEM ACA H-matrix BEM solid-angle evaluation failed";
                 }
                 return false;
             }
@@ -807,7 +807,7 @@ struct HierarchicalBemEntryEvaluator {
     bool evaluate(uint32_t row, uint32_t col, double &value, std::string &error) const {
         if (row >= surface.boundary_nodes.size() ||
             col >= surface.boundary_nodes.size()) {
-            error = "FEM/BEM hierarchical BEM entry index is out of range";
+            error = "FEM/BEM ACA H-matrix BEM entry index is out of range";
             return false;
         }
         if (row == col) {
@@ -820,7 +820,7 @@ struct HierarchicalBemEntryEvaluator {
         value = 0.0;
         for (uint32_t face : face_adjacency[static_cast<size_t>(col)]) {
             if (face >= surface.triangles.size()) {
-                error = "FEM/BEM hierarchical BEM face adjacency is out of range";
+                error = "FEM/BEM ACA H-matrix BEM face adjacency is out of range";
                 return false;
             }
             const auto &triangle = surface.triangles[static_cast<size_t>(face)];
@@ -840,7 +840,7 @@ struct HierarchicalBemEntryEvaluator {
                 surface.characteristic_length,
                 valid);
             if (!valid) {
-                error = "FEM/BEM hierarchical BEM Lindholm geometry evaluation failed";
+                error = "FEM/BEM ACA H-matrix BEM Lindholm geometry evaluation failed";
                 return false;
             }
             for (int local = 0; local < 3; ++local) {
@@ -851,7 +851,7 @@ struct HierarchicalBemEntryEvaluator {
             }
         }
         if (!std::isfinite(value)) {
-            error = "FEM/BEM hierarchical BEM entry evaluation produced a non-finite value";
+            error = "FEM/BEM ACA H-matrix BEM entry evaluation produced a non-finite value";
             return false;
         }
         return true;
@@ -874,7 +874,7 @@ bool checked_sum(uint64_t lhs, uint64_t rhs, uint64_t &result) {
     return true;
 }
 
-struct HierarchicalBemCompressionResult {
+struct AcaHMatrixBemCompressionResult {
     bool converged = false;
     uint32_t rank = 0;
     std::vector<double> u;
@@ -882,7 +882,7 @@ struct HierarchicalBemCompressionResult {
     double relative_error = 0.0;
 };
 
-double hierarchical_bem_approximation(
+double aca_hmatrix_bem_approximation(
     uint32_t row,
     uint32_t col,
     uint32_t row_count,
@@ -900,21 +900,21 @@ double hierarchical_bem_approximation(
     return result;
 }
 
-class HierarchicalBemAssembler {
+class AcaHMatrixBemAssembler {
 public:
-    HierarchicalBemAssembler(
-        HierarchicalBemEntryEvaluator &evaluator,
+    AcaHMatrixBemAssembler(
+        AcaHMatrixBemEntryEvaluator &evaluator,
         const std::vector<Vec3> &coordinates,
-        const HierarchicalDemagBemOptions &options)
+        const AcaHMatrixDemagBemOptions &options)
         : evaluator_(evaluator),
           cluster_builder_(coordinates, options.leaf_size),
           options_(options) {}
 
     bool build(
         std::vector<uint32_t> &permutation,
-        std::vector<HierarchicalBemCluster> &clusters,
-        std::vector<HierarchicalBemNearBlock> &near_blocks,
-        std::vector<HierarchicalBemFarBlock> &far_blocks,
+        std::vector<AcaHMatrixBemCluster> &clusters,
+        std::vector<AcaHMatrixBemNearBlock> &near_blocks,
+        std::vector<AcaHMatrixBemFarBlock> &far_blocks,
         uint32_t &max_rank,
         double &relative_error,
         uint64_t &resident_bytes,
@@ -927,7 +927,7 @@ public:
         const size_t boundary_size = evaluator_.surface.boundary_nodes.size();
         if (boundary_size == 0u ||
             boundary_size > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-            error = "FEM/BEM hierarchical BEM boundary-node count is invalid";
+            error = "FEM/BEM ACA H-matrix BEM boundary-node count is invalid";
             return false;
         }
         uint64_t minimum_bytes = 0;
@@ -937,19 +937,19 @@ public:
                 minimum_bytes) ||
             options_.max_memory_bytes != 0u &&
                 minimum_bytes > options_.max_memory_bytes) {
-            error = "FEM/BEM hierarchical BEM memory budget is too small for the boundary permutation";
+            error = "FEM/BEM ACA H-matrix BEM memory budget is too small for the boundary permutation";
             return false;
         }
 
         cluster_builder_.build();
         if (cluster_builder_.clusters_.empty()) {
-            error = "FEM/BEM hierarchical BEM cluster tree is empty";
+            error = "FEM/BEM ACA H-matrix BEM cluster tree is empty";
             return false;
         }
         clusters = cluster_builder_.clusters_;
         if (!reserve_bytes(
                 static_cast<uint64_t>(cluster_builder_.permutation_.capacity()) * sizeof(uint32_t) +
-                    static_cast<uint64_t>(clusters.capacity()) * sizeof(HierarchicalBemCluster),
+                    static_cast<uint64_t>(clusters.capacity()) * sizeof(AcaHMatrixBemCluster),
                 error)) {
             return false;
         }
@@ -978,18 +978,18 @@ private:
     bool validate_options(std::string &error) const {
         if (!std::isfinite(options_.admissibility_eta) ||
             !(options_.admissibility_eta > 0.0)) {
-            error = "FEM/BEM hierarchical BEM admissibility_eta must be finite and positive";
+            error = "FEM/BEM ACA H-matrix BEM admissibility_eta must be finite and positive";
             return false;
         }
         if (options_.leaf_size == 0u || options_.max_rank == 0u ||
             options_.max_blocks == 0u ||
             !std::isfinite(options_.relative_tolerance) ||
             !(options_.relative_tolerance >= 0.0)) {
-            error = "FEM/BEM hierarchical BEM options are invalid";
+            error = "FEM/BEM ACA H-matrix BEM options are invalid";
             return false;
         }
         if (options_.max_exact_entries == 0u) {
-            error = "FEM/BEM hierarchical BEM max_exact_entries must be positive";
+            error = "FEM/BEM ACA H-matrix BEM max_exact_entries must be positive";
             return false;
         }
         return true;
@@ -1000,7 +1000,7 @@ private:
         if (!checked_sum(resident_bytes_, bytes, total) ||
             options_.max_memory_bytes != 0u &&
                 total > options_.max_memory_bytes) {
-            error = "FEM/BEM hierarchical BEM memory budget exceeded";
+            error = "FEM/BEM ACA H-matrix BEM memory budget exceeded";
             return false;
         }
         resident_bytes_ = total;
@@ -1009,7 +1009,7 @@ private:
 
     bool register_block(std::string &error) {
         if (block_count_ >= options_.max_blocks) {
-            error = "FEM/BEM hierarchical BEM max_blocks budget exceeded";
+            error = "FEM/BEM ACA H-matrix BEM max_blocks budget exceeded";
             return false;
         }
         ++block_count_;
@@ -1020,7 +1020,7 @@ private:
         uint64_t total = 0;
         if (!checked_sum(exact_entries_, entries, total) ||
             total > options_.max_exact_entries) {
-            error = "FEM/BEM hierarchical BEM max_exact_entries budget exceeded";
+            error = "FEM/BEM ACA H-matrix BEM max_exact_entries budget exceeded";
             return false;
         }
         exact_entries_ = total;
@@ -1028,8 +1028,8 @@ private:
     }
 
     bool is_admissible(
-        const HierarchicalBemCluster &target,
-        const HierarchicalBemCluster &source) const
+        const AcaHMatrixBemCluster &target,
+        const AcaHMatrixBemCluster &source) const
     {
         const double distance = box_distance(target.box, source.box);
         const double diameter = std::max(
@@ -1040,21 +1040,21 @@ private:
                diameter <= options_.admissibility_eta * distance;
     }
 
-    bool is_leaf(const HierarchicalBemCluster &cluster) const {
+    bool is_leaf(const AcaHMatrixBemCluster &cluster) const {
         return cluster.left < 0 && cluster.right < 0;
     }
 
     bool try_compress(
-        const HierarchicalBemCluster &target,
-        const HierarchicalBemCluster &source,
-        HierarchicalBemCompressionResult &result,
+        const AcaHMatrixBemCluster &target,
+        const AcaHMatrixBemCluster &source,
+        AcaHMatrixBemCompressionResult &result,
         std::string &error) const
     {
         const uint32_t row_count = target.end - target.begin;
         const uint32_t col_count = source.end - source.begin;
         result = {};
         if (row_count == 0u || col_count == 0u) {
-            error = "FEM/BEM hierarchical BEM encountered an empty admissible block";
+            error = "FEM/BEM ACA H-matrix BEM encountered an empty admissible block";
             return false;
         }
         std::vector<double> u;
@@ -1076,7 +1076,7 @@ private:
                 }
                 scale = std::max(scale, std::abs(exact));
                 row[static_cast<size_t>(local_col)] =
-                    exact - hierarchical_bem_approximation(
+                    exact - aca_hmatrix_bem_approximation(
                                 local_row,
                                 local_col,
                                 row_count,
@@ -1085,7 +1085,7 @@ private:
                                 u,
                                 v);
                 if (!std::isfinite(row[static_cast<size_t>(local_col)])) {
-                    error = "FEM/BEM hierarchical BEM ACA residual is non-finite";
+                    error = "FEM/BEM ACA H-matrix BEM ACA residual is non-finite";
                     return false;
                 }
             }
@@ -1105,7 +1105,7 @@ private:
                 }
                 scale = std::max(scale, std::abs(exact));
                 column[static_cast<size_t>(local_row)] =
-                    exact - hierarchical_bem_approximation(
+                    exact - aca_hmatrix_bem_approximation(
                                 local_row,
                                 local_col,
                                 row_count,
@@ -1114,7 +1114,7 @@ private:
                                 u,
                                 v);
                 if (!std::isfinite(column[static_cast<size_t>(local_row)])) {
-                    error = "FEM/BEM hierarchical BEM ACA residual is non-finite";
+                    error = "FEM/BEM ACA H-matrix BEM ACA residual is non-finite";
                     return false;
                 }
             }
@@ -1199,7 +1199,7 @@ private:
             double selected_pivot = column_residual[static_cast<size_t>(selected_row)];
             if (!std::isfinite(selected_pivot) ||
                 !(std::abs(selected_pivot) > 0.0)) {
-                error = "FEM/BEM hierarchical BEM ACA selected a zero pivot";
+                error = "FEM/BEM ACA H-matrix BEM ACA selected a zero pivot";
                 return false;
             }
             u.insert(u.end(), column_residual.begin(), column_residual.end());
@@ -1239,7 +1239,7 @@ private:
                 }
                 scale = std::max(scale, std::abs(exact));
                 const double residual = std::abs(
-                    exact - hierarchical_bem_approximation(
+                    exact - aca_hmatrix_bem_approximation(
                                 local_row,
                                 local_col,
                                 row_count,
@@ -1265,8 +1265,8 @@ private:
     bool add_near_block(
         uint32_t target_cluster,
         uint32_t source_cluster,
-        const std::vector<HierarchicalBemCluster> &clusters,
-        std::vector<HierarchicalBemNearBlock> &near_blocks,
+        const std::vector<AcaHMatrixBemCluster> &clusters,
+        std::vector<AcaHMatrixBemNearBlock> &near_blocks,
         std::string &error)
     {
         const auto &target = clusters[static_cast<size_t>(target_cluster)];
@@ -1281,14 +1281,14 @@ private:
         uint64_t value_bytes = 0;
         uint64_t block_bytes = 0;
         if (!checked_product(entries, sizeof(double), value_bytes) ||
-            !checked_sum(value_bytes, sizeof(HierarchicalBemNearBlock), block_bytes) ||
+            !checked_sum(value_bytes, sizeof(AcaHMatrixBemNearBlock), block_bytes) ||
             !reserve_bytes(
                 block_bytes,
                 error) ||
             !register_block(error)) {
             return false;
         }
-        HierarchicalBemNearBlock block;
+        AcaHMatrixBemNearBlock block;
         block.target_cluster = target_cluster;
         block.source_cluster = source_cluster;
         block.values.resize(static_cast<size_t>(entries));
@@ -1312,8 +1312,8 @@ private:
     bool add_far_block(
         uint32_t target_cluster,
         uint32_t source_cluster,
-        HierarchicalBemCompressionResult &compression,
-        std::vector<HierarchicalBemFarBlock> &far_blocks,
+        AcaHMatrixBemCompressionResult &compression,
+        std::vector<AcaHMatrixBemFarBlock> &far_blocks,
         uint32_t &max_rank,
         double &relative_error,
         std::string &error)
@@ -1326,8 +1326,8 @@ private:
                 static_cast<uint64_t>(compression.v.size()),
                 factor_values) ||
             !checked_product(factor_values, sizeof(double), factor_bytes) ||
-            !checked_sum(factor_bytes, sizeof(HierarchicalBemFarBlock), block_bytes)) {
-            error = "FEM/BEM hierarchical BEM factor storage size overflows uint64";
+            !checked_sum(factor_bytes, sizeof(AcaHMatrixBemFarBlock), block_bytes)) {
+            error = "FEM/BEM ACA H-matrix BEM factor storage size overflows uint64";
             return false;
         }
         if (!reserve_bytes(
@@ -1336,7 +1336,7 @@ private:
             !register_block(error)) {
             return false;
         }
-        HierarchicalBemFarBlock block;
+        AcaHMatrixBemFarBlock block;
         block.target_cluster = target_cluster;
         block.source_cluster = source_cluster;
         block.rank = compression.rank;
@@ -1352,9 +1352,9 @@ private:
     bool build_block(
         uint32_t target_cluster,
         uint32_t source_cluster,
-        const std::vector<HierarchicalBemCluster> &clusters,
-        std::vector<HierarchicalBemNearBlock> &near_blocks,
-        std::vector<HierarchicalBemFarBlock> &far_blocks,
+        const std::vector<AcaHMatrixBemCluster> &clusters,
+        std::vector<AcaHMatrixBemNearBlock> &near_blocks,
+        std::vector<AcaHMatrixBemFarBlock> &far_blocks,
         uint32_t &max_rank,
         double &relative_error,
         std::string &error)
@@ -1362,7 +1362,7 @@ private:
         const auto &target = clusters[static_cast<size_t>(target_cluster)];
         const auto &source = clusters[static_cast<size_t>(source_cluster)];
         if (is_admissible(target, source)) {
-            HierarchicalBemCompressionResult compression;
+            AcaHMatrixBemCompressionResult compression;
             if (!try_compress(target, source, compression, error)) {
                 return false;
             }
@@ -1433,13 +1433,13 @@ private:
                        relative_error,
                        error);
         }
-        error = "FEM/BEM hierarchical BEM block partition reached an invalid leaf state";
+        error = "FEM/BEM ACA H-matrix BEM block partition reached an invalid leaf state";
         return false;
     }
 
-    HierarchicalBemEntryEvaluator &evaluator_;
-    HierarchicalBemClusterBuilder cluster_builder_;
-    const HierarchicalDemagBemOptions &options_;
+    AcaHMatrixBemEntryEvaluator &evaluator_;
+    AcaHMatrixBemClusterBuilder cluster_builder_;
+    const AcaHMatrixDemagBemOptions &options_;
     uint64_t resident_bytes_ = 0;
     uint64_t exact_entries_ = 0;
     uint32_t block_count_ = 0;
@@ -1447,35 +1447,35 @@ private:
 
 } // namespace
 
-struct HierarchicalDemagBemOperator::Impl {
+struct AcaHMatrixDemagBemOperator::Impl {
     bool ready = false;
     uint32_t size = 0;
     uint32_t max_rank = 0;
     double relative_error = 0.0;
     uint64_t resident_bytes = 0;
     std::vector<uint32_t> permutation;
-    std::vector<HierarchicalBemCluster> clusters;
-    std::vector<HierarchicalBemNearBlock> near_blocks;
-    std::vector<HierarchicalBemFarBlock> far_blocks;
+    std::vector<AcaHMatrixBemCluster> clusters;
+    std::vector<AcaHMatrixBemNearBlock> near_blocks;
+    std::vector<AcaHMatrixBemFarBlock> far_blocks;
     mutable std::vector<double> projected;
     std::string fingerprint;
 };
 
-HierarchicalDemagBemOperator::HierarchicalDemagBemOperator()
+AcaHMatrixDemagBemOperator::AcaHMatrixDemagBemOperator()
     : impl_(std::make_unique<Impl>()) {}
 
-HierarchicalDemagBemOperator::~HierarchicalDemagBemOperator() = default;
+AcaHMatrixDemagBemOperator::~AcaHMatrixDemagBemOperator() = default;
 
-HierarchicalDemagBemOperator::HierarchicalDemagBemOperator(
-    HierarchicalDemagBemOperator &&) noexcept = default;
+AcaHMatrixDemagBemOperator::AcaHMatrixDemagBemOperator(
+    AcaHMatrixDemagBemOperator &&) noexcept = default;
 
-HierarchicalDemagBemOperator &HierarchicalDemagBemOperator::operator=(
-    HierarchicalDemagBemOperator &&) noexcept = default;
+AcaHMatrixDemagBemOperator &AcaHMatrixDemagBemOperator::operator=(
+    AcaHMatrixDemagBemOperator &&) noexcept = default;
 
-bool HierarchicalDemagBemOperator::build(
+bool AcaHMatrixDemagBemOperator::build(
     const Context &ctx,
     const DemagBoundarySurface &surface,
-    const HierarchicalDemagBemOptions &options,
+    const AcaHMatrixDemagBemOptions &options,
     std::string &error)
 {
     error.clear();
@@ -1486,7 +1486,7 @@ bool HierarchicalDemagBemOperator::build(
     const size_t boundary_size = surface.boundary_nodes.size();
     if (boundary_size == 0u ||
         boundary_size > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-        error = "FEM/BEM hierarchical BEM requires a non-empty uint32 boundary";
+        error = "FEM/BEM ACA H-matrix BEM requires a non-empty uint32 boundary";
         return false;
     }
     uint64_t minimum_bytes = 0u;
@@ -1496,7 +1496,7 @@ bool HierarchicalDemagBemOperator::build(
             minimum_bytes) ||
         options.max_memory_bytes != 0u &&
             options.max_memory_bytes < minimum_bytes) {
-        error = "FEM/BEM hierarchical BEM memory budget is too small for the boundary permutation";
+        error = "FEM/BEM ACA H-matrix BEM memory budget is too small for the boundary permutation";
         return false;
     }
     if (surface.global_to_boundary.size() != ctx.mesh.n_nodes ||
@@ -1509,7 +1509,7 @@ bool HierarchicalDemagBemOperator::build(
         ctx.mesh.cell_offsets.size() != static_cast<size_t>(ctx.mesh.n_elements) + 1u ||
         ctx.mesh.cell_offsets.empty() ||
         ctx.mesh.cell_offsets.back() != ctx.mesh.cell_nodes.size()) {
-        error = "FEM/BEM hierarchical BEM received inconsistent typed mesh or surface buffers";
+        error = "FEM/BEM ACA H-matrix BEM received inconsistent typed mesh or surface buffers";
         return false;
     }
     std::vector<Vec3> coordinates;
@@ -1519,12 +1519,12 @@ bool HierarchicalDemagBemOperator::build(
         if (node >= ctx.mesh.n_nodes ||
             surface.global_to_boundary[static_cast<size_t>(node)] !=
                 static_cast<int32_t>(row)) {
-            error = "FEM/BEM hierarchical BEM received an invalid boundary-node map";
+            error = "FEM/BEM ACA H-matrix BEM received an invalid boundary-node map";
             return false;
         }
         const Vec3 point = node_position(ctx, node);
         if (!finite_vec3(point)) {
-            error = "FEM/BEM hierarchical BEM received non-finite boundary coordinates";
+            error = "FEM/BEM ACA H-matrix BEM received non-finite boundary coordinates";
             return false;
         }
         coordinates.push_back(point);
@@ -1537,7 +1537,7 @@ bool HierarchicalDemagBemOperator::build(
             !finite_vec3(surface.unit_normals[face]) ||
             !std::isfinite(surface.triangle_areas[face]) ||
             !(surface.triangle_areas[face] > 0.0)) {
-            error = "FEM/BEM hierarchical BEM received non-finite face geometry";
+            error = "FEM/BEM ACA H-matrix BEM received non-finite face geometry";
             return false;
         }
         for (uint32_t node : triangle) {
@@ -1546,7 +1546,7 @@ bool HierarchicalDemagBemOperator::build(
             if (boundary_node < 0 ||
                 static_cast<size_t>(boundary_node) >= boundary_size ||
                 surface.boundary_nodes[static_cast<size_t>(boundary_node)] != node) {
-                error = "FEM/BEM hierarchical BEM received an unmapped face node";
+                error = "FEM/BEM ACA H-matrix BEM received an unmapped face node";
                 return false;
             }
         }
@@ -1554,7 +1554,7 @@ bool HierarchicalDemagBemOperator::build(
     bool adjacency_valid = false;
     const auto node_adjacency = build_node_element_adjacency(ctx, adjacency_valid);
     if (!adjacency_valid) {
-        error = "FEM/BEM hierarchical BEM requires a typed active TET4 mesh";
+        error = "FEM/BEM ACA H-matrix BEM requires a typed active TET4 mesh";
         return false;
     }
     std::vector<std::vector<uint32_t>> face_adjacency;
@@ -1565,7 +1565,7 @@ bool HierarchicalDemagBemOperator::build(
             error)) {
         return false;
     }
-    HierarchicalBemEntryEvaluator evaluator{
+    AcaHMatrixBemEntryEvaluator evaluator{
         ctx,
         surface,
         node_adjacency,
@@ -1576,7 +1576,7 @@ bool HierarchicalDemagBemOperator::build(
     }
 
     try {
-        HierarchicalBemAssembler assembler(evaluator, coordinates, options);
+        AcaHMatrixBemAssembler assembler(evaluator, coordinates, options);
         uint32_t max_rank = 0;
         double relative_error = 0.0;
         uint64_t resident_bytes = 0;
@@ -1604,7 +1604,7 @@ bool HierarchicalDemagBemOperator::build(
             options.max_memory_bytes != 0u &&
                 total_resident_bytes > options.max_memory_bytes) {
             *impl_ = Impl{};
-            error = "FEM/BEM hierarchical BEM memory budget is too small for apply scratch";
+            error = "FEM/BEM ACA H-matrix BEM memory budget is too small for apply scratch";
             return false;
         }
         impl_->projected.assign(static_cast<size_t>(max_rank), 0.0);
@@ -1612,7 +1612,7 @@ bool HierarchicalDemagBemOperator::build(
         impl_->resident_bytes = total_resident_bytes;
         impl_->ready = true;
         frequency_domain::CanonicalDigestBuilder digest(
-            "fullmag.fem.bem.hierarchical_operator.v1");
+            "fullmag.fem.bem.aca_hmatrix_operator.v1");
         digest.add_u64("boundary_node_count", boundary_size);
         digest.add_u64("boundary_triangle_count", surface.triangles.size());
         digest.add_double("characteristic_length", surface.characteristic_length);
@@ -1620,6 +1620,34 @@ bool HierarchicalDemagBemOperator::build(
         digest.add_u64("leaf_size", options.leaf_size);
         digest.add_u64("max_rank", options.max_rank);
         digest.add_double("relative_tolerance", options.relative_tolerance);
+        digest.add_u64("max_memory_bytes", options.max_memory_bytes);
+        digest.add_u64("max_exact_entries", options.max_exact_entries);
+        digest.add_u64("max_blocks", options.max_blocks);
+        digest.add_u64("mesh_node_count", ctx.mesh.n_nodes);
+        for (uint32_t node : surface.boundary_nodes) {
+            digest.add_u64("boundary_node", node);
+            const size_t base = 3u * static_cast<size_t>(node);
+            digest.add_double("boundary_node_x", ctx.mesh.nodes_xyz[base]);
+            digest.add_double("boundary_node_y", ctx.mesh.nodes_xyz[base + 1u]);
+            digest.add_double("boundary_node_z", ctx.mesh.nodes_xyz[base + 2u]);
+        }
+        digest.add_u64("cell_type_count", ctx.mesh.cell_types.size());
+        for (uint32_t value : ctx.mesh.cell_types) {
+            digest.add_u64("cell_type", value);
+        }
+        digest.add_u64("cell_offset_count", ctx.mesh.cell_offsets.size());
+        for (uint32_t value : ctx.mesh.cell_offsets) {
+            digest.add_u64("cell_offset", value);
+        }
+        digest.add_u64("cell_node_count", ctx.mesh.cell_nodes.size());
+        for (uint32_t value : ctx.mesh.cell_nodes) {
+            digest.add_u64("cell_node", value);
+        }
+        for (const auto &triangle : surface.triangles) {
+            digest.add_u64("surface_triangle_node_0", triangle[0]);
+            digest.add_u64("surface_triangle_node_1", triangle[1]);
+            digest.add_u64("surface_triangle_node_2", triangle[2]);
+        }
         digest.add_u64("near_block_count", impl_->near_blocks.size());
         digest.add_u64("far_block_count", impl_->far_blocks.size());
         for (uint32_t value : impl_->permutation) {
@@ -1630,11 +1658,18 @@ bool HierarchicalDemagBemOperator::build(
             digest.add_u64("cluster_end", cluster.end);
             digest.add_u64("cluster_left", static_cast<uint64_t>(cluster.left + 1));
             digest.add_u64("cluster_right", static_cast<uint64_t>(cluster.right + 1));
+            for (size_t axis = 0; axis < 3u; ++axis) {
+                digest.add_double("cluster_box_lower", cluster.box.lower[axis]);
+                digest.add_double("cluster_box_upper", cluster.box.upper[axis]);
+            }
         }
         for (const auto &block : impl_->near_blocks) {
             digest.add_u64("near_target_cluster", block.target_cluster);
             digest.add_u64("near_source_cluster", block.source_cluster);
             digest.add_u64("near_entry_count", block.values.size());
+            for (double value : block.values) {
+                digest.add_double("near_value", value);
+            }
         }
         for (const auto &block : impl_->far_blocks) {
             digest.add_u64("far_target_cluster", block.target_cluster);
@@ -1643,46 +1678,51 @@ bool HierarchicalDemagBemOperator::build(
             digest.add_u64("far_u_count", block.u.size());
             digest.add_u64("far_v_count", block.v.size());
             digest.add_double("far_relative_error", block.relative_error);
+            for (double value : block.u) {
+                digest.add_double("far_u_value", value);
+            }
+            for (double value : block.v) {
+                digest.add_double("far_v_value", value);
+            }
         }
         impl_->fingerprint = "sha256:" + digest.sha256_hex();
         return true;
     } catch (const std::bad_alloc &) {
         *impl_ = Impl{};
-        error = "FEM/BEM hierarchical BEM allocation failed";
+        error = "FEM/BEM ACA H-matrix BEM allocation failed";
         return false;
     } catch (const std::exception &exception) {
         *impl_ = Impl{};
-        error = std::string("FEM/BEM hierarchical BEM build failed: ") + exception.what();
+        error = std::string("FEM/BEM ACA H-matrix BEM build failed: ") + exception.what();
         return false;
     }
 }
 
-bool HierarchicalDemagBemOperator::apply(
+bool AcaHMatrixDemagBemOperator::apply(
     const std::vector<double> &u1_boundary,
     std::vector<double> &u2_boundary,
     std::string &error) const
 {
     error.clear();
     if (!impl_ || !impl_->ready || impl_->size == 0u) {
-        error = "FEM/BEM hierarchical BEM operator is not assembled";
+        error = "FEM/BEM ACA H-matrix BEM operator is not assembled";
         return false;
     }
     if (u1_boundary.size() != static_cast<size_t>(impl_->size)) {
-        error = "FEM/BEM hierarchical BEM operator input size mismatch";
+        error = "FEM/BEM ACA H-matrix BEM operator input size mismatch";
         return false;
     }
     for (double value : u1_boundary) {
         if (!std::isfinite(value)) {
-            error = "FEM/BEM hierarchical BEM operator input contains a non-finite value";
+            error = "FEM/BEM ACA H-matrix BEM operator input contains a non-finite value";
             return false;
         }
     }
-    if (u2_boundary.size() != static_cast<size_t>(impl_->size) ||
-        impl_->projected.size() != static_cast<size_t>(impl_->max_rank)) {
-        error = "FEM/BEM hierarchical BEM output or scratch size mismatch";
+    if (impl_->projected.size() != static_cast<size_t>(impl_->max_rank)) {
+        error = "FEM/BEM ACA H-matrix BEM scratch size mismatch";
         return false;
     }
-    std::fill(u2_boundary.begin(), u2_boundary.end(), 0.0);
+    u2_boundary.assign(static_cast<size_t>(impl_->size), 0.0);
     for (const auto &block : impl_->near_blocks) {
         const auto &target = impl_->clusters[static_cast<size_t>(block.target_cluster)];
         const auto &source = impl_->clusters[static_cast<size_t>(block.source_cluster)];
@@ -1728,26 +1768,26 @@ bool HierarchicalDemagBemOperator::apply(
     }
     for (double value : u2_boundary) {
         if (!std::isfinite(value)) {
-            error = "FEM/BEM hierarchical BEM operator apply produced a non-finite value";
+            error = "FEM/BEM ACA H-matrix BEM operator apply produced a non-finite value";
             return false;
         }
     }
     return true;
 }
 
-uint32_t HierarchicalDemagBemOperator::size() const {
+uint32_t AcaHMatrixDemagBemOperator::size() const {
     return impl_ ? impl_->size : 0u;
 }
 
-uint32_t HierarchicalDemagBemOperator::near_block_count() const {
+uint32_t AcaHMatrixDemagBemOperator::near_block_count() const {
     return impl_ ? static_cast<uint32_t>(impl_->near_blocks.size()) : 0u;
 }
 
-uint32_t HierarchicalDemagBemOperator::far_block_count() const {
+uint32_t AcaHMatrixDemagBemOperator::far_block_count() const {
     return impl_ ? static_cast<uint32_t>(impl_->far_blocks.size()) : 0u;
 }
 
-uint64_t HierarchicalDemagBemOperator::near_entry_count() const {
+uint64_t AcaHMatrixDemagBemOperator::near_entry_count() const {
     if (!impl_) {
         return 0u;
     }
@@ -1758,7 +1798,7 @@ uint64_t HierarchicalDemagBemOperator::near_entry_count() const {
     return count;
 }
 
-uint64_t HierarchicalDemagBemOperator::far_row_count() const {
+uint64_t AcaHMatrixDemagBemOperator::far_row_count() const {
     if (!impl_) {
         return 0u;
     }
@@ -1770,31 +1810,31 @@ uint64_t HierarchicalDemagBemOperator::far_row_count() const {
     return count;
 }
 
-uint32_t HierarchicalDemagBemOperator::max_rank_observed() const {
+uint32_t AcaHMatrixDemagBemOperator::max_rank_observed() const {
     return impl_ ? impl_->max_rank : 0u;
 }
 
-double HierarchicalDemagBemOperator::relative_error_estimate() const {
+double AcaHMatrixDemagBemOperator::relative_error_estimate() const {
     return impl_ ? impl_->relative_error : std::numeric_limits<double>::infinity();
 }
 
-uint64_t HierarchicalDemagBemOperator::resident_bytes() const {
+uint64_t AcaHMatrixDemagBemOperator::resident_bytes() const {
     return impl_ ? impl_->resident_bytes : 0u;
 }
 
-const std::string &HierarchicalDemagBemOperator::fingerprint() const {
+const std::string &AcaHMatrixDemagBemOperator::fingerprint() const {
     static const std::string empty;
     return impl_ ? impl_->fingerprint : empty;
 }
 
-bool HierarchicalDemagBemOperator::export_device_data(
-    HierarchicalDemagBemDeviceData &data,
+bool AcaHMatrixDemagBemOperator::export_device_data(
+    AcaHMatrixDemagBemDeviceData &data,
     std::string &error) const
 {
     error.clear();
     data = {};
     if (!impl_ || !impl_->ready || impl_->size == 0u) {
-        error = "FEM/BEM hierarchical BEM device export requires an assembled operator";
+        error = "FEM/BEM ACA H-matrix BEM device export requires an assembled operator";
         return false;
     }
     try {
@@ -1837,7 +1877,7 @@ bool HierarchicalDemagBemOperator::export_device_data(
                 block.v.size() != static_cast<size_t>(expected_v) ||
                 data.far_blocks.size() >=
                     static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-                error = "FEM/BEM hierarchical BEM device export has invalid far block storage";
+                error = "FEM/BEM ACA H-matrix BEM device export has invalid far block storage";
                 data = {};
                 return false;
             }
@@ -1845,7 +1885,7 @@ bool HierarchicalDemagBemOperator::export_device_data(
             const uint64_t v_offset = static_cast<uint64_t>(data.far_v.size());
             data.far_u.insert(data.far_u.end(), block.u.begin(), block.u.end());
             data.far_v.insert(data.far_v.end(), block.v.begin(), block.v.end());
-            data.far_blocks.push_back(HierarchicalDemagBemFarBlock{
+            data.far_blocks.push_back(AcaHMatrixDemagBemFarBlock{
                 source.begin,
                 source.end,
                 target.begin,
@@ -1861,7 +1901,7 @@ bool HierarchicalDemagBemOperator::export_device_data(
                 static_cast<uint64_t>(data.near_column_indices.size()) +
                 near_columns[row].size();
             if (near_end > std::numeric_limits<uint32_t>::max()) {
-                error = "FEM/BEM hierarchical BEM device export exceeds uint32 CSR capacity";
+                error = "FEM/BEM ACA H-matrix BEM device export exceeds uint32 CSR capacity";
                 data = {};
                 return false;
             }
@@ -1877,7 +1917,7 @@ bool HierarchicalDemagBemOperator::export_device_data(
         }
         if (data.near_values.size() != data.near_column_indices.size() ||
             data.boundary_permutation.size() != boundary_size) {
-            error = "FEM/BEM hierarchical BEM device export produced inconsistent arrays";
+            error = "FEM/BEM ACA H-matrix BEM device export produced inconsistent arrays";
             data = {};
             return false;
         }
@@ -1897,7 +1937,7 @@ bool HierarchicalDemagBemOperator::export_device_data(
                 !checked_sum(block.u_offset, u_size, u_end) ||
                 !checked_sum(block.v_offset, v_size, v_end) ||
                 u_end > data.far_u.size() || v_end > data.far_v.size()) {
-                error = "FEM/BEM hierarchical BEM device export has invalid factor offsets";
+                error = "FEM/BEM ACA H-matrix BEM device export has invalid factor offsets";
                 data = {};
                 return false;
             }
@@ -1905,11 +1945,11 @@ bool HierarchicalDemagBemOperator::export_device_data(
         return true;
     } catch (const std::bad_alloc &) {
         data = {};
-        error = "FEM/BEM hierarchical BEM device export allocation failed";
+        error = "FEM/BEM ACA H-matrix BEM device export allocation failed";
         return false;
     } catch (const std::exception &exception) {
         data = {};
-        error = std::string("FEM/BEM hierarchical BEM device export failed: ") + exception.what();
+        error = std::string("FEM/BEM ACA H-matrix BEM device export failed: ") + exception.what();
         return false;
     }
 }

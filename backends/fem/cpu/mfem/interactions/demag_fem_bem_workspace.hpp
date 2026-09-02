@@ -26,7 +26,7 @@ struct FemBemHypreCache;
 /*
  * Workspace and lifecycle for Fredkin-Koehler FEM/BEM demag.
  *
- * This module owns the body boundary surface, hierarchical BEM operator, P1 scalar
+ * This module owns the body boundary surface, dense reference BEM operator, P1 scalar
  * potential space, stiffness operators, potential vectors, boundary true-DOF
  * map, and setup/teardown of shared Poisson RHS and recovery workspaces used by
  * FEM/BEM. It does not assemble per-step RHS, apply the BEM operator, run sparse
@@ -34,8 +34,7 @@ struct FemBemHypreCache;
  */
 struct DemagFemBemWorkspace {
     DemagBoundarySurface surface;
-    HierarchicalDemagBemOperator boundary_operator;
-    HierarchicalDemagBemOptions boundary_operator_options;
+    DenseDemagBemOperator boundary_operator;
     std::unique_ptr<mfem::FiniteElementCollection> potential_fec;
     std::unique_ptr<mfem::FiniteElementSpace> potential_fes;
     std::unique_ptr<mfem::BilinearForm> stiffness_form;

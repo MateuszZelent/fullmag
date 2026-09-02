@@ -15,7 +15,7 @@ void fullmag_cuda_fem_bem_apply(
     const uint32_t *near_row_offsets,
     const uint32_t *near_column_indices,
     const double *near_values,
-    const HierarchicalDemagBemFarBlock *far_blocks,
+    const AcaHMatrixDemagBemFarBlock *far_blocks,
     const double *far_u,
     const double *far_v,
     const uint32_t *boundary_permutation,
