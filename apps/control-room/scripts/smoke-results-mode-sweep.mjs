@@ -9,6 +9,8 @@ const apiBase = (
 const timeoutMs = Number(process.env.CONTROL_ROOM_RESULTS_MODE_SWEEP_TIMEOUT_MS ?? 30_000);
 const fixtureMode = process.env.CONTROL_ROOM_RESULTS_MODE_SWEEP_FIXTURE === "1";
 const runId = "results-mode-sweep-fixture-run";
+const modalK0DatasetId = "modal-k0-field-sweep";
+const modalK0SampleCount = 15;
 
 async function main() {
   const playwright = await loadPlaywright();
@@ -45,6 +47,7 @@ async function main() {
     await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
     await openResults(page);
     const manifestProof = await verifyTypedDatasetManifest(page);
+    const modalK0Proof = await verifyModalK0Sweep(page);
     const selectionProof = await verifyResultSelectionLifecycle(page);
     const legacyProof = await verifyLegacyAnalysisItems(page);
     const responsiveProof = await verifyThemesAndZoom(page);
@@ -53,6 +56,7 @@ async function main() {
     console.log(`Results mode sweep proof: ${JSON.stringify({
       fixture: fixtureMode,
       manifest: manifestProof,
+      modalK0: modalK0Proof,
       selection: selectionProof,
       legacyItems: legacyProof,
       responsive: responsiveProof,
@@ -85,7 +89,12 @@ async function verifyTypedDatasetManifest(page) {
   const datasetRows = browser.locator("nav[aria-label='Result datasets'] button[data-result-row='true']");
   const timeDomainDataset = page.getByRole("button", { name: /Time-domain spectrum fixture/ });
   await timeDomainDataset.waitFor({ state: "visible", timeout: timeoutMs });
-  assert.equal(await datasetRows.count(), 2, "Fixture must expose two typed datasets.");
+  assert.equal(await datasetRows.count(), 3, "Fixture must expose three typed datasets.");
+  await timeDomainDataset.click();
+  await page.waitForFunction(
+    () => document.querySelector(".fm-results-dataset-browser__eyebrow")?.textContent === "time_domain_spectrum",
+    { timeout: timeoutMs },
+  );
   const status = await timeDomainDataset.getAttribute("data-status");
   assert.equal(status, "partial", "Legacy fixture dataset must remain partial.");
   await browser.locator("header .fm-results-dataset-browser__eyebrow").waitFor({ state: "visible" });
@@ -104,7 +113,65 @@ async function verifyTypedDatasetManifest(page) {
   };
 }
 
+async function verifyModalK0Sweep(page) {
+  const dataset = page.getByRole("button", { name: /Modal K0 field sweep fixture/ });
+  await dataset.waitFor({ state: "visible", timeout: timeoutMs });
+  assert.equal(await dataset.getAttribute("data-status"), "ready", "K0 fixture must be ready.");
+  await dataset.click();
+  await page.waitForFunction(
+    () => document.querySelector(".fm-results-dataset-browser__eyebrow")?.textContent === "modal_eigen",
+    { timeout: timeoutMs },
+  );
+
+  const firstSample = page.getByRole("button", { name: /bias-field-sample-0000/ }).first();
+  await firstSample.waitFor({ state: "visible", timeout: timeoutMs });
+  await firstSample.click();
+  const firstModeId = "k0:sample-0000:mode-0000";
+  const firstMode = page.getByRole("button", { name: new RegExp(firstModeId) }).first();
+  await firstMode.waitFor({ state: "visible", timeout: timeoutMs });
+  await firstMode.click();
+  await page.waitForFunction(
+    (itemId) => document.querySelector("section[aria-label='Result items'] button[aria-current='true']")?.textContent?.includes(itemId),
+    firstModeId,
+    { timeout: timeoutMs },
+  );
+
+  const middleSample = page.getByRole("button", { name: /bias-field-sample-0007/ }).first();
+  await middleSample.click();
+  await page.waitForFunction(
+    () => document.querySelector("section[aria-label='Result items'] button")?.textContent?.includes("k0:sample-0007:mode-0000"),
+    { timeout: timeoutMs },
+  );
+  await assertNoStaleResultContext(page, firstModeId);
+
+  const lastSample = page.getByRole("button", { name: /bias-field-sample-0014/ }).first();
+  await lastSample.click();
+  const lastModeId = "k0:sample-0014:mode-0001";
+  const lastMode = page.getByRole("button", { name: new RegExp(lastModeId) }).first();
+  await lastMode.waitFor({ state: "visible", timeout: timeoutMs });
+  await lastMode.click();
+  await page.waitForFunction(
+    (itemId) => document.querySelector("section[aria-label='Result items'] button[aria-current='true']")?.textContent?.includes(itemId),
+    lastModeId,
+    { timeout: timeoutMs },
+  );
+  await assertNoStaleResultContext(page, firstModeId);
+  await page.getByRole("button", { name: "Open in Analysis" }).click();
+  await page.locator("[data-slot-id='viewport-main'][data-active-module-id='analysis-plots']").waitFor({ state: "attached", timeout: timeoutMs });
+  await page.locator("[data-result-projection='field-frequency-map']").waitFor({ state: "visible", timeout: timeoutMs });
+
+  return {
+    dataset: modalK0DatasetId,
+    sampleCount: modalK0SampleCount,
+    firstMode: firstModeId,
+    middleSample: "bias-field-sample-0007",
+    lastMode: lastModeId,
+    analysisProjection: "field-frequency-map",
+  };
+}
+
 async function verifyResultSelectionLifecycle(page) {
+  await page.getByRole("button", { name: /Time-domain spectrum fixture/ }).click();
   const firstItem = page.getByRole("button", { name: /legacy:gamma:peak:0/ }).first();
   await firstItem.waitFor({ state: "visible", timeout: timeoutMs });
   await firstItem.focus();
@@ -151,7 +218,7 @@ async function verifyResultSelectionLifecycle(page) {
 async function selectedResultItemId(page) {
   const selected = page.locator("section[aria-label='Result items'] button[aria-current='true']");
   return (await selected.count()) > 0
-    ? (await selected.first().innerText()).match(/legacy:[^\s]+/)?.[0] ?? null
+    ? (await selected.first().innerText()).split(/\s+/).find((token) => token.includes(":")) ?? null
     : null;
 }
 
@@ -296,7 +363,7 @@ function fixtureResponse(url) {
       run_id: runId,
       schema_version: "analysis.results.v1",
       status: "partial",
-      total_count: 2,
+      total_count: 3,
     };
   }
   if (url.pathname === "/v2/sessions/current/analysis/spin-wave/gamma.v1") return gamma();
@@ -315,19 +382,21 @@ function fixtureResponse(url) {
 
 function datasetSummaries() {
   return [
+    summary(modalK0DatasetId, "Modal K0 field sweep fixture", "modal_eigen", modalK0SampleCount, modalK0SampleCount * 2, k0StatusFacets(), "field-sweep-revision"),
     summary("time-domain-spectrum", "Time-domain spectrum fixture", "time_domain_spectrum"),
     summary("dynamic-structure-factor", "Dynamic structure factor fixture", "dynamic_structure_factor"),
   ];
 }
 
-function summary(datasetId, title, productKind) {
+function summary(datasetId, title, productKind, sampleCount = 2, itemCount = 2, status = statusFacets(), revision = "1") {
   return {
-    dataset_id: datasetId, dataset_revision: "1", item_count: 2, manifest_resource_key: `/fixture/${datasetId}/manifest`, product_kind: productKind,
-    run_id: runId, sample_count: 2, stage_id: "stage:analysis", status: statusFacets(), title,
+    dataset_id: datasetId, dataset_revision: revision, item_count: itemCount, manifest_resource_key: `/fixture/${datasetId}/manifest`, product_kind: productKind,
+    run_id: runId, sample_count: sampleCount, stage_id: "stage:analysis", status, title,
   };
 }
 
 function manifest(datasetId) {
+  if (datasetId === modalK0DatasetId) return modalK0Manifest();
   const productKind = datasetId === "dynamic-structure-factor" ? "dynamic_structure_factor" : "time_domain_spectrum";
   const projectionId = productKind === "dynamic_structure_factor" ? "dsf" : "spectral-features";
   return {
@@ -338,17 +407,260 @@ function manifest(datasetId) {
   };
 }
 
+function modalK0Manifest() {
+  const firstSampleId = modalK0SampleId(0);
+  const firstItemId = modalK0ItemId(0, 0);
+  return {
+    axes: [{
+      axis_id: "bias-field",
+      cardinality: modalK0SampleCount,
+      inline_values: Array.from({ length: modalK0SampleCount }, (_, index) => modalK0AxisValue(index)),
+      label: "Bias field",
+      ordering: "declared",
+      preferred_display_units: ["T"],
+      projections: [{
+        label: "mu0 Hx",
+        operation: "scale_vector_component_or_magnitude",
+        projection_id: "mu0_Hx",
+        unit: "T",
+      }],
+      role: "outer_sweep",
+      semantic_id: "bias_field_a_per_m",
+      symbol: "mu0 Hx",
+      unit_si: "A/m",
+      values_resource_key: `/fixture/${modalK0DatasetId}/axes/bias-field/values`,
+      value_kind: "vector3",
+    }],
+    capabilities: {
+      branch_tracking: true,
+      comparison: false,
+      export: true,
+      fields: true,
+      item_paging: true,
+      live_partial_results: false,
+      result_meshes: false,
+      sample_paging: true,
+      server_filtering: true,
+      server_sorting: true,
+    },
+    dataset_id: modalK0DatasetId,
+    dataset_revision: "field-sweep-revision",
+    default_cursor: { item_id: firstItemId, sample_id: firstSampleId },
+    description: "FEM K0 modal field-sweep fixture with 15 declared bias-field samples.",
+    item_index_resource: `/fixture/${modalK0DatasetId}/items`,
+    item_kinds: ["eigen_mode"],
+    product_kind: "modal_eigen",
+    projections: [{
+      kind: "line",
+      projection_id: "field-frequency-map",
+      resource_key: `/fixture/${modalK0DatasetId}/projections/field-frequency-map`,
+      selectable: true,
+      title: "Field-frequency map",
+      x_axis_id: "bias-field",
+      y_axis_id: "frequency_hz",
+    }],
+    provenance: {
+      calculation_mode: "fmr_modal",
+      k_point: "Gamma (0, 0, 0)",
+      magnetostatic_boundary: "periodic_airbox_k0",
+      source_artifact: "eigen/field_sweep.v1.json",
+    },
+    run_id: runId,
+    sample_index_resource: `/fixture/${modalK0DatasetId}/samples`,
+    schema_version: "analysis.results.v1",
+    source_artifacts: [{
+      artifact: "eigen/field_sweep.v1.json",
+      relation: "adapter_source",
+      revision: "field-sweep-revision",
+    }],
+    stage_id: "stage:analysis",
+    status: k0StatusFacets(),
+    title: "Modal K0 field sweep fixture",
+    topology_policy: "shared_across_dataset",
+    units_policy: "SI",
+  };
+}
+
+function modalK0Samples() {
+  return {
+    cursor: null,
+    dataset_id: modalK0DatasetId,
+    dataset_revision: "field-sweep-revision",
+    items: Array.from({ length: modalK0SampleCount }, (_, sampleIndex) => {
+      const sampleId = modalK0SampleId(sampleIndex);
+      return {
+        coordinates: [modalK0Coordinate(sampleIndex)],
+        equilibrium_ref: {
+          artifact: "eigen/equilibrium",
+          relation: "sample_equilibrium",
+          revision: `equilibrium:${sampleId}`,
+        },
+        item_count: 2,
+        items_resource: `/fixture/${modalK0DatasetId}/items?sample_id=${sampleId}`,
+        linearization_ref: {
+          artifact: "eigen/linearization",
+          relation: "sample_linearization",
+          revision: `linearization:${sampleId}`,
+        },
+        mesh_ref: modalK0MeshRef(),
+        sample_id: sampleId,
+        sample_index: sampleIndex,
+        source_revision: "field-sweep-revision",
+        status: k0StatusFacets(),
+      };
+    }),
+    limit: 50,
+    next_cursor: null,
+    run_id: runId,
+    schema_version: "analysis.results.v1",
+    total_count: modalK0SampleCount,
+  };
+}
+
+function modalK0Items(sampleId) {
+  const sampleIndex = Number(sampleId?.match(/bias-field-sample-(\d{4})/)?.[1] ?? 0);
+  const resolvedSampleId = modalK0SampleId(sampleIndex);
+  return {
+    cursor: null,
+    dataset_id: modalK0DatasetId,
+    dataset_revision: "field-sweep-revision",
+    items: [0, 1].map((modeIndex) => {
+      const itemId = modalK0ItemId(sampleIndex, modeIndex);
+      const fieldId = `analysis:k0:${resolvedSampleId}:mode-${String(modeIndex).padStart(4, "0")}`;
+      return {
+        branch_id: String(modeIndex),
+        detail_resource: `/fixture/${modalK0DatasetId}/items/${itemId}`,
+        display_index: modeIndex,
+        field_ref: {
+          field_id: fieldId,
+          field_revision: `field:${resolvedSampleId}:${modeIndex}`,
+          mesh_ref: modalK0MeshRef(),
+          quantity_id: "m",
+          representation: "complex-vector-xyz",
+          resource_key: `/fixture/${modalK0DatasetId}/fields/${encodeURIComponent(fieldId)}`,
+          status: "ready",
+        },
+        frequency_hz: (2.4 + sampleIndex * 0.02 + modeIndex * 0.35) * 1e9,
+        item_id: itemId,
+        item_kind: "eigen_mode",
+        quality: { qualification: "unvalidated", residual_relative_l2: 1e-10 },
+        relations: [],
+        sample_id: resolvedSampleId,
+        source_revision: "field-sweep-revision",
+        status: k0StatusFacets(),
+      };
+    }),
+    limit: 50,
+    next_cursor: null,
+    run_id: runId,
+    schema_version: "analysis.results.v1",
+    total_count: 2,
+  };
+}
+
+function modalK0Projection(projectionId) {
+  const series = [0, 1].map((modeIndex) => ({
+    label: `Mode branch ${modeIndex + 1}`,
+    points: Array.from({ length: modalK0SampleCount }, (_, sampleIndex) => {
+      const sampleId = modalK0SampleId(sampleIndex);
+      return {
+        branch_id: String(modeIndex),
+        item_id: modalK0ItemId(sampleIndex, modeIndex),
+        ordinal: modeIndex * modalK0SampleCount + sampleIndex,
+        sample_id: sampleId,
+        status: "ready",
+        value: (2.4 + sampleIndex * 0.02 + modeIndex * 0.35) * 1e9,
+        x: 40_000 + sampleIndex * 1_000,
+        y: (2.4 + sampleIndex * 0.02 + modeIndex * 0.35) * 1e9,
+      };
+    }),
+    series_id: `branch:${modeIndex}`,
+  }));
+  const selectionIndex = series.flatMap((entry) => entry.points.map((point) => ({
+    branch_id: point.branch_id,
+    item_id: point.item_id,
+    item_kind: "eigen_mode",
+    ordinal: point.ordinal,
+    sample_id: point.sample_id,
+  })));
+  return {
+    axis_labels: { x: "Bias field [A/m]", y: "Frequency [Hz]" },
+    axis_mapping: { x: "bias-field", y: "frequency_hz" },
+    axis_units: { x: "A/m", y: "Hz" },
+    dataset_id: modalK0DatasetId,
+    dataset_revision: "field-sweep-revision",
+    fixed_coordinates: [],
+    projection_id: projectionId,
+    projection_revision: "field-frequency-projection-revision",
+    run_id: runId,
+    schema_version: "analysis.results.v1",
+    selection_index: selectionIndex,
+    series,
+    status: k0StatusFacets(),
+  };
+}
+
+function modalK0AxisValue(sampleIndex) {
+  const sampleId = modalK0SampleId(sampleIndex);
+  return {
+    category: null,
+    entity_ref: null,
+    label: modalK0FieldLabel(sampleIndex),
+    scalar_si: null,
+    status: "ready",
+    token: sampleId,
+    vector3_si: [40_000 + sampleIndex * 1_000, 0, 0],
+  };
+}
+
+function modalK0Coordinate(sampleIndex) {
+  return {
+    axis_id: "bias-field",
+    category: null,
+    entity_ref: null,
+    label: modalK0FieldLabel(sampleIndex),
+    scalar_si: null,
+    token: modalK0SampleId(sampleIndex),
+    vector3_si: [40_000 + sampleIndex * 1_000, 0, 0],
+  };
+}
+
+function modalK0FieldLabel(sampleIndex) {
+  const fieldApm = 40_000 + sampleIndex * 1_000;
+  const mu0 = 4 * Math.PI * 1e-7;
+  return `mu0 Hx = ${(fieldApm * mu0 * 1_000).toFixed(1)} mT`;
+}
+
+function modalK0SampleId(sampleIndex) {
+  return `bias-field-sample-${String(sampleIndex).padStart(4, "0")}`;
+}
+
+function modalK0ItemId(sampleIndex, modeIndex) {
+  return `k0:sample-${String(sampleIndex).padStart(4, "0")}:mode-${String(modeIndex).padStart(4, "0")}`;
+}
+
+function modalK0MeshRef() {
+  return {
+    mesh_id: "mesh:k0-antidot",
+    mesh_revision: "mesh-revision-1",
+    topology_fingerprint: "sha256:k0-topology",
+  };
+}
+
 function samples(datasetId) {
+  if (datasetId === modalK0DatasetId) return modalK0Samples();
   return { dataset_id: datasetId, dataset_revision: "1", items: [0, 1].map((sampleIndex) => ({ coordinates: [{ axis_id: "sample", label: `sample:${sampleIndex}`, token: String(sampleIndex) }], item_count: 1, items_resource: `/fixture/${datasetId}/items`, sample_id: `${datasetId}:sample:${sampleIndex}`, sample_index: sampleIndex, source_revision: "1", status: statusFacets() })), limit: 50, run_id: runId, schema_version: "analysis.results.v1", total_count: 2 };
 }
 
 function items(datasetId, sampleId) {
+  if (datasetId === modalK0DatasetId) return modalK0Items(sampleId);
   const index = sampleId?.endsWith(":1") ? 1 : 0;
   const itemId = datasetId === "dynamic-structure-factor" ? `legacy:dsf:${index}:${index}` : `legacy:gamma:peak:${index}`;
   return { dataset_id: datasetId, dataset_revision: "1", items: [{ detail_resource: `/fixture/${datasetId}/items/${itemId}`, display_index: index, frequency_hz: (index + 1) * 12.5e9, item_id: itemId, item_kind: datasetId === "dynamic-structure-factor" ? "dsf_point" : "spectral_feature", quality: { qualification: "legacy" }, relations: [], sample_id: `${datasetId}:sample:${index}`, source_revision: "1", status: statusFacets(), wavevector_kf: datasetId === "dynamic-structure-factor" ? [index * 1e6, 0, 0] : null }], limit: 50, run_id: runId, schema_version: "analysis.results.v1", total_count: 1 };
 }
 
 function projection(datasetId, projectionId) {
+  if (datasetId === modalK0DatasetId) return modalK0Projection(projectionId);
   const dsf = datasetId === "dynamic-structure-factor";
   const itemIds = dsf ? ["legacy:dsf:0:0", "legacy:dsf:1:1"] : ["legacy:gamma:peak:0", "legacy:gamma:peak:1"];
   return { axis_labels: { x: dsf ? "frequency [Hz]" : "frequency [Hz]", y: "power [1]" }, axis_mapping: { x: "frequency", y: "power" }, axis_units: { x: "Hz", y: "1" }, dataset_id: datasetId, dataset_revision: "1", fixed_coordinates: [], projection_id: projectionId, projection_revision: "1", run_id: runId, schema_version: "analysis.results.v1", selection_index: itemIds.map((itemId, ordinal) => ({ item_id: itemId, ordinal, sample_id: `${datasetId}:sample:${ordinal}` })), series: [{ label: dsf ? "S(k,f)" : "Spectral features", points: itemIds.map((itemId, ordinal) => ({ item_id: itemId, ordinal, sample_id: `${datasetId}:sample:${ordinal}`, status: "partial", value: ordinal + 1, x: (ordinal + 1) * 12.5e9, y: ordinal + 1 })), series_id: "fixture" }], status: statusFacets() };
@@ -368,6 +680,10 @@ function dsf() {
 
 function statusFacets() {
   return { completeness: "partial", execution: "completed", qualification: "legacy", resource: "partial", reason_code: "legacy_artifact" };
+}
+
+function k0StatusFacets() {
+  return { completeness: "ready", execution: "published", qualification: "unvalidated", resource: "ready" };
 }
 
 async function loadPlaywright() {

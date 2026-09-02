@@ -20,6 +20,10 @@ describe("Results mode sweep smoke script", () => {
 
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
     expect(smokeScript).toContain("installResultsFixtureRoutes");
+    expect(smokeScript).toContain("Modal K0 field sweep fixture");
+    expect(smokeScript).toContain("verifyModalK0Sweep");
+    expect(smokeScript).toContain("bias-field-sample-0007");
+    expect(smokeScript).toContain("field-frequency-map");
     expect(smokeScript).toContain("Time-domain spectrum fixture");
     expect(smokeScript).toContain("Dynamic structure factor fixture");
     expect(smokeScript).not.toContain("datasetRows.first()");
