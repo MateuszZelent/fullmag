@@ -1551,7 +1551,7 @@ describe("StudyInspectorPanel", () => {
     );
     expect(html).toContain('<option value="auto">Auto</option>');
     expect(html).toContain('<option value="multilayer_convolution">FDM multilayer convolution</option>');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Save globals<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Apply Grid<\/button>/);
   });
 
   it("renders spectral stage authoring fields", () => {
@@ -1685,6 +1685,30 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain('value="1e9"');
     expect(html).toContain('value="2e9"');
     expect(html).toContain('value="frequency_window"');
+  });
+
+  it("renders K0 bias-field sweep authoring controls", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      biasFieldSamplesApm: "40000, 0, 0\n54000, 0, 0",
+      biasFieldEquilibriumPolicy: "continuation",
+      biasFieldContinuationSeed: "initial_state",
+    };
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={draft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Bias field sweep samples"');
+    expect(html).toContain("40000, 0, 0");
+    expect(html).toContain("54000, 0, 0");
+    expect(html).toContain('aria-label="Bias field equilibrium policy"');
+    expect(html).toContain('value="continuation" selected=""');
+    expect(html).toContain('aria-label="Bias field continuation seed"');
   });
 
   it("renders change-device stage authoring controls", () => {
