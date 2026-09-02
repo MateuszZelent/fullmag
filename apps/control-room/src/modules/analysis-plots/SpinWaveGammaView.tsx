@@ -63,17 +63,21 @@ export function SpinWaveGammaView({
           {resource.peaks.map((peak, rank) => {
             const selection = spinWaveGammaFeatureSelection(peak);
             const selectable = Boolean(selection && onFeatureSelect);
+            const activate = () => {
+              if (!selection || !onFeatureSelect) return;
+              onFeatureSelect(selection);
+            };
             return <div
               aria-disabled={!selectable || undefined}
               aria-label={selectable ? `Select spectral feature ${peak.index}` : `Unavailable spectral feature ${peak.index}`}
               className="fm-analysis-plots__column-row"
               {...(selection ? { "data-result-item-id": selection.itemId } : {})}
               key={peak.index}
-              onClick={selectable ? () => onFeatureSelect?.(selection) : undefined}
+              onClick={selectable ? activate : undefined}
               onKeyDown={selectable ? (event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  onFeatureSelect?.(selection);
+                  activate();
                 }
               } : undefined}
               role="row"
