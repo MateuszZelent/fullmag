@@ -11,6 +11,7 @@ import {
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 import { chartTableWindowFromBinary } from "@/shared/domain/analysis/chartDataPlan";
+import type { AnalysisResultProjectionSurfaceProps } from "./components/AnalysisResultProjectionSurface";
 import type { DynamicStructureFactorPointSelection } from "./dynamicStructureFactorModel";
 import type { SpinWaveGammaFeatureSelection } from "./spinWaveGammaModel";
 
@@ -288,6 +289,48 @@ describe("Analysis workbench", () => {
         }),
         "analysis-plots",
       );
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not use a legacy click fallback while canonical result projection is present", async () => {
+    const setSelection = vi.fn();
+    const kernel = { selection: { set: setSelection } } as unknown as KernelApi;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const resultProjection = {
+      kernel,
+      model: { selectionBySeriesId: {}, series: [] },
+      onPointSelect: vi.fn(),
+      onProjectionSelect: vi.fn(),
+      projections: [],
+      productKind: null,
+      resource: null,
+      selectedProjectionId: null,
+      selectedSelection: null,
+      status: "loading",
+    } as unknown as AnalysisResultProjectionSurfaceProps;
+    try {
+      await act(async () => root.render(
+        <AnalysisPlotsView
+          {...props}
+          activeSurface="dynamics"
+          activeSubview="dynamics.temporal-fft"
+          kernel={kernel}
+          resultProjection={resultProjection}
+          spinWaveGamma={spinWaveGamma}
+        />,
+      ));
+      const feature = findElements(container, (element) => element.getAttribute("data-legacy-gamma-feature") === "true")[0];
+      expect(feature).toBeDefined();
+
+      await act(async () => feature.click());
+
+      expect(setSelection).not.toHaveBeenCalled();
+      expect(resultProjection.onPointSelect).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

@@ -129,8 +129,10 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
   const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f";
   const isFrequencySubview = activeSubview === "dispersion.modal" || activeSubview === "dispersion.driven-map" || activeSubview === "dispersion.branches" || activeSubview === "resonance.eigenmodes" || activeSubview === "resonance.frequency-response" || activeSubview === "resonance.modal-driven";
   const isHysteresisSubview = activeSubview === "hysteresis.loop" || activeSubview === "hysteresis.branches";
-  const onGammaFeatureSelect = resultProjection?.productKind === "time_domain_spectrum"
-    ? (selection: SpinWaveGammaFeatureSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+  const onGammaFeatureSelect = resultProjection
+    ? resultProjection.productKind === "time_domain_spectrum"
+      ? (selection: SpinWaveGammaFeatureSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+      : undefined
     : spinWaveGamma
       ? (selection: SpinWaveGammaFeatureSelection) => {
           const ref = legacyGammaFeatureSelectionRef(
@@ -140,9 +142,11 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
           if (!ref) return;
           kernel.selection.set(legacyTimeDomainSelectionPatch(ref, "Legacy spectral feature"), "analysis-plots");
         }
-    : undefined;
-  const onDsfPointSelect = resultProjection?.productKind === "dynamic_structure_factor"
-    ? (selection: DynamicStructureFactorPointSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+      : undefined;
+  const onDsfPointSelect = resultProjection
+    ? resultProjection.productKind === "dynamic_structure_factor"
+      ? (selection: DynamicStructureFactorPointSelection) => resultProjection.onPointSelect(resultProjectionSelectionFromLegacyPoint(selection))
+      : undefined
     : dynamicStructureFactor
       ? (selection: DynamicStructureFactorPointSelection) => {
           const ref = legacyDsfPointSelectionRef(
@@ -152,7 +156,7 @@ export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: Analysis
           if (!ref) return;
           kernel.selection.set(legacyTimeDomainSelectionPatch(ref, "Legacy DSF point"), "analysis-plots");
         }
-    : undefined;
+      : undefined;
 
   return <div className="fm-analysis-plots">
     <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} onSubviewChange={onSubviewChange} subviews={subviews} />
