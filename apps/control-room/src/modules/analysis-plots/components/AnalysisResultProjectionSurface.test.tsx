@@ -33,7 +33,13 @@ describe("AnalysisResultProjectionSurface", () => {
       axis_units: { x: "rad/m", y: "Hz" },
       dataset_id: "result:run-1:stage-1:dynamic-structure-factor",
       dataset_revision: "revision-1",
-      fixed_coordinates: [],
+      fixed_coordinates: [
+        {
+          axis_id: "bias-field",
+          label: "mu0 Hx = 75 mT",
+          token: "bias:75mT",
+        },
+      ],
       projection_id: "dsf-map",
       projection_revision: "projection-revision-1",
       run_id: "run-1",
@@ -119,5 +125,85 @@ describe("AnalysisResultProjectionSurface", () => {
       ordinal: 0,
       sampleId: "dsf-sample-0000",
     });
+    const html = renderToStaticMarkup(
+      <AnalysisResultProjectionSurface
+        kernel={{ bus: undefined } as unknown as KernelApi}
+        model={model}
+        onPointSelect={onPointSelect}
+        onProjectionSelect={() => undefined}
+        projections={[]}
+        productKind="dynamic_structure_factor"
+        resource={resource}
+        selectedProjectionId="dsf-map"
+        selectedSelection={selectedSelection}
+        status="ready"
+      />,
+    );
+    expect(html).toContain('aria-label="Fixed coordinates"');
+    expect(html).toContain("bias-field=mu0 Hx = 75 mT");
+  });
+
+  it("does not display a selected point from another projection revision", () => {
+    const resource = {
+      axis_labels: { x: "Frequency", y: "Power" },
+      axis_mapping: { x: "frequency_hz", y: "power" },
+      axis_units: { x: "Hz", y: "1" },
+      dataset_id: "result:run-1:stage-1:spectrum",
+      dataset_revision: "revision-1",
+      fixed_coordinates: [],
+      projection_id: "response-spectrum",
+      projection_revision: "projection-revision-2",
+      run_id: "run-1",
+      schema_version: "fullmag.analysis.result_dataset_index.v1",
+      selection_index: [
+        {
+          branch_id: null,
+          item_id: "item-1",
+          item_kind: "spectral_feature",
+          ordinal: 0,
+          sample_id: "sample-1",
+        },
+      ],
+      series: [],
+      status: {
+        completeness: "ready",
+        detail: null,
+        execution: "published",
+        qualification: "validated",
+        reason_code: null,
+        resource: "ready",
+      },
+      unsupported_reason: null,
+    } as unknown as AnalysisResultProjectionResource;
+    const selectedSelection = analysisResultSelectionRef({
+      datasetId: resource.dataset_id,
+      datasetRevision: resource.dataset_revision,
+      focus: "projection-point",
+      itemId: "item-1",
+      itemKind: "spectral_feature",
+      projectionId: "response-spectrum",
+      projectionOrdinal: 0,
+      projectionRevision: "projection-revision-1",
+      runId: resource.run_id,
+      sampleId: "sample-1",
+      stageId: "stage-1",
+    });
+
+    const html = renderToStaticMarkup(
+      <AnalysisResultProjectionSurface
+        kernel={{ bus: undefined } as unknown as KernelApi}
+        model={{ selectionBySeriesId: {}, series: [] }}
+        onPointSelect={() => undefined}
+        onProjectionSelect={() => undefined}
+        projections={[]}
+        productKind="time_domain_spectrum"
+        resource={resource}
+        selectedProjectionId="response-spectrum"
+        selectedSelection={selectedSelection}
+        status="ready"
+      />,
+    );
+
+    expect(html).not.toContain("Selected result point:");
   });
 });

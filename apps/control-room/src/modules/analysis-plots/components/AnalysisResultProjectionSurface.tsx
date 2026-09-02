@@ -55,7 +55,11 @@ export function AnalysisResultProjectionSurface({
   selectedProjectionId,
   status,
 }: AnalysisResultProjectionSurfaceProps) {
-  const selectedOrdinal = selectedSelection?.projectionOrdinal ?? null;
+  const selectedOrdinal =
+    selectedSelection?.projectionId === resource?.projection_id &&
+    selectedSelection?.projectionRevision === resource?.projection_revision
+      ? selectedSelection.projectionOrdinal ?? null
+      : null;
   const projectionStatus = resource?.unsupported_reason ? "unsupported" : status;
   const subtitle = resource
     ? `${resource.dataset_id} · revision ${resource.projection_revision}`
@@ -141,6 +145,17 @@ export function AnalysisResultProjectionSurface({
             series={model.series}
             xAxisLabel={resource.axis_labels.x ?? resource.axis_mapping.x ?? "x"}
           />
+        </div>
+      ) : null}
+      {resource && resource.fixed_coordinates.length > 0 ? (
+        <div
+          aria-label="Fixed coordinates"
+          className="fm-analysis-plots__status"
+          role="status"
+        >
+          Fixed coordinates: {resource.fixed_coordinates
+            .map((coordinate) => `${coordinate.axis_id}=${coordinate.label ?? coordinate.token}`)
+            .join(" · ")}
         </div>
       ) : null}
     </ChartSection>
