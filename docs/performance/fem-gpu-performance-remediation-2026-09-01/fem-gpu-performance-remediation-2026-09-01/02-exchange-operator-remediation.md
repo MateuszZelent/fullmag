@@ -2,12 +2,16 @@
 
 **Ustalenia:** EX-01, EX-02, EX-03, EX-04, EX-05, EX-06, EX-07, EX-08.
 
-**Status po weryfikacji:** diagnozy EX-01, EX-02, EX-07 i EX-08 są
-potwierdzone w źródle. EX-03 jest częściowy: istnieje akumulacja double-double,
-ale nie dwa typowane tryby. EX-04 i korzyści plannerów są `NOT VERIFIED`.
-EX-05 już failuje przed strict GPU step dla consistent mass. EX-06 potwierdza
-obecną `LEGACY` assembly, lecz PA pozostaje celem. Wszystkie nowe typy, pliki i
-testy poniżej są projektowane.
+**Status po weryfikacji:** EX-01 ma źródłowy reduced CSR/mass/lift dla ścieżki
+RK oraz osobne reduced-kernel paths dla pola, energii exchange i różnicy energii
+używanej przez Armijo; EX-02 ma fused XYZ z zachowaną ścieżką split. EX-03
+pozostaje częściowy: typed operator kinds istnieją, ale strict/FMA precision
+modes nie. EX-04 ma deterministyczny fail-closed resolver, bez
+histogramu/autotune. EX-05 nadal failuje przed strict GPU step dla consistent
+mass. EX-06 potwierdza obecną `LEGACY` assembly, a PA pozostaje
+nieprodukcyjnym celem. Builder off-diagonal CSR i row-scale są kontraktami
+źródłowymi, lecz integracja wszystkich konsumentów, parytet i managed runtime
+są `NOT VERIFIED`.
 
 ## 1. Aktualny przepływ
 
@@ -16,8 +20,10 @@ testy poniżej są projektowane.
 Laplacjanu i publikuje metadane. `gpu/cuda/exchange/exchange_upload.cpp`
 kopiuje pełny CSR oraz lumped mass na GPU.
 
-`gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` uruchamia ten sam operator
-osobno dla `m.x`, `m.y` i `m.z`.
+`gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` zachowuje split x/y/z jako
+compatibility path, ale dla nieperiodycznego row-scale wybiera fused XYZ, a dla
+kwalifikowanej mapy PBC może wybrać reduced CSR/lift. Publiczny planner nadal
+nie promuje tych wariantów bez kwalifikacji.
 
 Wariant periodyczny używa kernela, w którym każdy docelowy wiersz skanuje
 wszystkie `source_row`, aby znaleźć członków swojej klasy. To nie jest problem
@@ -29,11 +35,10 @@ Zastąpić nazwę i strukturę `LegacyGpuExchangeDeviceState` modułowym stanem:
 
 ```cpp
 enum class GpuExchangeOperatorKind : uint32_t {
-    None,
-    ComponentSplitCsrCompatibility,
-    FusedXyzCsr,
-    PeriodicReducedFusedXyzCsr,
-    CusparseSpmm,
+    LegacySparse,
+    FusedXYZ,
+    PeriodicReduced,
+    CuSparse,
     PartialAssembly,
 };
 
@@ -59,7 +64,7 @@ struct GpuPeriodicExchangeDeviceState {
 };
 
 struct FemGpuExchangeDeviceState {
-    GpuExchangeOperatorKind kind = GpuExchangeOperatorKind::None;
+    GpuExchangeOperatorKind kind = GpuExchangeOperatorKind::LegacySparse;
     GpuExchangeCsrDeviceState full{};
     GpuPeriodicExchangeDeviceState periodic{};
     bool uploaded = false;
@@ -99,7 +104,7 @@ To są dane niezmienne względem etapu RK.
 
 ### Implementacja
 
-W `exchange_operator_builder.cpp` przygotować hostowy wektor:
+W `exchange_operator.cpp` oraz uploadzie przygotowano deviceowy row-scale:
 
 ```cpp
 std::vector<double> build_exchange_row_scale(
@@ -157,7 +162,7 @@ przekątna nie wnosi pracy.
 
 ### Builder
 
-Utworzyć kanoniczny GPU-only operator:
+Kanoniczny builder GPU-only znajduje się w `exchange_operator.cpp`:
 
 ```cpp
 struct HostExchangeCsr {

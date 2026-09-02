@@ -37,6 +37,22 @@ void fullmag_cuda_demag_recovery_csr(
     int rows,
     cudaStream_t stream = nullptr);
 
+/// Device Poisson demag recovery for three components sharing one CSR pattern.
+/// The value arrays may differ; only row offsets and column indices are shared.
+void fullmag_cuda_demag_recovery_xyz_csr(
+    const uint32_t *csr_row_offsets,
+    const uint32_t *csr_col_indices,
+    const double *csr_values_x,
+    const double *csr_values_y,
+    const double *csr_values_z,
+    const double *u,
+    const uint8_t *magnetic_node_mask,
+    double *h_x,
+    double *h_y,
+    double *h_z,
+    int rows,
+    cudaStream_t stream = nullptr);
+
 /// Lift reduced periodic scalar potential to full nodal scalar potential.
 void fullmag_cuda_lift_periodic_reduced_scalar_to_full(
     const double *reduced_values,

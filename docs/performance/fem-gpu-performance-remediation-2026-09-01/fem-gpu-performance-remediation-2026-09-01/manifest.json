@@ -3,76 +3,76 @@
   "base_commit": "4c7897f218eb0c32612db1f43a844502a316b4f6",
   "audit_commit": "7faa259c5597ba447c413f2aea0ff66d6110b297",
   "generation_branch": "docs/fem-gpu-performance-remediation-2026-09-01",
-  "verified_commit": "cdb3c135901b950871291610c6ba45e62f8cb90a",
+  "verified_commit": "c3f49db708868f3649a3e894416d230269718920",
   "verified_date": "2026-09-01",
   "verification_scope": "source_contracts_and_justfile_only",
   "managed_gpu_runtime": "NOT VERIFIED",
   "files": [
     {
       "path": "README.md",
-      "bytes": 10585,
-      "lines": 243,
-      "words": 1279
+      "bytes": 13060,
+      "lines": 281,
+      "words": 1577
     },
     {
       "path": "01-runtime-truth-build-and-instrumentation.md",
-      "bytes": 13011,
-      "lines": 403,
-      "words": 1262
+      "bytes": 15310,
+      "lines": 439,
+      "words": 1414
     },
     {
       "path": "02-exchange-operator-remediation.md",
-      "bytes": 11493,
-      "lines": 432,
-      "words": 1361
+      "bytes": 12370,
+      "lines": 438,
+      "words": 1418
     },
     {
       "path": "03-rk-pipeline-and-synchronization-remediation.md",
-      "bytes": 11472,
-      "lines": 448,
-      "words": 1361
+      "bytes": 12169,
+      "lines": 443,
+      "words": 1407
     },
     {
       "path": "04-adaptive-error-controller-remediation.md",
-      "bytes": 4265,
-      "lines": 175,
-      "words": 505
+      "bytes": 4665,
+      "lines": 178,
+      "words": 540
     },
     {
       "path": "05-demag-hypre-remediation.md",
-      "bytes": 6214,
-      "lines": 240,
-      "words": 721
+      "bytes": 6606,
+      "lines": 244,
+      "words": 743
     },
     {
       "path": "06-effective-field-reductions-and-memory-remediation.md",
-      "bytes": 5046,
-      "lines": 208,
-      "words": 602
+      "bytes": 5234,
+      "lines": 209,
+      "words": 601
     },
     {
       "path": "07-relaxation-preconditioning-remediation.md",
-      "bytes": 4815,
-      "lines": 209,
-      "words": 570
+      "bytes": 5092,
+      "lines": 211,
+      "words": 578
     },
     {
       "path": "08-operator-planner-partial-assembly-and-autotuning.md",
-      "bytes": 3797,
-      "lines": 162,
-      "words": 454
+      "bytes": 4042,
+      "lines": 166,
+      "words": 470
     },
     {
       "path": "09-pr-sequence-tests-and-definition-of-done.md",
-      "bytes": 4398,
-      "lines": 201,
-      "words": 555
+      "bytes": 5006,
+      "lines": 208,
+      "words": 607
     },
     {
       "path": "10-finding-coverage-matrix.md",
-      "bytes": 8441,
-      "lines": 65,
-      "words": 1072
+      "bytes": 10517,
+      "lines": 69,
+      "words": 1316
     }
   ],
   "finding_ids": [

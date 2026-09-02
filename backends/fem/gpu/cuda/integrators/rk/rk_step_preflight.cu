@@ -108,6 +108,13 @@ bool gpu_rk_prepare_step_preflight(
             static_cast<uint32_t>(ctx.base_plan.precision),
             static_cast<uint32_t>(ctx.base_plan.integrator));
     }
+    gpu_performance_configure(
+        ctx.gpu_state.performance_counters,
+        true,
+        static_cast<uint32_t>(plan.execution_class),
+        static_cast<uint32_t>(ctx.base_plan.precision),
+        static_cast<uint32_t>(ctx.base_plan.integrator),
+        ctx.mfem_context.selected_device_index);
     if (!gpu_execution_receipt_snapshot(ctx.gpu_state.execution_receipt).accounting_valid) {
         reason = "GPU RK execution receipt rejected the resolved operator plan";
         return false;

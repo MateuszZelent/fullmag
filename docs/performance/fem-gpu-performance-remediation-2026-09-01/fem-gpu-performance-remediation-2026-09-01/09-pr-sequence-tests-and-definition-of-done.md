@@ -1,5 +1,10 @@
 # 09. Kolejność PR, testy i Definition of Done
 
+W bieżącym worktree wykonano część zmian z PR-00–PR-13 (kontrakty źródłowe,
+fail-closed paths i testy kontraktowe). Poniższa kolejność nadal opisuje bramy
+kwalifikacyjne: bez managed GPU, parytetu naukowego i benchmarku żaden PR nie
+jest oznaczony jako produkcyjnie zamknięty.
+
 ## 1. Reguła
 
 Każdy PR ma jeden główny mechanizm, test/licznik przed optymalizacją,
@@ -11,9 +16,10 @@ compatibility path, managed GPU A/B i nie zmienia tolerancji razem z kernelem.
 
 Runtime performance owner, ABI v1 i SP4 managed benchmark. Zachować istniejący
 strict receipt, execution masks, transfer audit, step stats, endpoint telemetry
-i phase event ownership; nie implementować ich ponownie. Podłączyć istniejący
-`--require-native-cubin` do automatycznego GPU compute-capability gate finalnego
-managed manifestu.
+i phase event ownership; nie implementować ich ponownie. Zachować istniejący
+Ada-specific gate exportera (`8.9`, `fullmag_fem=sm_89`, `hypre=sm_89`), a
+stałe wymaganie `sm_89` zastąpić mapowaniem wykrytego compute capability i
+zapisać wynik z digestem bundle w immutable benchmark receipt.
 
 ### PR-01 — HYPRE owner + conditional RHS norm
 

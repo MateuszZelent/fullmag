@@ -21,6 +21,18 @@ void fullmag_cuda_device_max(
     cub::DeviceReduce::Max(temp_storage, temp_storage_bytes, data, result, N, stream);
 }
 
+void fullmag_cuda_device_min(
+    const double *data, int N, double *result,
+    void *temp_storage, size_t &temp_storage_bytes,
+    cudaStream_t stream)
+{
+    if (temp_storage == nullptr) {
+        cub::DeviceReduce::Min(nullptr, temp_storage_bytes, data, result, N, stream);
+        return;
+    }
+    cub::DeviceReduce::Min(temp_storage, temp_storage_bytes, data, result, N, stream);
+}
+
 void fullmag_cuda_device_sum(
     const double *data, int N, double *result,
     void *temp_storage, size_t &temp_storage_bytes,

@@ -1,6 +1,11 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
+use crate::fem::execution_receipt::{
+    validate_fem_gpu_performance_snapshot, FemGpuPerformanceSnapshotSummary,
+    FemGpuPerformanceSnapshotValidationError, FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
+    FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+};
 use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt, RunError};
 
 use std::ffi::CStr;
@@ -436,6 +441,87 @@ impl NativeFemGpuExecutionReceipt {
     }
 }
 
+/// Validated native performance evidence.  The raw append-only ABI is kept
+/// alongside the compact summary so diagnostics can expose every counter
+/// without inventing a second counter vocabulary in Rust.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NativeFemGpuPerformanceSnapshot {
+    pub(crate) summary: FemGpuPerformanceSnapshotSummary,
+    pub(crate) raw: ffi::fullmag_fem_gpu_performance_snapshot_v1,
+}
+
+impl NativeFemGpuPerformanceSnapshot {
+    pub(crate) fn from_ffi(
+        snapshot: ffi::fullmag_fem_gpu_performance_snapshot_v1,
+    ) -> Result<Self, RunError> {
+        let execution_class = match snapshot.execution_class {
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::
+                        FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                        as u32 => FemGpuExecutionClass::DeviceResident,
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::
+                        FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER
+                        as u32 => FemGpuExecutionClass::GpuOperatorHostSolver,
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::
+                        FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
+                        as u32 => FemGpuExecutionClass::HybridCpuPoisson,
+            value
+                if value
+                    == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_CPU
+                        as u32 => FemGpuExecutionClass::Cpu,
+            _ => return Err(receipt_error("performance_snapshot_unknown_execution_class")),
+        };
+        let summary = FemGpuPerformanceSnapshotSummary {
+            abi_version: snapshot.abi_version,
+            struct_size: snapshot.struct_size,
+            available: snapshot.available != 0,
+            execution_class,
+            completed_step: snapshot.completed_step,
+            completed_attempt_count: snapshot.completed_attempt_count,
+            rejected_attempt_count: snapshot.rejected_attempt_count,
+            failed_attempt_count: snapshot.failed_attempt_count,
+            physical_rhs_evaluations: snapshot.physical_rhs_evaluations,
+            accepted_rhs_evaluations: snapshot.accepted_rhs_evaluations,
+            physical_device_to_device_bytes: snapshot.physical_device_to_device_bytes,
+            accepted_device_to_device_bytes: snapshot.accepted_device_to_device_bytes,
+        };
+        validate_fem_gpu_performance_snapshot(&summary).map_err(|error| {
+            let token = match error {
+                FemGpuPerformanceSnapshotValidationError::AbiMismatch => {
+                    "performance_snapshot_abi_mismatch"
+                }
+                FemGpuPerformanceSnapshotValidationError::Unavailable => {
+                    "performance_snapshot_unavailable"
+                }
+                FemGpuPerformanceSnapshotValidationError::ExecutionClassMismatch => {
+                    "performance_snapshot_execution_class_mismatch"
+                }
+                FemGpuPerformanceSnapshotValidationError::NoCompletedStep => {
+                    "performance_snapshot_no_completed_step"
+                }
+                FemGpuPerformanceSnapshotValidationError::AcceptedCountersExceedPhysical => {
+                    "performance_snapshot_accounting_invalid"
+                }
+            };
+            receipt_error(token)
+        })?;
+        Ok(Self {
+            summary,
+            raw: snapshot,
+        })
+    }
+
+    pub(crate) fn abi_is_current(&self) -> bool {
+        self.summary.abi_version == FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1
+            && self.summary.struct_size == FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE
+    }
+}
+
 fn execution_class_name(class: FemGpuExecutionClass) -> &'static str {
     match class {
         FemGpuExecutionClass::DeviceResident => "device_resident",
@@ -697,6 +783,37 @@ mod tests {
             }
             assert!(NativeFemGpuExecutionReceipt::from_ffi(raw).is_err());
         }
+    }
+
+    #[test]
+    fn performance_snapshot_maps_and_validates_native_evidence() {
+        let mut raw = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
+            abi_version: FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
+            struct_size: FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+            available: 1,
+            execution_class:
+                ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32,
+            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
+            integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK23_BS as u32,
+            device_ordinal: 0,
+            completed_step: 1,
+            completed_attempt_count: 1,
+            physical_rhs_evaluations: 4,
+            accepted_rhs_evaluations: 3,
+            physical_device_to_device_bytes: 96,
+            accepted_device_to_device_bytes: 72,
+            ..Default::default()
+        };
+        let parsed = NativeFemGpuPerformanceSnapshot::from_ffi(raw).unwrap();
+        assert!(parsed.abi_is_current());
+        assert_eq!(
+            parsed.summary.execution_class,
+            FemGpuExecutionClass::DeviceResident
+        );
+        assert_eq!(parsed.summary.accepted_rhs_evaluations, 3);
+        raw.available = 0;
+        assert!(NativeFemGpuPerformanceSnapshot::from_ffi(raw).is_err());
     }
 
     fn metric_name(name: &str) -> [i8; 64] {

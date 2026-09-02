@@ -12,7 +12,7 @@
 - **Gałąź dokumentacyjna pochodzenia:** `docs/fem-gpu-performance-remediation-2026-09-01`
 - **Rewizja bazowa planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 - **Rewizja pierwotnego audytu:** `7faa259c5597ba447c413f2aea0ff66d6110b297`
-- **Rewizja weryfikacji kodu:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+- **Rewizja weryfikacji kodu:** `c3f49db708868f3649a3e894416d230269718920`
 - **Data:** 2026-09-01
 - **Lane:** natywny FEM GPU, MFEM 4.9, HYPRE 3.1.0, CUDA.
 - **Przypadek referencyjny:** µMAG SP4 FEM, `mixed_p1`, `layers=1`, `mesh=medium`,
@@ -34,9 +34,10 @@ Stosowane statusy:
 - `NOT VERIFIED` — oczekiwany wpływ wydajnościowy lub zachowanie runtime nie
   ma aktualnego, immutable receipt z managed GPU.
 
-Pseudokod, nowe pliki, typy i testy w dokumentach 01–09 są celami
-implementacyjnymi, o ile nie oznaczono ich jako istniejące. Ścieżki zaczynające
-się od `gpu/` lub `cpu/` są względne wobec `backends/fem/`.
+Pseudokod i planowane cele w dokumentach 01–09 należy czytać razem z macierzą:
+część kontraktów, implementacji i testów istnieje już w bieżącym worktree, ale
+bez kompilacji, parytetu i managed receipt nie jest jeszcze kwalifikacją.
+Ścieżki zaczynające się od `gpu/` lub `cpu/` są względne wobec `backends/fem/`.
 
 ## 1. Cel
 
@@ -95,9 +96,9 @@ czas do `tolA` w relaksacji albo czas symulacji 1 ns przy tej samej dokładnośc
 
 ## 4. Źródłowy i docelowy graf wykonania RK23
 
-Stan obecny dla zaakceptowanej, adaptacyjnej próby BS23 po rozgrzaniu FSAL,
-wyprowadzony z grafu wywołań w `rk_stage_schedule.cu` i
-`rk_final_refresh.cu`:
+Baseline przed remediacją dla zaakceptowanej, adaptacyjnej próby BS23 po
+rozgrzaniu FSAL, wyprowadzony z grafu wywołań w `rk_stage_schedule.cu` i
+`rk_final_refresh.cu`, wyglądał następująco:
 
 ```text
 backup D2D
@@ -111,6 +112,10 @@ backup D2D
   -> ponowny final RHS [jak wyżej]
   -> final energies/observables + host fence
 ```
+
+W bieżącym worktree ścieżka endpoint/FSAL i FieldOnly jest już zaimplementowana
+źródłowo, więc wariant bez odrzuceń może dojść do budżetu P0 poniżej. Dopóki
+nie ma managed receipt, tabelę należy czytać jako cel/hipotezę, nie wynik.
 
 Cel P0:
 
@@ -143,6 +148,37 @@ implementacyjną, a nie zmierzonym baseline SP4:
 | adaptive host fences | 1 | 1 |
 | final-stat host fences | 1 | 0 lub 1 zależnie od output/control mask |
 
+### Orientacyjny wpływ na wall time — hipoteza, nie wynik
+
+Na podstawie samego grafu pracy nie można uczciwie obiecać jednej wartości
+procentowej. Dla zwykłego, nieperiodycznego SP4, bez odrzuceń prób i przy
+kwalifikacji wszystkich ścieżek P0, mój roboczy szacunek całego kroku to około
+**15–30% krótszy wall time** (punkt środkowy około 20–25%). Wynika on głównie z
+4 → 3 pełnych RHS/demag solve, usunięcia stage demag energy oraz ograniczenia
+launchy exchange; nie jest to pomiar.
+
+W przypadku, w którym Poisson demag dominuje koszt, górna granica może dojść do
+około **30–40%**, natomiast przy dominacji innych operatorów, częstych
+odrzuceniach lub pozostawieniu ścieżki zgodności zysk może spaść do kilku–
+kilkunastu procent. Periodyczny reduced CSR może dać wielokrotny zysk w samym
+komponencie exchange względem skanu O(N²), ale zysk całego kroku pozostaje
+`NOT VERIFIED` i może być ograniczony przez Poisson, projekcję oraz koszt
+liftu.
+
+Powyższe widełki są jedynie hipotezą planistyczną. Do dokumentu kwalifikacyjnego
+wolno wpisać wyłącznie medianę/p95 z aktualnego managed GPU receipt dla tego
+samego ProblemIR, meshu, tolerancji, runtime bundle i źródła.
+
+Priorytet poniżej jest klasyfikacją inżynierską wynikającą ze struktury kodu,
+nie rankingiem udziału w wall time:
+
+| Klasa | Ustalenia | Podstawa |
+|---|---|---|
+| Błąd skalowania | EX-01 | pełny skan `source_row=0..N` dla każdego wiersza |
+| Gwarantowane usunięcie pracy | RK-03, DM-01, DM-02, RK-01, EX-02 | graf wywołań i liczniki pracy |
+| Kandydat sprzętowy | EX-03, EX-04, DM-04, DM-05, RL-01, PA-01 | wymaga A/B na rzeczywistym GPU |
+| Refaktor architektoniczny | RK-05, HF-02, RD-01 | samodzielnie nie gwarantuje skrócenia czasu |
+
 ## 5. Fale realizacji
 
 ### Fala A — prawda i baseline
@@ -150,8 +186,10 @@ implementacyjną, a nie zmierzonym baseline SP4:
 - scalenie istniejących statystyk kroku, endpoint cache, transfer audit,
   execution receipt i fazowych timerów w wersjonowany snapshot pracy,
 - zachowanie i rozszerzenie istniejącego fail-closed strict-device receipt,
-- podłączenie istniejącego `--require-native-cubin` do kwalifikacji finalnego
-  managed runtime dla wykrytego compute capability,
+- zachowanie istniejącego gate'u exportera dla Ada
+  (`FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY=8.9`, `fullmag_fem=sm_89`,
+  `hypre=sm_89`) oraz zastąpienie stałego `sm_89` mapowaniem z wykrytego
+  compute capability, związanym z digestem finalnego bundle i benchmark receipt,
 - stabilny benchmark SP4 i mikrobenchmark operatorów.
 
 Nie optymalizować przed zapisaniem baseline.
@@ -273,11 +311,11 @@ Istnieją ponadto `fullmag_fem_step_stats`, wersjonowana telemetria endpoint
 cache oraz transactional execution receipt. RT-01 nie oznacza więc braku
 fail-closed dowodu wykonania: `gpu_rk_plan_is_strict_device_resident` oraz
 `validate_strict_fem_gpu_execution_receipt` już odrzucają host, hybrid,
-unknown, brak wymaganej maski i bulk compute transfer. Luką jest brak jednego
-spójnego snapshotu **rzeczywiście wykonanej pracy** i niepełne pokrycie
-bezpośrednich synchronizacji, np. normalizatora.
+unknown, brak wymaganej maski i bulk compute transfer. W tym worktree dodano
+osobny, transakcyjny snapshot **rzeczywiście wykonanej pracy**; pozostała luka
+dotyczy pełnego pokrycia bezpośrednich synchronizacji i publicznego provenance.
 
-Brakuje jednak jednego wersjonowanego snapshotu odpowiadającego na pytania:
+Snapshot odpowiada już na pytania:
 
 - ile pełnych RHS wykonano,
 - ile solve’ów Poissona wykonano,
@@ -288,7 +326,11 @@ Brakuje jednak jednego wersjonowanego snapshotu odpowiadającego na pytania:
 - ile host fences przypadło na zaakceptowany krok,
 - czy endpoint cache został użyty,
 - ile D2D bytes wykonano,
-- jaki był faktyczny tryb operatora.
+- ile czasu fazowego zapisano dla exchange, demag i RHS.
+
+Faktyczny tryb operatora pozostaje w resolved planner/provenance, a nie w
+wersji ABI v1 snapshotu. Nie należy dopisywać go do istniejącego layoutu bez
+nowej wersji ABI.
 
 Bez tych liczników można skrócić pojedynczy kernel i jednocześnie pogorszyć
 time-to-solution przez większą liczbę RHS, odrzuceń albo iteracji.
@@ -297,27 +339,29 @@ time-to-solution przez większą liczbę RHS, odrzuceń albo iteracji.
 
 Nie dodawać pól bezpośrednio do `Context`.
 
-Utworzyć:
+Wprowadzono:
 
 ```text
 backends/fem/gpu/cuda/runtime/performance_counters.hpp
 backends/fem/gpu/cuda/runtime/performance_counters.cpp
 ```
 
-i dodać do `GpuStateRuntimeState` w
+oraz dodano `GpuPerformanceCounterState` do `GpuStateRuntimeState` w
 `gpu/cuda/runtime/gpu_state_runtime.hpp`:
 
 ```cpp
-struct FemGpuPerformanceRuntimeState {
-    FemGpuPerformanceCounters lifetime{};
-    FemGpuPerformanceCounters current_step{};
-    FemGpuPerformanceCounters last_completed_step{};
-    uint64_t schema_revision = 1;
+struct GpuPerformanceCounterState {
+    bool available = false;
+    bool attempt_active = false;
+    GpuPerformanceCounterDelta active{};
+    GpuPerformanceCounterDelta physical_lifetime{};
+    GpuPerformanceCounterDelta accepted_lifetime{};
+    fullmag_fem_gpu_performance_snapshot_v1 completed{};
 };
 
 struct GpuStateRuntimeState {
     ...
-    FemGpuPerformanceRuntimeState performance{};
+    GpuPerformanceCounterState performance_counters{};
 };
 ```
 
@@ -325,17 +369,17 @@ struct GpuStateRuntimeState {
 
 - resetu liczników kroku,
 - commit/rollback liczników prób,
-- eksportu C ABI,
-- nazw enumeracji trybów wykonania.
+- eksportu C ABI i walidacji layoutu,
+- mapowania metadanych snapshotu.
 
-Poszczególne moduły mogą wywoływać wąskie funkcje:
+Poszczególne moduły wywołują wąskie funkcje właściciela stanu:
 
 ```cpp
-gpu_perf_note_rhs_evaluation(ctx);
-gpu_perf_note_exchange_apply(ctx, kernel_launches, nnz_visited);
-gpu_perf_note_demag_solve(ctx, iterations);
-gpu_perf_note_control_fence(ctx, bytes);
-gpu_perf_note_endpoint_cache_hit(ctx);
+gpu_performance_begin_attempt(state, step, execution_id, operator_id);
+gpu_performance_note(state, delta);
+gpu_performance_commit_attempt(state);
+gpu_performance_reject_attempt(state);
+gpu_performance_fail_attempt(state);
 ```
 
 Nie mogą samodzielnie publikować ABI ani modyfikować liczników innych modułów.
@@ -351,80 +395,96 @@ Nie mogą samodzielnie publikować ABI ani modyfikować liczników innych moduł
 - `crates/fullmag-runner/src/fem/execution_receipt.rs`
 - test layoutu ABI w `backends/fem/tests/`
 
-### Struktura
+### Struktura obowiązująca w ABI v1
 
 Nie rozszerzać istniejącego niewersjonowanego `fullmag_fem_transfer_audit`.
-Dodać nowy append-only snapshot:
+Wprowadzony snapshot append-only ma następujący layout (bez pola operatora,
+które pozostaje w planner/provenance):
 
 ```cpp
-#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_VERSION 1u
-
-typedef enum {
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_UNKNOWN = 0,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CSR_COMPONENT_SPLIT = 1,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CSR_FUSED_XYZ = 2,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_PERIODIC_REDUCED_CSR = 3,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CUSPARSE_SPMM = 4,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_PARTIAL_ASSEMBLY = 5,
-} fullmag_fem_gpu_exchange_operator_v1;
+#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION 1u
 
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
-
-    uint64_t completed_step;
+    uint32_t available;
     uint32_t execution_class;
-    uint32_t exchange_operator;
+    uint32_t precision;
+    uint32_t integrator;
+    int32_t device_ordinal;
+    uint64_t completed_step;
+    uint64_t completed_execution_id;
+    uint64_t completed_operator_id;
+    uint64_t completed_attempt_count;
+    uint64_t rejected_attempt_count;
+    uint64_t failed_attempt_count;
 
-    uint64_t rhs_evaluations;
-    uint64_t exchange_applies;
-    uint64_t exchange_kernel_launches;
-    uint64_t exchange_nnz_visited;
+    uint64_t physical_rhs_evaluations;
+    uint64_t physical_exchange_applies;
+    uint64_t physical_exchange_launches;
+    uint64_t physical_exchange_nnz_visited;
+    uint64_t physical_demag_solves;
+    uint64_t physical_demag_iterations;
+    uint64_t physical_demag_rhs_norm_evaluations;
+    uint64_t physical_demag_stage_energy_evaluations;
+    uint64_t physical_normalization_launches;
+    uint64_t physical_normalization_readbacks;
+    uint64_t physical_adaptive_readbacks;
+    uint64_t physical_control_fences;
+    uint64_t physical_endpoint_cache_hits;
+    uint64_t physical_endpoint_cache_misses;
+    uint64_t physical_endpoint_cache_invalidations;
+    uint64_t physical_device_to_device_bytes;
+    uint64_t physical_control_d2h_bytes;
+    uint64_t physical_bulk_d2h_bytes;
+    double physical_demag_rhs_norm_sum;
+    double physical_demag_stage_energy_sum_joules;
 
-    uint64_t demag_solves;
-    uint64_t demag_iterations;
-    uint64_t demag_rhs_norm_evaluations;
-    uint64_t demag_stage_energy_evaluations;
+    uint64_t accepted_rhs_evaluations;
+    uint64_t accepted_exchange_applies;
+    uint64_t accepted_exchange_launches;
+    uint64_t accepted_exchange_nnz_visited;
+    uint64_t accepted_demag_solves;
+    uint64_t accepted_demag_iterations;
+    uint64_t accepted_demag_rhs_norm_evaluations;
+    uint64_t accepted_demag_stage_energy_evaluations;
+    uint64_t accepted_normalization_launches;
+    uint64_t accepted_normalization_readbacks;
+    uint64_t accepted_adaptive_readbacks;
+    uint64_t accepted_control_fences;
+    uint64_t accepted_endpoint_cache_hits;
+    uint64_t accepted_endpoint_cache_misses;
+    uint64_t accepted_endpoint_cache_invalidations;
+    uint64_t accepted_device_to_device_bytes;
+    uint64_t accepted_control_d2h_bytes;
+    uint64_t accepted_bulk_d2h_bytes;
+    double accepted_demag_rhs_norm_sum;
+    double accepted_demag_stage_energy_sum_joules;
 
-    uint64_t normalization_launches;
-    uint64_t normalization_control_readbacks;
-    uint64_t adaptive_control_readbacks;
-    uint64_t control_host_fences;
-
-    uint64_t endpoint_cache_hits;
-    uint64_t endpoint_cache_misses;
-    uint64_t endpoint_cache_invalidations;
-
-    uint64_t device_to_device_bytes;
-    uint64_t control_device_to_host_bytes;
-    uint64_t bulk_device_to_host_bytes;
-
-    uint64_t exchange_device_time_ns;
-    uint64_t demag_assemble_device_time_ns;
-    uint64_t demag_hypre_device_time_ns;
-    uint64_t demag_hypre_host_api_time_ns;
-    uint64_t demag_recovery_device_time_ns;
-    uint64_t demag_energy_device_time_ns;
-    uint64_t heff_device_time_ns;
-    uint64_t llg_device_time_ns;
-    uint64_t adaptive_device_time_ns;
-    uint64_t reductions_device_time_ns;
+    uint64_t physical_exchange_elapsed_ns;
+    uint64_t physical_demag_assemble_elapsed_ns;
+    uint64_t physical_demag_recover_elapsed_ns;
+    uint64_t physical_demag_energy_elapsed_ns;
+    uint64_t physical_rhs_elapsed_ns;
+    uint64_t accepted_exchange_elapsed_ns;
+    uint64_t accepted_demag_assemble_elapsed_ns;
+    uint64_t accepted_demag_recover_elapsed_ns;
+    uint64_t accepted_demag_energy_elapsed_ns;
+    uint64_t accepted_rhs_elapsed_ns;
 } fullmag_fem_gpu_performance_snapshot_v1;
 ```
 
 Nie deklarować ponownie `fullmag_fem_gpu_execution_class_v1`: ten enum już
 jest częścią `FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1` w
 `native/include/fullmag_fem.h` i obejmuje również klasy host-solver oraz CPU.
-Snapshot ma używać istniejących wartości albo osobnego, jednoznacznie nazwanego
-pola trybu operatora. Zachowanie API dla backendu CPU (`ERR_UNAVAILABLE` lub
-`ERR_INVALID`) należy najpierw ustalić w kontrakcie RED; nie opisywać go jako
-stanu istniejącego.
+Snapshot używa istniejących wartości klasy wykonania. CPU zwraca jawne
+`FULLMAG_FEM_ERR_UNAVAILABLE`; nie publikuje zerowego snapshotu udającego GPU.
 
 Funkcja:
 
 ```cpp
 int fullmag_fem_backend_gpu_performance_snapshot_v1(
-    const fullmag_fem_backend *backend,
+    fullmag_fem_backend *backend,
     fullmag_fem_gpu_performance_snapshot_v1 *out_snapshot);
 ```
 
@@ -443,7 +503,7 @@ Adaptive RK może odrzucać próby. Należy rozdzielić:
 - **accepted result counters** — odnoszą się do zaakceptowanego kroku;
 - **lifetime counters** — monotoniczne od utworzenia backendu.
 
-Proponowany model:
+Model wdrożony:
 
 ```cpp
 struct FemGpuPerformanceAttemptDelta {
@@ -452,26 +512,31 @@ struct FemGpuPerformanceAttemptDelta {
     ...
 };
 
-begin_attempt():
+begin_attempt(step):
+    ensure pending_accepted_step belongs to step;
     current_attempt = {};
 
 reject_attempt():
-    current_step.physical += current_attempt;
+    physical_lifetime += current_attempt;
+    pending_accepted_step += current_attempt;
     current_step.rejected_attempts++;
     current_attempt = {};
 
 accept_attempt():
-    current_step.physical += current_attempt;
-    current_step.accepted_attempt = current_attempt;
+    physical_lifetime += current_attempt;
+    pending_accepted_step += current_attempt;
+    accepted_lifetime += pending_accepted_step;
     current_attempt = {};
+    pending_accepted_step = {};
 
 commit_step():
     last_completed_step = current_step;
-    lifetime += current_step.physical;
 ```
 
-Liczników pracy nie wolno cofać po reject; licznik wyniku zaakceptowanego musi
-wskazywać koszt całego kroku wraz z odrzuconymi próbami.
+Liczników pracy nie wolno cofać po reject. `pending_accepted_step` sprawia, że
+po późniejszym accept licznik wyniku zaakceptowanego wskazuje koszt całego
+kroku wraz z odrzuconymi próbami; po failure pending jest porzucany, ale praca
+fizyczna pozostaje w lifetime.
 
 ## 5. Zachowanie istniejącego strict receipt i rozszerzenie artefaktu
 
@@ -530,14 +595,20 @@ CMake ustawia domyślną listę architektur CUDA, gdy CUDA jest dostępna, a
 `crates/fullmag-fem-sys/build.rs` warunkowo przekazuje niepusty override
 `FULLMAG_CUDA_ARCHITECTURES`. To nie dowodzi zawartości finalnego `.so`.
 `scripts/inspect_cuda_architectures.py` i jego testy już obsługują
-`--cuda-required` oraz `--require-native-cubin`; brakującym elementem jest
-automatyczne powiązanie compute capability rzeczywistego GPU z natywnym
-cubinem finalnego managed bundle oraz immutable manifest/receipt tego gate'u.
+`--cuda-required` oraz `--require-native-cubin`. Ponadto
+`scripts/export_fem_gpu_runtime.sh` już waliduje finalny bundle przez
+`validate_managed_fem_runtime_bundle.py`, domyślnie wymaga compute capability
+`8.9` oraz cubinów `fullmag_fem=sm_89` i `hypre=sm_89`. Brakującym elementem
+jest uogólnione mapowanie wykrytego `major.minor` na `sm_xy` zamiast stałego
+`sm_89` oraz immutable receipt łączący wynik gate'u z digestem dokładnego
+bundle i benchmarkiem.
 
 ### Zmiany
 
 - zachować istniejące testy `scripts/test_inspect_cuda_architectures.py`,
-- podłączyć istniejący inspektor do kwalifikacji finalnego runtime bundle,
+- zachować istniejącą walidację finalnego bundle w exporterze,
+- wyprowadzać wymagany cubin z wykrytego compute capability; nie wymagać
+  `sm_89` dla H100 ani innego nie-Ada GPU,
 - zapisać w `manifest.json`:
   - lista cubin `sm_*`,
   - obecne PTX `compute_*`,
@@ -577,7 +648,8 @@ autorytatywne. Skrypt ma dostać ścieżkę z manifestu managed runtime.
 
 ### RED 1 — layout i snapshot
 
-Dodać `backends/fem/tests/gpu_performance_snapshot_contract.cpp`:
+Dodany kontrakt `backends/fem/tests/gpu_performance_snapshot_contract.cpp`
+sprawdza:
 
 - layout/version/size,
 - null checks,
@@ -599,8 +671,9 @@ Rust `validate_strict_fem_gpu_execution_receipt`:
 
 ### REGRESSION 3 — final architecture
 
-Istniejący test skryptu pokrywa poniższe przypadki; RED ma dotyczyć
-automatycznego gate'u finalnego managed manifestu:
+Istniejące testy inspektora i walidatora bundle pokrywają poniższe przypadki;
+RED ma dotyczyć mapowania compute capability na wymagania wszystkich bibliotek
+i związania wyniku z immutable benchmark receipt:
 
 - fixture tylko `sm_52` musi failować dla `--require-native-cubin sm_89`,
 - fixture `sm_89` przechodzi,
@@ -668,12 +741,16 @@ diagnostyczny.
 
 **Ustalenia:** EX-01, EX-02, EX-03, EX-04, EX-05, EX-06, EX-07, EX-08.
 
-**Status po weryfikacji:** diagnozy EX-01, EX-02, EX-07 i EX-08 są
-potwierdzone w źródle. EX-03 jest częściowy: istnieje akumulacja double-double,
-ale nie dwa typowane tryby. EX-04 i korzyści plannerów są `NOT VERIFIED`.
-EX-05 już failuje przed strict GPU step dla consistent mass. EX-06 potwierdza
-obecną `LEGACY` assembly, lecz PA pozostaje celem. Wszystkie nowe typy, pliki i
-testy poniżej są projektowane.
+**Status po weryfikacji:** EX-01 ma źródłowy reduced CSR/mass/lift dla ścieżki
+RK oraz osobne reduced-kernel paths dla pola, energii exchange i różnicy energii
+używanej przez Armijo; EX-02 ma fused XYZ z zachowaną ścieżką split. EX-03
+pozostaje częściowy: typed operator kinds istnieją, ale strict/FMA precision
+modes nie. EX-04 ma deterministyczny fail-closed resolver, bez
+histogramu/autotune. EX-05 nadal failuje przed strict GPU step dla consistent
+mass. EX-06 potwierdza obecną `LEGACY` assembly, a PA pozostaje
+nieprodukcyjnym celem. Builder off-diagonal CSR i row-scale są kontraktami
+źródłowymi, lecz integracja wszystkich konsumentów, parytet i managed runtime
+są `NOT VERIFIED`.
 
 ## 1. Aktualny przepływ
 
@@ -682,8 +759,10 @@ testy poniżej są projektowane.
 Laplacjanu i publikuje metadane. `gpu/cuda/exchange/exchange_upload.cpp`
 kopiuje pełny CSR oraz lumped mass na GPU.
 
-`gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` uruchamia ten sam operator
-osobno dla `m.x`, `m.y` i `m.z`.
+`gpu/cuda/integrators/rk/rk_exchange_dispatch.cu` zachowuje split x/y/z jako
+compatibility path, ale dla nieperiodycznego row-scale wybiera fused XYZ, a dla
+kwalifikowanej mapy PBC może wybrać reduced CSR/lift. Publiczny planner nadal
+nie promuje tych wariantów bez kwalifikacji.
 
 Wariant periodyczny używa kernela, w którym każdy docelowy wiersz skanuje
 wszystkie `source_row`, aby znaleźć członków swojej klasy. To nie jest problem
@@ -695,11 +774,10 @@ Zastąpić nazwę i strukturę `LegacyGpuExchangeDeviceState` modułowym stanem:
 
 ```cpp
 enum class GpuExchangeOperatorKind : uint32_t {
-    None,
-    ComponentSplitCsrCompatibility,
-    FusedXyzCsr,
-    PeriodicReducedFusedXyzCsr,
-    CusparseSpmm,
+    LegacySparse,
+    FusedXYZ,
+    PeriodicReduced,
+    CuSparse,
     PartialAssembly,
 };
 
@@ -725,7 +803,7 @@ struct GpuPeriodicExchangeDeviceState {
 };
 
 struct FemGpuExchangeDeviceState {
-    GpuExchangeOperatorKind kind = GpuExchangeOperatorKind::None;
+    GpuExchangeOperatorKind kind = GpuExchangeOperatorKind::LegacySparse;
     GpuExchangeCsrDeviceState full{};
     GpuPeriodicExchangeDeviceState periodic{};
     bool uploaded = false;
@@ -765,7 +843,7 @@ To są dane niezmienne względem etapu RK.
 
 ### Implementacja
 
-W `exchange_operator_builder.cpp` przygotować hostowy wektor:
+W `exchange_operator.cpp` oraz uploadzie przygotowano deviceowy row-scale:
 
 ```cpp
 std::vector<double> build_exchange_row_scale(
@@ -823,7 +901,7 @@ przekątna nie wnosi pracy.
 
 ### Builder
 
-Utworzyć kanoniczny GPU-only operator:
+Kanoniczny builder GPU-only znajduje się w `exchange_operator.cpp`:
 
 ```cpp
 struct HostExchangeCsr {
@@ -1108,16 +1186,17 @@ DoD PBC:
 **Ustalenia:** RK-01, RK-02, RK-03, RK-04, RK-05, RK-06.
 
 **Status po weryfikacji:** wszystkie sześć diagnoz ma potwierdzenie w grafie
-źródłowym, ale proponowane packet, endpoint token, fused predictor, metric mode,
-role buforów i API v2 nie istnieją. Obecny adaptive readback już kopiuje trzy
-scalary jednym `cudaMemcpyAsync` i jednym fence; luka polega na wielu
-wcześniejszych normalizer readbackach oraz braku typowanego packetu. Wpływ na
-wall time pozostaje `NOT VERIFIED`.
+źródłowym. Deferred normalizer validation, pinned attempt-control packet,
+endpoint token/FSAL oraz opcjonalny metric mode są już obecne w kodzie; typed
+buffer roles, output mask v2, publiczne API v2 i device-side PI decision nadal
+nie są gotowe. Adaptive readback ma jedną ścieżkę packet+fence, ale część
+legacy nadal istnieje. Wpływ na wall time pozostaje `NOT VERIFIED`.
 
-Źródłowy budżet warm BS23 adaptive to 4 RHS (trzy stage, w tym endpoint k3,
-oraz obowiązkowy final refresh), trzy normalizacje i jeden adaptive scalar
-readback. DP54 odtwarza accepted endpoint osobno od stanu użytego dla k6;
-różnica bitowa nie została zmierzona.
+Historyczny budżet przed remediacją dla warm BS23 adaptive to 4 RHS (trzy
+stage, w tym endpoint k3, oraz obowiązkowy final refresh), trzy normalizacje i
+jeden adaptive scalar readback. Bieżący kod ma warunkowe endpoint/FSAL reuse,
+deferred normalizację i jeden packet control, ale ich liczby oraz parytet DP54
+nie zostały jeszcze zmierzone w managed runtime.
 
 ## 1. Granice własności
 
@@ -1146,9 +1225,9 @@ Nie umieszczać logiki metod w `src/api.cpp`, runnerze ani `Context`.
 
 Jest wywoływana po każdym predyktorze.
 
-### Nowy stan
+### Stan wdrożony
 
-Utworzyć:
+Wprowadzono:
 
 ```text
 gpu/cuda/integrators/rk/rk_attempt_control_state.hpp
@@ -1156,7 +1235,7 @@ gpu/cuda/integrators/rk/rk_attempt_control_memory.cpp
 gpu/cuda/integrators/rk/rk_attempt_control_kernels.cu
 ```
 
-i osadzić stan w `FemGpuRkWorkspaceDeviceState`:
+i osadzono stan w `FemGpuRkWorkspaceDeviceState`:
 
 ```cpp
 enum GpuRkAttemptFlag : uint64_t {
@@ -1171,7 +1250,7 @@ struct GpuRkAttemptControlPacket {
     uint64_t flags;
     double error_norm;
     double max_norm_defect;
-    double min_normalized_spin_dot;
+    double max_spin_rotation;
     double suggested_dt;
     uint32_t decision;
     uint32_t reason;
@@ -1190,20 +1269,18 @@ współdzielone z energią i relaksacją.
 ### Nowa funkcja normalizacji
 
 ```cpp
-bool fullmag_cuda_normalize_vectors_deferred(
-    FemGpuComponentField target,
+void fullmag_cuda_normalize_vectors_deferred(
+    const FemGpuComponentField &target,
     const FemGpuComponentField &safe_fallback,
-    const uint8_t *magnetic_mask,
-    const uint8_t *frozen_mask,
-    const FemGpuComponentField *frozen_reference,
+    const uint8_t *magnetic_node_mask,
     GpuRkAttemptControlPacket *packet,
-    int n,
-    cudaStream_t stream,
-    std::string &reason);
+    int N,
+    cudaStream_t stream = nullptr,
+    GpuPerformanceCounterState *performance_counters = nullptr);
 ```
 
-Zwracane `false` oznacza wyłącznie błąd enqueue/launch. Nie oznacza wyniku
-walidacji danych.
+Funkcja nie zwraca wyniku walidacji danych; zapisuje flagi do packetu, a błędy
+enqueue/launch są sprawdzane przez istniejącego właściciela sekwencji CUDA.
 
 Kernel dla aktywnego węzła:
 
@@ -1318,36 +1395,26 @@ Następny PR przenosi decyzję na GPU.
 
 ### BS23
 
-Adaptacyjny BS23 oblicza:
+Adaptacyjny BS23 oblicza (historyczny przebieg przed reuse):
 
 \[
 k_3=f(t_{n+1},m_{n+1})
 \]
 
-po normalizacji kandydata, a final refresh ponownie liczy to samo RHS.
+po normalizacji kandydata; przed remediacją final refresh ponownie liczył to
+samo RHS.
 
-### Attempt-local token
+### Attempt-local token (stan wdrożony)
 
-Dodać do `rk_workspace_state.hpp`:
+W `rk_workspace_state.hpp` zapisano token przez pola endpointu:
 
 ```cpp
-enum class GpuRkEndpointMethod : uint32_t {
-    None,
-    Bs23,
-    Dp54,
-};
-
-struct GpuRkEndpointEvaluationToken {
-    bool valid = false;
-    bool consumed = false;
-    GpuRkEndpointMethod method = GpuRkEndpointMethod::None;
-    uint32_t derivative_slot = 0;
-    uint64_t target_step = 0;
-    uint64_t attempt_identity = 0;
-    uint64_t state_generation = 0;
-    uint64_t operator_signature = 0;
-    double evaluation_time_s = 0.0;
-};
+bool endpoint_valid = false;
+uint32_t endpoint_integrator = 0;
+uint64_t endpoint_generation = 0;
+double endpoint_time_seconds = 0.0;
+uint64_t endpoint_operator_signature = 0;
+bool endpoint_consumed = false;
 ```
 
 Token poświadcza, że:
@@ -1390,6 +1457,10 @@ publish endpoint token
 
 `dp54_accept_kernel` nie rekonstruuje endpointu w ścieżce adaptacyjnej.
 
+Ważne ograniczenie bezpieczeństwa: gdy aktywna jest mapa okresowa, GPU wymusza
+projekcję `m` przed RHS, ale FSAL pozostaje wyłączony do czasu dowodu bitowej
+tożsamości kandydata po projekcji z endpointem użytym do `k_6`/`k_3`.
+
 ### Invalidation
 
 Token invalidować przy:
@@ -1411,9 +1482,10 @@ Token invalidować przy:
 
 ## 6. RK-04 — LLG metric wyłącznie dla konsumenta
 
-Obecnie fused LLG RHS zawsze wyznacza per-node metric i block maxima dla
-każdego RHS. Globalna redukcja maksimum jest wykonywana podczas finalizacji;
-nie opisywać tego jako pełnej globalnej redukcji „na każdym stage”.
+Fused LLG RHS może pominąć per-node metric i block maxima dla pośredniego RHS;
+finalizacja jawnie żąda metryki. Globalna redukcja maksimum jest wykonywana
+podczas finalizacji; nie opisywać tego jako pełnej globalnej redukcji „na każdym
+stage”.
 
 Dodać:
 
@@ -1562,31 +1634,32 @@ DoD:
 
 **Ustalenia:** AD-01, AD-02, AD-03.
 
-**Status po weryfikacji:** aktualny
-`adaptive_error_norm_blocks_kernel` zawsze przyjmuje k0…k6, liczy dot/`acos`
-per node i zapisuje trzy kanały, po czym runtime wykonuje trzy globalne
-redukcje maximum. Diagnozy są potwierdzone źródłowo. Wszystkie policy kinds,
-typed partials, wyspecjalizowane kernele i device decision poniżej są
-niezaimplementowanymi celami; ich przewaga wydajnościowa pozostaje
+**Status po weryfikacji:** diagnozy są potwierdzone źródłowo. Kernel nadal
+przyjmuje k0…k6 i pozostaje ogólny, ale obrót liczy przez dot/cosine, a runtime
+warunkowo redukuje kanały; rotation kończy się jednym device min i końcowym
+`acos`. Policy resolver istnieje. Typed partials, wyspecjalizowane kernele i
+device decision nie są jeszcze gotowe; przewaga wydajnościowa pozostaje
 `NOT VERIFIED`.
 
-## 1. Obecny koszt
+## 1. Koszt bazowy i stan bieżący
 
-Jeden ogólny kernel:
+Historyczny kernel bazowy:
 
 - przyjmuje `k0...k6`,
 - przyjmuje `b_hi` i `b_lo`,
 - wykonuje runtime branches,
 - liczy normę błędu, defekt normy i obrót,
-- wykonuje `acos` dla każdego węzła,
+- wykonywał `acos` dla każdego węzła,
 - zapisuje trzy tablice blokowe,
-- uruchamia trzy `DeviceReduce::Max`.
+- uruchamiał trzy `DeviceReduce::Max`.
 
-Także wtedy, gdy dodatkowe guardy są wyłączone.
+W bieżącym kodzie rotation używa dot/cosine i jednego device min; redukcje są
+warunkowe. Generic kernel nadal ma wspólne kanały i nie jest specjalizacją
+BS23/DP54.
 
 ## 2. Rozdzielenie metody i polityki
 
-Utworzyć:
+Pozostałe cele specjalizacji wymagają wydzielenia:
 
 ```text
 gpu/cuda/integrators/rk/adaptive_error_bs23.cu
@@ -1633,7 +1706,8 @@ d_i=\mathrm{clamp}
 \max_i\theta_i=\arccos(\min_i d_i).
 \]
 
-Redukować `min_dot`, wykonać jeden `acos` po redukcji. Dla samego progu:
+Redukować minimum dot/cosine, wykonać jeden `acos` po redukcji (wynik publikacji
+jest zapisywany jako `max_spin_rotation`). Dla samego progu:
 
 \[
 \theta_i\le\theta_\max\iff d_i\ge\cos(\theta_\max).
@@ -1745,12 +1819,14 @@ golden vectors. Nie utrzymywać dwóch niezależnych zestawów stałych.
 **Ustalenia:** DM-01, DM-02, DM-03, DM-04, DM-05 oraz podwójne ustawianie
 polityki HYPRE wykryte na aktualnym `master`.
 
-**Status po weryfikacji:** DM-01, DM-02 i duplikacja setterów HYPRE są
-potwierdzone. DM-03 jest projektem: dziś recovery ma sześć osobnych map/CSR i
-trzy kernele. DM-04 jest częściowy, ponieważ timingi host API/device/wait oraz
-iteracje już istnieją, ale brak profilu AMG levels i aktualnego benchmarku.
-DM-05 jest hipotezą kwalifikacyjną; wszystkie purpose używają dziś wspólnego
-`ctx.demag.solver.relative_tolerance`. Nowe requesty/enumy poniżej nie istnieją.
+**Status po weryfikacji:** DM-01 ma typed `FieldOnly` dla RK i frequency
+tangent, DM-02 ma warunkową walidację RHS norm/residual, a duplikacja setterów
+HYPRE została usunięta. DM-03 ma wspólny-pattern fused recovery z digestem i
+split fallback. DM-04 jest częściowy: timingi host API/device/wait/iteracji są
+zachowane i trafiają do snapshotu, ale brak profilu AMG levels i benchmarku.
+DM-05 pozostaje hipotezą kwalifikacyjną; purpose nadal używają wspólnego
+`ctx.demag.solver.relative_tolerance`. Managed/runtime parity jest
+`NOT VERIFIED`.
 
 ## 1. Co zachować
 
@@ -1768,12 +1844,12 @@ osobne synchronizacje i nie są dowodem pełnego grafu bez fence.
 
 ## 2. Jeden właściciel polityki HYPRE
 
-`runtime/hypre_device_policy.cpp` ma być jedynym właścicielem process-wide
-`HYPRE_Set*`. `hypre_device_solver.cpp` nadal posiada lokalne settery.
+`runtime/hypre_device_policy.cpp` jest jedynym właścicielem process-wide
+`HYPRE_Set*`; lokalne settery zostały usunięte z `hypre_device_solver.cpp`.
 
 Naprawa:
 
-1. usunąć `configure_hypre_device_vendor_kernels`;
+1. zachować usunięcie `configure_hypre_device_vendor_kernels`;
 2. po `mfem::Hypre::Init/InitDevice` wywołać wyłącznie
    `configure_hypre_cuda_device_policy`;
 3. zwalidować snapshot;
@@ -1831,7 +1907,7 @@ demag_stage_energy_evaluations += mode == FieldAndRecoveredEnergy
 
 ## 4. DM-02 — warunkowe `Norml2(rhs)`
 
-Utworzyć pure helper:
+Wprowadzony pure helper:
 
 ```text
 gpu/cuda/demag_poisson/hypre_validation_policy.hpp
@@ -1945,8 +2021,9 @@ pole. Brak pola = identyczny rtol.
 
 ## 8. Warm start i endpoint cache
 
-Persistent solver i warm/fresh counters już istnieją. Nie istnieje natomiast
-jeden ogólny token endpointu dla RK/HYPRE/PGBB; `FemGpuAcceptedEvaluationToken`
+Persistent solver i warm/fresh counters już istnieją. RK ma endpoint token
+związany z exact time/signature; nie ma jeszcze jednego ogólnego tokenu
+obejmującego równocześnie RK, HYPRE i PG-BB. `FemGpuAcceptedEvaluationToken`
 dotyczy GPU NCG. Poniższe punkty są wymaganiami docelowymi.
 
 - fresh-zero po invalidation/failure zgodnie z kontraktem;
@@ -1991,12 +2068,12 @@ DoD:
 
 **Ustalenia:** HF-01, HF-02, RD-01, MEM-01 oraz część RK-04/RK-05.
 
-**Status po weryfikacji:** HF-01/HF-02 są potwierdzone jako obecne
-component-split passes; `has_ext=true` jest dziś przekazywane bezwarunkowo.
-Typed reducers, maski materializacji i fused compose nie istnieją. MEM-01 jest
-częściowy: generyczny scalar readback ma pinned host buffer i pageable fallback,
-ale nie ma odrębnego `GpuRkAttemptControlPacket`. Wpływ wszystkich fuzji na
-rejestry, occupancy i wall time pozostaje `NOT VERIFIED`.
+**Status po weryfikacji:** HF-01/HF-02 nadal są component-split passes; `has_ext`
+jest już wyznaczane z rzeczywistego planu pola zewnętrznego, nie stałe.
+Typed reducers, maski materializacji i fused base compose nie istnieją. MEM-01
+ma dedykowany pinned `GpuRkAttemptControlPacket`, lecz generyczne readbacki
+nadal mają pageable fallback. Wpływ wszystkich fuzji na rejestry, occupancy i
+wall time pozostaje `NOT VERIFIED`.
 
 ## 1. HF-01 — fused bazowe H_eff xyz
 
@@ -2207,11 +2284,12 @@ DoD:
 **Ustalenia:** RL-01 oraz RD-01/RK-02 w NCG i PG-BB.
 
 **Status po weryfikacji:** CPU exchange-mass preconditioner i brak analogicznego
-preconditionera GPU NCG są potwierdzone. Nie wynika z tego, że preconditioner
-GPU skróci time-to-`tolA`; to pozostaje `NOT VERIFIED`. GPU ma już poprawny
-unpreconditioned PR+, tangent transport, restart, fallback i persistent state.
-Diagonal/Chebyshev/PCG, device Armijo packet i device PG-BB control poniżej są
-projektami, nie istniejącymi API. Istniejący managed target
+preconditionera GPU NCG są potwierdzone. Istnieje fail-closed builder/resolver
+diagonalnego preconditionera, ale nie jest on podłączony do NCG/PG-BB runtime.
+Nie wynika z tego, że preconditioner GPU skróci time-to-`tolA`; to pozostaje
+`NOT VERIFIED`. GPU ma poprawny unpreconditioned PR+, tangent transport,
+restart, fallback i persistent state. Chebyshev/PCG, device Armijo packet i
+device PG-BB control pozostają celami. Istniejący managed target
 `verify-fem-gpu-relaxation-preconditioner-qualification` i jego evidence należy
 rozszerzyć lub zastąpić, nie dublować.
 
@@ -2422,11 +2500,13 @@ DoD:
 
 **Ustalenie:** PA-01 oraz docelowa decyzja dla EX-04/EX-06.
 
-**Status po weryfikacji:** aktualny `GpuExchangePlan` rozwiązuje wyłącznie
-`legacy_sparse_gpu`; nie ma typed operator planner, profili, cuSPARSE SpMM ani
-produkcyjnego PA exchange. `backends/fem/examples/pa_benchmark.cpp` mierzy
-ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie emituje opisanego
-JSON. Cały wybór wariantu oraz break-even pozostają `NOT VERIFIED`.
+**Status po weryfikacji:** `exchange_operator.hpp/.cpp` dodaje jeden typed
+resolver dla legacy/fused/reduced/cuSPARSE/PA z fail-closed gates profilu,
+VRAM i runtime. Nie ma jeszcze produkcyjnego cuSPARSE SpMM ani PA exchange,
+a resolver nie jest podłączony do publicznego `GpuExchangePlan`. `pa_benchmark.cpp`
+ nadal mierzy ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie
+emituje opisanego JSON. Cały wybór wariantu oraz break-even pozostają
+`NOT VERIFIED`.
 
 ## 1. Problem
 
@@ -2438,9 +2518,10 @@ reprodukowalność. Planner ma wybierać tylko warianty zakwalifikowane offline.
 
 ```cpp
 enum class GpuExchangeOperatorKind : uint32_t {
-    FusedXyzCsr,
-    PeriodicReducedFusedXyzCsr,
-    CusparseSpmm,
+    LegacySparse,
+    FusedXYZ,
+    PeriodicReduced,
+    CuSparse,
     PartialAssembly,
 };
 
@@ -2589,6 +2670,11 @@ DoD: każdy resolved kind ma proof i poprawia time-to-solution w swoim profilu.
 
 # 09. Kolejność PR, testy i Definition of Done
 
+W bieżącym worktree wykonano część zmian z PR-00–PR-13 (kontrakty źródłowe,
+fail-closed paths i testy kontraktowe). Poniższa kolejność nadal opisuje bramy
+kwalifikacyjne: bez managed GPU, parytetu naukowego i benchmarku żaden PR nie
+jest oznaczony jako produkcyjnie zamknięty.
+
 ## 1. Reguła
 
 Każdy PR ma jeden główny mechanizm, test/licznik przed optymalizacją,
@@ -2600,9 +2686,10 @@ compatibility path, managed GPU A/B i nie zmienia tolerancji razem z kernelem.
 
 Runtime performance owner, ABI v1 i SP4 managed benchmark. Zachować istniejący
 strict receipt, execution masks, transfer audit, step stats, endpoint telemetry
-i phase event ownership; nie implementować ich ponownie. Podłączyć istniejący
-`--require-native-cubin` do automatycznego GPU compute-capability gate finalnego
-managed manifestu.
+i phase event ownership; nie implementować ich ponownie. Zachować istniejący
+Ada-specific gate exportera (`8.9`, `fullmag_fem=sm_89`, `hypre=sm_89`), a
+stałe wymaganie `sm_89` zastąpić mapowaniem wykrytego compute capability i
+zapisać wynik z digestem bundle w immutable benchmark receipt.
 
 ### PR-01 — HYPRE owner + conditional RHS norm
 
@@ -2799,47 +2886,50 @@ Produkcja:
 
 **Baza planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 
-**Zweryfikowano względem:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+**Zweryfikowano względem:** `c3f49db708868f3649a3e894416d230269718920`
 
 **Zakres:** kod, testy kontraktowe i `justfile`; managed GPU runtime oraz wyniki
 wydajnościowe: `NOT VERIFIED`.
 
-Werdykt dotyczy diagnozy bieżącego kodu. Nowe symbole/pliki/testy opisane w
-dokumentach 01–09 są planem, dopóki dowód poniżej nie wskazuje ich istnienia.
+Werdykt dotyczy diagnozy bieżącego kodu. W tym worktree część kontraktów
+źródłowych, implementacji i testów kontraktowych z dokumentów 01–09 została
+dodana. Samo istnienie symbolu nie oznacza jeszcze poprawnej kompilacji,
+parytetu fizycznego ani kwalifikacji managed GPU; te lanes pozostają jawnie
+oznaczone jako `NOT VERIFIED`.
 
 | ID | Werdykt diagnozy | Dowód w aktualnym kodzie | Korekta / stan celu | Runtime i wydajność | PR |
 |---|---|---|---|---|---|
-| EX-01 | `POTWIERDZONE` | `backends/fem/gpu/cuda/exchange/exchange_kernels.cu::periodic_legacy_sparse_exchange_kernel` skanuje `source_row=0..rows`; energy/difference nadal używają full CSR | Reduced `PᵀKP`, reduced mass, lift oraz wspólna semantyka field/energy/Armijo nie istnieją | `NOT VERIFIED` | PR-10 |
-| EX-02 | `POTWIERDZONE` | `rk_exchange_dispatch.cu::gpu_rk_compute_legacy_sparse_exchange` uruchamia x/y/z osobno | Fused XYZ kernel i typed state nie istnieją | `NOT VERIFIED` | PR-08 |
-| EX-03 | `CZĘŚCIOWO` | `exchange_kernels.cu` ma `ExchangeDoubleDouble`/`gpu_relax_dd` | Brak typed strict/FMA modes; koszt i zwycięski wariant wymagają profilu | `NOT VERIFIED` | PR-09 |
-| EX-04 | `CZĘŚCIOWO` | Obecny kernel: jeden thread/row, `kBlockSize=256`; brak histogramu | Problem nieregularności jest wiarygodny, ale mapping/planner i jego zysk nie są dowiedzione | `NOT VERIFIED` | PR-09 |
+| EX-01 | `POTWIERDZONE` | `exchange_operator.cpp::build_gpu_exchange_periodic_reduced_csr`, upload metadanych, `fullmag_cuda_periodic_reduced_exchange_xyz`, `fullmag_cuda_periodic_reduced_exchange_energy_blocks` i `fullmag_cuda_periodic_reduced_exchange_difference_blocks` tworzą/używają reduced CSR/mass/lift; stary kernel nadal istnieje jako kompatybilność | Reduced field/energy/direct-energy consumers są teraz spójne źródłowo; dowód stałości `m` w klasie periodycznej, parytet i promocja runtime nadal wymagają kwalifikacji | `NOT VERIFIED` | PR-10 |
+| EX-02 | `POTWIERDZONE` | `rk_exchange_dispatch.cu::gpu_rk_compute_legacy_sparse_exchange` wybiera fused XYZ dla nieperiodycznego row-scale; split x/y/z pozostaje ścieżką zgodności | Fused XYZ i typed state istnieją źródłowo, lecz profil nie jest jeszcze publicznie zakwalifikowany | `NOT VERIFIED` | PR-08 |
+| EX-03 | `CZĘŚCIOWO` | `exchange_operator.hpp` ma typed kinds `LegacySparse/FusedXYZ/PeriodicReduced/CuSparse/PartialAssembly`; DD pozostaje w kernelach relaksacji | Brak typowanych trybów strict/FMA i zwycięskiego wariantu precision; wymagana kwalifikacja profilu | `NOT VERIFIED` | PR-09 |
+| EX-04 | `CZĘŚCIOWO` | `exchange_operator.cpp` ma deterministyczny resolver fail-closed i builder CSR; brak histogramu/autotune | Planner nie wybiera jeszcze wariantu na podstawie kosztu/nieregularności, a zysk pozostaje niezmierzony | `NOT VERIFIED` | PR-09 |
 | EX-05 | `POTWIERDZONE` | `exchange_plan.cpp::gpu_exchange_plan_stage_exchange` już odrzuca consistent mass w strict GPU | Fail-closed zachować; device consistent-mass solver nie istnieje | `NOT VERIFIED` | później |
-| EX-06 | `POTWIERDZONE` | `cpu/mfem/interactions/exchange_operator.cpp::initialize_exchange_operator_mfem` używa `AssemblyLevel::LEGACY` | Produkcyjny exchange PA/libCEED nie istnieje; ogólny `pa_benchmark.cpp` nie jest dowodem exchange | `NOT VERIFIED` | PR-15 |
-| EX-07 | `POTWIERDZONE` | `legacy_sparse_exchange_kernel` liczy skalę z `Ms` i inverse lumped mass przy apply | Precomputed `row_scale` nie istnieje | `NOT VERIFIED` | PR-08 |
-| EX-08 | `POTWIERDZONE` | Kernel ma branch `col != row`; canonicalizer zeruje, lecz zachowuje diagonalny wpis CSR | GPU off-diagonal CSR builder nie istnieje | `NOT VERIFIED` | PR-08 |
-| RK-01 | `POTWIERDZONE` | `fields/vector_field_kernels.cu::fullmag_cuda_normalize_vectors` robi D2H flagi i `cudaStreamSynchronize` | Deferred validation/typed packet/fallback nie istnieją; transfer audit ma tu blind spot | `NOT VERIFIED` | PR-04 |
-| RK-02 | `CZĘŚCIOWO` | `rk_adaptive_decision_readback.cu` już czyta trzy scalary jednym copy+fence | Brak wspólnego packetu z flags/decision/dt; host nadal wykonuje PI decision | `NOT VERIFIED` | PR-04 |
-| RK-03 | `POTWIERDZONE` | `rk_stage_schedule.cu` liczy BS23 endpoint k3, a `rk_final_refresh.cu` zawsze liczy final RHS ponownie | Endpoint token/FSAL slot nie istnieją; DP54 exact identity wymaga osobnego testu | `NOT VERIFIED` | PR-06/07 |
-| RK-04 | `POTWIERDZONE` | Fused LLG zapisuje metric/block maxima dla każdego RHS | Global max nie jest redukowany na każdym stage; `NoMetric` nie istnieje | `NOT VERIFIED` | PR-03 |
-| RK-05 | `POTWIERDZONE` | `rk_attempt_setup.cu` backup i reject restore używają pełnych D2D; journal obejmuje m+k0 | Typed buffer roles/swap accept nie istnieją | `NOT VERIFIED` | PR-07+ |
-| RK-06 | `POTWIERDZONE` | `rk_step_stats.cu::finalize_step_stats_impl` zawsze liczy finalne energie/observables | Step request/output mask v2 nie istnieje | `NOT VERIFIED` | PR-03 |
-| AD-01 | `POTWIERDZONE` | `adaptive_error_norm_blocks_kernel` zawsze liczy dot i `acos` per node | Policy `ErrorOnly/ErrorAndNorm/Rotation` nie istnieje | `NOT VERIFIED` | PR-05 |
-| AD-02 | `POTWIERDZONE` | `rk_error_norm_runtime.cu` uruchamia trzy globalne max reductions | Typed `AdaptivePartial` i pojedynczy combine nie istnieją | `NOT VERIFIED` | PR-05 |
-| AD-03 | `POTWIERDZONE` | Jeden kernel przyjmuje k0…k6 i runtime `stages > s` | BS23/DP54 specialization nie istnieje; wpływ na register pressure niezmierzony | `NOT VERIFIED` | PR-05 |
-| DM-01 | `POTWIERDZONE` | `demag_poisson/stage_compute.cpp` zawsze recovery + energy blocks/reduction | `FieldOnly` request/mode nie istnieje | `NOT VERIFIED` | PR-02 |
-| DM-02 | `POTWIERDZONE` | `hypre_device_solver.cpp::validate_demag_linear_solve_result` bezwarunkowo wywołuje `b_par->Norml2()` | Conditional truth-table helper nie istnieje | `NOT VERIFIED` | PR-01 |
-| DM-03 | `POTWIERDZONE` | `operators.cpp`/`demag_kernels.cu` mają oddzielne recovery x/y/z i sześć map/CSR | Shared-pattern fused recovery nie istnieje; legalność patternu trzeba wykryć po assembly | `NOT VERIFIED` | PR-11 |
-| DM-04 | `CZĘŚCIOWO` | `hypre_stream_interop.*` i timing contract mają wait/host API/device/iterations | Brak AMG level metrics i aktualnego A/B solverów; „host-paced bottleneck” nieudowodniony | `NOT VERIFIED` | tuning |
-| DM-05 | `CZĘŚCIOWO` | Wszystkie purpose używają jednego `ctx.demag.solver.relative_tolerance` | Purpose-dependent tolerance jest hipotezą; default pozostaje bez zmian do pełnej kwalifikacji | `NOT VERIFIED` | PR-14 |
-| HF-01 | `POTWIERDZONE` | `rk_effective_field.cu::gpu_rk_accumulate_effective_field` wywołuje compose osobno x/y/z i przekazuje `has_ext=true` | Fused base compose nie istnieje; ext on/off wymaga jawnego planu/testu | `NOT VERIFIED` | PR-11 |
-| HF-02 | `POTWIERDZONE` | Separate field buffers i component-wise adds w `rk_effective_field.cu` | Lazy materialization i masks nie istnieją w plannerze/API | `NOT VERIFIED` | PR-11+ |
-| RD-01 | `POTWIERDZONE` | `reduction_kernels.*` ma osobne scalar sum/max i 32 generyczne sloty | Typed adaptive/Armijo/NCG/observable reducers nie istnieją | `NOT VERIFIED` | PR-12 |
-| RL-01 | `POTWIERDZONE` | CPU `exchange_mass_preconditioned_gradient`; GPU `relaxation/nonlinear_cg.cpp` jawnie unpreconditioned | GPU PR+ jest dziś poprawny dla raw gradient; zysk diagonal/Chebyshev/PCG nieudowodniony | `NOT VERIFIED` | PR-13 |
-| RT-01 | `NIEPRAWDA` w pierwotnym brzmieniu | `rk_plan.cpp::gpu_rk_plan_is_strict_device_resident`, `runtime/execution_receipt.cpp`, Rust `validate_strict_fem_gpu_execution_receipt` już failują dla hybrid/host/unknown/masks/transfers | Rzeczywista luka: brak scalonego work snapshotu i niepełne liczenie bezpośrednich sync/readback | `NOT VERIFIED` | PR-00 |
-| MEM-01 | `CZĘŚCIOWO` | Normalizer używa stack scalar; reduction workspace ma pinned host scalar buffer z pageable fallback | Dedykowany pinned attempt-control packet nie istnieje | `NOT VERIFIED` | PR-04 |
-| BL-01 | `CZĘŚCIOWO` | `inspect_cuda_architectures.py` i test już mają `--require-native-cubin`; manifest zapisuje cubin/PTX/device data | Brak automatycznego final-bundle CC→native-cubin qualification receipt; historyczne `sm_52` nie dowodzi `sm_89` | `NOT VERIFIED` | PR-00 |
-| PA-01 | `POTWIERDZONE` | `exchange_plan.hpp::GpuExchangePlan` rozwiązuje tylko `legacy_sparse_gpu` | Typed planner, profiles, SpMM i exchange PA nie istnieją; enum musi być jeden dla 02/08 | `NOT VERIFIED` | PR-15 |
-| NEW-HYPRE-01 | `POTWIERDZONE` | `runtime/hypre_device_policy.cpp` i `demag_poisson/hypre_device_solver.cpp::configure_hypre_device_vendor_kernels` dublują process-wide setters | Usunąć lokalne global setters; solver-local tolerancje/iteracje pozostają w solver owner | `NOT VERIFIED` | PR-01 |
+| EX-06 | `POTWIERDZONE` | `cpu/mfem/interactions/exchange_operator.cpp::initialize_exchange_operator_mfem` używa `AssemblyLevel::LEGACY` | Produkcyjny exchange PA/libCEED nadal nie istnieje; ogólny `pa_benchmark.cpp` nie jest dowodem exchange | `NOT VERIFIED` | PR-15 |
+| EX-07 | `POTWIERDZONE` | `exchange_kernels.cu::exchange_row_scale_kernel` oraz lazy setup w dispatchu precomputują skalę wiersza | Row-scale istnieje źródłowo, ale koszt i poprawność dla wszystkich ścieżek nie mają jeszcze runtime proof | `NOT VERIFIED` | PR-08 |
+| EX-08 | `POTWIERDZONE` | `build_gpu_exchange_off_diagonal_csr` usuwa diagonalę i deterministycznie scala duplikaty; obecny upload nadal może używać pełnego CSR | Builder kontraktowy istnieje, lecz off-diagonal CSR nie jest jeszcze globalnie podłączony do wszystkich konsumentów | `NOT VERIFIED` | PR-08 |
+| RK-01 | `POTWIERDZONE` | `rk_attempt_control_kernels.cu` wykonuje deferred validation, a RK używa pinned `GpuRkAttemptControlPacket`; stary normalizer pozostaje kompatybilnością | Hot path ma odroczony packet i fail-closed fallback; pełny transfer audit oraz każda ścieżka legacy nie są jeszcze zunifikowane | `NOT VERIFIED` | PR-04 |
+| RK-02 | `CZĘŚCIOWO` | `rk_adaptive_decision_readback.cu` czyta packet flags/error/norm/rotation jednym pinned D2H i fence | PI decision nadal jest hostowy, a packet nie jest jeszcze publicznym API v2 | `NOT VERIFIED` | PR-04 |
+| RK-03 | `POTWIERDZONE` | `rk_stage_schedule.cu` publikuje endpoint token dla BS23/DP54 na ścieżce bez aktywnej projekcji okresowej, a `rk_final_refresh.cu` ma exact-time/signature FSAL reuse | Przy aktywnej mapie okresowej projekcja `m` jest wykonywana przed RHS, lecz FSAL jest fail-closed; bitowa tożsamość DP54 i wpływ na trajektorię wymagają testu managed/scientific | `NOT VERIFIED` | PR-06/07 |
+| RK-04 | `POTWIERDZONE` | `gpu_rk_compute_rhs_for_magnetization(..., compute_metric)` pozwala pominąć stage metric; final RHS jawnie żąda metryki | Typed `NoMetric`/global reducer dla wszystkich konsumentów nie istnieje; obecny kontrakt jest częściowy | `NOT VERIFIED` | PR-03 |
+| RK-05 | `POTWIERDZONE` | Attempt-control packet/journal i endpoint invalidation ograniczają rollback; pełne D2D backupy nadal są używane | Typed buffer roles i swap-on-accept nie są wdrożone | `NOT VERIFIED` | PR-07+ |
+| RK-06 | `POTWIERDZONE` | `rk_step_stats.cu::finalize_step_stats_impl` nadal liczy finalne energie/observables bez output mask | Step request/output mask v2 nie istnieje | `NOT VERIFIED` | PR-03 |
+| AD-01 | `POTWIERDZONE` | `adaptive_error_norm_blocks_kernel` używa dot/cosine zamiast per-node `acos`, z policy resolverem dla kanałów | Generic kernel nadal oblicza wspólne kanały; pełne wyspecjalizowane `ErrorOnly/ErrorAndNorm/Rotation` nie są gotowe | `NOT VERIFIED` | PR-05 |
+| AD-02 | `POTWIERDZONE` | `rk_error_norm_runtime.cu` warunkowo uruchamia redukcje kanałów; rotation kończy się jednym device min + scalar `acos` | Typed `AdaptivePartial` i pojedynczy wspólny combine nie istnieją | `NOT VERIFIED` | PR-05 |
+| AD-03 | `POTWIERDZONE` | Kernel nadal przyjmuje k0…k6 i runtime `stages > s` | BS23/DP54 specialization nie istnieje; wpływ na register pressure niezmierzony | `NOT VERIFIED` | PR-05 |
+| DM-01 | `POTWIERDZONE` | `stage_compute.cpp` ma typed `GpuDemagEvaluationMode::FieldOnly`; RK i frequency tangent żądają FieldOnly | FieldOnly jest w źródle, ale parity każdego konsumenta i brak energii w publicznym snapshotcie wymagają runtime proof | `NOT VERIFIED` | PR-02 |
+| DM-02 | `POTWIERDZONE` | `hypre_validation_policy.cpp` rozstrzyga RHS normę/independent residual; solver wywołuje je warunkowo | Force-independent policy nie jest jeszcze publiczną konfiguracją, a managed HYPRE proof nie istnieje | `NOT VERIFIED` | PR-01 |
+| DM-03 | `POTWIERDZONE` | `operators.cpp`/`demag_kernels.cu` mają wspólny-pattern fused recovery z digestem i split fallback | Fused path jest fail-closed do zgodnego patternu; legalność i przewaga nie są zakwalifikowane | `NOT VERIFIED` | PR-11 |
+| DM-04 | `CZĘŚCIOWO` | Istnieją wait/host API/device/iterations oraz fazowe timingi zapisywane do performance snapshot | Brak AMG level metrics i aktualnego A/B solverów; „host-paced bottleneck” pozostaje nieudowodniony | `NOT VERIFIED` | tuning |
+| DM-05 | `CZĘŚCIOWO` | Wszystkie purpose nadal używają jednego `ctx.demag.solver.relative_tolerance`; nie dodano cichej zmiany defaultu | Purpose-dependent tolerance pozostaje hipotezą kwalifikacyjną | `NOT VERIFIED` | PR-14 |
+| HF-01 | `POTWIERDZONE` | `rk_effective_field.cu` nadal składa component-wise, ale przekazuje rzeczywiste `has_external_field` zamiast stałego `true` | Fused base compose nie istnieje; ext on/off wymaga jawnego planu/testu | `NOT VERIFIED` | PR-11 |
+| HF-02 | `POTWIERDZONE` | Separate field buffers i component-wise adds pozostają w `rk_effective_field.cu` | Lazy materialization i masks nie istnieją w plannerze/API | `NOT VERIFIED` | PR-11+ |
+| RD-01 | `POTWIERDZONE` | `reduction_kernels.*` ma scalar sum/max, a LLG metric można wyłączyć dla stage RHS | Typed adaptive/Armijo/NCG/observable reducers nadal nie istnieją | `NOT VERIFIED` | PR-12 |
+| RL-01 | `POTWIERDZONE` | `gpu_relaxation_preconditioner.cpp` ma fail-closed resolver/builder; GPU NCG nie włącza go do runtime | GPU PR+ pozostaje poprawny dla raw gradient; zysk diagonal/Chebyshev/PCG nieudowodniony | `NOT VERIFIED` | PR-13 |
+| RT-01 | `NIEPRAWDA` w pierwotnym brzmieniu | Istniejący strict receipt nadal odrzuca hybrid/host/unknown/maski/transfers; dodano transactional `GpuPerformanceCounterState`, C ABI snapshot i Rust validator | Snapshot nie jest jeszcze wpięty do pełnego publicznego provenance, a managed runtime pozostaje niezweryfikowany | `NOT VERIFIED` | PR-00 |
+| MEM-01 | `CZĘŚCIOWO` | RK ma dedykowany pinned `GpuRkAttemptControlPacket`; inne redukcje nadal mają pinned scalar buffer z pageable fallback | Packet nie obejmuje jeszcze wszystkich control/data-plane readbacków | `NOT VERIFIED` | PR-04 |
+| BL-01 | `CZĘŚCIOWO` | Inspektor i walidator bundle mają `--require-native-cubin`; `export_fem_gpu_runtime.sh` już wymaga domyślnie `8.9`, `fullmag_fem=sm_89` i `hypre=sm_89` | Brak ogólnego wykryte CC→`sm_xy` zamiast stałego `sm_89` oraz immutable benchmark receipt; historyczne `sm_52` nie dowodzi aktualnego `sm_89` | `NOT VERIFIED` | PR-00 |
+| PA-01 | `POTWIERDZONE` | `exchange_operator.hpp/.cpp` ma jeden typed resolver dla legacy/fused/reduced/cuSPARSE/PA z fail-closed profile/VRAM/runtime gates | Planner i profile są kontraktem źródłowym, ale nie są jeszcze podłączone do publicznego runtime; SpMM/PA nie są produkcyjną realizacją | `NOT VERIFIED` | PR-15 |
+| NEW-HYPRE-01 | `POTWIERDZONE` | `runtime/hypre_device_policy.cpp` jest jedynym właścicielem process-wide setterów; lokalna konfiguracja z solvera została usunięta | Solver-local tolerancje/iteracje pozostają w solver owner; trzeba potwierdzić build i HYPRE runtime | `NOT VERIFIED` | PR-01 |
 
 ## Reguła zamknięcia
 

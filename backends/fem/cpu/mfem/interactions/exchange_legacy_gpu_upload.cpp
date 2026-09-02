@@ -187,7 +187,12 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
         inv_lumped.data(),
         static_cast<uint64_t>(inv_lumped.size()),
         ctx.transfer_audit.audit,
-        error);
+        error,
+        ctx.mesh.periodic_reduced_node.data(),
+        static_cast<uint64_t>(ctx.mesh.periodic_reduced_node.size()),
+        ctx.mesh.periodic_representative_nodes.data(),
+        static_cast<uint64_t>(ctx.mesh.periodic_representative_nodes.size()),
+        static_cast<uint64_t>(ctx.mesh.periodic_reduced_node_count));
 }
 #else
 bool upload_legacy_sparse_exchange_to_gpu_state(

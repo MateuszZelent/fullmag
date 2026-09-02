@@ -648,6 +648,10 @@ struct RkStepTransaction::Impl {
         ctx.transfer_audit.audit = transfer_audit;
         ctx.gpu_state.device.residency = gpu_residency;
         ctx.gpu_state.device.rk.fsal_valid = gpu_fsal_valid;
+        // Endpoint tokens are attempt-local and are never valid across a
+        // transaction rollback, even when the pre-step FSAL k0 is restored.
+        ctx.gpu_state.device.rk.endpoint_valid = false;
+        ctx.gpu_state.device.rk.endpoint_consumed = true;
         ctx.gpu_state.device.demag_poisson.hybrid_stage_m_xyz = gpu_hybrid_stage_m;
         ctx.gpu_state.device.demag_poisson.hybrid_demag_xyz = gpu_hybrid_demag;
         ctx.gpu_state.device.demag_poisson.hybrid_demag_energy_joules =

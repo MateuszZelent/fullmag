@@ -6,7 +6,7 @@
 - **Gałąź dokumentacyjna pochodzenia:** `docs/fem-gpu-performance-remediation-2026-09-01`
 - **Rewizja bazowa planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 - **Rewizja pierwotnego audytu:** `7faa259c5597ba447c413f2aea0ff66d6110b297`
-- **Rewizja weryfikacji kodu:** `cdb3c135901b950871291610c6ba45e62f8cb90a`
+- **Rewizja weryfikacji kodu:** `c3f49db708868f3649a3e894416d230269718920`
 - **Data:** 2026-09-01
 - **Lane:** natywny FEM GPU, MFEM 4.9, HYPRE 3.1.0, CUDA.
 - **Przypadek referencyjny:** µMAG SP4 FEM, `mixed_p1`, `layers=1`, `mesh=medium`,
@@ -89,9 +89,9 @@ czas do `tolA` w relaksacji albo czas symulacji 1 ns przy tej samej dokładnośc
 
 ## 4. Źródłowy i docelowy graf wykonania RK23
 
-Stan obecny dla zaakceptowanej, adaptacyjnej próby BS23 po rozgrzaniu FSAL,
-wyprowadzony z grafu wywołań w `rk_stage_schedule.cu` i
-`rk_final_refresh.cu`:
+Baseline przed remediacją dla zaakceptowanej, adaptacyjnej próby BS23 po
+rozgrzaniu FSAL, wyprowadzony z grafu wywołań w `rk_stage_schedule.cu` i
+`rk_final_refresh.cu`, wyglądał następująco:
 
 ```text
 backup D2D
@@ -105,6 +105,10 @@ backup D2D
   -> ponowny final RHS [jak wyżej]
   -> final energies/observables + host fence
 ```
+
+W bieżącym worktree ścieżka endpoint/FSAL i FieldOnly jest już zaimplementowana
+źródłowo, więc wariant bez odrzuceń może dojść do budżetu P0 poniżej. Dopóki
+nie ma managed receipt, tabelę należy czytać jako cel/hipotezę, nie wynik.
 
 Cel P0:
 
@@ -137,6 +141,37 @@ implementacyjną, a nie zmierzonym baseline SP4:
 | adaptive host fences | 1 | 1 |
 | final-stat host fences | 1 | 0 lub 1 zależnie od output/control mask |
 
+### Orientacyjny wpływ na wall time — hipoteza, nie wynik
+
+Na podstawie samego grafu pracy nie można uczciwie obiecać jednej wartości
+procentowej. Dla zwykłego, nieperiodycznego SP4, bez odrzuceń prób i przy
+kwalifikacji wszystkich ścieżek P0, mój roboczy szacunek całego kroku to około
+**15–30% krótszy wall time** (punkt środkowy około 20–25%). Wynika on głównie z
+4 → 3 pełnych RHS/demag solve, usunięcia stage demag energy oraz ograniczenia
+launchy exchange; nie jest to pomiar.
+
+W przypadku, w którym Poisson demag dominuje koszt, górna granica może dojść do
+około **30–40%**, natomiast przy dominacji innych operatorów, częstych
+odrzuceniach lub pozostawieniu ścieżki zgodności zysk może spaść do kilku–
+kilkunastu procent. Periodyczny reduced CSR może dać wielokrotny zysk w samym
+komponencie exchange względem skanu O(N²), ale zysk całego kroku pozostaje
+`NOT VERIFIED` i może być ograniczony przez Poisson, projekcję oraz koszt
+liftu.
+
+Powyższe widełki są jedynie hipotezą planistyczną. Do dokumentu kwalifikacyjnego
+wolno wpisać wyłącznie medianę/p95 z aktualnego managed GPU receipt dla tego
+samego ProblemIR, meshu, tolerancji, runtime bundle i źródła.
+
+Priorytet poniżej jest klasyfikacją inżynierską wynikającą ze struktury kodu,
+nie rankingiem udziału w wall time:
+
+| Klasa | Ustalenia | Podstawa |
+|---|---|---|
+| Błąd skalowania | EX-01 | pełny skan `source_row=0..N` dla każdego wiersza |
+| Gwarantowane usunięcie pracy | RK-03, DM-01, DM-02, RK-01, EX-02 | graf wywołań i liczniki pracy |
+| Kandydat sprzętowy | EX-03, EX-04, DM-04, DM-05, RL-01, PA-01 | wymaga A/B na rzeczywistym GPU |
+| Refaktor architektoniczny | RK-05, HF-02, RD-01 | samodzielnie nie gwarantuje skrócenia czasu |
+
 ## 5. Fale realizacji
 
 ### Fala A — prawda i baseline
@@ -144,8 +179,10 @@ implementacyjną, a nie zmierzonym baseline SP4:
 - scalenie istniejących statystyk kroku, endpoint cache, transfer audit,
   execution receipt i fazowych timerów w wersjonowany snapshot pracy,
 - zachowanie i rozszerzenie istniejącego fail-closed strict-device receipt,
-- podłączenie istniejącego `--require-native-cubin` do kwalifikacji finalnego
-  managed runtime dla wykrytego compute capability,
+- zachowanie istniejącego gate'u exportera dla Ada
+  (`FULLMAG_FEM_EXPECTED_COMPUTE_CAPABILITY=8.9`, `fullmag_fem=sm_89`,
+  `hypre=sm_89`) oraz zastąpienie stałego `sm_89` mapowaniem z wykrytego
+  compute capability, związanym z digestem finalnego bundle i benchmark receipt,
 - stabilny benchmark SP4 i mikrobenchmark operatorów.
 
 Nie optymalizować przed zapisaniem baseline.

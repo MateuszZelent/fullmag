@@ -12,9 +12,11 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp"
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
+#include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
 #include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 
 #include <cstdio>
 #include <memory>
@@ -57,6 +59,37 @@ private:
     bool active_ = true;
 };
 
+class PerformanceAttemptGuard {
+public:
+    PerformanceAttemptGuard(GpuPerformanceCounterState &state, uint64_t step)
+        : state_(state)
+    {
+        gpu_performance_begin_attempt(state_, step);
+    }
+
+    ~PerformanceAttemptGuard()
+    {
+        if (active_) {
+            gpu_performance_fail_attempt(state_);
+        }
+    }
+
+    void reject()
+    {
+        gpu_performance_reject_attempt(state_);
+        active_ = false;
+    }
+
+    void release()
+    {
+        active_ = false;
+    }
+
+private:
+    GpuPerformanceCounterState &state_;
+    bool active_ = true;
+};
+
 std::string format_scientific(double value)
 {
     char buffer[64];
@@ -96,6 +129,9 @@ bool gpu_rk_run_accepted_attempt_loop(
         ReceiptAttemptGuard receipt_attempt(
             ctx.gpu_state.execution_receipt,
             ctx.transfer_audit.audit.counters);
+        PerformanceAttemptGuard performance_attempt(
+            ctx.gpu_state.performance_counters,
+            ctx.state.step_count + 1u);
         ctx.adaptive_dt.current_dt = active_dt;
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
         const uint32_t rhs_before_attempt = total_stage_rhs_evaluations;
@@ -126,6 +162,11 @@ bool gpu_rk_run_accepted_attempt_loop(
         }
         total_stage_rhs_evaluations += stage_attempt.rhs_evaluations;
         fsal_reused = stage_attempt.fsal_reused;
+        GpuPerformanceCounterDelta performance_delta{};
+        performance_delta.rhs_evaluations = stage_attempt.rhs_evaluations;
+        performance_delta.demag_solves =
+            ctx.poisson_demag.solves_current_step - demag_solves_before_attempt;
+        gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
 
         if (adaptive) {
             if (!gpu_rk_reduce_adaptive_error_norm_device(
@@ -209,6 +250,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                 ctx.adaptive_dt.current_dt = active_dt;
                 rejected_attempts += 1;
                 receipt_attempt.reject();
+                performance_attempt.reject();
                 if (rejected_attempts > ctx.adaptive_dt.max_reject) {
                     reason =
                         "adaptive GPU RK exceeded adaptive_config.max_reject rejected attempts "
@@ -244,6 +286,21 @@ bool gpu_rk_run_accepted_attempt_loop(
                 tableau.order_est,
             });
         }
+        if (is_rk45 && gpu.rk.endpoint_valid) {
+            if (!gpu_rk_copy_component_device(
+                    gpu.rk.error,
+                    gpu.magnetization.m,
+                    gpu.lifecycle.node_count,
+                    stream,
+                    "cudaMemcpyAsync GPU DP54 exact endpoint promotion",
+                    reason)) {
+                return false;
+            }
+            // Keep the endpoint token alive until accepted-step finalization
+            // consumes k6.  The copy makes the authoritative state bitwise
+            // identical to the normalized endpoint used for that RHS.
+        }
+        performance_attempt.release();
         receipt_attempt.release();
         break;
     }

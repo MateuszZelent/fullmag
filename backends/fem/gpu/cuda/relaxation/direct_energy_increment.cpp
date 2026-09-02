@@ -239,22 +239,54 @@ bool direct_difference(
     }
 
     if (ctx.exchange.enabled) {
-        fullmag_cuda_legacy_sparse_exchange_difference_blocks(
-            gpu.legacy_exchange.csr_row_offsets,
-            gpu.legacy_exchange.csr_col_indices,
-            gpu.legacy_exchange.csr_values,
-            base_m.x, base_m.y, base_m.z,
-            gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
-            gpu.reductions.scalar_workspace,
-            gpu.rk.k[1].x,
-            node_count, stream);
+        int exchange_reduction_blocks = block_count;
+        if (gpu.mesh_regions.has_periodic_reduced_nodes) {
+            if (!gpu.legacy_exchange.periodic_reduced_ready ||
+                gpu.legacy_exchange.periodic_reduced_row_offsets == nullptr ||
+                gpu.legacy_exchange.periodic_reduced_col_indices == nullptr ||
+                gpu.legacy_exchange.periodic_reduced_values == nullptr ||
+                gpu.mesh_regions.periodic_reduced_representative_nodes == nullptr ||
+                gpu.legacy_exchange.periodic_reduced_rows == 0u ||
+                gpu.legacy_exchange.periodic_reduced_rows >
+                    static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+                reason =
+                    "GPU periodic exchange difference requires a precomputed reduced CSR and representative map";
+                return false;
+            }
+            const int reduced_rows =
+                static_cast<int>(gpu.legacy_exchange.periodic_reduced_rows);
+            fullmag_cuda_periodic_reduced_exchange_difference_blocks(
+                gpu.legacy_exchange.periodic_reduced_row_offsets,
+                gpu.legacy_exchange.periodic_reduced_col_indices,
+                gpu.legacy_exchange.periodic_reduced_values,
+                gpu.mesh_regions.periodic_reduced_representative_nodes,
+                base_m.x, base_m.y, base_m.z,
+                gpu.magnetization.m.x,
+                gpu.magnetization.m.y,
+                gpu.magnetization.m.z,
+                gpu.reductions.scalar_workspace,
+                gpu.rk.k[1].x,
+                reduced_rows,
+                stream);
+            exchange_reduction_blocks = (reduced_rows + 255) / 256;
+        } else {
+            fullmag_cuda_legacy_sparse_exchange_difference_blocks(
+                gpu.legacy_exchange.csr_row_offsets,
+                gpu.legacy_exchange.csr_col_indices,
+                gpu.legacy_exchange.csr_values,
+                base_m.x, base_m.y, base_m.z,
+                gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+                gpu.reductions.scalar_workspace,
+                gpu.rk.k[1].x,
+                node_count, stream);
+        }
         if (!cuda_launch_ok("launch GPU direct minimizer exchange difference", reason) ||
             !reduce_scalar_sum(
-                ctx, stream, gpu.reductions.scalar_workspace, block_count,
+                ctx, stream, gpu.reductions.scalar_workspace, exchange_reduction_blocks,
                 tail + kDirectExchangeDeltaTailSlot,
                 "launch GPU direct minimizer exchange delta reduction", reason) ||
             !reduce_scalar_sum(
-                ctx, stream, gpu.rk.k[1].x, block_count,
+                ctx, stream, gpu.rk.k[1].x, exchange_reduction_blocks,
                 tail + kDirectExchangeAbsoluteTailSlot,
                 "launch GPU direct minimizer exchange absolute reduction", reason)) {
             return false;

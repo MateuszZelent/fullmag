@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <string>
 
+#include "gpu/cuda/runtime/performance_counters.hpp"
+
 namespace fullmag::fem {
 
 /// Validate and normalize each active (mx,my,mz) to unit length (SoA layout).
@@ -21,7 +23,8 @@ bool fullmag_cuda_normalize_vectors(
     double *device_invalid_flag,
     int N,
     cudaStream_t stream,
-    std::string &reason);
+    std::string &reason,
+    GpuPerformanceCounterState *performance_counters = nullptr);
 
 /// h_eff = h_ex + h_demag [+ h_ext] (element-wise, SoA component).
 void fullmag_cuda_accumulate_heff(

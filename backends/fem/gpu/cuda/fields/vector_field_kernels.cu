@@ -97,7 +97,8 @@ bool fullmag_cuda_normalize_vectors(
     double *device_invalid_flag,
     int N,
     cudaStream_t stream,
-    std::string &reason)
+    std::string &reason,
+    GpuPerformanceCounterState *performance_counters)
 {
     if (device_invalid_flag == nullptr) {
         reason = "GPU vector normalization requires a preallocated invalid-vector scalar";
@@ -139,6 +140,14 @@ bool fullmag_cuda_normalize_vectors(
     if (invalid != 0.0) {
         reason = "GPU RK stage contains zero, subnormal-norm, or nonfinite active magnetization";
         return false;
+    }
+    if (performance_counters != nullptr) {
+        GpuPerformanceCounterDelta delta{};
+        delta.normalization_launches = 1;
+        delta.normalization_readbacks = 1;
+        delta.control_fences = 1;
+        delta.control_d2h_bytes = sizeof(double);
+        gpu_performance_note(*performance_counters, delta);
     }
     return true;
 }

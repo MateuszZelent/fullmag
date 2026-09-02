@@ -1017,6 +1017,9 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
          recovery_cycle < kArmijoRecoveryCycles;
          ++recovery_cycle) {
         gpu.relaxation.nonlinear_cg_direction_valid = false;
+        gpu.rk.endpoint_valid = false;
+        gpu.rk.endpoint_consumed = true;
+        gpu.rk.endpoint_operator_signature = 0;
         if (!gpu_relax_prepare_descent_direction(
                 ctx,
                 stream,

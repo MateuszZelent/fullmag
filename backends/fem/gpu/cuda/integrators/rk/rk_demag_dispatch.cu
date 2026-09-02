@@ -27,6 +27,17 @@ namespace fullmag::fem {
 
 namespace {
 
+constexpr GpuDemagApplyRequest kRkStageDemagRequest{
+    false,
+    GpuDemagEvaluationMode::FieldOnly,
+    GpuDemagSolvePurpose::IntermediateRkStage};
+
+// The four-argument compatibility entrypoint remains available to direct
+// field callers: compute_device_demag_for_device_stage(ctx, m, stream, reason)
+// Fresh compatibility entrypoint: compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason)
+// The compatibility fresh spelling remains available to relaxation callers:
+// compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason)
+
 bool gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
     Context &ctx,
     const FemGpuComponentField &m,
@@ -107,7 +118,8 @@ bool gpu_rk_compute_demag_for_device_stage(
             ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON
                 ? gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
                       ctx, m, stream, reason, true)
-                : compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason);
+                : compute_device_demag_for_device_stage_fresh(
+                      ctx, m, stream, kRkStageDemagRequest, reason);
         if (refreshed) {
             ctx.poisson_demag.fresh_initial_guess_required = false;
         }
@@ -117,7 +129,8 @@ bool gpu_rk_compute_demag_for_device_stage(
         return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
             ctx, m, stream, reason, false);
     }
-    return compute_device_demag_for_device_stage(ctx, m, stream, reason);
+    return compute_device_demag_for_device_stage(
+        ctx, m, stream, kRkStageDemagRequest, reason);
 }
 
 bool gpu_rk_compute_demag_for_device_stage_fresh(
@@ -133,7 +146,8 @@ bool gpu_rk_compute_demag_for_device_stage_fresh(
         return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
             ctx, m, stream, reason, true);
     }
-    return compute_device_demag_for_device_stage_fresh(ctx, m, stream, reason);
+    return compute_device_demag_for_device_stage_fresh(
+        ctx, m, stream, kRkStageDemagRequest, reason);
 }
 
 } // namespace fullmag::fem

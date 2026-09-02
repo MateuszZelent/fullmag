@@ -20,6 +20,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.hpp"
 #include "gpu/cuda/integrators/rk/rk_local_fields.hpp"
+#include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 
 #include <string>
@@ -110,6 +111,30 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
     bool fresh_demag_initial_guess = false)
 {
     auto &timings = ctx.gpu_state.rk_phase_timings;
+    // The reduced periodic exchange representation is valid only after the
+    // local vector has been projected onto periodic classes. CPU RK enforces
+    // this after every stage normalization; keep the same invariant on the
+    // device before any interaction consumes m.
+    if (ctx.gpu_state.device.mesh_regions.has_periodic_reduced_nodes) {
+        const auto &mesh_regions = ctx.gpu_state.device.mesh_regions;
+        if (mesh_regions.periodic_representative_nodes == nullptr) {
+            reason = "GPU periodic RHS requires a representative-node projection map";
+            return false;
+        }
+        fullmag_cuda_relax_project_static_periodic_field(
+            m.x,
+            m.y,
+            m.z,
+            mesh_regions.periodic_representative_nodes,
+            n,
+            stream);
+        if (!cuda_ok(
+                cudaPeekAtLastError(),
+                "launch GPU periodic magnetization projection",
+                reason)) {
+            return false;
+        }
+    }
     GpuRkPhaseTimer exchange_timer;
     if (!exchange_timer.start(
             timings.enabled,
@@ -126,7 +151,8 @@ bool gpu_rk_accumulate_effective_field_for_magnetization(
             m,
             stream,
             reason,
-            &ctx.gpu_state.execution_receipt)) {
+            &ctx.gpu_state.execution_receipt,
+            &ctx.gpu_state.performance_counters)) {
         return false;
     }
     if (!exchange_timer.finish(reason)) {
@@ -188,7 +214,8 @@ bool gpu_rk_compute_rhs_for_magnetization(
     int n,
     double evaluation_time_s,
     const char *label,
-    std::string &reason)
+    std::string &reason,
+    bool compute_metric)
 {
     if (!gpu_rk_accumulate_effective_field_for_magnetization(
             ctx, m, stream, n, evaluation_time_s, label, reason)) {
@@ -207,7 +234,9 @@ bool gpu_rk_compute_rhs_for_magnetization(
             reason)) {
         return false;
     }
-    if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)) {
+    // The default compatibility call remains metric-free:
+    // gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason)
+    if (!gpu_rk_compute_llg_rhs(ctx, m, rhs, stream, n, reason, compute_metric)) {
         return false;
     }
     if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {

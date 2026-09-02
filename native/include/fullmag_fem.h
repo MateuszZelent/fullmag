@@ -2867,6 +2867,83 @@ typedef struct {
     uint64_t hot_loop_compute_host_sync_count;
 } fullmag_fem_gpu_execution_receipt_v1;
 
+/*
+ * Append-only host-owned performance snapshot.  The physical counters include
+ * rejected and failed attempts; accepted counters include all attempts that
+ * belong to a committed logical step, including retries.  A snapshot is
+ * published atomically at commit and therefore never exposes an active attempt.
+ */
+#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t available;
+    uint32_t execution_class;
+    uint32_t precision;
+    uint32_t integrator;
+    int32_t device_ordinal;
+    uint64_t completed_step;
+    uint64_t completed_execution_id;
+    uint64_t completed_operator_id;
+    uint64_t completed_attempt_count;
+    uint64_t rejected_attempt_count;
+    uint64_t failed_attempt_count;
+
+    uint64_t physical_rhs_evaluations;
+    uint64_t physical_exchange_applies;
+    uint64_t physical_exchange_launches;
+    uint64_t physical_exchange_nnz_visited;
+    uint64_t physical_demag_solves;
+    uint64_t physical_demag_iterations;
+    uint64_t physical_demag_rhs_norm_evaluations;
+    uint64_t physical_demag_stage_energy_evaluations;
+    uint64_t physical_normalization_launches;
+    uint64_t physical_normalization_readbacks;
+    uint64_t physical_adaptive_readbacks;
+    uint64_t physical_control_fences;
+    uint64_t physical_endpoint_cache_hits;
+    uint64_t physical_endpoint_cache_misses;
+    uint64_t physical_endpoint_cache_invalidations;
+    uint64_t physical_device_to_device_bytes;
+    uint64_t physical_control_d2h_bytes;
+    uint64_t physical_bulk_d2h_bytes;
+    double physical_demag_rhs_norm_sum;
+    double physical_demag_stage_energy_sum_joules;
+
+    uint64_t accepted_rhs_evaluations;
+    uint64_t accepted_exchange_applies;
+    uint64_t accepted_exchange_launches;
+    uint64_t accepted_exchange_nnz_visited;
+    uint64_t accepted_demag_solves;
+    uint64_t accepted_demag_iterations;
+    uint64_t accepted_demag_rhs_norm_evaluations;
+    uint64_t accepted_demag_stage_energy_evaluations;
+    uint64_t accepted_normalization_launches;
+    uint64_t accepted_normalization_readbacks;
+    uint64_t accepted_adaptive_readbacks;
+    uint64_t accepted_control_fences;
+    uint64_t accepted_endpoint_cache_hits;
+    uint64_t accepted_endpoint_cache_misses;
+    uint64_t accepted_endpoint_cache_invalidations;
+    uint64_t accepted_device_to_device_bytes;
+    uint64_t accepted_control_d2h_bytes;
+    uint64_t accepted_bulk_d2h_bytes;
+    double accepted_demag_rhs_norm_sum;
+    double accepted_demag_stage_energy_sum_joules;
+
+    uint64_t physical_exchange_elapsed_ns;
+    uint64_t physical_demag_assemble_elapsed_ns;
+    uint64_t physical_demag_recover_elapsed_ns;
+    uint64_t physical_demag_energy_elapsed_ns;
+    uint64_t physical_rhs_elapsed_ns;
+    uint64_t accepted_exchange_elapsed_ns;
+    uint64_t accepted_demag_assemble_elapsed_ns;
+    uint64_t accepted_demag_recover_elapsed_ns;
+    uint64_t accepted_demag_energy_elapsed_ns;
+    uint64_t accepted_rhs_elapsed_ns;
+} fullmag_fem_gpu_performance_snapshot_v1;
+
 typedef struct fullmag_fem_backend fullmag_fem_backend;
 typedef struct fullmag_fem_field_snapshot fullmag_fem_field_snapshot;
 typedef struct fullmag_fem_preview_snapshot fullmag_fem_preview_snapshot;
@@ -3264,6 +3341,11 @@ int fullmag_fem_backend_validate_strict_gpu_rk_plan(
 int fullmag_fem_backend_gpu_execution_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_execution_receipt_v1 *out_receipt
+);
+
+int fullmag_fem_backend_gpu_performance_snapshot_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_performance_snapshot_v1 *out_snapshot
 );
 
 int fullmag_fem_backend_upload_strain(

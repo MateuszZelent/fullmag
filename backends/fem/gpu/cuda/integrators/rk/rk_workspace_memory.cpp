@@ -8,6 +8,7 @@
 #include "gpu/cuda/integrators/rk/rk_workspace_memory.hpp"
 
 #include "gpu/cuda/state/device_memory.hpp"
+#include "gpu/cuda/integrators/rk/rk_attempt_control_memory.hpp"
 
 namespace fullmag::fem {
 
@@ -36,7 +37,8 @@ bool gpu_rk_workspace_allocate(
     return gpu_device_allocate_component(
                rk.transaction_m, node_count, device_bytes, error) &&
         gpu_device_allocate_component(
-               rk.transaction_k0, node_count, device_bytes, error);
+            rk.transaction_k0, node_count, device_bytes, error) &&
+        gpu_rk_attempt_control_allocate(rk.attempt_control, device_bytes, error);
 }
 
 void gpu_rk_workspace_free(FemGpuRkWorkspaceDeviceState &rk)
@@ -49,6 +51,7 @@ void gpu_rk_workspace_free(FemGpuRkWorkspaceDeviceState &rk)
     }
     gpu_device_free_component(rk.transaction_m);
     gpu_device_free_component(rk.transaction_k0);
+    gpu_rk_attempt_control_free(rk.attempt_control);
 }
 
 } // namespace fullmag::fem

@@ -3,11 +3,12 @@
 **Ustalenia:** RL-01 oraz RD-01/RK-02 w NCG i PG-BB.
 
 **Status po weryfikacji:** CPU exchange-mass preconditioner i brak analogicznego
-preconditionera GPU NCG są potwierdzone. Nie wynika z tego, że preconditioner
-GPU skróci time-to-`tolA`; to pozostaje `NOT VERIFIED`. GPU ma już poprawny
-unpreconditioned PR+, tangent transport, restart, fallback i persistent state.
-Diagonal/Chebyshev/PCG, device Armijo packet i device PG-BB control poniżej są
-projektami, nie istniejącymi API. Istniejący managed target
+preconditionera GPU NCG są potwierdzone. Istnieje fail-closed builder/resolver
+diagonalnego preconditionera, ale nie jest on podłączony do NCG/PG-BB runtime.
+Nie wynika z tego, że preconditioner GPU skróci time-to-`tolA`; to pozostaje
+`NOT VERIFIED`. GPU ma poprawny unpreconditioned PR+, tangent transport,
+restart, fallback i persistent state. Chebyshev/PCG, device Armijo packet i
+device PG-BB control pozostają celami. Istniejący managed target
 `verify-fem-gpu-relaxation-preconditioner-qualification` i jego evidence należy
 rozszerzyć lub zastąpić, nie dublować.
 

@@ -15,6 +15,7 @@
 #include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"
+#include "gpu/cuda/integrators/rk/rk_attempt_control_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_rk4_accept_kernel.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -61,15 +62,14 @@ bool gpu_rk_run_rk4_stage_sequence(
         0.5 * active_dt,
         n,
         stream);
-    if (!fullmag_cuda_normalize_vectors(
-            gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
-            gpu.mesh_regions.magnetic_node_mask,
-            gpu.reductions.scalar_result,
-            n,
-            stream,
-            reason)) {
-        return false;
-    }
+    fullmag_cuda_normalize_vectors_deferred(
+        gpu.rk.m_stage,
+        gpu.rk.m_backup,
+        gpu.mesh_regions.magnetic_node_mask,
+        gpu.rk.attempt_control.device,
+        n,
+        stream,
+        &ctx.gpu_state.performance_counters);
     if (!cuda_launch_ok("launch GPU RK4 midpoint-2/normalize", reason)) {
         return false;
     }
@@ -104,15 +104,14 @@ bool gpu_rk_run_rk4_stage_sequence(
         active_dt,
         n,
         stream);
-    if (!fullmag_cuda_normalize_vectors(
-            gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
-            gpu.mesh_regions.magnetic_node_mask,
-            gpu.reductions.scalar_result,
-            n,
-            stream,
-            reason)) {
-        return false;
-    }
+    fullmag_cuda_normalize_vectors_deferred(
+        gpu.rk.m_stage,
+        gpu.rk.m_backup,
+        gpu.mesh_regions.magnetic_node_mask,
+        gpu.rk.attempt_control.device,
+        n,
+        stream,
+        &ctx.gpu_state.performance_counters);
     if (!cuda_launch_ok("launch GPU RK4 endpoint/normalize", reason)) {
         return false;
     }

@@ -6,6 +6,7 @@
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <algorithm>
@@ -56,6 +57,14 @@ bool read_scalar_result_impl(
     } else {
         record_device_to_host(ctx.transfer_audit.audit, sizeof(double));
     }
+    GpuPerformanceCounterDelta performance_delta{};
+    performance_delta.control_fences = 1;
+    if (control_scalar_readback) {
+        performance_delta.control_d2h_bytes = sizeof(double);
+    } else {
+        performance_delta.bulk_d2h_bytes = sizeof(double);
+    }
+    gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
     return true;
 }
 
@@ -102,6 +111,14 @@ bool read_scalar_results_impl(
     } else {
         record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double));
     }
+    GpuPerformanceCounterDelta performance_delta{};
+    performance_delta.control_fences = 1;
+    if (control_scalar_readback) {
+        performance_delta.control_d2h_bytes = count * sizeof(double);
+    } else {
+        performance_delta.bulk_d2h_bytes = count * sizeof(double);
+    }
+    gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
     return true;
 }
 

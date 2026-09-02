@@ -17,11 +17,11 @@ Istnieją ponadto `fullmag_fem_step_stats`, wersjonowana telemetria endpoint
 cache oraz transactional execution receipt. RT-01 nie oznacza więc braku
 fail-closed dowodu wykonania: `gpu_rk_plan_is_strict_device_resident` oraz
 `validate_strict_fem_gpu_execution_receipt` już odrzucają host, hybrid,
-unknown, brak wymaganej maski i bulk compute transfer. Luką jest brak jednego
-spójnego snapshotu **rzeczywiście wykonanej pracy** i niepełne pokrycie
-bezpośrednich synchronizacji, np. normalizatora.
+unknown, brak wymaganej maski i bulk compute transfer. W tym worktree dodano
+osobny, transakcyjny snapshot **rzeczywiście wykonanej pracy**; pozostała luka
+dotyczy pełnego pokrycia bezpośrednich synchronizacji i publicznego provenance.
 
-Brakuje jednak jednego wersjonowanego snapshotu odpowiadającego na pytania:
+Snapshot odpowiada już na pytania:
 
 - ile pełnych RHS wykonano,
 - ile solve’ów Poissona wykonano,
@@ -32,7 +32,11 @@ Brakuje jednak jednego wersjonowanego snapshotu odpowiadającego na pytania:
 - ile host fences przypadło na zaakceptowany krok,
 - czy endpoint cache został użyty,
 - ile D2D bytes wykonano,
-- jaki był faktyczny tryb operatora.
+- ile czasu fazowego zapisano dla exchange, demag i RHS.
+
+Faktyczny tryb operatora pozostaje w resolved planner/provenance, a nie w
+wersji ABI v1 snapshotu. Nie należy dopisywać go do istniejącego layoutu bez
+nowej wersji ABI.
 
 Bez tych liczników można skrócić pojedynczy kernel i jednocześnie pogorszyć
 time-to-solution przez większą liczbę RHS, odrzuceń albo iteracji.
@@ -41,27 +45,29 @@ time-to-solution przez większą liczbę RHS, odrzuceń albo iteracji.
 
 Nie dodawać pól bezpośrednio do `Context`.
 
-Utworzyć:
+Wprowadzono:
 
 ```text
 backends/fem/gpu/cuda/runtime/performance_counters.hpp
 backends/fem/gpu/cuda/runtime/performance_counters.cpp
 ```
 
-i dodać do `GpuStateRuntimeState` w
+oraz dodano `GpuPerformanceCounterState` do `GpuStateRuntimeState` w
 `gpu/cuda/runtime/gpu_state_runtime.hpp`:
 
 ```cpp
-struct FemGpuPerformanceRuntimeState {
-    FemGpuPerformanceCounters lifetime{};
-    FemGpuPerformanceCounters current_step{};
-    FemGpuPerformanceCounters last_completed_step{};
-    uint64_t schema_revision = 1;
+struct GpuPerformanceCounterState {
+    bool available = false;
+    bool attempt_active = false;
+    GpuPerformanceCounterDelta active{};
+    GpuPerformanceCounterDelta physical_lifetime{};
+    GpuPerformanceCounterDelta accepted_lifetime{};
+    fullmag_fem_gpu_performance_snapshot_v1 completed{};
 };
 
 struct GpuStateRuntimeState {
     ...
-    FemGpuPerformanceRuntimeState performance{};
+    GpuPerformanceCounterState performance_counters{};
 };
 ```
 
@@ -69,17 +75,17 @@ struct GpuStateRuntimeState {
 
 - resetu liczników kroku,
 - commit/rollback liczników prób,
-- eksportu C ABI,
-- nazw enumeracji trybów wykonania.
+- eksportu C ABI i walidacji layoutu,
+- mapowania metadanych snapshotu.
 
-Poszczególne moduły mogą wywoływać wąskie funkcje:
+Poszczególne moduły wywołują wąskie funkcje właściciela stanu:
 
 ```cpp
-gpu_perf_note_rhs_evaluation(ctx);
-gpu_perf_note_exchange_apply(ctx, kernel_launches, nnz_visited);
-gpu_perf_note_demag_solve(ctx, iterations);
-gpu_perf_note_control_fence(ctx, bytes);
-gpu_perf_note_endpoint_cache_hit(ctx);
+gpu_performance_begin_attempt(state, step, execution_id, operator_id);
+gpu_performance_note(state, delta);
+gpu_performance_commit_attempt(state);
+gpu_performance_reject_attempt(state);
+gpu_performance_fail_attempt(state);
 ```
 
 Nie mogą samodzielnie publikować ABI ani modyfikować liczników innych modułów.
@@ -95,80 +101,96 @@ Nie mogą samodzielnie publikować ABI ani modyfikować liczników innych moduł
 - `crates/fullmag-runner/src/fem/execution_receipt.rs`
 - test layoutu ABI w `backends/fem/tests/`
 
-### Struktura
+### Struktura obowiązująca w ABI v1
 
 Nie rozszerzać istniejącego niewersjonowanego `fullmag_fem_transfer_audit`.
-Dodać nowy append-only snapshot:
+Wprowadzony snapshot append-only ma następujący layout (bez pola operatora,
+które pozostaje w planner/provenance):
 
 ```cpp
-#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_VERSION 1u
-
-typedef enum {
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_UNKNOWN = 0,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CSR_COMPONENT_SPLIT = 1,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CSR_FUSED_XYZ = 2,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_PERIODIC_REDUCED_CSR = 3,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_CUSPARSE_SPMM = 4,
-    FULLMAG_FEM_GPU_EXCHANGE_OPERATOR_PARTIAL_ASSEMBLY = 5,
-} fullmag_fem_gpu_exchange_operator_v1;
+#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION 1u
 
 typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
-
-    uint64_t completed_step;
+    uint32_t available;
     uint32_t execution_class;
-    uint32_t exchange_operator;
+    uint32_t precision;
+    uint32_t integrator;
+    int32_t device_ordinal;
+    uint64_t completed_step;
+    uint64_t completed_execution_id;
+    uint64_t completed_operator_id;
+    uint64_t completed_attempt_count;
+    uint64_t rejected_attempt_count;
+    uint64_t failed_attempt_count;
 
-    uint64_t rhs_evaluations;
-    uint64_t exchange_applies;
-    uint64_t exchange_kernel_launches;
-    uint64_t exchange_nnz_visited;
+    uint64_t physical_rhs_evaluations;
+    uint64_t physical_exchange_applies;
+    uint64_t physical_exchange_launches;
+    uint64_t physical_exchange_nnz_visited;
+    uint64_t physical_demag_solves;
+    uint64_t physical_demag_iterations;
+    uint64_t physical_demag_rhs_norm_evaluations;
+    uint64_t physical_demag_stage_energy_evaluations;
+    uint64_t physical_normalization_launches;
+    uint64_t physical_normalization_readbacks;
+    uint64_t physical_adaptive_readbacks;
+    uint64_t physical_control_fences;
+    uint64_t physical_endpoint_cache_hits;
+    uint64_t physical_endpoint_cache_misses;
+    uint64_t physical_endpoint_cache_invalidations;
+    uint64_t physical_device_to_device_bytes;
+    uint64_t physical_control_d2h_bytes;
+    uint64_t physical_bulk_d2h_bytes;
+    double physical_demag_rhs_norm_sum;
+    double physical_demag_stage_energy_sum_joules;
 
-    uint64_t demag_solves;
-    uint64_t demag_iterations;
-    uint64_t demag_rhs_norm_evaluations;
-    uint64_t demag_stage_energy_evaluations;
+    uint64_t accepted_rhs_evaluations;
+    uint64_t accepted_exchange_applies;
+    uint64_t accepted_exchange_launches;
+    uint64_t accepted_exchange_nnz_visited;
+    uint64_t accepted_demag_solves;
+    uint64_t accepted_demag_iterations;
+    uint64_t accepted_demag_rhs_norm_evaluations;
+    uint64_t accepted_demag_stage_energy_evaluations;
+    uint64_t accepted_normalization_launches;
+    uint64_t accepted_normalization_readbacks;
+    uint64_t accepted_adaptive_readbacks;
+    uint64_t accepted_control_fences;
+    uint64_t accepted_endpoint_cache_hits;
+    uint64_t accepted_endpoint_cache_misses;
+    uint64_t accepted_endpoint_cache_invalidations;
+    uint64_t accepted_device_to_device_bytes;
+    uint64_t accepted_control_d2h_bytes;
+    uint64_t accepted_bulk_d2h_bytes;
+    double accepted_demag_rhs_norm_sum;
+    double accepted_demag_stage_energy_sum_joules;
 
-    uint64_t normalization_launches;
-    uint64_t normalization_control_readbacks;
-    uint64_t adaptive_control_readbacks;
-    uint64_t control_host_fences;
-
-    uint64_t endpoint_cache_hits;
-    uint64_t endpoint_cache_misses;
-    uint64_t endpoint_cache_invalidations;
-
-    uint64_t device_to_device_bytes;
-    uint64_t control_device_to_host_bytes;
-    uint64_t bulk_device_to_host_bytes;
-
-    uint64_t exchange_device_time_ns;
-    uint64_t demag_assemble_device_time_ns;
-    uint64_t demag_hypre_device_time_ns;
-    uint64_t demag_hypre_host_api_time_ns;
-    uint64_t demag_recovery_device_time_ns;
-    uint64_t demag_energy_device_time_ns;
-    uint64_t heff_device_time_ns;
-    uint64_t llg_device_time_ns;
-    uint64_t adaptive_device_time_ns;
-    uint64_t reductions_device_time_ns;
+    uint64_t physical_exchange_elapsed_ns;
+    uint64_t physical_demag_assemble_elapsed_ns;
+    uint64_t physical_demag_recover_elapsed_ns;
+    uint64_t physical_demag_energy_elapsed_ns;
+    uint64_t physical_rhs_elapsed_ns;
+    uint64_t accepted_exchange_elapsed_ns;
+    uint64_t accepted_demag_assemble_elapsed_ns;
+    uint64_t accepted_demag_recover_elapsed_ns;
+    uint64_t accepted_demag_energy_elapsed_ns;
+    uint64_t accepted_rhs_elapsed_ns;
 } fullmag_fem_gpu_performance_snapshot_v1;
 ```
 
 Nie deklarować ponownie `fullmag_fem_gpu_execution_class_v1`: ten enum już
 jest częścią `FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1` w
 `native/include/fullmag_fem.h` i obejmuje również klasy host-solver oraz CPU.
-Snapshot ma używać istniejących wartości albo osobnego, jednoznacznie nazwanego
-pola trybu operatora. Zachowanie API dla backendu CPU (`ERR_UNAVAILABLE` lub
-`ERR_INVALID`) należy najpierw ustalić w kontrakcie RED; nie opisywać go jako
-stanu istniejącego.
+Snapshot używa istniejących wartości klasy wykonania. CPU zwraca jawne
+`FULLMAG_FEM_ERR_UNAVAILABLE`; nie publikuje zerowego snapshotu udającego GPU.
 
 Funkcja:
 
 ```cpp
 int fullmag_fem_backend_gpu_performance_snapshot_v1(
-    const fullmag_fem_backend *backend,
+    fullmag_fem_backend *backend,
     fullmag_fem_gpu_performance_snapshot_v1 *out_snapshot);
 ```
 
@@ -187,7 +209,7 @@ Adaptive RK może odrzucać próby. Należy rozdzielić:
 - **accepted result counters** — odnoszą się do zaakceptowanego kroku;
 - **lifetime counters** — monotoniczne od utworzenia backendu.
 
-Proponowany model:
+Model wdrożony:
 
 ```cpp
 struct FemGpuPerformanceAttemptDelta {
@@ -196,26 +218,31 @@ struct FemGpuPerformanceAttemptDelta {
     ...
 };
 
-begin_attempt():
+begin_attempt(step):
+    ensure pending_accepted_step belongs to step;
     current_attempt = {};
 
 reject_attempt():
-    current_step.physical += current_attempt;
+    physical_lifetime += current_attempt;
+    pending_accepted_step += current_attempt;
     current_step.rejected_attempts++;
     current_attempt = {};
 
 accept_attempt():
-    current_step.physical += current_attempt;
-    current_step.accepted_attempt = current_attempt;
+    physical_lifetime += current_attempt;
+    pending_accepted_step += current_attempt;
+    accepted_lifetime += pending_accepted_step;
     current_attempt = {};
+    pending_accepted_step = {};
 
 commit_step():
     last_completed_step = current_step;
-    lifetime += current_step.physical;
 ```
 
-Liczników pracy nie wolno cofać po reject; licznik wyniku zaakceptowanego musi
-wskazywać koszt całego kroku wraz z odrzuconymi próbami.
+Liczników pracy nie wolno cofać po reject. `pending_accepted_step` sprawia, że
+po późniejszym accept licznik wyniku zaakceptowanego wskazuje koszt całego
+kroku wraz z odrzuconymi próbami; po failure pending jest porzucany, ale praca
+fizyczna pozostaje w lifetime.
 
 ## 5. Zachowanie istniejącego strict receipt i rozszerzenie artefaktu
 
@@ -274,14 +301,20 @@ CMake ustawia domyślną listę architektur CUDA, gdy CUDA jest dostępna, a
 `crates/fullmag-fem-sys/build.rs` warunkowo przekazuje niepusty override
 `FULLMAG_CUDA_ARCHITECTURES`. To nie dowodzi zawartości finalnego `.so`.
 `scripts/inspect_cuda_architectures.py` i jego testy już obsługują
-`--cuda-required` oraz `--require-native-cubin`; brakującym elementem jest
-automatyczne powiązanie compute capability rzeczywistego GPU z natywnym
-cubinem finalnego managed bundle oraz immutable manifest/receipt tego gate'u.
+`--cuda-required` oraz `--require-native-cubin`. Ponadto
+`scripts/export_fem_gpu_runtime.sh` już waliduje finalny bundle przez
+`validate_managed_fem_runtime_bundle.py`, domyślnie wymaga compute capability
+`8.9` oraz cubinów `fullmag_fem=sm_89` i `hypre=sm_89`. Brakującym elementem
+jest uogólnione mapowanie wykrytego `major.minor` na `sm_xy` zamiast stałego
+`sm_89` oraz immutable receipt łączący wynik gate'u z digestem dokładnego
+bundle i benchmarkiem.
 
 ### Zmiany
 
 - zachować istniejące testy `scripts/test_inspect_cuda_architectures.py`,
-- podłączyć istniejący inspektor do kwalifikacji finalnego runtime bundle,
+- zachować istniejącą walidację finalnego bundle w exporterze,
+- wyprowadzać wymagany cubin z wykrytego compute capability; nie wymagać
+  `sm_89` dla H100 ani innego nie-Ada GPU,
 - zapisać w `manifest.json`:
   - lista cubin `sm_*`,
   - obecne PTX `compute_*`,
@@ -321,7 +354,8 @@ autorytatywne. Skrypt ma dostać ścieżkę z manifestu managed runtime.
 
 ### RED 1 — layout i snapshot
 
-Dodać `backends/fem/tests/gpu_performance_snapshot_contract.cpp`:
+Dodany kontrakt `backends/fem/tests/gpu_performance_snapshot_contract.cpp`
+sprawdza:
 
 - layout/version/size,
 - null checks,
@@ -343,8 +377,9 @@ Rust `validate_strict_fem_gpu_execution_receipt`:
 
 ### REGRESSION 3 — final architecture
 
-Istniejący test skryptu pokrywa poniższe przypadki; RED ma dotyczyć
-automatycznego gate'u finalnego managed manifestu:
+Istniejące testy inspektora i walidatora bundle pokrywają poniższe przypadki;
+RED ma dotyczyć mapowania compute capability na wymagania wszystkich bibliotek
+i związania wyniku z immutable benchmark receipt:
 
 - fixture tylko `sm_52` musi failować dla `--require-native-cubin sm_89`,
 - fixture `sm_89` przechodzi,

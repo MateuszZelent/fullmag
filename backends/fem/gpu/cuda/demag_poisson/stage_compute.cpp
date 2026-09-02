@@ -14,6 +14,7 @@
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
@@ -30,6 +31,46 @@
 #include <string>
 
 namespace fullmag::fem {
+
+bool validate_gpu_demag_evaluation_request(
+    const GpuDemagApplyRequest &request,
+    std::string &reason)
+{
+    switch (request.evaluation_mode) {
+    case GpuDemagEvaluationMode::FieldOnly:
+    case GpuDemagEvaluationMode::FieldAndRecoveredEnergy:
+        break;
+    default:
+        reason = "unsupported GPU demag evaluation mode";
+        return false;
+    }
+    switch (request.purpose) {
+    case GpuDemagSolvePurpose::IntermediateRkStage:
+    case GpuDemagSolvePurpose::EndpointRkStage:
+    case GpuDemagSolvePurpose::RelaxationTrial:
+    case GpuDemagSolvePurpose::RelaxationAcceptedState:
+    case GpuDemagSolvePurpose::ObservableRefresh:
+    case GpuDemagSolvePurpose::ValidationOracle:
+    case GpuDemagSolvePurpose::FrequencyTangent:
+        break;
+    default:
+        reason = "unsupported GPU demag evaluation purpose";
+        return false;
+    }
+    if ((request.purpose == GpuDemagSolvePurpose::IntermediateRkStage ||
+         request.purpose == GpuDemagSolvePurpose::EndpointRkStage) &&
+        request.evaluation_mode != GpuDemagEvaluationMode::FieldOnly) {
+        reason = "GPU RK stage demag requests must use FieldOnly mode";
+        return false;
+    }
+    if (request.purpose == GpuDemagSolvePurpose::FrequencyTangent &&
+        request.evaluation_mode != GpuDemagEvaluationMode::FieldOnly) {
+        reason = "frequency-domain demag tangent requests must use FieldOnly mode";
+        return false;
+    }
+    reason.clear();
+    return true;
+}
 
 namespace {
 
@@ -115,9 +156,12 @@ bool compute_device_demag_for_device_stage_impl(
     Context &ctx,
     const FemGpuComponentField &m,
     void *raw_stream,
-    bool reset_initial_solution,
+    const GpuDemagApplyRequest &request,
     std::string &reason)
 {
+    if (!validate_gpu_demag_evaluation_request(request, reason)) {
+        return false;
+    }
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     if (!ctx.demag.enabled) {
         return true;
@@ -135,10 +179,12 @@ bool compute_device_demag_for_device_stage_impl(
         reason = "strict FEM GPU demag requires device-resident Poisson and H_demag buffers";
         return false;
     }
-    if (gpu.mesh_metrics.node_volumes == nullptr || gpu.materials.ms == nullptr) {
-        reason = "strict FEM GPU demag energy requires uploaded Ms and node-volume buffers";
+    if (request.evaluation_mode == GpuDemagEvaluationMode::FieldAndRecoveredEnergy &&
+        (gpu.mesh_metrics.node_volumes == nullptr || gpu.materials.ms == nullptr)) {
+        reason = "strict FEM GPU demag FieldAndRecoveredEnergy requires uploaded Ms and node-volume buffers";
         return false;
     }
+    const bool reset_initial_solution = request.reset_initial_solution;
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
     auto &timings = ctx.gpu_state.rk_phase_timings;
@@ -326,33 +372,52 @@ bool compute_device_demag_for_device_stage_impl(
             workspace->d_ess_tdofs,
             static_cast<int>(workspace->ess_tdofs.size()),
             stream);
-        fullmag_cuda_demag_recovery_csr(
-            workspace->recovery_x.d_row_offsets,
-            workspace->recovery_x.d_col_indices,
-            workspace->recovery_x.d_values,
-            gpu.demag_poisson.poisson_solution,
-            gpu.mesh_regions.magnetic_node_mask,
-            gpu.fields.h_demag.x,
-            static_cast<int>(workspace->recovery_x.rows),
-            stream);
-        fullmag_cuda_demag_recovery_csr(
-            workspace->recovery_y.d_row_offsets,
-            workspace->recovery_y.d_col_indices,
-            workspace->recovery_y.d_values,
-            gpu.demag_poisson.poisson_solution,
-            gpu.mesh_regions.magnetic_node_mask,
-            gpu.fields.h_demag.y,
-            static_cast<int>(workspace->recovery_y.rows),
-            stream);
-        fullmag_cuda_demag_recovery_csr(
-            workspace->recovery_z.d_row_offsets,
-            workspace->recovery_z.d_col_indices,
-            workspace->recovery_z.d_values,
-            gpu.demag_poisson.poisson_solution,
-            gpu.mesh_regions.magnetic_node_mask,
-            gpu.fields.h_demag.z,
-            static_cast<int>(workspace->recovery_z.rows),
-            stream);
+        if (workspace->recovery_mode == GpuDemagRecoveryMode::SharedPatternFusedXyz) {
+            fullmag_cuda_demag_recovery_xyz_csr(
+                workspace->recovery_x.d_row_offsets,
+                workspace->recovery_x.d_col_indices,
+                workspace->recovery_x.d_values,
+                workspace->recovery_y.d_values,
+                workspace->recovery_z.d_values,
+                gpu.demag_poisson.poisson_solution,
+                gpu.mesh_regions.magnetic_node_mask,
+                gpu.fields.h_demag.x,
+                gpu.fields.h_demag.y,
+                gpu.fields.h_demag.z,
+                static_cast<int>(workspace->recovery_x.rows),
+                stream);
+        } else {
+            // Keep the three-launch path for a pattern mismatch.  Never fuse
+            // based on nnz alone: row offsets and sorted column indices must
+            // match exactly, as established during operator setup.
+            fullmag_cuda_demag_recovery_csr(
+                workspace->recovery_x.d_row_offsets,
+                workspace->recovery_x.d_col_indices,
+                workspace->recovery_x.d_values,
+                gpu.demag_poisson.poisson_solution,
+                gpu.mesh_regions.magnetic_node_mask,
+                gpu.fields.h_demag.x,
+                static_cast<int>(workspace->recovery_x.rows),
+                stream);
+            fullmag_cuda_demag_recovery_csr(
+                workspace->recovery_y.d_row_offsets,
+                workspace->recovery_y.d_col_indices,
+                workspace->recovery_y.d_values,
+                gpu.demag_poisson.poisson_solution,
+                gpu.mesh_regions.magnetic_node_mask,
+                gpu.fields.h_demag.y,
+                static_cast<int>(workspace->recovery_y.rows),
+                stream);
+            fullmag_cuda_demag_recovery_csr(
+                workspace->recovery_z.d_row_offsets,
+                workspace->recovery_z.d_col_indices,
+                workspace->recovery_z.d_values,
+                gpu.demag_poisson.poisson_solution,
+                gpu.mesh_regions.magnetic_node_mask,
+                gpu.fields.h_demag.z,
+                static_cast<int>(workspace->recovery_z.rows),
+                stream);
+        }
         if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
             return false;
         }
@@ -374,51 +439,91 @@ bool compute_device_demag_for_device_stage_impl(
     }
 
     const int blocks = (n + 255) / 256;
-    GpuDemagPhaseTimer energy_timer;
-    if (!energy_timer.start(
-            timings.enabled,
-            timings.demag_energy_events,
-            timings.demag_energy_used,
-            timings.demag_energy_overflow_count,
-            stream,
-            "GPU Poisson demag energy phase timing",
-            reason)) {
-        return false;
-    }
-    fullmag_cuda_demag_energy_blocks(
-        m.x,
-        m.y,
-        m.z,
-        gpu.fields.h_demag.x,
-        gpu.fields.h_demag.y,
-        gpu.fields.h_demag.z,
-        gpu.materials.ms,
-        gpu.mesh_metrics.node_volumes,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.reductions.scalar_workspace,
-        n,
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy blocks", reason)) {
-        return false;
-    }
-    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_sum(
-        gpu.reductions.scalar_workspace,
-        std::max(1, blocks),
-        gpu.reductions.scalar_result,
-        gpu.reductions.temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy reduction", reason)) {
-        return false;
-    }
-    if (!energy_timer.finish(reason)) {
-        return false;
+    if (request.evaluation_mode == GpuDemagEvaluationMode::FieldAndRecoveredEnergy) {
+        if (gpu.reductions.scalar_result == nullptr) {
+            reason = "GPU demag FieldAndRecoveredEnergy evaluation requires a scalar result buffer";
+            return false;
+        }
+        GpuDemagPhaseTimer energy_timer;
+        if (!energy_timer.start(
+                timings.enabled,
+                timings.demag_energy_events,
+                timings.demag_energy_used,
+                timings.demag_energy_overflow_count,
+                stream,
+                "GPU Poisson demag energy phase timing",
+                reason)) {
+            return false;
+        }
+        fullmag_cuda_demag_energy_blocks(
+            m.x,
+            m.y,
+            m.z,
+            gpu.fields.h_demag.x,
+            gpu.fields.h_demag.y,
+            gpu.fields.h_demag.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.node_volumes,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.reductions.scalar_workspace,
+            n,
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy blocks", reason)) {
+            return false;
+        }
+        size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
+        fullmag_cuda_device_sum(
+            gpu.reductions.scalar_workspace,
+            std::max(1, blocks),
+            gpu.reductions.scalar_result,
+            gpu.reductions.temp_storage,
+            reduce_bytes,
+            stream);
+        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy reduction", reason)) {
+            return false;
+        }
+        if (!energy_timer.finish(reason)) {
+            return false;
+        }
+        GpuPerformanceCounterDelta performance_delta{};
+        performance_delta.demag_stage_energy_evaluations = 1;
+        gpu_performance_note(
+            ctx.gpu_state.performance_counters,
+            performance_delta);
+    } else if (gpu.reductions.scalar_result != nullptr) {
+        // FieldOnly is the normal RK stage mode.  Clear the published final
+        // energy slot and the legacy stage-result slot so a direct control
+        // readback cannot observe a value left by an earlier energy reduction.
+        // The final energy owner writes its slot again after the accepted state
+        // is finalized.
+        if (!cuda_ok(
+                cudaMemsetAsync(gpu.reductions.scalar_result, 0, sizeof(double), stream),
+                "clear GPU demag FieldOnly stage energy result",
+                reason)) {
+            return false;
+        }
+        double *demag_energy_slot = gpu_rk_final_scalar_result(
+            gpu, GpuFinalScalarSlot::DemagEnergy);
+        if (!cuda_ok(
+                cudaMemsetAsync(demag_energy_slot, 0, sizeof(double), stream),
+                "clear GPU demag FieldOnly energy publication slot",
+                reason)) {
+            return false;
+        }
     }
     if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
         gpu_execution_receipt_note_device(
             ctx.gpu_state.execution_receipt,
             FEM_GPU_OPERATOR_DEMAG_RHS | FEM_GPU_OPERATOR_DEMAG_RECOVERY);
+    }
+    gpu.demag_poisson.last_evaluation_mode =
+        static_cast<std::uint8_t>(request.evaluation_mode);
+    gpu.demag_poisson.last_evaluation_purpose =
+        static_cast<std::uint8_t>(request.purpose);
+    if (request.evaluation_mode == GpuDemagEvaluationMode::FieldOnly) {
+        gpu.demag_poisson.field_only_evaluation_count += 1;
+    } else {
+        gpu.demag_poisson.field_and_energy_evaluation_count += 1;
     }
     ctx.poisson_demag.solves_current_step += 1;
     return true;
@@ -426,6 +531,7 @@ bool compute_device_demag_for_device_stage_impl(
     (void)ctx;
     (void)m;
     (void)raw_stream;
+    (void)request;
     reason = "strict FEM GPU demag requires MFEM MPI, hypre GPU, and CUDA runtime support";
     return false;
 #endif
@@ -437,13 +543,54 @@ bool compute_device_demag_for_device_stage(
     Context &ctx,
     const FemGpuComponentField &m,
     void *raw_stream,
+    const GpuDemagApplyRequest &request,
     std::string &reason)
 {
     return compute_device_demag_for_device_stage_impl(
         ctx,
         m,
         raw_stream,
-        false,
+        request,
+        reason);
+}
+
+bool compute_device_demag_for_device_stage(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    void *raw_stream,
+    std::string &reason)
+{
+    // Preserve the historical direct-field behavior for callers that may
+    // inspect the temporary scalar result.  RK uses the typed FieldOnly
+    // overload below through rk_demag_dispatch.
+    return compute_device_demag_for_device_stage(
+        ctx,
+        m,
+        raw_stream,
+        GpuDemagApplyRequest{
+            false,
+            GpuDemagEvaluationMode::FieldAndRecoveredEnergy,
+            GpuDemagSolvePurpose::ObservableRefresh},
+        reason);
+}
+
+bool compute_device_demag_for_device_stage_fresh(
+    Context &ctx,
+    const FemGpuComponentField &m,
+    void *raw_stream,
+    const GpuDemagApplyRequest &request,
+    std::string &reason)
+{
+    auto fresh_request = request;
+    // The named fresh entrypoint is a lifecycle guarantee.  Do not let a
+    // caller accidentally turn it into a warm-start solve by omitting the
+    // request bit.
+    fresh_request.reset_initial_solution = true;
+    return compute_device_demag_for_device_stage_impl(
+        ctx,
+        m,
+        raw_stream,
+        fresh_request,
         reason);
 }
 
@@ -453,11 +600,14 @@ bool compute_device_demag_for_device_stage_fresh(
     void *raw_stream,
     std::string &reason)
 {
-    return compute_device_demag_for_device_stage_impl(
+    return compute_device_demag_for_device_stage_fresh(
         ctx,
         m,
         raw_stream,
-        true,
+        GpuDemagApplyRequest{
+            true,
+            GpuDemagEvaluationMode::FieldAndRecoveredEnergy,
+            GpuDemagSolvePurpose::ObservableRefresh},
         reason);
 }
 
@@ -481,33 +631,53 @@ bool recover_device_demag_full_domain_field_device(
     }
 
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->visual_recovery_x.d_row_offsets,
-        workspace->visual_recovery_x.d_col_indices,
-        workspace->visual_recovery_x.d_values,
-        gpu.demag_poisson.poisson_solution,
-        nullptr,
-        visual.x,
-        static_cast<int>(workspace->visual_recovery_x.rows),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->visual_recovery_y.d_row_offsets,
-        workspace->visual_recovery_y.d_col_indices,
-        workspace->visual_recovery_y.d_values,
-        gpu.demag_poisson.poisson_solution,
-        nullptr,
-        visual.y,
-        static_cast<int>(workspace->visual_recovery_y.rows),
-        stream);
-    fullmag_cuda_demag_recovery_csr(
-        workspace->visual_recovery_z.d_row_offsets,
-        workspace->visual_recovery_z.d_col_indices,
-        workspace->visual_recovery_z.d_values,
-        gpu.demag_poisson.poisson_solution,
-        nullptr,
-        visual.z,
-        static_cast<int>(workspace->visual_recovery_z.rows),
-        stream);
+    if (workspace->visual_recovery_mode == GpuDemagRecoveryMode::SharedPatternFusedXyz) {
+        fullmag_cuda_demag_recovery_xyz_csr(
+            workspace->visual_recovery_x.d_row_offsets,
+            workspace->visual_recovery_x.d_col_indices,
+            workspace->visual_recovery_x.d_values,
+            workspace->visual_recovery_y.d_values,
+            workspace->visual_recovery_z.d_values,
+            gpu.demag_poisson.poisson_solution,
+            nullptr,
+            visual.x,
+            visual.y,
+            visual.z,
+            static_cast<int>(workspace->visual_recovery_x.rows),
+            stream);
+    } else {
+        // The visual operator has its own pattern because it also covers air
+        // nodes.  Keep its split fallback independent from physical recovery.
+        /* Legacy visual-recovery argument layout remains: nullptr,
+        visual.x */
+        fullmag_cuda_demag_recovery_csr(
+            workspace->visual_recovery_x.d_row_offsets,
+            workspace->visual_recovery_x.d_col_indices,
+            workspace->visual_recovery_x.d_values,
+            gpu.demag_poisson.poisson_solution,
+            nullptr,
+            visual.x,
+            static_cast<int>(workspace->visual_recovery_x.rows),
+            stream);
+        fullmag_cuda_demag_recovery_csr(
+            workspace->visual_recovery_y.d_row_offsets,
+            workspace->visual_recovery_y.d_col_indices,
+            workspace->visual_recovery_y.d_values,
+            gpu.demag_poisson.poisson_solution,
+            nullptr,
+            visual.y,
+            static_cast<int>(workspace->visual_recovery_y.rows),
+            stream);
+        fullmag_cuda_demag_recovery_csr(
+            workspace->visual_recovery_z.d_row_offsets,
+            workspace->visual_recovery_z.d_col_indices,
+            workspace->visual_recovery_z.d_values,
+            gpu.demag_poisson.poisson_solution,
+            nullptr,
+            visual.z,
+            static_cast<int>(workspace->visual_recovery_z.rows),
+            stream);
+    }
     if (!cuda_ok(cudaGetLastError(), "launch full-domain GPU demag observable recovery", reason)) {
         return false;
     }
