@@ -42,6 +42,31 @@ function spectrumPowers(
   return spectrum === "source" ? resource.source_power : resource.power;
 }
 
+function dynamicStructureFactorSourceIndices(
+  frequencyCount: number,
+  wavevectorCount: number,
+): { frequency: number[]; wavevector: number[] } {
+  let frequencyStride = 1;
+  let wavevectorStride = 1;
+  while (
+    Math.ceil(frequencyCount / frequencyStride) * Math.ceil(wavevectorCount / wavevectorStride) >
+    MAX_HEATMAP_CELLS
+  ) {
+    if (frequencyCount / frequencyStride >= wavevectorCount / wavevectorStride) frequencyStride += 1;
+    else wavevectorStride += 1;
+  }
+  return {
+    frequency: indicesWithStride(frequencyCount, frequencyStride),
+    wavevector: indicesWithStride(wavevectorCount, wavevectorStride),
+  };
+}
+
+function indicesWithStride(count: number, stride: number): number[] {
+  const indices: number[] = [];
+  for (let index = 0; index < count; index += stride) indices.push(index);
+  return indices;
+}
+
 function hasConsistentGrid(
   resource: DynamicStructureFactorResource,
   spectrum: DynamicStructureFactorSpectrum,
@@ -69,14 +94,6 @@ function boundedIndices(count: number, maximum: number): number[] {
   return indices;
 }
 
-function sourceGridIndex(renderedIndex: number, renderedCount: number, sourceCount: number): number {
-  if (sourceCount === renderedCount) return renderedIndex;
-  if (sourceCount % renderedCount === 0) {
-    return renderedIndex * (sourceCount / renderedCount);
-  }
-  return Math.min(sourceCount - 1, Math.floor(renderedIndex * sourceCount / renderedCount));
-}
-
 export function dynamicStructureFactorPointSelection(
   resource: DynamicStructureFactorResource | null,
   frequencyIndex: number,
@@ -99,16 +116,17 @@ export function dynamicStructureFactorPointSelection(
   if (resource.invalid_probe_mask?.[wavevectorIndex] !== false) return null;
   const originalFrequencyCount = resource.original_frequency_count;
   const originalWavevectorCount = resource.original_wavevector_count;
-  const sourceFrequencyIndex = sourceGridIndex(
-    frequencyIndex,
-    resource.frequency_count,
+  const sourceIndices = dynamicStructureFactorSourceIndices(
     originalFrequencyCount,
-  );
-  const sourceWavevectorIndex = sourceGridIndex(
-    wavevectorIndex,
-    resource.wavevector_count,
     originalWavevectorCount,
   );
+  if (
+    sourceIndices.frequency.length !== resource.frequency_count ||
+    sourceIndices.wavevector.length !== resource.wavevector_count
+  ) return null;
+  const sourceFrequencyIndex = sourceIndices.frequency[frequencyIndex];
+  const sourceWavevectorIndex = sourceIndices.wavevector[wavevectorIndex];
+  if (sourceFrequencyIndex == null || sourceWavevectorIndex == null) return null;
   const frequencyHz = resource.frequency_hz[frequencyIndex];
   const kRadPerM = resource.k_rad_per_m[wavevectorIndex];
   const power = spectrumPowers(resource, spectrum)[
@@ -177,7 +195,7 @@ function source() {
 }
 
 export function dynamicStructureFactorFrequencyCut(resource: DynamicStructureFactorResource | null, wavevectorIndex: number, spectrum: "response" | "source" = "response"): ChartSeries[] {
-  if (!resource || wavevectorIndex < 0 || wavevectorIndex >= resource.wavevector_count) return [];
+  if (!resource || !hasConsistentGrid(resource, spectrum) || wavevectorIndex < 0 || wavevectorIndex >= resource.wavevector_count) return [];
   const powers = spectrum === "source" ? resource.source_power : resource.power;
   const quantity = spectrum === "source" ? `|${resource.source_observable}(k,f)|²` : "S(k,f)";
   const frequencyIndices = boundedIndices(resource.frequency_count, MAX_LINE_CUT_POINTS);
@@ -186,7 +204,7 @@ export function dynamicStructureFactorFrequencyCut(resource: DynamicStructureFac
 }
 
 export function dynamicStructureFactorWavevectorCut(resource: DynamicStructureFactorResource | null, frequencyIndex: number, spectrum: "response" | "source" = "response"): ChartSeries[] {
-  if (!resource || frequencyIndex < 0 || frequencyIndex >= resource.frequency_count) return [];
+  if (!resource || !hasConsistentGrid(resource, spectrum) || frequencyIndex < 0 || frequencyIndex >= resource.frequency_count) return [];
   const powers = spectrum === "source" ? resource.source_power : resource.power;
   const quantity = spectrum === "source" ? `|${resource.source_observable}(k,f)|²` : "S(k,f)";
   const wavevectorIndices = boundedIndices(resource.wavevector_count, MAX_LINE_CUT_POINTS);

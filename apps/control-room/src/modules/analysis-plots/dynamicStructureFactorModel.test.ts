@@ -279,6 +279,8 @@ describe("dynamicStructureFactorModel", () => {
 
     expect(dynamicStructureFactorPointSelection(resource, 0, 0)).toBeNull();
     expect(dynamicStructureFactorCells(resource)).toEqual([]);
+    expect(dynamicStructureFactorFrequencyCut(resource, 0)).toEqual([]);
+    expect(dynamicStructureFactorWavevectorCut(resource, 0)).toEqual([]);
   });
 
   it("rejects non-finite response and source cells without manufacturing selection identity", () => {
