@@ -1701,7 +1701,7 @@ fn build_gamma_index(
     let dataset_id = format!("result:{run_id}:{stage_id}:time-domain-spectrum");
     let sample_id = "gamma-spectrum-sample-0000".to_string();
     let provenance = legacy_gamma_provenance(&payload);
-    let peaks = payload.peaks;
+    let peaks = &payload.peaks;
     let items = peaks.iter().map(|peak| AnalysisResultSpectralItemSummary {
         item_id: format!("legacy:gamma:peak:{}", peak.index),
         item_kind: AnalysisResultItemKind::SpectralFeature,
@@ -1740,8 +1740,7 @@ fn build_gamma_index(
         run_id,
         &dataset_id,
         &dataset_revision,
-        &peaks,
-        &payload.frequency_unit,
+        &payload,
         &status,
     );
     let mut manifest = build_manifest(dataset_id, dataset_revision, run_id, stage_id, AnalysisResultProductKind::TimeDomainSpectrum, "LLG Gamma spectrum", Some("Bounded legacy adapter; peaks are spectral features, never eigenmodes"), status, source_artifacts, axes, vec![AnalysisResultItemKind::SpectralFeature], &projections, &[sample.clone()], &items, "shared_across_dataset", "Hz");
@@ -1753,24 +1752,158 @@ fn build_gamma_projection(
     run_id: &str,
     dataset_id: &str,
     dataset_revision: &str,
-    peaks: &[SpinWavePeakResource],
-    frequency_unit: &str,
+    payload: &SpinWaveGammaResource,
     status: &AnalysisResultStatusFacets,
 ) -> BTreeMap<String, AnalysisResultProjectionResource> {
-    let points = peaks
+    let sample_id = "gamma-spectrum-sample-0000";
+    let psd_unit = format!("{}²", payload.trace_unit);
+    let response_points = finite_gamma_points(
+        &payload.frequency_hz,
+        &payload.response_psd,
+        sample_id,
+        |_| None,
+        status,
+    );
+    let feature_points = payload
+        .peaks
         .iter()
+        .filter(|peak| peak.frequency_hz.is_finite() && peak.power.is_finite())
         .map(|peak| AnalysisResultProjectionPoint {
             ordinal: peak.index as u64,
-            x: peak.frequency_hz.is_finite().then_some(peak.frequency_hz),
-            y: peak.power.is_finite().then_some(peak.power),
-            value: peak.power.is_finite().then_some(peak.power),
-            sample_id: Some(String::from("gamma-spectrum-sample-0000")),
+            x: Some(peak.frequency_hz),
+            y: Some(peak.power),
+            value: Some(peak.power),
+            sample_id: Some(sample_id.to_string()),
             item_id: Some(format!("legacy:gamma:peak:{}", peak.index)),
             branch_id: None,
             status: status.completeness.clone(),
         })
-        .filter(|point| point.x.is_some() && point.y.is_some())
         .collect::<Vec<_>>();
+    let susceptibility_points = payload
+        .frequency_hz
+        .iter()
+        .zip(&payload.susceptibility_abs)
+        .enumerate()
+        .filter_map(|(index, (frequency, susceptibility))| {
+            (frequency.is_finite()
+                && susceptibility.as_ref().is_some_and(|value| value.is_finite()))
+            .then(|| {
+                let value = *susceptibility
+                    .as_ref()
+                    .expect("finite susceptibility was checked");
+                AnalysisResultProjectionPoint {
+                    ordinal: index as u64,
+                    x: Some(*frequency),
+                    y: Some(value),
+                    value: Some(value),
+                    sample_id: Some(sample_id.to_string()),
+                    item_id: None,
+                    branch_id: None,
+                    status: status.completeness.clone(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    BTreeMap::from([
+        (
+            String::from("response-spectrum"),
+            gamma_projection_resource(
+                run_id,
+                dataset_id,
+                dataset_revision,
+                "response-spectrum",
+                "Frequency",
+                "Response PSD",
+                "frequency_hz",
+                "response_psd",
+                &payload.frequency_unit,
+                &psd_unit,
+                response_points,
+                "response spectrum has no finite frequency_hz/response_psd pairs",
+                status,
+            ),
+        ),
+        (
+            String::from("spectral-features"),
+            gamma_projection_resource(
+                run_id,
+                dataset_id,
+                dataset_revision,
+                "spectral-features",
+                "Frequency",
+                "Spectral power",
+                "frequency_hz",
+                "response_psd",
+                &payload.frequency_unit,
+                &psd_unit,
+                feature_points,
+                "spectral features contain no finite published peaks",
+                status,
+            ),
+        ),
+        (
+            String::from("susceptibility"),
+            gamma_projection_resource(
+                run_id,
+                dataset_id,
+                dataset_revision,
+                "susceptibility",
+                "Frequency",
+                "Susceptibility",
+                "frequency_hz",
+                "susceptibility_abs",
+                &payload.frequency_unit,
+                &payload.susceptibility_unit,
+                susceptibility_points,
+                "susceptibility has no finite published values",
+                status,
+            ),
+        ),
+    ])
+}
+
+fn finite_gamma_points(
+    frequencies: &[f64],
+    values: &[f64],
+    sample_id: &str,
+    item_id: impl Fn(usize) -> Option<String>,
+    status: &AnalysisResultStatusFacets,
+) -> Vec<AnalysisResultProjectionPoint> {
+    frequencies
+        .iter()
+        .zip(values)
+        .enumerate()
+        .filter_map(|(index, (frequency, value))| {
+            (frequency.is_finite() && value.is_finite()).then(|| AnalysisResultProjectionPoint {
+                ordinal: index as u64,
+                x: Some(*frequency),
+                y: Some(*value),
+                value: Some(*value),
+                sample_id: Some(sample_id.to_string()),
+                item_id: item_id(index),
+                branch_id: None,
+                status: status.completeness.clone(),
+            })
+        })
+        .collect()
+}
+
+fn gamma_projection_resource(
+    run_id: &str,
+    dataset_id: &str,
+    dataset_revision: &str,
+    projection_id: &str,
+    x_label: &str,
+    y_label: &str,
+    x_mapping: &str,
+    y_mapping: &str,
+    x_unit: &str,
+    y_unit: &str,
+    points: Vec<AnalysisResultProjectionPoint>,
+    empty_reason: &str,
+    status: &AnalysisResultStatusFacets,
+) -> AnalysisResultProjectionResource {
     let selection_index = points
         .iter()
         .map(|point| AnalysisResultProjectionSelectionEntry {
@@ -1781,37 +1914,42 @@ fn build_gamma_projection(
         })
         .collect::<Vec<_>>();
     let projection_revision = digest_json(&(points.clone(), &selection_index));
-    let projection_id = String::from("spectrum");
-    let projection = AnalysisResultProjectionResource {
+    AnalysisResultProjectionResource {
         schema_version: ANALYSIS_RESULT_INDEX_SCHEMA_VERSION.to_string(),
         run_id: run_id.to_string(),
         dataset_id: dataset_id.to_string(),
         dataset_revision: dataset_revision.to_string(),
-        projection_id: projection_id.clone(),
+        projection_id: projection_id.to_string(),
         projection_revision,
         axis_labels: BTreeMap::from([
-            (String::from("x"), String::from("Frequency")),
-            (String::from("y"), String::from("Spectral power")),
+            (String::from("x"), x_label.to_string()),
+            (String::from("y"), y_label.to_string()),
         ]),
         axis_mapping: BTreeMap::from([
-            (String::from("x"), String::from("frequency_hz")),
-            (String::from("y"), String::from("spectral_power")),
+            (String::from("x"), x_mapping.to_string()),
+            (String::from("y"), y_mapping.to_string()),
         ]),
         axis_units: BTreeMap::from([
-            (String::from("x"), frequency_unit.to_string()),
-            (String::from("y"), String::from("unknown")),
+            (String::from("x"), x_unit.to_string()),
+            (String::from("y"), y_unit.to_string()),
         ]),
         fixed_coordinates: Vec::new(),
         series: vec![AnalysisResultProjectionSeries {
-            series_id: String::from("spectral-features"),
-            label: String::from("Spectral features"),
+            series_id: projection_id.to_string(),
+            label: y_label.to_string(),
             points,
         }],
-        selection_index,
         status: status.clone(),
-        unsupported_reason: None,
-    };
-    BTreeMap::from([(projection_id, projection)])
+        unsupported_reason: projection_empty_reason(&selection_index, empty_reason),
+        selection_index,
+    }
+}
+
+fn projection_empty_reason(
+    selection_index: &[AnalysisResultProjectionSelectionEntry],
+    reason: &str,
+) -> Option<String> {
+    selection_index.is_empty().then(|| reason.to_string())
 }
 
 fn build_dsf_index(
@@ -2245,7 +2383,7 @@ fn build_manifest(
             axis
         })
         .collect::<Vec<_>>();
-    let projection_descriptors = projections.values().map(|projection| AnalysisResultProjectionDescriptor { projection_id: projection.projection_id.clone(), kind: "line".to_string(), title: projection.projection_id.clone(), resource_key: projection_path(run_id, &dataset_id, &projection.projection_id), x_axis_id: projection.axis_mapping.get("x").cloned(), y_axis_id: projection.axis_mapping.get("y").cloned(), selectable: !projection.selection_index.is_empty() }).collect::<Vec<_>>();
+    let projection_descriptors = projections.values().map(|projection| AnalysisResultProjectionDescriptor { projection_id: projection.projection_id.clone(), kind: "line".to_string(), title: projection_descriptor_title(&projection.projection_id), resource_key: projection_path(run_id, &dataset_id, &projection.projection_id), x_axis_id: projection.axis_mapping.get("x").cloned(), y_axis_id: projection.axis_mapping.get("y").cloned(), selectable: !projection.selection_index.is_empty() }).collect::<Vec<_>>();
     let fields = items.iter().any(|item| item.field_ref.is_some());
     let branch_tracking = items.iter().any(|item| item.branch_id.is_some());
     AnalysisResultDatasetManifestResource {
@@ -2256,6 +2394,15 @@ fn build_manifest(
         default_cursor: AnalysisResultDefaultCursor { sample_id: samples.first().map(|sample| sample.sample_id.clone()), item_id: items.first().map(|item| item.item_id.clone()) },
         topology_policy: topology_policy.to_string(), units_policy: units_policy.to_string(), provenance: BTreeMap::from([(String::from("adapter"), String::from(ANALYSIS_RESULT_INDEX_SCHEMA_VERSION)), (String::from("qualification"), String::from("unvalidated"))]),
         sample_index_resource: samples_path(run_id, &dataset_id), item_index_resource: items_path(run_id, &dataset_id, "",),
+    }
+}
+
+fn projection_descriptor_title(projection_id: &str) -> String {
+    match projection_id {
+        "response-spectrum" => "Response spectrum".to_string(),
+        "spectral-features" => "Spectral features".to_string(),
+        "susceptibility" => "Susceptibility".to_string(),
+        _ => projection_id.to_string(),
     }
 }
 
@@ -3173,6 +3320,106 @@ mod tests {
         assert_eq!(projection.axis_units.get("y").map(String::as_str), Some("index"));
         assert_eq!(projection.selection_index.len(), 1);
         assert_eq!(projection.series[0].points[0].x, Some(2.5e9));
+    }
+
+    #[test]
+    fn legacy_gamma_index_exposes_semantic_projections_and_stable_peak_ids() {
+        let index = build_gamma_index(
+            gamma_projection_fixture(),
+            "sha256:gamma".to_string(),
+            "run-1",
+            "stage-1",
+        )
+        .expect("legacy Gamma payload should be indexable");
+
+        assert_eq!(index.projections.len(), 3);
+        assert_eq!(index.manifest.item_kinds, vec![AnalysisResultItemKind::SpectralFeature]);
+        assert_eq!(index.manifest.projections[0].title, "Response spectrum");
+        assert_eq!(index.manifest.projections[1].title, "Spectral features");
+        assert_eq!(index.manifest.projections[2].title, "Susceptibility");
+
+        let response = &index.projections["response-spectrum"];
+        assert_eq!(response.axis_units["x"], "Hz");
+        assert_eq!(response.axis_units["y"], "1²");
+        assert_eq!(response.selection_index[0].item_id, None);
+        assert_eq!(response.series[0].points.len(), 3);
+
+        let features = &index.projections["spectral-features"];
+        assert_eq!(features.axis_units["y"], "1²");
+        assert_eq!(features.selection_index[0].item_id.as_deref(), Some("legacy:gamma:peak:2"));
+        assert!(index.items.iter().any(|item| item.item_id == "legacy:gamma:peak:2"));
+
+        let susceptibility = &index.projections["susceptibility"];
+        assert_eq!(susceptibility.axis_units["y"], "m/A");
+        assert_eq!(susceptibility.selection_index[0].item_id, None);
+    }
+
+    #[test]
+    fn legacy_gamma_projections_drop_non_finite_spectrum_and_susceptibility_values() {
+        let index = build_gamma_index(
+            gamma_projection_fixture_with_non_finite_values(),
+            "sha256:gamma".to_string(),
+            "run-1",
+            "stage-1",
+        )
+        .expect("legacy Gamma payload should remain indexable");
+
+        let response = &index.projections["response-spectrum"];
+        assert_eq!(response.series[0].points.len(), 1);
+        assert_eq!(response.series[0].points[0].ordinal, 0);
+        assert_eq!(response.selection_index.len(), 1);
+
+        let susceptibility = &index.projections["susceptibility"];
+        assert_eq!(susceptibility.series[0].points.len(), 1);
+        assert_eq!(susceptibility.series[0].points[0].ordinal, 1);
+        assert_eq!(susceptibility.selection_index.len(), 1);
+    }
+
+    fn gamma_projection_fixture() -> SpinWaveGammaResource {
+        SpinWaveGammaResource {
+            schema_version: "spin_wave_response.gamma.v1".to_string(),
+            time_unit: "s".to_string(),
+            frequency_unit: "Hz".to_string(),
+            trace_unit: "1".to_string(),
+            source_unit: "A/m".to_string(),
+            susceptibility_unit: "m/A".to_string(),
+            weighting: "Ms_times_lumped_volume".to_string(),
+            detrend: "mean".to_string(),
+            window: "hann".to_string(),
+            normalization: "one_sided_psd".to_string(),
+            reference_m0: 1.0,
+            reference_m0_secondary: 0.0,
+            response_component: "my".to_string(),
+            transverse_components: ["my".to_string(), "mz".to_string()],
+            time_s: vec![0.0, 1.0, 2.0],
+            response_trace: vec![0.0; 3],
+            secondary_response_trace: vec![0.0; 3],
+            source_trace: vec![1.0; 3],
+            frequency_hz: vec![1.0e9, 2.0e9, 3.0e9],
+            response_psd: vec![1.0, 2.0, 3.0],
+            primary_response_psd: vec![1.0, 2.0, 3.0],
+            secondary_response_psd: vec![0.0; 3],
+            source_psd: vec![1.0; 3],
+            response_spectrum_real: vec![0.0; 3],
+            response_spectrum_imag: vec![0.0; 3],
+            secondary_response_spectrum_real: vec![0.0; 3],
+            secondary_response_spectrum_imag: vec![0.0; 3],
+            source_spectrum_real: vec![0.0; 3],
+            source_spectrum_imag: vec![0.0; 3],
+            window_values: vec![1.0; 3],
+            window_power_sum: 3.0,
+            nyquist_hz: 3.0e9,
+            susceptibility_abs: vec![Some(0.1), Some(0.2), Some(0.3)],
+            peaks: vec![SpinWavePeakResource { index: 2, frequency_hz: 3.0e9, power: 3.0 }],
+        }
+    }
+
+    fn gamma_projection_fixture_with_non_finite_values() -> SpinWaveGammaResource {
+        let mut payload = gamma_projection_fixture();
+        payload.frequency_hz = vec![1.0e9, 2.0e9, f64::NAN];
+        payload.response_psd = vec![1.0, f64::NAN, 3.0];
+        payload.susceptibility_abs = vec![Some(f64::NAN), Some(0.2), Some(f64::INFINITY)];
+        payload
     }
 
     #[test]
