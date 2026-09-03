@@ -211,4 +211,11 @@ void gpu_snapshot_pool_release(
     }
 }
 
+void gpu_snapshot_pool_cancel(
+    FemGpuSnapshotPoolState &pool,
+    std::size_t slot_index)
+{
+    gpu_snapshot_pool_release(pool, slot_index, /*work_complete=*/true);
+}
+
 } // namespace fullmag::fem

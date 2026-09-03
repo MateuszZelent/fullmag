@@ -320,6 +320,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/relaxation/pgbb_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
+            gpu/cuda/integrators/rk/rk_output_control.cu
             gpu/cuda/integrators/rk/rk_step.cu
         )
         if(FULLMAG_FEM_WITH_SLEPC)
@@ -751,6 +752,14 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     add_test(NAME fem_gpu_operator_fusion_contract COMMAND fem_gpu_operator_fusion_contract)
+
+    add_executable(fem_gpu_rk_device_controller_contract tests/gpu_rk_device_controller_contract.cpp)
+    target_link_libraries(fem_gpu_rk_device_controller_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_gpu_rk_device_controller_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_gpu_rk_device_controller_contract COMMAND fem_gpu_rk_device_controller_contract)
 endif()
 
 add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)

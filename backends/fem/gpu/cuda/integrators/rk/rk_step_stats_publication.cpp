@@ -7,6 +7,7 @@
  */
 
 #include "gpu/cuda/integrators/rk/rk_step_stats_publication.hpp"
+#include "gpu/cuda/integrators/rk/rk_output_control.hpp"
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -33,6 +34,18 @@ void gpu_rk_publish_final_step_stats(
     const std::array<double, kGpuFinalScalarSlots> &scalars,
     fullmag_fem_step_stats &stats)
 {
+    gpu_rk_publish_final_step_stats(ctx, scalars, stats, RkOutputControlMask{});
+}
+
+void gpu_rk_publish_final_step_stats(
+    Context &ctx,
+    const std::array<double, kGpuFinalScalarSlots> &scalars,
+    fullmag_fem_step_stats &stats,
+    const RkOutputControlMask &mask)
+{
+    if (!mask.publish_step_stats) {
+        return;
+    }
     auto scalar = [&](GpuFinalScalarSlot slot) {
         return scalars[static_cast<size_t>(slot)];
     };
