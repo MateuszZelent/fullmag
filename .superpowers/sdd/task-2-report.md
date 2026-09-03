@@ -13,6 +13,8 @@ parity ani walidacji fizycznej; te poziomy pozostają `NOT VERIFIED`.
 
 - `86333864451c12b958f317b3ddfb249cb6d4a027` —
   `feat(fem): publish versioned GPU phase counters`
+- `c977506d1c30ea81cc281a4954ed03088f8a1124` —
+  `fix(fem): close GPU receipt publication gaps`
 
 Niniejszy raport jest śledzony osobnym commitem dokumentacyjnym, aby nie
 tworzyć niemożliwej self-referencji do własnego hasha.
@@ -37,9 +39,14 @@ tworzyć niemożliwej self-referencji do własnego hasha.
   v1.
 - Runner zawiera 12-polowy `FemGpuPerformanceSnapshotV2` oraz jawny payload
   `fullmag.fem_gpu_performance_snapshot.v2` bez domyślania brakujących pól.
-- Dodano focused recipe `verify-fem-gpu-execution-receipt-contract`. Korzysta
-  z profilu Docker FEM GPU, nie wymaga hostowego `python3` ani checkoutowego
-  środowiska `.fullmag`, a CMake/Cargo zapisują wyłącznie pod `/tmp` kontenera.
+- Dodano focused recipe `verify-fem-gpu-execution-receipt-contract`. Na
+  Windows przechodzi ona wyłącznie przez kanoniczny
+  `scripts/windows/run_fullmag_fem.ps1`, którego implementacja używa
+  `compose.windows.yaml`. Nie uruchamia generic `docker compose` z
+  `compose.yaml`; build i Cargo target są pod `/workspace/.fullmag-build`,
+  związanym z zewnętrznym `FULLMAG_WINDOWS_BUILD_ROOT`. Recipe nie wymaga
+  hostowego `python3` ani checkoutowego środowiska `.fullmag`. Kanoniczny
+  launcher nadal wymaga hostowego polecenia `python` do source identity.
   Istniejąca szeroka recipe pozostała bez zmian.
 
 ## TDD — RED
@@ -117,6 +124,64 @@ fence oraz byte-identyczny accepted snapshot po próbie rejected i failed.
 Sprawdza też, że istniejące liczniki rejected/failed rosną niezależnie. Ten sam
 executable nadal uruchamia wszystkie wcześniejsze testy lifecycle i ABI v1.
 
+## Remediacja findings po review
+
+### RED — pre-accept publication
+
+Najpierw rozszerzono native contract o stan z rozwiązanym planem, ale bez
+accepted commit. Bufor został wypełniony markerem, a test wymagał
+`FULLMAG_FEM_ERR_UNAVAILABLE` i byte-identyczności całych 88 bajtów. Ten sam
+test sprawdza byte-identyczność dla błędnego `abi_version` i `struct_size`.
+
+Polecenie:
+
+```text
+just verify-fem-gpu-execution-receipt-contract
+```
+
+Sesja `37460`, wynik terminalny `exit 1`. Recipe wykonała się przez
+`scripts/windows/run_fullmag_fem.ps1`, wyświetliła dokładny plik
+`compose.windows.yaml`, wykryła NVIDIA GeForce RTX 4080 SUPER, skonfigurowała
+CUDA 12.6.85 i zbudowała target. CTest zakończył się oczekiwanym pojedynczym
+błędem:
+
+```text
+FAIL: performance snapshot v2 must be unavailable before the first accepted commit
+0% tests passed, 1 tests failed out of 1
+```
+
+Implementacja dodała guard `accepted_step_count == 0` po walidacji planu i
+accountingu, lecz przed utworzeniem lokalnego snapshotu i zapisem bufora.
+Zwracany jest typed `FULLMAG_FEM_ERR_UNAVAILABLE`. ABI v1 nie został zmieniony.
+
+### GREEN — poprawiona kanoniczna ścieżka Windows
+
+To samo polecenie uruchomiono po implementacji. Sesja `36986` zakończyła się
+terminalnym `exit 0`:
+
+- route: `run_fullmag_fem.ps1` → `compose.windows.yaml` → service FEM GPU;
+- CTest `fem_gpu_execution_receipt_contract`: `1/1 PASS`, `0.17 s`;
+- exact `fullmag-fem-sys` ABI/layout/symbol: `1/1 PASS`, `49 filtered out`;
+- exact runner type serialization: `1/1 PASS`, `1194 filtered out`;
+- exact runner artifact serialization: `1/1 PASS`, `1194 filtered out`;
+- końcowy komunikat launchera: `Windows FEM GPU execution receipt contract passed`.
+
+Accepted path w native contract rejestruje teraz rzeczywiste fazy
+`SnapshotFence` i `ExportFence`, wykonuje accepted commit, a następnie wymaga
+`snapshot_fence_count == 1` oraz `export_fence_count == 1`. Rejected i failed
+attempt nadal nie zastępują ostatniego accepted snapshotu.
+
+Statyczny kontrakt routingu uruchomiono bez pytestowego environment seam:
+
+```text
+python -c "import inspect, scripts.test_windows_fullmag_launcher_contract as t; ..."
+```
+
+Wynik: `PASS 33 zero-argument Windows launcher contract tests`, exit `0`.
+Focused test zabrania generic `docker compose`/`compose.yaml` w recipe i wymaga
+kanonicznego launchera, `-Contract gpu-execution-receipt`, zewnętrznych ścieżek
+build/Cargo oraz wszystkich czterech dokładnych bramek testowych.
+
 ## Dodatkowa weryfikacja
 
 ```text
@@ -144,8 +209,8 @@ Task 2: źródła receipt/API, test C++, C/Rust ABI, runner type/artifact i
 - Diff nagłówków C/Rust nie zmienia stałych, pól, rozmiaru ani symboli v1;
   dodaje wyłącznie osobny typ i symbol v2.
 - Bufor publicznego API v2 nie jest nadpisywany przy błędnym handshake,
-  nierozwiązanym planie lub nieważnym accountingu; dane są składane lokalnie
-  i przypisywane dopiero na ścieżce sukcesu.
+  nierozwiązanym planie, nieważnym accountingu ani przed pierwszym accepted
+  commit; dane są składane lokalnie i przypisywane dopiero na ścieżce sukcesu.
 - Aktywna próba ma osobny snapshot. Jedyną ścieżką przenoszącą go do
   `accepted_performance` jest ważny `commit_attempt`; reject/failed używają
   wspólnego `clear_attempt`.
@@ -154,8 +219,10 @@ Task 2: źródła receipt/API, test C++, C/Rust ABI, runner type/artifact i
 - Nie zmieniono capability matrix, planner semantics ani dokumentacji fizyki.
   Wyników kontraktu nie opisuje się jako production performance, parity lub
   walidacji naukowej.
-- Repozytoryjna recipe jest samowystarczalna względem hostowego Pythona i nie
-  pozostawia build/cache w checkoutcie.
+- Repozytoryjna recipe nie używa hostowego `python3` ani checkoutowego env;
+  kanoniczny Windows launcher używa hostowego `python` wyłącznie do source
+  identity. Build/cache pozostają poza checkoutem przez bindy
+  `compose.windows.yaml`.
 
 ## Concerns
 
