@@ -14,7 +14,7 @@ export function EmptyWorkspace() {
   };
 
   return (
-    <main className="grid min-h-0 flex-1 place-items-center p-8" data-state="no-session">
+    <main className="grid min-h-0 flex-1 place-items-center p-8" id="fm-main-content" tabIndex={-1} data-state="no-session">
       <section className="grid max-w-md gap-3 text-center">
         <p className="font-fm-ui text-fm-control font-medium text-fm-accent">Workspace</p>
         <h1 className="font-fm-ui text-2xl font-semibold tracking-tight text-fm-primary">Create a simulation</h1>

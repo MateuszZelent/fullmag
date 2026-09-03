@@ -21,6 +21,9 @@ export default function RootLayout({
   return (
     <html lang="en" data-theme={DEFAULT_THEME_MODE} suppressHydrationWarning>
       <body suppressHydrationWarning>
+        <a href="#fm-main-content" className="fm-skip-link">
+          Skip to main content
+        </a>
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

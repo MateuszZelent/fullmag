@@ -67,6 +67,44 @@ const allowedDevOrigins = [
     : []),
 ];
 
+/**
+ * Baseline production security headers (frontend audit 2026-09-03, P0 item 2).
+ *
+ * Deliberately permissive on script/style/connect sources: this is a
+ * WebGL-heavy app (three.js / react-three-fiber) whose API host is
+ * deployment-configurable (FULLMAG_API_PROXY_TARGET / FULLMAG_API_URL) and
+ * whose realtime layer may reach ws/wss hosts that cannot be enumerated at
+ * build time. Not applied under static export (Tauri desktop build): Next.js
+ * rejects `headers()` when `output: "export"` is set, and the desktop shell
+ * is not a browser-hosted document anyway.
+ */
+function securityHeaders() {
+  return [
+    { key: "X-Content-Type-Options", value: "nosniff" },
+    { key: "X-Frame-Options", value: "SAMEORIGIN" },
+    { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    {
+      key: "Permissions-Policy",
+      value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    },
+    {
+      key: "Content-Security-Policy",
+      value: [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob:",
+        "font-src 'self' data:",
+        "connect-src 'self' http: https: ws: wss:",
+        "worker-src 'self' blob:",
+        "frame-ancestors 'self'",
+        "base-uri 'self'",
+        "object-src 'none'",
+      ].join("; "),
+    },
+  ];
+}
+
 const nextConfig: NextConfig = {
   allowedDevOrigins,
   distDir,
@@ -78,6 +116,14 @@ const nextConfig: NextConfig = {
         trailingSlash: true,
       }
     : {
+        async headers() {
+          return [
+            {
+              source: "/:path*",
+              headers: securityHeaders(),
+            },
+          ];
+        },
         async rewrites() {
           const apiTarget = controlRoomApiProxyTarget();
           return [

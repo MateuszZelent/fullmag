@@ -1,0 +1,30 @@
+# Frontend audit 2026-09-03, P0 item 5: automated dependency updates.
+# The control-room stack (Next 16 / React 19 / Tailwind 4 / Vite 8) tracks
+# very recent major versions with no prior automated patch/security cadence.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/apps/control-room"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      radix-ui:
+        patterns:
+          - "@radix-ui/*"
+      dev-tooling:
+        patterns:
+          - "eslint*"
+          - "@storybook/*"
+          - "vitest*"
+          - "vite"
+      react-three:
+        patterns:
+          - "@react-three/*"
+          - "three"
+          - "@types/three"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

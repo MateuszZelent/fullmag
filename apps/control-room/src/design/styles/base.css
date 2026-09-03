@@ -173,3 +173,30 @@ textarea {
   overflow: hidden;
   white-space: nowrap;
 }
+
+/*
+ * Skip link (frontend audit 2026-09-03, P2 item 7).
+ * Visually hidden until keyboard-focused; jumps past the app menu / ribbon
+ * chrome straight to the main workspace content.
+ */
+.fm-skip-link {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  transform: translateY(-120%);
+  padding: var(--fm-space-2) var(--fm-space-4);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  border: 1px solid var(--fm-border-default);
+  border-radius: 0 0 var(--fm-radius-md) 0;
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-sm);
+  text-decoration: none;
+  transition: transform 120ms ease-out;
+}
+
+.fm-skip-link:focus-visible {
+  transform: translateY(0);
+  box-shadow: var(--fm-focus-ring);
+}

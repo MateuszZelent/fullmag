@@ -1,5 +1,18 @@
 # Layout handle guide (Control Room Docking)
 
+> **UWAGA (2026-09-03, audyt frontendu): dokument nieaktualny.**
+> Opisuje wczesniejszy system dockingu oparty o `apps/web/components/workspace/docking/*`
+> i `dockLayoutContract.ts` / `workspace-store.ts` (localStorage). Sciezki te juz nie
+> istnieja w repozytorium. Biezacy uklad paneli Control Roomu jest zaimplementowany w
+> `apps/control-room/src/kernel/layout/WorkspaceDockLayout.tsx` przy pomocy
+> `react-resizable-panels` (grupy `ResizablePanelGroup`/`ResizablePanel`, `autoSaveId`
+> do persystencji ukladu, min/default size w %). Ten dokument zostawiono jako
+> kontekst historyczny; nie traktowac go jako obowiazujacej specyfikacji do czasu
+> aktualizacji tresci ponizej.
+
+---
+
+
 ## 1) Cel
 
 Ten guide opisuje, jak poprawnie dodawać nowe panele do układu docking i jak

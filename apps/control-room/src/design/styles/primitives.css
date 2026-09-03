@@ -972,3 +972,220 @@
   height: 1px;
   background: var(--fm-border-subtle);
 }
+
+/* ---------------------------------------------------------------------- */
+/* Card (frontend audit 2026-09-03, P2 — shared/ui gap)                   */
+/* ---------------------------------------------------------------------- */
+
+.fm-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-3);
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-primary);
+  box-shadow: var(--fm-shadow-sm);
+}
+
+.fm-card__header,
+.fm-card__content,
+.fm-card__footer {
+  padding: var(--fm-space-4);
+}
+
+.fm-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+  padding-bottom: 0;
+}
+
+.fm-card__title {
+  margin: 0;
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-lg);
+  font-weight: var(--fm-font-weight-semibold);
+  color: var(--fm-text-primary);
+}
+
+.fm-card__description {
+  margin: 0;
+  font-size: var(--fm-font-size-sm);
+  color: var(--fm-text-secondary);
+}
+
+.fm-card__content {
+  padding-top: 0;
+}
+
+.fm-card__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-2);
+  padding-top: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Table (frontend audit 2026-09-03, P2 — shared/ui gap)                  */
+/* ---------------------------------------------------------------------- */
+
+.fm-table__wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.fm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-sm);
+  color: var(--fm-text-primary);
+}
+
+.fm-table__header {
+  border-bottom: 1px solid var(--fm-border-default);
+}
+
+.fm-table__head {
+  padding: var(--fm-space-2) var(--fm-space-3);
+  text-align: left;
+  font-weight: var(--fm-font-weight-medium);
+  color: var(--fm-text-secondary);
+  white-space: nowrap;
+}
+
+.fm-table__row {
+  border-bottom: 1px solid var(--fm-border-subtle);
+}
+
+.fm-table__row:hover {
+  background: var(--fm-bg-hover);
+}
+
+.fm-table__cell {
+  padding: var(--fm-space-2) var(--fm-space-3);
+  vertical-align: middle;
+}
+
+.fm-table__footer {
+  border-top: 1px solid var(--fm-border-default);
+  font-weight: var(--fm-font-weight-medium);
+}
+
+.fm-table__caption {
+  margin-top: var(--fm-space-2);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  text-align: left;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Textarea (frontend audit 2026-09-03, P2 — shared/ui gap)               */
+/* ---------------------------------------------------------------------- */
+
+.fm-textarea {
+  height: auto;
+  min-height: calc(var(--fm-control-height-compact) * 3);
+  padding: var(--fm-space-2);
+  resize: vertical;
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------- */
+/* RadioGroup (frontend audit 2026-09-03, P2 — shared/ui gap)             */
+/* ---------------------------------------------------------------------- */
+
+.fm-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-2);
+}
+
+.fm-radio {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--fm-border-default);
+  border-radius: 50%;
+  background: var(--fm-bg-panel-raised);
+  cursor: pointer;
+}
+
+.fm-radio:checked {
+  border-color: var(--fm-accent);
+  box-shadow: inset 0 0 0 3px var(--fm-bg-panel-raised), inset 0 0 0 7px var(--fm-accent);
+}
+
+.fm-radio:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Avatar (frontend audit 2026-09-03, P2 — shared/ui gap)                 */
+/* ---------------------------------------------------------------------- */
+
+.fm-avatar {
+  position: relative;
+  display: inline-flex;
+  height: var(--fm-space-8);
+  width: var(--fm-space-8);
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--fm-bg-muted);
+}
+
+.fm-avatar__image {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+.fm-avatar__fallback {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fm-font-size-xs);
+  font-weight: var(--fm-font-weight-medium);
+  color: var(--fm-text-secondary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* EmptyState (frontend audit 2026-09-03, P2 — shared/ui gap)             */
+/* ---------------------------------------------------------------------- */
+
+.fm-empty-state {
+  display: grid;
+  gap: var(--fm-space-3);
+  max-width: 32rem;
+  padding: var(--fm-space-8);
+  margin-inline: auto;
+  text-align: center;
+  justify-items: center;
+}
+
+.fm-empty-state__icon {
+  color: var(--fm-text-muted);
+}
+
+.fm-empty-state__title {
+  margin: 0;
+  font-family: var(--fm-font-ui);
+  font-size: var(--fm-font-size-xl);
+  font-weight: var(--fm-font-weight-semibold);
+  color: var(--fm-text-primary);
+}
+
+.fm-empty-state__description {
+  margin: 0;
+  color: var(--fm-text-secondary);
+}
+
+.fm-empty-state__action {
+  margin-top: var(--fm-space-2);
+}
