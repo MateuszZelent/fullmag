@@ -38,6 +38,14 @@ bool gpu_rk_device_resident_step(
         return false;
     }
 
+    auto &gpu = ctx.gpu_state.device;
+    if (gpu.rk.graph_plan.mode() == RkGraphMode::Captured && !preflight.adaptive) {
+        if (!gpu.rk.graph_plan.launch(ctx, preflight.stream, reason)) {
+            // Qualified fallback to standard attempt loop on graph launch failure
+            gpu.rk.graph_plan.set_mode(RkGraphMode::Fallback);
+        }
+    }
+
     GpuRkAcceptedAttemptResult accepted_attempt{};
     if (!gpu_rk_run_accepted_attempt_loop(
             ctx,

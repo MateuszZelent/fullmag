@@ -1,12 +1,12 @@
 #pragma once
 
-#include "context.hpp"
-
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <string>
 
 namespace fullmag::fem {
+
+struct Context;
 
 enum class RkGraphMode : uint32_t {
     Disabled = 0,
@@ -34,6 +34,12 @@ public:
     uint64_t capture_count() const noexcept { return capture_count_; }
     uint64_t launch_count() const noexcept { return launch_count_; }
     uint64_t host_callback_count() const noexcept { return host_callback_count_; }
+    size_t node_count() const noexcept {
+        if (graph_ == nullptr) return 0;
+        size_t count = 0;
+        cudaGraphGetNodes(graph_, nullptr, &count);
+        return count;
+    }
 
 private:
     bool is_captured_ = false;
@@ -43,6 +49,7 @@ private:
     uint64_t host_callback_count_ = 0;
     cudaGraph_t graph_ = nullptr;
     cudaGraphExec_t instance_ = nullptr;
+    void *d_probe_ = nullptr;
 };
 
 } // namespace fullmag::fem

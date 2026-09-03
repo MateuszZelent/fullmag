@@ -11,6 +11,7 @@
 #include "gpu/cuda/state/component_field.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_control_state.hpp"
 #include "gpu/cuda/integrators/rk/rk_output_control.hpp"
+#include "gpu/cuda/integrators/rk/rk_graph.hpp"
 
 #include <array>
 #include <cstdint>
@@ -40,6 +41,7 @@ struct FemGpuRkWorkspaceDeviceState {
     FemGpuComponentField transaction_m;
     FemGpuComponentField transaction_k0;
     RkCandidateState candidate{};
+    RkGraphPlan graph_plan{};
 };
 
 } // namespace fullmag::fem

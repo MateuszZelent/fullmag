@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,7 @@ void test_graph_capture_and_rollback() {
     check(graph.is_captured(), "graph should be marked captured");
     check(graph.mode() == RkGraphMode::Captured, "graph mode should be Captured");
     check(graph.capture_count() == 1, "capture_count should be 1");
+    check(graph.node_count() > 0, "captured graph must contain non-zero nodes");
 
     const auto last_accepted_m = ctx.state.m_xyz;
     const auto last_accepted_time = ctx.state.current_time;
@@ -80,11 +82,32 @@ void test_graph_fallback_mode() {
     check(graph.launch_count() == 1, "launch_count incremented in fallback mode");
 }
 
+void test_graph_stream_capture_source_contract() {
+    std::ifstream file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_graph.cpp");
+    if (!file.is_open()) {
+        file.open("backends/fem/gpu/cuda/integrators/rk/rk_graph.cpp");
+    }
+    if (!file.is_open()) {
+        file.open("../backends/fem/gpu/cuda/integrators/rk/rk_graph.cpp");
+    }
+    check(file.is_open(), "unable to open rk_graph.cpp");
+    std::string src((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    check(src.find("cudaStreamBeginCapture") != std::string::npos,
+          "rk_graph.cpp must use cudaStreamBeginCapture");
+    check(src.find("cudaStreamEndCapture") != std::string::npos,
+          "rk_graph.cpp must use cudaStreamEndCapture");
+    check(src.find("cudaGraphGetNodes") != std::string::npos,
+          "rk_graph.cpp must verify non-empty graph via cudaGraphGetNodes");
+    check(src.find("cudaGraphCreate(&graph_, 0)") == std::string::npos,
+          "rk_graph.cpp must not instantiate an empty graph created via cudaGraphCreate");
+}
+
 } // namespace
 
 int main() {
     test_graph_capture_and_rollback();
     test_graph_fallback_mode();
+    test_graph_stream_capture_source_contract();
     std::printf("PASS: gpu_rk_graph_contract\n");
     return 0;
 }
