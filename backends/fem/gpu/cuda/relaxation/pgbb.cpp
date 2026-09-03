@@ -286,6 +286,19 @@ bool gpu_relax_compute_current_metrics(
         gpu.reductions.scalar_workspace,
         n,
         stream);
+    if (gpu.relaxation.preconditioner.is_active()) {
+        std::string prec_err;
+        gpu.relaxation.preconditioner.apply_device_component(
+            gradient.x,
+            gradient.y,
+            gradient.z,
+            gradient.x,
+            gradient.y,
+            gradient.z,
+            static_cast<size_t>(n),
+            stream,
+            prec_err);
+    }
     fullmag_cuda_relax_energy_weighted_dot_blocks(
         gradient.x,
         gradient.y,

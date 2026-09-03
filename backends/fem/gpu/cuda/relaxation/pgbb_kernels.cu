@@ -1691,5 +1691,70 @@ void fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
         n);
 }
 
+__global__ void relax_preconditioner_apply_kernel(
+    const double *__restrict__ rhs,
+    const double *__restrict__ factors,
+    double *__restrict__ solution,
+    int n)
+{
+    const int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < n) {
+        solution[idx] = factors[idx] * rhs[idx];
+    }
+}
+
+__global__ void relax_preconditioner_apply_component_kernel(
+    const double *__restrict__ rhs_x,
+    const double *__restrict__ rhs_y,
+    const double *__restrict__ rhs_z,
+    const double *__restrict__ factors,
+    double *__restrict__ sol_x,
+    double *__restrict__ sol_y,
+    double *__restrict__ sol_z,
+    int n)
+{
+    const int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (idx < n) {
+        const double f = factors[idx];
+        sol_x[idx] = f * rhs_x[idx];
+        sol_y[idx] = f * rhs_y[idx];
+        sol_z[idx] = f * rhs_z[idx];
+    }
+}
+
+void fullmag_cuda_relax_preconditioner_apply(
+    const double *d_rhs,
+    const double *d_factors,
+    double *d_solution,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0 || d_rhs == nullptr || d_factors == nullptr || d_solution == nullptr) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    relax_preconditioner_apply_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        d_rhs, d_factors, d_solution, n);
+}
+
+void fullmag_cuda_relax_preconditioner_apply_component(
+    const double *d_rhs_x,
+    const double *d_rhs_y,
+    const double *d_rhs_z,
+    const double *d_factors,
+    double *d_sol_x,
+    double *d_sol_y,
+    double *d_sol_z,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0 || d_factors == nullptr) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    relax_preconditioner_apply_component_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        d_rhs_x, d_rhs_y, d_rhs_z, d_factors, d_sol_x, d_sol_y, d_sol_z, n);
+}
+
 } // namespace fullmag::fem
 #endif

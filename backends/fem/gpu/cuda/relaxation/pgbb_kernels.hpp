@@ -321,5 +321,23 @@ void fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
     int n,
     cudaStream_t stream = nullptr);
 
+void fullmag_cuda_relax_preconditioner_apply(
+    const double *d_rhs,
+    const double *d_factors,
+    double *d_solution,
+    int n,
+    cudaStream_t stream = nullptr);
+
+void fullmag_cuda_relax_preconditioner_apply_component(
+    const double *d_rhs_x,
+    const double *d_rhs_y,
+    const double *d_rhs_z,
+    const double *d_factors,
+    double *d_sol_x,
+    double *d_sol_y,
+    double *d_sol_z,
+    int n,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif

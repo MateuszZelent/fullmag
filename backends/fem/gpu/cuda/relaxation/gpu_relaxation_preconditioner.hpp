@@ -76,6 +76,20 @@ public:
         void *stream,
         std::string &error);
 
+    bool apply_device_component(
+        const double *d_rhs_x,
+        const double *d_rhs_y,
+        const double *d_rhs_z,
+        double *d_sol_x,
+        double *d_sol_y,
+        double *d_sol_z,
+        size_t n,
+        void *stream,
+        std::string &error);
+
+    bool is_active() const noexcept { return d_op_diag_inv_ != nullptr; }
+    const double *device_factors() const noexcept { return d_op_diag_inv_; }
+
     uint64_t setup_count() const noexcept { return setup_count_; }
     uint64_t apply_count() const noexcept { return apply_count_; }
 

@@ -1,6 +1,8 @@
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
 
+#include <cuda_runtime.h>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -81,6 +83,8 @@ int main()
     double weight = 0.5;
     check(preconditioner.setup(mass, exchange, weight, nullptr, error));
     check(preconditioner.setup_count() == 1);
+    check(preconditioner.is_active());
+    check(preconditioner.device_factors() != nullptr);
 
     // Repeated setup with same parameters reuses existing setup
     check(preconditioner.setup(mass, exchange, weight, nullptr, error));
@@ -102,5 +106,58 @@ int main()
     const double rel_res = relative_residual(mass_plus_weight_exchange, solution, mass_rhs);
     check(rel_res <= 1.0e-10);
 
+    // Step 2: GPU device execution test
+    double *d_rhs = nullptr;
+    double *d_sol = nullptr;
+    check(cudaMalloc(&d_rhs, mass.size() * sizeof(double)) == cudaSuccess);
+    check(cudaMalloc(&d_sol, mass.size() * sizeof(double)) == cudaSuccess);
+    check(cudaMemcpy(d_rhs, rhs.data(), mass.size() * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess);
+
+    check(preconditioner.apply_device(d_rhs, d_sol, mass.size(), nullptr, error));
+    check(preconditioner.apply_count() == 2);
+
+    std::vector<double> dev_solution(mass.size(), 0.0);
+    check(cudaMemcpy(dev_solution.data(), d_sol, mass.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess);
+    for (size_t i = 0; i < mass.size(); ++i) {
+        check(std::abs(dev_solution[i] - solution[i]) <= 1.0e-14);
+    }
+
+    // Step 3: GPU 3-component device execution test
+    double *d_sol_x = nullptr;
+    double *d_sol_y = nullptr;
+    double *d_sol_z = nullptr;
+    check(cudaMalloc(&d_sol_x, mass.size() * sizeof(double)) == cudaSuccess);
+    check(cudaMalloc(&d_sol_y, mass.size() * sizeof(double)) == cudaSuccess);
+    check(cudaMalloc(&d_sol_z, mass.size() * sizeof(double)) == cudaSuccess);
+
+    check(preconditioner.apply_device_component(
+        d_rhs, d_rhs, d_rhs,
+        d_sol_x, d_sol_y, d_sol_z,
+        mass.size(), nullptr, error));
+    check(preconditioner.apply_count() == 3);
+
+    std::vector<double> dev_sol_x(mass.size());
+    std::vector<double> dev_sol_y(mass.size());
+    std::vector<double> dev_sol_z(mass.size());
+    check(cudaMemcpy(dev_sol_x.data(), d_sol_x, mass.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess);
+    check(cudaMemcpy(dev_sol_y.data(), d_sol_y, mass.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess);
+    check(cudaMemcpy(dev_sol_z.data(), d_sol_z, mass.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess);
+    for (size_t i = 0; i < mass.size(); ++i) {
+        check(std::abs(dev_sol_x[i] - solution[i]) <= 1.0e-14);
+        check(std::abs(dev_sol_y[i] - solution[i]) <= 1.0e-14);
+        check(std::abs(dev_sol_z[i] - solution[i]) <= 1.0e-14);
+    }
+
+    cudaFree(d_rhs);
+    cudaFree(d_sol);
+    cudaFree(d_sol_x);
+    cudaFree(d_sol_y);
+    cudaFree(d_sol_z);
+
+    preconditioner.reset();
+    check(!preconditioner.is_active());
+    check(preconditioner.device_factors() == nullptr);
+
+    std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;
 }

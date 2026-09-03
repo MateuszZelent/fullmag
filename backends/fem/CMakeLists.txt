@@ -826,7 +826,7 @@ add_executable(
     fem_gpu_relaxation_preconditioner_contract
     tests/gpu_relaxation_preconditioner_contract.cpp
 )
-target_link_libraries(fem_gpu_relaxation_preconditioner_contract PRIVATE fullmag_fem)
+target_link_libraries(fem_gpu_relaxation_preconditioner_contract PRIVATE fullmag_fem CUDA::cudart)
 target_include_directories(fem_gpu_relaxation_preconditioner_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

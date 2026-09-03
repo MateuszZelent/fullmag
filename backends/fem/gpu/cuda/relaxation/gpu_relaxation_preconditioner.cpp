@@ -1,5 +1,7 @@
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
+#include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 
+#include <cuda_runtime.h>
 #include <cmath>
 
 namespace fullmag::fem {
@@ -102,6 +104,10 @@ GpuExchangeMassPreconditioner::~GpuExchangeMassPreconditioner()
 
 void GpuExchangeMassPreconditioner::reset()
 {
+    if (d_op_diag_inv_ != nullptr) {
+        cudaFree(d_op_diag_inv_);
+        d_op_diag_inv_ = nullptr;
+    }
     d_capacity_ = 0;
     cached_weight_ = 0.0;
     cached_mass_.clear();
@@ -116,23 +122,26 @@ bool GpuExchangeMassPreconditioner::setup(
     void *stream,
     std::string &error)
 {
-    (void)stream;
     if (mass_diagonal.empty() || mass_diagonal.size() != exchange_diagonal.size() ||
         !std::isfinite(weight) || weight < 0.0) {
         error = "invalid dimensions or weight for exchange-mass preconditioner";
         return false;
     }
 
+    const size_t n = mass_diagonal.size();
+
     // Reusable check: if already configured with matching inputs, reuse existing setup
     if (cached_weight_ == weight &&
         cached_mass_ == mass_diagonal &&
         cached_exchange_ == exchange_diagonal &&
-        !cached_op_diag_.empty()) {
+        !cached_op_diag_.empty() &&
+        d_op_diag_inv_ != nullptr &&
+        d_capacity_ >= n) {
         return true;
     }
 
-    const size_t n = mass_diagonal.size();
     cached_op_diag_.resize(n);
+    std::vector<double> host_factors(n);
     for (size_t i = 0; i < n; ++i) {
         const double m = mass_diagonal[i];
         const double k = exchange_diagonal[i];
@@ -141,7 +150,37 @@ bool GpuExchangeMassPreconditioner::setup(
             reset();
             return false;
         }
-        cached_op_diag_[i] = m + weight * k;
+        const double denom = m + weight * k;
+        cached_op_diag_[i] = denom;
+        host_factors[i] = m / denom;
+    }
+
+    if (d_op_diag_inv_ != nullptr && d_capacity_ < n) {
+        cudaFree(d_op_diag_inv_);
+        d_op_diag_inv_ = nullptr;
+        d_capacity_ = 0;
+    }
+    if (d_op_diag_inv_ == nullptr) {
+        cudaError_t rc = cudaMalloc(&d_op_diag_inv_, n * sizeof(double));
+        if (rc != cudaSuccess) {
+            error = "cudaMalloc d_op_diag_inv_ failed: " + std::string(cudaGetErrorString(rc));
+            reset();
+            return false;
+        }
+        d_capacity_ = n;
+    }
+
+    cudaStream_t s = static_cast<cudaStream_t>(stream);
+    cudaError_t rc = cudaMemcpyAsync(
+        d_op_diag_inv_,
+        host_factors.data(),
+        n * sizeof(double),
+        cudaMemcpyHostToDevice,
+        s);
+    if (rc != cudaSuccess) {
+        error = "cudaMemcpyAsync d_op_diag_inv_ failed: " + std::string(cudaGetErrorString(rc));
+        reset();
+        return false;
     }
 
     cached_mass_ = mass_diagonal;
@@ -179,10 +218,36 @@ bool GpuExchangeMassPreconditioner::apply_device(
     void *stream,
     std::string &error)
 {
-    (void)d_rhs;
-    (void)d_solution;
-    (void)n;
-    (void)stream;
+    if (d_op_diag_inv_ == nullptr || d_capacity_ < n || d_rhs == nullptr || d_solution == nullptr) {
+        error = "GPU preconditioner device buffers not allocated or null arguments";
+        return false;
+    }
+    cudaStream_t s = static_cast<cudaStream_t>(stream);
+    fullmag_cuda_relax_preconditioner_apply(
+        d_rhs, d_op_diag_inv_, d_solution, static_cast<int>(n), s);
+    apply_count_ += 1;
+    error.clear();
+    return true;
+}
+
+bool GpuExchangeMassPreconditioner::apply_device_component(
+    const double *d_rhs_x,
+    const double *d_rhs_y,
+    const double *d_rhs_z,
+    double *d_sol_x,
+    double *d_sol_y,
+    double *d_sol_z,
+    size_t n,
+    void *stream,
+    std::string &error)
+{
+    if (d_op_diag_inv_ == nullptr || d_capacity_ < n) {
+        error = "GPU preconditioner device buffers not allocated";
+        return false;
+    }
+    cudaStream_t s = static_cast<cudaStream_t>(stream);
+    fullmag_cuda_relax_preconditioner_apply_component(
+        d_rhs_x, d_rhs_y, d_rhs_z, d_op_diag_inv_, d_sol_x, d_sol_y, d_sol_z, static_cast<int>(n), s);
     apply_count_ += 1;
     error.clear();
     return true;

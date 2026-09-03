@@ -608,8 +608,23 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
         gpu.rk.error.z,
         n,
         stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG current gradient/direction blocks", reason) ||
-        !gpu_relax_reduce_scalar_sum(
+    if (!cuda_launch_ok("launch GPU nonlinear-CG current gradient/direction blocks", reason)) {
+        return false;
+    }
+    if (gpu.relaxation.preconditioner.is_active()) {
+        std::string prec_err;
+        gpu.relaxation.preconditioner.apply_device_component(
+            gradient.x,
+            gradient.y,
+            gradient.z,
+            gradient.x,
+            gradient.y,
+            gradient.z,
+            static_cast<size_t>(n),
+            stream,
+            prec_err);
+    }
+    if (!gpu_relax_reduce_scalar_sum(
             ctx,
             stream,
             gpu.reductions.scalar_workspace,

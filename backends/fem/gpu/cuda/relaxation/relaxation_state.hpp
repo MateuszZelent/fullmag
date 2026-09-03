@@ -10,6 +10,7 @@
  */
 
 #include "gpu/cuda/state/component_field.hpp"
+#include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
 
 #include <array>
 #include <cstddef>
@@ -55,6 +56,7 @@ struct FemGpuRelaxationDeviceState {
     uint64_t nonlinear_cg_failures_injected = 0;
     uint32_t direct_energy_refinements_current_step = 0;
     uint64_t direct_energy_refinements = 0;
+    GpuExchangeMassPreconditioner preconditioner{};
 };
 
 inline void gpu_relax_invalidate_accepted_evaluation(
