@@ -1,127 +1,117 @@
-# Task 3 — końcowa weryfikacja modala diagnostycznego
+# Raport implementera — Task 3: źródłowo przypięty benchmark fazy 0
 
-## Focused test suite
+Data: 2026-09-03
 
-Polecenie:
+Baza: `45eda81251a81d4f641e4eb9588a24a4fc6dea88`
+
+Commit implementacyjny: `ea41d1d099992ab75e7e40ac343f496a07e3e448`
+
+## Zakres wykonany
+
+- Dodano kontrakt `fullmag.fem_gpu.benchmark.v2`: rekord zawiera commit i snapshot źródła, digest manifestu runtime, digest ProblemIR i mesh, UUID GPU, precyzję, p50/p95 czasu oraz liczniki snapshotu v2.
+- `collect_case` waliduje wszystkie co najmniej pięć powtórzeń przed obliczeniem statystyk. Odrzuca niespójne identity, niepełny receipt/snapshot, hostowe maski i transfery strict GPU, compute fence oraz niezaliczony CPU oracle.
+- Benchmark konsumuje istniejące `fem_gpu_execution_receipt` i `fem_gpu_performance_snapshot_v2`, jeśli runtime je opublikuje. Task 3 nie dodaje producenta runtime.
+- Jeden słownik definiuje publiczne nazwy preconditionerów. `exchange_mass` jest zarezerwowany, lecz ma wartość `None` i nie trafia do CLI, ponieważ aktualny C++ resolver akceptuje tylko `none` i `diagonal`; realizacja `exchange_mass` należy do Task 10.
+- Nsight ma fail-closed kontrakt faz `setup -> attempt -> accepted_finalization -> snapshot -> export`. Brak którejkolwiek fazy blokuje `VERIFIED`.
+- Receptury baseline i Nsight zapisują jawne `NOT VERIFIED`, gdy kanoniczna ścieżka wykonania lub narzędzia są niedostępne. Baseline v2 używa katalogu adresowanego SHA i opcji immutable.
+
+## TDD i weryfikacja
+
+RED:
 
 ```text
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/simulationPreparationDiagnostics.test.ts src/kernel/layout/simulationPreparationModel.test.ts src/kernel/layout/SimulationPreparationMounted.test.tsx
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+Ran 8 tests
+FAILED (failures=1, errors=10)
 ```
 
-Wynik: exit 0; 3 pliki i 43/43 testy przeszły.
+Brakowało publicznych helperów benchmarku v2, jednej mapy preconditionerów, kontraktu faz Nsight i wymaganych zapisów receptur.
 
-## Typecheck i integralność diffu
-
-Polecenia:
+GREEN po implementacji oraz ponowiony przed commitem:
 
 ```text
-pnpm --dir apps/control-room typecheck
-node --check apps/control-room/scripts/smoke-simulation-preparation.mjs
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+........
+Ran 8 tests in 0.013s
+OK
+```
+
+Pozostałe sprawdzenia:
+
+```text
+python -m py_compile scripts/analysis/fem_gpu_benchmark.py scripts/analysis/capture_fem_gpu_nsight.py scripts/test_fem_gpu_benchmark_contract.py
+exit 0
+
 git diff --check
+exit 0
+
+just --dry-run capture-fem-gpu-pre-remediation-performance-baseline
+exit 0
+
+just --dry-run capture-fem-gpu-nsight
+exit 0
 ```
 
-Wynik: wszystkie exit 0; typy tras wygenerowano bez błędów.
+`cargo fmt --all -- --check` zakończył się `exit 1` wyłącznie na wcześniejszym driftcie formatowania w plikach Rust spoza Task 3, między innymi `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs`, `crates/fullmag-api/src/router_v2/handlers/analysis/spin_wave_response.rs` i `crates/fullmag-runner/src/eigen/artifacts/*`. Nie wykonano `cargo fmt`, aby nie zmieniać obcego zakresu; Task 3 nie modyfikuje Rust.
 
-## React Doctor
-
-Polecenie:
+Dodatkowa próba uruchomienia istniejącego pliku pytest:
 
 ```text
-npx react-doctor@latest --verbose --scope changed
+python -m pytest -q scripts/test_capture_fem_gpu_nsight.py scripts/test_fem_gpu_benchmark_contract.py
+C:\Users\Mateusz\miniconda3\python.exe: No module named pytest
+exit 1
 ```
 
-Pierwsza próba w sandboxie nie uzyskała DNS do npm (`EAI_AGAIN`). Powtórzenie z zatwierdzonym dostępem sieciowym zakończyło się exit 0: 8 zmienionych plików, wynik 100/100, brak problemów.
+Nie instalowano zależności ani cache do checkoutu. Wymagany w briefie runner `unittest` przeszedł.
 
-## Browser smoke
+## Fail-closed baseline i Nsight
 
-Istniejący `apps/control-room/scripts/smoke-simulation-preparation.mjs` otrzymał ukierunkowany tryb:
+Po commicie implementacyjnym uruchomiono dokładnie:
 
 ```text
-CONTROL_ROOM_SIMULATION_PREPARATION_FAILURE_ONLY=1
+just capture-fem-gpu-pre-remediation-performance-baseline
+FEM_GPU_BENCHMARK_V2=NOT VERIFIED
+recipe exit code 2 (proces `just` na Windows zwrócił 1)
 ```
 
-Tryb używa prawdziwego `/workspace`, Radix Dialog, kanonicznego `GET /v2/sessions`, zasobu statusu oraz początkowego zasobu HTTP `GET /v2/sessions/current/simulation/preparation`. Trasa WebSocket jest jedynie skonfigurowana; narrow lane nie wysyła, nie czeka na ani nie weryfikuje invalidacji WebSocket. Nie montuje niepowiązanych zasobów viewportu po stanie ready.
+Artefakt:
 
-Polecenie:
+`C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902\.fullmag\reports\task-3-fem-gpu-baseline\ea41d1d099992ab75e7e40ac343f496a07e3e448\benchmark.v2.json`
+
+- SHA-256: `b6e51771d502ce518f99a94db35fd819185f57725eb564e540ae0507bc1e17e2`
+- `qualification_status`: `NOT VERIFIED`
+- `correctness_gate`: `not_run`
+- `records`: `[]`
+- blocker: kanoniczne wykonanie managed FEM benchmarku nie jest dostępne w windowsowej gałęzi tej receptury.
 
 ```text
-env TMPDIR=/tmp CONTROL_ROOM_URL=http://127.0.0.1:3107/workspace CONTROL_ROOM_SIMULATION_PREPARATION_FAILURE_ONLY=1 pnpm --dir apps/control-room smoke:simulation-preparation
+just capture-fem-gpu-nsight
+qualification_status=NOT VERIFIED
+recipe exit code 2 (proces `just` na Windows zwrócił 1)
 ```
 
-Wynik: exit 0. Potwierdzone asercje:
+Artefakt:
 
-- failure-dialog-auto-open;
-- known-predicate-action dla `gpu_dmi_kernel_not_mixed_p1`;
-- full-report-collapsed;
-- full-report-expanded;
-- copy-full-report;
-- viewport-blocked;
-- dialog-geometry-in-viewport;
-- dialog-focus-trapped;
-- dialog-reduced-motion-stable;
-- network-failures-none;
-- console-errors-none;
-- page-errors-none;
-- http-errors-none.
+`C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902\.fullmag\reports\task-13-nsight\task13-box500-airbox-ncg-sm89-v1\summary.json`
 
-Dowody wizualne:
+- SHA-256: `af724218bfd902a6118a6765f8db30cce8260f0ccd401087e7837df3559dc0ae`
+- `qualification_status`: `NOT VERIFIED`
+- `status`: `unavailable`
+- zakres faz: `setup -> attempt -> accepted_finalization -> snapshot -> export`
+- blocker: Nsight nie jest dostępny na kanonicznej windowsowej ścieżce Task 3.
 
-- `.superpowers/sdd/evidence/simulation-preparation-failure-collapsed.png`
-- `.superpowers/sdd/evidence/simulation-preparation-failure-expanded.png`
+## Granice dowodu i luki
 
-Ręczna kontrola screenshotów potwierdziła: modal mieści się w viewport 1440x900, zwinięty raport nie wypiera stopki, rozwinięty raport ma własny scroll, a stopka pozostaje widoczna. Te własności są dodatkowo objęte automatycznymi pomiarami geometrii i fokusu opisanymi poniżej.
+- Nie wykonano managed FEM CPU/GPU workload, dlatego nie ma source/runtime/ProblemIR/mesh zgodności z realnego runu, rozkładu p50/p95 ani CPU-oracle parity evidence.
+- Runtime Task 2 nie publikuje jeszcze snapshotu wydajności v2 do artefaktu ukończonego runu. Benchmark v2 konsumuje taki snapshot, ale przy jego braku pozostaje `NOT VERIFIED`.
+- Brak śladu Nsight oznacza brak dowodu pokrycia faz, overlapu, occupancy, bandwidth i top-kernel metrics.
+- Nie zweryfikowano wydajności, physics, parity ani production qualification. Artefakty source/contract nie zastępują tych torów dowodowych.
+- Istniejąca, niezwiązana zmiana `.superpowers/sdd/progress.md` została zachowana i nie weszła do commita.
 
-## Diagnostyka starego broad smoke
+## Pliki
 
-Pełny historyczny przebieg najpierw ujawnił brak fixture `GET /v2/sessions`, a po jego dodaniu dotarł do nieaktualnego oczekiwania na dwa zasoby po stanie ready. Zamiast poszerzać ten modalowy gate o kilkadziesiąt niepowiązanych zasobów workspace dodano failure-only lane. Ograniczony zrzut stanu przy błędzie pozostaje w skrypcie, aby kolejne drifty raportowały body, requesty i błędy zamiast kończyć się samym timeoutem.
-
-## Granica API
-
-Zmiana produkcyjna jest frontend-only. Nie zmieniono OpenAPI v2, wygenerowanych typów/transportu, API facade, hooków ani codeców. HTTP v2 pozostaje źródłem prawdy; WebSocket przenosi tylko zdarzenie/invalidation. Komponent nie wykonuje bezpośredniego `fetch()` i nie tworzy ścieżek endpointów.
-
-## Fix po review — dowody
-
-### Bounded diagnostics
-
-`consoleErrors`, `failedResponses`, `networkFailures` i `pageErrors` są teraz
-ograniczane przy zapisie do 12 wpisów. Teksty mają limit 400 znaków, URL-e 600
-znaków, a body zrzutu 2 000 znaków; każdy collector raportuje liczbę `dropped`.
-Oba bloki `catch` wywołują wspólny `boundedFailureSnapshot`, więc nie mogą
-serializować nieograniczonych tablic. W narrow lane `networkFailures` jest
-asertywnie puste, podobnie jak pozostałe trzy klasy błędów.
-
-TDD: przed implementacją uruchomiono celowy kontrakt
-`CONTROL_ROOM_SIMULATION_PREPARATION_ASSERT_BOUNDS=1 node apps/control-room/scripts/smoke-simulation-preparation.mjs`.
-Zakończył się oczekiwanym RED: `Diagnostic collector did not retain a fixed
-number of entries.` Po dodaniu limitu, obcinania i licznika wynik to exit 0:
-`bounded-diagnostic-collector-contract`.
-
-### Dialog, fokus i reduced motion
-
-Po rozwinięciu raportu smoke mierzy `boundingBox()` dialogu i wszystkich
-przycisków stopki względem viewportu 1440×900. Sprawdza, że
-`document.activeElement` pozostaje wewnątrz dialogu po auto-open, kliknięciu
-`summary` oraz kopiowaniu. Dla failure dialog `reducedMotion: "reduce"` jest
-włączane przed auto-open, sprawdzane są stabilna geometria i fokus, po czym
-ustawienie jest przywracane do `no-preference`. Te same pomocniki są użyte w
-zachowanym broad lane; jego semantyka connecting/planning/meshing/reconnect/
-ready/failure i revision-only invalidation nie została zawężona.
-
-Świeży narrow smoke po fixie:
-
-```text
-TMPDIR=/tmp CONTROL_ROOM_URL=http://127.0.0.1:3107/workspace CONTROL_ROOM_SIMULATION_PREPARATION_FAILURE_ONLY=1 pnpm smoke:simulation-preparation
-```
-
-Wynik: exit 0. Potwierdzone: `failure-dialog-auto-open`,
-`full-report-collapsed`, `full-report-expanded`, `dialog-geometry-in-viewport`,
-`dialog-focus-trapped`, `dialog-reduced-motion-stable`, `copy-full-report`,
-`network-failures-none`, `console-errors-none`, `page-errors-none` i
-`http-errors-none`.
-
-### Broad lane
-
-**NOT VERIFIED — fresh broad execution.** Broad lane został przejrzany jako
-zachowany w źródle, ale nie został uruchomiony świeżo po tym fixie. Jego
-WebSocket invalidation należy kwalifikować osobnym pełnym przebiegiem, nie na
-podstawie narrow lane.
+- `scripts/analysis/fem_gpu_benchmark.py`
+- `scripts/analysis/capture_fem_gpu_nsight.py`
+- `scripts/test_fem_gpu_benchmark_contract.py`
+- `justfile`
+- `.superpowers/sdd/task-3-report.md` (ten raport; osobny commit raportowy)
