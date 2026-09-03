@@ -9,12 +9,14 @@
  */
 
 #include <cstdint>
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 
 namespace fullmag::fem {
 
 struct LegacyGpuExchangeDeviceState {
     bool uploaded = false;
     bool row_scale_ready = false;
+    SparseApplyPlan plan{};
     uint64_t rows = 0;
     uint64_t cols = 0;
     uint64_t nnz = 0;

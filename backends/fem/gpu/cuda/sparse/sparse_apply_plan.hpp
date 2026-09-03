@@ -66,6 +66,10 @@ public:
 
     SparseApplyPlan(const SparseApplyPlan &) = delete;
     SparseApplyPlan &operator=(const SparseApplyPlan &) = delete;
+    SparseApplyPlan(SparseApplyPlan &&other) noexcept;
+    SparseApplyPlan &operator=(SparseApplyPlan &&other) noexcept;
+
+    void reset() noexcept;
 
     bool setup(
         const SparseApplyCsrDeviceView &csr,

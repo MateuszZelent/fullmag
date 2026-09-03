@@ -7,6 +7,7 @@
 #pragma once
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 #include <cuda_runtime.h>
 #include <cstdint>
 
@@ -24,7 +25,8 @@ void fullmag_cuda_demag_rhs_csr(
     const double *mz,
     double *rhs,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    SparseApplyVariant variant = SparseApplyVariant::ScalarRow);
 
 /// Device Poisson demag recovery: h_component = G_component u.
 void fullmag_cuda_demag_recovery_csr(
@@ -35,7 +37,8 @@ void fullmag_cuda_demag_recovery_csr(
     const uint8_t *magnetic_node_mask,
     double *h_component,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    SparseApplyVariant variant = SparseApplyVariant::ScalarRow);
 
 /// Device Poisson demag recovery for three components sharing one CSR pattern.
 /// The value arrays may differ; only row offsets and column indices are shared.
@@ -51,7 +54,8 @@ void fullmag_cuda_demag_recovery_xyz_csr(
     double *h_y,
     double *h_z,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    SparseApplyVariant variant = SparseApplyVariant::ScalarRow);
 
 /// Lift reduced periodic scalar potential to full nodal scalar potential.
 void fullmag_cuda_lift_periodic_reduced_scalar_to_full(

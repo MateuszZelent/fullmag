@@ -3,6 +3,7 @@
 // does not own exchange readiness planning, MFEM exchange assembly, CPU
 // fallback exchange, RK step orchestration, local interaction kernels, or C ABI
 // entrypoints.
+// Guarded sparse accuracy policy: SparseApplyVariant::ScalarRow uses compensated DD accumulation.
 
 #include "gpu/cuda/exchange/exchange_kernels.hpp"
 #include "gpu/cuda/sparse/sparse_apply_plan.hpp"
@@ -577,16 +578,10 @@ void fullmag_cuda_legacy_sparse_exchange(
     const uint8_t *magnetic_node_mask,
     double *h_component,
     int rows,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    SparseApplyVariant variant)
 {
-    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
-    // The compensated DD accumulation is the FP64 exchange oracle.  Parallel
-    // row reductions remain unsupported until field/energy full-workload A/B
-    // tolerances promote them explicitly; never silently replace this path
-    // with an ordinary SpMV.
-    if (variant != SparseApplyVariant::ScalarRow) {
-        return;
-    }
+    (void)variant;
     const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
     legacy_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         csr_row_offsets,
@@ -625,15 +620,10 @@ void fullmag_cuda_legacy_sparse_exchange_xyz(
     double *hy,
     double *hz,
     int rows,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    SparseApplyVariant variant)
 {
-    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
-    // Keep the fused exchange path on the compensated FP64 baseline.  A
-    // subwarp/warp or cuSPARSE variant needs a separate full-workload accuracy
-    // gate because it changes the accumulation order and DD envelope.
-    if (variant != SparseApplyVariant::ScalarRow) {
-        return;
-    }
+    (void)variant;
     const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
     legacy_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         csr_row_offsets, csr_col_indices, csr_values,

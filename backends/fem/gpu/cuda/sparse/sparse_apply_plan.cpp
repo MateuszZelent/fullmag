@@ -430,7 +430,28 @@ SparseApplyPlan::SparseApplyPlan() noexcept
 {
 }
 
+SparseApplyPlan::SparseApplyPlan(SparseApplyPlan &&other) noexcept
+    : impl_(other.impl_)
+{
+    other.impl_ = nullptr;
+}
+
+SparseApplyPlan &SparseApplyPlan::operator=(SparseApplyPlan &&other) noexcept
+{
+    if (this != &other) {
+        reset();
+        impl_ = other.impl_;
+        other.impl_ = nullptr;
+    }
+    return *this;
+}
+
 SparseApplyPlan::~SparseApplyPlan()
+{
+    reset();
+}
+
+void SparseApplyPlan::reset() noexcept
 {
     if (impl_ == nullptr) {
         return;

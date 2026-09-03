@@ -162,6 +162,7 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 }
                 gpu.legacy_exchange.row_scale_ready = true;
             }
+            const auto ex_variant = gpu.legacy_exchange.plan.selected_variant();
             fullmag_cuda_legacy_sparse_exchange_xyz(
                 gpu.legacy_exchange.csr_row_offsets,
                 gpu.legacy_exchange.csr_col_indices,
@@ -174,7 +175,15 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.fields.h_ex.y,
                 gpu.fields.h_ex.z,
                 rows,
-                stream);
+                stream,
+                ex_variant);
+            if (execution_receipt != nullptr) {
+                gpu_execution_receipt_note_performance_phase(
+                    *execution_receipt,
+                    FemGpuPerformancePhase::KernelLaunch,
+                    0,
+                    gpu.legacy_exchange.plan.selected_variant_id());
+            }
         }
     }
     if (!cuda_launch_ok("launch GPU legacy sparse exchange", reason)) {

@@ -16,6 +16,7 @@
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #include <cstdint>
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 
 namespace fullmag::fem {
 
@@ -32,7 +33,8 @@ void fullmag_cuda_legacy_sparse_exchange(
     const uint8_t *magnetic_node_mask,
     double *h_component,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    SparseApplyVariant variant = SparseApplyVariant::ScalarRow);
 
 /// Fused non-periodic legacy sparse exchange for all three SoA components.
 /// The row scale is precomputed once per runtime coefficient upload/setup.
@@ -50,7 +52,8 @@ void fullmag_cuda_legacy_sparse_exchange_xyz(
     double *hy,
     double *hz,
     int rows,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr,
+    SparseApplyVariant variant = SparseApplyVariant::ScalarRow);
 
 /// Build -2/(mu0*Ms_i) once per exchange setup. The inverse lumped mass is
 /// applied after the compensated CSR sum to preserve the legacy operation

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
@@ -88,6 +89,8 @@ struct GpuDemagPoissonWorkspace {
     GpuDemagRecoveryMode visual_recovery_mode = GpuDemagRecoveryMode::SplitCsr;
     DeviceCsrScalar robin_boundary_mass;
     std::vector<uint32_t> ess_tdofs;
+    SparseApplyPlan rhs_plan{};
+    SparseApplyPlan recovery_plan{};
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint32_t *d_ess_tdofs = nullptr;
     HypreStreamInterop stream_interop{};

@@ -371,6 +371,75 @@ __global__ void rhs_csr_kernel(
     output[row] = sum;
 }
 
+__global__ void warp_three_csr_kernel(
+    const std::uint32_t *__restrict__ row_offsets,
+    const std::uint32_t *__restrict__ col_indices,
+    const double *__restrict__ values_x,
+    const double *__restrict__ values_y,
+    const double *__restrict__ values_z,
+    const double *__restrict__ input,
+    double *__restrict__ out_x,
+    double *__restrict__ out_y,
+    double *__restrict__ out_z,
+    int rows,
+    const std::uint8_t *__restrict__ active_mask)
+{
+    const int lane = threadIdx.x & 31;
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    const bool active = row < rows &&
+        (active_mask == nullptr || active_mask[row] != 0u);
+    const std::uint32_t begin = active ? row_offsets[row] : 0u;
+    const std::uint32_t end = active ? row_offsets[row + 1] : 0u;
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_z = 0.0;
+    if (active) {
+        for (std::uint32_t p = begin + static_cast<std::uint32_t>(lane); p < end; p += 32u) {
+            const std::uint32_t col = col_indices[p];
+            const double input_value = input[col];
+            sum_x += values_x[p] * input_value;
+            sum_y += values_y[p] * input_value;
+            sum_z += values_z[p] * input_value;
+        }
+    }
+    reduce_width_xyz<32>(sum_x, sum_y, sum_z);
+    if (row < rows && lane == 0) {
+        out_x[row] = sum_x;
+        out_y[row] = sum_y;
+        out_z[row] = sum_z;
+    }
+}
+
+__global__ void warp_rhs_csr_kernel(
+    const std::uint32_t *__restrict__ row_offsets,
+    const std::uint32_t *__restrict__ col_indices,
+    const double *__restrict__ values_x,
+    const double *__restrict__ values_y,
+    const double *__restrict__ values_z,
+    const double *__restrict__ x,
+    const double *__restrict__ y,
+    const double *__restrict__ z,
+    double *__restrict__ output,
+    int rows)
+{
+    const int lane = threadIdx.x & 31;
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    const bool active = row < rows;
+    const std::uint32_t begin = active ? row_offsets[row] : 0u;
+    const std::uint32_t end = active ? row_offsets[row + 1] : 0u;
+    double sum = 0.0;
+    if (active) {
+        for (std::uint32_t p = begin + static_cast<std::uint32_t>(lane); p < end; p += 32u) {
+            const std::uint32_t col = col_indices[p];
+            sum += values_x[p] * x[col] + values_y[p] * y[col] + values_z[p] * z[col];
+        }
+    }
+    sum = reduce_width<32>(sum);
+    if (row < rows && lane == 0) {
+        output[row] = sum;
+    }
+}
+
 __global__ void pack_xyz_kernel(
     const double *__restrict__ x,
     const double *__restrict__ y,
@@ -513,24 +582,39 @@ bool launch_three_csr(
     cudaStream_t stream,
     const std::uint8_t *active_mask)
 {
-    if (!custom_variant(variant) || variant != SparseApplyVariant::ScalarRow || rows <= 0 ||
+    if (!custom_variant(variant) || rows <= 0 ||
         row_offsets == nullptr || col_indices == nullptr || values_x == nullptr ||
         values_y == nullptr || values_z == nullptr || input == nullptr || out_x == nullptr ||
         out_y == nullptr || out_z == nullptr) {
         return false;
     }
-    three_csr_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        row_offsets,
-        col_indices,
-        values_x,
-        values_y,
-        values_z,
-        input,
-        out_x,
-        out_y,
-        out_z,
-        rows,
-        active_mask);
+    if (variant == SparseApplyVariant::Warp) {
+        warp_three_csr_kernel<<<(rows + 7) / 8, kBlockSize, 0, stream>>>(
+            row_offsets,
+            col_indices,
+            values_x,
+            values_y,
+            values_z,
+            input,
+            out_x,
+            out_y,
+            out_z,
+            rows,
+            active_mask);
+    } else {
+        three_csr_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            row_offsets,
+            col_indices,
+            values_x,
+            values_y,
+            values_z,
+            input,
+            out_x,
+            out_y,
+            out_z,
+            rows,
+            active_mask);
+    }
     return true;
 }
 
@@ -548,23 +632,37 @@ bool launch_rhs_csr(
     SparseApplyVariant variant,
     cudaStream_t stream)
 {
-    if (!custom_variant(variant) || variant != SparseApplyVariant::ScalarRow || rows <= 0 ||
+    if (!custom_variant(variant) || rows <= 0 ||
         row_offsets == nullptr || col_indices == nullptr || values_x == nullptr ||
         values_y == nullptr || values_z == nullptr || x == nullptr || y == nullptr ||
         z == nullptr || output == nullptr) {
         return false;
     }
-    rhs_csr_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        row_offsets,
-        col_indices,
-        values_x,
-        values_y,
-        values_z,
-        x,
-        y,
-        z,
-        output,
-        rows);
+    if (variant == SparseApplyVariant::Warp) {
+        warp_rhs_csr_kernel<<<(rows + 7) / 8, kBlockSize, 0, stream>>>(
+            row_offsets,
+            col_indices,
+            values_x,
+            values_y,
+            values_z,
+            x,
+            y,
+            z,
+            output,
+            rows);
+    } else {
+        rhs_csr_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+            row_offsets,
+            col_indices,
+            values_x,
+            values_y,
+            values_z,
+            x,
+            y,
+            z,
+            output,
+            rows);
+    }
     return true;
 }
 

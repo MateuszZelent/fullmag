@@ -1220,6 +1220,23 @@ bool upload_demag_poisson_operators(
         return false;
     }
     workspace.operator_upload_count += 1u;
+    SparseApplyCsrDeviceView rhs_csr{
+        workspace.rhs.d_row_offsets,
+        workspace.rhs.d_col_indices,
+        workspace.rhs.d_values_x,
+        static_cast<uint32_t>(workspace.rhs.rows),
+        static_cast<uint32_t>(workspace.rhs.rows),
+    };
+    std::string plan_err;
+    workspace.rhs_plan.setup(rhs_csr, nullptr, plan_err);
+    SparseApplyCsrDeviceView rec_csr{
+        workspace.recovery_x.d_row_offsets,
+        workspace.recovery_x.d_col_indices,
+        workspace.recovery_x.d_values,
+        static_cast<uint32_t>(workspace.recovery_x.rows),
+        static_cast<uint32_t>(workspace.recovery_x.rows),
+    };
+    workspace.recovery_plan.setup(rec_csr, nullptr, plan_err);
     return true;
 #else
     (void)workspace;
@@ -1252,6 +1269,8 @@ void destroy_demag_poisson_operators(GpuDemagPoissonWorkspace &workspace)
     workspace.recovery_mode = GpuDemagRecoveryMode::SplitCsr;
     workspace.visual_recovery_xyz_pattern_digest = 0;
     workspace.visual_recovery_mode = GpuDemagRecoveryMode::SplitCsr;
+    workspace.rhs_plan.reset();
+    workspace.recovery_plan.reset();
     workspace.device_bytes = 0;
     workspace.ready = false;
 }

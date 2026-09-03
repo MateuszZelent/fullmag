@@ -201,6 +201,7 @@ bool compute_device_demag_for_device_stage_impl(
     }
     {
         FULLMAG_NVTX_RANGE("fem.demag.rhs");
+        const auto rhs_variant = workspace->rhs_plan.selected_variant();
         fullmag_cuda_demag_rhs_csr(
             workspace->rhs.d_row_offsets,
             workspace->rhs.d_col_indices,
@@ -212,7 +213,13 @@ bool compute_device_demag_for_device_stage_impl(
             m.z,
             gpu.demag_poisson.poisson_rhs,
             static_cast<int>(workspace->rhs.rows),
-            stream);
+            stream,
+            rhs_variant);
+        gpu_execution_receipt_note_performance_phase(
+            ctx.gpu_state.execution_receipt,
+            FemGpuPerformancePhase::KernelLaunch,
+            0,
+            workspace->rhs_plan.selected_variant_id());
         if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag RHS CSR", reason)) {
             return false;
         }
@@ -372,6 +379,7 @@ bool compute_device_demag_for_device_stage_impl(
             workspace->d_ess_tdofs,
             static_cast<int>(workspace->ess_tdofs.size()),
             stream);
+        const auto rec_variant = workspace->recovery_plan.selected_variant();
         if (workspace->recovery_mode == GpuDemagRecoveryMode::SharedPatternFusedXyz) {
             fullmag_cuda_demag_recovery_xyz_csr(
                 workspace->recovery_x.d_row_offsets,
@@ -385,7 +393,8 @@ bool compute_device_demag_for_device_stage_impl(
                 gpu.fields.h_demag.y,
                 gpu.fields.h_demag.z,
                 static_cast<int>(workspace->recovery_x.rows),
-                stream);
+                stream,
+                rec_variant);
         } else {
             // Keep the three-launch path for a pattern mismatch.  Never fuse
             // based on nnz alone: row offsets and sorted column indices must
@@ -398,7 +407,8 @@ bool compute_device_demag_for_device_stage_impl(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_demag.x,
                 static_cast<int>(workspace->recovery_x.rows),
-                stream);
+                stream,
+                rec_variant);
             fullmag_cuda_demag_recovery_csr(
                 workspace->recovery_y.d_row_offsets,
                 workspace->recovery_y.d_col_indices,
@@ -407,7 +417,8 @@ bool compute_device_demag_for_device_stage_impl(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_demag.y,
                 static_cast<int>(workspace->recovery_y.rows),
-                stream);
+                stream,
+                rec_variant);
             fullmag_cuda_demag_recovery_csr(
                 workspace->recovery_z.d_row_offsets,
                 workspace->recovery_z.d_col_indices,
@@ -416,8 +427,14 @@ bool compute_device_demag_for_device_stage_impl(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_demag.z,
                 static_cast<int>(workspace->recovery_z.rows),
-                stream);
+                stream,
+                rec_variant);
         }
+        gpu_execution_receipt_note_performance_phase(
+            ctx.gpu_state.execution_receipt,
+            FemGpuPerformancePhase::KernelLaunch,
+            0,
+            workspace->recovery_plan.selected_variant_id());
         if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag recovery CSR", reason)) {
             return false;
         }
