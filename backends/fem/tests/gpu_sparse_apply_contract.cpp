@@ -188,9 +188,48 @@ int main()
     check(plan.apply_count() == variants.size(), "sparse apply count does not match executed variants");
     check(plan.setup_count() == 1u, "sparse apply must not rebuild setup state");
 
+    // Qualification of active_mask across all sparse variants:
+    std::vector<uint8_t> host_mask(oracle_x.size());
+    std::vector<double> masked_oracle_x(oracle_x.size());
+    std::vector<double> masked_oracle_y(oracle_y.size());
+    std::vector<double> masked_oracle_z(oracle_z.size());
+    for (size_t row = 0; row < host_mask.size(); ++row) {
+        host_mask[row] = static_cast<uint8_t>(row % 2 == 0 ? 1 : 0);
+        masked_oracle_x[row] = host_mask[row] != 0 ? oracle_x[row] : 0.0;
+        masked_oracle_y[row] = host_mask[row] != 0 ? oracle_y[row] : 0.0;
+        masked_oracle_z[row] = host_mask[row] != 0 ? oracle_z[row] : 0.0;
+    }
+    uint8_t *d_mask = nullptr;
+    check_cuda(cudaMalloc(reinterpret_cast<void **>(&d_mask), host_mask.size() * sizeof(uint8_t)), "cudaMalloc active_mask");
+    check_cuda(cudaMemcpyAsync(d_mask, host_mask.data(), host_mask.size() * sizeof(uint8_t), cudaMemcpyHostToDevice, stream), "upload active_mask");
+    check_cuda(cudaStreamSynchronize(stream), "synchronize mask upload");
+
+    SparseApplyXyzDeviceView masked_xyz = xyz;
+    masked_xyz.active_mask = d_mask;
+    for (const SparseApplyVariant variant : variants) {
+        check(plan.force_variant_for_test(variant, error), error.c_str());
+        check(plan.apply_xyz(masked_xyz, stream, error), error.c_str());
+        check_cuda(cudaStreamSynchronize(stream), "synchronize masked sparse apply");
+        std::vector<double> actual_x(oracle_x.size());
+        std::vector<double> actual_y(oracle_y.size());
+        std::vector<double> actual_z(oracle_z.size());
+        check_cuda(cudaMemcpy(actual_x.data(), d_out_x, actual_x.size() * sizeof(double), cudaMemcpyDeviceToHost), "download masked x");
+        check_cuda(cudaMemcpy(actual_y.data(), d_out_y, actual_y.size() * sizeof(double), cudaMemcpyDeviceToHost), "download masked y");
+        check_cuda(cudaMemcpy(actual_z.data(), d_out_z, actual_z.size() * sizeof(double), cudaMemcpyDeviceToHost), "download masked z");
+        check(vector_rms(actual_x, masked_oracle_x) <= 1e-12, "masked sparse x apply differs from FP64 oracle");
+        check(vector_rms(actual_y, masked_oracle_y) <= 1e-12, "masked sparse y apply differs from FP64 oracle");
+        check(vector_rms(actual_z, masked_oracle_z) <= 1e-12, "masked sparse z apply differs from FP64 oracle");
+    }
+    check(plan.apply_count() == 2u * variants.size(), "sparse apply count does not reflect masked executions");
+
     const auto root = fem_source_root();
+    const std::string plan_header = read_text_file(root / "gpu" / "cuda" / "sparse" / "sparse_apply_plan.hpp");
     const std::string demag = read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "demag_kernels.cu");
     const std::string exchange = read_text_file(root / "gpu" / "cuda" / "exchange" / "exchange_kernels.cu");
+    check(
+        plan_header.find("private:") != std::string::npos &&
+            plan_header.find("struct Impl;") != std::string::npos,
+        "SparseApplyPlan::Impl must be private");
     check(
         demag.find("sparse_apply_detail::launch_rhs_csr") != std::string::npos &&
             demag.find("sparse_apply_detail::launch_scalar_csr") != std::string::npos &&
@@ -203,6 +242,7 @@ int main()
     check(demag.find("cudaStreamSynchronize") == std::string::npos, "demag sparse apply contains a host fence");
     check(exchange.find("cudaStreamSynchronize") == std::string::npos, "exchange sparse apply contains a host fence");
 
+    cudaFree(d_mask);
     cudaFree(d_out_z);
     cudaFree(d_out_y);
     cudaFree(d_out_x);

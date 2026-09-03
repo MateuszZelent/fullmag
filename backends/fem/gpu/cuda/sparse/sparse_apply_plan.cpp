@@ -123,77 +123,94 @@ struct SparseApplyPlan::Impl {
     void *spmm_buffer = nullptr;
     std::size_t spmm_buffer_bytes = 0;
 #endif
+
+    void release_cuda_state() noexcept;
+
+#if FULLMAG_HAS_CUSPARSE
+    bool apply_spmv(
+        const SparseApplyXyzDeviceView &vectors,
+        FullmagSparseApplyStream stream,
+        std::string &error);
+
+    bool apply_spmm3(
+        const SparseApplyXyzDeviceView &vectors,
+        FullmagSparseApplyStream stream,
+        std::string &error);
+#endif
+
+    bool benchmark_variant(
+        SparseApplyVariant variant,
+        FullmagSparseApplyStream stream,
+        float &elapsed_ms,
+        std::string &error);
 #endif
 };
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 
-namespace {
-
-void release_cuda_state(SparseApplyPlan::Impl &state) noexcept
+void SparseApplyPlan::Impl::release_cuda_state() noexcept
 {
 #if FULLMAG_HAS_CUSPARSE
-    for (auto &descriptor : state.spmv_input) {
+    for (auto &descriptor : spmv_input) {
         if (descriptor != nullptr) {
             cusparseDestroyDnVec(descriptor);
             descriptor = nullptr;
         }
     }
-    for (auto &descriptor : state.spmv_output) {
+    for (auto &descriptor : spmv_output) {
         if (descriptor != nullptr) {
             cusparseDestroyDnVec(descriptor);
             descriptor = nullptr;
         }
     }
-    if (state.spmm_input != nullptr) {
-        cusparseDestroyDnMat(state.spmm_input);
-        state.spmm_input = nullptr;
+    if (spmm_input != nullptr) {
+        cusparseDestroyDnMat(spmm_input);
+        spmm_input = nullptr;
     }
-    if (state.spmm_output != nullptr) {
-        cusparseDestroyDnMat(state.spmm_output);
-        state.spmm_output = nullptr;
+    if (spmm_output != nullptr) {
+        cusparseDestroyDnMat(spmm_output);
+        spmm_output = nullptr;
     }
-    if (state.matrix != nullptr) {
-        cusparseDestroySpMat(state.matrix);
-        state.matrix = nullptr;
+    if (matrix != nullptr) {
+        cusparseDestroySpMat(matrix);
+        matrix = nullptr;
     }
-    if (state.handle != nullptr) {
-        cusparseDestroy(state.handle);
-        state.handle = nullptr;
+    if (handle != nullptr) {
+        cusparseDestroy(handle);
+        handle = nullptr;
     }
-    if (state.spmm_buffer != nullptr) {
-        cudaFree(state.spmm_buffer);
-        state.spmm_buffer = nullptr;
+    if (spmm_buffer != nullptr) {
+        cudaFree(spmm_buffer);
+        spmm_buffer = nullptr;
     }
-    if (state.spmv_buffer != nullptr) {
-        cudaFree(state.spmv_buffer);
-        state.spmv_buffer = nullptr;
+    if (spmv_buffer != nullptr) {
+        cudaFree(spmv_buffer);
+        spmv_buffer = nullptr;
     }
-    state.spmm_buffer_bytes = 0;
-    state.spmv_buffer_bytes = 0;
+    spmm_buffer_bytes = 0;
+    spmv_buffer_bytes = 0;
 #endif
-    if (state.scratch_output != nullptr) {
-        cudaFree(state.scratch_output);
-        state.scratch_output = nullptr;
+    if (scratch_output != nullptr) {
+        cudaFree(scratch_output);
+        scratch_output = nullptr;
     }
-    if (state.scratch_input != nullptr) {
-        cudaFree(state.scratch_input);
-        state.scratch_input = nullptr;
+    if (scratch_input != nullptr) {
+        cudaFree(scratch_input);
+        scratch_input = nullptr;
     }
-    state.scratch_input_count = 0;
-    state.scratch_output_count = 0;
+    scratch_input_count = 0;
+    scratch_output_count = 0;
 }
 
 #if FULLMAG_HAS_CUSPARSE
 
-bool apply_spmv(
-    SparseApplyPlan::Impl &state,
+bool SparseApplyPlan::Impl::apply_spmv(
     const SparseApplyXyzDeviceView &vectors,
     FullmagSparseApplyStream stream,
     std::string &error)
 {
     if (!cusparse_ok(
-            cusparseSetStream(state.handle, stream),
+            cusparseSetStream(handle, stream),
             "cusparseSetStream",
             error)) {
         return false;
@@ -205,70 +222,108 @@ bool apply_spmv(
     for (std::size_t component = 0; component < inputs.size(); ++component) {
         if (!cusparse_ok(
                 cusparseDnVecSetValues(
-                    state.spmv_input[component],
+                    spmv_input[component],
                     const_cast<double *>(inputs[component])),
                 "cusparseDnVecSetValues(input)",
                 error) ||
             !cusparse_ok(
-                cusparseDnVecSetValues(state.spmv_output[component], outputs[component]),
+                cusparseDnVecSetValues(spmv_output[component], outputs[component]),
                 "cusparseDnVecSetValues(output)",
                 error)) {
             return false;
         }
         if (!cusparse_ok(
                 cusparseSpMV(
-                    state.handle,
+                    handle,
                     CUSPARSE_OPERATION_NON_TRANSPOSE,
                     &alpha,
-                    state.matrix,
-                    state.spmv_input[component],
+                    matrix,
+                    spmv_input[component],
                     &beta,
-                    state.spmv_output[component],
+                    spmv_output[component],
                     CUDA_R_64F,
                     CUSPARSE_SPMV_ALG_DEFAULT,
-                    state.spmv_buffer),
+                    spmv_buffer),
                 "cusparseSpMV",
                 error)) {
+            return false;
+        }
+    }
+    if (vectors.active_mask != nullptr) {
+        if (!sparse_apply_detail::launch_mask_xyz(
+                vectors.out_x,
+                vectors.out_y,
+                vectors.out_z,
+                static_cast<int>(csr.rows),
+                stream,
+                vectors.active_mask)) {
+            error = "sparse apply mask launch failed";
             return false;
         }
     }
     return true;
 }
 
-bool apply_spmm3(
-    SparseApplyPlan::Impl &state,
+bool SparseApplyPlan::Impl::apply_spmm3(
+    const SparseApplyXyzDeviceView &vectors,
     FullmagSparseApplyStream stream,
     std::string &error)
 {
+    if (!sparse_apply_detail::launch_pack_xyz(
+            vectors.x,
+            vectors.y,
+            vectors.z,
+            scratch_input,
+            static_cast<int>(csr.cols),
+            stream)) {
+        error = "sparse apply XYZ pack rejected parameters";
+        return false;
+    }
+    if (!cuda_ok(cudaGetLastError(), "sparse apply XYZ pack enqueue", error)) {
+        return false;
+    }
     if (!cusparse_ok(
-            cusparseSetStream(state.handle, stream),
+            cusparseSetStream(handle, stream),
             "cusparseSetStream",
             error)) {
         return false;
     }
     const double alpha = 1.0;
     const double beta = 0.0;
-    return cusparse_ok(
-        cusparseSpMM(
-            state.handle,
-            CUSPARSE_OPERATION_NON_TRANSPOSE,
-            CUSPARSE_OPERATION_NON_TRANSPOSE,
-            &alpha,
-            state.matrix,
-            state.spmm_input,
-            &beta,
-            state.spmm_output,
-            CUDA_R_64F,
-            CUSPARSE_SPMM_ALG_DEFAULT,
-            state.spmm_buffer),
-        "cusparseSpMM",
-        error);
+    if (!cusparse_ok(
+            cusparseSpMM(
+                handle,
+                CUSPARSE_OPERATION_NON_TRANSPOSE,
+                CUSPARSE_OPERATION_NON_TRANSPOSE,
+                &alpha,
+                matrix,
+                spmm_input,
+                &beta,
+                spmm_output,
+                CUDA_R_64F,
+                CUSPARSE_SPMM_ALG_DEFAULT,
+                spmm_buffer),
+            "cusparseSpMM",
+            error)) {
+        return false;
+    }
+    if (!sparse_apply_detail::launch_unpack_xyz(
+            scratch_output,
+            vectors.out_x,
+            vectors.out_y,
+            vectors.out_z,
+            static_cast<int>(csr.rows),
+            stream,
+            vectors.active_mask)) {
+        error = "sparse apply XYZ unpack rejected parameters";
+        return false;
+    }
+    return cuda_ok(cudaGetLastError(), "sparse apply XYZ unpack enqueue", error);
 }
 
 #endif
 
-bool benchmark_variant(
-    SparseApplyPlan::Impl &state,
+bool SparseApplyPlan::Impl::benchmark_variant(
     SparseApplyVariant variant,
     FullmagSparseApplyStream stream,
     float &elapsed_ms,
@@ -289,15 +344,16 @@ bool benchmark_variant(
         return false;
     }
 
-    const int rows = static_cast<int>(state.csr.rows);
-    const int cols = static_cast<int>(state.csr.cols);
+    const int rows = static_cast<int>(csr.rows);
+    const int cols = static_cast<int>(csr.cols);
     const SparseApplyXyzDeviceView scratch_vectors{
-        state.scratch_input,
-        state.scratch_input + cols,
-        state.scratch_input + 2 * cols,
-        state.scratch_output,
-        state.scratch_output + rows,
-        state.scratch_output + 2 * rows,
+        scratch_input,
+        scratch_input + cols,
+        scratch_input + 2 * cols,
+        scratch_output,
+        scratch_output + rows,
+        scratch_output + 2 * rows,
+        nullptr,
     };
     auto enqueue = [&]() {
         switch (variant) {
@@ -305,9 +361,9 @@ bool benchmark_variant(
         case SparseApplyVariant::Subwarp:
         case SparseApplyVariant::Warp:
             return sparse_apply_detail::launch_xyz_csr(
-                state.csr.row_offsets,
-                state.csr.col_indices,
-                state.csr.values,
+                csr.row_offsets,
+                csr.col_indices,
+                csr.values,
                 scratch_vectors.x,
                 scratch_vectors.y,
                 scratch_vectors.z,
@@ -316,12 +372,13 @@ bool benchmark_variant(
                 scratch_vectors.out_z,
                 rows,
                 variant,
-                stream);
+                stream,
+                scratch_vectors.active_mask);
 #if FULLMAG_HAS_CUSPARSE
         case SparseApplyVariant::CusparseSpmv:
-            return apply_spmv(state, scratch_vectors, stream, error);
+            return apply_spmv(scratch_vectors, stream, error);
         case SparseApplyVariant::CusparseSpmm3:
-            return apply_spmm3(state, stream, error);
+            return apply_spmm3(scratch_vectors, stream, error);
 #else
         case SparseApplyVariant::CusparseSpmv:
         case SparseApplyVariant::CusparseSpmm3:
@@ -368,8 +425,6 @@ bool benchmark_variant(
 
 #endif
 
-} // namespace
-
 SparseApplyPlan::SparseApplyPlan() noexcept
     : impl_(new (std::nothrow) Impl())
 {
@@ -381,7 +436,7 @@ SparseApplyPlan::~SparseApplyPlan()
         return;
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
-    release_cuda_state(*impl_);
+    impl_->release_cuda_state();
 #endif
     delete impl_;
     impl_ = nullptr;
@@ -497,7 +552,7 @@ bool SparseApplyPlan::setup(
             "cudaMemsetAsync sparse apply output scratch",
             error) ||
         !cuda_ok(cudaStreamSynchronize(stream), "synchronize sparse apply setup scratch", error)) {
-        release_cuda_state(*impl_);
+        impl_->release_cuda_state();
         return false;
     }
 
@@ -666,7 +721,7 @@ bool SparseApplyPlan::setup(
         // The custom CUDA variants remain valid.  The unavailable library
         // variants are kept explicitly unsupported and fail closed when
         // selected by a caller.
-        release_cuda_state(*impl_);
+        impl_->release_cuda_state();
         impl_->csr = csr;
         impl_->scratch_input_count = static_cast<std::size_t>(csr.cols) * 3u;
         impl_->scratch_output_count = static_cast<std::size_t>(csr.rows) * 3u;
@@ -682,7 +737,7 @@ bool SparseApplyPlan::setup(
                     impl_->scratch_output_count * sizeof(double)),
                 "cudaMalloc sparse apply output scratch after cuSPARSE failure",
                 error)) {
-            release_cuda_state(*impl_);
+            impl_->release_cuda_state();
             return false;
         }
         if (!cuda_ok(
@@ -693,7 +748,7 @@ bool SparseApplyPlan::setup(
                 cudaMemset(impl_->scratch_output, 0, impl_->scratch_output_count * sizeof(double)),
                 "cudaMemset sparse apply output scratch after cuSPARSE failure",
                 error)) {
-            release_cuda_state(*impl_);
+            impl_->release_cuda_state();
             return false;
         }
         impl_->supported[variant_index(SparseApplyVariant::ScalarRow)] = true;
@@ -715,7 +770,7 @@ bool SparseApplyPlan::setup(
         const auto variant = static_cast<SparseApplyVariant>(index);
         float elapsed_ms = 0.0f;
         std::string candidate_error;
-        if (!benchmark_variant(*impl_, variant, stream, elapsed_ms, candidate_error)) {
+        if (!impl_->benchmark_variant(variant, stream, elapsed_ms, candidate_error)) {
 #if FULLMAG_HAS_CUSPARSE
             if (variant == SparseApplyVariant::CusparseSpmv ||
                 variant == SparseApplyVariant::CusparseSpmm3) {
@@ -723,7 +778,7 @@ bool SparseApplyPlan::setup(
                 continue;
             }
 #endif
-            release_cuda_state(*impl_);
+            impl_->release_cuda_state();
             error = "sparse apply setup benchmark failed for " +
                 std::string(sparse_apply_variant_name(variant)) + ": " + candidate_error;
             return false;
@@ -739,7 +794,7 @@ bool SparseApplyPlan::setup(
         }
     }
     if (!have_benchmark) {
-        release_cuda_state(*impl_);
+        impl_->release_cuda_state();
         error = "sparse apply setup found no supported CUDA variant";
         return false;
     }
@@ -790,7 +845,8 @@ bool SparseApplyPlan::apply_xyz(
                 vectors.out_z,
                 static_cast<int>(impl_->csr.rows),
                 variant,
-                stream) ||
+                stream,
+                vectors.active_mask) ||
             !cuda_ok(cudaGetLastError(), "sparse apply custom kernel enqueue", error)) {
             if (error.empty()) {
                 error = "selected sparse custom variant rejected the device view";
@@ -800,7 +856,7 @@ bool SparseApplyPlan::apply_xyz(
         break;
     case SparseApplyVariant::CusparseSpmv:
 #if FULLMAG_HAS_CUSPARSE
-        if (!apply_spmv(*impl_, vectors, stream, error)) {
+        if (!impl_->apply_spmv(vectors, stream, error)) {
             return false;
         }
 #else
@@ -810,25 +866,7 @@ bool SparseApplyPlan::apply_xyz(
         break;
     case SparseApplyVariant::CusparseSpmm3:
 #if FULLMAG_HAS_CUSPARSE
-        sparse_apply_detail::launch_pack_xyz(
-            vectors.x,
-            vectors.y,
-            vectors.z,
-            impl_->scratch_input,
-            static_cast<int>(impl_->csr.cols),
-            stream);
-        if (!cuda_ok(cudaGetLastError(), "sparse apply XYZ pack enqueue", error) ||
-            !apply_spmm3(*impl_, stream, error)) {
-            return false;
-        }
-        sparse_apply_detail::launch_unpack_xyz(
-            impl_->scratch_output,
-            vectors.out_x,
-            vectors.out_y,
-            vectors.out_z,
-            static_cast<int>(impl_->csr.rows),
-            stream);
-        if (!cuda_ok(cudaGetLastError(), "sparse apply XYZ unpack enqueue", error)) {
+        if (!impl_->apply_spmm3(vectors, stream, error)) {
             return false;
         }
 #else

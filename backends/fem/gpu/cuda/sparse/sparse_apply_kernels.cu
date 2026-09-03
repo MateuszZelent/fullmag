@@ -392,15 +392,40 @@ __global__ void unpack_xyz_kernel(
     double *__restrict__ x,
     double *__restrict__ y,
     double *__restrict__ z,
-    int rows)
+    int rows,
+    const std::uint8_t *__restrict__ active_mask)
 {
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= rows) {
         return;
     }
+    if (active_mask != nullptr && active_mask[row] == 0u) {
+        x[row] = 0.0;
+        y[row] = 0.0;
+        z[row] = 0.0;
+        return;
+    }
     x[row] = packed[row];
     y[row] = packed[rows + row];
     z[row] = packed[2 * rows + row];
+}
+
+__global__ void mask_xyz_kernel(
+    double *__restrict__ x,
+    double *__restrict__ y,
+    double *__restrict__ z,
+    int rows,
+    const std::uint8_t *__restrict__ active_mask)
+{
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= rows || active_mask == nullptr) {
+        return;
+    }
+    if (active_mask[row] == 0u) {
+        x[row] = 0.0;
+        y[row] = 0.0;
+        z[row] = 0.0;
+    }
 }
 
 bool custom_variant(SparseApplyVariant variant)
@@ -543,7 +568,7 @@ bool launch_rhs_csr(
     return true;
 }
 
-void launch_pack_xyz(
+bool launch_pack_xyz(
     const double *x,
     const double *y,
     const double *z,
@@ -551,26 +576,48 @@ void launch_pack_xyz(
     int rows,
     cudaStream_t stream)
 {
-    if (rows <= 0) {
-        return;
+    if (rows <= 0 || x == nullptr || y == nullptr || z == nullptr || packed == nullptr) {
+        return false;
     }
     pack_xyz_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
         x, y, z, packed, rows);
+    return true;
 }
 
-void launch_unpack_xyz(
+bool launch_unpack_xyz(
     const double *packed,
     double *x,
     double *y,
     double *z,
     int rows,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const std::uint8_t *active_mask)
 {
-    if (rows <= 0) {
-        return;
+    if (rows <= 0 || packed == nullptr || x == nullptr || y == nullptr || z == nullptr) {
+        return false;
     }
     unpack_xyz_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        packed, x, y, z, rows);
+        packed, x, y, z, rows, active_mask);
+    return true;
+}
+
+bool launch_mask_xyz(
+    double *x,
+    double *y,
+    double *z,
+    int rows,
+    cudaStream_t stream,
+    const std::uint8_t *active_mask)
+{
+    if (rows <= 0 || x == nullptr || y == nullptr || z == nullptr) {
+        return false;
+    }
+    if (active_mask == nullptr) {
+        return true;
+    }
+    mask_xyz_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
+        x, y, z, rows, active_mask);
+    return true;
 }
 
 } // namespace fullmag::fem::sparse_apply_detail

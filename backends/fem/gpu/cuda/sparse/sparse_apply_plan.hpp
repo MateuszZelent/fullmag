@@ -50,6 +50,7 @@ struct SparseApplyXyzDeviceView {
     double *out_x = nullptr;
     double *out_y = nullptr;
     double *out_z = nullptr;
+    const std::uint8_t *active_mask = nullptr;
 };
 
 /*
@@ -60,8 +61,6 @@ struct SparseApplyXyzDeviceView {
  */
 class SparseApplyPlan {
 public:
-    struct Impl;
-
     SparseApplyPlan() noexcept;
     ~SparseApplyPlan();
 
@@ -89,6 +88,7 @@ public:
     std::uint64_t apply_count() const noexcept;
 
 private:
+    struct Impl;
     Impl *impl_ = nullptr;
 };
 
@@ -154,7 +154,7 @@ bool launch_rhs_csr(
     SparseApplyVariant variant,
     cudaStream_t stream);
 
-void launch_pack_xyz(
+bool launch_pack_xyz(
     const double *x,
     const double *y,
     const double *z,
@@ -162,13 +162,22 @@ void launch_pack_xyz(
     int rows,
     cudaStream_t stream);
 
-void launch_unpack_xyz(
+bool launch_unpack_xyz(
     const double *packed,
     double *x,
     double *y,
     double *z,
     int rows,
-    cudaStream_t stream);
+    cudaStream_t stream,
+    const std::uint8_t *active_mask = nullptr);
+
+bool launch_mask_xyz(
+    double *x,
+    double *y,
+    double *z,
+    int rows,
+    cudaStream_t stream,
+    const std::uint8_t *active_mask);
 
 } // namespace sparse_apply_detail
 #endif
