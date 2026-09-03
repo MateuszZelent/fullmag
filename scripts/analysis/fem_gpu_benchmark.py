@@ -809,6 +809,9 @@ def collect_case(
         raise ValueError(f"CPU oracle did not pass: {details}")
     if len(rows) < 5:
         raise ValueError("at least five measured repetitions are required")
+    repeat_indices = [as_int(row.get("repeat_index")) for row in rows]
+    if None in repeat_indices or len(set(repeat_indices)) != len(repeat_indices):
+        raise ValueError("measured repetitions require unique repeat_index values")
 
     identities: dict[str, str] = {}
     wall_times_ns: list[float] = []

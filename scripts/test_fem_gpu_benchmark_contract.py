@@ -118,6 +118,10 @@ class BenchmarkV2ContractTests(unittest.TestCase):
         self.assertEqual(record["wall_time_p50_ns"], 12_000_000)
         self.assertEqual(record["wall_time_p95_ns"], 14_000_000)
         self.assertEqual(record["trace_scope"], "setup_to_export")
+        duplicate = [dict(row) for row in self.rows]
+        duplicate[-1]["repeat_index"] = 0
+        with self.assertRaisesRegex(ValueError, "unique repeat_index"):
+            benchmark.collect_case(duplicate, cpu_oracle=self.oracle)
 
     def test_correctness_gate_runs_before_any_statistics_are_published(self) -> None:
         for field, expected in (
@@ -262,6 +266,7 @@ class ManagedRecipeContractTests(unittest.TestCase):
         self.assertIn("benchmark.v2.json", baseline)
         self.assertIn("--repeat 5", baseline)
         self.assertIn("--benchmark-v2-immutable", baseline)
+        self.assertIn("--gpu-host-thread-qualification-run", baseline)
         self.assertIn("NOT VERIFIED", baseline)
         self.assertIn("NOT VERIFIED", nsight_recipe)
         self.assertNotIn("lumped_exchange_mass_cg8", baseline)

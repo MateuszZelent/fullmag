@@ -4631,6 +4631,7 @@ capture-fem-gpu-pre-remediation-performance-baseline:
         --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
         --require-fixture-identity \
         --gpu-warmup \
+        --gpu-host-thread-qualification-run \
         --reuse-generated-domain-mesh \
         --require-stable-solver-mesh \
         --require-demag-converged \
