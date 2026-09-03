@@ -1,6 +1,5 @@
 #pragma once
 
-#include "context.hpp"
 #include "gpu/cuda/state/component_field.hpp"
 
 #include <cuda_runtime.h>
@@ -9,6 +8,8 @@
 #include <vector>
 
 namespace fullmag::fem {
+
+struct Context;
 
 enum class RkOutputControlField : uint32_t {
     None = 0,
@@ -86,6 +87,13 @@ void rk_candidate_state_destroy(
 bool rk_candidate_upload_m(
     RkCandidateState &candidate,
     const double *host_m,
+    uint64_t node_count,
+    cudaStream_t stream,
+    std::string &error);
+
+bool rk_candidate_capture_device(
+    RkCandidateState &candidate,
+    const FemGpuComponentField &source_m,
     uint64_t node_count,
     cudaStream_t stream,
     std::string &error);

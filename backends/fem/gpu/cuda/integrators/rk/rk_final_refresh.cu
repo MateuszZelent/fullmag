@@ -180,8 +180,8 @@ bool gpu_rk_finalize_accepted_step(
         return false;
     }
 
-    ctx.state.current_time += active_dt;
-    ctx.state.step_count += 1;
+    std::string commit_err;
+    commit_candidate(ctx, gpu.rk.candidate, stream, commit_err);
     stats.step = ctx.state.step_count;
     stats.time_seconds = ctx.state.current_time;
     stats.dt_seconds = active_dt;

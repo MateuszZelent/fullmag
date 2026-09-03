@@ -3,6 +3,7 @@
  */
 
 #include "gpu/cuda/integrators/rk/rk_output_control.hpp"
+#include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "fullmag_adaptive_step_decision.hpp"
@@ -105,40 +106,41 @@ bool rk_candidate_state_allocate(
 {
     rk_candidate_state_destroy(candidate);
     candidate.node_count = node_count;
-    candidate.host_m.assign(static_cast<size_t>(node_count) * 3u, 0.0);
+    candidate.host_m.clear();
 
     const size_t bytes = static_cast<size_t>(node_count) * sizeof(double);
     cudaError_t rc = cudaMalloc(&candidate.m_candidate.x, bytes);
     if (rc != cudaSuccess) {
-        // Fallback or record error if CUDA failed
-        candidate.m_candidate.x = nullptr;
+        error = std::string("cudaMalloc candidate.m_candidate.x failed: ") + cudaGetErrorString(rc);
+        rk_candidate_state_destroy(candidate);
+        return false;
     }
-    if (candidate.m_candidate.x != nullptr) {
-        rc = cudaMalloc(&candidate.m_candidate.y, bytes);
-        if (rc != cudaSuccess) {
-            error = "cudaMalloc candidate.y failed";
-            rk_candidate_state_destroy(candidate);
-            return false;
-        }
-        rc = cudaMalloc(&candidate.m_candidate.z, bytes);
-        if (rc != cudaSuccess) {
-            error = "cudaMalloc candidate.z failed";
-            rk_candidate_state_destroy(candidate);
-            return false;
-        }
-        rc = cudaMalloc(&candidate.d_slots, 2 * sizeof(RkDecisionSlot));
-        if (rc != cudaSuccess) {
-            error = "cudaMalloc candidate.d_slots failed";
-            rk_candidate_state_destroy(candidate);
-            return false;
-        }
-        cudaMemset(candidate.d_slots, 0, 2 * sizeof(RkDecisionSlot));
+    rc = cudaMalloc(&candidate.m_candidate.y, bytes);
+    if (rc != cudaSuccess) {
+        error = std::string("cudaMalloc candidate.m_candidate.y failed: ") + cudaGetErrorString(rc);
+        rk_candidate_state_destroy(candidate);
+        return false;
     }
+    rc = cudaMalloc(&candidate.m_candidate.z, bytes);
+    if (rc != cudaSuccess) {
+        error = std::string("cudaMalloc candidate.m_candidate.z failed: ") + cudaGetErrorString(rc);
+        rk_candidate_state_destroy(candidate);
+        return false;
+    }
+    rc = cudaMalloc(&candidate.d_slots, 2 * sizeof(RkDecisionSlot));
+    if (rc != cudaSuccess) {
+        error = std::string("cudaMalloc candidate.d_slots failed: ") + cudaGetErrorString(rc);
+        rk_candidate_state_destroy(candidate);
+        return false;
+    }
+    cudaMemset(candidate.d_slots, 0, 2 * sizeof(RkDecisionSlot));
+
     candidate.active_slot = 0;
     candidate.candidate_version = 0;
     candidate.accepted_version = 0;
     candidate.candidate_valid = false;
     candidate.fsal_valid = false;
+    error.clear();
     return true;
 }
 
@@ -177,7 +179,7 @@ bool rk_candidate_upload_m(
         error = "invalid upload pointer or node count";
         return false;
     }
-    std::memcpy(candidate.host_m.data(), host_m, static_cast<size_t>(node_count) * 3u * sizeof(double));
+    candidate.host_m.assign(host_m, host_m + static_cast<size_t>(node_count) * 3u);
 
     if (candidate.m_candidate.x != nullptr) {
         std::vector<double> hx(node_count), hy(node_count), hz(node_count);
@@ -193,10 +195,33 @@ bool rk_candidate_upload_m(
         if (rc != cudaSuccess) { error = "cudaMemcpyAsync candidate.y failed"; return false; }
         rc = cudaMemcpyAsync(candidate.m_candidate.z, hz.data(), bytes, cudaMemcpyHostToDevice, stream);
         if (rc != cudaSuccess) { error = "cudaMemcpyAsync candidate.z failed"; return false; }
-        if (stream == nullptr) {
-            cudaStreamSynchronize(nullptr);
-        }
     }
+    return true;
+}
+
+bool rk_candidate_capture_device(
+    RkCandidateState &candidate,
+    const FemGpuComponentField &source_m,
+    uint64_t node_count,
+    cudaStream_t stream,
+    std::string &error)
+{
+    if (node_count != candidate.node_count || candidate.m_candidate.x == nullptr) {
+        error = "candidate unallocated or dimension mismatch";
+        return false;
+    }
+    if (!gpu_rk_copy_component_device(
+            source_m,
+            candidate.m_candidate,
+            static_cast<int>(node_count),
+            stream,
+            "rk_candidate_capture_device",
+            error)) {
+        return false;
+    }
+    candidate.candidate_valid = true;
+    candidate.candidate_version += 1;
+    error.clear();
     return true;
 }
 
@@ -211,7 +236,7 @@ bool commit_candidate(
         if (!gpu_rk_copy_component_device(
                 candidate.m_candidate,
                 gpu.magnetization.m,
-                candidate.node_count,
+                static_cast<int>(candidate.node_count),
                 stream,
                 "commit_candidate device copy",
                 error)) {
@@ -231,6 +256,7 @@ bool commit_candidate(
     if (candidate.fsal_valid) {
         gpu.rk.fsal_valid = true;
     }
+    error.clear();
     return true;
 }
 
@@ -242,10 +268,10 @@ bool rollback_candidate(
 {
     (void)ctx;
     (void)stream;
-    (void)error;
     candidate.candidate_valid = false;
     candidate.fsal_valid = false;
     candidate.receipt.rejected_attempt_count += 1;
+    error.clear();
     return true;
 }
 

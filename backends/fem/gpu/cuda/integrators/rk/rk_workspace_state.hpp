@@ -10,6 +10,7 @@
 
 #include "gpu/cuda/state/component_field.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_control_state.hpp"
+#include "gpu/cuda/integrators/rk/rk_output_control.hpp"
 
 #include <array>
 #include <cstdint>
@@ -38,6 +39,7 @@ struct FemGpuRkWorkspaceDeviceState {
     // Derived fields and Poisson iterates are invalidated after rollback.
     FemGpuComponentField transaction_m;
     FemGpuComponentField transaction_k0;
+    RkCandidateState candidate{};
 };
 
 } // namespace fullmag::fem

@@ -232,6 +232,8 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                     return false;
                 }
+                std::string rb_err;
+                rollback_candidate(ctx, gpu.rk.candidate, stream, rb_err);
                 reason = std::string("GPU adaptive RK decision failed: ") +
                     adaptive::adaptive_decision_reason_id(adaptive_result.reason);
                 return false;
@@ -244,6 +246,8 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!rk_restore_active_step_device_checkpoint(ctx, reason)) {
                     return false;
                 }
+                std::string rb_err;
+                rollback_candidate(ctx, gpu.rk.candidate, stream, rb_err);
                 gpu.rk.fsal_valid = false;
                 active_dt = adaptive_result.dt_next;
                 ctx.base_plan.dt_seconds = active_dt;
@@ -299,6 +303,18 @@ bool gpu_rk_run_accepted_attempt_loop(
             // Keep the endpoint token alive until accepted-step finalization
             // consumes k6.  The copy makes the authoritative state bitwise
             // identical to the normalized endpoint used for that RHS.
+        }
+        gpu.rk.candidate.dt = active_dt;
+        gpu.rk.candidate.time = ctx.state.current_time + active_dt;
+        gpu.rk.candidate.candidate_valid = true;
+        if (gpu.rk.candidate.m_candidate.x != nullptr && gpu.magnetization.m.x != nullptr) {
+            std::string cap_err;
+            rk_candidate_capture_device(
+                gpu.rk.candidate,
+                gpu.magnetization.m,
+                gpu.lifecycle.node_count,
+                stream,
+                cap_err);
         }
         performance_attempt.release();
         receipt_attempt.release();

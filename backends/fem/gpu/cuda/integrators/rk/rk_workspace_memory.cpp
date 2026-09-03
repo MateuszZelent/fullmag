@@ -34,11 +34,18 @@ bool gpu_rk_workspace_allocate(
             return false;
         }
     }
-    return gpu_device_allocate_component(
-               rk.transaction_m, node_count, device_bytes, error) &&
-        gpu_device_allocate_component(
-            rk.transaction_k0, node_count, device_bytes, error) &&
-        gpu_rk_attempt_control_allocate(rk.attempt_control, device_bytes, error);
+    if (!gpu_device_allocate_component(
+               rk.transaction_m, node_count, device_bytes, error) ||
+        !gpu_device_allocate_component(
+            rk.transaction_k0, node_count, device_bytes, error) ||
+        !gpu_rk_attempt_control_allocate(rk.attempt_control, device_bytes, error)) {
+        return false;
+    }
+    if (!rk_candidate_state_allocate(rk.candidate, node_count, error)) {
+        return false;
+    }
+    device_bytes += static_cast<uint64_t>(node_count) * 3u * sizeof(double) + 2u * sizeof(RkDecisionSlot);
+    return true;
 }
 
 void gpu_rk_workspace_free(FemGpuRkWorkspaceDeviceState &rk)
@@ -52,6 +59,7 @@ void gpu_rk_workspace_free(FemGpuRkWorkspaceDeviceState &rk)
     gpu_device_free_component(rk.transaction_m);
     gpu_device_free_component(rk.transaction_k0);
     gpu_rk_attempt_control_free(rk.attempt_control);
+    rk_candidate_state_destroy(rk.candidate);
 }
 
 } // namespace fullmag::fem

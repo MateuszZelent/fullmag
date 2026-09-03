@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <vector>
 
 namespace {
@@ -206,6 +207,58 @@ void test_device_controller_golden_vectors() {
     }
 }
 
+void test_device_candidate_capture_and_fail_closed_allocation() {
+    using namespace fullmag::fem;
+    // Verify source assertions: no cudaStreamSynchronize in rk_output_control.cu
+    std::ifstream file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_output_control.cu");
+    if (!file.is_open()) {
+        file.open("backends/fem/gpu/cuda/integrators/rk/rk_output_control.cu");
+    }
+    if (!file.is_open()) {
+        file.open("../backends/fem/gpu/cuda/integrators/rk/rk_output_control.cu");
+    }
+    check(file.is_open(), "unable to open rk_output_control.cu");
+    std::string src((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    check(src.find("cudaStreamSynchronize") == std::string::npos,
+          "rk_output_control.cu must not contain cudaStreamSynchronize calls");
+    check(src.find("rk_candidate_capture_device") != std::string::npos,
+          "rk_output_control.cu must provide rk_candidate_capture_device");
+
+    // Verify candidate capture device-to-device
+    RkCandidateState candidate{};
+    std::string error;
+    check(rk_candidate_state_allocate(candidate, 4, error), "allocate candidate 4");
+
+    FemGpuComponentField dev_m{};
+    check(cudaMalloc(&dev_m.x, 4 * sizeof(double)) == cudaSuccess, "alloc dev_m.x");
+    check(cudaMalloc(&dev_m.y, 4 * sizeof(double)) == cudaSuccess, "alloc dev_m.y");
+    check(cudaMalloc(&dev_m.z, 4 * sizeof(double)) == cudaSuccess, "alloc dev_m.z");
+
+    std::vector<double> hx = {1.0, 2.0, 3.0, 4.0};
+    std::vector<double> hy = {5.0, 6.0, 7.0, 8.0};
+    std::vector<double> hz = {9.0, 10.0, 11.0, 12.0};
+    cudaMemcpy(dev_m.x, hx.data(), 4 * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_m.y, hy.data(), 4 * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_m.z, hz.data(), 4 * sizeof(double), cudaMemcpyHostToDevice);
+
+    check(rk_candidate_capture_device(candidate, dev_m, 4, nullptr, error), "capture device m");
+    check(candidate.candidate_valid, "candidate is marked valid after capture");
+    check(candidate.candidate_version == 1, "candidate version incremented");
+
+    std::vector<double> out_x(4), out_y(4), out_z(4);
+    cudaMemcpy(out_x.data(), candidate.m_candidate.x, 4 * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(out_y.data(), candidate.m_candidate.y, 4 * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(out_z.data(), candidate.m_candidate.z, 4 * sizeof(double), cudaMemcpyDeviceToHost);
+    check(out_x == hx, "captured x matches source");
+    check(out_y == hy, "captured y matches source");
+    check(out_z == hz, "captured z matches source");
+
+    cudaFree(dev_m.x);
+    cudaFree(dev_m.y);
+    cudaFree(dev_m.z);
+    rk_candidate_state_destroy(candidate);
+}
+
 } // namespace
 
 int main() {
@@ -214,6 +267,7 @@ int main() {
     test_double_buffered_decision_slots();
     test_output_control_mask();
     test_device_controller_golden_vectors();
+    test_device_candidate_capture_and_fail_closed_allocation();
     std::printf("PASS: gpu_rk_device_controller_contract\n");
     return 0;
 }
