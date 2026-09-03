@@ -3,9 +3,9 @@ import type { ComponentPropsWithRef, ReactNode } from "react";
 import { cn } from "@/shared/utils/className";
 
 export interface EmptyStateProps extends ComponentPropsWithRef<"section"> {
-  /** Small decorative icon or glyph rendered above the title. */
+  /** Small decorative icon or glyph rendered above the heading. */
   icon?: ReactNode;
-  title: ReactNode;
+  heading: ReactNode;
   description?: ReactNode;
   /** Typically a <Button/>. */
   action?: ReactNode;
@@ -19,7 +19,7 @@ export interface EmptyStateProps extends ComponentPropsWithRef<"section"> {
  */
 export function EmptyState({
   icon,
-  title,
+  heading,
   description,
   action,
   className,
@@ -32,7 +32,7 @@ export function EmptyState({
       {...props}
     >
       {icon ? <div className="fm-empty-state__icon">{icon}</div> : null}
-      <p className="fm-empty-state__title">{title}</p>
+      <p className="fm-empty-state__title">{heading}</p>
       {description ? (
         <p className="fm-empty-state__description">{description}</p>
       ) : null}
