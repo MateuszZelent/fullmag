@@ -30,6 +30,29 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &error)
     error = std::string(operation) + " failed: " + cudaGetErrorString(rc);
     return false;
 }
+
+uint64_t compute_geometry_fingerprint(
+    const double *nodes_xyz,
+    size_t node_count,
+    const uint32_t *elements,
+    size_t element_count,
+    const uint8_t *mask)
+{
+    uint64_t h = 0xcbf29ce484222325ULL;
+    auto mix = [&](const void *data, size_t bytes) {
+        const uint8_t *p = static_cast<const uint8_t *>(data);
+        for (size_t i = 0; i < bytes; ++i) {
+            h ^= static_cast<uint64_t>(p[i]);
+            h *= 0x100000001b3ULL;
+        }
+    };
+    mix(nodes_xyz, node_count * 3 * sizeof(double));
+    mix(elements, element_count * 4 * sizeof(uint32_t));
+    if (mask != nullptr) {
+        mix(mask, element_count * sizeof(uint8_t));
+    }
+    return h;
+}
 #endif
 
 } // namespace
@@ -104,7 +127,10 @@ bool gpu_mesh_geometry_upload(
     record_host_to_device(audit, static_cast<uint64_t>(nodes_bytes + elements_bytes + mask_bytes));
     mesh_geometry.element_count = element_count;
     mesh_geometry.uploaded = true;
-    const uint64_t mesh_version = static_cast<uint64_t>(element_count) ^ (static_cast<uint64_t>(lifecycle.node_count) << 32);
+    const uint64_t mesh_version = compute_geometry_fingerprint(
+        nodes_xyz, static_cast<size_t>(lifecycle.node_count),
+        elements, static_cast<size_t>(element_count),
+        element_mask.data());
     if (!mesh_geometry.dmi_cache.build(
             mesh_geometry.nodes_xyz,
             mesh_geometry.elements,

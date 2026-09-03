@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <vector>
 
 namespace {
@@ -530,6 +531,41 @@ void test_aca_batching()
     std::printf("PASS: ACA far apply batching parity\n");
 }
 
+void test_dmi_geometry_cache_invalidation_and_coloring_qualification()
+{
+    std::printf("--- test_dmi_geometry_cache_invalidation_and_coloring_qualification ---\n");
+    // Verify source assertions on geometry fingerprint and coloring qualification
+    std::ifstream upload_file("/workspace/backends/fem/gpu/cuda/mesh/mesh_geometry_upload.cpp");
+    if (!upload_file.is_open()) {
+        upload_file.open("backends/fem/gpu/cuda/mesh/mesh_geometry_upload.cpp");
+    }
+    if (!upload_file.is_open()) {
+        upload_file.open("../backends/fem/gpu/cuda/mesh/mesh_geometry_upload.cpp");
+    }
+    check(upload_file.is_open(), "unable to open mesh_geometry_upload.cpp");
+    std::string upload_src((std::istreambuf_iterator<char>(upload_file)), std::istreambuf_iterator<char>());
+    check(upload_src.find("compute_geometry_fingerprint") != std::string::npos,
+          "mesh_geometry_upload must use compute_geometry_fingerprint for mesh_version");
+    check(upload_src.find("static_cast<uint64_t>(element_count) ^ (static_cast<uint64_t>(lifecycle.node_count) << 32)") == std::string::npos,
+          "mesh_geometry_upload must not use naive node/element count XOR for mesh_version");
+
+    std::ifstream cache_file("/workspace/backends/fem/gpu/cuda/interactions/dmi/dmi_geometry_cache.cu");
+    if (!cache_file.is_open()) {
+        cache_file.open("backends/fem/gpu/cuda/interactions/dmi/dmi_geometry_cache.cu");
+    }
+    if (!cache_file.is_open()) {
+        cache_file.open("../backends/fem/gpu/cuda/interactions/dmi/dmi_geometry_cache.cu");
+    }
+    check(cache_file.is_open(), "unable to open dmi_geometry_cache.cu");
+    std::string cache_src((std::istreambuf_iterator<char>(cache_file)), std::istreambuf_iterator<char>());
+    check(cache_src.find("num_colors <= 32") != std::string::npos,
+          "dmi_geometry_cache must qualify coloring with num_colors threshold");
+    check(cache_src.find("cudaMemcpyAsync") != std::string::npos &&
+          cache_src.find("cpy_off == cudaSuccess && cpy_elem == cudaSuccess") != std::string::npos,
+          "dmi_geometry_cache must check cudaMemcpyAsync error codes");
+    std::printf("PASS: DMI geometry cache invalidation and coloring qualification verified\n");
+}
+
 } // namespace
 
 int main()
@@ -537,6 +573,7 @@ int main()
     test_dmi_geometry_cache();
     test_effective_field_fusion();
     test_aca_batching();
+    test_dmi_geometry_cache_invalidation_and_coloring_qualification();
     std::printf("ALL GPU OPERATOR FUSION CONTRACT TESTS PASSED\n");
     return 0;
 }
