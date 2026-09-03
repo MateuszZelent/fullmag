@@ -69,11 +69,44 @@ HOST_NVTX_RANGES = (
     "fem.host.callback",
     "fem.host.publish",
 )
+TRACE_PHASE_RANGES = {
+    "setup": ("fem.gpu.setup",),
+    "attempt": ("fem.relax.ncg.step",),
+    "accepted_finalization": ("fem.gpu.accepted_finalization",),
+    "snapshot": ("fem.preview.snapshot",),
+    "export": ("fem.host.publish",),
+}
 NCU_SECTIONS = ("LaunchStats", "Occupancy", "SpeedOfLight", "WarpStateStats")
 NCU_TIMEOUT_SECONDS = 120
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def trace_phase_failures(observed_ranges: Iterable[str]) -> list[str]:
+    observed = set(observed_ranges)
+    return [
+        f"{phase} trace phase is missing"
+        for phase, candidates in TRACE_PHASE_RANGES.items()
+        if not observed.intersection(candidates)
+    ]
+
+
+def not_verified_payload(
+    *, run_id: str, blockers: Sequence[object]
+) -> dict[str, object]:
+    return {
+        "schema": "fullmag.fem_gpu.nsight_capture.v1",
+        "status": "unavailable",
+        "qualification_status": "NOT VERIFIED",
+        "run_id": run_id,
+        "trace_scope": {
+            "from": "setup",
+            "through": "export",
+            "phases": list(TRACE_PHASE_RANGES),
+        },
+        "blockers": [str(value) for value in blockers],
+    }
 
 
 def _run_text(
@@ -1167,8 +1200,7 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
     }
     fixture_block.update(_fixture_mesh_counts(fixture_identity))
     base: dict[str, object] = {
-        "schema": "fullmag.fem_gpu.nsight_capture.v1",
-        "run_id": args.run_id,
+        **not_verified_payload(run_id=args.run_id, blockers=[]),
         "preflight": preflight,
         "bundle": bundle,
         "fixture": fixture_block,
@@ -1284,6 +1316,7 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
         blockers.append("compute NVTX ranges missing: " + ", ".join(missing_compute))
     if missing_host:
         blockers.append("host NVTX ranges missing: " + ", ".join(missing_host))
+    blockers.extend(trace_phase_failures(compute_observed | host_observed))
     if len(top_five) != 5:
         blockers.append(f"compute nsys reported only {len(top_five)} unique kernels")
     ncu_access_probe = run_ncu_access_probe(
@@ -1379,6 +1412,7 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
         return 1
     base.update(
         status="captured",
+        qualification_status="VERIFIED",
         blockers=[],
         metrics=metrics,
         interactive_identity=interactive_identity,
@@ -1410,20 +1444,36 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument(
+        "--record-not-verified",
+        default=None,
+        help="Write an explicit NOT VERIFIED capture summary without profiling",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.record_not_verified is not None:
+        write_summary_artifacts(
+            args.output_dir / args.run_id,
+            not_verified_payload(
+                run_id=args.run_id,
+                blockers=[args.record_not_verified],
+            ),
+        )
+        print("qualification_status=NOT VERIFIED", file=sys.stderr)
+        return 2
     preflight = preflight_tools()
     if args.preflight_only:
         output_dir = args.output_dir / args.run_id
         payload = {
-            "schema": "fullmag.fem_gpu.nsight_capture.v1",
+            **not_verified_payload(
+                run_id=args.run_id,
+                blockers=preflight["blockers"],
+            ),
             "status": preflight["status"],
-            "run_id": args.run_id,
             "preflight": preflight,
-            "blockers": preflight["blockers"],
         }
         if (args.runtime_root / "manifest.json").is_file():
             payload["bundle"] = collect_bundle_identity(args.runtime_root)

@@ -11,7 +11,10 @@ import json
 import math
 import os
 import re
-import resource
+try:
+    import resource
+except ModuleNotFoundError:  # Windows supports the source-only NOT VERIFIED path.
+    resource = None  # type: ignore[assignment]
 import shutil
 import statistics
 import struct
@@ -214,12 +217,17 @@ SUPPORTED_RELAXATION_ALGORITHMS = (
     "nonlinear_cg",
     "tangent_plane_implicit",
 )
-RELAXATION_PRECONDITIONER_STRATEGIES = (
-    "none",
-    "diagonal_mass",
-    "lumped_exchange_mass_cg4",
-    "lumped_exchange_mass_cg8",
-    "stagnation_triggered_cg8",
+RELAXATION_PRECONDITIONER_RUNTIME_NAMES = {
+    "none": "none",
+    "diagonal": "diagonal",
+    # Task 10 enables the matching C++ runtime kind. Until then the public
+    # vocabulary is reserved but deliberately unavailable to the CLI.
+    "exchange_mass": None,
+}
+RELAXATION_PRECONDITIONER_STRATEGIES = tuple(
+    strategy
+    for strategy, runtime_name in RELAXATION_PRECONDITIONER_RUNTIME_NAMES.items()
+    if runtime_name is not None
 )
 RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES = ("coarse", "medium", "fine")
 RELAXATION_PRECONDITIONER_REQUIRED_REPEATS = 5
@@ -665,6 +673,257 @@ def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
     }
 
 
+BENCHMARK_V2_SCHEMA = "fullmag.fem_gpu.benchmark.v2"
+PERFORMANCE_SNAPSHOT_V2_SCHEMA = "fullmag.fem_gpu_performance_snapshot.v2"
+BENCHMARK_V2_IDENTITY_FIELDS = {
+    "runtime_git_commit": "source_commit",
+    "runtime_source_snapshot_sha256": "source_snapshot_sha256",
+    "runtime_manifest_sha256": "runtime_manifest_sha256",
+    "executed_problem_ir_sha256": "problem_ir_sha256",
+    "solver_mesh_sha256": "mesh_sha256",
+    "device_uuid": "gpu_uuid",
+    "reported_precision": "precision",
+}
+BENCHMARK_V2_COUNTER_FIELDS = (
+    "setup_count",
+    "apply_count",
+    "compute_fence_count",
+    "kernel_launch_count",
+)
+
+
+def _benchmark_v2_oracle(cpu_oracle: object) -> tuple[object, Sequence[object]]:
+    if isinstance(cpu_oracle, Mapping):
+        failures = cpu_oracle.get("failures", [])
+        if not isinstance(failures, Sequence) or isinstance(failures, (str, bytes)):
+            failures = [failures]
+        return cpu_oracle.get("status"), failures
+    return getattr(cpu_oracle, "status", None), getattr(cpu_oracle, "failures", ())
+
+
+def _canonical_digest(value: object, *, field: str, length: int) -> str:
+    text = str(value or "")
+    if len(text) != length or any(
+        character not in "0123456789abcdef" for character in text
+    ):
+        raise ValueError(f"{field} must be a canonical lowercase hexadecimal digest")
+    return text
+
+
+def _benchmark_v2_receipt(row: Mapping[str, object]) -> Mapping[str, object]:
+    receipt = row.get("fem_gpu_execution_receipt")
+    if not isinstance(receipt, Mapping):
+        raise ValueError("FEM GPU execution receipt is missing or incomplete")
+    required = as_int(receipt.get("required_operator_mask"))
+    resolved_device = as_int(receipt.get("resolved_device_operator_mask"))
+    executed_device = as_int(receipt.get("executed_device_operator_mask"))
+    if receipt.get("requested") != "gpu":
+        raise ValueError("execution receipt requested must be gpu")
+    if receipt.get("resolved") != "device_resident":
+        raise ValueError("execution receipt resolved must be device_resident")
+    if receipt.get("execution_class") != "device_resident":
+        raise ValueError("execution receipt execution_class must be device_resident")
+    if not isinstance(receipt.get("executed"), str) or not receipt.get("executed"):
+        raise ValueError("execution receipt executed identity is missing")
+    for field in (
+        "device_ordinal",
+        "rejected_attempt_count",
+        "failed_attempt_count",
+    ):
+        if as_int(receipt.get(field)) is None or as_int(receipt.get(field)) < 0:
+            raise ValueError(f"execution receipt {field} is missing or invalid")
+    for field in ("precision", "integrator"):
+        if not isinstance(receipt.get(field), str) or not receipt.get(field):
+            raise ValueError(f"execution receipt {field} is missing")
+    if receipt.get("precision") != row.get("reported_precision"):
+        raise ValueError("execution receipt precision differs from reported_precision")
+    if (
+        required is None
+        or required <= 0
+        or resolved_device != required
+        or executed_device != required
+    ):
+        raise ValueError("execution receipt operator masks are incomplete")
+    for field in (
+        "resolved_host_operator_mask",
+        "resolved_unknown_operator_mask",
+        "executed_host_operator_mask",
+        "executed_unknown_operator_mask",
+        "fallback_count",
+        "hot_loop_compute_h2d_bytes",
+        "hot_loop_compute_d2h_bytes",
+        "hot_loop_compute_host_sync_count",
+    ):
+        if as_int(receipt.get(field)) != 0:
+            raise ValueError(f"execution receipt {field} must be zero")
+    if (as_int(receipt.get("accepted_step_count")) or 0) <= 0:
+        raise ValueError("execution receipt accepted_step_count must be positive")
+    if receipt.get("accounting_valid") is not True:
+        raise ValueError("execution receipt accounting_valid must be true")
+    return receipt
+
+
+def _benchmark_v2_snapshot(row: Mapping[str, object]) -> Mapping[str, object]:
+    snapshot = row.get("fem_gpu_performance_snapshot_v2")
+    if not isinstance(snapshot, Mapping):
+        raise ValueError("FEM GPU performance snapshot v2 is missing")
+    if as_int(snapshot.get("abi_version")) != 2 or as_int(
+        snapshot.get("struct_size")
+    ) != 88:
+        raise ValueError("FEM GPU performance snapshot v2 ABI is invalid")
+    for field in (
+        *BENCHMARK_V2_COUNTER_FIELDS,
+        "snapshot_fence_count",
+        "export_fence_count",
+        "selected_sparse_kernel_id",
+        "setup_wall_time_ns",
+        "apply_wall_time_ns",
+        "accepted_finalization_wall_time_ns",
+    ):
+        if as_int(snapshot.get(field)) is None or as_int(snapshot.get(field)) < 0:
+            raise ValueError(f"performance snapshot {field} must be a non-negative integer")
+    if as_int(snapshot.get("compute_fence_count")) != 0:
+        raise ValueError("performance snapshot compute_fence_count must be zero")
+    if as_int(snapshot.get("setup_count")) != 1:
+        raise ValueError("performance snapshot setup_count must equal one")
+    for field in (
+        "apply_count",
+        "kernel_launch_count",
+        "snapshot_fence_count",
+        "export_fence_count",
+    ):
+        if (as_int(snapshot.get(field)) or 0) <= 0:
+            raise ValueError(f"performance snapshot {field} must be positive")
+    return snapshot
+
+
+def collect_case(
+    rows: Sequence[Mapping[str, object]], *, cpu_oracle: object
+) -> dict[str, object]:
+    """Validate one exact GPU case before calculating any timing statistic."""
+    oracle_status, oracle_failures = _benchmark_v2_oracle(cpu_oracle)
+    if oracle_status != "checked" or oracle_failures:
+        details = "; ".join(str(value) for value in oracle_failures) or str(
+            oracle_status
+        )
+        raise ValueError(f"CPU oracle did not pass: {details}")
+    if len(rows) < 5:
+        raise ValueError("at least five measured repetitions are required")
+
+    identities: dict[str, str] = {}
+    wall_times_ns: list[float] = []
+    counters: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        if row.get("status") != "ok" or row.get("backend") != "fem_gpu":
+            raise ValueError(f"repeat {index} is not a completed fem_gpu run")
+        for source_field, output_field in BENCHMARK_V2_IDENTITY_FIELDS.items():
+            raw = row.get(source_field)
+            if source_field == "runtime_git_commit":
+                value = _canonical_digest(raw, field=output_field, length=40)
+            elif source_field.endswith("sha256"):
+                value = _canonical_digest(raw, field=output_field, length=64)
+            else:
+                value = str(raw or "").strip()
+                if not value:
+                    raise ValueError(f"{output_field} must be present")
+            prior = identities.setdefault(output_field, value)
+            if prior != value:
+                raise ValueError(f"{output_field} differs across measured repetitions")
+
+        _benchmark_v2_receipt(row)
+        snapshot = _benchmark_v2_snapshot(row)
+        for field in BENCHMARK_V2_COUNTER_FIELDS:
+            value = as_int(snapshot.get(field))
+            assert value is not None
+            prior = counters.setdefault(field, value)
+            if prior != value:
+                raise ValueError(f"performance snapshot {field} differs across repetitions")
+        wall_time_ms = as_float(row.get("wall_time_ms"))
+        if wall_time_ms is None or not math.isfinite(wall_time_ms) or wall_time_ms <= 0.0:
+            raise ValueError("wall_time_ms must be positive and finite")
+        wall_times_ns.append(round(wall_time_ms * 1_000_000.0))
+
+    distribution = summarize_distribution(wall_times_ns)
+    return {
+        **identities,
+        **counters,
+        "wall_time_p50_ns": int(distribution["p50"]),
+        "wall_time_p95_ns": int(distribution["p95"]),
+        "measured_repetitions": len(rows),
+        "trace_scope": "setup_to_export",
+    }
+
+
+def build_benchmark_v2(
+    rows: Sequence[Mapping[str, object]], *, cpu_oracle: object
+) -> dict[str, object]:
+    grouped: dict[tuple[object, ...], list[Mapping[str, object]]] = {}
+    for row in rows:
+        if row.get("backend") == "fem_gpu":
+            grouped.setdefault(repeated_case_key(row), []).append(row)
+    blockers: list[str] = []
+    records: list[dict[str, object]] = []
+    if not grouped:
+        blockers.append("no FEM GPU benchmark cases were produced")
+    for case, case_rows in grouped.items():
+        try:
+            records.append(collect_case(case_rows, cpu_oracle=cpu_oracle))
+        except ValueError as exc:
+            blockers.append(f"case={case}: {exc}")
+    if blockers:
+        records = []
+    return {
+        "schema": BENCHMARK_V2_SCHEMA,
+        "qualification_status": "VERIFIED" if records else "NOT VERIFIED",
+        "correctness_gate": "pass" if records else "fail",
+        "trace_scope": "setup_to_export",
+        "records": records,
+        "blockers": blockers,
+    }
+
+
+def not_verified_benchmark_v2(blocker: str) -> dict[str, object]:
+    return {
+        "schema": BENCHMARK_V2_SCHEMA,
+        "qualification_status": "NOT VERIFIED",
+        "correctness_gate": "not_run",
+        "trace_scope": "setup_to_export",
+        "records": [],
+        "blockers": [blocker],
+    }
+
+
+def write_benchmark_v2(
+    payload: Mapping[str, object], *, json_path: Path, csv_path: Path, immutable: bool
+) -> None:
+    if immutable and (json_path.exists() or csv_path.exists()):
+        raise FileExistsError("immutable FEM GPU benchmark v2 artifact already exists")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    records = payload.get("records")
+    csv_rows = list(records) if isinstance(records, list) else []
+    with json_path.open(
+        "x" if immutable else "w", encoding="utf-8"
+    ) as handle:
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    fieldnames = (
+        list(csv_rows[0])
+        if csv_rows
+        else [
+            *BENCHMARK_V2_IDENTITY_FIELDS.values(),
+            "wall_time_p50_ns",
+            "wall_time_p95_ns",
+            *BENCHMARK_V2_COUNTER_FIELDS,
+            "measured_repetitions",
+            "trace_scope",
+        ]
+    )
+    with csv_path.open("x" if immutable else "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(csv_rows)
+
+
 def accepted_energy_trajectory_gate(
     row: Mapping[str, object],
 ) -> tuple[bool, str]:
@@ -724,19 +983,12 @@ def relaxation_preconditioner_row_failures(
     iterations = as_int(row.get("relaxation_preconditioner_iterations"))
     allowed_iterations = {
         "none": {0},
-        "diagonal_mass": {0},
-        "lumped_exchange_mass_cg4": {4},
-        "lumped_exchange_mass_cg8": {8},
-        "stagnation_triggered_cg8": {0, 8},
+        "diagonal": {0},
     }[expected_strategy]
     if iterations not in allowed_iterations:
         failures.append(
             f"resolved iteration count {iterations!r} is not one of {sorted(allowed_iterations)}"
         )
-    if expected_strategy == "stagnation_triggered_cg8":
-        apply_count = as_int(row.get("relaxation_preconditioner_apply_count"))
-        if apply_count is None or apply_count <= 0:
-            failures.append("stagnation-triggered strategy never applied CG8")
     lambda_m_per_a = as_float(row.get("relaxation_preconditioner_lambda_m_per_a"))
     if (
         lambda_m_per_a is None
@@ -4476,6 +4728,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Output CSV path",
     )
     parser.add_argument(
+        "--benchmark-v2-output",
+        type=Path,
+        default=None,
+        help="Source-bound fullmag.fem_gpu.benchmark.v2 JSON output",
+    )
+    parser.add_argument(
+        "--benchmark-v2-csv-output",
+        type=Path,
+        default=None,
+        help="CSV projection of source-bound benchmark v2 p50/p95 records",
+    )
+    parser.add_argument(
+        "--benchmark-v2-immutable",
+        action="store_true",
+        help="Refuse to overwrite benchmark v2 JSON or CSV artifacts",
+    )
+    parser.add_argument(
+        "--require-benchmark-v2",
+        action="store_true",
+        help="Fail unless the correctness-gated benchmark v2 artifact is VERIFIED",
+    )
+    parser.add_argument(
+        "--record-benchmark-v2-not-verified",
+        type=str,
+        default=None,
+        help="Write an explicit NOT VERIFIED benchmark v2 artifact and exit",
+    )
+    parser.add_argument(
         "--fixture-manifest",
         type=Path,
         default=None,
@@ -5797,6 +6077,15 @@ def resolve_relaxation_preconditioner_strategies(strategies_arg: str) -> list[st
             f"{', '.join(RELAXATION_PRECONDITIONER_STRATEGIES)}"
         )
     return list(dict.fromkeys(strategies))
+
+
+def relaxation_preconditioner_runtime_name(strategy: str) -> str:
+    runtime_name = RELAXATION_PRECONDITIONER_RUNTIME_NAMES.get(strategy)
+    if runtime_name is None:
+        raise ValueError(
+            f"FEM GPU relaxation preconditioner {strategy!r} has no C++ runtime realization"
+        )
+    return runtime_name
 
 
 def resolve_timestep_policies(policies_arg: str) -> list[str]:
@@ -7736,6 +8025,8 @@ def run_backend(
     ui_surface: str = "headless",
     canonical_mesh_output_path: Path | None = None,
 ) -> dict[str, object]:
+    if resource is None:
+        raise RuntimeError("FEM benchmark execution requires a POSIX managed runtime")
     runtime_identity = runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT)
     runtime_manifest_payload = json.loads(
         (MANAGED_FEM_RUNTIME_ROOT / "manifest.json").read_text(encoding="utf-8")
@@ -8154,6 +8445,21 @@ def run_backend(
             "stderr_lines": len(completed.stderr.splitlines()),
         }
     )
+    receipt = provenance.get("fem_gpu_execution_receipt")
+    if isinstance(receipt, Mapping):
+        row["fem_gpu_execution_receipt"] = dict(receipt)
+    snapshot = first_present(
+        provenance.get("fem_gpu_performance_snapshot_v2"),
+        metadata.get("fem_gpu_performance_snapshot_v2") if metadata else None,
+        payload.get("fem_gpu_performance_snapshot_v2")
+        if isinstance(payload, Mapping)
+        else None,
+    )
+    if isinstance(snapshot, Mapping):
+        if snapshot.get("schema") == PERFORMANCE_SNAPSHOT_V2_SCHEMA:
+            snapshot = snapshot.get("snapshot")
+        if isinstance(snapshot, Mapping):
+            row["fem_gpu_performance_snapshot_v2"] = dict(snapshot)
     if payload is not None:
         row.update(
             {
@@ -11906,6 +12212,29 @@ def main() -> None:
     apply_fem_cpu_no_pbc_adaptive_ready_preset(args)
     apply_box500_airbox_exchange_only_preset(args)
     apply_box500_airbox_interaction_consistency_preset(args)
+    if args.record_benchmark_v2_not_verified is not None:
+        if args.benchmark_v2_output is None:
+            raise SystemExit(
+                "--record-benchmark-v2-not-verified needs --benchmark-v2-output"
+            )
+        csv_path = args.benchmark_v2_csv_output or args.benchmark_v2_output.with_suffix(
+            ".csv"
+        )
+        write_benchmark_v2(
+            not_verified_benchmark_v2(args.record_benchmark_v2_not_verified),
+            json_path=args.benchmark_v2_output,
+            csv_path=csv_path,
+            immutable=args.benchmark_v2_immutable,
+        )
+        print("FEM_GPU_BENCHMARK_V2=NOT VERIFIED", file=sys.stderr)
+        raise SystemExit(2)
+    if (
+        args.benchmark_v2_csv_output is not None
+        and args.benchmark_v2_output is None
+    ):
+        raise SystemExit("--benchmark-v2-csv-output needs --benchmark-v2-output")
+    if args.require_benchmark_v2 and args.benchmark_v2_output is None:
+        raise SystemExit("--require-benchmark-v2 needs --benchmark-v2-output")
     if args.list_amg_qualification_fixture_suite is not None:
         print_amg_qualification_fixture_suite(
             args.list_amg_qualification_fixture_suite
@@ -12385,7 +12714,11 @@ def main() -> None:
                     extra_env={
                         **warmup_mesh_env,
                         **relax_env,
-                        "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": relaxation_preconditioner_strategies[0],
+                        "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": (
+                            relaxation_preconditioner_runtime_name(
+                                relaxation_preconditioner_strategies[0]
+                            )
+                        ),
                         **warmup_domain_mesh_env,
                         **demag_policy_env(
                             warmup_solver,
@@ -12683,7 +13016,11 @@ def main() -> None:
                                                                     is not None
                                                                     else 0
                                                                 ),
-                                                                "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": relaxation_preconditioner_strategy,
+                                                                "FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY": (
+                                                                    relaxation_preconditioner_runtime_name(
+                                                                        relaxation_preconditioner_strategy
+                                                                    )
+                                                                ),
                                                                 **demag_env,
                                                                 **case_mesh_env,
                                                                 **relax_env,
@@ -12701,6 +13038,42 @@ def main() -> None:
                                                             "qualification_fixture_problem_ir_sha256"
                                                         ] = args.qualification_fixture_problem_ir_sha256
                                                     results.append(row)
+
+    benchmark_v2_failures: list[str] = []
+    if args.benchmark_v2_output is not None:
+        oracle = assess_cpu_gpu_consistency(
+            results,
+            require_gpu_strict_residency=True,
+            energy_rtol=args.cpu_gpu_energy_rtol,
+            energy_atol=args.cpu_gpu_energy_atol,
+            torque_rtol=args.cpu_gpu_torque_rtol,
+            torque_atol_apm=args.cpu_gpu_torque_atol_apm,
+            torque_atol_t=args.cpu_gpu_torque_atol_t,
+            max_step_delta=args.cpu_gpu_max_step_delta,
+            allow_coverage_only=False,
+        )
+        benchmark_v2_payload = build_benchmark_v2(results, cpu_oracle=oracle)
+        benchmark_v2_csv_path = (
+            args.benchmark_v2_csv_output
+            or args.benchmark_v2_output.with_suffix(".csv")
+        )
+        write_benchmark_v2(
+            benchmark_v2_payload,
+            json_path=args.benchmark_v2_output,
+            csv_path=benchmark_v2_csv_path,
+            immutable=args.benchmark_v2_immutable,
+        )
+        print(
+            "FEM_GPU_BENCHMARK_V2="
+            + str(benchmark_v2_payload["qualification_status"])
+        )
+        if (
+            args.require_benchmark_v2
+            and benchmark_v2_payload["qualification_status"] != "VERIFIED"
+        ):
+            benchmark_v2_failures.extend(
+                str(value) for value in benchmark_v2_payload["blockers"]
+            )
 
     write_csv(results, args.output)
     equilibrium_summary: dict[str, object] | None = None
@@ -12775,6 +13148,9 @@ def main() -> None:
         )
     gate_failures: list[str] = []
     gate_exit_code = 0
+    if benchmark_v2_failures:
+        gate_failures.extend(benchmark_v2_failures)
+        gate_exit_code = 22
     if equilibrium_summary is not None and args.require_equilibrium_parity:
         equilibrium_failures = [
             str(failure)

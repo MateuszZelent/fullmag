@@ -1,0 +1,271 @@
+from __future__ import annotations
+
+import csv
+import importlib.util
+import json
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BENCHMARK_PATH = ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py"
+NSIGHT_PATH = ROOT / "scripts" / "analysis" / "capture_fem_gpu_nsight.py"
+
+if "resource" not in sys.modules:
+    try:
+        __import__("resource")
+    except ModuleNotFoundError:
+        sys.modules["resource"] = types.SimpleNamespace()
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+benchmark = load_module("fem_gpu_benchmark_contract", BENCHMARK_PATH)
+nsight = load_module("capture_fem_gpu_nsight_contract", NSIGHT_PATH)
+
+
+REQUIRED_RECORD_FIELDS = {
+    "source_commit",
+    "source_snapshot_sha256",
+    "runtime_manifest_sha256",
+    "problem_ir_sha256",
+    "mesh_sha256",
+    "gpu_uuid",
+    "precision",
+    "wall_time_p50_ns",
+    "wall_time_p95_ns",
+    "setup_count",
+    "apply_count",
+    "compute_fence_count",
+    "kernel_launch_count",
+}
+
+
+def accepted_row(repeat_index: int) -> dict[str, object]:
+    return {
+        "status": "ok",
+        "backend": "fem_gpu",
+        "repeat_index": repeat_index,
+        "runtime_git_commit": "a" * 40,
+        "runtime_source_snapshot_sha256": "b" * 64,
+        "runtime_manifest_sha256": "c" * 64,
+        "executed_problem_ir_sha256": "d" * 64,
+        "solver_mesh_sha256": "e" * 64,
+        "device_uuid": "GPU-01234567-89ab-cdef-0123-456789abcdef",
+        "reported_precision": "double",
+        "integrator": "heun",
+        "wall_time_ms": 10.0 + repeat_index,
+        "fem_gpu_execution_receipt": {
+            "requested": "gpu",
+            "resolved": "device_resident",
+            "executed": "cuda_fem",
+            "execution_class": "device_resident",
+            "device_ordinal": 0,
+            "precision": "double",
+            "integrator": "heun",
+            "required_operator_mask": 0x1FF,
+            "resolved_device_operator_mask": 0x1FF,
+            "resolved_host_operator_mask": 0,
+            "resolved_unknown_operator_mask": 0,
+            "executed_device_operator_mask": 0x1FF,
+            "executed_host_operator_mask": 0,
+            "executed_unknown_operator_mask": 0,
+            "fallback_count": 0,
+            "accepted_step_count": 64,
+            "rejected_attempt_count": 0,
+            "failed_attempt_count": 0,
+            "hot_loop_compute_h2d_bytes": 0,
+            "hot_loop_compute_d2h_bytes": 0,
+            "hot_loop_compute_host_sync_count": 0,
+            "accounting_valid": True,
+        },
+        "fem_gpu_performance_snapshot_v2": {
+            "abi_version": 2,
+            "struct_size": 88,
+            "setup_count": 1,
+            "apply_count": 64,
+            "kernel_launch_count": 512,
+            "compute_fence_count": 0,
+            "snapshot_fence_count": 1,
+            "export_fence_count": 1,
+            "selected_sparse_kernel_id": 0,
+            "setup_wall_time_ns": 100,
+            "apply_wall_time_ns": 1_000,
+            "accepted_finalization_wall_time_ns": 50,
+        },
+    }
+
+
+class BenchmarkV2ContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.rows = [accepted_row(index) for index in range(5)]
+        self.oracle = {"status": "checked", "failures": []}
+
+    def test_record_is_source_bound_complete_and_uses_five_repetitions(self) -> None:
+        record = benchmark.collect_case(self.rows, cpu_oracle=self.oracle)
+        self.assertLessEqual(REQUIRED_RECORD_FIELDS, set(record))
+        self.assertEqual(record["measured_repetitions"], 5)
+        self.assertEqual(record["wall_time_p50_ns"], 12_000_000)
+        self.assertEqual(record["wall_time_p95_ns"], 14_000_000)
+        self.assertEqual(record["trace_scope"], "setup_to_export")
+
+    def test_correctness_gate_runs_before_any_statistics_are_published(self) -> None:
+        for field, expected in (
+            ("runtime_git_commit", "source_commit"),
+            ("runtime_source_snapshot_sha256", "source_snapshot_sha256"),
+            ("executed_problem_ir_sha256", "problem_ir_sha256"),
+            ("solver_mesh_sha256", "mesh_sha256"),
+        ):
+            with self.subTest(field=field):
+                bad = [dict(row) for row in self.rows]
+                bad[-1][field] = "f" * len(str(bad[-1][field]))
+                payload = benchmark.build_benchmark_v2(
+                    bad, cpu_oracle=self.oracle
+                )
+                self.assertEqual(payload["qualification_status"], "NOT VERIFIED")
+                self.assertEqual(payload["records"], [])
+                self.assertTrue(
+                    any(expected in blocker for blocker in payload["blockers"])
+                )
+
+    def test_incomplete_receipt_strict_host_work_or_oracle_failure_rejects(self) -> None:
+        cases: list[tuple[list[dict[str, object]], dict[str, object], str]] = []
+
+        missing_snapshot = [dict(row) for row in self.rows]
+        missing_snapshot[0].pop("fem_gpu_performance_snapshot_v2")
+        cases.append((missing_snapshot, self.oracle, "performance snapshot"))
+
+        missing_receipt = [dict(row) for row in self.rows]
+        missing_receipt[0].pop("fem_gpu_execution_receipt")
+        cases.append((missing_receipt, self.oracle, "execution receipt"))
+
+        host_mask = [dict(row) for row in self.rows]
+        receipt = dict(host_mask[0]["fem_gpu_execution_receipt"])
+        receipt["executed_host_operator_mask"] = 1
+        host_mask[0]["fem_gpu_execution_receipt"] = receipt
+        cases.append((host_mask, self.oracle, "executed_host_operator_mask"))
+
+        compute_fence = [dict(row) for row in self.rows]
+        snapshot = dict(compute_fence[0]["fem_gpu_performance_snapshot_v2"])
+        snapshot["compute_fence_count"] = 1
+        compute_fence[0]["fem_gpu_performance_snapshot_v2"] = snapshot
+        cases.append((compute_fence, self.oracle, "compute_fence_count"))
+
+        oracle_failure = {
+            "status": "failed",
+            "failures": ["CPU oracle relative error 2e-4 exceeds tolerance 1e-6"],
+        }
+        cases.append((self.rows, oracle_failure, "CPU oracle"))
+
+        for rows, oracle, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaisesRegex(ValueError, expected):
+                    benchmark.collect_case(rows, cpu_oracle=oracle)
+
+    def test_preconditioner_cli_has_one_canonical_runtime_mapping(self) -> None:
+        self.assertEqual(
+            benchmark.RELAXATION_PRECONDITIONER_RUNTIME_NAMES,
+            {
+                "none": "none",
+                "diagonal": "diagonal",
+                "exchange_mass": None,
+            },
+        )
+        self.assertEqual(
+            benchmark.resolve_relaxation_preconditioner_strategies(
+                "none,diagonal"
+            ),
+            ["none", "diagonal"],
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            benchmark.resolve_relaxation_preconditioner_strategies(
+                "exchange_mass"
+            )
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            benchmark.resolve_relaxation_preconditioner_strategies(
+                "lumped_exchange_mass_cg8"
+            )
+
+    def test_writer_emits_json_and_p50_p95_csv_without_overwriting(self) -> None:
+        payload = benchmark.build_benchmark_v2(self.rows, cpu_oracle=self.oracle)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            json_path = root / "benchmark.v2.json"
+            csv_path = root / "benchmark.v2.csv"
+            benchmark.write_benchmark_v2(
+                payload,
+                json_path=json_path,
+                csv_path=csv_path,
+                immutable=True,
+            )
+            written = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(written["schema"], "fullmag.fem_gpu.benchmark.v2")
+            self.assertEqual(written["qualification_status"], "VERIFIED")
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["wall_time_p50_ns"], "12000000")
+            self.assertEqual(rows[0]["wall_time_p95_ns"], "14000000")
+            with self.assertRaisesRegex(FileExistsError, "immutable"):
+                benchmark.write_benchmark_v2(
+                    payload,
+                    json_path=json_path,
+                    csv_path=csv_path,
+                    immutable=True,
+                )
+
+
+class NsightPhaseContractTests(unittest.TestCase):
+    def test_setup_to_export_phase_contract_is_fail_closed(self) -> None:
+        self.assertEqual(
+            tuple(nsight.TRACE_PHASE_RANGES),
+            ("setup", "attempt", "accepted_finalization", "snapshot", "export"),
+        )
+        observed = {
+            values[0] for values in nsight.TRACE_PHASE_RANGES.values()
+        }
+        self.assertEqual(nsight.trace_phase_failures(observed), [])
+        observed.remove(nsight.TRACE_PHASE_RANGES["setup"][0])
+        self.assertEqual(
+            nsight.trace_phase_failures(observed),
+            ["setup trace phase is missing"],
+        )
+
+    def test_unavailable_capture_is_explicitly_not_verified(self) -> None:
+        payload = nsight.not_verified_payload(
+            run_id="missing-tools",
+            blockers=["nsys unavailable"],
+        )
+        self.assertEqual(payload["qualification_status"], "NOT VERIFIED")
+        self.assertEqual(payload["trace_scope"]["from"], "setup")
+        self.assertEqual(payload["trace_scope"]["through"], "export")
+
+
+class ManagedRecipeContractTests(unittest.TestCase):
+    def test_baseline_and_nsight_recipes_are_v2_immutable_and_honest(self) -> None:
+        justfile = (ROOT / "justfile").read_text(encoding="utf-8")
+        baseline = justfile.split(
+            "capture-fem-gpu-pre-remediation-performance-baseline:", 1
+        )[1].split("\n\n", 1)[0]
+        nsight_recipe = justfile.split("capture-fem-gpu-nsight:", 1)[1].split(
+            "\n\n", 1
+        )[0]
+        self.assertIn("benchmark.v2.json", baseline)
+        self.assertIn("--repeat 5", baseline)
+        self.assertIn("--benchmark-v2-immutable", baseline)
+        self.assertIn("NOT VERIFIED", baseline)
+        self.assertIn("NOT VERIFIED", nsight_recipe)
+        self.assertNotIn("lumped_exchange_mass_cg8", baseline)
+
+
+if __name__ == "__main__":
+    unittest.main()

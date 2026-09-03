@@ -4493,7 +4493,7 @@ verify-fem-gpu-relaxation-preconditioner-qualification:
           --timestep-policies fixed \
           --thread-counts 1 \
           --relax-algorithms nonlinear_cg \
-          --relaxation-preconditioner-strategies none,diagonal_mass,lumped_exchange_mass_cg4,lumped_exchange_mass_cg8,stagnation_triggered_cg8 \
+          --relaxation-preconditioner-strategies none,diagonal \
           --demag-solvers CG \
           --demag-preconditioners AMG \
           --demag-rtols 1e-12 \
@@ -4598,13 +4598,26 @@ verify-fem-gpu-host-thread-policy-qualification:
             .fullmag/reports/task-12-host-thread-policy/qualification.json'
 
 capture-fem-gpu-pre-remediation-performance-baseline:
-    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime
-    mkdir -p .fullmag/reports
-    COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
+    set -eu; \
+      baseline_dir=".fullmag/reports/task-3-fem-gpu-baseline/$(git rev-parse HEAD)"; \
+      case "$(uname -s 2>/dev/null || true)" in \
+        MINGW*|MSYS*|CYGWIN*) \
+          python scripts/analysis/fem_gpu_benchmark.py \
+            --benchmark-v2-output "$baseline_dir/benchmark.v2.json" \
+            --benchmark-v2-csv-output "$baseline_dir/benchmark.v2.csv" \
+            --benchmark-v2-immutable \
+            --record-benchmark-v2-not-verified \
+              "canonical Windows managed FEM benchmark execution is unavailable in this Task 3 recipe; NOT VERIFIED"; \
+          ;; \
+      esac; \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime; \
+      mkdir -p "$baseline_dir"; \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
       -e FULLMAG_BENCH_AIRBOX_HMAX=100e-9 \
+      -e FULLMAG_BENCHMARK_V2_DIR="$baseline_dir" \
       fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
         --meshes coarse \
         --scenarios box500_airbox_exchange_demag \
@@ -4623,8 +4636,12 @@ capture-fem-gpu-pre-remediation-performance-baseline:
         --require-demag-converged \
         --require-cpu-gpu-consistency \
         --require-gpu-strict-residency \
-        --output .fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline.csv \
-        --cpu-gpu-summary-output .fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline_summary.json'
+        --benchmark-v2-output "$FULLMAG_BENCHMARK_V2_DIR/benchmark.v2.json" \
+        --benchmark-v2-csv-output "$FULLMAG_BENCHMARK_V2_DIR/benchmark.v2.csv" \
+        --benchmark-v2-immutable \
+        --require-benchmark-v2 \
+        --output "$FULLMAG_BENCHMARK_V2_DIR/raw-repetitions.csv" \
+        --cpu-gpu-summary-output "$FULLMAG_BENCHMARK_V2_DIR/cpu-gpu-oracle.json"'
 
 verify-fem-gpu-pre-remediation-runtime-restore:
     state_file="$(mktemp /tmp/fullmag-fem-gpu-restore-state.XXXXXX.json)"; \
@@ -6510,8 +6527,18 @@ rebuild-fem-runtime:
 capture-fem-gpu-nsight:
     set -eu; \
       mkdir -p .fullmag/reports/task-13-nsight; \
+      case "$(uname -s 2>/dev/null || true)" in \
+        MINGW*|MSYS*|CYGWIN*) \
+          python scripts/analysis/capture_fem_gpu_nsight.py \
+            --record-not-verified \
+              "Nsight capture is unavailable on the canonical Windows Task 3 route; NOT VERIFIED"; \
+          ;; \
+      esac; \
       active=".fullmag/runtimes/fem-gpu-host"; \
       if [ ! -L "$active" ]; then \
+        python3 scripts/analysis/capture_fem_gpu_nsight.py \
+          --record-not-verified \
+            "active managed FEM runtime is not a symlink; NOT VERIFIED" || true; \
         echo "status=unavailable: active managed FEM runtime must be a symlink before capture" >&2; \
         exit 2; \
       fi; \
