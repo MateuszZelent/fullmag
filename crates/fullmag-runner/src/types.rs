@@ -3590,6 +3590,23 @@ pub struct FemGpuExecutionReceipt {
     pub accounting_valid: bool,
 }
 
+/// Append-only native FEM GPU phase counters published after accepted attempts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuPerformanceSnapshotV2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub setup_count: u64,
+    pub apply_count: u64,
+    pub kernel_launch_count: u64,
+    pub compute_fence_count: u64,
+    pub snapshot_fence_count: u64,
+    pub export_fence_count: u64,
+    pub selected_sparse_kernel_id: u64,
+    pub setup_wall_time_ns: u64,
+    pub apply_wall_time_ns: u64,
+    pub accepted_finalization_wall_time_ns: u64,
+}
+
 #[cfg(test)]
 mod fem_gpu_execution_receipt_contract_tests {
     use super::*;
@@ -3630,6 +3647,39 @@ mod fem_gpu_execution_receipt_contract_tests {
         assert_eq!(receipt["execution_class"], "hybrid_cpu_poisson");
         assert_eq!(receipt["executed_host_operator_mask"], 0x204);
         assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
+    }
+
+    #[test]
+    fn performance_snapshot_v2_serializes_every_native_field() {
+        let snapshot = FemGpuPerformanceSnapshotV2 {
+            abi_version: 2,
+            struct_size: 88,
+            setup_count: 1,
+            apply_count: 2,
+            kernel_launch_count: 3,
+            compute_fence_count: 4,
+            snapshot_fence_count: 5,
+            export_fence_count: 6,
+            selected_sparse_kernel_id: 7,
+            setup_wall_time_ns: 8,
+            apply_wall_time_ns: 9,
+            accepted_finalization_wall_time_ns: 10,
+        };
+        let value = serde_json::to_value(snapshot).expect("serialize FEM GPU performance v2");
+        let object = value.as_object().expect("performance snapshot object");
+        assert_eq!(object.len(), 12);
+        assert_eq!(value["abi_version"], 2);
+        assert_eq!(value["struct_size"], 88);
+        assert_eq!(value["setup_count"], 1);
+        assert_eq!(value["apply_count"], 2);
+        assert_eq!(value["kernel_launch_count"], 3);
+        assert_eq!(value["compute_fence_count"], 4);
+        assert_eq!(value["snapshot_fence_count"], 5);
+        assert_eq!(value["export_fence_count"], 6);
+        assert_eq!(value["selected_sparse_kernel_id"], 7);
+        assert_eq!(value["setup_wall_time_ns"], 8);
+        assert_eq!(value["apply_wall_time_ns"], 9);
+        assert_eq!(value["accepted_finalization_wall_time_ns"], 10);
     }
 }
 /// Attestation returned by the native modal boundary after planner selection.

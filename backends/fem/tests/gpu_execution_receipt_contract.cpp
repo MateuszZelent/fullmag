@@ -558,6 +558,92 @@ void begin_without_resolved_plan_fails_closed() {
     check(receipt.executed_device_operator_mask == 0, "empty commit must not publish device masks");
 }
 
+void performance_snapshot_v2_publishes_only_accepted_phases() {
+    static_assert(sizeof(fullmag_fem_gpu_performance_snapshot_v2) == 88);
+    static_assert(alignof(fullmag_fem_gpu_performance_snapshot_v2) == 8);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, abi_version) == 0);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, struct_size) == 4);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, setup_count) == 8);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, apply_count) == 16);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, kernel_launch_count) == 24);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, compute_fence_count) == 32);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, snapshot_fence_count) == 40);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, export_fence_count) == 48);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, selected_sparse_kernel_id) == 56);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, setup_wall_time_ns) == 64);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, apply_wall_time_ns) == 72);
+    static_assert(offsetof(fullmag_fem_gpu_performance_snapshot_v2, accepted_finalization_wall_time_ns) == 80);
+
+    fullmag_fem_backend handle{};
+    auto &state = handle.context.gpu_state.execution_receipt;
+    gpu_execution_receipt_resolve_plan(
+        state,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::Setup, 11);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::Apply, 13);
+    gpu_execution_receipt_note_performance_phase(
+        state, FemGpuPerformancePhase::KernelLaunch, 0, 17);
+    gpu_execution_receipt_note_performance_phase(
+        state, FemGpuPerformancePhase::AcceptedFinalization, 19);
+    gpu_execution_receipt_commit_attempt(state);
+
+    fullmag_fem_gpu_performance_snapshot_v2 out{};
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION;
+    out.struct_size = sizeof(out);
+    check(
+        fullmag_fem_backend_gpu_performance_snapshot_v2(&handle, &out) == FULLMAG_FEM_OK,
+        "performance snapshot v2 must accept the exact handshake");
+    check(out.setup_count <= out.apply_count + 1, "setup/apply baseline invariant mismatch");
+    check(out.setup_count == 1 && out.apply_count == 1, "accepted setup/apply counts mismatch");
+    check(out.kernel_launch_count == 1, "accepted kernel launch count mismatch");
+    check(out.compute_fence_count == 0, "accepted compute phase must remain fence-free");
+    check(out.selected_sparse_kernel_id == 17, "accepted sparse kernel id mismatch");
+    check(out.setup_wall_time_ns == 11, "accepted setup wall time mismatch");
+    check(out.apply_wall_time_ns == 13, "accepted apply wall time mismatch");
+    check(
+        out.accepted_finalization_wall_time_ns == 19,
+        "accepted finalization wall time mismatch");
+
+    const auto accepted = out;
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::Setup, 23);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::ComputeFence);
+    gpu_execution_receipt_reject_attempt(state);
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION;
+    out.struct_size = sizeof(out);
+    check(
+        fullmag_fem_backend_gpu_performance_snapshot_v2(&handle, &out) == FULLMAG_FEM_OK,
+        "rejected attempt must retain an available accepted snapshot");
+    check(std::memcmp(&out, &accepted, sizeof(out)) == 0,
+          "rejected attempt must not publish partial performance phases");
+
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, FEM_GPU_OPERATOR_EXCHANGE);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::Apply, 29);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::ExportFence);
+    gpu_execution_receipt_fail_attempt(state);
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION;
+    out.struct_size = sizeof(out);
+    check(
+        fullmag_fem_backend_gpu_performance_snapshot_v2(&handle, &out) == FULLMAG_FEM_OK,
+        "failed attempt must retain an available accepted snapshot");
+    check(std::memcmp(&out, &accepted, sizeof(out)) == 0,
+          "failed attempt must not publish partial performance phases");
+    const auto receipt = gpu_execution_receipt_snapshot(state);
+    check(receipt.rejected_attempt_count == 1, "reject counter must advance independently");
+    check(receipt.failed_attempt_count == 1, "failure counter must advance independently");
+}
+
 void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
     static_assert(sizeof(fullmag_fem_gpu_execution_receipt_v1) == 136);
     static_assert(alignof(fullmag_fem_gpu_execution_receipt_v1) == 8);
@@ -719,6 +805,7 @@ int main() {
     invalid_lifecycle_is_sticky_and_preserves_last_commit();
     invalid_commit_preserves_last_accepted_snapshot();
     begin_without_resolved_plan_fails_closed();
+    performance_snapshot_v2_publishes_only_accepted_phases();
     public_abi_v1_rejects_invalid_handshake_without_writing_output();
     return 0;
 }

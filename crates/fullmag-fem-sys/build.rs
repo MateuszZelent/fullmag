@@ -60,6 +60,29 @@ fn generate_gpu_execution_receipt_abi_assertions(out_dir: &std::path::Path) {
             "    assert!(std::mem::offset_of!(fullmag_fem_gpu_execution_receipt_v1, {field}) == {offset});\n"
         ));
     }
+    generated.push_str("};\n\n");
+    const PERFORMANCE_V2_FIELDS: &[(&str, usize)] = &[
+        ("abi_version", 0),
+        ("struct_size", 4),
+        ("setup_count", 8),
+        ("apply_count", 16),
+        ("kernel_launch_count", 24),
+        ("compute_fence_count", 32),
+        ("snapshot_fence_count", 40),
+        ("export_fence_count", 48),
+        ("selected_sparse_kernel_id", 56),
+        ("setup_wall_time_ns", 64),
+        ("apply_wall_time_ns", 72),
+        ("accepted_finalization_wall_time_ns", 80),
+    ];
+    generated.push_str(
+        "const _: () = {\n    assert!(std::mem::size_of::<fullmag_fem_gpu_performance_snapshot_v2>() == 88);\n    assert!(std::mem::align_of::<fullmag_fem_gpu_performance_snapshot_v2>() == 8);\n",
+    );
+    for (field, offset) in PERFORMANCE_V2_FIELDS {
+        generated.push_str(&format!(
+            "    assert!(std::mem::offset_of!(fullmag_fem_gpu_performance_snapshot_v2, {field}) == {offset});\n"
+        ));
+    }
     generated.push_str("};\n");
     std::fs::write(
         out_dir.join("gpu_execution_receipt_abi_assertions.rs"),

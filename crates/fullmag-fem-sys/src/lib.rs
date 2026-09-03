@@ -33,6 +33,7 @@ pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_FROZEN_SPINS_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
 pub const FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION: u32 = 1;
+pub const FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION: u32 = 2;
 pub const FULLMAG_FEM_GPU_OPERATOR_EXCHANGE: u64 = 1 << 0;
 pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS: u64 = 1 << 1;
 pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE: u64 = 1 << 2;
@@ -2593,6 +2594,23 @@ pub struct fullmag_fem_gpu_execution_receipt_v1 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_gpu_performance_snapshot_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub setup_count: u64,
+    pub apply_count: u64,
+    pub kernel_launch_count: u64,
+    pub compute_fence_count: u64,
+    pub snapshot_fence_count: u64,
+    pub export_fence_count: u64,
+    pub selected_sparse_kernel_id: u64,
+    pub setup_wall_time_ns: u64,
+    pub apply_wall_time_ns: u64,
+    pub accepted_finalization_wall_time_ns: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct fullmag_fem_gpu_performance_snapshot_v1 {
     pub abi_version: u32,
     pub struct_size: u32,
@@ -3021,6 +3039,10 @@ extern "C" {
     pub fn fullmag_fem_backend_gpu_performance_snapshot_v1(
         handle: *mut fullmag_fem_backend,
         out_snapshot: *mut fullmag_fem_gpu_performance_snapshot_v1,
+    ) -> i32;
+    pub fn fullmag_fem_backend_gpu_performance_snapshot_v2(
+        handle: *mut fullmag_fem_backend,
+        out_snapshot: *mut fullmag_fem_gpu_performance_snapshot_v2,
     ) -> i32;
 
     pub fn fullmag_fem_backend_last_error(handle: *mut fullmag_fem_backend) -> *const c_char;
@@ -6141,5 +6163,32 @@ mod tests {
             *mut fullmag_fem_backend,
             *mut fullmag_fem_gpu_performance_snapshot_v1,
         ) -> i32 = fullmag_fem_backend_gpu_performance_snapshot_v1;
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn gpu_performance_snapshot_v2_has_stable_layout_and_symbol() {
+        use std::mem::{align_of, offset_of, size_of};
+
+        assert_eq!(FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION, 2);
+        assert_eq!(size_of::<fullmag_fem_gpu_performance_snapshot_v2>(), 88);
+        assert_eq!(align_of::<fullmag_fem_gpu_performance_snapshot_v2>(), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, struct_size), 4);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, setup_count), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, apply_count), 16);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, kernel_launch_count), 24);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, compute_fence_count), 32);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, snapshot_fence_count), 40);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, export_fence_count), 48);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, selected_sparse_kernel_id), 56);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, setup_wall_time_ns), 64);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, apply_wall_time_ns), 72);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v2, accepted_finalization_wall_time_ns), 80);
+
+        let _symbol: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut fullmag_fem_gpu_performance_snapshot_v2,
+        ) -> i32 = fullmag_fem_backend_gpu_performance_snapshot_v2;
     }
 }

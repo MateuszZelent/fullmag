@@ -27,6 +27,15 @@ pub(crate) const SOLVER_DIAGNOSTIC_TRACE_ARTIFACT: &str = "solver/accepted_steps
 pub(crate) const PHYSICS_GRAPH_PROVENANCE_ARTIFACT: &str =
     "physics/physics_graph_provenance.v1.json";
 
+pub(crate) fn fem_gpu_performance_snapshot_artifact(
+    snapshot: &crate::types::FemGpuPerformanceSnapshotV2,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "fullmag.fem_gpu_performance_snapshot.v2",
+        "snapshot": snapshot,
+    })
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SolverDiagnosticTraceArtifact {
     schema_version: String,
@@ -5287,6 +5296,28 @@ mod tests {
         assert_eq!(receipt["hot_loop_compute_h2d_bytes"], 24);
         assert_eq!(receipt["hot_loop_compute_d2h_bytes"], 24);
         assert_eq!(receipt["hot_loop_compute_host_sync_count"], 2);
+    }
+
+    #[test]
+    fn artifact_serializes_complete_fem_gpu_performance_snapshot_v2() {
+        let snapshot = crate::types::FemGpuPerformanceSnapshotV2 {
+            abi_version: 2,
+            struct_size: 88,
+            setup_count: 11,
+            apply_count: 13,
+            kernel_launch_count: 17,
+            compute_fence_count: 19,
+            snapshot_fence_count: 23,
+            export_fence_count: 29,
+            selected_sparse_kernel_id: 31,
+            setup_wall_time_ns: 37,
+            apply_wall_time_ns: 41,
+            accepted_finalization_wall_time_ns: 43,
+        };
+        let value = fem_gpu_performance_snapshot_artifact(&snapshot);
+        assert_eq!(value["schema"], "fullmag.fem_gpu_performance_snapshot.v2");
+        assert_eq!(value["snapshot"], serde_json::to_value(snapshot).unwrap());
+        assert_eq!(value["snapshot"].as_object().unwrap().len(), 12);
     }
 
     #[test]

@@ -5661,6 +5661,67 @@ int fullmag_fem_backend_gpu_performance_snapshot_v1(
     return FULLMAG_FEM_OK;
 }
 
+int fullmag_fem_backend_gpu_performance_snapshot_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_performance_snapshot_v2 *out_snapshot
+) {
+    if (out_snapshot == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v2 received null out_snapshot");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_performance_snapshot_v2 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_snapshot->abi_version !=
+            FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION ||
+        out_snapshot->struct_size !=
+            sizeof(fullmag_fem_gpu_performance_snapshot_v2)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v2 received unsupported abi_version or struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto execution = fullmag::fem::gpu_execution_receipt_snapshot(
+        handle->context.gpu_state.execution_receipt);
+    if (!execution.plan_resolved) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v2 has no resolved execution plan");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!execution.accounting_valid) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v2 accounting is invalid");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+
+    const auto snapshot = fullmag::fem::gpu_execution_receipt_performance_snapshot(
+        handle->context.gpu_state.execution_receipt);
+    fullmag_fem_gpu_performance_snapshot_v2 out{};
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION;
+    out.struct_size = sizeof(out);
+    out.setup_count = snapshot.setup_count;
+    out.apply_count = snapshot.apply_count;
+    out.kernel_launch_count = snapshot.kernel_launch_count;
+    out.compute_fence_count = snapshot.compute_fence_count;
+    out.snapshot_fence_count = snapshot.snapshot_fence_count;
+    out.export_fence_count = snapshot.export_fence_count;
+    out.selected_sparse_kernel_id = snapshot.selected_sparse_kernel_id;
+    out.setup_wall_time_ns = snapshot.setup_wall_time_ns;
+    out.apply_wall_time_ns = snapshot.apply_wall_time_ns;
+    out.accepted_finalization_wall_time_ns =
+        snapshot.accepted_finalization_wall_time_ns;
+    *out_snapshot = out;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
 const char *fullmag_fem_backend_last_error(fullmag_fem_backend *handle) {
     if (handle != nullptr) {
         return handle->last_error.empty() ? nullptr : handle->last_error.c_str();

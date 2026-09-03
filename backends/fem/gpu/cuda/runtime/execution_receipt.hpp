@@ -23,6 +23,16 @@ enum class FemGpuExecutionClass : uint32_t {
     Cpu = 4,
 };
 
+enum class FemGpuPerformancePhase : uint32_t {
+    Setup = 0,
+    Apply = 1,
+    KernelLaunch = 2,
+    ComputeFence = 3,
+    SnapshotFence = 4,
+    ExportFence = 5,
+    AcceptedFinalization = 6,
+};
+
 enum FemGpuOperatorMask : uint64_t {
     FEM_GPU_OPERATOR_EXCHANGE = UINT64_C(1) << 0,
     FEM_GPU_OPERATOR_DEMAG_RHS = UINT64_C(1) << 1,
@@ -71,6 +81,19 @@ struct FemGpuExecutionSnapshot {
     uint64_t hot_loop_compute_host_sync_count = 0;
 };
 
+struct FemGpuPerformanceSnapshot {
+    uint64_t setup_count = 0;
+    uint64_t apply_count = 0;
+    uint64_t kernel_launch_count = 0;
+    uint64_t compute_fence_count = 0;
+    uint64_t snapshot_fence_count = 0;
+    uint64_t export_fence_count = 0;
+    uint64_t selected_sparse_kernel_id = 0;
+    uint64_t setup_wall_time_ns = 0;
+    uint64_t apply_wall_time_ns = 0;
+    uint64_t accepted_finalization_wall_time_ns = 0;
+};
+
 struct FemGpuExecutionReceiptRuntimeState {
     mutable std::mutex mutex{};
     bool accounting_valid = true;
@@ -93,6 +116,7 @@ struct FemGpuExecutionReceiptRuntimeState {
     uint64_t hot_loop_compute_h2d_bytes = 0;
     uint64_t hot_loop_compute_d2h_bytes = 0;
     uint64_t hot_loop_compute_host_sync_count = 0;
+    FemGpuPerformanceSnapshot accepted_performance{};
     bool attempt_active = false;
     uint64_t attempt_device_operator_mask = 0;
     uint64_t attempt_host_operator_mask = 0;
@@ -105,6 +129,7 @@ struct FemGpuExecutionReceiptRuntimeState {
     uint64_t attempt_transfer_d2h_bytes = 0;
     uint64_t attempt_transfer_host_sync_count = 0;
     bool attempt_transfer_valid = true;
+    FemGpuPerformanceSnapshot attempt_performance{};
 };
 
 void gpu_execution_receipt_resolve_plan(
@@ -137,10 +162,17 @@ void gpu_execution_receipt_note_unknown(
     FemGpuExecutionReceiptRuntimeState &state,
     uint64_t operator_mask);
 void gpu_execution_receipt_note_fallback(FemGpuExecutionReceiptRuntimeState &state);
+void gpu_execution_receipt_note_performance_phase(
+    FemGpuExecutionReceiptRuntimeState &state,
+    FemGpuPerformancePhase phase,
+    uint64_t wall_time_ns = 0,
+    uint64_t selected_sparse_kernel_id = 0);
 void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_reject_attempt(FemGpuExecutionReceiptRuntimeState &state);
 void gpu_execution_receipt_fail_attempt(FemGpuExecutionReceiptRuntimeState &state);
 FemGpuExecutionSnapshot gpu_execution_receipt_snapshot(
+    const FemGpuExecutionReceiptRuntimeState &state);
+FemGpuPerformanceSnapshot gpu_execution_receipt_performance_snapshot(
     const FemGpuExecutionReceiptRuntimeState &state);
 
 } // namespace fullmag::fem

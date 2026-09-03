@@ -16,6 +16,7 @@ void clear_attempt(FemGpuExecutionReceiptRuntimeState &state) {
     state.attempt_transfer_d2h_bytes = 0;
     state.attempt_transfer_host_sync_count = 0;
     state.attempt_transfer_valid = true;
+    state.attempt_performance = {};
 }
 
 void note_operator(
@@ -124,6 +125,7 @@ void gpu_execution_receipt_resolve_plan(
     state.hot_loop_compute_h2d_bytes = 0;
     state.hot_loop_compute_d2h_bytes = 0;
     state.hot_loop_compute_host_sync_count = 0;
+    state.accepted_performance = {};
     clear_attempt(state);
     state.plan_resolved = plan_masks_are_valid(
             required_operator_mask,
@@ -232,6 +234,45 @@ void gpu_execution_receipt_note_fallback(FemGpuExecutionReceiptRuntimeState &sta
     ++state.attempt_fallback_count;
 }
 
+void gpu_execution_receipt_note_performance_phase(
+    FemGpuExecutionReceiptRuntimeState &state,
+    FemGpuPerformancePhase phase,
+    uint64_t wall_time_ns,
+    uint64_t selected_sparse_kernel_id) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (!state.attempt_active) {
+        state.accounting_valid = false;
+        state.execution_class = FemGpuExecutionClass::Unknown;
+        return;
+    }
+    switch (phase) {
+    case FemGpuPerformancePhase::Setup:
+        ++state.attempt_performance.setup_count;
+        state.attempt_performance.setup_wall_time_ns += wall_time_ns;
+        break;
+    case FemGpuPerformancePhase::Apply:
+        ++state.attempt_performance.apply_count;
+        state.attempt_performance.apply_wall_time_ns += wall_time_ns;
+        break;
+    case FemGpuPerformancePhase::KernelLaunch:
+        ++state.attempt_performance.kernel_launch_count;
+        state.attempt_performance.selected_sparse_kernel_id = selected_sparse_kernel_id;
+        break;
+    case FemGpuPerformancePhase::ComputeFence:
+        ++state.attempt_performance.compute_fence_count;
+        break;
+    case FemGpuPerformancePhase::SnapshotFence:
+        ++state.attempt_performance.snapshot_fence_count;
+        break;
+    case FemGpuPerformancePhase::ExportFence:
+        ++state.attempt_performance.export_fence_count;
+        break;
+    case FemGpuPerformancePhase::AcceptedFinalization:
+        state.attempt_performance.accepted_finalization_wall_time_ns += wall_time_ns;
+        break;
+    }
+}
+
 void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &state) {
     std::lock_guard<std::mutex> lock(state.mutex);
     if (!state.attempt_active) {
@@ -253,6 +294,26 @@ void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &st
     state.hot_loop_compute_h2d_bytes = state.attempt_transfer_h2d_bytes;
     state.hot_loop_compute_d2h_bytes = state.attempt_transfer_d2h_bytes;
     state.hot_loop_compute_host_sync_count = state.attempt_transfer_host_sync_count;
+    state.accepted_performance.setup_count += state.attempt_performance.setup_count;
+    state.accepted_performance.apply_count += state.attempt_performance.apply_count;
+    state.accepted_performance.kernel_launch_count +=
+        state.attempt_performance.kernel_launch_count;
+    state.accepted_performance.compute_fence_count +=
+        state.attempt_performance.compute_fence_count;
+    state.accepted_performance.snapshot_fence_count +=
+        state.attempt_performance.snapshot_fence_count;
+    state.accepted_performance.export_fence_count +=
+        state.attempt_performance.export_fence_count;
+    if (state.attempt_performance.selected_sparse_kernel_id != 0) {
+        state.accepted_performance.selected_sparse_kernel_id =
+            state.attempt_performance.selected_sparse_kernel_id;
+    }
+    state.accepted_performance.setup_wall_time_ns +=
+        state.attempt_performance.setup_wall_time_ns;
+    state.accepted_performance.apply_wall_time_ns +=
+        state.attempt_performance.apply_wall_time_ns;
+    state.accepted_performance.accepted_finalization_wall_time_ns +=
+        state.attempt_performance.accepted_finalization_wall_time_ns;
     ++state.accepted_step_count;
     clear_attempt(state);
 }
@@ -304,6 +365,12 @@ FemGpuExecutionSnapshot gpu_execution_receipt_snapshot(
     snapshot.hot_loop_compute_d2h_bytes = state.hot_loop_compute_d2h_bytes;
     snapshot.hot_loop_compute_host_sync_count = state.hot_loop_compute_host_sync_count;
     return snapshot;
+}
+
+FemGpuPerformanceSnapshot gpu_execution_receipt_performance_snapshot(
+    const FemGpuExecutionReceiptRuntimeState &state) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.accepted_performance;
 }
 
 } // namespace fullmag::fem

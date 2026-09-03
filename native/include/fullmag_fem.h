@@ -2945,6 +2945,25 @@ typedef struct {
     uint64_t accepted_rhs_elapsed_ns;
 } fullmag_fem_gpu_performance_snapshot_v1;
 
+/* Minimal accepted-attempt phase counters. Rejected and failed attempts never
+   replace or contribute to this published snapshot. */
+#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION 2u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t setup_count;
+    uint64_t apply_count;
+    uint64_t kernel_launch_count;
+    uint64_t compute_fence_count;
+    uint64_t snapshot_fence_count;
+    uint64_t export_fence_count;
+    uint64_t selected_sparse_kernel_id;
+    uint64_t setup_wall_time_ns;
+    uint64_t apply_wall_time_ns;
+    uint64_t accepted_finalization_wall_time_ns;
+} fullmag_fem_gpu_performance_snapshot_v2;
+
 typedef struct fullmag_fem_backend fullmag_fem_backend;
 typedef struct fullmag_fem_field_snapshot fullmag_fem_field_snapshot;
 typedef struct fullmag_fem_preview_snapshot fullmag_fem_preview_snapshot;
@@ -3347,6 +3366,11 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
 int fullmag_fem_backend_gpu_performance_snapshot_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_performance_snapshot_v1 *out_snapshot
+);
+
+int fullmag_fem_backend_gpu_performance_snapshot_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_performance_snapshot_v2 *out_snapshot
 );
 
 int fullmag_fem_backend_upload_strain(
