@@ -836,6 +836,21 @@ def collect_case(
             raise ValueError(f"repeat {index} is not a completed fem_gpu run")
         if row.get("runtime_dirty") not in (False, "false"):
             raise ValueError(f"repeat {index} runtime manifest is dirty")
+        binary_path = Path(str(row.get("binary") or "")).resolve()
+        launcher_path = Path(str(row.get("runtime_launcher_path") or "")).resolve()
+        if binary_path != launcher_path:
+            raise ValueError(
+                f"repeat {index} executed binary is not the manifested launcher"
+            )
+        if not binary_path.is_file():
+            raise ValueError(f"repeat {index} executed binary is missing")
+        launcher_sha256 = _canonical_digest(
+            row.get("runtime_launcher_sha256"),
+            field="runtime launcher sha256",
+            length=64,
+        )
+        if hashlib.sha256(binary_path.read_bytes()).hexdigest() != launcher_sha256:
+            raise ValueError(f"repeat {index} executed binary sha256 mismatch")
         for source_field, output_field in BENCHMARK_V2_IDENTITY_FIELDS.items():
             raw = row.get(source_field)
             if source_field == "runtime_git_commit":
@@ -4410,9 +4425,14 @@ def runtime_bundle_identity(
         if not isinstance(binaries, Mapping) or not isinstance(integrity, Mapping):
             raise ValueError("runtime manifest binary integrity is missing")
         for name in ("launcher", "worker", "api"):
-            checked_artifact_sha256(
+            artifact_sha256 = checked_artifact_sha256(
                 binaries.get(name), integrity.get(f"{name}_sha256"), label=name
             )
+            if name == "launcher":
+                identity["runtime_launcher_path"] = str(
+                    (resolved_root / str(binaries[name])).resolve()
+                )
+                identity["runtime_launcher_sha256"] = artifact_sha256
     native_libraries = manifest.get("native_libraries")
     if require_integrity and not isinstance(native_libraries, Mapping):
         raise ValueError("runtime manifest native library integrity is missing")

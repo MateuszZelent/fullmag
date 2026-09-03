@@ -60,6 +60,11 @@ def accepted_row(repeat_index: int) -> dict[str, object]:
         "runtime_source_snapshot_sha256": "b" * 64,
         "runtime_manifest_sha256": "c" * 64,
         "runtime_dirty": "false",
+        "binary": str(BENCHMARK_PATH),
+        "runtime_launcher_path": str(BENCHMARK_PATH),
+        "runtime_launcher_sha256": benchmark.hashlib.sha256(
+            BENCHMARK_PATH.read_bytes()
+        ).hexdigest(),
         "executed_problem_ir_sha256": "d" * 64,
         "solver_mesh_sha256": "e" * 64,
         "device_uuid": "GPU-01234567-89ab-cdef-0123-456789abcdef",
@@ -254,6 +259,16 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             paths["worker"].write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "worker sha256 mismatch"):
                 benchmark.runtime_bundle_identity(root, require_integrity=True)
+
+    def test_executed_binary_must_be_the_manifested_launcher(self) -> None:
+        wrong_binary = [dict(row) for row in self.rows]
+        wrong_binary[0]["binary"] = str(NSIGHT_PATH)
+        with self.assertRaisesRegex(ValueError, "executed binary"):
+            benchmark.collect_case(
+                wrong_binary,
+                cpu_oracle=self.oracle,
+                expected_source_identity=self.source_identity,
+            )
 
     def test_preconditioner_cli_has_one_canonical_runtime_mapping(self) -> None:
         self.assertEqual(
