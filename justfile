@@ -4599,17 +4599,19 @@ verify-fem-gpu-host-thread-policy-qualification:
 
 capture-fem-gpu-pre-remediation-performance-baseline:
     set -eu; \
-      baseline_dir=".fullmag/reports/task-3-fem-gpu-baseline/$(git rev-parse HEAD)"; \
+      source_commit="$(git rev-parse HEAD)"; \
       case "$(uname -s 2>/dev/null || true)" in \
         MINGW*|MSYS*|CYGWIN*) \
-          python scripts/analysis/fem_gpu_benchmark.py \
-            --benchmark-v2-output "$baseline_dir/benchmark.v2.json" \
-            --benchmark-v2-csv-output "$baseline_dir/benchmark.v2.csv" \
-            --benchmark-v2-immutable \
-            --record-benchmark-v2-not-verified \
-              "canonical Windows managed FEM benchmark execution is unavailable in this Task 3 recipe; NOT VERIFIED"; \
+          attempt_id="$(python -c 'import uuid; print(uuid.uuid4())')"; \
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass \
+            -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" \
+            -BuildMode true -BuildOnly -Backend fem -Device gpu \
+            -Contract gpu-benchmark-baseline -ContractAttemptId "$attempt_id"; \
+          exit $?; \
           ;; \
+        *) attempt_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;; \
       esac; \
+      baseline_dir=".fullmag/reports/task-3-fem-gpu-baseline/$source_commit/$attempt_id"; \
       COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just rebuild-fem-runtime; \
       mkdir -p "$baseline_dir"; \
       COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
@@ -4618,7 +4620,7 @@ capture-fem-gpu-pre-remediation-performance-baseline:
       -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
       -e FULLMAG_BENCH_AIRBOX_HMAX=100e-9 \
       -e FULLMAG_BENCHMARK_V2_DIR="$baseline_dir" \
-      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+      fem-gpu bash -lc 'cd /workspace && fixture_problem_ir_sha256="$(python3 -c '\''import json; print(json.load(open("examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json", encoding="utf-8"))["problem_ir_sha256"])'\'')" && python3 scripts/analysis/fem_gpu_benchmark.py \
         --meshes coarse \
         --scenarios box500_airbox_exchange_demag \
         --integrators heun \
@@ -4629,6 +4631,7 @@ capture-fem-gpu-pre-remediation-performance-baseline:
         --repeat 5 \
         --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
         --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --qualification-fixture-problem-ir-sha256 "$fixture_problem_ir_sha256" \
         --require-fixture-identity \
         --gpu-warmup \
         --gpu-host-thread-qualification-run \
@@ -6527,17 +6530,25 @@ rebuild-fem-runtime:
 # stop before an instrumented runtime rebuild or a fabricated capture.
 capture-fem-gpu-nsight:
     set -eu; \
+      source_commit="$(git rev-parse HEAD)"; \
+      attempt_id=""; \
       mkdir -p .fullmag/reports/task-13-nsight; \
       case "$(uname -s 2>/dev/null || true)" in \
         MINGW*|MSYS*|CYGWIN*) \
-          python scripts/analysis/capture_fem_gpu_nsight.py \
-            --record-not-verified \
-              "Nsight capture is unavailable on the canonical Windows Task 3 route; NOT VERIFIED"; \
+          attempt_id="$(python -c 'import uuid; print(uuid.uuid4())')"; \
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass \
+            -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" \
+            -BuildMode true -BuildOnly -Backend fem -Device gpu \
+            -Contract gpu-nsight -ContractAttemptId "$attempt_id"; \
+          exit $?; \
           ;; \
+        *) attempt_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" ;; \
       esac; \
+      run_id="task13-box500-airbox-ncg-sm89-v1-$source_commit-$attempt_id"; \
       active=".fullmag/runtimes/fem-gpu-host"; \
       if [ ! -L "$active" ]; then \
         python3 scripts/analysis/capture_fem_gpu_nsight.py \
+          --run-id "$run_id" \
           --record-not-verified \
             "active managed FEM runtime is not a symlink; NOT VERIFIED" || true; \
         echo "status=unavailable: active managed FEM runtime must be a symlink before capture" >&2; \
@@ -6556,8 +6567,9 @@ capture-fem-gpu-nsight:
       docker compose --profile fem-gpu build fem-gpu; \
       if ! docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
+        -e FULLMAG_NSIGHT_RUN_ID="$run_id" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only'; then \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only --run-id "$FULLMAG_NSIGHT_RUN_ID"'; then \
           echo "status=unavailable: Nsight preflight failed in managed fem-gpu fixture image" >&2; \
           exit 2; \
       fi; \
@@ -6568,19 +6580,21 @@ capture-fem-gpu-nsight:
       if ! docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
         -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
+        -e FULLMAG_NSIGHT_RUN_ID="$run_id" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only --runtime-root /workspace/.fullmag/runtime'; then \
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --preflight-only --run-id "$FULLMAG_NSIGHT_RUN_ID" --runtime-root /workspace/.fullmag/runtime'; then \
           echo "status=unavailable: Nsight preflight failed in rebuilt managed fem-gpu fixture image" >&2; \
           exit 2; \
       fi; \
       docker compose --profile fem-gpu run --rm -T \
         --cap-add SYS_ADMIN \
         -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
+        -e FULLMAG_NSIGHT_RUN_ID="$run_id" \
         -e PYTHONPATH=/workspace/packages/fullmag-py/src \
         -e FULLMAG_PYTHON=/usr/bin/python3 \
         -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
-        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --runtime-root /workspace/.fullmag/runtime'
+        fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/capture_fem_gpu_nsight.py --run-id "$FULLMAG_NSIGHT_RUN_ID" --runtime-root /workspace/.fullmag/runtime'
 
 # Build and export one immutable, hash-addressed HYPRE memory-strategy bundle.
 # The exporter atomically selects the resulting bundle as fem-gpu-host only

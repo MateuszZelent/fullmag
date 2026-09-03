@@ -23,8 +23,11 @@ param(
 
   [switch]$BuildOnly,
 
-  [ValidateSet("gpu-execution-receipt")]
+  [ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]
   [string]$Contract,
+
+  [ValidatePattern("^[A-Za-z0-9._-]+$")]
+  [string]$ContractAttemptId,
 
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
@@ -475,6 +478,109 @@ CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p ful
     $contractCommandPayload = "printf '%s' '$contractCommandBase64' | base64 --decode | bash"
     Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $contractCommandPayload)
     Write-Host "Windows FEM GPU execution receipt contract passed"
+    exit 0
+  }
+
+  if ($Contract -in @("gpu-benchmark-baseline", "gpu-nsight")) {
+    if ($Device -ne "gpu") {
+      throw "Windows FEM GPU evidence contracts require -Device gpu; CPU fallback is forbidden"
+    }
+    if (-not $ContractAttemptId) {
+      throw "Windows FEM GPU evidence contracts require -ContractAttemptId"
+    }
+    if ($BuildMode -eq "true") {
+      Invoke-DockerImageBuild
+    } else {
+      $null = Get-DockerImageId $RuntimeImage
+    }
+    if ($Contract -eq "gpu-benchmark-baseline") {
+      $contractCommand = @'
+set -euo pipefail
+cd /workspace
+source_commit=__SOURCE_COMMIT__
+attempt_id=__ATTEMPT_ID__
+output_dir="/workspace/.fullmag/reports/task-3-fem-gpu-baseline/$source_commit/$attempt_id"
+runtime_root=/workspace/.fullmag/runtimes/fem-gpu-host
+mkdir -p "$output_dir"
+if [ ! -x "$runtime_root/bin/fullmag-fem-gpu" ] || [ ! -f "$runtime_root/manifest.json" ]; then
+  python3 scripts/analysis/fem_gpu_benchmark.py \
+    --benchmark-v2-output "$output_dir/benchmark.v2.json" \
+    --benchmark-v2-csv-output "$output_dir/benchmark.v2.csv" \
+    --benchmark-v2-immutable \
+    --record-benchmark-v2-not-verified \
+      "managed FEM benchmark runtime producer is unavailable after canonical Windows launcher preflight; NOT VERIFIED"
+  exit $?
+fi
+fixture_problem_ir_sha256="$(python3 -c 'import json; print(json.load(open("examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json", encoding="utf-8"))["problem_ir_sha256"])')"
+FULLMAG_FEM_RUNTIME_ROOT="$runtime_root" \
+FULLMAG_BENCH_GPU_BIN="$runtime_root/bin/fullmag-fem-gpu" \
+FULLMAG_BENCH_CPU_BIN="$runtime_root/bin/fullmag-fem-gpu" \
+FULLMAG_FEM_EXECUTION=gpu \
+python3 scripts/analysis/fem_gpu_benchmark.py \
+  --meshes coarse \
+  --scenarios box500_airbox_exchange_demag \
+  --integrators heun \
+  --relax-algorithms nonlinear_cg \
+  --demag-preconditioners AMG \
+  --demag-amg-relax-types 6 \
+  --steps 64 \
+  --repeat 5 \
+  --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
+  --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+  --qualification-fixture-problem-ir-sha256 "$fixture_problem_ir_sha256" \
+  --require-fixture-identity \
+  --gpu-warmup \
+  --gpu-host-thread-qualification-run \
+  --reuse-generated-domain-mesh \
+  --require-stable-solver-mesh \
+  --require-demag-converged \
+  --require-cpu-gpu-consistency \
+  --require-gpu-strict-residency \
+  --benchmark-v2-output "$output_dir/benchmark.v2.json" \
+  --benchmark-v2-csv-output "$output_dir/benchmark.v2.csv" \
+  --benchmark-v2-immutable \
+  --require-benchmark-v2 \
+  --output "$output_dir/raw-repetitions.csv" \
+  --cpu-gpu-summary-output "$output_dir/cpu-gpu-oracle.json"
+'@
+    } elseif ($Contract -eq "gpu-nsight") {
+      $contractCommand = @'
+set -euo pipefail
+cd /workspace
+source_commit=__SOURCE_COMMIT__
+attempt_id=__ATTEMPT_ID__
+output_root=/workspace/.fullmag/reports/task-13-nsight
+run_id="task13-box500-airbox-ncg-sm89-v1-$source_commit-$attempt_id"
+runtime_root=/workspace/.fullmag/runtimes/fem-gpu-host
+python3 scripts/analysis/capture_fem_gpu_nsight.py \
+  --preflight-only \
+  --run-id "$run_id" \
+  --output-dir "$output_root" \
+  --runtime-root "$runtime_root"
+if [ ! -x "$runtime_root/bin/fullmag-fem-gpu" ] || [ ! -f "$runtime_root/manifest.json" ]; then
+  python3 scripts/analysis/capture_fem_gpu_nsight.py \
+    --record-not-verified \
+      "NVTX-enabled managed FEM runtime producer is unavailable after canonical Windows launcher and Nsight preflight; NOT VERIFIED" \
+    --run-id "$run_id" \
+    --output-dir "$output_root" \
+    --runtime-root "$runtime_root"
+  exit $?
+fi
+python3 scripts/analysis/capture_fem_gpu_nsight.py \
+  --run-id "$run_id" \
+  --output-dir "$output_root" \
+  --runtime-root "$runtime_root"
+'@
+    } else {
+      throw "Unsupported Windows FEM GPU evidence contract: $Contract"
+    }
+    $contractCommand = $contractCommand.Replace("__SOURCE_COMMIT__", [string]$sourceIdentity.head_commit_full)
+    $contractCommand = $contractCommand.Replace("__ATTEMPT_ID__", $ContractAttemptId)
+    $contractCommand = $contractCommand.Replace("`r`n", "`n").Replace("`r", "`n")
+    $contractCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($contractCommand)
+    $contractCommandBase64 = [Convert]::ToBase64String($contractCommandBytes)
+    $contractCommandPayload = "printf '%s' '$contractCommandBase64' | base64 --decode | bash"
+    Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $contractCommandPayload)
     exit 0
   }
 

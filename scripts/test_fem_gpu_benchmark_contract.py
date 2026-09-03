@@ -66,6 +66,7 @@ def accepted_row(repeat_index: int) -> dict[str, object]:
             BENCHMARK_PATH.read_bytes()
         ).hexdigest(),
         "executed_problem_ir_sha256": "d" * 64,
+        "qualification_fixture_problem_ir_sha256": "d" * 64,
         "solver_mesh_sha256": "e" * 64,
         "device_uuid": "GPU-01234567-89ab-cdef-0123-456789abcdef",
         "reported_precision": "double",
@@ -121,12 +122,18 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             "source_snapshot_sha256": "b" * 64,
             "source_snapshot_dirty": False,
         }
+        self.workload_identity = {
+            "problem_ir_sha256": "d" * 64,
+            "mesh_sha256": "e" * 64,
+            "qualification_fixture_problem_ir_sha256": "d" * 64,
+        }
 
     def test_record_is_source_bound_complete_and_uses_five_repetitions(self) -> None:
         record = benchmark.collect_case(
             self.rows,
             cpu_oracle=self.oracle,
             expected_source_identity=self.source_identity,
+            expected_workload_identity=self.workload_identity,
         )
         self.assertLessEqual(REQUIRED_RECORD_FIELDS, set(record))
         self.assertEqual(record["measured_repetitions"], 5)
@@ -140,6 +147,7 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                 duplicate,
                 cpu_oracle=self.oracle,
                 expected_source_identity=self.source_identity,
+                expected_workload_identity=self.workload_identity,
             )
 
     def test_correctness_gate_runs_before_any_statistics_are_published(self) -> None:
@@ -156,6 +164,7 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                     bad,
                     cpu_oracle=self.oracle,
                     expected_source_identity=self.source_identity,
+                    expected_workload_identity=self.workload_identity,
                 )
                 self.assertEqual(payload["qualification_status"], "NOT VERIFIED")
                 self.assertEqual(payload["records"], [])
@@ -199,6 +208,7 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                         rows,
                         cpu_oracle=oracle,
                         expected_source_identity=self.source_identity,
+                        expected_workload_identity=self.workload_identity,
                     )
 
     def test_checkout_identity_must_match_and_be_clean(self) -> None:
@@ -214,7 +224,47 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                         self.rows,
                         cpu_oracle=self.oracle,
                         expected_source_identity=identity,
+                        expected_workload_identity=self.workload_identity,
                     )
+
+    def test_all_repetitions_must_match_canonical_workload_identity(self) -> None:
+        for field, expected in (
+            ("executed_problem_ir_sha256", "problem_ir_sha256"),
+            ("solver_mesh_sha256", "mesh_sha256"),
+            (
+                "qualification_fixture_problem_ir_sha256",
+                "qualification fixture problem_ir_sha256",
+            ),
+        ):
+            with self.subTest(field=field):
+                wrong = [{**row, field: "f" * 64} for row in self.rows]
+                payload = benchmark.build_benchmark_v2(
+                    wrong,
+                    cpu_oracle=self.oracle,
+                    expected_source_identity=self.source_identity,
+                    expected_workload_identity=self.workload_identity,
+                )
+                self.assertEqual(payload["qualification_status"], "NOT VERIFIED")
+                self.assertEqual(payload["records"], [])
+                self.assertTrue(
+                    any(expected in blocker for blocker in payload["blockers"])
+                )
+
+        aliased_identity = {
+            **self.workload_identity,
+            "qualification_fixture_problem_ir_sha256": "f" * 64,
+        }
+        payload = benchmark.build_benchmark_v2(
+            self.rows,
+            cpu_oracle=self.oracle,
+            expected_source_identity=self.source_identity,
+            expected_workload_identity=aliased_identity,
+        )
+        self.assertEqual(payload["qualification_status"], "NOT VERIFIED")
+        self.assertEqual(payload["records"], [])
+        self.assertTrue(
+            any("differs from canonical workload" in item for item in payload["blockers"])
+        )
 
     def test_runtime_bundle_identity_rejects_tampered_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -259,6 +309,14 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             paths["worker"].write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "worker sha256 mismatch"):
                 benchmark.runtime_bundle_identity(root, require_integrity=True)
+            paths["worker"].write_bytes(b"worker")
+            for native_libraries in ({}, {"mfem": {}}):
+                manifest["native_libraries"] = native_libraries
+                (root / "manifest.json").write_text(
+                    json.dumps(manifest), encoding="utf-8"
+                )
+                with self.assertRaisesRegex(ValueError, "fullmag_fem"):
+                    benchmark.runtime_bundle_identity(root, require_integrity=True)
 
     def test_executed_binary_must_be_the_manifested_launcher(self) -> None:
         wrong_binary = [dict(row) for row in self.rows]
@@ -268,6 +326,7 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                 wrong_binary,
                 cpu_oracle=self.oracle,
                 expected_source_identity=self.source_identity,
+                expected_workload_identity=self.workload_identity,
             )
 
     def test_preconditioner_cli_has_one_canonical_runtime_mapping(self) -> None:
@@ -299,6 +358,7 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             self.rows,
             cpu_oracle=self.oracle,
             expected_source_identity=self.source_identity,
+            expected_workload_identity=self.workload_identity,
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -324,6 +384,69 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                     csv_path=csv_path,
                     immutable=True,
                 )
+
+    def test_atomic_writer_supports_distinct_attempts_without_partial_marker(self) -> None:
+        payload = benchmark.build_benchmark_v2(
+            self.rows,
+            cpu_oracle=self.oracle,
+            expected_source_identity=self.source_identity,
+            expected_workload_identity=self.workload_identity,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / ("a" * 40)
+            first = root / "attempt-1"
+            second = root / "attempt-2"
+            benchmark.write_benchmark_v2(
+                benchmark.not_verified_benchmark_v2("precondition unavailable"),
+                json_path=first / "benchmark.v2.json",
+                csv_path=first / "benchmark.v2.csv",
+                immutable=True,
+            )
+            benchmark.write_benchmark_v2(
+                payload,
+                json_path=second / "benchmark.v2.json",
+                csv_path=second / "benchmark.v2.csv",
+                immutable=True,
+            )
+            self.assertEqual(
+                json.loads((first / "benchmark.v2.json").read_text())["qualification_status"],
+                "NOT VERIFIED",
+            )
+            self.assertEqual(
+                json.loads((second / "benchmark.v2.json").read_text())["qualification_status"],
+                "VERIFIED",
+            )
+
+            broken_json = root / "broken" / "benchmark.v2.json"
+            broken_csv = root / "broken" / "benchmark.v2.csv"
+            broken = {
+                **payload,
+                "records": [payload["records"][0], {"unexpected": 1}],
+            }
+            with self.assertRaises(ValueError):
+                benchmark.write_benchmark_v2(
+                    broken,
+                    json_path=broken_json,
+                    csv_path=broken_csv,
+                    immutable=True,
+                )
+            self.assertFalse(broken_json.exists())
+            self.assertFalse(broken_csv.exists())
+
+            overwrite_json = root / "overwrite" / "benchmark.v2.json"
+            overwrite_csv = root / "overwrite" / "benchmark.v2.csv"
+            overwrite_json.parent.mkdir(parents=True)
+            overwrite_json.write_text('{"qualification_status":"VERIFIED"}\n')
+            overwrite_csv.write_text("stale\n")
+            with self.assertRaises(ValueError):
+                benchmark.write_benchmark_v2(
+                    broken,
+                    json_path=overwrite_json,
+                    csv_path=overwrite_csv,
+                    immutable=False,
+                )
+            self.assertFalse(overwrite_json.exists())
+            self.assertEqual(overwrite_csv.read_text(), "stale\n")
 
 
 class NsightPhaseContractTests(unittest.TestCase):
@@ -377,9 +500,34 @@ class ManagedRecipeContractTests(unittest.TestCase):
         self.assertIn("--benchmark-v2-immutable", baseline)
         self.assertIn("--gpu-host-thread-qualification-run", baseline)
         self.assertIn("just rebuild-fem-runtime", baseline)
-        self.assertIn("NOT VERIFIED", baseline)
-        self.assertIn("NOT VERIFIED", nsight_recipe)
+        self.assertIn("$source_commit/$attempt_id", baseline)
+        self.assertIn("scripts/windows/run_fullmag_fem.ps1", baseline)
+        self.assertIn("-Contract gpu-benchmark-baseline", baseline)
         self.assertNotIn("lumped_exchange_mass_cg8", baseline)
+        self.assertIn("scripts/windows/run_fullmag_fem.ps1", nsight_recipe)
+        self.assertIn("-Contract gpu-nsight", nsight_recipe)
+        baseline_windows = baseline.split("MINGW*|MSYS*|CYGWIN*)", 1)[1].split(
+            ";;", 1
+        )[0]
+        nsight_windows = nsight_recipe.split("MINGW*|MSYS*|CYGWIN*)", 1)[1].split(
+            ";;", 1
+        )[0]
+        self.assertNotIn("--record-benchmark-v2-not-verified", baseline_windows)
+        self.assertNotIn("--record-not-verified", nsight_windows)
+
+        launcher = (
+            ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '[ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]',
+            launcher,
+        )
+        self.assertIn("compose.windows.yaml", launcher)
+        self.assertIn('$Contract -eq "gpu-benchmark-baseline"', launcher)
+        self.assertIn('$Contract -eq "gpu-nsight"', launcher)
+        self.assertIn("FULLMAG_FEM_EXECUTION=gpu", launcher)
+        self.assertIn("CPU fallback is forbidden", launcher)
+        self.assertIn("NOT VERIFIED", launcher)
 
 
 if __name__ == "__main__":

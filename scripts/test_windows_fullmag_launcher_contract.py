@@ -202,7 +202,7 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
 
     launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
     for required in (
-        '[ValidateSet("gpu-execution-receipt")]',
+        '[ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]',
         "/workspace/.fullmag-build/contracts/fem-gpu-execution-receipt",
         "/workspace/.fullmag-build/cargo-targets/fem-gpu-execution-receipt",
         'Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName',

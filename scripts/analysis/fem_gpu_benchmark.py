@@ -802,6 +802,7 @@ def collect_case(
     *,
     cpu_oracle: object,
     expected_source_identity: Mapping[str, object],
+    expected_workload_identity: Mapping[str, object],
 ) -> dict[str, object]:
     """Validate one exact GPU case before calculating any timing statistic."""
     expected_commit = _canonical_digest(
@@ -816,6 +817,27 @@ def collect_case(
     )
     if expected_source_identity.get("source_snapshot_dirty") is not False:
         raise ValueError("current source snapshot is dirty")
+    expected_problem_ir = _canonical_digest(
+        expected_workload_identity.get("problem_ir_sha256"),
+        field="canonical workload problem_ir_sha256",
+        length=64,
+    )
+    expected_mesh = _canonical_digest(
+        expected_workload_identity.get("mesh_sha256"),
+        field="canonical workload mesh_sha256",
+        length=64,
+    )
+    expected_qualification_problem_ir = _canonical_digest(
+        expected_workload_identity.get(
+            "qualification_fixture_problem_ir_sha256"
+        ),
+        field="qualification fixture problem_ir_sha256",
+        length=64,
+    )
+    if expected_qualification_problem_ir != expected_problem_ir:
+        raise ValueError(
+            "qualification fixture problem_ir_sha256 differs from canonical workload"
+        )
     oracle_status, oracle_failures = _benchmark_v2_oracle(cpu_oracle)
     if oracle_status != "checked" or oracle_failures:
         details = "; ".join(str(value) for value in oracle_failures) or str(
@@ -851,6 +873,24 @@ def collect_case(
         )
         if hashlib.sha256(binary_path.read_bytes()).hexdigest() != launcher_sha256:
             raise ValueError(f"repeat {index} executed binary sha256 mismatch")
+        qualification_problem_ir = row.get(
+            "qualification_fixture_problem_ir_sha256"
+        )
+        if qualification_problem_ir is not None:
+            qualification_problem_ir = _canonical_digest(
+                qualification_problem_ir,
+                field="qualification fixture problem_ir_sha256",
+                length=64,
+            )
+            if qualification_problem_ir != expected_problem_ir:
+                raise ValueError(
+                    "qualification fixture problem_ir_sha256 differs from "
+                    "canonical workload"
+                )
+        else:
+            raise ValueError(
+                "qualification fixture problem_ir_sha256 is missing from repetition"
+            )
         for source_field, output_field in BENCHMARK_V2_IDENTITY_FIELDS.items():
             raw = row.get(source_field)
             if source_field == "runtime_git_commit":
@@ -884,6 +924,10 @@ def collect_case(
         raise ValueError(
             "source_snapshot_sha256 does not match the current checkout"
         )
+    if identities["problem_ir_sha256"] != expected_problem_ir:
+        raise ValueError("problem_ir_sha256 differs from canonical workload")
+    if identities["mesh_sha256"] != expected_mesh:
+        raise ValueError("mesh_sha256 differs from canonical workload")
 
     distribution = summarize_distribution(wall_times_ns)
     return {
@@ -901,6 +945,7 @@ def build_benchmark_v2(
     *,
     cpu_oracle: object,
     expected_source_identity: Mapping[str, object],
+    expected_workload_identity: Mapping[str, object],
 ) -> dict[str, object]:
     grouped: dict[tuple[object, ...], list[Mapping[str, object]]] = {}
     for row in rows:
@@ -917,6 +962,7 @@ def build_benchmark_v2(
                     case_rows,
                     cpu_oracle=cpu_oracle,
                     expected_source_identity=expected_source_identity,
+                    expected_workload_identity=expected_workload_identity,
                 )
             )
         except ValueError as exc:
@@ -983,10 +1029,6 @@ def write_benchmark_v2(
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     records = payload.get("records")
     csv_rows = list(records) if isinstance(records, list) else []
-    with json_path.open(
-        "x" if immutable else "w", encoding="utf-8"
-    ) as handle:
-        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     fieldnames = (
         list(csv_rows[0])
         if csv_rows
@@ -999,10 +1041,53 @@ def write_benchmark_v2(
             "trace_scope",
         ]
     )
-    with csv_path.open("x" if immutable else "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(csv_rows)
+    if not immutable:
+        json_path.unlink(missing_ok=True)
+    csv_fd, csv_temporary_name = tempfile.mkstemp(
+        prefix=f".{csv_path.name}.", suffix=".tmp", dir=csv_path.parent
+    )
+    csv_temporary = Path(csv_temporary_name)
+    json_fd = -1
+    json_temporary: Path | None = None
+    csv_published = False
+    try:
+        open_csv_fd = csv_fd
+        csv_fd = -1
+        with os.fdopen(open_csv_fd, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=fieldnames, lineterminator="\n"
+            )
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        json_fd, json_temporary_name = tempfile.mkstemp(
+            prefix=f".{json_path.name}.", suffix=".tmp", dir=json_path.parent
+        )
+        json_temporary = Path(json_temporary_name)
+        open_json_fd = json_fd
+        json_fd = -1
+        with os.fdopen(open_json_fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        if immutable:
+            os.link(csv_temporary, csv_path)
+            csv_published = True
+            assert json_temporary is not None
+            os.link(json_temporary, json_path)
+        else:
+            os.replace(csv_temporary, csv_path)
+            assert json_temporary is not None
+            os.replace(json_temporary, json_path)
+    except BaseException:
+        if immutable and csv_published and not json_path.exists():
+            csv_path.unlink(missing_ok=True)
+        raise
+    finally:
+        if csv_fd >= 0:
+            os.close(csv_fd)
+        if json_fd >= 0:
+            os.close(json_fd)
+        csv_temporary.unlink(missing_ok=True)
+        if json_temporary is not None:
+            json_temporary.unlink(missing_ok=True)
 
 
 def accepted_energy_trajectory_gate(
@@ -4437,6 +4522,11 @@ def runtime_bundle_identity(
     if require_integrity and not isinstance(native_libraries, Mapping):
         raise ValueError("runtime manifest native library integrity is missing")
     if isinstance(native_libraries, Mapping):
+        fullmag_fem = native_libraries.get("fullmag_fem")
+        if require_integrity and not isinstance(fullmag_fem, Mapping):
+            raise ValueError(
+                "runtime manifest native_libraries.fullmag_fem is missing"
+            )
         for name, entry in native_libraries.items():
             if not isinstance(entry, Mapping):
                 if require_integrity:
@@ -4446,7 +4536,6 @@ def runtime_bundle_identity(
                 checked_artifact_sha256(
                     entry.get("path"), entry.get("sha256"), label=str(name)
                 )
-        fullmag_fem = native_libraries.get("fullmag_fem")
         if isinstance(fullmag_fem, Mapping):
             library_path = fullmag_fem.get("path")
             if isinstance(library_path, str) and library_path:
@@ -13193,11 +13282,23 @@ def main() -> None:
             allow_coverage_only=False,
         )
         try:
+            if fixture is None:
+                raise ValueError(
+                    "benchmark v2 requires an explicit canonical fixture identity"
+                )
             current_source_identity = capture_benchmark_source_identity()
+            expected_workload_identity = {
+                "problem_ir_sha256": fixture.problem_ir_sha256,
+                "mesh_sha256": fixture.solver_mesh_sha256,
+                "qualification_fixture_problem_ir_sha256": (
+                    args.qualification_fixture_problem_ir_sha256
+                ),
+            }
             benchmark_v2_payload = build_benchmark_v2(
                 results,
                 cpu_oracle=oracle,
                 expected_source_identity=current_source_identity,
+                expected_workload_identity=expected_workload_identity,
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             benchmark_v2_payload = not_verified_benchmark_v2(
