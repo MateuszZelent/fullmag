@@ -10,7 +10,8 @@ Commity implementacyjne:
 - `79dd0020d8169283e58f6bf2f778801160b3b5c9` — unikalne indeksy powtórzeń i odczyt UUID GPU w managed baseline,
 - `173bb27160f7069eff766b1f8d1869184f6eae12` — remediacja review: bieżący clean source snapshot, integralność binariów i uporządkowane fazy jednego capture,
 - `1f860804c905ff068c0bfc5af38274ffde4da106` — powiązanie faktycznie wykonywanego launchera ze zweryfikowaną ścieżką i SHA-256 z manifestu,
-- `bac04dadca5e8b118d7ec2718e5a8b334dd251ce` — formalna remediacja: kanoniczna tożsamość workloadu, wymagany `fullmag_fem`, wykonywalne recipes Windows i atomowe artefakty per-attempt.
+- `bac04dadca5e8b118d7ec2718e5a8b334dd251ce` — formalna remediacja: kanoniczna tożsamość workloadu, wymagany `fullmag_fem`, wykonywalne recipes Windows i atomowe artefakty per-attempt,
+- `8f41c468406c8bc7e024068060e1b36c7fe8f039` — canonical owner Windows FEM w `run_fullmag_fem.ps1`, dwa cienkie aliasy zgodności i bezpieczny GUID attemptu.
 
 ## Zakres wykonany
 
@@ -146,6 +147,62 @@ exit 1
 
 Nie instalowano zależności ani cache do checkoutu. Wymagany w briefie runner `unittest` przeszedł.
 
+## Remediacja formalnego re-review: własność launchera i GUID
+
+RED po zmianie kontraktów statycznych wymuszających canonical owner i bezpieczny GUID:
+
+```text
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+Ran 13 tests in 0.172s
+FAILED (failures=1)
+
+python -c "... wszystkie zeroargumentowe testy scripts.test_windows_fullmag_launcher_contract ..."
+AssertionError: compose.windows.yaml missing from run_fullmag_fem.ps1
+exit 1
+```
+
+Minimalna implementacja przeniosła całą logikę Docker Desktop do `scripts/windows/run_fullmag_fem.ps1`. `run_fullmag_wsl.ps1` i `run_fullmag_docker.ps1` zawierają tylko bezpośrednie przekazanie `@args` do canonical launchera. Produkcyjne gałęzie `gpu-benchmark-baseline` i `gpu-nsight` występują wyłącznie w canonical owner. `ContractAttemptId` przyjmuje wyłącznie GUID w formacie `8-4-4-4-12` cyfr szesnastkowych.
+
+GREEN:
+
+```text
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+.............
+Ran 13 tests in 0.169s
+OK
+
+python -c "... wszystkie zeroargumentowe testy scripts.test_windows_fullmag_launcher_contract ..."
+launcher contracts: 35/35 passed
+```
+
+Rzeczywisty parameter binding, wykonany dla canonical launchera i obu aliasów z `ContractAttemptId='..'`, zatrzymał każde wywołanie przed Dockerem:
+
+```text
+scripts/windows/run_fullmag_fem.ps1 unsafe UUID binding: rejected (exit=1)
+scripts/windows/run_fullmag_wsl.ps1 unsafe UUID binding: rejected (exit=1)
+scripts/windows/run_fullmag_docker.ps1 unsafe UUID binding: rejected (exit=1)
+```
+
+Pozostałe sprawdzenia:
+
+```text
+python -m py_compile scripts/analysis/fem_gpu_benchmark.py scripts/analysis/capture_fem_gpu_nsight.py scripts/test_fem_gpu_benchmark_contract.py scripts/test_windows_fullmag_launcher_contract.py
+exit 0
+
+scripts/windows/run_fullmag_fem.ps1 parser: OK
+scripts/windows/run_fullmag_wsl.ps1 parser: OK
+scripts/windows/run_fullmag_docker.ps1 parser: OK
+
+git diff --check
+exit 0 (wyłącznie ostrzeżenia Git o przyszłej normalizacji LF/CRLF)
+
+just --dry-run capture-fem-gpu-pre-remediation-performance-baseline
+baseline dry-run: OK
+
+just --dry-run capture-fem-gpu-nsight
+Nsight dry-run: OK
+```
+
 ## Fail-closed baseline i Nsight
 
 Po commicie `bac04dadca5e8b118d7ec2718e5a8b334dd251ce` uruchomiono dokładnie kanoniczną recipe. Pierwsza próba w sandboxie nie uzyskała dostępu do Docker API; powtórzenie poza sandboxem dotarło do `compose.windows.yaml`, wykryło rzeczywiste GPU i uruchomiło kontener:
@@ -205,6 +262,8 @@ Artefakt:
 - `scripts/analysis/capture_fem_gpu_nsight.py`
 - `scripts/test_fem_gpu_benchmark_contract.py`
 - `scripts/test_windows_fullmag_launcher_contract.py`
-- `scripts/windows/run_fullmag_wsl.ps1` (implementacja wywoływana przez kanoniczny `run_fullmag_fem.ps1`)
+- `scripts/windows/run_fullmag_fem.ps1` (canonical owner pełnej implementacji Docker Desktop)
+- `scripts/windows/run_fullmag_wsl.ps1` (historyczny cienki alias zgodności)
+- `scripts/windows/run_fullmag_docker.ps1` (cienki alias zgodności dla nazwy Docker)
 - `justfile`
 - `.superpowers/sdd/task-3-report.md` (ten raport; osobny commit raportowy)
