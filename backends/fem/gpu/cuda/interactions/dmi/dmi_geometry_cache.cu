@@ -243,7 +243,7 @@ bool DmiGeometryCache::build(
         return true;
     }
 
-    if (element_count_ != element_count) {
+    if (element_count_ != element_count || d_grads_ == nullptr) {
         release();
         const size_t grads_bytes = static_cast<size_t>(element_count) * 12u * sizeof(double);
         const size_t volume_bytes = static_cast<size_t>(element_count) * sizeof(double);
