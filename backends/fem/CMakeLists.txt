@@ -50,6 +50,7 @@ set(FEM_SOURCES
     gpu/cuda/integrators/rk/rk_step_stats.cpp
     gpu/cuda/integrators/rk/rk_step_stats_publication.cpp
     gpu/cuda/integrators/rk/rk_workspace_memory.cpp
+    gpu/cuda/integrators/rk/rk_graph.cpp
     gpu/cuda/interactions/local_interaction_workspace_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
@@ -760,6 +761,14 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     add_test(NAME fem_gpu_rk_device_controller_contract COMMAND fem_gpu_rk_device_controller_contract)
+
+    add_executable(fem_gpu_rk_graph_contract tests/gpu_rk_graph_contract.cpp)
+    target_link_libraries(fem_gpu_rk_graph_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_gpu_rk_graph_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_gpu_rk_graph_contract COMMAND fem_gpu_rk_graph_contract)
 endif()
 
 add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)
