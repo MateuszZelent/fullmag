@@ -393,11 +393,29 @@ bool solve_linear_system(
     if (!hypre_wait_for_fullmag(stream_lease, stream, error)) {
         return false;
     }
+    bool hypre_dependency_open = false;
+    const auto close_hypre_dependency = [&](bool operation_succeeded) {
+        if (!hypre_dependency_open) {
+            return operation_succeeded;
+        }
+        std::string dependency_error;
+        const bool dependency_closed =
+            fullmag_wait_for_hypre(stream_lease, stream, dependency_error);
+        hypre_dependency_open = false;
+        if (!dependency_closed) {
+            if (!operation_succeeded && !error.empty()) {
+                error += "; ";
+            }
+            error += dependency_error;
+        }
+        return operation_succeeded && dependency_closed;
+    };
     if (!set_zero_initial_iterate(ctx, system, error)) {
         return false;
     }
     system.b_par->HypreWrite();
     system.x_par->HypreWrite();
+    hypre_dependency_open = true;
     system.solver->Mult(*system.b_par, *system.x_par);
     int iterations = 0;
     double relative_residual = 0.0;
@@ -421,7 +439,7 @@ bool solve_linear_system(
         system.A_par->Mult(*system.x_par, *system.residual);
         if (!mfem_default_stream_wait_for_hypre_validation(
                 stream_lease, error)) {
-            return false;
+            return close_hypre_dependency(false);
         }
         system.residual->Add(-1.0, *system.b_par);
         absolute_residual = system.residual->Norml2();
@@ -447,9 +465,9 @@ bool solve_linear_system(
     result.absolute_tolerance = ctx.demag.solver.absolute_tolerance;
     result.max_iterations = ctx.demag.solver.max_iterations;
     if (!validate_demag_linear_solve_result(result, error)) {
-        return false;
+        return close_hypre_dependency(false);
     }
-    if (!fullmag_wait_for_hypre(stream_lease, stream, error)) {
+    if (!close_hypre_dependency(true)) {
         return false;
     }
     iterations_out = static_cast<uint64_t>(std::max(0, iterations));
@@ -566,6 +584,11 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
         return true;
     }
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    bool force_independent_residual_validation = false;
+    if (!read_force_independent_residual_validation(
+            force_independent_residual_validation, error)) {
+        return false;
+    }
     auto *cpu_workspace = demag_fem_bem_workspace(ctx);
     auto &gpu = ctx.gpu_state.device;
     if (cpu_workspace == nullptr || !ctx.demag_fem_bem.ready ||
@@ -606,6 +629,8 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
     std::unique_ptr<GpuDemagFemBemWorkspace> workspace;
     try {
         workspace = std::make_unique<GpuDemagFemBemWorkspace>();
+        workspace->force_independent_residual_validation =
+            force_independent_residual_validation;
         workspace->boundary_nodes = cpu_workspace->surface.boundary_nodes;
         workspace->boundary_nodes_count = workspace->boundary_nodes.size();
         workspace->boundary_triangle_count = cpu_workspace->surface.triangles.size();

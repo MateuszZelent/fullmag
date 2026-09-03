@@ -8,6 +8,8 @@
  * or explicitly forced validation path needs an independent A*x-b residual.
  */
 
+#include <string>
+
 namespace fullmag::fem {
 
 struct HypreResidualValidationNeeds {
@@ -18,6 +20,10 @@ struct HypreResidualValidationNeeds {
 bool should_validate_independent_residual(
     bool solver_reported_converged,
     bool forced) noexcept;
+
+bool read_force_independent_residual_validation(
+    bool &forced,
+    std::string &error);
 
 HypreResidualValidationNeeds resolve_hypre_residual_validation_needs(
     bool solver_reported_converged,

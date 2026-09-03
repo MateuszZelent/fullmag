@@ -61,6 +61,9 @@ class FemGpuFullPotentialContractTests(unittest.TestCase):
         gpu_header = (
             ROOT / "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.hpp"
         ).read_text(encoding="utf-8")
+        validation_policy = (
+            ROOT / "backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp"
+        ).read_text(encoding="utf-8")
         poisson_operators = (
             ROOT / "backends/fem/gpu/cuda/demag_poisson/operators.cpp"
         ).read_text(encoding="utf-8")
@@ -86,6 +89,9 @@ class FemGpuFullPotentialContractTests(unittest.TestCase):
         self.assertIn("fullmag_wait_for_hypre", gpu_source)
         self.assertNotIn("cudaStreamSynchronize", gpu_source)
         self.assertNotIn("record_mfem_host_sync", gpu_source)
+        self.assertIn("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL", validation_policy)
+        self.assertIn("read_force_independent_residual_validation", gpu_source)
+        self.assertIn("close_hypre_dependency", gpu_source)
         self.assertIn("allow_fredkin_koehler", poisson_operators)
         self.assertIn("hot_loop_compute_host_sync_count += 1", transfer_audit)
         for fingerprint_field in (

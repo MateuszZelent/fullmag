@@ -53,6 +53,29 @@ void expect(bool solver_converged, bool has_absolute_tolerance, bool force,
         "unexpected HYPRE independent residual policy");
 }
 
+void expect_force_validation_environment(
+    const char *value,
+    bool expected_ok,
+    bool expected_forced)
+{
+    if (value == nullptr) {
+        unsetenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL");
+    } else {
+        check(
+            setenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL", value, 1) == 0,
+            "unable to set independent-residual qualification environment");
+    }
+    bool forced = !expected_forced;
+    std::string error;
+    const bool ok = fullmag::fem::read_force_independent_residual_validation(
+        forced, error);
+    check(ok == expected_ok, "unexpected qualification environment status");
+    check(forced == expected_forced, "unexpected qualification environment value");
+    check(
+        expected_ok || error.find("expected 0 or 1") != std::string::npos,
+        "invalid qualification environment must fail with a strict-value error");
+}
+
 } // namespace
 
 int main()
@@ -78,6 +101,12 @@ int main()
     expect(true, true, false, true, false);
     expect(true, false, true, true, true);
     expect(true, true, true, true, true);
+
+    expect_force_validation_environment(nullptr, true, false);
+    expect_force_validation_environment("0", true, false);
+    expect_force_validation_environment("1", true, true);
+    expect_force_validation_environment("true", false, false);
+    unsetenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL");
 
     const auto root = fem_source_root();
     const std::string solver = read_text_file(

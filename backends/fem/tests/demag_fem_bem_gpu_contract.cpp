@@ -108,6 +108,7 @@ void device_bem_apply_is_device_resident() {
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
 void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
+    unsetenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL");
     int device_count = 0;
     check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
           "managed FEM/BEM GPU contract requires a CUDA device");
@@ -219,6 +220,8 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
           "FEM/BEM GPU workspace accounts uploaded device bytes");
     check(gpu_workspace->stream_lease.ready,
           "FEM/BEM GPU workspace owns a prepared HYPRE stream lease");
+    check(!gpu_workspace->force_independent_residual_validation,
+          "FEM/BEM GPU initialization must default qualification validation to disabled");
 
     constexpr uint64_t demag_mask =
         fullmag::fem::FEM_GPU_OPERATOR_DEMAG_RHS |
@@ -269,14 +272,61 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
     check(receipt.accounting_valid &&
               receipt.execution_class == fullmag::fem::FemGpuExecutionClass::DeviceResident,
           "FEM/BEM strict receipt must preserve the resolved device-resident class");
+    fullmag::fem::gpu_execution_receipt_commit_attempt(
+        ctx.gpu_state.execution_receipt);
+    const auto performance =
+        fullmag::fem::gpu_execution_receipt_performance_snapshot(
+            ctx.gpu_state.execution_receipt);
+    check(performance.compute_fence_count == 0u,
+          "versioned FEM/BEM performance receipt must report zero compute fences");
     check(gpu_workspace->stream_lease.event_wait_count == 4u,
-          "two FEM/BEM HYPRE solves must enqueue exactly two dependency pairs");
+          "two ordinary FEM/BEM solves must enqueue exactly two dependency pairs");
     check(gpu_workspace->u1_system.independent_residual_validation_count == 0u &&
               gpu_workspace->u2_system.independent_residual_validation_count == 0u,
           "ordinary converged FEM/BEM solves must skip independent residual SpMV");
 
+    gpu_workspace->force_independent_residual_validation = true;
+    const uint64_t event_waits_before_forced_validation =
+        gpu_workspace->stream_lease.event_wait_count;
+    check(fullmag::fem::compute_device_demag_fem_bem_for_device_stage(
+              ctx,
+              ctx.gpu_state.device.magnetization.m,
+              nullptr,
+              true,
+              false,
+              error),
+          "forced FEM/BEM independent residual validation must execute");
+    check(gpu_workspace->u1_system.independent_residual_validation_count == 1u &&
+              gpu_workspace->u2_system.independent_residual_validation_count == 1u,
+          "forced FEM/BEM solve must independently validate both residuals");
+    check(
+        gpu_workspace->stream_lease.event_wait_count ==
+            event_waits_before_forced_validation + 6u,
+        "forced FEM/BEM solve must close both solve and validation dependencies");
+
+    const uint64_t event_waits_before_failed_validation =
+        gpu_workspace->stream_lease.event_wait_count;
+    ctx.demag.solver.max_iterations = 0;
+    check(!fullmag::fem::compute_device_demag_fem_bem_for_device_stage(
+              ctx,
+              ctx.gpu_state.device.magnetization.m,
+              nullptr,
+              true,
+              false,
+              error),
+          "invalid post-solve iteration limit must fail FEM/BEM residual validation");
+    check(
+        gpu_workspace->stream_lease.event_wait_count ==
+            event_waits_before_failed_validation + 3u,
+        "failed validation after HYPRE A*x must still close the outbound dependency");
+    check(error.find("max_iterations=0") != std::string::npos,
+          "failed FEM/BEM validation must report the deterministic iteration limit");
+    ctx.demag.solver.max_iterations = 500;
+
     check(ctx.gpu_state.device.lifecycle.device_bytes > baseline_device_bytes,
           "FEM/BEM GPU initialization must account nested device allocations");
+    check(setenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL", "1", 1) == 0,
+          "FEM/BEM GPU contract enables qualification validation through the environment");
     check(fullmag::fem::context_initialize_demag_fem_bem(ctx, error, 3u),
           "FEM/BEM shared workspace reinitialization must destroy the prior GPU workspace");
     check(ctx.gpu_state.device.lifecycle.device_bytes == baseline_device_bytes,
@@ -293,8 +343,11 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
         cpu_workspace->gpu_workspace);
     check(gpu_workspace != nullptr && gpu_workspace->d_boundary_tdofs != nullptr,
           "FEM/BEM GPU workspace must own device allocations after reinitialization");
+    check(gpu_workspace->force_independent_residual_validation,
+          "FEM/BEM GPU initialization must consume the qualification environment");
     check(ctx.gpu_state.device.lifecycle.device_bytes > baseline_device_bytes,
           "FEM/BEM GPU reinitialization must account exactly one nested workspace");
+    unsetenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL");
 
     fullmag::fem::context_destroy_mfem(ctx);
     check(ctx.demag_fem_bem.workspace == nullptr && !ctx.demag_fem_bem.ready,

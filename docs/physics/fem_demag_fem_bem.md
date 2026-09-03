@@ -309,10 +309,16 @@ eventów blokuje dalszego konsumenta Fullmag bez zatrzymywania hosta.
 
 Po zwykłym sukcesie Hypre wynikowa norma residuum solvera jest używana bez
 dodatkowego SpMV. `should_validate_independent_residual` wymusza $A x-b$ tylko
-po zgłoszonym braku zbieżności albo w jawnym trybie kwalifikacyjnym. Jeżeli
-włączono tolerancję absolutną, jedna norma RHS służy zarówno do przeliczenia
-residuum solvera, jak i do niezależnej walidacji. Kontrakt nie zmienia równań,
-znaków, jednostek ani wyboru solvera.
+po zgłoszonym braku zbieżności albo po jawnym ustawieniu kwalifikacyjnym
+`FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL=1`. Brak zmiennej i wartość `0`
+zachowują zwykłą ścieżkę; każda inna wartość jest odrzucana fail-closed podczas
+initialize. Jeżeli włączono tolerancję absolutną, jedna norma RHS służy zarówno
+do przeliczenia residuum solvera, jak i do niezależnej walidacji.
+
+Po wejściu do HYPRE zależność wyjściowa jest domykana także przy błędzie
+walidacji, w tym po niezależnym `A*x-b`; ścieżka błędu nie niszczy eventu ani
+nie pozwala kolejnemu konsumentowi Fullmag ominąć oczekiwania na strumień
+HYPRE. Kontrakt nie zmienia równań, znaków, jednostek ani wyboru solvera.
 
 Wskaźnik device workspace ma dokładnie jednego właściciela lifecycle:
 `DemagFemBemWorkspace` przechowuje callback destruktora dostarczony przez moduł
@@ -359,7 +365,9 @@ niepoprawne, nie-manifold, skalowanie, typy/CSR, gauge wielu składowych,
 pełny CPU solve, fingerprint geometrii/opcji i bezpieczny pusty output `apply`.
 Osobny target GPU sprawdza pełne initialize→apply, upload true-DOF, device
 apply, cztery event waits dla dwóch solve’ów, zerowy przyrost compute host sync
-i brak niezależnego SpMV po zwykłej zbieżności. Istniejące
+i zerowy `compute_fence_count` w receipcie. Sprawdza również brak niezależnego
+SpMV po zwykłej zbieżności, dwa wymuszone residua oraz domknięcie outbound event
+po celowo odrzuconej walidacji. Istniejące
 testy energii, skończoności macierzy i własności modułów pozostają aktywne.
 
 ### 10.2. Walidacja fizyczna
@@ -444,6 +452,7 @@ na managed CPU i GPU.
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu | fullmag_cuda_fem_bem_apply | device apply bloków near/far i mapowania P1 true DOF |
 | backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp | initialize_hypre_stream_interop, HypreStreamLease | trwały pożyczony strumień Hypre oraz eventy zależności wejścia/wyjścia |
 | backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp | should_validate_independent_residual | czysta polityka pomijania dodatkowego $A x-b$ po zwykłej zbieżności |
+| backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp | read_force_independent_residual_validation | strict odczyt `FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL` dla kwalifikacyjnego wymuszenia residuum |
 | backends/fem/tests/demag_fem_bem_contract.cpp | main | wykonywalny kontrakt testowy |
 | backends/fem/tests/demag_fem_bem_gpu_contract.cpp | main | wykonywalny kontrakt CUDA near/far apply |
 

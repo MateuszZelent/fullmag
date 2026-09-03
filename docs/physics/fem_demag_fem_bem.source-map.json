@@ -167,6 +167,12 @@
       "responsibility": "Czysta polityka niezależnego residuum po braku zbieżności albo jawnym wymuszeniu kwalifikacyjnym."
     },
     {
+      "id": "gpu-residual-qualification-config",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp",
+      "symbol": "read_force_independent_residual_validation",
+      "responsibility": "Strict odczyt 0/1 zmiennej FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL; inne wartości kończą initialize fail-closed."
+    },
+    {
       "id": "workspace",
       "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp",
       "symbol": "context_initialize_demag_fem_bem",

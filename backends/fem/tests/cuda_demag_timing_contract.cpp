@@ -174,7 +174,9 @@ int main()
             gpu_fem_bem.find("record_mfem_host_sync") == std::string::npos &&
             gpu_fem_bem.find("hypre_wait_for_fullmag(") <
                 gpu_fem_bem.find("system.solver->Mult(*system.b_par, *system.x_par)") &&
-            gpu_fem_bem.find("fullmag_wait_for_hypre(") >
+            gpu_fem_bem.find("fullmag_wait_for_hypre(") !=
+                std::string::npos &&
+            gpu_fem_bem.find("close_hypre_dependency(true)") >
                 gpu_fem_bem.find("system.solver->Mult(*system.b_par, *system.x_par)"),
         "FEM/BEM HYPRE solves must use bidirectional event dependencies without host fences");
     check(
