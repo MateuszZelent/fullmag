@@ -15,6 +15,7 @@ import {
 } from "../resources/ResourceRuntimeStore";
 import type { KernelApi } from "../types";
 
+import { LayoutController } from "./LayoutController";
 import {
   findElements,
   installSimulationPreparationTestDom,
@@ -127,6 +128,7 @@ function makeKernel(
     bus,
     commands: new CommandRegistry(),
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+    layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
     resources: new ResourceInvalidationController(bus),
   } as unknown as KernelApi;

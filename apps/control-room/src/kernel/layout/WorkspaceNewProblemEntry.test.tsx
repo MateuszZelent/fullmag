@@ -23,6 +23,7 @@ import type { KernelApi } from "../types";
 import { appMenuManifest } from "@/modules/app-menu/manifest";
 import AppMenuModule from "@/modules/app-menu/AppMenuModule";
 
+import { LayoutController } from "./LayoutController";
 import {
   findElement,
   findElements,
@@ -212,6 +213,7 @@ function makeKernel(): KernelApi {
     bus,
     commands,
     diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+    layout: new LayoutController(bus),
     modules,
     resources: new ResourceInvalidationController(bus),
   } as unknown as KernelApi;
