@@ -200,19 +200,35 @@ def test_windows_fem_compatibility_launchers_are_thin_direct_aliases() -> None:
         assert '$Contract -eq "gpu-benchmark-baseline"' not in launcher
         assert '$Contract -eq "gpu-nsight"' not in launcher
         assert "function Invoke-DockerCompose" not in launcher
+        assert "wsl.exe" not in launcher.lower()
+        assert "Invoke-External" not in launcher
 
 
 def test_windows_fem_contract_attempt_id_is_a_safe_guid() -> None:
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
-    guid_pattern = (
-        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    python_guid_pattern = (
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+        r"4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    )
+    powershell_guid_pattern = python_guid_pattern.replace("^", r"\A").replace(
+        "$", r"\z"
     )
 
-    assert f'[ValidatePattern("{guid_pattern}")]' in launcher
-    assert re.fullmatch(guid_pattern, "46578ff1-efff-4bf4-8ce4-22ccda091dc3")
-    for invalid in (".", "..", "attempt-1", "a/b", r"a\b"):
-        assert re.fullmatch(guid_pattern, invalid) is None
+    assert f'[ValidatePattern("{powershell_guid_pattern}")]' in launcher
+    assert re.fullmatch(
+        python_guid_pattern, "46578ff1-efff-4bf4-8ce4-22ccda091dc3"
+    )
+    for invalid in (
+        ".",
+        "..",
+        "attempt-1",
+        "a/b",
+        r"a\b",
+        "46578ff1-efff-1bf4-8ce4-22ccda091dc3",
+        "46578ff1-efff-4bf4-7ce4-22ccda091dc3",
+        "46578ff1-efff-4bf4-8ce4-22ccda091dc3\n",
+    ):
+        assert re.fullmatch(python_guid_pattern, invalid) is None
 
 
 def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> None:

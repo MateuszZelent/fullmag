@@ -27,7 +27,7 @@ param(
   [ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]
   [string]$Contract,
 
-  [ValidatePattern("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")]
+  [ValidatePattern("\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\z")]
   [string]$ContractAttemptId,
 
   [ValidateRange(1, 65535)]
