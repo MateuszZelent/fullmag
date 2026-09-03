@@ -516,7 +516,7 @@ class ManagedRecipeContractTests(unittest.TestCase):
         self.assertNotIn("--record-not-verified", nsight_windows)
 
         launcher = (
-            ROOT / "scripts" / "windows" / "run_fullmag_wsl.ps1"
+            ROOT / "scripts" / "windows" / "run_fullmag_fem.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn(
             '[ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]',

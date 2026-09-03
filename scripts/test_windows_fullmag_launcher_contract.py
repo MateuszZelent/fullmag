@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -184,9 +185,34 @@ def test_windows_fem_entrypoint_is_windows_powerShell_to_docker_and_wsl_free() -
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert "Canonical Windows FEM entry point" in launcher
-    assert "run_fullmag_wsl.ps1" in launcher
+    assert "compose.windows.yaml" in launcher
+    assert '$Contract -eq "gpu-benchmark-baseline"' in launcher
+    assert '$Contract -eq "gpu-nsight"' in launcher
     assert 'Invoke-External "wsl.exe"' not in launcher
-    assert "@args" in launcher
+
+
+def test_windows_fem_compatibility_launchers_are_thin_direct_aliases() -> None:
+    for path in (LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER):
+        launcher = path.read_text(encoding="utf-8")
+        assert "run_fullmag_fem.ps1" in launcher
+        assert "@args" in launcher
+        assert "compose.windows.yaml" not in launcher
+        assert '$Contract -eq "gpu-benchmark-baseline"' not in launcher
+        assert '$Contract -eq "gpu-nsight"' not in launcher
+        assert "function Invoke-DockerCompose" not in launcher
+
+
+def test_windows_fem_contract_attempt_id_is_a_safe_guid() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
+    guid_pattern = (
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+        r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+
+    assert f'[ValidatePattern("{guid_pattern}")]' in launcher
+    assert re.fullmatch(guid_pattern, "46578ff1-efff-4bf4-8ce4-22ccda091dc3")
+    for invalid in (".", "..", "attempt-1", "a/b", r"a\b"):
+        assert re.fullmatch(guid_pattern, invalid) is None
 
 
 def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> None:
@@ -200,7 +226,7 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
     assert "docker compose" not in recipe
     assert "compose.yaml" not in recipe
 
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
     for required in (
         '[ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]',
         "/workspace/.fullmag-build/contracts/fem-gpu-execution-receipt",
@@ -214,7 +240,7 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
 
 
 def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     for required in (
         "GetPathRoot($RepoRoot)",
@@ -274,20 +300,12 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     assert "run_fullmag.ps1" not in launcher
 
 
-def test_windows_docker_compatibility_launcher_captures_image_inspect_exit_code() -> None:
-    launcher = DOCKER_LAUNCHER.read_text(encoding="utf-8")
+def test_windows_fem_launcher_captures_image_inspect_exit_code() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     inspect = launcher.index("docker image inspect")
-    exit_candidates = [
-        launcher.find("$imageExitCode = $LASTEXITCODE", inspect),
-        launcher.find("$imageInspectExitCode = $LASTEXITCODE", inspect),
-    ]
-    exit_code = min(index for index in exit_candidates if index != -1)
-    selection_candidates = [
-        launcher.find("Select-Object -First 1", inspect),
-        launcher.find("$imageId = if", inspect),
-    ]
-    selection = min(index for index in selection_candidates if index != -1)
+    exit_code = launcher.index("$imageInspectExitCode = $LASTEXITCODE", inspect)
+    selection = launcher.index("$imageId = if", inspect)
 
     assert inspect < exit_code < selection
     assert 'Invoke-External "wsl.exe"' not in launcher
@@ -295,7 +313,7 @@ def test_windows_docker_compatibility_launcher_captures_image_inspect_exit_code(
 
 def test_windows_launchers_and_setup_namespace_default_storage_per_worktree() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
-    fem_launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    fem_launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
     setup = SETUP.read_text(encoding="utf-8")
 
     for script in (launcher, fem_launcher, setup):
@@ -322,7 +340,7 @@ def test_managed_compose_recipes_do_not_use_a_global_project_name() -> None:
 
 
 def test_windows_fem_image_override_is_used_for_runtime_validation() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     runtime_image_block = launcher[launcher.index("$RuntimeImage ="):]
     assert "FULLMAG_WINDOWS_FEM_CPU_IMAGE" in runtime_image_block
@@ -357,8 +375,8 @@ def test_justfile_exposes_windows_setup_doctor_and_build_only_routes() -> None:
     assert "-BuildOnly" in justfile
 
 
-def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+def test_windows_fem_build_script_uses_binary_safe_bash_payload() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert '[System.Text.Encoding]::UTF8.GetBytes($buildCommand)' in launcher
     assert '[Convert]::ToBase64String($buildCommandBytes)' in launcher
@@ -366,15 +384,15 @@ def test_windows_wsl_build_script_uses_binary_safe_bash_payload() -> None:
     assert '.Replace("`r`n", "`n").Replace("`r", "`n")' in launcher
 
 
-def test_windows_wsl_launcher_uses_windows_powershell_relative_path_api() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+def test_windows_fem_launcher_uses_windows_powershell_relative_path_api() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert "MakeRelativeUri" in launcher
     assert "Path.GetRelativePath" not in launcher
 
 
 def test_windows_fem_interactive_launch_omits_empty_compose_environment_entries() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     assert '$(if ($RunMode -eq "headless") { "FULLMAG_API_PORT=0" } else { $null })' in launcher
     assert "[string]::IsNullOrWhiteSpace([string]$entry)" in launcher
@@ -382,7 +400,7 @@ def test_windows_fem_interactive_launch_omits_empty_compose_environment_entries(
 
 
 def test_windows_fem_build_mutex_is_released_before_long_running_simulation() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
     manifest_boundary = launcher.index('  if ($BuildOnly) {')
     release_boundary = launcher.index(
@@ -395,7 +413,7 @@ def test_windows_fem_build_mutex_is_released_before_long_running_simulation() ->
 
 
 def test_windows_fem_interactive_launch_separates_host_and_container_web_ports() -> None:
-    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
     compose = WINDOWS_COMPOSE.read_text(encoding="utf-8")
 
     assert '$env:FULLMAG_WINDOWS_WEB_PORT = $WebPort.ToString()' in launcher
