@@ -68,7 +68,8 @@ bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error
 {
     auto &gpu = ctx.gpu_state.device;
     if (ctx.demag.enabled &&
-        ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+        (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+         ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) &&
         !fullmag::fem::recover_device_demag_visual_field(
             ctx,
             ctx.gpu_state.cuda.compute_stream,

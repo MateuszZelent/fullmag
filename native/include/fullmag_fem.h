@@ -2786,6 +2786,7 @@ typedef enum {
     FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED = 0,
     FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON = 1,
     FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON = 2,
+    FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM = 3,
 } fullmag_fem_gpu_demag_mode;
 
 /*
@@ -2866,6 +2867,36 @@ typedef struct {
     uint64_t hot_loop_compute_d2h_bytes;
     uint64_t hot_loop_compute_host_sync_count;
 } fullmag_fem_gpu_execution_receipt_v1;
+
+/*
+ * Append-only Fredkin-Koehler FEM/BEM operator provenance.  The query reports
+ * the operator that was actually assembled/uploaded for the current backend
+ * handle; it never infers readiness from the requested plan alone.
+ */
+#define FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t available;
+    uint32_t reserved;
+    char operator_mode[64];
+    char operator_fingerprint[256];
+    uint64_t boundary_node_count;
+    uint64_t boundary_triangle_count;
+    uint64_t near_block_count;
+    uint64_t far_block_count;
+    uint64_t near_entry_count;
+    uint64_t far_row_count;
+    uint32_t max_rank;
+    uint32_t reserved2;
+    double relative_error_estimate;
+    uint64_t resident_bytes;
+    uint64_t device_bytes;
+    uint64_t operator_build_count;
+    uint64_t operator_upload_count;
+    uint64_t apply_count;
+} fullmag_fem_demag_fem_bem_provenance_v1;
 
 /*
  * Append-only host-owned performance snapshot.  The physical counters include
@@ -3341,6 +3372,11 @@ int fullmag_fem_backend_validate_strict_gpu_rk_plan(
 int fullmag_fem_backend_gpu_execution_receipt_v1(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_execution_receipt_v1 *out_receipt
+);
+
+int fullmag_fem_backend_demag_fem_bem_provenance_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_demag_fem_bem_provenance_v1 *out_provenance
 );
 
 int fullmag_fem_backend_gpu_performance_snapshot_v1(

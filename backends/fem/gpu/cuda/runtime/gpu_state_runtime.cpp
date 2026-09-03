@@ -79,7 +79,8 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     }
 #endif
 #if FULLMAG_HAS_MFEM_STACK
-    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+    if ((ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+         ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) &&
         !ctx.gpu_state.device.lifecycle.allocated) {
         error =
             "strict FEM GPU demag requires an MFEM GPU device before FemGpuState demag buffers can be allocated";

@@ -1,0 +1,24 @@
+{
+  "execution_identity": {
+    "backend": "fdm",
+    "capability_id": "llg_td_policy_v1",
+    "device": "cuda",
+    "integrator": "rk45",
+    "precision": "double",
+    "qualification_id": "explicit_fixed_fdm_cuda_double",
+    "qualification_registry_version": "fullmag.llg_timestep_qualification_registry.v1",
+    "timestep_policy": "fixed",
+    "validation_state": "unvalidated"
+  },
+  "requested_policy": {
+    "integrator": "rk45",
+    "kind": "fixed",
+    "timestep_s": 5e-14
+  },
+  "resolved_policy": {
+    "integrator": "rk45",
+    "kind": "fixed",
+    "timestep_s": 5e-14
+  },
+  "schema_version": "LLG-TD-SOLVER-CONFIG-V1"
+}

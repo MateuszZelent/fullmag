@@ -5,6 +5,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_operator.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem_surface.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,7 +26,7 @@ struct FemBemHypreCache;
 /*
  * Workspace and lifecycle for Fredkin-Koehler FEM/BEM demag.
  *
- * This module owns the body boundary surface, dense BEM operator, P1 scalar
+ * This module owns the body boundary surface, hierarchical BEM operator, P1 scalar
  * potential space, stiffness operators, potential vectors, boundary true-DOF
  * map, and setup/teardown of shared Poisson RHS and recovery workspaces used by
  * FEM/BEM. It does not assemble per-step RHS, apply the BEM operator, run sparse
@@ -33,7 +34,8 @@ struct FemBemHypreCache;
  */
 struct DemagFemBemWorkspace {
     DemagBoundarySurface surface;
-    DenseDemagBemOperator boundary_operator;
+    HierarchicalDemagBemOperator boundary_operator;
+    HierarchicalDemagBemOptions boundary_operator_options;
     std::unique_ptr<mfem::FiniteElementCollection> potential_fec;
     std::unique_ptr<mfem::FiniteElementSpace> potential_fes;
     std::unique_ptr<mfem::BilinearForm> stiffness_form;
@@ -44,8 +46,14 @@ struct DemagFemBemWorkspace {
     std::unique_ptr<mfem::Vector> total_potential;
     std::unique_ptr<mfem::Vector> boundary_values_global;
     std::unique_ptr<mfem::Vector> laplace_rhs;
+    std::vector<int> boundary_tdofs_by_row;
     std::vector<int> boundary_tdofs;
+    std::vector<double> boundary_u1;
+    std::vector<double> boundary_u2;
     std::vector<int> neumann_gauge_tdofs;
+    uint64_t boundary_operator_build_count = 0;
+    uint64_t boundary_operator_upload_count = 0;
+    uint64_t boundary_operator_apply_count = 0;
     int last_u1_iterations = 0;
     int last_u2_iterations = 0;
     double last_u1_residual = 0.0;
@@ -53,6 +61,9 @@ struct DemagFemBemWorkspace {
     bool fresh_initial_guess_required = false;
     FemBemHypreCache *u1_hypre_cache = nullptr;
     FemBemHypreCache *u2_hypre_cache = nullptr;
+    void *gpu_workspace = nullptr;
+    bool gpu_workspace_ready = false;
+    uint64_t gpu_workspace_device_bytes = 0;
 };
 
 /*

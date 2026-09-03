@@ -63,8 +63,8 @@ pub(crate) use plan::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
-    NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency,
+    NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use stage_coupled::StageM2CoupledProvider;
@@ -3152,6 +3152,24 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU execution receipt read failed"));
         }
         runtime_info::NativeFemGpuExecutionReceipt::from_ffi(receipt)
+    }
+
+    pub(crate) fn demag_fem_bem_provenance(
+        &self,
+    ) -> Result<Option<runtime_info::NativeFemDemagFemBemProvenance>, RunError> {
+        let mut provenance = ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
+            abi_version: ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION,
+            struct_size:
+                std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
+            ..Default::default()
+        };
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_demag_fem_bem_provenance_v1(self.handle, &mut provenance)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM Fredkin-Koehler provenance read failed"));
+        }
+        runtime_info::NativeFemDemagFemBemProvenance::from_ffi(provenance)
     }
 
     pub(crate) fn gpu_performance_snapshot(

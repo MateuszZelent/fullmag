@@ -19,15 +19,17 @@ windows-doctor:
 windows-setup:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/setup_fullmag.ps1" -InstallMissing
 
-windows-build backend="fdm" device="cpu" frontend="dev":
-    backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; \
+windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false":
+    backend="{{backend}}"; device="{{device}}"; frontend="{{frontend}}"; skip_local_changes="{{skip_local_changes}}"; \
     case "$backend" in backend=*) backend="${backend#backend=}" ;; --backend=*) backend="${backend#--backend=}" ;; esac; \
     case "$device" in device=*) device="${device#device=}" ;; --device=*) device="${device#--device=}" ;; esac; \
     case "$frontend" in frontend=*) frontend="${frontend#frontend=}" ;; --frontend=*) frontend="${frontend#--frontend=}" ;; esac; \
+    case "$skip_local_changes" in skip_local_changes=*) skip_local_changes="${skip_local_changes#*=}" ;; --skip_local_changes=*) skip_local_changes="${skip_local_changes#*=}" ;; esac; \
+    case "$skip_local_changes" in 1|true|yes|on) skip_local_changes_args=(-SkipLocalChanges) ;; 0|false|no|off) skip_local_changes_args=() ;; *) echo "unsupported skip_local_changes value: $skip_local_changes (expected true or false)" >&2; exit 2 ;; esac; \
     if [ "$backend" = "fem" ]; then \
-      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device"; \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend fem -Device "$device" "${skip_local_changes_args[@]}"; \
     else \
-      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device"; \
+      powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag.ps1" -BuildMode true -BuildOnly -Frontend "$frontend" -Backend "$backend" -Device "$device" "${skip_local_changes_args[@]}"; \
     fi
 
 ensure-python:
@@ -1742,6 +1744,14 @@ verify-fem-demag-poisson-contract:
 verify-fem-demag-poisson-contract-focused:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_demag_poisson_contract fem_demag_delta_potential_contract fem_demag_fem_bem_contract fem_cuda_demag_timing_contract fem_cuda_periodic_demag_contract fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_demag_delta_potential_contract && native/build/backends/fem/fem_demag_fem_bem_contract && native/build/backends/fem/fem_cuda_demag_timing_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
+
+verify-fem-demag-fem-bem-contract-focused:
+    docker compose --profile fem-gpu run --rm --no-deps \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fem-bem-contract && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target fem_demag_fem_bem_contract fem_demag_fem_bem_gpu_contract && LD_LIBRARY_PATH="$build_dir/backends/fem:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fem/fem_demag_fem_bem_contract" && "$build_dir/backends/fem/fem_demag_fem_bem_gpu_contract"'
+
+verify-fem-fk-sinc-layer-validator:
+    python3 -m unittest scripts.test_validate_fem_fk_sinc_layer_runtime -v
 
 verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
@@ -5239,7 +5249,7 @@ run-headless-bench script:
 
 fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
     bash -euo pipefail -c '\
-      build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; seen_options=""; \
+      build="false"; force="false"; windows="false"; frontend="dev"; backend="auto"; device="auto"; run_mode="interactive"; script=""; web_port="3100"; skip_local_changes="false"; seen_options=""; \
       for raw in "{{opt_1}}" "{{opt_2}}" "{{opt_3}}" "{{opt_4}}" "{{opt_5}}" "{{opt_6}}" "{{opt_7}}" "{{opt_8}}"; do \
         [ -n "$raw" ] || continue; \
         key="${raw%%=*}"; value="$raw"; if [ "$key" != "$raw" ]; then value="${raw#*=}"; fi; \
@@ -5249,6 +5259,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
           --build|build|true|false) option_id="build" ;; \
           --windows|windows) option_id="windows" ;; \
           --force|force) option_id="force" ;; \
+          --skip_local_changes|skip_local_changes|--skip-local-changes|skip-local-changes) option_id="skip_local_changes" ;; \
           --frontend|frontend|ui|--static|static|--dev|dev) option_id="frontend" ;; \
           --backend|--discretization|--engine|backend|discretization|engine|--fem|fem|--fdm|fdm|--auto|auto) option_id="backend" ;; \
           --device|--execution|device|execution|--gpu|gpu|--cpu|cpu) option_id="device" ;; \
@@ -5264,6 +5275,7 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
           --build|build) build="$value_lc" ;; \
           --windows|windows) windows="$value_lc" ;; \
           --force|force) if [ "$key" = "$raw" ]; then force="true"; else force="$value_lc"; fi ;; \
+          --skip_local_changes|skip_local_changes|--skip-local-changes|skip-local-changes) if [ "$key" = "$raw" ]; then skip_local_changes="true"; else skip_local_changes="$value_lc"; fi ;; \
           --frontend|frontend|ui) frontend="$value_lc" ;; \
           --backend|--discretization|--engine|backend|discretization|engine) backend="$value_lc" ;; \
           --device|--execution|device|execution) device="$value_lc" ;; \
@@ -5290,19 +5302,21 @@ fullmag opt_1="" opt_2="" opt_3="" opt_4="" opt_5="" opt_6="" opt_7="" opt_8="":
       case "$build" in 1|true|yes|on) build="true" ;; 0|false|no|off) build="false" ;; *) echo "unsupported build value: $build (expected true or false)" >&2; exit 2 ;; esac; \
       case "$windows" in 1|true|yes|on) windows="true" ;; 0|false|no|off) windows="false" ;; *) echo "unsupported windows value: $windows (expected true or false)" >&2; exit 2 ;; esac; \
       case "$force" in 1|true|yes|on) force="true"; build="true" ;; 0|false|no|off) force="false" ;; *) echo "unsupported force value: $force (expected true or false)" >&2; exit 2 ;; esac; \
+      case "$skip_local_changes" in 1|true|yes|on) skip_local_changes="true" ;; 0|false|no|off) skip_local_changes="false" ;; *) echo "unsupported skip_local_changes value: $skip_local_changes (expected true or false)" >&2; exit 2 ;; esac; \
       case "$frontend" in static|dev) ;; *) echo "unsupported frontend mode: $frontend (expected static or dev)" >&2; exit 2 ;; esac; \
       case "$backend" in fem|fdm|auto) ;; *) echo "unsupported backend: $backend (expected fem, fdm, or auto)" >&2; exit 2 ;; esac; \
       case "$device" in gpu|cpu|auto) ;; *) echo "unsupported device: $device (expected gpu, cpu, or auto)" >&2; exit 2 ;; esac; \
       case "$run_mode" in interactive|headless) ;; *) echo "unsupported run mode: $run_mode (expected interactive or headless)" >&2; exit 2 ;; esac; \
       if [ -z "$script" ]; then echo "missing script path; example: just fullmag windows=True build=True dev fdm gpu ./examples/permalloy_layer_bimeron_prism_single_layer_relax_300nm.py" >&2; exit 2; fi; \
       if [ ! -f "$script" ]; then echo "script not found: $script" >&2; exit 2; fi; \
+      skip_local_changes_args=(); if [ "$skip_local_changes" = "true" ]; then skip_local_changes_args=(-SkipLocalChanges); fi; \
       host_windows="false"; \
       case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows="true" ;; esac; \
       if [ "$backend" = "fem" ] && { [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; }; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag_fem.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$windows" = "true" ] || [ "$host_windows" = "true" ]; then \
-        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port"; \
+        exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{ repo_root }}/scripts/windows/run_fullmag.ps1" -BuildMode "$build" -Frontend "$frontend" -Backend "$backend" -Device "$device" -RunMode "$run_mode" -ScriptPath "$script" -WebPort "$web_port" "${skip_local_changes_args[@]}"; \
       fi; \
       if [ "$build" = "true" ]; then just ensure-python; elif [ ! -x "{{repo_python}}" ]; then echo "Python env is missing; run with build=True or force=True once." >&2; exit 2; fi; \
       if [ "$frontend" = "static" ]; then \

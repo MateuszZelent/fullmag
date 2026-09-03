@@ -1,0 +1,5 @@
+{
+  "authoritative": true,
+  "schema_version": "fullmag_field_storage.v1",
+  "storage": "json_snapshot_files"
+}

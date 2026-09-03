@@ -1,0 +1,43 @@
+{
+  "schema_version": "physics_graph.runtime.v1",
+  "graph_sha256": "b1f836f5d1b78db8f9b10c6d5af9f64fecec2e8f05ed784e642da812b2b84edf",
+  "scene_revision": 0,
+  "mesh_revision": 9597643389719064630,
+  "requested_lane": "fdm",
+  "resolved_lane": "fdm",
+  "modules": [
+    {
+      "module_id": "uniform_sinc_y",
+      "kind": "regional_field_drive",
+      "scope": "global",
+      "status": "active",
+      "depends_on": [],
+      "requested_lane": "fdm",
+      "resolved_lane": "fdm",
+      "fem_marker_ids": [
+        4156116031
+      ],
+      "fdm_cell_mask_id": "physics-mask.v1:uniform_sinc_y:global",
+      "source_path": "/field_drives/0"
+    }
+  ],
+  "realization": {
+    "schema_version": "physics_graph.realization.v1",
+    "topology_fingerprint": "a2d4c9663a6f57abeec3e18d775e709b40fac028fdb8226f3f9e13743598c883",
+    "resolved_module_ids": [
+      "uniform_sinc_y"
+    ],
+    "modules": [
+      {
+        "module_id": "uniform_sinc_y",
+        "state": "resolved",
+        "topology_fingerprint": "a2d4c9663a6f57abeec3e18d775e709b40fac028fdb8226f3f9e13743598c883",
+        "realized_fdm_mask_digest": "sha256:ff174ab8ee72919b45fbe7646498b81f753747f6ba534e2da920544dcad94673",
+        "realized_cell_count": 40000,
+        "realized_fdm_region_ids": [
+          0
+        ]
+      }
+    ]
+  }
+}

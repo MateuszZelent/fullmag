@@ -5,6 +5,8 @@
 # wsl.exe or require a WSL checkout.  The historical run_fullmag_wsl.ps1 name
 # is retained as a compatibility implementation for older scripts.
 
+Write-Host "[Fullmag] FEM launcher started: $($MyInvocation.MyCommand.Path)" -ForegroundColor Cyan
+
 $ErrorActionPreference = "Stop"
 
 $legacyLauncher = Join-Path $PSScriptRoot "run_fullmag_wsl.ps1"

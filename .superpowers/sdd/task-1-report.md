@@ -388,3 +388,114 @@ Statusy wszystkich lane'ów pozostają `UNQUALIFIED`.
 
 Nie uruchamiano innych gate'ów. Nie wykonano `git add`, `git commit` ani
 `git push`; niezwiązane pliki nie zostały dotknięte.
+
+## Task 1 — Analysis projection revision gate (2026-09-02)
+
+### Status
+
+`DONE_WITH_CONCERNS`
+
+Task 1 został zaimplementowany w izolowanym worktree:
+
+`C:\git\fullmag\fullmag\.worktrees\task-1-projection-gate`
+
+Branch worktree:
+
+`codex/results-task-1-projection-gate`
+
+Dirty checkout nadrzędny pozostał bez zmian. Nie wykonano `git add`, `git
+commit`, `git reset`, `git restore`, `git stash` ani `git push` na rodzicu.
+
+### Zmienione pliki
+
+Własny diff względem snapshotu rodzica obejmuje wyłącznie:
+
+- `apps/control-room/src/modules/analysis-plots/useAnalysisResultProjectionController.ts`
+- `apps/control-room/src/modules/analysis-plots/useAnalysisResultProjectionController.test.ts`
+
+Kontroler otrzymał `analysisResultProjectionMatchesSelection`, który wymaga
+jednoczesnej zgodności `run_id`, `dataset_id` i `dataset_revision` projekcji z
+bieżącą selekcją oraz manifestem. Wynik gate'a zasila model wykresu, przekazany
+`resource` i callback wyboru punktu; projekcja z obcą lub starą tożsamością nie
+może więc wygenerować danych wykresu ani nowego stanu selekcji. Surowy
+`resultProjection.status` jest nadal zwracany bez zmian, dzięki czemu
+odrzucona odpowiedź zachowuje status transportu i nie jest przedstawiana jako
+brakujący zasób.
+
+Test zawiera dwa nowe przypadki: zgodną projekcję oraz projekcję ze starą
+rewizją datasetu. Istniejące dwa testy własności overlay zostały zachowane.
+
+Nie zmieniono kontraktów API, generated files, Results files ani plików poza
+zakresem implementacji. Worktree używa junction do istniejącego
+`apps/control-room/node_modules` wyłącznie dla narzędzi testowych; nie
+kopiowano cache do checkoutu.
+
+### Weryfikacja TDD i focused
+
+1. Bazowy test istniejących zachowań przed zmianą:
+
+   ```text
+   vitest run src/modules/analysis-plots/useAnalysisResultProjectionController.test.ts
+   Test Files  1 passed (1)
+   Tests       2 passed (2)
+   ```
+
+2. RED po dopisaniu testów gate'a:
+
+   ```text
+   Test Files  1 failed (1)
+   Tests       4 total; 2 failed, 2 passed
+   TypeError: analysisResultProjectionMatchesSelection is not a function
+   ```
+
+   Testy padały z powodu brakującej implementacji gate'a, a nie błędu fixture'a.
+
+3. GREEN po minimalnej implementacji:
+
+   ```text
+   vitest run src/modules/analysis-plots/useAnalysisResultProjectionController.test.ts
+   Test Files  1 passed (1)
+   Tests       4 passed (4)
+   ```
+
+4. Final focused test zakończył się ponownie wynikiem 4/4.
+
+5. Pełny typecheck Control Room w worktree, bez zapisu incremental cache:
+
+   ```text
+   tsc --noEmit --incremental false --project tsconfig.typecheck.json
+   exit=0
+   ```
+
+6. Targeted ESLint dla dwóch plików implementacji/testu:
+
+   ```text
+   eslint src/modules/analysis-plots/useAnalysisResultProjectionController.ts \
+     src/modules/analysis-plots/useAnalysisResultProjectionController.test.ts --max-warnings=0
+   exit=0
+   ```
+
+7. `git diff --check` nie zgłosił whitespace errors.
+
+8. React Doctor:
+
+   ```text
+   npx --yes react-doctor@latest --verbose --scope changed
+   Scanned 7 files
+   Score: 98 / 100
+   No issues found!
+   exit=0
+   ```
+
+### Concerns i ograniczenia
+
+- Narzędzia wieloagentowe (`spawn_agent`/`wait_agent`) nie były dostępne w tej
+  sesji, więc nie można było uruchomić implementera i osobnego subagenta
+  reviewera z procedury SDD. Wykonano lokalny task-scoped review diffu,
+  niezależny focused test, typecheck, ESLint i React Doctor.
+- Worktree został zbudowany z `HEAD`, a następnie otrzymał istniejące,
+  niezatwierdzone pliki bazowe konieczne do odtworzenia bieżącego dirty
+  kontrolera overlay. Są one tylko kontekstem snapshotu i nie należą do
+  własnego diffu Task 1.
+- Nie wykonano browser smoke; zmiana dotyczy fail-closed selekcji danych w
+  kontrolerze i nie zmienia layoutu ani cyklu życia viewportu.

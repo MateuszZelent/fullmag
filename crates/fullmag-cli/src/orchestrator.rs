@@ -9659,6 +9659,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let next_continuation_completion = stage_result.completion.clone();
         let next_continuation_certified_fields =
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
+                && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
                     completion.status == "completed" && completion.converged
                 })
@@ -9680,6 +9681,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             };
         let next_continuation_recomputed_certificate =
             if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
+                && matches!(&execution_plan.backend_plan, BackendPlanIR::Fem(_))
                 && stage_result.completion.as_ref().is_some_and(|completion| {
                     completion.status == "completed" && completion.converged
                 })
@@ -12035,6 +12037,31 @@ mod tests {
             !production.contains("_ => ContinuationSource::Fdm"),
             "wildcard source classification aliases FEM eigen/frequency and unsupported backends to FDM"
         );
+    }
+
+    #[test]
+    fn fem_equilibrium_certificates_are_only_required_for_native_fem_relaxation() {
+        let source = include_str!("orchestrator.rs");
+        let production = source
+            .rsplit_once("\n#[cfg(test)]\nmod tests {")
+            .map(|(production, _)| production)
+            .expect("production source");
+        let certified_block = production
+            .split("let next_continuation_certified_fields =")
+            .nth(1)
+            .and_then(|tail| tail.split("let next_continuation_recomputed_certificate =").next())
+            .expect("certified FEM equilibrium field handoff block");
+        let recomputed_block = production
+            .split("let next_continuation_recomputed_certificate =")
+            .nth(1)
+            .and_then(|tail| tail.split("let next_continuation_stage_source =").next())
+            .expect("recomputed FEM linearization certificate handoff block");
+        for block in [certified_block, recomputed_block] {
+            assert!(
+                block.contains("execution_plan.backend_plan")
+                    && block.contains("BackendPlanIR::Fem(_)")
+            );
+        }
     }
 
     #[test]

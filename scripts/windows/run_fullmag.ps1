@@ -18,7 +18,12 @@ param(
 
   [string]$ScriptPath,
 
+  [string]$OutputDir,
+
   [switch]$BuildOnly,
+
+  [Alias("skip_local_changes")]
+  [switch]$SkipLocalChanges,
 
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
@@ -470,6 +475,10 @@ $sourceIdentity = Get-SourceIdentity
 $sourceCommit = [string]$sourceIdentity.head_commit_full
 $sourceWorktreeState = if ([bool]$sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
 $sourceSnapshotSha256 = [string]$sourceIdentity.source_snapshot_sha256
+$localChangesCheck = if ($SkipLocalChanges) { "skipped" } else { "enforced" }
+if ($SkipLocalChanges) {
+  Write-Warning "Local source-change validation is skipped; this runtime is unqualified for reproducibility"
+}
 $env:FULLMAG_SOURCE_GIT_COMMIT = $sourceCommit
 $env:FULLMAG_SOURCE_WORKTREE_STATE = $sourceWorktreeState
 $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
@@ -530,11 +539,13 @@ if ($BuildMode -eq "true") {
   if ($useCuda) {
     $nativeFdmDll = Stage-NativeFdmDll
   }
-  # Do not publish a manifest for a binary built from a different checkout
-  # snapshot when another process edits the shared worktree during the build.
+  # Capture both ends of the build.  The default path refuses a binary built
+  # from a different checkout snapshot; the explicit skip path preserves both
+  # identities in the manifest and marks the receipt non-qualifying.
   $finalSourceIdentity = Get-SourceIdentity
-  if ([string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
-      [string]$finalSourceIdentity.source_snapshot_sha256 -ne $sourceSnapshotSha256) {
+  $sourceIdentityChanged = [string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
+      [string]$finalSourceIdentity.source_snapshot_sha256 -ne $sourceSnapshotSha256
+  if ($sourceIdentityChanged -and -not $SkipLocalChanges) {
     throw "Fullmag source changed while the native runtime was building; rerun with build=True after the checkout is stable"
   }
   $manifest = [ordered]@{
@@ -553,6 +564,11 @@ if ($BuildMode -eq "true") {
     git_commit = $sourceCommit
     worktree_state = $sourceWorktreeState
     source_snapshot_sha256 = $sourceSnapshotSha256
+    source_identity_check = if ($SkipLocalChanges) { "skipped" } else { "passed" }
+    local_changes_check = $localChangesCheck
+    source_commit_after = [string]$finalSourceIdentity.head_commit_full
+    source_worktree_state_after = if ([bool]$finalSourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+    source_snapshot_sha256_after = [string]$finalSourceIdentity.source_snapshot_sha256
     node_version = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
     pnpm_version = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
     static_web_sha256 = if ($Frontend -eq "static") { Get-DirectorySha256 (Split-Path -Parent $StaticControlRoom) } else { $null }
@@ -579,17 +595,22 @@ else {
   $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
   $expectedNodeVersion = if ($needsControlRoomToolchain) { (& node --version).Trim() } else { $null }
   $expectedPnpmVersion = if ($needsControlRoomToolchain) { $PinnedPnpmVersion } else { $null }
-  if ([int]$manifest.schema_version -ne 1 -or
+  $manifestStructureMismatch = [int]$manifest.schema_version -ne 1 -or
       [string]$manifest.git_commit -notmatch '^[0-9a-f]{40}$' -or
       [string]$manifest.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
-      [string]$manifest.git_commit -ne $sourceCommit -or
-      [string]$manifest.worktree_state -ne $sourceWorktreeState -or
-      [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256 -or
       [string]$manifest.workspace_namespace -ne $WorkspaceNamespace -or
       [string]$manifest.target_triple -ne $TargetTriple -or
       [string]$manifest.node_version -ne [string]$expectedNodeVersion -or
-      [string]$manifest.pnpm_version -ne [string]$expectedPnpmVersion) {
+      [string]$manifest.pnpm_version -ne [string]$expectedPnpmVersion
+  $manifestSourceMismatch = [string]$manifest.git_commit -ne $sourceCommit -or
+      [string]$manifest.worktree_state -ne $sourceWorktreeState -or
+      [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256
+  if ($manifestStructureMismatch -or
+      (-not $SkipLocalChanges -and $manifestSourceMismatch)) {
     throw "Existing Windows runtime does not match the current source identity; rerun with build=True"
+  }
+  if (-not $SkipLocalChanges -and [string]$manifest.local_changes_check -eq "skipped") {
+    throw "Existing Windows runtime was built with -SkipLocalChanges; rerun with -SkipLocalChanges to acknowledge the unqualified receipt"
   }
   $binaryHash = (Get-FileHash -LiteralPath $FullmagExe -Algorithm SHA256).Hash.ToLowerInvariant()
   $apiBinaryHash = (Get-FileHash -LiteralPath $FullmagApiExe -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -652,6 +673,15 @@ else {
 if (-not (Test-Path -LiteralPath $resolvedScript -PathType Leaf)) {
   throw "Fullmag script not found: $resolvedScript"
 }
+$resolvedOutputDir = $null
+if ($OutputDir) {
+  $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) {
+    Resolve-AbsolutePath $OutputDir
+  }
+  else {
+    Resolve-AbsolutePath (Join-Path $RepoRoot $OutputDir)
+  }
+}
 
 $cliArguments = @()
 if ($Frontend -eq "dev") {
@@ -661,6 +691,9 @@ if ($RunMode -eq "interactive") {
   $cliArguments += "-i"
 }
 $cliArguments += $resolvedScript
+if ($resolvedOutputDir) {
+  $cliArguments += @("--output-dir", $resolvedOutputDir)
+}
 if ($Backend -ne "auto") {
   $cliArguments += @("--backend", $Backend)
 }

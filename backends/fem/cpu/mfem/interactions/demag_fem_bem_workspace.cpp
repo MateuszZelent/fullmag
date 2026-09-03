@@ -2,7 +2,7 @@
  * FEM/BEM demag workspace source contract.
  *
  * This source owns Fredkin-Koehler workspace lifecycle, FE spaces, stiffness
- * operators, dense boundary operator setup, shared Poisson RHS/recovery setup,
+ * operators, hierarchical boundary operator setup, shared Poisson RHS/recovery setup,
  * and teardown. It does not run per-step solves, transfer boundary values, combine potentials, recover fields, compute energy, or publish telemetry.
  */
 
@@ -239,9 +239,14 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
             error = "FEM/BEM Fredkin-Koehler demag does not support periodic FEM meshes";
             return false;
         }
-        if (!workspace->boundary_operator.build(ctx, workspace->surface, error)) {
+        if (!workspace->boundary_operator.build(
+                ctx,
+                workspace->surface,
+                workspace->boundary_operator_options,
+                error)) {
             return false;
         }
+        workspace->boundary_operator_build_count = 1u;
 
         workspace->potential_fec =
             std::make_unique<mfem::H1_FECollection>(static_cast<int>(ctx.base_plan.fe_order), mesh->Dimension());
@@ -328,6 +333,7 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
 
         workspace->dirichlet_op =
             std::make_unique<mfem::SparseMatrix>(workspace->stiffness_form->SpMat());
+        workspace->boundary_tdofs_by_row.reserve(workspace->surface.boundary_nodes.size());
         workspace->boundary_tdofs.reserve(workspace->surface.boundary_nodes.size());
         for (uint32_t node : workspace->surface.boundary_nodes) {
             if (node >= node_to_tdof.size() ||
@@ -336,7 +342,9 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
                 error = "FEM/BEM demag boundary node does not map to a P1 true DOF";
                 return false;
             }
-            workspace->boundary_tdofs.push_back(node_to_tdof[static_cast<size_t>(node)]);
+            const int tdof = node_to_tdof[static_cast<size_t>(node)];
+            workspace->boundary_tdofs_by_row.push_back(tdof);
+            workspace->boundary_tdofs.push_back(tdof);
         }
         std::sort(workspace->boundary_tdofs.begin(), workspace->boundary_tdofs.end());
         workspace->boundary_tdofs.erase(
@@ -345,6 +353,12 @@ bool initialize_demag_fem_bem_workspace(Context &ctx, std::string &error)
         for (int tdof : workspace->boundary_tdofs) {
             eliminate_row_col_zero(*workspace->dirichlet_op, tdof);
         }
+        workspace->boundary_u1.assign(
+            workspace->boundary_tdofs_by_row.size(),
+            0.0);
+        workspace->boundary_u2.assign(
+            workspace->boundary_tdofs_by_row.size(),
+            0.0);
 
         ctx.demag_fem_bem.workspace = workspace.release();
         ctx.demag_fem_bem.ready = true;

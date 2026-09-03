@@ -272,6 +272,13 @@ fn execute_native_fem(
         StepStats::default()
     };
     let initial_stats = needs_initial_snapshot.then_some(&current_stats);
+    let fem_bem_demag = if plan.demag_realization
+        == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler)
+    {
+        backend.demag_fem_bem_provenance()?.map(|value| value.into_provenance())
+    } else {
+        None
+    };
     // FEM-013 fix: serialize resolved demag realization and integrator in provenance.
     let resolved_demag = plan
         .demag_realization
@@ -319,6 +326,7 @@ fn execute_native_fem(
             (stats.effective_fem_omp_threads > 0).then_some(stats.effective_fem_omp_threads as u32)
         }),
         fem_poisson_demag: fem_poisson_demag_provenance(plan, initial_stats),
+        fem_bem_demag,
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());

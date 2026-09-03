@@ -33,8 +33,10 @@ namespace {
 bool strict_gpu_demag_upload_path(const Context &ctx)
 {
     return ctx.gpu_state.device.lifecycle.allocated &&
-        ctx.poisson_demag.gpu_demag_mode ==
-            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+        (ctx.poisson_demag.gpu_demag_mode ==
+             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+         ctx.poisson_demag.gpu_demag_mode ==
+             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM);
 }
 #endif
 

@@ -3672,6 +3672,26 @@ pub struct FemPoissonDemagProvenance {
     pub recovered_field_energy_joules: Option<f64>,
 }
 
+/// Measured Fredkin-Koehler FEM/BEM operator provenance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemBemDemagProvenance {
+    pub operator_mode: String,
+    pub operator_fingerprint: String,
+    pub boundary_node_count: u64,
+    pub boundary_triangle_count: u64,
+    pub near_block_count: u64,
+    pub far_block_count: u64,
+    pub near_entry_count: u64,
+    pub far_row_count: u64,
+    pub max_rank: u32,
+    pub relative_error_estimate: f64,
+    pub resident_bytes: u64,
+    pub device_bytes: u64,
+    pub operator_build_count: u64,
+    pub operator_upload_count: u64,
+    pub apply_count: u64,
+}
+
 /// Records which engine and device produced a run.
 /// Measured host/device movement for a multilayer FDM CUDA realization.
 ///
@@ -4146,6 +4166,9 @@ pub struct ExecutionProvenance {
     /// FEM Poisson demag solver policy and observed solve result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
+    /// Measured body-only Fredkin-Koehler FEM/BEM operator provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_bem_demag: Option<FemBemDemagProvenance>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

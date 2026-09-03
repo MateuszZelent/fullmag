@@ -83,6 +83,7 @@ pub(crate) fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProv
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     })
 }
 
@@ -183,6 +184,7 @@ pub(crate) fn cuda_execution_provenance(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     })
 }
 
@@ -329,6 +331,7 @@ pub(crate) fn fem_gpu_execution_provenance(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
     Ok(provenance)

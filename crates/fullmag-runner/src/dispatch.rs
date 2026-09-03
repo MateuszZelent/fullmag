@@ -301,7 +301,10 @@ fn native_fem_gpu_ready_log_message(
         plan.exchange_only_enabled
             && plan.stage_exchange_device_resident
             && plan.uses_gpu_poisson
-            && plan.demag_operator_mode == "device_hypre_poisson"
+            && matches!(
+                plan.demag_operator_mode.as_str(),
+                "device_hypre_poisson" | "device_hypre_fem_bem"
+            )
             && plan.hypre_execution_policy == "device"
             && plan.demag_residency == "device"
     });
@@ -2980,7 +2983,10 @@ fn native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan: &NativeFemGpuRk
     gpu_rk_plan.exchange_only_enabled
         && gpu_rk_plan.stage_exchange_device_resident
         && gpu_rk_plan.uses_gpu_poisson
-        && gpu_rk_plan.demag_operator_mode == "device_hypre_poisson"
+        && matches!(
+            gpu_rk_plan.demag_operator_mode.as_str(),
+            "device_hypre_poisson" | "device_hypre_fem_bem"
+        )
         && gpu_rk_plan.hypre_execution_policy == "device"
         && gpu_rk_plan.demag_residency == "device"
         && matches!(
@@ -3002,7 +3008,10 @@ fn native_fem_gpu_rk_plan_is_device_resident_for_plan(
         );
     let demag_device_resident = !plan.enable_demag
         || (gpu_rk_plan.uses_gpu_poisson
-            && gpu_rk_plan.demag_operator_mode == "device_hypre_poisson"
+            && matches!(
+                gpu_rk_plan.demag_operator_mode.as_str(),
+                "device_hypre_poisson" | "device_hypre_fem_bem"
+            )
             && gpu_rk_plan.hypre_execution_policy == "device"
             && gpu_rk_plan.demag_residency == "device");
 
@@ -5516,6 +5525,28 @@ mod tests {
         assert!(err
             .message
             .contains("gpu_rk_block_reason=stage H_ex is not device-resident"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn all_in_gpu_request_accepts_device_fem_bem_demag() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut rk_plan = gpu_rk_ready_plan_for_log_test();
+        rk_plan.demag_operator_mode = "device_hypre_fem_bem".to_string();
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_ALL_IN_GPU", "1");
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+
+        let result = validate_all_in_gpu_fem_runtime_contract(
+            "all_in_gpu_legacy_sparse",
+            &rk_plan,
+        );
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");
+        }
+        result.expect("device-resident Fredkin-Koehler demag must satisfy ALL_IN_GPU");
     }
 
     #[cfg(feature = "fem-gpu")]

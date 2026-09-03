@@ -47,6 +47,9 @@
 #include "gpu/cuda/transfer/component_transfer.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#if FULLMAG_HAS_MFEM_STACK
+#include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
+#endif
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
@@ -57,6 +60,7 @@
 #include <cmath>
 #include <complex>
 #include <cstddef>
+#include <cstdio>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -374,8 +378,10 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
         return &context.gpu_state.device.fields.h_ex;
     case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
         if (context.demag.enabled &&
-            context.poisson_demag.gpu_demag_mode ==
-                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            (context.poisson_demag.gpu_demag_mode ==
+                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+             context.poisson_demag.gpu_demag_mode ==
+                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM)) {
             return &context.gpu_state.device.demag_poisson.poisson_gradient;
         }
         return nullptr;
@@ -397,8 +403,10 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
         return &context.gpu_state.device.fields.h_mel;
     case FULLMAG_FEM_OBSERVABLE_H_EFF:
         if (!context.demag.enabled ||
-            context.poisson_demag.gpu_demag_mode ==
-                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            (context.poisson_demag.gpu_demag_mode ==
+                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+             context.poisson_demag.gpu_demag_mode ==
+                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM)) {
             return &context.gpu_state.device.fields.h_eff;
         }
         return nullptr;
@@ -422,7 +430,9 @@ bool prepare_gpu_full_domain_snapshot(
         !context.demag.enabled ||
         !needs_full_domain_demag ||
         context.poisson_demag.gpu_demag_mode !=
-            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+        context.poisson_demag.gpu_demag_mode !=
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
         return true;
     }
     if (!fullmag::fem::recover_device_demag_full_domain_field_device(
@@ -548,8 +558,10 @@ bool schedule_gpu_snapshot_payload(
     const bool compose_full_domain_h_eff =
         observable == FULLMAG_FEM_OBSERVABLE_H_EFF &&
         context.demag.enabled &&
-        context.poisson_demag.gpu_demag_mode ==
-            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+        (context.poisson_demag.gpu_demag_mode ==
+             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+         context.poisson_demag.gpu_demag_mode ==
+             FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM);
     if (compose_full_domain_h_eff) {
         const auto &h_demag_full = context.gpu_state.device.demag_poisson.poisson_gradient;
         const auto &h_demag_magnetic = context.gpu_state.device.fields.h_demag;
@@ -5488,6 +5500,101 @@ int fullmag_fem_backend_get_gpu_state_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     *out_info = fullmag::fem::gpu_state_info(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_demag_fem_bem_provenance_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_demag_fem_bem_provenance_v1 *out_provenance
+) {
+    if (out_provenance == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_demag_fem_bem_provenance_v1 received null out_provenance");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_demag_fem_bem_provenance_v1 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_provenance->abi_version !=
+            FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION ||
+        out_provenance->struct_size !=
+            sizeof(fullmag_fem_demag_fem_bem_provenance_v1)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_demag_fem_bem_provenance_v1 received unsupported abi_version or struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    fullmag_fem_demag_fem_bem_provenance_v1 provenance{};
+    provenance.abi_version = FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION;
+    provenance.struct_size = sizeof(provenance);
+#if FULLMAG_HAS_MFEM_STACK
+    const auto *workspace = fullmag::fem::demag_fem_bem_workspace(handle->context);
+    if (workspace != nullptr && handle->context.demag_fem_bem.ready &&
+        workspace->boundary_operator.size() != 0u) {
+        provenance.available = 1u;
+        provenance.boundary_node_count = workspace->surface.boundary_nodes.size();
+        provenance.boundary_triangle_count = workspace->surface.triangles.size();
+        provenance.near_block_count = workspace->boundary_operator.near_block_count();
+        provenance.far_block_count = workspace->boundary_operator.far_block_count();
+        provenance.near_entry_count = workspace->boundary_operator.near_entry_count();
+        provenance.far_row_count = workspace->boundary_operator.far_row_count();
+        provenance.max_rank = workspace->boundary_operator.max_rank_observed();
+        provenance.relative_error_estimate =
+            workspace->boundary_operator.relative_error_estimate();
+        provenance.resident_bytes = workspace->boundary_operator.resident_bytes();
+        provenance.operator_build_count = workspace->boundary_operator_build_count;
+        provenance.operator_upload_count = workspace->boundary_operator_upload_count;
+        provenance.apply_count = workspace->boundary_operator_apply_count;
+        std::snprintf(
+            provenance.operator_mode,
+            sizeof(provenance.operator_mode),
+            "%s",
+            workspace->boundary_operator.mode());
+        std::snprintf(
+            provenance.operator_fingerprint,
+            sizeof(provenance.operator_fingerprint),
+            "%s",
+            workspace->boundary_operator.fingerprint().c_str());
+
+        if (handle->context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM &&
+            workspace->gpu_workspace_ready && workspace->gpu_workspace != nullptr) {
+            const auto *gpu_workspace = static_cast<const fullmag::fem::GpuDemagFemBemWorkspace *>(
+                workspace->gpu_workspace);
+            if (!gpu_workspace->ready) {
+                fullmag_fem_set_handle_error(
+                    handle,
+                    "fullmag_fem_backend_demag_fem_bem_provenance_v1 found an unready GPU BEM workspace");
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            provenance.near_entry_count = gpu_workspace->near_entry_count;
+            provenance.far_row_count = gpu_workspace->far_row_count;
+            provenance.max_rank = gpu_workspace->max_rank;
+            provenance.relative_error_estimate = gpu_workspace->relative_error_estimate;
+            provenance.device_bytes = gpu_workspace->device_bytes;
+            provenance.operator_build_count = gpu_workspace->operator_build_count;
+            provenance.operator_upload_count = gpu_workspace->operator_upload_count;
+            provenance.apply_count = gpu_workspace->boundary_operator_apply_count;
+            std::snprintf(
+                provenance.operator_mode,
+                sizeof(provenance.operator_mode),
+                "%s",
+                "device_hypre_fem_bem");
+            std::snprintf(
+                provenance.operator_fingerprint,
+                sizeof(provenance.operator_fingerprint),
+                "%s",
+                gpu_workspace->operator_fingerprint.c_str());
+        }
+    }
+#else
+    (void)handle;
+#endif
+    *out_provenance = provenance;
     return FULLMAG_FEM_OK;
 }
 

@@ -1022,7 +1022,10 @@ fn demag_runtime_metadata(
                 resolved_policy.map_or(policy.max_iterations, |entry| entry.max_iterations);
             let amg_profile = demag_amg_profile_metadata(&preconditioner, last);
             let (runtime_solver, runtime_preconditioner) =
-                if provenance.fem_demag_operator_mode.as_deref() == Some("device_hypre_poisson") {
+                if matches!(
+                    provenance.fem_demag_operator_mode.as_deref(),
+                    Some("device_hypre_poisson") | Some("device_hypre_fem_bem")
+                ) {
                     let solver = match linear_solver.as_str() {
                         "CG" => Some("HyprePCG"),
                         "GMRES" => Some("HypreGMRES"),
@@ -1084,6 +1087,7 @@ fn demag_runtime_metadata(
                 "fem_assembly_mode": provenance.fem_assembly_mode,
                 "requested_fem_omp_threads": provenance.requested_fem_omp_threads,
                 "effective_fem_omp_threads": provenance.effective_fem_omp_threads,
+                "bem_operator": provenance.fem_bem_demag,
                 "airbox_factor": fem.air_box_config.as_ref().map(|cfg| cfg.factor),
                 "robin_beta_mode": fem
                     .air_box_config
@@ -4249,14 +4253,14 @@ pub(crate) fn write_scalars_csv(path: &Path, steps: &[StepStats]) -> std::io::Re
 pub(crate) fn write_scalars_csv_header(writer: &mut impl Write) -> std::io::Result<()> {
     writeln!(
         writer,
-        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_ani,E_dmi,E_total,max_dm_dt,max_h_eff,max_h_demag,max_torque_Apm,max_torque_T"
+        "step,time,solver_dt,mx,my,mz,E_ex,E_demag,E_ext,E_drive,E_ani,E_dmi,E_total,max_dm_dt,max_h_eff,max_h_demag,max_torque_Apm,max_torque_T"
     )
 }
 
 pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std::io::Result<()> {
     writeln!(
         writer,
-        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
+        "{},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e},{:.15e}",
         step.step,
         step.time,
         step.dt,
@@ -4266,6 +4270,7 @@ pub(crate) fn write_scalar_row(writer: &mut impl Write, step: &StepStats) -> std
         step.e_ex,
         step.e_demag,
         step.e_ext,
+        step.e_drive,
         step.e_ani,
         step.e_dmi,
         step.e_total,
@@ -4797,6 +4802,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scalar_csv_publishes_drive_energy_between_external_and_anisotropy() {
+        let mut stats = StepStats::default();
+        stats.e_ext = 2.0;
+        stats.e_drive = 3.0;
+        stats.e_ani = 5.0;
+
+        let mut csv = Vec::new();
+        write_scalars_csv_header(&mut csv).expect("scalar header should be writable");
+        write_scalar_row(&mut csv, &stats).expect("scalar row should be writable");
+        let text = String::from_utf8(csv).expect("scalar CSV should be UTF-8");
+        let mut lines = text.lines();
+        let header: Vec<_> = lines.next().expect("header line").split(',').collect();
+        let row: Vec<_> = lines.next().expect("row line").split(',').collect();
+
+        assert_eq!(header[9], "E_drive");
+        assert_eq!(row[9], "3.000000000000000e0");
+        assert_eq!(row.len(), header.len());
+    }
+
+    #[test]
     fn physics_graph_runtime_provenance_preserves_scope_dependencies_and_lane() {
         let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
         problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Auto;
@@ -5130,6 +5155,43 @@ mod tests {
         assert_eq!(metadata["preconditioner"], "AMG");
         assert_eq!(metadata["runtime_solver"], "HyprePCG");
         assert_eq!(metadata["runtime_preconditioner"], "HypreBoomerAMG");
+    }
+
+    #[test]
+    fn fem_bem_runtime_metadata_preserves_measured_operator_provenance() {
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("test plan must be FEM");
+        };
+        fem.enable_demag = true;
+        fem.demag_realization = Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler);
+        let provenance = ExecutionProvenance {
+            fem_demag_operator_mode: Some("hierarchical_h2".to_string()),
+            fem_bem_demag: Some(crate::types::FemBemDemagProvenance {
+                operator_mode: "hierarchical_h2".to_string(),
+                operator_fingerprint: "hierarchical_h2-test".to_string(),
+                boundary_node_count: 128,
+                boundary_triangle_count: 252,
+                near_block_count: 32,
+                far_block_count: 64,
+                near_entry_count: 2048,
+                far_row_count: 512,
+                max_rank: 12,
+                relative_error_estimate: 1.0e-7,
+                resident_bytes: 1_048_576,
+                device_bytes: 0,
+                operator_build_count: 1,
+                operator_upload_count: 0,
+                apply_count: 4,
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let metadata = demag_runtime_metadata(&plan, &provenance, &[]);
+        assert_eq!(metadata["magnetostatic_boundary_model"], "fredkin_koehler");
+        assert_eq!(metadata["bem_operator"]["operator_mode"], "hierarchical_h2");
+        assert_eq!(metadata["bem_operator"]["boundary_triangle_count"], 252);
+        assert_eq!(metadata["bem_operator"]["max_rank"], 12);
     }
 
     #[test]
@@ -8900,6 +8962,7 @@ mod tests {
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
             fem_poisson_demag: None,
+            fem_bem_demag: None,
         };
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -9796,6 +9859,7 @@ mod tests {
             requested_fem_omp_threads: None,
             effective_fem_omp_threads: None,
             fem_poisson_demag: None,
+            fem_bem_demag: None,
         };
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

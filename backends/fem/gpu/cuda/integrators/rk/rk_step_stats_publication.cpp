@@ -95,7 +95,8 @@ void gpu_rk_publish_final_step_stats(
     if (ctx.demag.enabled) {
         fill_demag_solver_stats(ctx, stats);
 #if FULLMAG_HAS_MFEM_STACK
-        if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+        if ((ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+             ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) &&
             ctx.poisson_demag.solves_current_step > 0) {
             DemagPoissonPhaseTimings demag_timings{};
             demag_timings.assemble_wall_time_ns = ctx.poisson_demag.step_assemble_wall_time_ns;

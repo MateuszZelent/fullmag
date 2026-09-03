@@ -23,6 +23,7 @@
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_mesh_builder.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
 
 #include <mfem.hpp>
@@ -411,6 +412,9 @@ bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
 void context_destroy_mfem(Context &ctx)
 {
     relaxation::destroy_exchange_mass_preconditioner_cache(ctx);
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        gpu_demag_fem_bem_destroy(ctx);
+    }
     context_destroy_demag_fem_bem(ctx);
     context_destroy_poisson(ctx);
     destroy_dmi_workspace(ctx);

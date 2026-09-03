@@ -36,6 +36,10 @@ pub(super) fn native_fem_gpu_demag_mode(plan: &fullmag_ir::FemPlanIR) -> i32 {
     if !native_fem_plan_requests_gpu_mfem_device(plan) || !plan.enable_demag {
         return ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED as i32;
     }
+    if plan.demag_realization == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) {
+        return ffi::fullmag_fem_gpu_demag_mode::FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM
+            as i32;
+    }
     match std::env::var("FULLMAG_FEM_GPU_DEMAG_MODE")
         .ok()
         .map(|value| value.trim().to_ascii_lowercase())

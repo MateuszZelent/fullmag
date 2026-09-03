@@ -372,6 +372,7 @@ pub(crate) fn execute_reference_fdm_multilayer_with_checkpoint(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
+        fem_bem_demag: None,
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)

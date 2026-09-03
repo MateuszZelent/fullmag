@@ -21,7 +21,12 @@ param(
 
   [string]$ScriptPath,
 
+  [string]$OutputDir,
+
   [switch]$BuildOnly,
+
+  [Alias("skip_local_changes")]
+  [switch]$SkipLocalChanges,
 
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
@@ -305,10 +310,12 @@ if ($Backend -ne "fem") {
 Require-Command "docker"
 Test-ExplicitDockerStorageRoot
 
+Write-Host "[Fullmag] Checking Docker Desktop Linux engine..." -ForegroundColor DarkCyan
 $dockerOsType = (& docker info --format '{{.OSType}}').Trim()
 if ($LASTEXITCODE -ne 0 -or $dockerOsType -ne "linux") {
   throw "FEM on Windows requires Docker Desktop's Linux engine; detected OSTYPE=$dockerOsType"
 }
+Write-Host "[Fullmag] Docker Desktop engine: $dockerOsType" -ForegroundColor DarkCyan
 $RequestedDevice = $Device
 if ($Device -eq "auto") {
   $nvidiaSmi = Get-Command "nvidia-smi" -ErrorAction SilentlyContinue
@@ -413,10 +420,51 @@ finally {
 if ($identityExitCode -ne 0) {
   throw "Fullmag source identity capture failed with exit code $identityExitCode"
 }
+
+function Get-SourceIdentity {
+  $previousGitOptionalLocks = $env:GIT_OPTIONAL_LOCKS
+  $identityOutput = $null
+  $identityExitCode = 0
+  try {
+    $env:GIT_OPTIONAL_LOCKS = "0"
+    $identityOutput = (& $identityPython.Path (Join-Path $RepoRoot "scripts\capture_source_snapshot_identity.py") --repo-root $RepoRoot --ignore-non-runtime-dirty 2>&1 | Out-String)
+    $identityExitCode = $LASTEXITCODE
+  }
+  finally {
+    if ($null -eq $previousGitOptionalLocks) {
+      Remove-Item Env:GIT_OPTIONAL_LOCKS -ErrorAction SilentlyContinue
+    } else {
+      $env:GIT_OPTIONAL_LOCKS = $previousGitOptionalLocks
+    }
+  }
+  if ($identityExitCode -ne 0) {
+    throw "Fullmag source identity capture failed with exit code $identityExitCode`: $identityOutput"
+  }
+  try {
+    $identity = $identityOutput | ConvertFrom-Json
+  }
+  catch {
+    throw "Fullmag source identity capture returned invalid JSON: $identityOutput"
+  }
+  if ([string]$identity.head_commit_full -notmatch '^[0-9a-f]{40}$' -or
+      [string]$identity.source_snapshot_sha256 -notmatch '^[0-9a-f]{64}$' -or
+      $identity.source_snapshot_dirty -isnot [bool]) {
+    throw "Fullmag source identity is incomplete or invalid"
+  }
+  return $identity
+}
+
 $sourceIdentity = $identityOutput | ConvertFrom-Json
-$env:FULLMAG_SOURCE_GIT_COMMIT = [string]$sourceIdentity.head_commit_full
-$env:FULLMAG_SOURCE_WORKTREE_STATE = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
-$env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = [string]$sourceIdentity.source_snapshot_sha256
+$sourceCommit = [string]$sourceIdentity.head_commit_full
+$sourceWorktreeState = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+$sourceSnapshotSha256 = [string]$sourceIdentity.source_snapshot_sha256
+$localChangesCheck = if ($SkipLocalChanges) { "skipped" } else { "enforced" }
+if ($SkipLocalChanges) {
+  Write-Warning "Local source-change validation is skipped; this runtime is unqualified for reproducibility"
+}
+$env:FULLMAG_SOURCE_GIT_COMMIT = $sourceCommit
+$env:FULLMAG_SOURCE_WORKTREE_STATE = $sourceWorktreeState
+$env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
 $ManifestPath = Join-Path $StateRoot "windows-fem-$Device-manifest.json"
 $RuntimeBinaryPath = Join-Path $StateRoot "local\bin\fullmag"
 $RuntimeApiPath = Join-Path $StateRoot "local\bin\fullmag-api"
@@ -439,6 +487,20 @@ if ($ScriptPath) {
   $containerScript = "/workspace/$relativeScript"
 } elseif (-not $BuildOnly) {
   throw "ScriptPath is required unless -BuildOnly is used"
+}
+$containerOutputDir = $null
+if ($OutputDir) {
+  $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) {
+    Resolve-AbsolutePath $OutputDir
+  }
+  else {
+    Resolve-AbsolutePath (Join-Path $RepoRoot $OutputDir)
+  }
+  $relativeOutput = (Get-RelativeUriPath $RepoRoot $resolvedOutputDir).Replace("\", "/")
+  if ($relativeOutput.StartsWith("../") -or $relativeOutput -eq "..") {
+    throw "Fullmag output directory must be inside the repository: $resolvedOutputDir"
+  }
+  $containerOutputDir = "/workspace/$relativeOutput"
 }
 
 $makeTarget = if ($Frontend -eq "static") { "install-cli-static" } else { "install-cli-dev" }
@@ -509,6 +571,15 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
   $imageId = Get-DockerImageId $RuntimeImage
 
   if ($BuildMode -eq "true") {
+    # Capture both ends of the container build.  The default path refuses a
+    # binary built from a different checkout snapshot; the explicit skip path
+    # preserves both identities and marks the receipt non-qualifying.
+    $finalSourceIdentity = Get-SourceIdentity
+    $sourceIdentityChanged = [string]$finalSourceIdentity.head_commit_full -ne $sourceCommit -or
+        [string]$finalSourceIdentity.source_snapshot_sha256 -ne $sourceSnapshotSha256
+    if ($sourceIdentityChanged -and -not $SkipLocalChanges) {
+      throw "Fullmag source changed while the FEM runtime was building; rerun with build=True after the checkout is stable"
+    }
     $manifest = [ordered]@{
       schema_version = 2
       backend = "fem"
@@ -525,9 +596,14 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
       cache_root = $CacheRoot
       cargo_target_root = $TargetRoot
       script = $resolvedScript
-      git_commit = [string]$sourceIdentity.head_commit_full
-      worktree_state = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
-      source_snapshot_sha256 = [string]$sourceIdentity.source_snapshot_sha256
+      git_commit = $sourceCommit
+      worktree_state = $sourceWorktreeState
+      source_snapshot_sha256 = $sourceSnapshotSha256
+      source_identity_check = if ($SkipLocalChanges) { "skipped" } else { "passed" }
+      local_changes_check = $localChangesCheck
+      source_commit_after = [string]$finalSourceIdentity.head_commit_full
+      source_worktree_state_after = if ($finalSourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
+      source_snapshot_sha256_after = [string]$finalSourceIdentity.source_snapshot_sha256
       binary_sha256 = Get-Sha256File -Path $RuntimeBinaryPath
       api_binary_sha256 = Get-Sha256File -Path $RuntimeApiPath
       built_at_utc = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -541,15 +617,20 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     $binaryHash = Get-Sha256File -Path $RuntimeBinaryPath
     $apiBinaryHash = Get-Sha256File -Path $RuntimeApiPath
     $expectedWorktreeState = if ($sourceIdentity.source_snapshot_dirty) { "dirty" } else { "clean" }
-    if ([int]$manifest.schema_version -ne 2 -or
-        [string]$manifest.git_commit -ne [string]$sourceIdentity.head_commit_full -or
-        [string]$manifest.worktree_state -ne $expectedWorktreeState -or
-        [string]$manifest.source_snapshot_sha256 -ne [string]$sourceIdentity.source_snapshot_sha256 -or
+    $manifestStructureMismatch = [int]$manifest.schema_version -ne 2 -or
         [string]$manifest.workspace_namespace -ne $WorkspaceNamespace -or
         [string]$manifest.binary_sha256 -ne $binaryHash -or
         [string]$manifest.api_binary_sha256 -ne $apiBinaryHash -or
-        [string]$manifest.image_id -ne $imageId) {
+        [string]$manifest.image_id -ne $imageId
+    $manifestSourceMismatch = [string]$manifest.git_commit -ne $sourceCommit -or
+        [string]$manifest.worktree_state -ne $expectedWorktreeState -or
+        [string]$manifest.source_snapshot_sha256 -ne $sourceSnapshotSha256
+    if ($manifestStructureMismatch -or
+        (-not $SkipLocalChanges -and $manifestSourceMismatch)) {
       throw "Existing Windows FEM $Device runtime does not match the current source identity or binary hashes; rerun with build=True"
+    }
+    if (-not $SkipLocalChanges -and [string]$manifest.local_changes_check -eq "skipped") {
+      throw "Existing Windows FEM $Device runtime was built with -SkipLocalChanges; rerun with -SkipLocalChanges to acknowledge the unqualified receipt"
     }
   }
 
@@ -617,13 +698,19 @@ grep -Fxq fem-cpu /workspace/.fullmag/local/launcher-build-mode
     }
   }
   if ($Device -eq "gpu") {
-    $runArguments += @("-e", "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson")
+    $gpuDemagMode = if ($env:FULLMAG_SINC_LAYER_DEMAG -eq "fredkin_koehler") {
+      "device_hypre_fem_bem"
+    } else {
+      "device_hypre_poisson"
+    }
+    $runArguments += @("-e", "FULLMAG_FEM_GPU_DEMAG_MODE=$gpuDemagMode")
   }
   $runArguments += @($ServiceName, "bash", "-lc")
   $cliArguments = @()
   if ($Frontend -eq "dev") { $cliArguments += "--dev" }
   if ($RunMode -eq "interactive") { $cliArguments += "-i" }
   $cliArguments += $containerScript
+  if ($containerOutputDir) { $cliArguments += @("--output-dir", $containerOutputDir) }
   $cliArguments += @("--backend", "fem")
   if ($RunMode -eq "headless") {
     $cliArguments += @("--headless", "--json")

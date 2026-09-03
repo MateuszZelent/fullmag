@@ -573,6 +573,77 @@ void dense_bem_rejects_boundary_limit_before_allocation() {
           "dense BEM limit error names the configured limit");
 }
 
+void hierarchical_bem_matches_dense_reference_and_is_deterministic() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(fullmag::fem::build_demag_boundary_surface(ctx, surface, error), error.c_str());
+
+    fullmag::fem::DenseDemagBemOperator dense;
+    check(dense.build(ctx, surface, error), error.c_str());
+
+    fullmag::fem::HierarchicalDemagBemOptions options;
+    options.admissibility_eta = 0.5;
+    options.leaf_size = 1;
+    options.max_rank = 8;
+    options.relative_tolerance = 1e-12;
+    options.max_memory_bytes = 1u << 20;
+
+    fullmag::fem::HierarchicalDemagBemOperator hierarchical;
+    check(hierarchical.build(ctx, surface, options, error), error.c_str());
+    check(hierarchical.size() == dense.size(), "hierarchical BEM operator size");
+    check(hierarchical.near_block_count() > 0u, "hierarchical BEM has near blocks");
+    check(hierarchical.far_block_count() > 0u, "hierarchical BEM has far blocks");
+    check(hierarchical.max_rank_observed() > 0u, "hierarchical BEM records far rank");
+    check(std::isfinite(hierarchical.relative_error_estimate()),
+          "hierarchical BEM reports a finite error estimate");
+    check(hierarchical.mode() == std::string("hierarchical_h2"),
+          "hierarchical BEM exposes its resolved operator mode");
+    check(
+        hierarchical.fingerprint().rfind("sha256:", 0) == 0 &&
+            hierarchical.fingerprint().size() == 71u,
+        "hierarchical BEM publishes a canonical SHA-256 fingerprint");
+
+    const std::vector<double> input = {0.25, -0.5, 1.0, 2.0};
+    std::vector<double> dense_output;
+    std::vector<double> hierarchical_output(hierarchical.size(), 0.0);
+    check(dense.apply(input, dense_output, error), error.c_str());
+    check(hierarchical.apply(input, hierarchical_output, error), error.c_str());
+    check(hierarchical_output.size() == dense_output.size(),
+          "hierarchical BEM output size");
+    for (size_t i = 0; i < dense_output.size(); ++i) {
+        check_near(hierarchical_output[i], dense_output[i], 1e-10,
+                   "hierarchical BEM matches dense reference");
+    }
+
+    fullmag::fem::HierarchicalDemagBemOperator second;
+    check(second.build(ctx, surface, options, error), error.c_str());
+    check(second.fingerprint() == hierarchical.fingerprint(),
+          "hierarchical BEM build is deterministic");
+    check(second.near_block_count() == hierarchical.near_block_count(),
+          "hierarchical BEM near block partition is deterministic");
+    check(second.far_block_count() == hierarchical.far_block_count(),
+          "hierarchical BEM far block partition is deterministic");
+}
+
+void hierarchical_bem_rejects_invalid_budget_before_build() {
+    fullmag::fem::Context ctx;
+    unit_tet_context(ctx);
+    fullmag::fem::DemagBoundarySurface surface;
+    std::string error;
+    check(fullmag::fem::build_demag_boundary_surface(ctx, surface, error), error.c_str());
+
+    fullmag::fem::HierarchicalDemagBemOptions options;
+    options.max_memory_bytes = 1u;
+    fullmag::fem::HierarchicalDemagBemOperator operator_instance;
+    check(!operator_instance.build(ctx, surface, options, error),
+          "hierarchical BEM must reject an impossible memory budget");
+    check(error.find("memory") != std::string::npos ||
+              error.find("budget") != std::string::npos,
+          "hierarchical BEM budget error is descriptive");
+}
+
 void fem_bem_energy_matches_demag_energy_contract() {
     fullmag::fem::Context ctx;
     unit_tet_context(ctx);
@@ -981,7 +1052,8 @@ void fem_bem_potential_trace_is_owned_by_potential_module() {
     const char *symbols[] = {
         "bool extract_demag_fem_bem_boundary_trace(",
         "bool combine_demag_fem_bem_total_potential(",
-        "boundary_trace.assign(boundary_nodes.size(), 0.0)",
+        "boundary_trace.size() != boundary_tdofs.size()",
+        "std::fill(boundary_trace.begin(), boundary_trace.end(), 0.0)",
         "boundary_trace[i] = potential_data[tdof]",
         "total_potential.SetSize(u1.Size())",
         "total_data[i] = u1_data[i] + u2_data[i]",
@@ -994,6 +1066,41 @@ void fem_bem_potential_trace_is_owned_by_potential_module() {
             potential.find(symbol) != std::string::npos,
             "FEM/BEM boundary trace and total potential helpers must be defined in demag_fem_bem_potential.cpp");
     }
+}
+
+void fem_bem_hierarchical_apply_reuses_workspace_scratch() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string operator_source = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_operator.cpp");
+    const std::string workspace_header = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_workspace.hpp");
+    const size_t apply_begin = operator_source.find(
+        "bool HierarchicalDemagBemOperator::apply(");
+    const size_t apply_end = operator_source.find(
+        "uint32_t HierarchicalDemagBemOperator::size() const", apply_begin);
+    check(
+        apply_begin != std::string::npos && apply_end != std::string::npos &&
+            apply_end > apply_begin,
+        "hierarchical BEM apply source must remain discoverable");
+    const std::string apply_source = operator_source.substr(
+        apply_begin,
+        apply_end - apply_begin);
+    check(
+        apply_source.find("std::vector<double> projected") == std::string::npos,
+        "hierarchical BEM apply must not allocate a projected scratch vector");
+    check(
+        apply_source.find("u2_boundary.assign") == std::string::npos,
+        "hierarchical BEM apply must not resize the output on every step");
+    check(
+        apply_source.find("impl_->projected") != std::string::npos,
+        "hierarchical BEM apply must use persistent projected scratch");
+    check(
+        apply_source.find("u2_boundary.size()") != std::string::npos,
+        "hierarchical BEM apply must validate the preallocated output size");
+    check(
+        workspace_header.find("std::vector<double> boundary_u1") != std::string::npos &&
+            workspace_header.find("std::vector<double> boundary_u2") != std::string::npos,
+        "FEM/BEM workspace must own persistent boundary scratch vectors");
 }
 
 void fem_bem_telemetry_is_owned_by_telemetry_module() {
@@ -1077,6 +1184,8 @@ int main() {
     boundary_surface_is_scale_invariant();
     dense_bem_operator_is_finite_and_has_constant_sanity();
     dense_bem_rejects_boundary_limit_before_allocation();
+    hierarchical_bem_matches_dense_reference_and_is_deterministic();
+    hierarchical_bem_rejects_invalid_budget_before_build();
     fem_bem_energy_matches_demag_energy_contract();
     fem_bem_energy_is_owned_by_energy_module();
     fem_bem_aggregate_header_documents_submodule_boundaries();
@@ -1089,6 +1198,7 @@ int main() {
     fem_bem_boundary_value_rhs_is_owned_by_boundary_values_module();
     fem_bem_workspace_lifecycle_is_owned_by_workspace_module();
     fem_bem_potential_trace_is_owned_by_potential_module();
+    fem_bem_hierarchical_apply_reuses_workspace_scratch();
     fem_bem_telemetry_is_owned_by_telemetry_module();
     fem_bem_neumann_rhs_is_owned_by_rhs_module();
     return 0;

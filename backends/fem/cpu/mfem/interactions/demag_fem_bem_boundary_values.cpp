@@ -16,20 +16,20 @@ namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
 bool set_demag_fem_bem_boundary_values(
-    const std::vector<uint32_t> &boundary_nodes,
+    const std::vector<int> &boundary_tdofs,
     const std::vector<double> &boundary_values,
     mfem::Vector &boundary_values_global,
     std::string &error)
 {
-    if (boundary_values.size() != boundary_nodes.size()) {
+    if (boundary_values.size() != boundary_tdofs.size()) {
         error = "FEM/BEM demag boundary value size mismatch";
         return false;
     }
 
     boundary_values_global = 0.0;
     double *global_data = audited_host_write(boundary_values_global);
-    for (size_t i = 0; i < boundary_nodes.size(); ++i) {
-        const int tdof = static_cast<int>(boundary_nodes[i]);
+    for (size_t i = 0; i < boundary_tdofs.size(); ++i) {
+        const int tdof = boundary_tdofs[i];
         if (tdof >= 0 && tdof < boundary_values_global.Size()) {
             global_data[tdof] = boundary_values[i];
         }
@@ -38,7 +38,6 @@ bool set_demag_fem_bem_boundary_values(
 }
 
 bool prepare_demag_fem_bem_dirichlet_rhs(
-    const std::vector<uint32_t> &boundary_nodes,
     const std::vector<int> &boundary_tdofs,
     const std::vector<double> &boundary_values,
     mfem::BilinearForm &stiffness_form,
@@ -48,7 +47,7 @@ bool prepare_demag_fem_bem_dirichlet_rhs(
     std::string &error)
 {
     if (!set_demag_fem_bem_boundary_values(
-            boundary_nodes,
+            boundary_tdofs,
             boundary_values,
             boundary_values_global,
             error)) {

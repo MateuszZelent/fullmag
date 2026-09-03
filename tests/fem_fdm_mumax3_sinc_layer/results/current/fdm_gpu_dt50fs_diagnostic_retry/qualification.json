@@ -1,0 +1,19 @@
+{
+  "accepted_steps": 105,
+  "attempt_records": 0,
+  "checks": [],
+  "reason": "Scientific qualification is produced by the dedicated qualification gate; artifact creation alone is not evidence of validation.",
+  "schema_version": "LLG-TD-QUALIFICATION-V1",
+  "status": "not_evaluated",
+  "timestep_qualification": {
+    "backend": "fdm",
+    "capability_id": "llg_td_policy_v1",
+    "device": "cuda",
+    "integrator": "rk45",
+    "precision": "double",
+    "qualification_id": "explicit_fixed_fdm_cuda_double",
+    "qualification_registry_version": "fullmag.llg_timestep_qualification_registry.v1",
+    "timestep_policy": "fixed",
+    "validation_state": "unvalidated"
+  }
+}

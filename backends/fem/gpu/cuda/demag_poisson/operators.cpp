@@ -699,10 +699,6 @@ bool build_mixed_demag_operators(
         error = "strict FEM GPU demag requires unconstrained serial potential true DOFs";
         return false;
     }
-    if (ctx.demag.realization == FULLMAG_FEM_DEMAG_FREDKIN_KOEHLER) {
-        error = "strict FEM GPU demag does not support Fredkin-Koehler FEM/BEM demag";
-        return false;
-    }
     if (!ctx.material_fields.Ms_element_field.empty() ||
         (ctx.material_fields.runtime &&
          ctx.material_fields.runtime->has_elementwise_ms())) {

@@ -91,6 +91,55 @@ def test_windows_launcher_rechecks_source_identity_before_publishing_manifest() 
     assert "source changed while the native runtime was building" in launcher
 
 
+def test_windows_launcher_skip_local_changes_is_explicit_and_non_qualifying() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "[switch]$SkipLocalChanges" in launcher
+    assert '[Alias("skip_local_changes")]' in launcher
+    assert "$localChangesCheck = if ($SkipLocalChanges)" in launcher
+    assert 'local_changes_check = $localChangesCheck' in launcher
+    assert 'source_snapshot_sha256_after = [string]$finalSourceIdentity.source_snapshot_sha256' in launcher
+    assert 'source_identity_check = if ($SkipLocalChanges) { "skipped" } else { "passed" }' in launcher
+    assert "unqualified for reproducibility" in launcher
+    assert "was built with -SkipLocalChanges" in launcher
+
+
+def test_windows_fem_launchers_skip_local_changes_with_the_same_manifest_contract() -> None:
+    for path in (LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER):
+        launcher = path.read_text(encoding="utf-8")
+
+        assert "[switch]$SkipLocalChanges" in launcher
+        assert '[Alias("skip_local_changes")]' in launcher
+        assert "$finalSourceIdentity = Get-SourceIdentity" in launcher
+        assert "source changed while the FEM runtime was building" in launcher
+        assert 'local_changes_check = $localChangesCheck' in launcher
+        assert 'source_snapshot_sha256_after = [string]$finalSourceIdentity.source_snapshot_sha256' in launcher
+        assert 'source_identity_check = if ($SkipLocalChanges) { "skipped" } else { "passed" }' in launcher
+        assert "unqualified for reproducibility" in launcher
+        assert "was built with -SkipLocalChanges" in launcher
+
+
+def test_windows_fem_launchers_define_source_identity_probe_before_use() -> None:
+    for path in (LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER):
+        launcher = path.read_text(encoding="utf-8")
+
+        assert "function Get-SourceIdentity {" in launcher
+        assert launcher.index("function Get-SourceIdentity {") < launcher.index(
+            "$finalSourceIdentity = Get-SourceIdentity"
+        )
+
+
+def test_just_fullmag_exposes_skip_local_changes_and_forwards_it_to_windows_launchers() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+
+    assert 'windows-build backend="fdm" device="cpu" frontend="dev" skip_local_changes="false"' in justfile
+    assert 'skip_local_changes="false"' in justfile
+    assert "--skip_local_changes|skip_local_changes|--skip-local-changes|skip-local-changes" in justfile
+    assert 'skip_local_changes="$value_lc"' in justfile
+    assert 'skip_local_changes_args=(-SkipLocalChanges)' in justfile
+    assert '"${skip_local_changes_args[@]}"' in justfile
+
+
 def test_windows_build_recipe_normalizes_named_arguments() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
@@ -113,6 +162,13 @@ def test_windows_launcher_supports_build_false_without_rebuilding() -> None:
     assert '"false"' in launcher
     assert "build-manifest.json" in launcher
     assert "release\\fullmag.exe" in launcher
+
+
+def test_windows_simulation_launchers_forward_explicit_output_directory() -> None:
+    for path in (LAUNCHER, LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER):
+        launcher = path.read_text(encoding="utf-8")
+        assert "[string]$OutputDir" in launcher
+        assert '"--output-dir"' in launcher
 
 
 def test_windows_launcher_builds_cli_and_api_as_sibling_release_binaries() -> None:
@@ -248,6 +304,16 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     assert 'Invoke-External "wsl.exe"' not in launcher
     assert '"buildx", "build"' in launcher
     assert "run_fullmag.ps1" not in launcher
+
+
+def test_windows_fem_fk_gpu_route_selects_device_operator_without_cpu_fallback() -> None:
+    for launcher_path in (LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER):
+        launcher = launcher_path.read_text(encoding="utf-8")
+
+        assert 'FULLMAG_SINC_LAYER_DEMAG -eq "fredkin_koehler"' in launcher
+        assert '"device_hypre_fem_bem"' in launcher
+        assert '"device_hypre_poisson"' in launcher
+        assert "FULLMAG_FEM_GPU_DEMAG_MODE" in launcher
 
 
 def test_windows_docker_compatibility_launcher_captures_image_inspect_exit_code() -> None:

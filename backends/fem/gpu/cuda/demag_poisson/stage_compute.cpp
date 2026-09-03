@@ -11,6 +11,7 @@
 
 #include "context.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
@@ -161,6 +162,15 @@ bool compute_device_demag_for_device_stage_impl(
 {
     if (!validate_gpu_demag_evaluation_request(request, reason)) {
         return false;
+    }
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return compute_device_demag_fem_bem_for_device_stage(
+            ctx,
+            m,
+            raw_stream,
+            request.reset_initial_solution,
+            request.evaluation_mode == GpuDemagEvaluationMode::FieldAndRecoveredEnergy,
+            reason);
     }
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     if (!ctx.demag.enabled) {
@@ -616,6 +626,9 @@ bool recover_device_demag_full_domain_field_device(
     void *raw_stream,
     std::string &reason)
 {
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return recover_device_demag_fem_bem_field_device(ctx, raw_stream, reason);
+    }
 #if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     auto *workspace = workspace_ptr(ctx);
     auto &gpu = ctx.gpu_state.device;

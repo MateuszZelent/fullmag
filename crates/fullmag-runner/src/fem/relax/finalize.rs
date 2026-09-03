@@ -368,6 +368,11 @@ pub(crate) fn finalize_native_fem_relaxation(
     // ExecutedRun; no later provenance mutation is permitted.
     let mut final_provenance = artifacts.provenance_snapshot();
     final_provenance.fem_poisson_demag = fem_poisson_demag_provenance(plan, Some(&final_stats));
+    if plan.demag_realization == Some(fullmag_ir::ResolvedFemDemagIR::FredkinKoehler) {
+        final_provenance.fem_bem_demag = backend
+            .demag_fem_bem_provenance()?
+            .map(|value| value.into_provenance());
+    }
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
     apply_native_fem_runtime_contract(

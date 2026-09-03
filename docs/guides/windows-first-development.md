@@ -122,6 +122,21 @@ just fullmag build=True dev fdm cpu .\examples\example.py
 just fullmag build=True dev fem gpu .\examples\example.py
 ```
 
+When multiple agents are editing the same checkout during a build, pass
+`skip_local_changes=true` (or use `-SkipLocalChanges` on the PowerShell
+launcher):
+
+```text
+just fullmag build=True headless fdm gpu skip_local_changes=true .\path\case.py
+```
+
+This only disables the before/after source-snapshot equality gate. The launcher
+still records both snapshots in the manifest and marks the receipt
+`local_changes_check=skipped` / `source_identity_check=skipped`; such a runtime
+is explicitly unqualified for reproducibility. Reusing that manifest with
+`build=False` requires passing the same flag again. Binary hashes, backend,
+device, image, and storage checks remain enforced.
+
 Existing FEM images are reused. Set `FULLMAG_WINDOWS_REBUILD_FEM_IMAGE=1` for a
 deliberate image rebuild after changing a FEM Dockerfile or its dependencies.
 

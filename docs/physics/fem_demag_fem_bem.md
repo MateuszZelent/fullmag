@@ -1,9 +1,11 @@
 # FEM Fredkin–Koehler: demagnetyzacja otwartej granicy
 
-- Status: kontrakt FEM CPU dense-reference; walidacja runtime i fizyczna filmu
-  500 x 500 x 10 nm pozostaje NOT VERIFIED
-- Wersja dokumentu: 2026-09-01
-- Zakres: body-only tet4, skalarne FEM P1, dense BEM O($N_b^2$), CPU
+- Status: implementacja operatora hierarchicznego FEM/BEM CPU oraz ścisłego
+  operatora device-resident GPU; managed runtime i walidacja fizyczna filmu
+  500 x 500 x 10 nm pozostają NOT VERIFIED do czasu świeżego receiptu
+- Wersja dokumentu: 2026-09-02
+- Zakres: body-only tet4, skalarne FEM P1, hierarchiczny BEM CPU i CUDA/Hypre
+  BEM GPU
 - Powiązane dokumenty: docs/physics/fem_demag_poisson.md,
   docs/physics/0106-fem-mixed-prism-pyramid-shared-domain.md,
   docs/physics/0870-fem-bem-demag-open-boundary.md,
@@ -24,9 +26,11 @@ Nie wolno utożsamiać zgodności solvera z jedną granicą, jednym rzędem lub
 jednym artefaktem z konwergencją rozwiązania w otwartej przestrzeni.
 
 Aktualny kontrakt wykonawczy jest celowo wąski: aktywny magnetyk musi mieć
-typowane elementy tet4, skalarna przestrzeń potencjału jest P1, a realizacja
-jest FEM CPU z gęstym operatorem referencyjnym. prism6, pyramid5, P2,
-kompresja H2/FMM i ścisły device-resident FK GPU są poza tym kontraktem.
+typowane elementy tet4, skalarna przestrzeń potencjału jest P1, a produkcyjna
+realizacja CPU używa operatora hierarchicznego H2. Mały
+DenseDemagBemOperator pozostaje wyłącznie oracle’em referencyjnym. GPU ma
+osobną, spłaszczoną realizację CUDA z device Hypre dla obu potencjałów i nie
+może przejść na CPU. prism6, pyramid5 i P2 są poza kontraktem FK.
 
 (governing-equations)=
 ## 2. Równania i konwencja znaków
@@ -77,9 +81,10 @@ u=u_1+u_2,
 
 Jego wartości brzegowe wynikają z reprezentacji całkowej Green’a z
 $G(\mathbf x,\mathbf y)=1/(4\pi\lVert\mathbf x-\mathbf y\rVert)$ oraz z
-wartości $u_1$ na $\Gamma$. W dyskretyzacji Fullmag liniowe funkcje kształtu
-na trójkątach granicy prowadzą do macierzy dense o rozmiarze $N_b\times N_b$;
-DenseDemagBemOperator jest tylko referencją, nie metodą skalowalną.
+wartości $u_1$ na $\Gamma$. W dyskretyzacji Fullmag near-blocki przechowują
+dokładny kernel Lindholma, a admissible far-blocki deterministyczne czynniki
+ACA $UV^T$. Globalna macierz $N_b\times N_b$ nie jest tworzona w ścieżce
+produkcyjnej; DenseDemagBemOperator jest tylko małym oracle’em.
 
 ### 2.3. Kontrast z Poisson–Robin
 
@@ -134,6 +139,12 @@ skali nanometrowej.
 - materiał i magnetyzacja spoza $\Omega_m$ nie są dodawane do RHS ani energii;
 - dense BEM służy do małych przypadków referencyjnych; limit alokacji jest
   sprawdzany przed utworzeniem macierzy;
+- hierarchiczny CPU BEM raportuje deterministyczny fingerprint, near/far
+  blocks, observed rank, resident bytes i estymatę błędu z niezależnych probes;
+  estymata nie jest dowodem analitycznego error bound;
+- GPU uploaduje spłaszczone near/far blocks raz w setupie. Apply, oba solve’y,
+  recovery i redukcja energii pozostają w ścieżce device; receipt z niezerowym
+  host-operator mask lub transferem hot-loop kończy kwalifikację;
 - model nie jest dowodem jakości meshera ani dowodem zbieżności dla filmu
   500 x 500 x 10 nm.
 
@@ -171,9 +182,12 @@ resolved realization, capability i provenance, a nie nowa semantyka fizyczna.
 
 RequestedFemDemagIR::FredkinKoehler wymaga body-only mesh i nie wymaga
 airboxa. Planner rozwiązuje go do
-ResolvedFemDemagIR::FredkinKoehler; warianty Bem i Fmm pozostają
-niezaimplementowane. Plan powinien zachować requested model, resolved model,
-device, precision, topology, FE order, boundary-node count i operator mode.
+ResolvedFemDemagIR::FredkinKoehler. CPU i GPU są osobnymi realizacjami tego
+samego modelu: CPU używa hierarchii H2, a GPU używa spłaszczonych bloków
+near/far oraz Hypre na device. Plan powinien zachować requested model,
+resolved model, device, precision, topology, FE order, boundary-node count i
+operator mode; sama obecność resolved planu nie jest dowodem runtime ani
+walidacji fizycznej.
 
 Metadata fem_demag_accuracy_contract ma schemat
 fullmag.fem.demag_accuracy.v1. Wymaga Poisson airbox,
@@ -202,6 +216,8 @@ fail-closed zamiast niejawnego fallbacku.
   rozspojony link wierzchołka;
 - dense reference przekracza dense_reference_max_boundary_nodes albo
   przepełnia rozmiar/budżet bajtów;
+- hierarchiczny operator przekracza budżet bloków/pamięci albo probe błędu
+  przekracza tolerancję;
 - liczba gauge nie pasuje do spójnych składowych Neumanna.
 
 Każdy taki przypadek zwraca opisany błąd. Nie wolno zastępować błędu pustą
@@ -241,7 +257,15 @@ spójnej składowej wybierany jest deterministycznie najmniejszy globalny węze�
 Workspace mapuje go na prawidłowy true DOF P1, a operator Neumanna eliminuje
 wszystkie te DOF-y. RHS kopiuje wspólny demag RHS i zeruje dokładnie tę listę.
 
-### 8.3. Dense operator
+### 8.3. Operator hierarchiczny CPU
+
+`HierarchicalDemagBemOperator` buduje medianowe drzewa klastrów węzłów
+docelowych i trójkątów źródłowych. Pary nieadmissible zapisują dokładne wpisy
+Lindholma w blokach near. Pary admissible są kompresowane deterministycznym
+ACA do czynników $UV^T$ z limitem rzędu i kontrolą pivotu. Diagonalny wkład
+kątów bryłowych pozostaje jawny; globalna macierz $N_b^2$ nie jest
+materializowana. Workspace operatora zawiera scratch dla `apply`, więc
+powtórne zastosowanie nie alokuje buforów zależnych od liczby węzłów.
 
 DenseDemagBemOperator składa macierz wierszami. Diagonalny wkład używa sumy
 kątów bryłowych przy węźle granicy, a pozadiagonalne wkłady liniowych funkcji
@@ -249,10 +273,24 @@ kształtu trójkąta w formulacji Lindholma. Wszelkie przypadki pokrywającego s
 wierzchołka, zerowej krawędzi, niedozwolonego logarytmu lub niefinitycznego
 wyniku są błędem kontrolowanym.
 
-Macierz ma złożoność i pamięć $O(N_b^2)$. Guard jest wykonywany przed
-matrix_.assign, sprawdza $N_b^2$, $N_b^2\operatorname{sizeof}(\mathrm{double})$
-i bad_alloc. Przekroczenie limitu wskazuje Poisson-airbox jako aktualną
-alternatywę; nie uruchamia H2/FMM ani nie przenosi pracy na GPU.
+Dense reference ma złożoność i pamięć $O(N_b^2)$ i jest chroniony guardem
+przed `matrix_.assign`; nie jest fallbackiem operatora hierarchicznego.
+Kontrola jakości hierarchii wykonuje ograniczoną, deterministyczną serię
+niezależnych probes/residual estimates. `relative_error_estimate` jest
+estymatą diagnostyczną, nie analityczną gwarancją błędu; przekroczenie
+tolerancji kończy budowę błędem. Budżety pamięci, liczby bloków i wpisów są
+sprawdzane przed alokacją.
+
+### 8.4. Operator device-resident GPU
+
+`GpuDemagFemBemWorkspace` spłaszcza te same deterministyczne bloki near/far
+oraz fingerprint CPU do buforów CUDA. Setup wykonuje jeden upload operatora;
+kernel liczy near sumy i $U(V^Tx)$ dla far blocks. Dwa układy Hypre rozwiązują
+$u_1$ i $u_2$, a recovery pola i redukcja energii są wykonywane na device.
+W hot loop nie ma pełnego wektora H2D/D2H ani wywołania CPU FK. Receipt
+`device_resident` musi pokrywać wszystkie wymagane maski, mieć zero fallbacków,
+zero host-operatorów i zero transferów/synchronizacji obliczeniowych;
+przeciwny stan oznacza `NOT VERIFIED`.
 
 (implementation-mapping)=
 ## 9. Mapa implementacji i własność modułów
@@ -261,13 +299,15 @@ alternatywę; nie uruchamia H2/FMM ani nie przenosi pracy na GPU.
 |---|---|---|
 | typed mesh i topologia | backends/fem/core/fem_mesh.hpp/.cpp | FemMesh, element_topology |
 | granica BEM | backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.hpp/.cpp | build_demag_boundary_surface |
-| macierz dense | backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp/.cpp | DenseDemagBemOperator::build, apply |
+| oracle dense i operator hierarchiczny | backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp/.cpp | DenseDemagBemOperator oraz HierarchicalDemagBemOperator::build, apply |
 | RHS Neumanna | backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.hpp/.cpp | prepare_demag_fem_bem_neumann_rhs |
 | workspace i gauge | backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp/.cpp | DemagFemBemWorkspace, initialize_demag_fem_bem_workspace |
 | solve | backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.hpp/.cpp | context_compute_demag_fem_bem |
 | wartości brzegowe | backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.* | boundary transfer |
 | potencjał | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.* | potential combine |
 | odzysk pola i energia | backends/fem/cpu/mfem/interactions/demag_poisson_recovery.*, demag_fem_bem_energy.* | H_demag, E_d |
+| operator GPU i Hypre | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.* | GpuDemagFemBemWorkspace, device FK apply |
+| provenance ABI | native/include/fullmag_fem.h, backends/fem/src/api.cpp, crates/fullmag-fem-sys | fullmag_fem_backend_demag_fem_bem_provenance_v1 |
 | kontrakt testowy | backends/fem/tests/demag_fem_bem_contract.cpp | fem_demag_fem_bem_contract |
 
 Operator FK nie dodaje nowej fizyki do Context ani mfem_bridge.cpp.
@@ -286,9 +326,10 @@ just --shell 'C:\Program Files\Git\bin\bash.exe' --shell-arg -lc verify-fem-dema
 ```
 
 fem_demag_fem_bem_contract musi obejmować granicę kompletną, fasety
-niepoprawne, nie-manifold, skalowanie, typy/CSR, gauge wielu składowych i
-limit dense przed alokacją. Istniejące testy energii, skończoności macierzy i
-własności modułów pozostają aktywne.
+niepoprawne, nie-manifold, skalowanie, typy/CSR, gauge wielu składowych,
+zgodność dense-oracle z hierarchią i brak alokacji per `apply`. Osobny target
+GPU sprawdza upload, prawidłowe true-DOF mapowanie i device apply. Istniejące
+testy energii, skończoności macierzy i własności modułów pozostają aktywne.
 
 ### 10.2. Walidacja fizyczna
 
@@ -312,10 +353,10 @@ NOT VERIFIED.
 
 | Lane | Implementacja | Walidacja runtime | Status |
 |---|---|---|---|
-| FEM CPU + tet4 + P1 + dense | kod i kontrakt źródłowy | wymagany managed receipt | reference_executable, physics NOT VERIFIED |
+| FEM CPU + tet4 + P1 + hierarchia H2 | kod, kontrakt i metryki BEM | wymagany managed receipt | implemented, physics NOT VERIFIED |
 | FEM CPU + all-tet/P2 Poisson accuracy | osobny planner contract | brak świeżego artefaktu filmu | NOT VERIFIED |
-| FEM GPU strict/device-resident FK | brak operatora FK GPU | brak | NOT VERIFIED |
-| H2/FMM lub skalowalny BEM | niezaimplementowane | brak | NOT VERIFIED |
+| FEM GPU strict/device-resident FK | osobny CUDA/Hypre operator i receipt | brak świeżego artefaktu filmu | implemented, physics NOT VERIFIED |
+| H2/FMM lub skalowalny BEM | H2 zaimplementowany; FMM poza zakresem | brak świeżego artefaktu filmu | H2 source-verified, runtime NOT VERIFIED |
 
 Przejście do physics_validated lub production_qualified wymaga źródłowej
 tożsamości, managed receipt, artefaktu, validatora i pełnego scope. Test
@@ -326,8 +367,9 @@ kompilacji ani dowód, że istnieje funkcja build, nie jest takim przejściem.
 
 - dense BEM nie skaluje się do dużych powierzchni; limit chroni pamięć, ale nie
   jest benchmarkiem produkcyjnego rozmiaru;
-- FK GPU i H2/FMM nie mają implementacji ani dowodu, więc capability nie może
-  ich deklarować;
+- CPU H2 i GPU device-resident FK mają implementację oraz kontrakt źródłowy,
+  ale capability/production qualification wymaga nadal świeżego managed
+  receiptu i artefaktu filmu; FMM pozostaje poza zakresem;
 - dopasowanie pojedynczego wyniku filmu 500 x 500 x 10 nm nie rozstrzyga, czy
   przyczyną rozbieżności jest rząd P1, topologia piramid, grading, granica czy
   błąd energii;
@@ -336,8 +378,9 @@ kompilacji ani dowód, że istnieje funkcja build, nie jest takim przejściem.
 - brak aktualnego artefaktu lub nieudany runtime oznacza NOT VERIFIED, nie
   „prawdopodobnie poprawne”.
 
-Odroczone są: skalowalny operator H2/FMM, ścisła realizacja CUDA bez D2H/CPU,
-adaptacja siatki, automatyczny wybór rzędu oraz pełna kwalifikacja filmu.
+Odroczone są: analityczny error bound i adaptacja hierarchii, FMM,
+automatyczny wybór rzędu, większa macierz filmu oraz pełna kwalifikacja filmu
+na managed CPU i GPU.
 
 (scientific-bibliography)=
 ## 12. Bibliografia naukowa
@@ -359,7 +402,7 @@ adaptacja siatki, automatyczny wybór rzędu oraz pełna kwalifikacja filmu.
 | crates/fullmag-ir/src/plan.rs | enum ResolvedFemDemagIR | kanoniczna realizacja resolved |
 | crates/fullmag-plan/src/fem.rs | validate_fem_demag_accuracy_contract | fail-closed profil all-tet/P2 Poisson |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp | build_demag_boundary_surface | typed TET4 i watertight boundary |
-| backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp | class DenseDemagBemOperator | dense reference i limit węzłów |
+| backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp/.cpp | class DenseDemagBemOperator, HierarchicalDemagBemOperator | dense oracle, hierarchia H2 i limit budżetu |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp | initialize_demag_fem_bem_workspace | przestrzeń P1 i wielokrotny gauge |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp | prepare_demag_fem_bem_neumann_rhs | zerowanie gauge w RHS |
 | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp | combine_demag_fem_bem_total_potential | suma potencjałów u1 i u2 |
@@ -369,7 +412,13 @@ adaptacja siatki, automatyczny wybór rzędu oraz pełna kwalifikacja filmu.
 - backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp — rekordy
   ścian, orientacja, mapowanie węzłów i kontrola zamknięcia;
 - backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp — kąty
-  bryłowe, wagi Lindholma, dense assembly/apply i limit pamięci;
+  bryłowe, wagi Lindholma, dense oracle, hierarchia H2, apply i limity pamięci;
+- backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp — device-resident FK,
+  spłaszczone bloki near/far i upload operatora;
+- backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu — kernel near/far
+  oraz mapa scalar true DOF;
+- native/include/fullmag_fem.h oraz backends/fem/src/api.cpp — ABI
+  provenance operatora CPU/GPU;
 - backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp — MFEM P1,
   workspace, operatory Neumanna/Dirichleta i gauge;
 - backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp — transformacja
@@ -390,7 +439,8 @@ adaptacja siatki, automatyczny wybór rzędu oraz pełna kwalifikacja filmu.
 - [x] założenia, zakres P1/TET4 i ograniczenia;
 - [x] Python DSL, ProblemIR, planner i round-trip;
 - [x] realizacja dyskretna, ownership i semantyka błędów;
-- [x] osobne lane’y CPU, GPU, P2 i H2/FMM;
+- [x] osobne lane’y CPU, GPU, P2 i hierarchiczny H2/FMM z jawnym statusem
+  implementacji oraz walidacji;
 - [x] plan walidacji i statusy bez nieuprawnionej promocji;
 - [x] bibliografia i source index;
 - [x] machine-readable source map.

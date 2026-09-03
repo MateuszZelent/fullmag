@@ -32,6 +32,7 @@ pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
 pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_FROZEN_SPINS_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
+pub const FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_GPU_OPERATOR_EXCHANGE: u64 = 1 << 0;
 pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS: u64 = 1 << 1;
@@ -2518,6 +2519,7 @@ pub enum fullmag_fem_gpu_demag_mode {
     FULLMAG_FEM_GPU_DEMAG_UNSPECIFIED = 0,
     FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON = 1,
     FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON = 2,
+    FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM = 3,
 }
 
 #[repr(C)]
@@ -2588,6 +2590,37 @@ pub struct fullmag_fem_gpu_execution_receipt_v1 {
     pub hot_loop_compute_h2d_bytes: u64,
     pub hot_loop_compute_d2h_bytes: u64,
     pub hot_loop_compute_host_sync_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_demag_fem_bem_provenance_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub available: u32,
+    pub reserved: u32,
+    pub operator_mode: [c_char; 64],
+    pub operator_fingerprint: [c_char; 256],
+    pub boundary_node_count: u64,
+    pub boundary_triangle_count: u64,
+    pub near_block_count: u64,
+    pub far_block_count: u64,
+    pub near_entry_count: u64,
+    pub far_row_count: u64,
+    pub max_rank: u32,
+    pub reserved2: u32,
+    pub relative_error_estimate: f64,
+    pub resident_bytes: u64,
+    pub device_bytes: u64,
+    pub operator_build_count: u64,
+    pub operator_upload_count: u64,
+    pub apply_count: u64,
+}
+
+impl Default for fullmag_fem_demag_fem_bem_provenance_v1 {
+    fn default() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
@@ -3016,6 +3049,10 @@ extern "C" {
     pub fn fullmag_fem_backend_gpu_execution_receipt_v1(
         handle: *mut fullmag_fem_backend,
         out_receipt: *mut fullmag_fem_gpu_execution_receipt_v1,
+    ) -> i32;
+    pub fn fullmag_fem_backend_demag_fem_bem_provenance_v1(
+        handle: *mut fullmag_fem_backend,
+        out_provenance: *mut fullmag_fem_demag_fem_bem_provenance_v1,
     ) -> i32;
     pub fn fullmag_fem_backend_gpu_performance_snapshot_v1(
         handle: *mut fullmag_fem_backend,
@@ -6091,6 +6128,29 @@ mod tests {
             *mut fullmag_fem_backend,
             *mut fullmag_fem_gpu_execution_receipt_v1,
         ) -> i32 = fullmag_fem_backend_gpu_execution_receipt_v1;
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn demag_fem_bem_provenance_v1_has_stable_layout_and_symbol() {
+        use std::mem::{align_of, offset_of, size_of};
+
+        assert_eq!(FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION, 1);
+        assert_eq!(size_of::<fullmag_fem_demag_fem_bem_provenance_v1>(), 440);
+        assert_eq!(align_of::<fullmag_fem_demag_fem_bem_provenance_v1>(), 8);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, struct_size), 4);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, available), 8);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, operator_mode), 16);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, operator_fingerprint), 80);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, boundary_node_count), 336);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, max_rank), 384);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, relative_error_estimate), 392);
+        assert_eq!(offset_of!(fullmag_fem_demag_fem_bem_provenance_v1, apply_count), 432);
+        let _: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut fullmag_fem_demag_fem_bem_provenance_v1,
+        ) -> i32 = fullmag_fem_backend_demag_fem_bem_provenance_v1;
     }
 
     #[test]

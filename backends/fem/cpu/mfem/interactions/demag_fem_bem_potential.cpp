@@ -8,6 +8,8 @@
 #include "cpu/mfem/interactions/demag_fem_bem_potential.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 
+#include <algorithm>
+
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
 #endif
@@ -16,15 +18,19 @@ namespace fullmag::fem {
 
 #if FULLMAG_HAS_MFEM_STACK
 bool extract_demag_fem_bem_boundary_trace(
-    const std::vector<uint32_t> &boundary_nodes,
+    const std::vector<int> &boundary_tdofs,
     const mfem::Vector &potential,
     std::vector<double> &boundary_trace,
     std::string &error)
 {
-    boundary_trace.assign(boundary_nodes.size(), 0.0);
+    if (boundary_trace.size() != boundary_tdofs.size()) {
+        error = "FEM/BEM demag boundary trace scratch size mismatch";
+        return false;
+    }
+    std::fill(boundary_trace.begin(), boundary_trace.end(), 0.0);
     const double *potential_data = audited_host_read(potential);
-    for (size_t i = 0; i < boundary_nodes.size(); ++i) {
-        const int tdof = static_cast<int>(boundary_nodes[i]);
+    for (size_t i = 0; i < boundary_tdofs.size(); ++i) {
+        const int tdof = boundary_tdofs[i];
         if (tdof < 0 || tdof >= potential.Size()) {
             error = "FEM/BEM demag boundary trace references a potential DOF outside the vector";
             return false;

@@ -1,0 +1,46 @@
+{
+  "binary_path": "mesh/fdm_region_membership.v2.bin",
+  "cell_count": 40000,
+  "cell_m": [
+    2.5e-9,
+    2.5e-9,
+    1e-8
+  ],
+  "counts": [
+    200,
+    200,
+    1
+  ],
+  "domain_generation_id": "a2d4c9663a6f57abeec3e18d775e709b40fac028fdb8226f3f9e13743598c883",
+  "encoding": "FMRM:u32_membership_le",
+  "grid_fingerprint": "a2d4c9663a6f57abeec3e18d775e709b40fac028fdb8226f3f9e13743598c883",
+  "magnetic_support": {
+    "active_cell_count": 40000,
+    "active_unassigned_cell_count": 40000,
+    "bounds_max_m": [
+      2.5e-7,
+      2.5e-7,
+      5e-9
+    ],
+    "bounds_min_m": [
+      -2.5e-7,
+      -2.5e-7,
+      -5e-9
+    ],
+    "grid_fingerprint": "a2d4c9663a6f57abeec3e18d775e709b40fac028fdb8226f3f9e13743598c883",
+    "inactive_cell_count": 0,
+    "semantic_role": "magnetic-support"
+  },
+  "object_ids": [
+    "py_layer",
+    "py_layer_geom"
+  ],
+  "origin_m": [
+    -2.5e-7,
+    -2.5e-7,
+    -5e-9
+  ],
+  "region_legend": [],
+  "region_legend_fingerprint": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "schema_version": "fdm_region_membership.v2"
+}
