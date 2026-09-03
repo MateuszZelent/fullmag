@@ -39,7 +39,8 @@ static __device__ bool dmi_tetra_gradients_device(
     double grads[4][3],
     double &volume,
     double *condition_scale = nullptr,
-    double gradient_scales[4][3] = nullptr)
+    double gradient_scales[4][3] = nullptr,
+    bool *nonfinite_geometry = nullptr)
 {
     constexpr double kGeomEpsDevice = 1.0e-30;
     const double p0x = nodes_xyz[static_cast<size_t>(n0) * 3u + 0u];
@@ -59,7 +60,17 @@ static __device__ bool dmi_tetra_gradients_device(
     const double c23y = d2z * d3x - d2x * d3z;
     const double c23z = d2x * d3y - d2y * d3x;
     const double det = d1x * c23x + d1y * c23y + d1z * c23z;
-    if (!(fabs(det) > kGeomEpsDevice) || !isfinite(det)) {
+    if (!isfinite(det)) {
+        if (nonfinite_geometry != nullptr) {
+            *nonfinite_geometry = true;
+        }
+        volume = 0.0;
+        return false;
+    }
+    if (!(fabs(det) > kGeomEpsDevice)) {
+        if (nonfinite_geometry != nullptr) {
+            *nonfinite_geometry = false;
+        }
         volume = 0.0;
         return false;
     }
@@ -125,118 +136,207 @@ __global__ void dmi_element_residual_kernel(
     double *__restrict__ residual_x,
     double *__restrict__ residual_y,
     double *__restrict__ residual_z,
-    double *__restrict__ energy_out,
+    double *__restrict__ energy_partials,
+    DmiDiagnostics *__restrict__ diagnostics,
+    DmiApplyRequest request,
     double uniform_d,
     double nx,
     double ny,
     double nz,
     bool use_d_field,
     bool bulk_mode,
-    int element_count)
+    int element_count,
+    int node_count)
 {
-    const int e = blockIdx.x * blockDim.x + threadIdx.x;
-    if (e >= element_count) {
-        return;
-    }
-    if (magnetic_element_mask != nullptr && magnetic_element_mask[e] == 0u) {
-        return;
-    }
-    const size_t ebase = static_cast<size_t>(e) * 4u;
-    const uint32_t nodes[4] = {
-        elements[ebase + 0u],
-        elements[ebase + 1u],
-        elements[ebase + 2u],
-        elements[ebase + 3u],
-    };
-    double grads[4][3];
-    double volume = 0.0;
-    if (!dmi_tetra_gradients_device(nodes_xyz, nodes[0], nodes[1], nodes[2], nodes[3], grads, volume)) {
-        return;
-    }
-    double elem_d = uniform_d;
-    if (use_d_field && d_field != nullptr) {
-        elem_d = 0.0;
+    __shared__ double block_energy[kBlockSize];
+    double thread_energy = 0.0;
+
+    for (int e = blockIdx.x * blockDim.x + threadIdx.x;
+         e < element_count;
+         e += blockDim.x * gridDim.x) {
+        if (magnetic_element_mask != nullptr && magnetic_element_mask[e] == 0u) {
+            continue;
+        }
+        const size_t ebase = static_cast<size_t>(e) * 4u;
+        const uint32_t nodes[4] = {
+            elements[ebase + 0u],
+            elements[ebase + 1u],
+            elements[ebase + 2u],
+            elements[ebase + 3u],
+        };
+        bool valid_nodes = true;
         for (int local = 0; local < 4; ++local) {
-            elem_d += d_field[nodes[local]];
+            valid_nodes = valid_nodes && nodes[local] < static_cast<uint32_t>(node_count);
         }
-        elem_d *= 0.25;
-    }
-    if (elem_d == 0.0) {
-        return;
-    }
-
-    double grad_m[3][3] = {};
-    double m_q[3] = {};
-    for (int local = 0; local < 4; ++local) {
-        const uint32_t node = nodes[local];
-        const double m[3] = {mx[node], my[node], mz[node]};
-        for (int comp = 0; comp < 3; ++comp) {
-            m_q[comp] += 0.25 * m[comp];
-            grad_m[comp][0] += m[comp] * grads[local][0];
-            grad_m[comp][1] += m[comp] * grads[local][1];
-            grad_m[comp][2] += m[comp] * grads[local][2];
+        if (!valid_nodes) {
+            atomicAdd(
+                reinterpret_cast<unsigned long long *>(&diagnostics->degenerate_tet_count),
+                1ull);
+            continue;
         }
-    }
 
-    const double weight = volume;
-    const double div_m = grad_m[0][0] + grad_m[1][1] + grad_m[2][2];
-    const double curl_m[3] = {
-        grad_m[2][1] - grad_m[1][2],
-        grad_m[0][2] - grad_m[2][0],
-        grad_m[1][0] - grad_m[0][1],
-    };
-    const double grad_m_dot_n[3] = {
-        nx * grad_m[0][0] + ny * grad_m[1][0] + nz * grad_m[2][0],
-        nx * grad_m[0][1] + ny * grad_m[1][1] + nz * grad_m[2][1],
-        nx * grad_m[0][2] + ny * grad_m[1][2] + nz * grad_m[2][2],
-    };
-    const double m_dot_n = m_q[0] * nx + m_q[1] * ny + m_q[2] * nz;
-    for (int local = 0; local < 4; ++local) {
-        const uint32_t node = nodes[local];
-        const double shape = 0.25;
-        const double *grad_shape = grads[local];
-        double residual[3] = {};
-        if (bulk_mode) {
-            residual[0] = elem_d * weight *
-                (shape * curl_m[0] + m_q[1] * grad_shape[2] - m_q[2] * grad_shape[1]);
-            residual[1] = elem_d * weight *
-                (shape * curl_m[1] - m_q[0] * grad_shape[2] + m_q[2] * grad_shape[0]);
-            residual[2] = elem_d * weight *
-                (shape * curl_m[2] + m_q[0] * grad_shape[1] - m_q[1] * grad_shape[0]);
-        } else {
+        double grads[4][3];
+        double volume = 0.0;
+        bool nonfinite_geometry = false;
+        if (!dmi_tetra_gradients_device(
+                nodes_xyz, nodes[0], nodes[1], nodes[2], nodes[3], grads, volume,
+                nullptr, nullptr, &nonfinite_geometry)) {
+            uint64_t *counter = nonfinite_geometry
+                ? &diagnostics->nonfinite_count
+                : &diagnostics->degenerate_tet_count;
+            atomicAdd(reinterpret_cast<unsigned long long *>(counter), 1ull);
+            continue;
+        }
+        double elem_d = uniform_d;
+        if (use_d_field && d_field != nullptr) {
+            elem_d = 0.0;
+            for (int local = 0; local < 4; ++local) {
+                elem_d += d_field[nodes[local]];
+            }
+            elem_d *= 0.25;
+        }
+        if (!isfinite(elem_d)) {
+            atomicAdd(
+                reinterpret_cast<unsigned long long *>(&diagnostics->nonfinite_count),
+                1ull);
+            continue;
+        }
+        if (elem_d == 0.0) {
+            continue;
+        }
+
+        double grad_m[3][3] = {};
+        double m_q[3] = {};
+        bool finite_input = true;
+        for (int local = 0; local < 4; ++local) {
+            const uint32_t node = nodes[local];
+            const double m[3] = {mx[node], my[node], mz[node]};
             for (int comp = 0; comp < 3; ++comp) {
-                const double n_comp = comp == 0 ? nx : (comp == 1 ? ny : nz);
-                const double dw_dm = elem_d * (n_comp * div_m - grad_m_dot_n[comp]);
-                double grad_action = 0.0;
-                for (int dir = 0; dir < 3; ++dir) {
-                    const double delta = comp == dir ? 1.0 : 0.0;
-                    const double m_dir = dir == 0 ? m_q[0] : (dir == 1 ? m_q[1] : m_q[2]);
-                    const double dw_dg = elem_d * (m_dot_n * delta - n_comp * m_dir);
-                    grad_action += dw_dg * grad_shape[dir];
-                }
-                residual[comp] = weight * (shape * dw_dm + grad_action);
+                finite_input = finite_input && isfinite(m[comp]);
+                m_q[comp] += 0.25 * m[comp];
+                grad_m[comp][0] += m[comp] * grads[local][0];
+                grad_m[comp][1] += m[comp] * grads[local][1];
+                grad_m[comp][2] += m[comp] * grads[local][2];
             }
         }
-        dmi_atomic_add_double(&residual_x[node], residual[0]);
-        dmi_atomic_add_double(&residual_y[node], residual[1]);
-        dmi_atomic_add_double(&residual_z[node], residual[2]);
+        if (!finite_input) {
+            atomicAdd(
+                reinterpret_cast<unsigned long long *>(&diagnostics->nonfinite_count),
+                1ull);
+            continue;
+        }
+
+        const double weight = volume;
+        const double div_m = grad_m[0][0] + grad_m[1][1] + grad_m[2][2];
+        const double curl_m[3] = {
+            grad_m[2][1] - grad_m[1][2],
+            grad_m[0][2] - grad_m[2][0],
+            grad_m[1][0] - grad_m[0][1],
+        };
+        const double grad_m_dot_n[3] = {
+            nx * grad_m[0][0] + ny * grad_m[1][0] + nz * grad_m[2][0],
+            nx * grad_m[0][1] + ny * grad_m[1][1] + nz * grad_m[2][1],
+            nx * grad_m[0][2] + ny * grad_m[1][2] + nz * grad_m[2][2],
+        };
+        const double m_dot_n = m_q[0] * nx + m_q[1] * ny + m_q[2] * nz;
+
+        double element_residual[4][3] = {};
+        bool finite_result = true;
+        if (request.field) {
+            for (int local = 0; local < 4; ++local) {
+                const double shape = 0.25;
+                const double *grad_shape = grads[local];
+                if (bulk_mode) {
+                    element_residual[local][0] = elem_d * weight *
+                        (shape * curl_m[0] + m_q[1] * grad_shape[2] - m_q[2] * grad_shape[1]);
+                    element_residual[local][1] = elem_d * weight *
+                        (shape * curl_m[1] - m_q[0] * grad_shape[2] + m_q[2] * grad_shape[0]);
+                    element_residual[local][2] = elem_d * weight *
+                        (shape * curl_m[2] + m_q[0] * grad_shape[1] - m_q[1] * grad_shape[0]);
+                } else {
+                    for (int comp = 0; comp < 3; ++comp) {
+                        const double n_comp = comp == 0 ? nx : (comp == 1 ? ny : nz);
+                        const double dw_dm = elem_d * (n_comp * div_m - grad_m_dot_n[comp]);
+                        double grad_action = 0.0;
+                        for (int dir = 0; dir < 3; ++dir) {
+                            const double delta = comp == dir ? 1.0 : 0.0;
+                            const double m_dir = dir == 0 ? m_q[0] : (dir == 1 ? m_q[1] : m_q[2]);
+                            const double dw_dg = elem_d * (m_dot_n * delta - n_comp * m_dir);
+                            grad_action += dw_dg * grad_shape[dir];
+                        }
+                        element_residual[local][comp] = weight * (shape * dw_dm + grad_action);
+                    }
+                }
+                finite_result = finite_result &&
+                    isfinite(element_residual[local][0]) &&
+                    isfinite(element_residual[local][1]) &&
+                    isfinite(element_residual[local][2]);
+            }
+        }
+
+        double energy = 0.0;
+        if (request.energy) {
+            if (bulk_mode) {
+                energy = elem_d *
+                    (m_q[0] * curl_m[0] + m_q[1] * curl_m[1] + m_q[2] * curl_m[2]) *
+                    weight;
+            } else {
+                const double m_grad_mn =
+                    m_q[0] * grad_m_dot_n[0] +
+                    m_q[1] * grad_m_dot_n[1] +
+                    m_q[2] * grad_m_dot_n[2];
+                energy = elem_d * (m_dot_n * div_m - m_grad_mn) * weight;
+            }
+            finite_result = finite_result && isfinite(energy);
+        }
+        if (!finite_result) {
+            atomicAdd(
+                reinterpret_cast<unsigned long long *>(&diagnostics->nonfinite_count),
+                1ull);
+            continue;
+        }
+
+        if (request.field) {
+            for (int local = 0; local < 4; ++local) {
+                const uint32_t node = nodes[local];
+                dmi_atomic_add_double(&residual_x[node], element_residual[local][0]);
+                dmi_atomic_add_double(&residual_y[node], element_residual[local][1]);
+                dmi_atomic_add_double(&residual_z[node], element_residual[local][2]);
+            }
+        }
+        if (request.energy) {
+            thread_energy += energy;
+        }
     }
 
-    double energy = 0.0;
-    if (bulk_mode) {
-        energy = elem_d *
-            (m_q[0] * curl_m[0] + m_q[1] * curl_m[1] + m_q[2] * curl_m[2]) *
-            weight;
-    } else {
-        const double m_grad_mn =
-            m_q[0] * grad_m_dot_n[0] +
-            m_q[1] * grad_m_dot_n[1] +
-            m_q[2] * grad_m_dot_n[2];
-        energy = elem_d * (m_dot_n * div_m - m_grad_mn) * weight;
+    if (request.energy) {
+        block_energy[threadIdx.x] = thread_energy;
+        __syncthreads();
+        for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+            if (threadIdx.x < offset) {
+                block_energy[threadIdx.x] += block_energy[threadIdx.x + offset];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            energy_partials[blockIdx.x] = block_energy[0];
+        }
     }
-    if (energy_out != nullptr) {
-        dmi_atomic_add_double(energy_out, energy);
+}
+
+__global__ void dmi_pairwise_sum_in_place(
+    const double *__restrict__ input,
+    double *__restrict__ output,
+    int input_count)
+{
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    const int output_count = (input_count + 1) / 2;
+    if (index >= output_count) {
+        return;
     }
+    const int left = 2 * index;
+    const int right = left + 1;
+    output[index] = input[left] + (right < input_count ? input[right] : 0.0);
 }
 
 __global__ void dmi_energy_difference_kernel(
@@ -366,6 +466,7 @@ __global__ void dmi_project_field_kernel(
     double *__restrict__ h_dmi_x,
     double *__restrict__ h_dmi_y,
     double *__restrict__ h_dmi_z,
+    DmiDiagnostics *__restrict__ diagnostics,
     double uniform_ms,
     int node_count)
 {
@@ -383,15 +484,55 @@ __global__ void dmi_project_field_kernel(
     }
     const double mass = lumped_mass[node];
     const double ms_i = ms != nullptr ? ms[node] : uniform_ms;
+    if (!isfinite(mass) || !isfinite(ms_i)) {
+        atomicAdd(
+            reinterpret_cast<unsigned long long *>(&diagnostics->nonfinite_count),
+            1ull);
+        return;
+    }
     if (mass > 0.0 && ms_i > 0.0) {
         const double inv_projection_mass = -1.0 / (kMu0 * ms_i * mass + kTinyDevice);
         h_dmi_x[node] = residual_x[node] * inv_projection_mass;
         h_dmi_y[node] = residual_y[node] * inv_projection_mass;
         h_dmi_z[node] = residual_z[node] * inv_projection_mass;
+        if (!isfinite(h_dmi_x[node]) || !isfinite(h_dmi_y[node]) ||
+            !isfinite(h_dmi_z[node])) {
+            atomicAdd(
+                reinterpret_cast<unsigned long long *>(&diagnostics->nonfinite_count),
+                1ull);
+        }
     }
 }
 
-void fullmag_cuda_dmi_field_energy(
+__global__ void dmi_fail_closed_kernel(
+    double *h_dmi_x,
+    double *h_dmi_y,
+    double *h_dmi_z,
+    double *energy_partials,
+    const DmiDiagnostics *diagnostics,
+    DmiApplyRequest request,
+    int node_count)
+{
+    if (diagnostics->degenerate_tet_count == 0u && diagnostics->nonfinite_count == 0u) {
+        return;
+    }
+    const int node = blockIdx.x * blockDim.x + threadIdx.x;
+    if (request.field && node < node_count) {
+        h_dmi_x[node] = nan("");
+        h_dmi_y[node] = nan("");
+        h_dmi_z[node] = nan("");
+    }
+    if (request.energy && node == 0) {
+        energy_partials[0] = nan("");
+    }
+}
+
+int dmi_energy_partial_count(int node_count)
+{
+    return node_count > 0 ? (node_count + kBlockSize - 1) / kBlockSize : 0;
+}
+
+cudaError_t fullmag_cuda_dmi_field_energy(
     const double *nodes_xyz,
     const uint32_t *elements,
     const uint8_t *magnetic_element_mask,
@@ -408,7 +549,9 @@ void fullmag_cuda_dmi_field_energy(
     double *h_dmi_x,
     double *h_dmi_y,
     double *h_dmi_z,
-    double *energy_out,
+    double *energy_partials,
+    DmiDiagnostics *diagnostics,
+    DmiApplyRequest request,
     double uniform_ms,
     double uniform_d,
     double nx,
@@ -420,20 +563,41 @@ void fullmag_cuda_dmi_field_energy(
     int node_count,
     cudaStream_t stream)
 {
-    if (node_count <= 0) {
-        return;
+    if (node_count <= 0 || element_count < 0 || diagnostics == nullptr ||
+        (!request.field && !request.energy)) {
+        return cudaErrorInvalidValue;
     }
-    const size_t node_bytes = static_cast<size_t>(node_count) * sizeof(double);
-    cudaMemsetAsync(residual_x, 0, node_bytes, stream);
-    cudaMemsetAsync(residual_y, 0, node_bytes, stream);
-    cudaMemsetAsync(residual_z, 0, node_bytes, stream);
-    if (energy_out != nullptr) {
-        cudaMemsetAsync(energy_out, 0, sizeof(double), stream);
+    if ((request.field &&
+         (residual_x == nullptr || residual_y == nullptr || residual_z == nullptr ||
+          h_dmi_x == nullptr || h_dmi_y == nullptr || h_dmi_z == nullptr ||
+          lumped_mass == nullptr)) ||
+        (request.energy && energy_partials == nullptr) || nodes_xyz == nullptr ||
+        elements == nullptr || mx == nullptr || my == nullptr || mz == nullptr) {
+        return cudaErrorInvalidDevicePointer;
+    }
+    cudaError_t status = cudaMemsetAsync(diagnostics, 0, sizeof(DmiDiagnostics), stream);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    if (request.field) {
+        const size_t node_bytes = static_cast<size_t>(node_count) * sizeof(double);
+        status = cudaMemsetAsync(residual_x, 0, node_bytes, stream);
+        if (status != cudaSuccess) {
+            return status;
+        }
+        status = cudaMemsetAsync(residual_y, 0, node_bytes, stream);
+        if (status != cudaSuccess) {
+            return status;
+        }
+        status = cudaMemsetAsync(residual_z, 0, node_bytes, stream);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
+    const int node_blocks = dmi_energy_partial_count(node_count);
     if (element_count > 0) {
-        const int element_blocks = (element_count + kBlockSize - 1) / kBlockSize;
-        dmi_element_residual_kernel<<<element_blocks, kBlockSize, 0, stream>>>(
+        dmi_element_residual_kernel<<<node_blocks, kBlockSize, 0, stream>>>(
             nodes_xyz,
             elements,
             magnetic_element_mask,
@@ -445,29 +609,89 @@ void fullmag_cuda_dmi_field_energy(
             residual_x,
             residual_y,
             residual_z,
-            energy_out,
+            energy_partials,
+            diagnostics,
+            request,
             uniform_d,
             nx,
             ny,
             nz,
             use_d_field,
             bulk_mode,
-            element_count);
+            element_count,
+            node_count);
+        status = cudaPeekAtLastError();
+        if (status != cudaSuccess) {
+            return status;
+        }
+    } else if (request.energy) {
+        status = cudaMemsetAsync(
+            energy_partials,
+            0,
+            static_cast<size_t>(node_blocks) * sizeof(double),
+            stream);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
 
-    const int node_blocks = (node_count + kBlockSize - 1) / kBlockSize;
-    dmi_project_field_kernel<<<node_blocks, kBlockSize, 0, stream>>>(
-        residual_x,
-        residual_y,
-        residual_z,
-        ms,
-        lumped_mass,
-        magnetic_node_mask,
+    if (request.field) {
+        dmi_project_field_kernel<<<node_blocks, kBlockSize, 0, stream>>>(
+            residual_x,
+            residual_y,
+            residual_z,
+            ms,
+            lumped_mass,
+            magnetic_node_mask,
+            h_dmi_x,
+            h_dmi_y,
+            h_dmi_z,
+            diagnostics,
+            uniform_ms,
+            node_count);
+        status = cudaPeekAtLastError();
+        if (status != cudaSuccess) {
+            return status;
+        }
+    }
+    dmi_fail_closed_kernel<<<node_blocks, kBlockSize, 0, stream>>>(
         h_dmi_x,
         h_dmi_y,
         h_dmi_z,
-        uniform_ms,
+        energy_partials,
+        diagnostics,
+        request,
         node_count);
+    return cudaPeekAtLastError();
+}
+
+cudaError_t fullmag_cuda_dmi_pairwise_sum(
+    double *partials,
+    double *scratch,
+    int partial_count,
+    double *result,
+    cudaStream_t stream)
+{
+    if (partials == nullptr || scratch == nullptr || result == nullptr || partial_count <= 0) {
+        return cudaErrorInvalidValue;
+    }
+    const double *input = partials;
+    double *output = scratch;
+    int input_count = partial_count;
+    while (input_count > 1) {
+        const int output_count = (input_count + 1) / 2;
+        const int blocks = (output_count + kBlockSize - 1) / kBlockSize;
+        dmi_pairwise_sum_in_place<<<blocks, kBlockSize, 0, stream>>>(
+            input, output, input_count);
+        cudaError_t status = cudaPeekAtLastError();
+        if (status != cudaSuccess) {
+            return status;
+        }
+        input_count = output_count;
+        input = output;
+        output = output == scratch ? partials : scratch;
+    }
+    return cudaMemcpyAsync(result, input, sizeof(double), cudaMemcpyDeviceToDevice, stream);
 }
 
 void fullmag_cuda_dmi_energy_difference(

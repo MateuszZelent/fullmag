@@ -784,6 +784,9 @@ verify-fem-time-domain-native-contract:
 verify-fem-gpu-execution-receipt-contract:
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Backend fem -Device gpu -Contract gpu-execution-receipt
 
+verify-fem-dmi-gpu-contract:
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" -BuildMode true -BuildOnly -Backend fem -Device gpu -Contract dmi-gpu
+
 verify-fem-mesh-runner-abi-contract:
     docker compose --profile fem-gpu run --rm \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \

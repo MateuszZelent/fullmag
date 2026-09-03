@@ -519,7 +519,7 @@ class ManagedRecipeContractTests(unittest.TestCase):
             ROOT / "scripts" / "windows" / "run_fullmag_fem.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            '[ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]',
+            '[ValidateSet("gpu-execution-receipt", "dmi-gpu", "gpu-benchmark-baseline", "gpu-nsight")]',
             launcher,
         )
         self.assertIn("compose.windows.yaml", launcher)

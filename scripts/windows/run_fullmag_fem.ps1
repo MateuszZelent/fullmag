@@ -24,7 +24,7 @@ param(
 
   [switch]$BuildOnly,
 
-  [ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]
+  [ValidateSet("gpu-execution-receipt", "dmi-gpu", "gpu-benchmark-baseline", "gpu-nsight")]
   [string]$Contract,
 
   [ValidatePattern("\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\z")]
@@ -453,6 +453,33 @@ $buildMutex = $null
 $buildMutexHeld = $false
 Push-Location $RepoRoot
 try {
+  if ($Contract -eq "dmi-gpu") {
+    if ($Device -ne "gpu") {
+      throw "Windows FEM DMI GPU contract requires -Device gpu; CPU fallback is forbidden"
+    }
+    if ($BuildMode -eq "true") {
+      Invoke-DockerImageBuild
+    } else {
+      $null = Get-DockerImageId $RuntimeImage
+    }
+    $contractCommand = @"
+set -euo pipefail
+cd /workspace
+build_dir=/workspace/.fullmag-build/contracts/fem-dmi-gpu
+mkdir -p "`$build_dir"
+cmake -S native -B "`$build_dir" -DCMAKE_CUDA_ARCHITECTURES="`$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF
+cmake --build "`$build_dir" --target fem_dmi_gpu_contract
+ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error -R '^fem_dmi_gpu_contract$'
+"@
+    $contractCommand = $contractCommand.Replace("`r`n", "`n").Replace("`r", "`n")
+    $contractCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($contractCommand)
+    $contractCommandBase64 = [Convert]::ToBase64String($contractCommandBytes)
+    $contractCommandPayload = "printf '%s' '$contractCommandBase64' | base64 --decode | bash"
+    Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $contractCommandPayload)
+    Write-Host "Windows FEM DMI GPU contract passed"
+    exit 0
+  }
+
   if ($Contract -eq "gpu-execution-receipt") {
     if ($BuildMode -eq "true") {
       Invoke-DockerImageBuild

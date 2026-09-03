@@ -31,11 +31,6 @@ bool cuda_ok(cudaError_t rc, const char *operation, std::string &reason)
     return false;
 }
 
-bool cuda_launch_ok(const char *operation, std::string &reason)
-{
-    return cuda_ok(cudaPeekAtLastError(), operation, reason);
-}
-
 bool gpu_rk_compute_one_dmi_field(
     Context &ctx,
     const FemGpuComponentField &m,
@@ -51,8 +46,9 @@ bool gpu_rk_compute_one_dmi_field(
         gpu.mesh_geometry.magnetic_element_mask == nullptr ||
         gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.local_interactions.vector.x == nullptr || gpu.local_interactions.vector.y == nullptr ||
-        gpu.local_interactions.vector.z == nullptr) {
-        reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
+        gpu.local_interactions.vector.z == nullptr || gpu.reductions.scalar_workspace == nullptr ||
+        gpu.reductions.scalar_result == nullptr) {
+        reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, residual buffers, and reduction workspace";
         return false;
     }
     FemGpuComponentField &field = bulk_mode ? gpu.fields.h_bulk_dmi : gpu.fields.h_dmi;
@@ -60,7 +56,10 @@ bool gpu_rk_compute_one_dmi_field(
         reason = "GPU RK DMI requires device-resident H_dmi buffers";
         return false;
     }
-    fullmag_cuda_dmi_field_energy(
+    static_assert(sizeof(DmiDiagnostics) == 2 * sizeof(double));
+    auto *diagnostics = reinterpret_cast<DmiDiagnostics *>(
+        gpu.reductions.scalar_result + FEM_GPU_SCALAR_RESULT_SLOTS - 2);
+    return cuda_ok(fullmag_cuda_dmi_field_energy(
         gpu.mesh_geometry.nodes_xyz,
         gpu.mesh_geometry.elements,
         gpu.mesh_geometry.magnetic_element_mask,
@@ -77,7 +76,9 @@ bool gpu_rk_compute_one_dmi_field(
         field.x,
         field.y,
         field.z,
-        gpu.reductions.scalar_workspace,
+        nullptr, // energy_out
+        diagnostics,
+        DmiApplyRequest{true, false},
         ctx.material_fields.material.saturation_magnetisation,
         bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
         ctx.dmi.interface_normal[0],
@@ -87,8 +88,7 @@ bool gpu_rk_compute_one_dmi_field(
         bulk_mode,
         static_cast<int>(ctx.mesh.n_elements),
         n,
-        stream);
-    return cuda_launch_ok(
+        stream),
         bulk_mode ? "launch GPU RK bulk DMI field" : "launch GPU RK interfacial DMI field",
         reason);
 }

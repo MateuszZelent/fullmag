@@ -724,6 +724,10 @@ add_test(
     COMMAND fem_cuda_demag_field_only_contract
 )
 
+add_executable(fem_dmi_gpu_contract tests/dmi_gpu_contract.cpp)
+add_dependencies(fem_dmi_gpu_contract fullmag_fem)
+add_test(NAME fem_dmi_gpu_contract COMMAND fem_dmi_gpu_contract)
+
 add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)
 target_link_libraries(fem_adaptive_error_policy_contract PRIVATE fullmag_fem)
 target_include_directories(fem_adaptive_error_policy_contract PRIVATE

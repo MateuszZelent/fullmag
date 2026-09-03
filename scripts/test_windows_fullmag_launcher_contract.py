@@ -188,6 +188,7 @@ def test_windows_fem_entrypoint_is_windows_powerShell_to_docker_and_wsl_free() -
     assert "compose.windows.yaml" in launcher
     assert '$Contract -eq "gpu-benchmark-baseline"' in launcher
     assert '$Contract -eq "gpu-nsight"' in launcher
+    assert '$Contract -eq "dmi-gpu"' in launcher
     assert 'Invoke-External "wsl.exe"' not in launcher
 
 
@@ -244,7 +245,7 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
 
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
     for required in (
-        '[ValidateSet("gpu-execution-receipt", "gpu-benchmark-baseline", "gpu-nsight")]',
+        '[ValidateSet("gpu-execution-receipt", "dmi-gpu", "gpu-benchmark-baseline", "gpu-nsight")]',
         "/workspace/.fullmag-build/contracts/fem-gpu-execution-receipt",
         "/workspace/.fullmag-build/cargo-targets/fem-gpu-execution-receipt",
         'Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName',
@@ -253,6 +254,22 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
         "artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2",
     ):
         assert required in launcher
+
+
+def test_fem_dmi_gpu_contract_recipe_uses_canonical_windows_launcher() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    start = justfile.index("verify-fem-dmi-gpu-contract:")
+    end = justfile.index("\nverify-fem-mesh-runner-abi-contract:", start)
+    recipe = justfile[start:end]
+
+    assert "scripts/windows/run_fullmag_fem.ps1" in recipe
+    assert "-Contract dmi-gpu" in recipe
+    assert "docker compose" not in recipe
+
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
+    assert '$Contract -eq "dmi-gpu"' in launcher
+    assert "fem_dmi_gpu_contract" in launcher
+    assert "CPU fallback is forbidden" in launcher
 
 
 def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency() -> None:

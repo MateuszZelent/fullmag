@@ -12,8 +12,21 @@
 
 namespace fullmag::fem {
 
+struct DmiApplyRequest {
+    bool field = false;
+    bool energy = false;
+};
+
+struct DmiDiagnostics {
+    uint64_t degenerate_tet_count = 0;
+    uint64_t nonfinite_count = 0;
+};
+
+/// Number of persistent double-precision partials required by DMI energy.
+int dmi_energy_partial_count(int node_count);
+
 /// DMI weak-residual field projection and energy for linear tetrahedra.
-void fullmag_cuda_dmi_field_energy(
+cudaError_t fullmag_cuda_dmi_field_energy(
     const double *nodes_xyz,
     const uint32_t *elements,
     const uint8_t *magnetic_element_mask,
@@ -30,7 +43,9 @@ void fullmag_cuda_dmi_field_energy(
     double *h_dmi_x,
     double *h_dmi_y,
     double *h_dmi_z,
-    double *energy_out,
+    double *energy_partials,
+    DmiDiagnostics *diagnostics,
+    DmiApplyRequest request,
     double uniform_ms,
     double uniform_d,
     double nx,
@@ -40,6 +55,14 @@ void fullmag_cuda_dmi_field_energy(
     bool bulk_mode,
     int element_count,
     int node_count,
+    cudaStream_t stream = nullptr);
+
+/// Deterministic qualification reduction using a fixed pairwise tree.
+cudaError_t fullmag_cuda_dmi_pairwise_sum(
+    double *partials,
+    double *scratch,
+    int partial_count,
+    double *result,
     cudaStream_t stream = nullptr);
 
 /// Polarized DMI increment E(m1)-E(m0) on linear tetrahedra, one value per element.
