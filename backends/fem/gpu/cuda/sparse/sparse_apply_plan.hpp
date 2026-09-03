@@ -74,7 +74,8 @@ public:
     bool setup(
         const SparseApplyCsrDeviceView &csr,
         FullmagSparseApplyStream stream,
-        std::string &error);
+        std::string &error,
+        bool allow_cusparse = true);
 
     bool apply_xyz(
         const SparseApplyXyzDeviceView &vectors,

@@ -254,6 +254,22 @@ int main()
           "demag operators must check rhs_plan.setup return value");
     check(exchange_upload_src.find("if (!legacy_exchange.plan.setup") != std::string::npos,
           "exchange upload must check legacy_exchange.plan.setup return value");
+    check(operators_src.find("/*allow_cusparse=*/false") != std::string::npos,
+          "demag operators must disallow cuSPARSE for specialized 3-component CSR plans");
+    check(exchange_upload_src.find("/*allow_cusparse=*/false") != std::string::npos,
+          "exchange upload must disallow cuSPARSE for fused exchange plans");
+
+    const std::string sparse_kernels_src = read_text_file(root / "gpu" / "cuda" / "sparse" / "sparse_apply_kernels.cu");
+    check(sparse_kernels_src.find("subwarp_three_csr_kernel") != std::string::npos,
+          "sparse apply kernels must define subwarp_three_csr_kernel");
+    check(sparse_kernels_src.find("subwarp_rhs_csr_kernel") != std::string::npos,
+          "sparse apply kernels must define subwarp_rhs_csr_kernel");
+
+    SparseApplyPlan plan_custom_only;
+    check(plan_custom_only.setup(csr, stream, error, false), "setup custom-only plan failed");
+    check(plan_custom_only.selected_variant() != SparseApplyVariant::CusparseSpmv &&
+          plan_custom_only.selected_variant() != SparseApplyVariant::CusparseSpmm3,
+          "custom-only plan must never select cuSPARSE variants");
 
     cudaFree(d_mask);
     cudaFree(d_out_z);

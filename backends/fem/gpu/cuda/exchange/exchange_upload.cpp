@@ -319,7 +319,7 @@ bool gpu_exchange_upload_legacy_sparse(
         static_cast<uint32_t>(cols),
     };
     std::string plan_err;
-    if (!legacy_exchange.plan.setup(ex_csr, nullptr, plan_err)) {
+    if (!legacy_exchange.plan.setup(ex_csr, nullptr, plan_err, /*allow_cusparse=*/false)) {
         error = "failed to setup exchange sparse apply plan: " + plan_err;
         return false;
     }

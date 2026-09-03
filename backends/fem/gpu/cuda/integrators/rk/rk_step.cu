@@ -39,33 +39,44 @@ bool gpu_rk_device_resident_step(
     }
 
     auto &gpu = ctx.gpu_state.device;
+    GpuRkAcceptedAttemptResult accepted_attempt{};
+    bool executed_via_graph = false;
     if (gpu.rk.graph_plan.mode() == RkGraphMode::Captured && !preflight.adaptive) {
-        if (!gpu.rk.graph_plan.launch(ctx, preflight.stream, reason)) {
+        if (gpu.rk.graph_plan.launch(ctx, preflight.stream, reason)) {
+            executed_via_graph = true;
+            accepted_attempt.active_dt = dt_seconds;
+            accepted_attempt.suggested_dt = dt_seconds;
+            accepted_attempt.error_estimate = 0.0;
+            accepted_attempt.rejected_attempts = 0;
+            accepted_attempt.total_stage_rhs_evaluations = static_cast<uint32_t>(tableau.stages);
+            accepted_attempt.fsal_reused = false;
+        } else {
             // Qualified fallback to standard attempt loop on graph launch failure
             gpu.rk.graph_plan.set_mode(RkGraphMode::Fallback);
         }
     }
 
-    GpuRkAcceptedAttemptResult accepted_attempt{};
-    if (!gpu_rk_run_accepted_attempt_loop(
-            ctx,
-            tableau,
-            preflight.stream,
-            preflight.n,
-            preflight.blocks,
-            preflight.is_heun,
-            preflight.is_rk4,
-            preflight.is_rk23,
-            preflight.is_rk45,
-            preflight.adaptive,
-            preflight.fsal_method,
-            dt_seconds,
-            accepted_attempt,
-            reason)) {
-        if (reason.empty()) {
-            reason = "GPU RK accepted-attempt loop failed without a diagnostic";
+    if (!executed_via_graph) {
+        if (!gpu_rk_run_accepted_attempt_loop(
+                ctx,
+                tableau,
+                preflight.stream,
+                preflight.n,
+                preflight.blocks,
+                preflight.is_heun,
+                preflight.is_rk4,
+                preflight.is_rk23,
+                preflight.is_rk45,
+                preflight.adaptive,
+                preflight.fsal_method,
+                dt_seconds,
+                accepted_attempt,
+                reason)) {
+            if (reason.empty()) {
+                reason = "GPU RK accepted-attempt loop failed without a diagnostic";
+            }
+            return false;
         }
-        return false;
     }
 
     if (!gpu_rk_finalize_accepted_step(
