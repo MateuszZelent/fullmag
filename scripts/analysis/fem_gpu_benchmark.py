@@ -798,9 +798,24 @@ def _benchmark_v2_snapshot(row: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def collect_case(
-    rows: Sequence[Mapping[str, object]], *, cpu_oracle: object
+    rows: Sequence[Mapping[str, object]],
+    *,
+    cpu_oracle: object,
+    expected_source_identity: Mapping[str, object],
 ) -> dict[str, object]:
     """Validate one exact GPU case before calculating any timing statistic."""
+    expected_commit = _canonical_digest(
+        expected_source_identity.get("head_commit_full"),
+        field="current source_commit",
+        length=40,
+    )
+    expected_snapshot = _canonical_digest(
+        expected_source_identity.get("source_snapshot_sha256"),
+        field="current source_snapshot_sha256",
+        length=64,
+    )
+    if expected_source_identity.get("source_snapshot_dirty") is not False:
+        raise ValueError("current source snapshot is dirty")
     oracle_status, oracle_failures = _benchmark_v2_oracle(cpu_oracle)
     if oracle_status != "checked" or oracle_failures:
         details = "; ".join(str(value) for value in oracle_failures) or str(
@@ -819,6 +834,8 @@ def collect_case(
     for index, row in enumerate(rows):
         if row.get("status") != "ok" or row.get("backend") != "fem_gpu":
             raise ValueError(f"repeat {index} is not a completed fem_gpu run")
+        if row.get("runtime_dirty") not in (False, "false"):
+            raise ValueError(f"repeat {index} runtime manifest is dirty")
         for source_field, output_field in BENCHMARK_V2_IDENTITY_FIELDS.items():
             raw = row.get(source_field)
             if source_field == "runtime_git_commit":
@@ -846,6 +863,13 @@ def collect_case(
             raise ValueError("wall_time_ms must be positive and finite")
         wall_times_ns.append(round(wall_time_ms * 1_000_000.0))
 
+    if identities["source_commit"] != expected_commit:
+        raise ValueError("source_commit does not match the current checkout")
+    if identities["source_snapshot_sha256"] != expected_snapshot:
+        raise ValueError(
+            "source_snapshot_sha256 does not match the current checkout"
+        )
+
     distribution = summarize_distribution(wall_times_ns)
     return {
         **identities,
@@ -858,7 +882,10 @@ def collect_case(
 
 
 def build_benchmark_v2(
-    rows: Sequence[Mapping[str, object]], *, cpu_oracle: object
+    rows: Sequence[Mapping[str, object]],
+    *,
+    cpu_oracle: object,
+    expected_source_identity: Mapping[str, object],
 ) -> dict[str, object]:
     grouped: dict[tuple[object, ...], list[Mapping[str, object]]] = {}
     for row in rows:
@@ -870,7 +897,13 @@ def build_benchmark_v2(
         blockers.append("no FEM GPU benchmark cases were produced")
     for case, case_rows in grouped.items():
         try:
-            records.append(collect_case(case_rows, cpu_oracle=cpu_oracle))
+            records.append(
+                collect_case(
+                    case_rows,
+                    cpu_oracle=cpu_oracle,
+                    expected_source_identity=expected_source_identity,
+                )
+            )
         except ValueError as exc:
             blockers.append(f"case={case}: {exc}")
     if blockers:
@@ -894,6 +927,36 @@ def not_verified_benchmark_v2(blocker: str) -> dict[str, object]:
         "records": [],
         "blockers": [blocker],
     }
+
+
+def capture_benchmark_source_identity(
+    repo_root: Path = REPO_ROOT,
+) -> Mapping[str, object]:
+    """Capture the current race-checked source identity for v2 qualification."""
+    with tempfile.TemporaryDirectory(prefix="fullmag-benchmark-v2-source-") as temporary:
+        output_path = Path(temporary) / "source-snapshot.v2.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(repo_root / "scripts" / "capture_source_snapshot_identity.py"),
+                "--repo-root",
+                str(repo_root),
+                "--ignore-non-runtime-dirty",
+                "--output",
+                str(output_path),
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            details = truncate_error("\n".join((completed.stdout, completed.stderr)))
+            raise ValueError(f"current source identity capture failed: {details}")
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("current source identity is not an object")
+    return payload
 
 
 def write_benchmark_v2(
@@ -4288,7 +4351,9 @@ def validate_runtime_restore_manifest(path: Path) -> dict[str, object]:
     return payload
 
 
-def runtime_bundle_identity(runtime_root: Path) -> dict[str, str]:
+def runtime_bundle_identity(
+    runtime_root: Path, *, require_integrity: bool = False
+) -> dict[str, str]:
     resolved_root = runtime_root.resolve()
     manifest_path = resolved_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -4316,15 +4381,65 @@ def runtime_bundle_identity(runtime_root: Path) -> dict[str, str]:
         raise ValueError("runtime manifest has invalid dirty source provenance")
     identity["runtime_dirty"] = str(dirty).lower()
     identity["runtime_dirty_patch_sha256"] = "" if dirty_patch is None else dirty_patch
+
+    def checked_artifact_sha256(
+        path_value: object, expected_value: object, *, label: str
+    ) -> str:
+        if not isinstance(path_value, str) or not path_value:
+            raise ValueError(f"runtime manifest has no {label} path")
+        path = (resolved_root / path_value).resolve()
+        try:
+            path.relative_to(resolved_root)
+        except ValueError as exc:
+            raise ValueError(f"runtime manifest {label} path escapes bundle") from exc
+        if not path.is_file():
+            raise ValueError(f"runtime manifest {label} is missing: {path}")
+        expected = _canonical_digest(
+            expected_value, field=f"{label} sha256", length=64
+        )
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            raise ValueError(
+                f"{label} sha256 mismatch: expected {expected}, got {actual}"
+            )
+        return actual
+
+    if require_integrity:
+        binaries = manifest.get("binaries")
+        integrity = manifest.get("integrity")
+        if not isinstance(binaries, Mapping) or not isinstance(integrity, Mapping):
+            raise ValueError("runtime manifest binary integrity is missing")
+        for name in ("launcher", "worker", "api"):
+            checked_artifact_sha256(
+                binaries.get(name), integrity.get(f"{name}_sha256"), label=name
+            )
     native_libraries = manifest.get("native_libraries")
+    if require_integrity and not isinstance(native_libraries, Mapping):
+        raise ValueError("runtime manifest native library integrity is missing")
     if isinstance(native_libraries, Mapping):
+        for name, entry in native_libraries.items():
+            if not isinstance(entry, Mapping):
+                if require_integrity:
+                    raise ValueError(f"runtime manifest {name} entry is invalid")
+                continue
+            if require_integrity:
+                checked_artifact_sha256(
+                    entry.get("path"), entry.get("sha256"), label=str(name)
+                )
         fullmag_fem = native_libraries.get("fullmag_fem")
         if isinstance(fullmag_fem, Mapping):
             library_path = fullmag_fem.get("path")
             if isinstance(library_path, str) and library_path:
-                identity["libfullmag_fem_sha256"] = hashlib.sha256(
-                    (resolved_root / library_path).read_bytes()
-                ).hexdigest()
+                if require_integrity:
+                    identity["libfullmag_fem_sha256"] = checked_artifact_sha256(
+                        library_path,
+                        fullmag_fem.get("sha256"),
+                        label="fullmag_fem",
+                    )
+                else:
+                    identity["libfullmag_fem_sha256"] = hashlib.sha256(
+                        (resolved_root / library_path).read_bytes()
+                    ).hexdigest()
     return identity
 
 
@@ -8030,7 +8145,9 @@ def run_backend(
 ) -> dict[str, object]:
     if resource is None:
         raise RuntimeError("FEM benchmark execution requires a POSIX managed runtime")
-    runtime_identity = runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT)
+    runtime_identity = runtime_bundle_identity(
+        MANAGED_FEM_RUNTIME_ROOT, require_integrity=True
+    )
     runtime_manifest_payload = json.loads(
         (MANAGED_FEM_RUNTIME_ROOT / "manifest.json").read_text(encoding="utf-8")
     )
@@ -13055,7 +13172,17 @@ def main() -> None:
             max_step_delta=args.cpu_gpu_max_step_delta,
             allow_coverage_only=False,
         )
-        benchmark_v2_payload = build_benchmark_v2(results, cpu_oracle=oracle)
+        try:
+            current_source_identity = capture_benchmark_source_identity()
+            benchmark_v2_payload = build_benchmark_v2(
+                results,
+                cpu_oracle=oracle,
+                expected_source_identity=current_source_identity,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            benchmark_v2_payload = not_verified_benchmark_v2(
+                f"source/runtime identity gate failed: {exc}"
+            )
         benchmark_v2_csv_path = (
             args.benchmark_v2_csv_output
             or args.benchmark_v2_output.with_suffix(".csv")

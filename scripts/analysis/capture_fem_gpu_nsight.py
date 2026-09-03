@@ -92,6 +92,41 @@ def trace_phase_failures(observed_ranges: Iterable[str]) -> list[str]:
     ]
 
 
+def ordered_trace_phase_failures(
+    events: Sequence[Mapping[str, object]],
+) -> list[str]:
+    """Require setup through export in order within one Nsight capture."""
+    nvtx_events = sorted(
+        (
+            event
+            for event in events
+            if event.get("kind") == "nvtx"
+            and isinstance(event.get("start_ns"), int)
+        ),
+        key=lambda event: int(event["start_ns"]),
+    )
+    previous_start: int | None = None
+    failures: list[str] = []
+    for phase, candidates in TRACE_PHASE_RANGES.items():
+        match = next(
+            (
+                event
+                for event in nvtx_events
+                if event.get("name") in candidates
+                and (
+                    previous_start is None
+                    or int(event["start_ns"]) >= previous_start
+                )
+            ),
+            None,
+        )
+        if match is None:
+            failures.append(f"{phase} trace phase is missing or out of order")
+            continue
+        previous_start = int(match["start_ns"])
+    return failures
+
+
 def not_verified_payload(
     *, run_id: str, blockers: Sequence[object]
 ) -> dict[str, object]:
@@ -1269,6 +1304,23 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
     }
     metrics["nvtx_ranges_observed"] = sorted(compute_observed | host_observed)
     metrics["nvtx_ranges_missing"] = sorted(missing_compute + missing_host)
+    ordered_phase_failures = {
+        "compute": ordered_trace_phase_failures(compute_pass["events"]),
+        "host": ordered_trace_phase_failures(host_pass["events"]),
+    }
+    qualifying_phase_pass = next(
+        (
+            label
+            for label, failures in ordered_phase_failures.items()
+            if not failures
+        ),
+        None,
+    )
+    metrics["ordered_trace_phase_contract"] = {
+        "required_order": list(TRACE_PHASE_RANGES),
+        "qualifying_pass": qualifying_phase_pass,
+        "failures_by_pass": ordered_phase_failures,
+    }
     top_five = top_kernel_names(compute_pass["kernel_rows"])
     blockers: list[str] = []
     try:
@@ -1316,7 +1368,12 @@ def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> i
         blockers.append("compute NVTX ranges missing: " + ", ".join(missing_compute))
     if missing_host:
         blockers.append("host NVTX ranges missing: " + ", ".join(missing_host))
-    blockers.extend(trace_phase_failures(compute_observed | host_observed))
+    if qualifying_phase_pass is None:
+        blockers.append(
+            "no single Nsight capture contains ordered setup -> attempt -> "
+            "accepted_finalization -> snapshot -> export phases: "
+            + json.dumps(ordered_phase_failures, sort_keys=True)
+        )
     if len(top_five) != 5:
         blockers.append(f"compute nsys reported only {len(top_five)} unique kernels")
     ncu_access_probe = run_ncu_access_probe(

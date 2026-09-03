@@ -59,6 +59,7 @@ def accepted_row(repeat_index: int) -> dict[str, object]:
         "runtime_git_commit": "a" * 40,
         "runtime_source_snapshot_sha256": "b" * 64,
         "runtime_manifest_sha256": "c" * 64,
+        "runtime_dirty": "false",
         "executed_problem_ir_sha256": "d" * 64,
         "solver_mesh_sha256": "e" * 64,
         "device_uuid": "GPU-01234567-89ab-cdef-0123-456789abcdef",
@@ -110,9 +111,18 @@ class BenchmarkV2ContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.rows = [accepted_row(index) for index in range(5)]
         self.oracle = {"status": "checked", "failures": []}
+        self.source_identity = {
+            "head_commit_full": "a" * 40,
+            "source_snapshot_sha256": "b" * 64,
+            "source_snapshot_dirty": False,
+        }
 
     def test_record_is_source_bound_complete_and_uses_five_repetitions(self) -> None:
-        record = benchmark.collect_case(self.rows, cpu_oracle=self.oracle)
+        record = benchmark.collect_case(
+            self.rows,
+            cpu_oracle=self.oracle,
+            expected_source_identity=self.source_identity,
+        )
         self.assertLessEqual(REQUIRED_RECORD_FIELDS, set(record))
         self.assertEqual(record["measured_repetitions"], 5)
         self.assertEqual(record["wall_time_p50_ns"], 12_000_000)
@@ -121,7 +131,11 @@ class BenchmarkV2ContractTests(unittest.TestCase):
         duplicate = [dict(row) for row in self.rows]
         duplicate[-1]["repeat_index"] = 0
         with self.assertRaisesRegex(ValueError, "unique repeat_index"):
-            benchmark.collect_case(duplicate, cpu_oracle=self.oracle)
+            benchmark.collect_case(
+                duplicate,
+                cpu_oracle=self.oracle,
+                expected_source_identity=self.source_identity,
+            )
 
     def test_correctness_gate_runs_before_any_statistics_are_published(self) -> None:
         for field, expected in (
@@ -134,7 +148,9 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                 bad = [dict(row) for row in self.rows]
                 bad[-1][field] = "f" * len(str(bad[-1][field]))
                 payload = benchmark.build_benchmark_v2(
-                    bad, cpu_oracle=self.oracle
+                    bad,
+                    cpu_oracle=self.oracle,
+                    expected_source_identity=self.source_identity,
                 )
                 self.assertEqual(payload["qualification_status"], "NOT VERIFIED")
                 self.assertEqual(payload["records"], [])
@@ -174,7 +190,70 @@ class BenchmarkV2ContractTests(unittest.TestCase):
         for rows, oracle, expected in cases:
             with self.subTest(expected=expected):
                 with self.assertRaisesRegex(ValueError, expected):
-                    benchmark.collect_case(rows, cpu_oracle=oracle)
+                    benchmark.collect_case(
+                        rows,
+                        cpu_oracle=oracle,
+                        expected_source_identity=self.source_identity,
+                    )
+
+    def test_checkout_identity_must_match_and_be_clean(self) -> None:
+        for update, expected in (
+            ({"head_commit_full": "f" * 40}, "source_commit"),
+            ({"source_snapshot_sha256": "f" * 64}, "source_snapshot_sha256"),
+            ({"source_snapshot_dirty": True}, "dirty"),
+        ):
+            with self.subTest(update=update):
+                identity = {**self.source_identity, **update}
+                with self.assertRaisesRegex(ValueError, expected):
+                    benchmark.collect_case(
+                        self.rows,
+                        cpu_oracle=self.oracle,
+                        expected_source_identity=identity,
+                    )
+
+    def test_runtime_bundle_identity_rejects_tampered_binaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = {
+                "launcher": root / "bin" / "fullmag-fem-gpu",
+                "worker": root / "bin" / "fullmag-fem-gpu-bin",
+                "api": root / "bin" / "fullmag-api",
+            }
+            library = root / "lib" / "libfullmag_fem.so"
+            for name, path in {**paths, "fullmag_fem": library}.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(name.encode("ascii"))
+            sha256 = benchmark.hashlib.sha256
+            manifest = {
+                "schema": 3,
+                "source_provenance": {
+                    "git_commit": "a" * 40,
+                    "git_tree": "b" * 40,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "c" * 64,
+                },
+                "binaries": {
+                    name: str(path.relative_to(root)) for name, path in paths.items()
+                },
+                "integrity": {
+                    f"{name}_sha256": sha256(path.read_bytes()).hexdigest()
+                    for name, path in paths.items()
+                },
+                "native_libraries": {
+                    "fullmag_fem": {
+                        "path": str(library.relative_to(root)),
+                        "sha256": sha256(library.read_bytes()).hexdigest(),
+                    }
+                },
+            }
+            (root / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            benchmark.runtime_bundle_identity(root, require_integrity=True)
+            paths["worker"].write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "worker sha256 mismatch"):
+                benchmark.runtime_bundle_identity(root, require_integrity=True)
 
     def test_preconditioner_cli_has_one_canonical_runtime_mapping(self) -> None:
         self.assertEqual(
@@ -201,7 +280,11 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             )
 
     def test_writer_emits_json_and_p50_p95_csv_without_overwriting(self) -> None:
-        payload = benchmark.build_benchmark_v2(self.rows, cpu_oracle=self.oracle)
+        payload = benchmark.build_benchmark_v2(
+            self.rows,
+            cpu_oracle=self.oracle,
+            expected_source_identity=self.source_identity,
+        )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             json_path = root / "benchmark.v2.json"
@@ -234,15 +317,26 @@ class NsightPhaseContractTests(unittest.TestCase):
             tuple(nsight.TRACE_PHASE_RANGES),
             ("setup", "attempt", "accepted_finalization", "snapshot", "export"),
         )
-        observed = {
-            values[0] for values in nsight.TRACE_PHASE_RANGES.values()
-        }
-        self.assertEqual(nsight.trace_phase_failures(observed), [])
-        observed.remove(nsight.TRACE_PHASE_RANGES["setup"][0])
-        self.assertEqual(
-            nsight.trace_phase_failures(observed),
-            ["setup trace phase is missing"],
-        )
+        ordered = [
+            {
+                "kind": "nvtx",
+                "name": values[0],
+                "start_ns": index * 10,
+                "end_ns": index * 10 + 5,
+            }
+            for index, values in enumerate(nsight.TRACE_PHASE_RANGES.values())
+        ]
+        self.assertEqual(nsight.ordered_trace_phase_failures(ordered), [])
+        split_compute = ordered[:2]
+        split_host = ordered[2:]
+        self.assertTrue(nsight.ordered_trace_phase_failures(split_compute))
+        self.assertTrue(nsight.ordered_trace_phase_failures(split_host))
+        out_of_order = [dict(event) for event in ordered]
+        out_of_order[1]["start_ns"] = 25
+        out_of_order[1]["end_ns"] = 29
+        out_of_order[2]["start_ns"] = 10
+        out_of_order[2]["end_ns"] = 15
+        self.assertTrue(nsight.ordered_trace_phase_failures(out_of_order))
 
     def test_unavailable_capture_is_explicitly_not_verified(self) -> None:
         payload = nsight.not_verified_payload(
@@ -267,6 +361,7 @@ class ManagedRecipeContractTests(unittest.TestCase):
         self.assertIn("--repeat 5", baseline)
         self.assertIn("--benchmark-v2-immutable", baseline)
         self.assertIn("--gpu-host-thread-qualification-run", baseline)
+        self.assertIn("just rebuild-fem-runtime", baseline)
         self.assertIn("NOT VERIFIED", baseline)
         self.assertIn("NOT VERIFIED", nsight_recipe)
         self.assertNotIn("lumped_exchange_mass_cg8", baseline)

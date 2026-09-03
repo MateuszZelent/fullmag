@@ -4610,7 +4610,7 @@ capture-fem-gpu-pre-remediation-performance-baseline:
               "canonical Windows managed FEM benchmark execution is unavailable in this Task 3 recipe; NOT VERIFIED"; \
           ;; \
       esac; \
-      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just ensure-managed-fem-runtime; \
+      COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" just rebuild-fem-runtime; \
       mkdir -p "$baseline_dir"; \
       COMPOSE_PROJECT_NAME="$(bash scripts/resolve_fullmag_compose_project.sh)" docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
