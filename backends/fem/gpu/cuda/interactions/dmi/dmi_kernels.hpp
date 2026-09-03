@@ -58,6 +58,42 @@ cudaError_t fullmag_cuda_dmi_field_energy(
     int node_count,
     cudaStream_t stream = nullptr);
 
+struct DmiGeometryDeviceView;
+enum class DmiAccumulationMode : std::uint32_t;
+
+/// DMI weak-residual field projection and energy for linear tetrahedra using precomputed geometry cache.
+cudaError_t fullmag_cuda_dmi_field_energy_cached(
+    const DmiGeometryDeviceView &geometry_cache,
+    const uint32_t *elements,
+    const uint8_t *magnetic_element_mask,
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const double *ms,
+    const double *d_field,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double *residual_x,
+    double *residual_y,
+    double *residual_z,
+    double *h_dmi_x,
+    double *h_dmi_y,
+    double *h_dmi_z,
+    double *energy_partials,
+    DmiDiagnostics *diagnostics,
+    DmiApplyRequest request,
+    double uniform_ms,
+    double uniform_d,
+    double nx,
+    double ny,
+    double nz,
+    bool use_d_field,
+    bool bulk_mode,
+    int element_count,
+    int node_count,
+    cudaStream_t stream = nullptr,
+    DmiAccumulationMode mode = static_cast<DmiAccumulationMode>(0));
+
 /// Deterministic qualification reduction using a fixed pairwise tree.
 cudaError_t fullmag_cuda_dmi_pairwise_sum(
     double *partials,

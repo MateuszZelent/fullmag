@@ -10,10 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 FEM_BEM_TASK1_SHA256 = {
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp":
         "8fc1ca7ed78e59928fe322cf971cf8ea3c43b2b25f85b4575df1e0957ca20969",
-    "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu":
-        "034fb0b7b498fa2615b214e66d1a975f76447ff01819b9a1949b836c23fa7d24",
-    "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp":
-        "6ff5d292ddb5d83d61d51830022448d7982d2af93a7969c49373d4cdb3a0ef45",
     "docs/audits/2026-09-02-fem-gpu-solver-audit.md":
         "64a3ac03aa5e04485d83e0b7348b74be25f396617cc066ef91cb76469628b85b",
     "docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md":

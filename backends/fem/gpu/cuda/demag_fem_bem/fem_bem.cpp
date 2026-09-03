@@ -530,6 +530,39 @@ bool build_source_operators(
 }
 #endif
 
+inline std::vector<uint32_t> build_aca_batch_offsets(
+    const std::vector<AcaHMatrixDemagBemFarBlock> &blocks)
+{
+    std::vector<uint32_t> offsets;
+    if (blocks.empty()) {
+        return offsets;
+    }
+    offsets.push_back(0);
+    uint32_t current_batch_size = 0;
+    uint32_t current_batch_cost = 0;
+    constexpr uint32_t kMaxBatchCost = 256;
+    constexpr uint32_t kMaxBatchSize = 16;
+
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        const auto &block = blocks[i];
+        const uint32_t target_len = block.target_end - block.target_begin;
+        const uint32_t source_len = block.source_end - block.source_begin;
+        const uint32_t block_cost = block.rank * (target_len + source_len);
+
+        if (current_batch_size > 0 &&
+            (current_batch_size >= kMaxBatchSize ||
+             current_batch_cost + block_cost > kMaxBatchCost)) {
+            offsets.push_back(static_cast<uint32_t>(i));
+            current_batch_size = 0;
+            current_batch_cost = 0;
+        }
+        current_batch_size += 1;
+        current_batch_cost += block_cost;
+    }
+    offsets.push_back(static_cast<uint32_t>(blocks.size()));
+    return offsets;
+}
+
 void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -545,6 +578,7 @@ void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
     free_array(workspace.d_far_blocks);
     free_array(workspace.d_far_u);
     free_array(workspace.d_far_v);
+    free_array(workspace.d_batch_offsets);
     destroy_scalar_operator(workspace.dirichlet_matrix);
 #endif
 #if FULLMAG_HAS_MFEM_STACK
@@ -766,6 +800,19 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
             destroy_gpu_workspace(*workspace);
             return false;
         }
+        workspace->batch_offsets = build_aca_batch_offsets(workspace->far_blocks);
+        workspace->batch_count = workspace->batch_offsets.empty() ? 0 : static_cast<int>(workspace->batch_offsets.size()) - 1;
+        if (!workspace->batch_offsets.empty()) {
+            if (!upload_array(
+                    workspace->d_batch_offsets,
+                    workspace->batch_offsets,
+                    device_bytes,
+                    "cudaMalloc/upload Fredkin-Koehler ACA batch offsets",
+                    error)) {
+                destroy_gpu_workspace(*workspace);
+                return false;
+            }
+        }
         if (!initialize_linear_system(
                 ctx,
                 *cpu_workspace->neumann_op,
@@ -972,7 +1019,9 @@ bool compute_device_demag_fem_bem_for_device_stage(
         boundary_rows,
         static_cast<int>(workspace->far_blocks.size()),
         static_cast<int>(workspace->max_rank),
-        stream);
+        stream,
+        workspace->d_batch_offsets,
+        workspace->batch_count);
     if (!cuda_ok(cudaGetLastError(), "launch Fredkin-Koehler device BEM", reason)) {
         return false;
     }

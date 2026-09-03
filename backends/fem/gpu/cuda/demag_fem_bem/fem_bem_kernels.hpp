@@ -25,6 +25,21 @@ void fullmag_cuda_fem_bem_apply(
     int boundary_rows,
     int far_block_count,
     int max_rank,
+    cudaStream_t stream,
+    const uint32_t *batch_offsets = nullptr,
+    int batch_count = 0);
+
+void fullmag_cuda_fem_bem_far_apply_batched(
+    const AcaHMatrixDemagBemFarBlock *far_blocks,
+    const double *far_u,
+    const double *far_v,
+    const uint32_t *boundary_permutation,
+    const uint32_t *boundary_tdofs,
+    const double *u1_full,
+    double *u2_boundary,
+    const uint32_t *batch_offsets,
+    int batch_count,
+    int max_rank,
     cudaStream_t stream);
 
 void fullmag_cuda_fem_bem_build_dirichlet_rhs(

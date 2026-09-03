@@ -57,36 +57,75 @@ bool gpu_rk_compute_one_dmi_field(
     }
     auto *diagnostics = reinterpret_cast<DmiDiagnostics *>(
         gpu.reductions.dmi_diagnostics);
-    return cuda_ok(fullmag_cuda_dmi_field_energy(
-        gpu.mesh_geometry.nodes_xyz,
-        gpu.mesh_geometry.elements,
-        gpu.mesh_geometry.magnetic_element_mask,
-        m.x,
-        m.y,
-        m.z,
-        gpu.materials.ms,
-        bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
-        gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.local_interactions.vector.x,
-        gpu.local_interactions.vector.y,
-        gpu.local_interactions.vector.z,
-        field.x,
-        field.y,
-        field.z,
-        nullptr, // energy_out
-        diagnostics,
-        DmiApplyRequest{true, false},
-        ctx.material_fields.material.saturation_magnetisation,
-        bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
-        ctx.dmi.interface_normal[0],
-        ctx.dmi.interface_normal[1],
-        ctx.dmi.interface_normal[2],
-        bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
-        bulk_mode,
-        static_cast<int>(ctx.mesh.n_elements),
-        n,
-        stream),
+    cudaError_t status = cudaSuccess;
+    if (gpu.mesh_geometry.dmi_cache.is_built()) {
+        status = fullmag_cuda_dmi_field_energy_cached(
+            gpu.mesh_geometry.dmi_cache.device_view(),
+            gpu.mesh_geometry.elements,
+            gpu.mesh_geometry.magnetic_element_mask,
+            m.x,
+            m.y,
+            m.z,
+            gpu.materials.ms,
+            bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
+            gpu.mesh_metrics.lumped_mass,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.local_interactions.vector.x,
+            gpu.local_interactions.vector.y,
+            gpu.local_interactions.vector.z,
+            field.x,
+            field.y,
+            field.z,
+            nullptr, // energy_out
+            diagnostics,
+            DmiApplyRequest{true, false},
+            ctx.material_fields.material.saturation_magnetisation,
+            bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
+            ctx.dmi.interface_normal[0],
+            ctx.dmi.interface_normal[1],
+            ctx.dmi.interface_normal[2],
+            bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
+            bulk_mode,
+            static_cast<int>(ctx.mesh.n_elements),
+            n,
+            stream,
+            gpu.mesh_geometry.dmi_cache.accumulation_mode());
+        if (status == cudaSuccess) {
+            gpu.mesh_geometry.dmi_cache.record_apply();
+        }
+    } else {
+        status = fullmag_cuda_dmi_field_energy(
+            gpu.mesh_geometry.nodes_xyz,
+            gpu.mesh_geometry.elements,
+            gpu.mesh_geometry.magnetic_element_mask,
+            m.x,
+            m.y,
+            m.z,
+            gpu.materials.ms,
+            bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
+            gpu.mesh_metrics.lumped_mass,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.local_interactions.vector.x,
+            gpu.local_interactions.vector.y,
+            gpu.local_interactions.vector.z,
+            field.x,
+            field.y,
+            field.z,
+            nullptr, // energy_out
+            diagnostics,
+            DmiApplyRequest{true, false},
+            ctx.material_fields.material.saturation_magnetisation,
+            bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
+            ctx.dmi.interface_normal[0],
+            ctx.dmi.interface_normal[1],
+            ctx.dmi.interface_normal[2],
+            bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
+            bulk_mode,
+            static_cast<int>(ctx.mesh.n_elements),
+            n,
+            stream);
+    }
+    return cuda_ok(status,
         bulk_mode ? "launch GPU RK bulk DMI field" : "launch GPU RK interfacial DMI field",
         reason);
 }

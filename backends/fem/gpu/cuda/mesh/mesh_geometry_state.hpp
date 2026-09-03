@@ -10,6 +10,7 @@
  */
 
 #include <cstdint>
+#include "gpu/cuda/interactions/dmi/dmi_geometry_cache.hpp"
 
 namespace fullmag::fem {
 
@@ -19,6 +20,9 @@ struct FemGpuMeshGeometryDeviceState {
     uint8_t *magnetic_element_mask = nullptr;
     uint64_t element_count = 0;
     bool uploaded = false;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    DmiGeometryCache dmi_cache{};
+#endif
 };
 
 } // namespace fullmag::fem

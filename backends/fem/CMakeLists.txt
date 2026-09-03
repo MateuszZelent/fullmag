@@ -305,6 +305,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_total_energy_reduction.cu
             gpu/cuda/integrators/rk/rk_zhang_li_torque.cu
             gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu
+            gpu/cuda/interactions/dmi/dmi_geometry_cache.cu
             gpu/cuda/interactions/dmi/dmi_kernels.cu
             gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu
             gpu/cuda/interactions/oersted/oersted_kernels.cu
@@ -742,6 +743,14 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     add_test(NAME fem_gpu_sparse_apply_contract COMMAND fem_gpu_sparse_apply_contract)
+
+    add_executable(fem_gpu_operator_fusion_contract tests/gpu_operator_fusion_contract.cpp)
+    target_link_libraries(fem_gpu_operator_fusion_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_gpu_operator_fusion_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_gpu_operator_fusion_contract COMMAND fem_gpu_operator_fusion_contract)
 endif()
 
 add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)

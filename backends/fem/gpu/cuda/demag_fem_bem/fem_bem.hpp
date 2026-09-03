@@ -82,6 +82,8 @@ struct GpuDemagFemBemWorkspace {
     std::vector<AcaHMatrixDemagBemFarBlock> far_blocks;
     std::vector<double> far_u;
     std::vector<double> far_v;
+    std::vector<uint32_t> batch_offsets;
+    int batch_count = 0;
 
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint32_t *d_boundary_nodes = nullptr;
@@ -95,6 +97,7 @@ struct GpuDemagFemBemWorkspace {
     AcaHMatrixDemagBemFarBlock *d_far_blocks = nullptr;
     double *d_far_u = nullptr;
     double *d_far_v = nullptr;
+    uint32_t *d_batch_offsets = nullptr;
 #endif
 
     GpuFemBemLinearSystem u1_system;

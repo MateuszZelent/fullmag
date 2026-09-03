@@ -104,6 +104,18 @@ bool gpu_mesh_geometry_upload(
     record_host_to_device(audit, static_cast<uint64_t>(nodes_bytes + elements_bytes + mask_bytes));
     mesh_geometry.element_count = element_count;
     mesh_geometry.uploaded = true;
+    const uint64_t mesh_version = static_cast<uint64_t>(element_count) ^ (static_cast<uint64_t>(lifecycle.node_count) << 32);
+    if (!mesh_geometry.dmi_cache.build(
+            mesh_geometry.nodes_xyz,
+            mesh_geometry.elements,
+            mesh_geometry.magnetic_element_mask,
+            static_cast<int>(element_count),
+            static_cast<int>(lifecycle.node_count),
+            nullptr,
+            error,
+            mesh_version)) {
+        return false;
+    }
     return true;
 #else
     (void)audit;

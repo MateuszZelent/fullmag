@@ -963,6 +963,7 @@ void gpu_state_destroy(FemGpuState &state)
     gpu_device_free_double(state.mesh_geometry.nodes_xyz);
     gpu_device_free_u32(state.mesh_geometry.elements);
     gpu_device_free_u8(state.mesh_geometry.magnetic_element_mask);
+    state.mesh_geometry.dmi_cache.release();
     gpu_device_free_double(state.demag_poisson.poisson_rhs);
     gpu_device_free_double(state.demag_poisson.poisson_solution);
     gpu_device_free_double(state.demag_poisson.poisson_solution_full);
