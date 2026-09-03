@@ -717,8 +717,8 @@ def _benchmark_v2_receipt(row: Mapping[str, object]) -> Mapping[str, object]:
     required = as_int(receipt.get("required_operator_mask"))
     resolved_device = as_int(receipt.get("resolved_device_operator_mask"))
     executed_device = as_int(receipt.get("executed_device_operator_mask"))
-    if receipt.get("requested") != "gpu":
-        raise ValueError("execution receipt requested must be gpu")
+    if receipt.get("requested") != "strict_device":
+        raise ValueError("execution receipt requested must be strict_device")
     if receipt.get("resolved") != "device_resident":
         raise ValueError("execution receipt resolved must be device_resident")
     if receipt.get("execution_class") != "device_resident":
@@ -784,8 +784,13 @@ def _benchmark_v2_snapshot(row: Mapping[str, object]) -> Mapping[str, object]:
             raise ValueError(f"performance snapshot {field} must be a non-negative integer")
     if as_int(snapshot.get("compute_fence_count")) != 0:
         raise ValueError("performance snapshot compute_fence_count must be zero")
-    if as_int(snapshot.get("setup_count")) != 1:
-        raise ValueError("performance snapshot setup_count must equal one")
+    setup_count = as_int(snapshot.get("setup_count")) or 0
+    apply_count = as_int(snapshot.get("apply_count")) or 0
+    if setup_count <= 0 or setup_count > apply_count + 1:
+        raise ValueError(
+            "performance snapshot setup_count must be positive and no greater "
+            "than apply_count plus one"
+        )
     for field in (
         "apply_count",
         "kernel_launch_count",
@@ -7281,6 +7286,30 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
         "executed_steps": executed_steps,
         "artifact_dir": str(artifact_dir),
     }
+    performance_snapshot_path = (
+        artifact_dir / "performance" / "fem_gpu_performance_snapshot.v2.json"
+    )
+    if performance_snapshot_path.is_file():
+        try:
+            performance_document = json.loads(
+                performance_snapshot_path.read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "published FEM GPU performance snapshot is unreadable: "
+                f"{performance_snapshot_path}: {exc}"
+            ) from exc
+        if (
+            not isinstance(performance_document, Mapping)
+            or performance_document.get("schema") != PERFORMANCE_SNAPSHOT_V2_SCHEMA
+            or not isinstance(performance_document.get("snapshot"), Mapping)
+        ):
+            raise ValueError(
+                "published FEM GPU performance snapshot has an invalid v2 schema"
+            )
+        payload["fem_gpu_performance_snapshot_v2"] = dict(
+            performance_document["snapshot"]
+        )
     for source, target in (
         ("hypre_wait_in_enqueue", "demag_hypre_wait_in_enqueue_wall_time_ns"),
         ("hypre_host_api", "demag_hypre_host_api_wall_time_ns"),
@@ -7497,6 +7526,28 @@ def load_authoritative_benchmark_payload(run_dir: str | Path) -> dict[str, objec
         if demag_operator_mode == "none" and demag_runtime_is_none:
             payload["demag_solves"] = 0
     return payload
+
+
+def _select_performance_snapshot(
+    backend_label: str,
+    *,
+    artifact_payload: Mapping[str, object] | None,
+    metadata: Mapping[str, object] | None,
+    payload: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    """Return only the runner-published v2 evidence for a FEM GPU run.
+
+    Metadata and process output are deliberately not fallback evidence: both can
+    predate finalization, whereas the auxiliary artifact is emitted only after a
+    completed strict-device run passes its receipt gate.
+    """
+
+    del metadata, payload
+    normalized_backend = backend_label.strip().lower().replace("-", "_")
+    if normalized_backend != "fem_gpu" or not isinstance(artifact_payload, Mapping):
+        return None
+    snapshot = artifact_payload.get("fem_gpu_performance_snapshot_v2")
+    return dict(snapshot) if isinstance(snapshot, Mapping) else None
 
 
 def load_final_magnetization_evidence(run_dir: str | Path) -> dict[str, object]:
@@ -8677,18 +8728,14 @@ def run_backend(
     receipt = provenance.get("fem_gpu_execution_receipt")
     if isinstance(receipt, Mapping):
         row["fem_gpu_execution_receipt"] = dict(receipt)
-    snapshot = first_present(
-        provenance.get("fem_gpu_performance_snapshot_v2"),
-        metadata.get("fem_gpu_performance_snapshot_v2") if metadata else None,
-        payload.get("fem_gpu_performance_snapshot_v2")
-        if isinstance(payload, Mapping)
-        else None,
+    snapshot = _select_performance_snapshot(
+        backend_label,
+        artifact_payload=artifact_payload,
+        metadata=metadata,
+        payload=payload,
     )
     if isinstance(snapshot, Mapping):
-        if snapshot.get("schema") == PERFORMANCE_SNAPSHOT_V2_SCHEMA:
-            snapshot = snapshot.get("snapshot")
-        if isinstance(snapshot, Mapping):
-            row["fem_gpu_performance_snapshot_v2"] = dict(snapshot)
+        row["fem_gpu_performance_snapshot_v2"] = dict(snapshot)
     if payload is not None:
         row.update(
             {

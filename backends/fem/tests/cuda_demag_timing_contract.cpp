@@ -120,8 +120,17 @@ int main()
             hypre_stream_interop_header.find("fullmag_ready") !=
                 std::string::npos &&
             hypre_stream_interop_header.find("hypre_done") !=
+                std::string::npos &&
+            hypre_stream_interop_header.find("hypre_validation_done") ==
                 std::string::npos,
         "strict GPU demag stream interop must expose a typed lease with input and output events");
+    check(
+        hypre_stream_interop.find("cudaStreamWaitEvent(nullptr") ==
+                std::string::npos &&
+            hypre_stream_interop.find(
+                "mfem_default_stream_wait_for_hypre_validation") ==
+                std::string::npos,
+        "strict GPU demag validation must not assume the CUDA default stream");
     check(
         hypre_stream_interop_header.find("HypreApplyTimingEventPair") !=
                 std::string::npos &&
@@ -183,8 +192,12 @@ int main()
         hypre_validation_policy.find("should_validate_independent_residual") !=
                 std::string::npos &&
             gpu_fem_bem.find("should_validate_independent_residual(") !=
+                std::string::npos &&
+            gpu_fem_bem.find("HYPRE_ParVectorAxpy") !=
+                std::string::npos &&
+            gpu_fem_bem.find("HYPRE_ParVectorInnerProd") !=
                 std::string::npos,
-        "FEM/BEM must use the shared conditional independent-residual policy");
+        "FEM/BEM must use conditional residual validation on the exact HYPRE stream");
     for (const char *field : {
              "step_hypre_wait_in_enqueue_wall_time_ns",
              "step_hypre_host_api_wall_time_ns",

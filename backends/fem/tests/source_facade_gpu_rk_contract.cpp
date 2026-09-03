@@ -993,7 +993,7 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             dmi_energy_source.find("fullmag_cuda_dmi_field_energy(") !=
                 std::string::npos &&
-            dmi_energy_source.find("GPU RK DMI energy requires device-resident mesh geometry, Ms, lumped mass, and residual buffers") !=
+            dmi_energy_source.find("GPU RK DMI energy requires device-resident mesh geometry, material data, and persistent reduction workspace") !=
                 std::string::npos &&
             dmi_energy_source.find("ctx.dmi.interfacial_enabled") !=
                 std::string::npos &&
@@ -1224,7 +1224,7 @@ void gpu_rk_final_refresh_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK final refresh source must own final RHS refresh, FSAL copy, and max-RHS reduction");
     check(
-        refresh_source.find("stats.rhs_evaluations = total_stage_rhs_evaluations + 1") !=
+        refresh_source.find("stats.rhs_evaluations = total_stage_rhs_evaluations + (endpoint_rhs_ready ? 0u : 1u)") !=
                 std::string::npos &&
             refresh_source.find("stats.fsal_reused = fsal_reused ? 1 : 0") !=
                 std::string::npos &&
@@ -1379,7 +1379,9 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             attempt_setup_source.find("gpu_rk_copy_component_device(") !=
                 std::string::npos &&
-            attempt_setup_source.find("fsal_reused = fsal_method && gpu.rk.fsal_valid") !=
+            attempt_setup_source.find("fsal_reused = fsal_method &&") !=
+                std::string::npos &&
+            attempt_setup_source.find("!gpu.mesh_regions.has_periodic_reduced_nodes") !=
                 std::string::npos &&
             attempt_setup_source.find("gpu_rk_compute_rhs_for_magnetization(") !=
                 std::string::npos &&
@@ -1504,7 +1506,11 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
     check(
         schedule_source.find("launch GPU RK23 BS23 k3 for adaptive error estimate") ==
                 std::string::npos &&
-            schedule_source.find("gpu_rk_copy_component_device(") == std::string::npos &&
+            schedule_source.find("gpu_rk_prepare_stage_attempt(") != std::string::npos &&
+            schedule_source.find("gpu_rk_compute_rk23_adaptive_k3(") !=
+                std::string::npos &&
+            schedule_source.find("cudaMemcpyAsync GPU DP54 exact endpoint cache") !=
+                std::string::npos &&
             schedule_source.find("fsal_reused = fsal_method && gpu.rk.fsal_valid") ==
                 std::string::npos &&
             schedule_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
@@ -1942,16 +1948,12 @@ void gpu_demag_hypre_validation_is_cuda_guarded_for_cpu_builds() {
     const std::filesystem::path root = fem_source_root();
     const std::string hypre_solver = read_text_file(
         root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
-    const std::string guarded_call =
-        "#if FULLMAG_HAS_CUDA_RUNTIME\n"
-        "        if (!mfem_default_stream_wait_for_hypre_validation(\n"
-        "                workspace.stream_interop, error)) {\n"
-        "            return false;\n"
-        "        }\n"
-        "#endif";
     check(
-        hypre_solver.find(guarded_call) != std::string::npos,
-        "GPU HYPRE residual validation must guard CUDA stream interop so the FEM CPU-only build compiles");
+        hypre_solver.find("HYPRE_ParVectorAxpy") != std::string::npos &&
+            hypre_solver.find("HYPRE_ParVectorInnerProd") != std::string::npos &&
+            hypre_solver.find("mfem_default_stream_wait_for_hypre_validation") ==
+                std::string::npos,
+        "GPU HYPRE residual validation must remain in the HYPRE API without CUDA default-stream assumptions");
 }
 
 void gpu_frequency_domain_device_poisson_recovers_nodal_phi_from_true_dofs() {

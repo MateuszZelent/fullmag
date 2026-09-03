@@ -38,6 +38,46 @@ namespace fullmag::fem {
 namespace {
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+bool hypre_vector_norm_l2(
+    mfem::HypreParVector &vector,
+    double &norm,
+    const char *operation,
+    std::string &error)
+{
+    HYPRE_Real norm_squared = 0.0;
+    HYPRE_ClearAllErrors();
+    const HYPRE_Int status = HYPRE_ParVectorInnerProd(
+        vector, vector, &norm_squared);
+    if (status != 0) {
+        error = std::string(operation) + " failed with HYPRE status " +
+            std::to_string(status);
+        return false;
+    }
+    if (!std::isfinite(norm_squared) || norm_squared < 0.0) {
+        error = std::string(operation) + " returned an invalid squared norm";
+        return false;
+    }
+    norm = std::sqrt(norm_squared);
+    return true;
+}
+
+bool hypre_vector_axpy(
+    double alpha,
+    mfem::HypreParVector &x,
+    mfem::HypreParVector &y,
+    const char *operation,
+    std::string &error)
+{
+    HYPRE_ClearAllErrors();
+    const HYPRE_Int status = HYPRE_ParVectorAxpy(alpha, x, y);
+    if (status == 0) {
+        return true;
+    }
+    error = std::string(operation) + " failed with HYPRE status " +
+        std::to_string(status);
+    return false;
+}
+
 void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
 {
     const auto &policy = ctx.demag.amg_policy;
@@ -346,7 +386,13 @@ bool validate_demag_poisson_hypre_device_solve(
     double absolute_residual = 0.0;
     double rhs_norm = 0.0;
     if (validation_needs.rhs_norm && workspace.b_par != nullptr) {
-        rhs_norm = workspace.b_par->Norml2();
+        if (!hypre_vector_norm_l2(
+                *workspace.b_par,
+                rhs_norm,
+                "strict FEM GPU Poisson demag RHS norm",
+                error)) {
+            return false;
+        }
         GpuPerformanceCounterDelta performance_delta{};
         performance_delta.demag_rhs_norm_evaluations = 1;
         performance_delta.demag_rhs_norm_sum = rhs_norm;
@@ -358,14 +404,19 @@ bool validate_demag_poisson_hypre_device_solve(
         workspace.b_par != nullptr &&
         workspace.residual != nullptr) {
         workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
-#if FULLMAG_HAS_CUDA_RUNTIME
-        if (!mfem_default_stream_wait_for_hypre_validation(
-                workspace.stream_interop, error)) {
+        if (!hypre_vector_axpy(
+                -1.0,
+                *workspace.b_par,
+                *workspace.residual,
+                "strict FEM GPU Poisson demag residual AXPY",
+                error) ||
+            !hypre_vector_norm_l2(
+                *workspace.residual,
+                absolute_residual,
+                "strict FEM GPU Poisson demag residual norm",
+                error)) {
             return false;
         }
-#endif
-        workspace.residual->Add(-1.0, *workspace.b_par);
-        absolute_residual = workspace.residual->Norml2();
         residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
         residual_independently_certified = std::isfinite(absolute_residual);
     }

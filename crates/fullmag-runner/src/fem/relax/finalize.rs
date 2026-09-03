@@ -34,9 +34,14 @@ struct NativeEquilibriumEvaluation {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_after_strict_receipt_gate, terminal_scheduled_field_actions};
+    use super::{
+        completed_strict_gpu_performance_snapshot_artifact, run_after_strict_receipt_gate,
+        terminal_scheduled_field_actions,
+    };
     use crate::schedules::OutputSchedule;
-    use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt};
+    use crate::types::{
+        FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuPerformanceSnapshotV2, RunStatus,
+    };
 
     fn schedule(name: &str, last_sampled_time: Option<f64>) -> OutputSchedule {
         OutputSchedule {
@@ -44,6 +49,23 @@ mod tests {
             every_seconds: 1.0e-14,
             next_time: 2.0e-14,
             last_sampled_time,
+        }
+    }
+
+    fn performance_snapshot() -> FemGpuPerformanceSnapshotV2 {
+        FemGpuPerformanceSnapshotV2 {
+            abi_version: 2,
+            struct_size: 88,
+            setup_count: 1,
+            apply_count: 2,
+            kernel_launch_count: 3,
+            compute_fence_count: 0,
+            snapshot_fence_count: 0,
+            export_fence_count: 0,
+            selected_sparse_kernel_id: 7,
+            setup_wall_time_ns: 11,
+            apply_wall_time_ns: 13,
+            accepted_finalization_wall_time_ns: 17,
         }
     }
 
@@ -112,6 +134,49 @@ mod tests {
         assert!(finalize.contains("artifacts.take_solver_steps()"));
         assert!(finalize.contains("solver_diagnostic_trace_artifact(diagnostic_steps)"));
     }
+
+    #[test]
+    fn completed_strict_finalization_publishes_complete_v2_performance_artifact() {
+        let artifact = completed_strict_gpu_performance_snapshot_artifact(
+            RunStatus::Completed,
+            Some("strict_device"),
+            Some(performance_snapshot()),
+        )
+        .unwrap()
+        .expect("completed strict run publishes performance evidence");
+        assert_eq!(
+            artifact.relative_path,
+            "performance/fem_gpu_performance_snapshot.v2.json"
+        );
+        let document: serde_json::Value = serde_json::from_slice(&artifact.bytes).unwrap();
+        assert_eq!(
+            document["schema"],
+            "fullmag.fem_gpu_performance_snapshot.v2"
+        );
+        assert_eq!(
+            document["snapshot"],
+            serde_json::to_value(performance_snapshot()).unwrap()
+        );
+    }
+
+    #[test]
+    fn noncompleted_or_nonstrict_finalization_never_publishes_performance_evidence() {
+        for (status, request) in [
+            (RunStatus::Paused, Some("strict_device")),
+            (RunStatus::Cancelled, Some("strict_device")),
+            (RunStatus::Failed, Some("strict_device")),
+            (RunStatus::Completed, Some("gpu")),
+            (RunStatus::Completed, None),
+        ] {
+            assert!(completed_strict_gpu_performance_snapshot_artifact(
+                status,
+                request,
+                Some(performance_snapshot()),
+            )
+            .unwrap()
+            .is_none());
+        }
+    }
 }
 
 fn run_after_strict_receipt_gate<T>(
@@ -128,6 +193,30 @@ fn run_after_strict_receipt_gate<T>(
         })?;
     }
     Ok(success())
+}
+
+fn completed_strict_gpu_performance_snapshot_artifact(
+    status: RunStatus,
+    receipt_request: Option<&str>,
+    snapshot: Option<crate::types::FemGpuPerformanceSnapshotV2>,
+) -> Result<Option<AuxiliaryArtifact>, RunError> {
+    if status != RunStatus::Completed || receipt_request != Some("strict_device") {
+        return Ok(None);
+    }
+    let Some(snapshot) = snapshot else {
+        return Ok(None);
+    };
+    let mut bytes = serde_json::to_vec_pretty(
+        &crate::artifacts::fem_gpu_performance_snapshot_artifact(&snapshot),
+    )
+    .map_err(|error| RunError {
+        message: format!("failed to encode FEM GPU performance snapshot: {error}"),
+    })?;
+    bytes.push(b'\n');
+    Ok(Some(AuxiliaryArtifact {
+        relative_path: "performance/fem_gpu_performance_snapshot.v2.json".into(),
+        bytes,
+    }))
 }
 
 pub(crate) struct NativeFemRelaxationFinalization {
@@ -377,6 +466,14 @@ pub(crate) fn finalize_native_fem_relaxation(
         Some(&gpu_state_info),
         Some(&gpu_rk_plan_info),
     );
+    let status = if finalization.paused {
+        RunStatus::Paused
+    } else if finalization.cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let mut fem_gpu_performance_snapshot = None;
     if engine == FemEngine::NativeGpu {
         // The backend receipt describes the resolved RK execution plan. Direct
         // minimizers publish their own policy and realization provenance.
@@ -387,6 +484,9 @@ pub(crate) fn finalize_native_fem_relaxation(
             run_after_strict_receipt_gate(&receipt, receipt_request, || {
                 final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
             })?;
+            if receipt_request == "strict_device" && status == RunStatus::Completed {
+                fem_gpu_performance_snapshot = Some(backend.gpu_performance_snapshot()?.snapshot);
+            }
         }
     }
     artifacts.replace_provenance_synchronously(final_provenance)?;
@@ -618,6 +718,13 @@ pub(crate) fn finalize_native_fem_relaxation(
     let mut diagnostic_steps = artifacts.take_solver_steps();
     let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
+    if let Some(artifact) = completed_strict_gpu_performance_snapshot_artifact(
+        status,
+        finalization.fem_gpu_receipt_request.as_deref(),
+        fem_gpu_performance_snapshot,
+    )? {
+        auxiliary_artifacts.push(artifact);
+    }
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "equilibrium/certified_fem_equilibrium_fields.v1.json".into(),
         bytes: serde_json::to_vec_pretty(&certified_fem_equilibrium_fields).map_err(|error| {
@@ -679,13 +786,6 @@ pub(crate) fn finalize_native_fem_relaxation(
     if let Some(trace) = crate::artifacts::solver_diagnostic_trace_artifact(diagnostic_steps) {
         auxiliary_artifacts.push(trace);
     }
-    let status = if finalization.paused {
-        RunStatus::Paused
-    } else if finalization.cancelled {
-        RunStatus::Cancelled
-    } else {
-        RunStatus::Completed
-    };
     let completion = if let Some(mut completion) = finalization.backend_completion {
         completion.status = match status {
             RunStatus::Completed => "completed",

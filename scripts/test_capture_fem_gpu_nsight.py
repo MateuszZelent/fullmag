@@ -22,6 +22,39 @@ def load_capture_module():
     return module
 
 
+def write_minimal_runtime_manifest(
+    capture, runtime: Path, *, nvtx_enabled: bool
+) -> None:
+    binaries = {"launcher": runtime / "bin" / "fullmag-fem-gpu"}
+    fullmag_fem = runtime / "lib" / "libfullmag_fem.so"
+    for path in (*binaries.values(), fullmag_fem):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode("ascii"))
+    (runtime / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": 3,
+                "binaries": {
+                    name: str(path.relative_to(runtime))
+                    for name, path in binaries.items()
+                },
+                "integrity": {
+                    f"{name}_sha256": capture._sha256(path)
+                    for name, path in binaries.items()
+                },
+                "native_libraries": {
+                    "fullmag_fem": {
+                        "path": str(fullmag_fem.relative_to(runtime)),
+                        "sha256": capture._sha256(fullmag_fem),
+                    }
+                },
+                "instrumentation": {"nvtx_enabled": nvtx_enabled},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_nsight_sys_admin_capability_is_capture_only() -> None:
     capture = subprocess.run(
         ["just", "--dry-run", "capture-fem-gpu-nsight"],
@@ -129,7 +162,8 @@ def test_task13_sources_wire_exact_stable_ranges_and_opt_in_build() -> None:
     assert "inherited RUSTFLAGS contains fullmag_enable_nvtx" in exporter
     assert "only_native_lib_dir" in exporter
     stale_native_clean = (
-        'find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*"'
+        'find "${CARGO_TARGET_DIR}/release/build" -maxdepth 1 -type d '
+        '-name "fullmag-fem-sys-*"'
     )
     assert stale_native_clean in exporter
     stale_guard = "stale fullmag-fem-sys native artifacts remain after targeted clean"
@@ -260,10 +294,7 @@ def test_preflight_only_accepts_available_tools_with_default_off_bundle(
     capture = load_capture_module()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "manifest.json").write_text(
-        json.dumps({"schema": 2, "instrumentation": {"nvtx_enabled": False}}),
-        encoding="utf-8",
-    )
+    write_minimal_runtime_manifest(capture, runtime, nvtx_enabled=False)
     monkeypatch.setattr(
         capture,
         "preflight_tools",
@@ -302,10 +333,7 @@ def test_actual_capture_rejects_default_off_bundle_before_profiling(tmp_path: Pa
     capture = load_capture_module()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "manifest.json").write_text(
-        json.dumps({"schema": 2, "instrumentation": {"nvtx_enabled": False}}),
-        encoding="utf-8",
-    )
+    write_minimal_runtime_manifest(capture, runtime, nvtx_enabled=False)
     args = capture.parse_args(
         ["--runtime-root", str(runtime), "--output-dir", str(tmp_path / "output")]
     )
@@ -777,10 +805,7 @@ def test_ncu_access_probe_is_always_run_before_top_kernel_passes(
     capture = load_capture_module()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "manifest.json").write_text(
-        json.dumps({"schema": 2, "instrumentation": {"nvtx_enabled": True}}),
-        encoding="utf-8",
-    )
+    write_minimal_runtime_manifest(capture, runtime, nvtx_enabled=True)
     expected = json.loads(capture.FIXTURE_MANIFEST.read_text(encoding="utf-8"))
 
     def write_identity(path: Path, *, problem_ir: str) -> None:
@@ -950,6 +975,16 @@ def test_identity_and_status_artifacts_preserve_run_bundle_and_architectures(tmp
     capture = load_capture_module()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
+    binaries = {
+        "launcher": runtime / "bin" / "fullmag-fem-gpu",
+        "worker": runtime / "bin" / "fullmag-fem-gpu-bin",
+        "api": runtime / "bin" / "fullmag-api",
+    }
+    fullmag_fem = runtime / "lib" / "libfullmag_fem.so"
+    for path in (*binaries.values(), fullmag_fem):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode("ascii"))
+    digest = capture._sha256
     manifest = {
         "schema": 3,
         "source_provenance": {
@@ -964,9 +999,17 @@ def test_identity_and_status_artifacts_preserve_run_bundle_and_architectures(tmp
             "requested_cuda_architectures": "80-real;89-real;90-virtual",
             "effective_cuda_architectures": ["sm_80", "sm_89", "compute_90"],
         },
+        "binaries": {
+            name: str(path.relative_to(runtime)) for name, path in binaries.items()
+        },
+        "integrity": {
+            f"{name}_sha256": digest(path) for name, path in binaries.items()
+        },
         "native_libraries": {
-            "fullmag_fem": {"sha256": "b" * 64},
-            "hypre": {"sha256": "c" * 64},
+            "fullmag_fem": {
+                "path": str(fullmag_fem.relative_to(runtime)),
+                "sha256": digest(fullmag_fem),
+            },
         },
         "instrumentation": {"nvtx_enabled": True},
     }
@@ -988,7 +1031,7 @@ def test_identity_and_status_artifacts_preserve_run_bundle_and_architectures(tmp
     assert persisted["bundle"]["runtime_git_commit"] == "a" * 40
     assert persisted["bundle"]["runtime_source_inputs_sha256"] == "c" * 64
     assert persisted["bundle"]["runtime_dirty"] is False
-    assert persisted["bundle"]["libraries"]["fullmag_fem"] == "b" * 64
+    assert persisted["bundle"]["libraries"]["fullmag_fem"] == digest(fullmag_fem)
     assert persisted["bundle"]["requested_cuda_architectures"] == "80-real;89-real;90-virtual"
     assert "status: `unavailable`" in markdown_path.read_text(encoding="utf-8")
 

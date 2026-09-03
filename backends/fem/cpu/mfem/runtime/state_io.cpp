@@ -32,9 +32,13 @@ namespace {
 #if FULLMAG_HAS_MFEM_STACK
 bool strict_gpu_demag_upload_path(const Context &ctx)
 {
-    return ctx.gpu_state.device.lifecycle.allocated &&
+    if (!ctx.gpu_state.device.lifecycle.allocated) {
+        return false;
+    }
+    return ctx.poisson_demag.gpu_demag_mode ==
+               FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
         ctx.poisson_demag.gpu_demag_mode ==
-            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+               FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM;
 }
 #endif
 
@@ -528,6 +532,9 @@ int context_upload_magnetization_f64(
                 ctx.transfer_audit.audit,
                 error)) {
             return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (strict_gpu_demag_upload_path(ctx)) {
+            ctx.poisson_demag.fresh_initial_guess_required = true;
         }
     } else {
         record_host_to_device(ctx.transfer_audit.audit, sizeof(double) * len);

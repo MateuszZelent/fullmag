@@ -9,11 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FEM_BEM_TASK1_SHA256 = {
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp":
-        "8fc1ca7ed78e59928fe322cf971cf8ea3c43b2b25f85b4575df1e0957ca20969",
+        "e55e5b1cab2be2f34c818b48de98a01b89a951ad69463ee782654814fa364d4b",
     "docs/audits/2026-09-02-fem-gpu-solver-audit.md":
-        "64a3ac03aa5e04485d83e0b7348b74be25f396617cc066ef91cb76469628b85b",
+        "fe2673954a2d4731079660fc8efee9c657713a4fb9b23c7ce857f1d8fb523300",
     "docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md":
-        "a82db339cc64d36f16c451e05179d195d019a319ffba3608cd5a21a50644aec1",
+        "75f544c8d2ff1268b5b91ac09127be5516eb6655b1279b781847672b0485ebf9",
 }
 
 

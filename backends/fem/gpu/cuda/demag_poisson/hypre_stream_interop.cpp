@@ -70,9 +70,6 @@ void destroy_hypre_stream_interop(HypreStreamInterop &interop) noexcept
     if (interop.hypre_done != nullptr) {
         cudaEventDestroy(interop.hypre_done);
     }
-    if (interop.hypre_validation_done != nullptr) {
-        cudaEventDestroy(interop.hypre_validation_done);
-    }
     interop = HypreStreamInterop{};
 }
 
@@ -298,10 +295,6 @@ bool initialize_hypre_stream_interop(
         !cuda_ok(
             cudaEventCreateWithFlags(&interop.hypre_done, cudaEventDisableTiming),
             "cudaEventCreate strict FEM GPU demag HYPRE-done",
-            error) ||
-        !cuda_ok(
-            cudaEventCreateWithFlags(&interop.hypre_validation_done, cudaEventDisableTiming),
-            "cudaEventCreate strict FEM GPU demag HYPRE-validation-done",
             error)) {
         destroy_hypre_stream_interop(interop);
         return false;
@@ -380,28 +373,6 @@ bool fullmag_wait_for_hypre(
     return true;
 }
 
-bool mfem_default_stream_wait_for_hypre_validation(
-    HypreStreamInterop &interop,
-    std::string &error)
-{
-    if (!interop.ready || interop.hypre_stream == nullptr ||
-        interop.hypre_validation_done == nullptr) {
-        error = "strict FEM GPU demag HYPRE stream interop is not initialized";
-        return false;
-    }
-    if (!cuda_ok(
-            cudaEventRecord(interop.hypre_validation_done, interop.hypre_stream),
-            "cudaEventRecord strict FEM GPU demag HYPRE-validation-done",
-            error) ||
-        !cuda_ok(
-            cudaStreamWaitEvent(nullptr, interop.hypre_validation_done, 0),
-            "cudaStreamWaitEvent strict FEM GPU demag MFEM waits for HYPRE validation",
-            error)) {
-        return false;
-    }
-    interop.event_wait_count += 1u;
-    return true;
-}
 #endif
 
 } // namespace fullmag::fem

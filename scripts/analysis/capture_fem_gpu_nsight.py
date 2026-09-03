@@ -780,14 +780,59 @@ def _sha256(path: Path) -> str:
 
 
 def collect_bundle_identity(runtime_root: Path) -> dict[str, object]:
+    runtime_root = runtime_root.resolve()
     manifest_path = runtime_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     build = manifest.get("build") if isinstance(manifest.get("build"), Mapping) else {}
-    libraries = (
-        manifest.get("native_libraries")
-        if isinstance(manifest.get("native_libraries"), Mapping)
-        else {}
-    )
+    binaries = manifest.get("binaries")
+    integrity = manifest.get("integrity")
+    libraries = manifest.get("native_libraries")
+    if not isinstance(binaries, Mapping) or not isinstance(integrity, Mapping):
+        raise ValueError("runtime manifest binary integrity is missing")
+    if not isinstance(libraries, Mapping):
+        raise ValueError("runtime manifest native library integrity is missing")
+
+    def verified_sha256(path_value: object, expected_value: object, label: str) -> str:
+        if not isinstance(path_value, str) or not path_value:
+            raise ValueError(f"runtime manifest has no {label} path")
+        path = (runtime_root / path_value).resolve()
+        try:
+            path.relative_to(runtime_root)
+        except ValueError as exc:
+            raise ValueError(f"runtime manifest {label} path escapes bundle") from exc
+        if not path.is_file():
+            raise ValueError(f"runtime manifest {label} is missing: {path}")
+        if not isinstance(expected_value, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", expected_value
+        ):
+            raise ValueError(f"runtime manifest has invalid {label} sha256")
+        actual = _sha256(path)
+        if actual != expected_value:
+            raise ValueError(
+                f"{label} sha256 mismatch: expected {expected_value}, got {actual}"
+            )
+        return actual
+
+    binary_digests = {
+        str(name): verified_sha256(
+            path,
+            integrity.get(f"{name}_sha256"),
+            str(name),
+        )
+        for name, path in binaries.items()
+    }
+    fullmag_fem = libraries.get("fullmag_fem")
+    if not isinstance(fullmag_fem, Mapping):
+        raise ValueError("runtime manifest native_libraries.fullmag_fem is missing")
+    library_digests = {}
+    for name, entry in libraries.items():
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"runtime manifest {name} entry is invalid")
+        library_digests[str(name)] = verified_sha256(
+            entry.get("path"),
+            entry.get("sha256"),
+            str(name),
+        )
     instrumentation = (
         manifest.get("instrumentation")
         if isinstance(manifest.get("instrumentation"), Mapping)
@@ -811,11 +856,8 @@ def collect_bundle_identity(runtime_root: Path) -> dict[str, object]:
         "requested_cuda_architectures": build.get("requested_cuda_architectures"),
         "effective_cuda_architectures": build.get("effective_cuda_architectures", []),
         "nvtx_enabled": instrumentation.get("nvtx_enabled") is True,
-        "libraries": {
-            name: payload.get("sha256")
-            for name, payload in libraries.items()
-            if isinstance(payload, Mapping) and payload.get("sha256")
-        },
+        "binaries": binary_digests,
+        "libraries": library_digests,
     }
 
 
@@ -1222,7 +1264,17 @@ def _run_nsys_pass(
 
 def _run_capture(args: argparse.Namespace, preflight: Mapping[str, object]) -> int:
     output_dir = args.output_dir / args.run_id
-    bundle = collect_bundle_identity(args.runtime_root)
+    try:
+        bundle = collect_bundle_identity(args.runtime_root)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        payload = not_verified_payload(
+            run_id=args.run_id,
+            blockers=[f"managed runtime identity is invalid: {exc}"],
+        )
+        payload["status"] = "unavailable"
+        payload["preflight"] = dict(preflight)
+        write_summary_artifacts(output_dir, payload)
+        return 2
     fixture_identity = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf-8"))
     fixture_block: dict[str, object] = {
         "manifest": str(FIXTURE_MANIFEST.relative_to(REPO_ROOT)),
@@ -1533,7 +1585,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             "preflight": preflight,
         }
         if (args.runtime_root / "manifest.json").is_file():
-            payload["bundle"] = collect_bundle_identity(args.runtime_root)
+            try:
+                payload["bundle"] = collect_bundle_identity(args.runtime_root)
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+                payload["status"] = "unavailable"
+                payload["qualification_status"] = "NOT VERIFIED"
+                payload["blockers"] = [
+                    *payload["blockers"],
+                    f"managed runtime identity is invalid: {exc}",
+                ]
+                write_summary_artifacts(output_dir, payload)
+                return 2
         write_summary_artifacts(output_dir, payload)
         if preflight["status"] != "available":
             print("status=unavailable: " + "; ".join(preflight["blockers"]), file=sys.stderr)

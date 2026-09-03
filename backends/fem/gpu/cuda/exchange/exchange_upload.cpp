@@ -66,7 +66,7 @@ void gpu_exchange_reset_legacy_sparse(
     legacy_exchange.cols = 0;
     legacy_exchange.nnz = 0;
     legacy_exchange.device_bytes = 0;
-    legacy_exchange.plan.reset();
+    legacy_exchange.plan = SparseApplyPlan{};
     legacy_exchange.row_scale = nullptr;
     legacy_exchange.periodic_reduced_ready = false;
     legacy_exchange.periodic_reduced_rows = 0;

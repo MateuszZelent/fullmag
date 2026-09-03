@@ -113,8 +113,12 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
     workspace.x_par->HypreRead();
     check(fullmag::fem::initialize_hypre_stream_interop(workspace.stream_interop, error),
           "strict GPU fixture initializes exact HYPRE stream interop");
+    cudaStream_t fullmag_stream = nullptr;
+    check(cudaStreamCreateWithFlags(&fullmag_stream, cudaStreamNonBlocking) == cudaSuccess,
+          "strict GPU fixture creates Fullmag stream");
     workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
-    check(fullmag::fem::fullmag_wait_for_hypre(workspace.stream_interop, nullptr, error),
+    check(fullmag::fem::fullmag_wait_for_hypre(
+              workspace.stream_interop, fullmag_stream, error),
           "strict GPU fixture orders the solve before residual certification");
 
     int iterations = -1;
@@ -135,13 +139,10 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
           "strict GPU failure includes maximum iterations");
 
     const uint64_t waits_before_stream_contract = workspace.stream_interop.event_wait_count;
-    cudaStream_t fullmag_stream = nullptr;
     cudaStream_t independent_stream = nullptr;
     cudaEvent_t independent_done = nullptr;
     int *producer_value = nullptr;
     int *hypre_value = nullptr;
-    check(cudaStreamCreateWithFlags(&fullmag_stream, cudaStreamNonBlocking) == cudaSuccess,
-          "strict GPU fixture creates Fullmag stream");
     check(cudaStreamCreateWithFlags(&independent_stream, cudaStreamNonBlocking) == cudaSuccess,
           "strict GPU fixture creates independent stream");
     check(cudaEventCreateWithFlags(&independent_done, cudaEventDisableTiming) == cudaSuccess,
@@ -205,16 +206,16 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
             cudaMemcpyDeviceToDevice,
             workspace.stream_interop.hypre_stream) == cudaSuccess;
     dependency_bridge_ok = dependency_bridge_ok &&
-        fullmag::fem::mfem_default_stream_wait_for_hypre_validation(
-            workspace.stream_interop, error);
+        fullmag::fem::fullmag_wait_for_hypre(
+            workspace.stream_interop, fullmag_stream, error);
     dependency_bridge_ok = dependency_bridge_ok &&
         cudaMemcpyAsync(
             &consumer_host,
             hypre_value,
             sizeof(int),
             cudaMemcpyDeviceToHost,
-            nullptr) == cudaSuccess &&
-        cudaStreamSynchronize(nullptr) == cudaSuccess;
+            fullmag_stream) == cudaSuccess &&
+        cudaStreamSynchronize(fullmag_stream) == cudaSuccess;
     const cudaError_t independent_status = cudaEventQuery(independent_done);
     independent_callback.release.store(true, std::memory_order_release);
     const bool independent_cleanup_ok =
@@ -285,13 +286,12 @@ int main()
                 std::string::npos,
         "strict GPU Hypre demag solver must use the periodic reduced Poisson matrix for PBC");
     check(
-        gpu_hypre.find("mfem_default_stream_wait_for_hypre_validation(") !=
-                std::string::npos &&
-            hypre_stream_interop.find("hypre_validation_done") != std::string::npos &&
+        gpu_hypre.find("HYPRE_ParVectorAxpy") != std::string::npos &&
+            gpu_hypre.find("HYPRE_ParVectorInnerProd") != std::string::npos &&
+            hypre_stream_interop.find("hypre_validation_done") == std::string::npos &&
             hypre_stream_interop.find(
-                "cudaStreamWaitEvent(nullptr, interop.hypre_validation_done, 0)") !=
-                std::string::npos,
-        "strict GPU residual certification must order its Hypre matvec before MFEM Vector::Add");
+                "cudaStreamWaitEvent(nullptr") == std::string::npos,
+        "strict GPU residual certification must remain on the exact HYPRE stream");
     const size_t validate_pos =
         gpu_stage.find("validate_demag_poisson_hypre_device_solve(");
     const size_t recover_pos = gpu_stage.find("fullmag_cuda_demag_recovery_csr(");

@@ -149,6 +149,13 @@ struct GpuStateRuntimeState {
  */
 bool initialize_context_gpu_state(Context &ctx, std::string &error);
 
+/*
+ * Initialize the configured strict device-demag workspace after generic GPU
+ * state and MFEM exchange have been uploaded.  This is the single production
+ * selection point for device HYPRE Poisson versus Fredkin-Koehler FEM/BEM.
+ */
+bool initialize_context_gpu_demag_workspace(Context &ctx, std::string &error);
+
 void set_gpu_step_profile(Context &ctx, bool enabled);
 
 } // namespace fullmag::fem

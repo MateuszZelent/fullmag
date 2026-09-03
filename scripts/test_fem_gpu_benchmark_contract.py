@@ -73,7 +73,7 @@ def accepted_row(repeat_index: int) -> dict[str, object]:
         "integrator": "heun",
         "wall_time_ms": 10.0 + repeat_index,
         "fem_gpu_execution_receipt": {
-            "requested": "gpu",
+            "requested": "strict_device",
             "resolved": "device_resident",
             "executed": "cuda_fem",
             "execution_class": "device_resident",
@@ -99,7 +99,7 @@ def accepted_row(repeat_index: int) -> dict[str, object]:
         "fem_gpu_performance_snapshot_v2": {
             "abi_version": 2,
             "struct_size": 88,
-            "setup_count": 1,
+            "setup_count": 64,
             "apply_count": 64,
             "kernel_launch_count": 512,
             "compute_fence_count": 0,
@@ -318,6 +318,133 @@ class BenchmarkV2ContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "fullmag_fem"):
                     benchmark.runtime_bundle_identity(root, require_integrity=True)
 
+    def test_gpu_snapshot_is_loaded_from_published_runner_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "performance").mkdir()
+            metadata = {
+                "status": "completed",
+                "scalar_rows": 1,
+                "execution_provenance": {
+                    "fem_gpu_performance_snapshot_v2": {
+                        "abi_version": 2,
+                        "struct_size": 88,
+                        "setup_count": 999,
+                    }
+                },
+            }
+            (root / "metadata.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+            (root / "scalars.csv").write_text(
+                "time,E_total\n0,0\n", encoding="utf-8"
+            )
+            published = {
+                "abi_version": 2,
+                "struct_size": 88,
+                "setup_count": 1,
+                "apply_count": 64,
+                "kernel_launch_count": 512,
+                "compute_fence_count": 0,
+            }
+            (root / "performance" / "fem_gpu_performance_snapshot.v2.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "fullmag.fem_gpu_performance_snapshot.v2",
+                        "snapshot": published,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = benchmark.load_authoritative_benchmark_payload(root)
+
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertEqual(
+                payload["fem_gpu_performance_snapshot_v2"], published
+            )
+            self.assertEqual(
+                benchmark._select_performance_snapshot(
+                    "fem_gpu",
+                    artifact_payload=payload,
+                    metadata=metadata,
+                    payload=metadata,
+                ),
+                published,
+            )
+            self.assertIsNone(
+                benchmark._select_performance_snapshot(
+                    "fem_gpu",
+                    artifact_payload={"status": "completed"},
+                    metadata=metadata,
+                    payload=metadata,
+                )
+            )
+
+    def test_nsight_bundle_identity_rehashes_declared_binaries_and_fullmag_fem(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binaries = {
+                name: root / "bin" / filename
+                for name, filename in (
+                    ("launcher", "fullmag-fem-gpu"),
+                    ("worker", "fullmag-fem-gpu-bin"),
+                    ("api", "fullmag-api"),
+                )
+            }
+            fullmag_fem = root / "lib" / "libfullmag_fem.so"
+            for path in {
+                **binaries,
+                "fullmag_fem": fullmag_fem,
+            }.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(path.name.encode("ascii"))
+            digest = lambda path: benchmark.hashlib.sha256(path.read_bytes()).hexdigest()
+            manifest = {
+                "schema": 3,
+                "source_provenance": {
+                    "git_commit": "a" * 40,
+                    "git_tree": "b" * 40,
+                    "dirty": False,
+                    "dirty_patch_sha256": None,
+                    "source_inputs_sha256": "c" * 64,
+                },
+                "binaries": {
+                    name: str(path.relative_to(root))
+                    for name, path in binaries.items()
+                },
+                "integrity": {
+                    f"{name}_sha256": digest(path)
+                    for name, path in binaries.items()
+                },
+                "native_libraries": {
+                    "fullmag_fem": {
+                        "path": str(fullmag_fem.relative_to(root)),
+                        "sha256": digest(fullmag_fem),
+                    }
+                },
+            }
+            (root / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+
+            identity = nsight.collect_bundle_identity(root)
+
+            self.assertEqual(identity["binaries"]["launcher"], digest(binaries["launcher"]))
+            self.assertEqual(identity["binaries"]["worker"], digest(binaries["worker"]))
+            self.assertEqual(identity["binaries"]["api"], digest(binaries["api"]))
+            self.assertEqual(identity["libraries"]["fullmag_fem"], digest(fullmag_fem))
+            binaries["worker"].write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "worker sha256 mismatch"):
+                nsight.collect_bundle_identity(root)
+            binaries["worker"].write_bytes(binaries["worker"].name.encode("ascii"))
+            fullmag_fem.write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "fullmag_fem sha256 mismatch"):
+                nsight.collect_bundle_identity(root)
+
     def test_executed_binary_must_be_the_manifested_launcher(self) -> None:
         wrong_binary = [dict(row) for row in self.rows]
         wrong_binary[0]["binary"] = str(NSIGHT_PATH)
@@ -450,6 +577,31 @@ class BenchmarkV2ContractTests(unittest.TestCase):
 
 
 class NsightPhaseContractTests(unittest.TestCase):
+    def test_production_emits_missing_setup_and_accepted_finalization_ranges(self) -> None:
+        gpu_setup = (
+            ROOT
+            / "backends"
+            / "fem"
+            / "gpu"
+            / "cuda"
+            / "runtime"
+            / "gpu_state_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        nonlinear_cg = (
+            ROOT
+            / "backends"
+            / "fem"
+            / "gpu"
+            / "cuda"
+            / "relaxation"
+            / "nonlinear_cg.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn('FULLMAG_NVTX_RANGE("fem.gpu.setup")', gpu_setup)
+        self.assertIn(
+            'FULLMAG_NVTX_RANGE("fem.gpu.accepted_finalization")',
+            nonlinear_cg,
+        )
+
     def test_setup_to_export_phase_contract_is_fail_closed(self) -> None:
         self.assertEqual(
             tuple(nsight.TRACE_PHASE_RANGES),
