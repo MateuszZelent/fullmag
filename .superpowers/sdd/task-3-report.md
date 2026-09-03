@@ -7,15 +7,19 @@ Baza: `45eda81251a81d4f641e4eb9588a24a4fc6dea88`
 Commity implementacyjne:
 
 - `ea41d1d099992ab75e7e40ac343f496a07e3e448` — główny kontrakt benchmarku v2 i Nsight,
-- `79dd0020d8169283e58f6bf2f778801160b3b5c9` — unikalne indeksy powtórzeń i odczyt UUID GPU w managed baseline.
+- `79dd0020d8169283e58f6bf2f778801160b3b5c9` — unikalne indeksy powtórzeń i odczyt UUID GPU w managed baseline,
+- `173bb27160f7069eff766b1f8d1869184f6eae12` — remediacja review: bieżący clean source snapshot, integralność binariów i uporządkowane fazy jednego capture,
+- `1f860804c905ff068c0bfc5af38274ffde4da106` — powiązanie faktycznie wykonywanego launchera ze zweryfikowaną ścieżką i SHA-256 z manifestu.
 
 ## Zakres wykonany
 
 - Dodano kontrakt `fullmag.fem_gpu.benchmark.v2`: rekord zawiera commit i snapshot źródła, digest manifestu runtime, digest ProblemIR i mesh, UUID GPU, precyzję, p50/p95 czasu oraz liczniki snapshotu v2.
 - `collect_case` waliduje wszystkie co najmniej pięć powtórzeń przed obliczeniem statystyk. Odrzuca niespójne identity, niepełny receipt/snapshot, hostowe maski i transfery strict GPU, compute fence oraz niezaliczony CPU oracle.
+- Przed `VERIFIED` źródłowy commit i snapshot wszystkich powtórzeń muszą zgadzać się z bieżącym race-checked, czystym checkoutem. Ścieżka wykonawcza sprawdza też manifestowane SHA-256 launchera, workera, API oraz bibliotek natywnych; podmieniony plik blokuje kwalifikację.
+- `collect_case` wymaga ponadto, aby `binary` każdego powtórzenia wskazywał dokładnie manifestowany launcher i aby ponownie obliczony SHA-256 tego pliku zgadzał się z digestem zweryfikowanym z manifestu. Alternatywny `FULLMAG_BENCH_GPU_BIN` nie może odziedziczyć cudzej tożsamości runtime.
 - Benchmark konsumuje istniejące `fem_gpu_execution_receipt` i `fem_gpu_performance_snapshot_v2`, jeśli runtime je opublikuje. Task 3 nie dodaje producenta runtime.
 - Jeden słownik definiuje publiczne nazwy preconditionerów. `exchange_mass` jest zarezerwowany, lecz ma wartość `None` i nie trafia do CLI, ponieważ aktualny C++ resolver akceptuje tylko `none` i `diagonal`; realizacja `exchange_mass` należy do Task 10.
-- Nsight ma fail-closed kontrakt faz `setup -> attempt -> accepted_finalization -> snapshot -> export`. Brak którejkolwiek fazy blokuje `VERIFIED`.
+- Nsight ma fail-closed kontrakt faz `setup -> attempt -> accepted_finalization -> snapshot -> export`. Cała uporządkowana sekwencja musi wystąpić w jednym capture compute albo host; unia dwóch niezależnych przebiegów nie kwalifikuje wyniku.
 - Receptury baseline i Nsight zapisują jawne `NOT VERIFIED`, gdy kanoniczna ścieżka wykonania lub narzędzia są niedostępne. Baseline v2 używa katalogu adresowanego SHA i opcji immutable.
 
 ## TDD i weryfikacja
@@ -39,6 +43,36 @@ Ran 8 tests in 0.013s
 OK
 ```
 
+Remediacja review miała osobny cykl RED/GREEN. RED wymuszał zgodność bieżącego checkoutu, wykrycie podmienionego binarium, rebuild runtime i uporządkowany pojedynczy capture:
+
+```text
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+Ran 10 tests in 0.023s
+FAILED (failures=1, errors=16)
+```
+
+Po minimalnej implementacji:
+
+```text
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+..........
+Ran 10 tests in 0.025s
+OK
+```
+
+Końcowy re-review ujawnił możliwość wskazania alternatywnego `FULLMAG_BENCH_GPU_BIN`. Cykl TDD dla tej luki:
+
+```text
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+Ran 11 tests in 0.052s
+FAILED (failures=1)
+
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+...........
+Ran 11 tests in 0.130s
+OK
+```
+
 Pozostałe sprawdzenia:
 
 ```text
@@ -56,6 +90,8 @@ exit 0
 ```
 
 `cargo fmt --all -- --check` zakończył się `exit 1` wyłącznie na wcześniejszym driftcie formatowania w plikach Rust spoza Task 3, między innymi `crates/fullmag-api/src/router_v2/handlers/analysis/results.rs`, `crates/fullmag-api/src/router_v2/handlers/analysis/spin_wave_response.rs` i `crates/fullmag-runner/src/eigen/artifacts/*`. Nie wykonano `cargo fmt`, aby nie zmieniać obcego zakresu; Task 3 nie modyfikuje Rust.
+
+Końcowy, niezależny re-review po obu remediacjach: `APPROVED`. Reviewer potwierdził domknięcie source/runtime/manifest/binary identity oraz wymogu uporządkowanej sekwencji faz Nsight w jednym capture.
 
 Dodatkowa próba uruchomienia istniejącego pliku pytest:
 
@@ -79,13 +115,14 @@ recipe exit code 2 (proces `just` na Windows zwrócił 1)
 
 Artefakt:
 
-`C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902\.fullmag\reports\task-3-fem-gpu-baseline\79dd0020d8169283e58f6bf2f778801160b3b5c9\benchmark.v2.json`
+`C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902\.fullmag\reports\task-3-fem-gpu-baseline\1f860804c905ff068c0bfc5af38274ffde4da106\benchmark.v2.json`
 
 - SHA-256: `b6e51771d502ce518f99a94db35fd819185f57725eb564e540ae0507bc1e17e2`
 - `qualification_status`: `NOT VERIFIED`
 - `correctness_gate`: `not_run`
 - `records`: `[]`
 - blocker: kanoniczne wykonanie managed FEM benchmarku nie jest dostępne w windowsowej gałęzi tej receptury.
+- Linuxowa gałąź receptury zaczyna od `just rebuild-fem-runtime`, aby runtime manifest i binaria były zbudowane dla aktualnej tożsamości źródła.
 
 ```text
 just capture-fem-gpu-nsight
