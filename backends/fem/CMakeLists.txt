@@ -253,6 +253,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/frequency_domain/driven_response_gpu.cu
             gpu/cuda/frequency_domain/modal_krylov.cu
+            gpu/cuda/frequency_domain/small_dense_dispatch.cu
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu
@@ -834,6 +835,20 @@ target_include_directories(fem_gpu_relaxation_preconditioner_contract PRIVATE
 add_test(
     NAME fem_gpu_relaxation_preconditioner_contract
     COMMAND fem_gpu_relaxation_preconditioner_contract
+)
+
+add_executable(
+    fem_gpu_small_dense_contract
+    tests/frequency_domain/gpu_small_dense_contract.cpp
+)
+target_link_libraries(fem_gpu_small_dense_contract PRIVATE fullmag_fem CUDA::cudart)
+target_include_directories(fem_gpu_small_dense_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_small_dense_contract
+    COMMAND fem_gpu_small_dense_contract
 )
 
 add_executable(
