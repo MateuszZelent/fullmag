@@ -46,8 +46,7 @@ bool gpu_rk_compute_one_dmi_field(
         gpu.mesh_geometry.magnetic_element_mask == nullptr ||
         gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
         gpu.local_interactions.vector.x == nullptr || gpu.local_interactions.vector.y == nullptr ||
-        gpu.local_interactions.vector.z == nullptr || gpu.reductions.scalar_workspace == nullptr ||
-        gpu.reductions.scalar_result == nullptr) {
+        gpu.local_interactions.vector.z == nullptr || gpu.reductions.dmi_diagnostics == nullptr) {
         reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, residual buffers, and reduction workspace";
         return false;
     }
@@ -56,9 +55,8 @@ bool gpu_rk_compute_one_dmi_field(
         reason = "GPU RK DMI requires device-resident H_dmi buffers";
         return false;
     }
-    static_assert(sizeof(DmiDiagnostics) == 2 * sizeof(double));
     auto *diagnostics = reinterpret_cast<DmiDiagnostics *>(
-        gpu.reductions.scalar_result + FEM_GPU_SCALAR_RESULT_SLOTS - 2);
+        gpu.reductions.dmi_diagnostics);
     return cuda_ok(fullmag_cuda_dmi_field_energy(
         gpu.mesh_geometry.nodes_xyz,
         gpu.mesh_geometry.elements,

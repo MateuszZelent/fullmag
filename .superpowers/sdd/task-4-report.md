@@ -2,6 +2,10 @@
 
 Status: `DONE_WITH_CONCERNS`
 
+Formalne findingi review dotyczące wykonywalnej mikrofikstury, jawnej pamięci
+diagnostycznej i przepełnienia licznika partiali naprawia osobny commit oraz
+`task-4-remediation-report.md`.
+
 ## Zakres wykonany
 
 - Dodano wewnętrzne typy `DmiApplyRequest { field, energy }` oraz
@@ -35,14 +39,13 @@ Status: `DONE_WITH_CONCERNS`
 
 ## NOT VERIFIED
 
-- Test CTest jest kontraktem źródłowym i kompilacyjnym; nie wykonuje
-  mikrofikstury pola/energii na GPU i nie stanowi CPU/GPU parity.
+- CTest wykonuje mikrofiksturę CUDA FP64 dla TET4, ale nie stanowi pełnej
+  CPU/GPU parity na produkcyjnej siatce.
 - Nie uruchomiono DMI CPU/GPU parity ani niezależnego oracle energii.
 - Nie uruchomiono A/B RHS p50/p95; brak podstaw do twierdzenia o poprawie lub
   braku regresji wydajności.
-- Nie wykonano runtime odczytu wartości liczników diagnostycznych; ich layout,
-  zerowanie, atomowe inkrementacje i fail-closed poisoning są objęte buildem i
-  kontraktem źródłowym.
+- W mikrofiksturze wykonano runtime odczyt liczników oraz sprawdzono NaN
+  fail-closed dla degeneratu i wejścia niefinitycznego.
 
 ## Dokumentacja fizyki
 

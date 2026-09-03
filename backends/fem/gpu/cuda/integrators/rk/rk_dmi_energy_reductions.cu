@@ -82,15 +82,15 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             gpu.local_interactions.vector.z == nullptr ||
             gpu.reductions.scalar_workspace == nullptr ||
             gpu.reductions.scalar_result == nullptr ||
+            gpu.reductions.dmi_diagnostics == nullptr ||
             (!deterministic_reduction && gpu.reductions.temp_storage == nullptr)) {
             reason = "GPU RK DMI energy requires device-resident mesh geometry, material data, and persistent reduction workspace";
             return false;
         }
         FemGpuComponentField &field = bulk_mode ? gpu.fields.h_bulk_dmi : gpu.fields.h_dmi;
         const int dmi_energy_partial_count = fullmag::fem::dmi_energy_partial_count(n);
-        static_assert(sizeof(DmiDiagnostics) == 2 * sizeof(double));
         auto *diagnostics = reinterpret_cast<DmiDiagnostics *>(
-            gpu.reductions.scalar_result + FEM_GPU_SCALAR_RESULT_SLOTS - 2);
+            gpu.reductions.dmi_diagnostics);
         if (!cuda_ok(fullmag_cuda_dmi_field_energy(
             gpu.mesh_geometry.nodes_xyz,
             gpu.mesh_geometry.elements,

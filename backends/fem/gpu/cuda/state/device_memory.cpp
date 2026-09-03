@@ -104,6 +104,20 @@ bool gpu_device_allocate_u32(uint32_t *&ptr, uint64_t count, uint64_t &device_by
     return true;
 }
 
+bool gpu_device_allocate_u64(uint64_t *&ptr, uint64_t count, uint64_t &device_bytes, std::string &error)
+{
+    if (count > std::numeric_limits<size_t>::max() / sizeof(uint64_t)) {
+        error = "FemGpuState u64 buffer is too large for device allocation";
+        return false;
+    }
+    void *raw = nullptr;
+    if (!gpu_device_allocate_bytes(&raw, static_cast<size_t>(count) * sizeof(uint64_t), device_bytes, error)) {
+        return false;
+    }
+    ptr = static_cast<uint64_t *>(raw);
+    return true;
+}
+
 bool gpu_device_allocate_component(
     FemGpuComponentField &field,
     uint64_t node_count,
@@ -192,6 +206,16 @@ void gpu_device_free_u32(uint32_t *&ptr)
 #else
     ptr = nullptr;
 #endif
+}
+
+void gpu_device_free_u64(uint64_t *&ptr)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ptr != nullptr) {
+        cudaFree(ptr);
+    }
+#endif
+    ptr = nullptr;
 }
 
 void gpu_device_free_component(FemGpuComponentField &field)

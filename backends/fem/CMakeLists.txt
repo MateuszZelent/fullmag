@@ -724,9 +724,12 @@ add_test(
     COMMAND fem_cuda_demag_field_only_contract
 )
 
-add_executable(fem_dmi_gpu_contract tests/dmi_gpu_contract.cpp)
-add_dependencies(fem_dmi_gpu_contract fullmag_fem)
-add_test(NAME fem_dmi_gpu_contract COMMAND fem_dmi_gpu_contract)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
+    add_executable(fem_dmi_gpu_contract tests/dmi_gpu_contract.cpp)
+    target_link_libraries(fem_dmi_gpu_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_dmi_gpu_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME fem_dmi_gpu_contract COMMAND fem_dmi_gpu_contract)
+endif()
 
 add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)
 target_link_libraries(fem_adaptive_error_policy_contract PRIVATE fullmag_fem)

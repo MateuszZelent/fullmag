@@ -21,6 +21,7 @@ struct DmiDiagnostics {
     uint64_t degenerate_tet_count = 0;
     uint64_t nonfinite_count = 0;
 };
+static_assert(sizeof(DmiDiagnostics) == 2 * sizeof(uint64_t));
 
 /// Number of persistent double-precision partials required by DMI energy.
 int dmi_energy_partial_count(int node_count);

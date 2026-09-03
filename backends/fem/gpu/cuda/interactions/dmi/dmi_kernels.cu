@@ -529,7 +529,9 @@ __global__ void dmi_fail_closed_kernel(
 
 int dmi_energy_partial_count(int node_count)
 {
-    return node_count > 0 ? (node_count + kBlockSize - 1) / kBlockSize : 0;
+    return node_count > 0
+        ? node_count / kBlockSize + (node_count % kBlockSize != 0)
+        : 0;
 }
 
 cudaError_t fullmag_cuda_dmi_field_energy(

@@ -65,7 +65,8 @@ bool gpu_reduction_workspace_allocate(
         return false;
     }
     if (!gpu_device_allocate_double(reductions.scalar_workspace, 3u * reduce_blocks, device_bytes, error) ||
-        !gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error)) {
+        !gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error) ||
+        !gpu_device_allocate_u64(reductions.dmi_diagnostics, 2u, device_bytes, error)) {
         return false;
     }
     const bool forced_pageable = force_pageable_scalar_readback();
@@ -132,6 +133,7 @@ bool gpu_reduction_workspace_allocate(
     reductions.temp_storage_bytes = static_cast<uint64_t>(reduce_temp_storage_bytes);
     reduction_workspace_bytes =
         (3u * reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS) * sizeof(double) +
+        2u * sizeof(uint64_t) +
         reductions.temp_storage_bytes;
     return true;
 #else
@@ -158,6 +160,7 @@ void gpu_reduction_workspace_free(FemGpuReductionWorkspaceDeviceState &reduction
 #endif
     gpu_device_free_double(reductions.scalar_workspace);
     gpu_device_free_double(reductions.scalar_result);
+    gpu_device_free_u64(reductions.dmi_diagnostics);
     gpu_device_free_bytes(reductions.temp_storage);
 }
 

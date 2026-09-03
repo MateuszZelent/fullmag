@@ -18,6 +18,7 @@ static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 32;
 struct FemGpuReductionWorkspaceDeviceState {
     double *scalar_workspace = nullptr;
     double *scalar_result = nullptr;
+    uint64_t *dmi_diagnostics = nullptr;
     double *host_scalar_result = nullptr;
     std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> pageable_scalar_result{};
     bool scalar_result_pinned = false;
