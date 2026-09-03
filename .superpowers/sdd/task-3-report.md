@@ -4,7 +4,10 @@ Data: 2026-09-03
 
 Baza: `45eda81251a81d4f641e4eb9588a24a4fc6dea88`
 
-Commit implementacyjny: `ea41d1d099992ab75e7e40ac343f496a07e3e448`
+Commity implementacyjne:
+
+- `ea41d1d099992ab75e7e40ac343f496a07e3e448` — główny kontrakt benchmarku v2 i Nsight,
+- `79dd0020d8169283e58f6bf2f778801160b3b5c9` — unikalne indeksy powtórzeń i odczyt UUID GPU w managed baseline.
 
 ## Zakres wykonany
 
@@ -76,7 +79,7 @@ recipe exit code 2 (proces `just` na Windows zwrócił 1)
 
 Artefakt:
 
-`C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902\.fullmag\reports\task-3-fem-gpu-baseline\ea41d1d099992ab75e7e40ac343f496a07e3e448\benchmark.v2.json`
+`C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902\.fullmag\reports\task-3-fem-gpu-baseline\79dd0020d8169283e58f6bf2f778801160b3b5c9\benchmark.v2.json`
 
 - SHA-256: `b6e51771d502ce518f99a94db35fd819185f57725eb564e540ae0507bc1e17e2`
 - `qualification_status`: `NOT VERIFIED`
