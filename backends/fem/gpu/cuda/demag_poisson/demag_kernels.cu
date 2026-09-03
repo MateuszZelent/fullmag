@@ -4,6 +4,7 @@
 // RK stage orchestration, exchange/local interaction kernels, or C ABI entrypoints.
 
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 
 #include <cub/cub.cuh>
 
@@ -233,8 +234,10 @@ void fullmag_cuda_demag_rhs_csr(
     int rows,
     cudaStream_t stream)
 {
-    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    demag_rhs_csr_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+    // The legacy void ABI has no plan lifetime.  Keep its compatibility path
+    // on the validated scalar launcher; autotuned variants use SparseApplyPlan.
+    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
+    if (!sparse_apply_detail::launch_rhs_csr(
         csr_row_offsets,
         csr_col_indices,
         csr_values_x,
@@ -244,7 +247,11 @@ void fullmag_cuda_demag_rhs_csr(
         my,
         mz,
         rhs,
-        rows);
+        rows,
+        variant,
+        stream)) {
+        return;
+    }
 }
 
 void fullmag_cuda_demag_recovery_csr(
@@ -257,15 +264,21 @@ void fullmag_cuda_demag_recovery_csr(
     int rows,
     cudaStream_t stream)
 {
-    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    demag_recovery_csr_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+    // The legacy void ABI has no plan lifetime.  Keep its compatibility path
+    // on the validated scalar launcher; autotuned variants use SparseApplyPlan.
+    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
+    if (!sparse_apply_detail::launch_scalar_csr(
         csr_row_offsets,
         csr_col_indices,
         csr_values,
         u,
-        magnetic_node_mask,
         h_component,
-        rows);
+        rows,
+        variant,
+        stream,
+        magnetic_node_mask)) {
+        return;
+    }
 }
 
 void fullmag_cuda_demag_recovery_xyz_csr(
@@ -282,19 +295,25 @@ void fullmag_cuda_demag_recovery_xyz_csr(
     int rows,
     cudaStream_t stream)
 {
-    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    demag_recovery_xyz_csr_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+    // The legacy void ABI has no plan lifetime.  Keep its compatibility path
+    // on the validated scalar launcher; autotuned variants use SparseApplyPlan.
+    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
+    if (!sparse_apply_detail::launch_three_csr(
         csr_row_offsets,
         csr_col_indices,
         csr_values_x,
         csr_values_y,
         csr_values_z,
         u,
-        magnetic_node_mask,
         h_x,
         h_y,
         h_z,
-        rows);
+        rows,
+        variant,
+        stream,
+        magnetic_node_mask)) {
+        return;
+    }
 }
 
 void fullmag_cuda_lift_periodic_reduced_scalar_to_full(

@@ -1202,3 +1202,20 @@ after the managed runtime can be rebuilt.
   GREEN at 9/9 with `useLayoutEffect`.
 - Commit `3c645b827` contains only the production hook and its regression test;
   Control Room typecheck, ESLint, and the focused Results/Analysis suite pass.
+
+## Plan: FEM GPU full-potential implementation (2026-09-02)
+
+- Worktree: `C:\git\fullmag\fullmag\.worktrees\fem-gpu-full-potential-20260902`
+- Branch: `codex/fem-gpu-full-potential-20260902`
+- Base: `31f4e65e91f22bbe85ff5c6a06f03fc7ab63b755`
+- Plan: `docs/superpowers/plans/2026-09-02-fem-gpu-full-potential.md`
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 1 | complete (`9476914fe..f56582125`) | `fem_gpu_task1_impl` | approved; no Critical/Important, one non-blocking brief-name correction |
+| 2 | complete (`863338644..45eda8125`) | `fem_gpu_task2_impl` | approved after pre-accept, Windows-route, fence-counter, and byte-preservation remediation; focused Windows FEM gate GREEN (CTest 1/1, sys ABI 1/1, runner types 1/1, artifact 1/1), launcher contracts 33/33; managed receipt/benchmark/parity/physics remain `NOT VERIFIED` |
+| 3 | complete (`ea41d1d09..12a313777`) | `fem_gpu_task3_impl` | approved after canonical ProblemIR/mesh identity, mandatory native-library hash, Windows canonical-owner/UUID hardening, and atomic attempt artifacts; benchmark contract 13/13, launcher contracts 35/35, PowerShell parsers/py_compile/diff-check/dry-runs PASS; actual baseline/Nsight/runtime/parity/physics remain `NOT VERIFIED` |
+| 4 | complete (`4005c0d3..bfdc2bfbb`) | `fem_gpu_task4_impl` | approved after executable FP64 CUDA fixture, CUB/pairwise reduction, fail-closed diagnostics, dedicated workspace allocation, and INT_MAX hardening; managed `fem_dmi_gpu_contract` 1/1, Python benchmark contract 13/13, focused launcher checks PASS; production parity/A-B/physics remain `NOT VERIFIED` |
+| 5 | complete (`537d45f1..b02a6332`) | `fem_gpu_task5_impl` | approved after remediation; managed 4/4, source/docs gates green; parity/Nsight/p50-p95/physics remain `NOT VERIFIED` |
+| 6 | in progress | `fem_gpu_task6_impl` | pending |
+| 7–14 | pending | — | — |

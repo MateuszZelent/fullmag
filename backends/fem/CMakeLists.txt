@@ -38,6 +38,7 @@ set(FEM_SOURCES
     gpu/cuda/exchange/exchange_plan.cpp
     gpu/cuda/exchange/exchange_operator.cpp
     gpu/cuda/exchange/exchange_upload.cpp
+    gpu/cuda/sparse/sparse_apply_plan.cpp
     gpu/cuda/fields/field_buffer_memory.cpp
     gpu/cuda/fields/field_buffer_upload.cpp
     gpu/cuda/demag_poisson/hypre_stream_interop.cpp
@@ -247,6 +248,7 @@ if(FULLMAG_USE_MFEM_STACK)
         list(APPEND FEM_SOURCES
             gpu/cuda/constraints/frozen_spins.cu
             gpu/cuda/exchange/exchange_kernels.cu
+            gpu/cuda/sparse/sparse_apply_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/frequency_domain/driven_response_gpu.cu
             gpu/cuda/frequency_domain/modal_krylov.cu
@@ -355,10 +357,12 @@ if(FULLMAG_USE_MFEM_STACK)
     if(FULLMAG_ENABLE_CUDA)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=1)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSOLVER=1)
-        target_link_libraries(fullmag_fem PRIVATE CUDA::cudart CUDA::cusolver)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSPARSE=1)
+        target_link_libraries(fullmag_fem PRIVATE CUDA::cudart CUDA::cusolver CUDA::cusparse)
     else()
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
         target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSOLVER=0)
+        target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSPARSE=0)
     endif()
     if(TARGET MFEM::mfem)
         target_link_libraries(fullmag_fem PRIVATE MFEM::mfem)
@@ -391,6 +395,7 @@ else()
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_MFEM_STACK=0)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUDA_RUNTIME=0)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSOLVER=0)
+    target_compile_definitions(fullmag_fem PUBLIC FULLMAG_HAS_CUSPARSE=0)
     target_compile_definitions(fullmag_fem PUBLIC FULLMAG_FEM_WITH_SLEPC=0)
     fullmag_private_string_define(fullmag_fem FULLMAG_FEM_PETSC_VERSION "")
     fullmag_private_string_define(fullmag_fem FULLMAG_FEM_SLEPC_VERSION "")
@@ -729,6 +734,14 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU)
     target_link_libraries(fem_dmi_gpu_contract PRIVATE fullmag_fem CUDA::cudart)
     target_include_directories(fem_dmi_gpu_contract PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME fem_dmi_gpu_contract COMMAND fem_dmi_gpu_contract)
+
+    add_executable(fem_gpu_sparse_apply_contract tests/gpu_sparse_apply_contract.cpp)
+    target_link_libraries(fem_gpu_sparse_apply_contract PRIVATE fullmag_fem CUDA::cudart)
+    target_include_directories(fem_gpu_sparse_apply_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_gpu_sparse_apply_contract COMMAND fem_gpu_sparse_apply_contract)
 endif()
 
 add_executable(fem_adaptive_error_policy_contract tests/adaptive_error_policy_contract.cpp)

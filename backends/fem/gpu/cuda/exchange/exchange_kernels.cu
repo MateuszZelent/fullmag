@@ -5,6 +5,7 @@
 // entrypoints.
 
 #include "gpu/cuda/exchange/exchange_kernels.hpp"
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 #include "gpu/cuda/relaxation/double_double.cuh"
 
 #include <cub/cub.cuh>
@@ -578,6 +579,14 @@ void fullmag_cuda_legacy_sparse_exchange(
     int rows,
     cudaStream_t stream)
 {
+    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
+    // The compensated DD accumulation is the FP64 exchange oracle.  Parallel
+    // row reductions remain unsupported until field/energy full-workload A/B
+    // tolerances promote them explicitly; never silently replace this path
+    // with an ordinary SpMV.
+    if (variant != SparseApplyVariant::ScalarRow) {
+        return;
+    }
     const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
     legacy_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         csr_row_offsets,
@@ -618,6 +627,13 @@ void fullmag_cuda_legacy_sparse_exchange_xyz(
     int rows,
     cudaStream_t stream)
 {
+    const SparseApplyVariant variant = SparseApplyVariant::ScalarRow;
+    // Keep the fused exchange path on the compensated FP64 baseline.  A
+    // subwarp/warp or cuSPARSE variant needs a separate full-workload accuracy
+    // gate because it changes the accumulation order and DD envelope.
+    if (variant != SparseApplyVariant::ScalarRow) {
+        return;
+    }
     const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
     legacy_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         csr_row_offsets, csr_col_indices, csr_values,
