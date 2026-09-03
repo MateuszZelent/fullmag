@@ -57,6 +57,16 @@ void expect(bool solver_converged, bool has_absolute_tolerance, bool force,
 
 int main()
 {
+    check(
+        fullmag::fem::should_validate_independent_residual(false, false),
+        "a non-converged HYPRE solve must receive independent residual validation");
+    check(
+        !fullmag::fem::should_validate_independent_residual(true, false),
+        "an ordinarily converged HYPRE solve must skip independent residual validation");
+    check(
+        fullmag::fem::should_validate_independent_residual(true, true),
+        "qualification policy must be able to force independent residual validation");
+
     // The ordinary path avoids all validation work after a converged solve,
     // except the RHS norm needed to certify an explicitly requested absolute
     // tolerance. A non-converged or forced path computes both quantities.

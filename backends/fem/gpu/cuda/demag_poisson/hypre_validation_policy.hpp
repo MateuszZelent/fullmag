@@ -15,6 +15,10 @@ struct HypreResidualValidationNeeds {
     bool independent_residual = false;
 };
 
+bool should_validate_independent_residual(
+    bool solver_reported_converged,
+    bool forced) noexcept;
+
 HypreResidualValidationNeeds resolve_hypre_residual_validation_needs(
     bool solver_reported_converged,
     bool has_absolute_tolerance,

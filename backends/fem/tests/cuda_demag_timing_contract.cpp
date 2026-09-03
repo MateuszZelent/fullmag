@@ -3,6 +3,7 @@
  * demag solver timing telemetry.
  */
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -29,7 +30,9 @@ std::string read_text_file(const std::filesystem::path &path)
     }
     std::ostringstream buffer;
     buffer << in.rdbuf();
-    return buffer.str();
+    std::string text = buffer.str();
+    text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+    return text;
 }
 
 std::filesystem::path fem_source_root()
@@ -52,6 +55,10 @@ int main()
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string hypre_stream_interop_header =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.hpp");
+    const std::string hypre_validation_policy =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_validation_policy.cpp");
+    const std::string gpu_fem_bem =
+        read_text_file(root / "gpu" / "cuda" / "demag_fem_bem" / "fem_bem.cpp");
     const std::string gpu_rk_stats_publication =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
     const std::string gpu_rk_stats =
@@ -108,6 +115,14 @@ int main()
                 std::string::npos,
         "strict GPU demag stream adapter must be version-pinned and order the exact Hypre stream with CUDA events");
     check(
+        hypre_stream_interop_header.find("struct HypreStreamLease") !=
+                std::string::npos &&
+            hypre_stream_interop_header.find("fullmag_ready") !=
+                std::string::npos &&
+            hypre_stream_interop_header.find("hypre_done") !=
+                std::string::npos,
+        "strict GPU demag stream interop must expose a typed lease with input and output events");
+    check(
         hypre_stream_interop_header.find("HypreApplyTimingEventPair") !=
                 std::string::npos &&
             hypre_stream_interop_header.find("apply_timing_events") !=
@@ -154,6 +169,20 @@ int main()
     check(
         hypre_stream_interop.find("cudaEventSynchronize") == std::string::npos,
         "strict GPU demag HYPRE device timing must be collected only after the existing final stats synchronization boundary");
+    check(
+        gpu_fem_bem.find("cudaStreamSynchronize") == std::string::npos &&
+            gpu_fem_bem.find("record_mfem_host_sync") == std::string::npos &&
+            gpu_fem_bem.find("hypre_wait_for_fullmag(") <
+                gpu_fem_bem.find("system.solver->Mult(*system.b_par, *system.x_par)") &&
+            gpu_fem_bem.find("fullmag_wait_for_hypre(") >
+                gpu_fem_bem.find("system.solver->Mult(*system.b_par, *system.x_par)"),
+        "FEM/BEM HYPRE solves must use bidirectional event dependencies without host fences");
+    check(
+        hypre_validation_policy.find("should_validate_independent_residual") !=
+                std::string::npos &&
+            gpu_fem_bem.find("should_validate_independent_residual(") !=
+                std::string::npos,
+        "FEM/BEM must use the shared conditional independent-residual policy");
     for (const char *field : {
              "step_hypre_wait_in_enqueue_wall_time_ns",
              "step_hypre_host_api_wall_time_ns",

@@ -16,6 +16,7 @@
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp"
 #include "gpu/cuda/demag_poisson/demag_kernels.hpp"
+#include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
@@ -346,19 +347,27 @@ void read_solver_statistics(
     const Context &ctx,
     GpuFemBemLinearSystem &system,
     int &iterations,
+    double &relative_residual,
     bool &reported_converged)
 {
     iterations = 0;
+    relative_residual = 0.0;
     reported_converged = false;
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         auto *gmres = static_cast<mfem::HypreGMRES *>(system.solver.get());
         gmres->GetNumIterations(iterations);
+        mfem::real_t residual = 0.0;
+        gmres->GetFinalResidualNorm(residual);
+        relative_residual = static_cast<double>(residual);
         HYPRE_Int converged = 0;
         HYPRE_GMRESGetConverged(static_cast<HYPRE_Solver>(*gmres), &converged);
         reported_converged = converged != 0;
     } else {
         auto *pcg = static_cast<mfem::HyprePCG *>(system.solver.get());
         pcg->GetNumIterations(iterations);
+        mfem::real_t residual = 0.0;
+        pcg->GetFinalResidualNorm(residual);
+        relative_residual = static_cast<double>(residual);
         HYPRE_Int converged = 0;
         HYPRE_PCGGetConverged(static_cast<HYPRE_Solver>(*pcg), &converged);
         reported_converged = converged != 0;
@@ -368,7 +377,9 @@ void read_solver_statistics(
 bool solve_linear_system(
     Context &ctx,
     GpuFemBemLinearSystem &system,
+    HypreStreamLease &stream_lease,
     cudaStream_t stream,
+    bool force_independent_validation,
     uint64_t &iterations_out,
     double &relative_residual_out,
     std::string &error)
@@ -379,11 +390,7 @@ bool solve_linear_system(
         error = "strict FEM GPU Fredkin-Koehler solve requires a completed Hypre setup";
         return false;
     }
-    record_mfem_host_sync();
-    if (!cuda_ok(
-            cudaStreamSynchronize(stream),
-            "synchronize Fredkin-Koehler RHS before Hypre",
-            error)) {
+    if (!hypre_wait_for_fullmag(stream_lease, stream, error)) {
         return false;
     }
     if (!set_zero_initial_iterate(ctx, system, error)) {
@@ -392,25 +399,48 @@ bool solve_linear_system(
     system.b_par->HypreWrite();
     system.x_par->HypreWrite();
     system.solver->Mult(*system.b_par, *system.x_par);
-    system.A_par->Mult(*system.x_par, *system.residual);
-    system.residual->Add(-1.0, *system.b_par);
-    const double absolute_residual = system.residual->Norml2();
-    const double rhs_norm = system.b_par->Norml2();
-    const double relative_residual = rhs_norm > 0.0
-        ? absolute_residual / rhs_norm
-        : absolute_residual;
     int iterations = 0;
+    double relative_residual = 0.0;
     bool reported_converged = false;
-    read_solver_statistics(ctx, system, iterations, reported_converged);
+    read_solver_statistics(
+        ctx, system, iterations, relative_residual, reported_converged);
+    const bool validate_independent_residual =
+        should_validate_independent_residual(
+            reported_converged, force_independent_validation);
+    const bool rhs_norm_required =
+        validate_independent_residual ||
+        ctx.demag.solver.has_absolute_tolerance != 0;
+    double rhs_norm = 0.0;
+    if (rhs_norm_required) {
+        rhs_norm = system.b_par->Norml2();
+    }
+    double absolute_residual =
+        rhs_norm_required ? relative_residual * rhs_norm : 0.0;
+    bool residual_independently_certified = false;
+    if (validate_independent_residual) {
+        system.A_par->Mult(*system.x_par, *system.residual);
+        if (!mfem_default_stream_wait_for_hypre_validation(
+                stream_lease, error)) {
+            return false;
+        }
+        system.residual->Add(-1.0, *system.b_par);
+        absolute_residual = system.residual->Norml2();
+        relative_residual = rhs_norm > 0.0
+            ? absolute_residual / rhs_norm
+            : absolute_residual;
+        residual_independently_certified = std::isfinite(absolute_residual);
+        system.independent_residual_validation_count += 1u;
+    }
     DemagLinearSolveResult result;
     result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
         ? "gpu_fem_bem/gmres"
         : "gpu_fem_bem/cg";
     result.solver_reported_converged = reported_converged;
-    result.residual_independently_certified = std::isfinite(absolute_residual);
+    result.residual_independently_certified = residual_independently_certified;
     result.iterations = iterations;
     result.relative_residual = relative_residual;
-    result.has_absolute_residual = true;
+    result.has_absolute_residual =
+        ctx.demag.solver.has_absolute_tolerance != 0;
     result.absolute_residual = absolute_residual;
     result.relative_tolerance = ctx.demag.solver.relative_tolerance;
     result.has_absolute_tolerance = ctx.demag.solver.has_absolute_tolerance != 0;
@@ -419,11 +449,7 @@ bool solve_linear_system(
     if (!validate_demag_linear_solve_result(result, error)) {
         return false;
     }
-    record_mfem_host_sync();
-    if (!cuda_ok(
-            cudaStreamSynchronize(stream),
-            "synchronize Fredkin-Koehler potential after Hypre",
-            error)) {
+    if (!fullmag_wait_for_hypre(stream_lease, stream, error)) {
         return false;
     }
     iterations_out = static_cast<uint64_t>(std::max(0, iterations));
@@ -489,6 +515,7 @@ bool build_source_operators(
 void destroy_gpu_workspace(GpuDemagFemBemWorkspace &workspace)
 {
 #if FULLMAG_HAS_CUDA_RUNTIME
+    destroy_hypre_stream_interop(workspace.stream_lease);
     free_array(workspace.d_boundary_nodes);
     free_array(workspace.d_boundary_global_to_row);
     free_array(workspace.d_boundary_tdofs);
@@ -731,6 +758,10 @@ bool gpu_demag_fem_bem_initialize(Context &ctx, std::string &error)
             destroy_gpu_workspace(*workspace);
             return false;
         }
+        if (!initialize_hypre_stream_interop(workspace->stream_lease, error)) {
+            destroy_gpu_workspace(*workspace);
+            return false;
+        }
         frequency_domain::CanonicalDigestBuilder digest(
             "fullmag.fem.bem.gpu_operator.v1");
         digest.add_string(
@@ -883,7 +914,9 @@ bool compute_device_demag_fem_bem_for_device_stage(
     if (!solve_linear_system(
             ctx,
             workspace->u1_system,
+            workspace->stream_lease,
             stream,
+            workspace->force_independent_residual_validation,
             workspace->u1_iterations,
             workspace->u1_residual,
             reason)) {
@@ -944,7 +977,9 @@ bool compute_device_demag_fem_bem_for_device_stage(
     if (!solve_linear_system(
             ctx,
             workspace->u2_system,
+            workspace->stream_lease,
             stream,
+            workspace->force_independent_residual_validation,
             workspace->u2_iterations,
             workspace->u2_residual,
             reason)) {

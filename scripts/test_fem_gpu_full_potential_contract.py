@@ -14,12 +14,6 @@ FEM_BEM_TASK1_SHA256 = {
         "034fb0b7b498fa2615b214e66d1a975f76447ff01819b9a1949b836c23fa7d24",
     "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp":
         "6ff5d292ddb5d83d61d51830022448d7982d2af93a7969c49373d4cdb3a0ef45",
-    "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp":
-        "046f1f2dee74405d9143e25fd02c09f0f736760710a80edbe134c8359fb13164",
-    "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.hpp":
-        "f2c8e2d6983e010f6874f817daa29463a2a6e567bf554d2d74173286400cb92a",
-    "backends/fem/tests/demag_fem_bem_gpu_contract.cpp":
-        "cb32bb9018705b7b824e4f91354ac1c3d39e6de14e46dfdccf85d2f97abd632e",
     "docs/audits/2026-09-02-fem-gpu-solver-audit.md":
         "64a3ac03aa5e04485d83e0b7348b74be25f396617cc066ef91cb76469628b85b",
     "docs/superpowers/specs/2026-09-02-fem-bem-scalable-operator-design.md":
@@ -64,6 +58,9 @@ class FemGpuFullPotentialContractTests(unittest.TestCase):
         gpu_source = (
             ROOT / "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp"
         ).read_text(encoding="utf-8")
+        gpu_header = (
+            ROOT / "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.hpp"
+        ).read_text(encoding="utf-8")
         poisson_operators = (
             ROOT / "backends/fem/gpu/cuda/demag_poisson/operators.cpp"
         ).read_text(encoding="utf-8")
@@ -84,7 +81,11 @@ class FemGpuFullPotentialContractTests(unittest.TestCase):
         self.assertIn("build_fredkin_koehler_demag_operators", gpu_source)
         self.assertIn("destroy_attached_demag_fem_bem_gpu_workspace", gpu_source)
         self.assertIn("workspace->d_boundary_tdofs", gpu_source)
-        self.assertIn("record_mfem_host_sync", gpu_source)
+        self.assertIn("HypreStreamLease stream_lease", gpu_header)
+        self.assertIn("hypre_wait_for_fullmag", gpu_source)
+        self.assertIn("fullmag_wait_for_hypre", gpu_source)
+        self.assertNotIn("cudaStreamSynchronize", gpu_source)
+        self.assertNotIn("record_mfem_host_sync", gpu_source)
         self.assertIn("allow_fredkin_koehler", poisson_operators)
         self.assertIn("hot_loop_compute_host_sync_count += 1", transfer_audit)
         for fingerprint_field in (

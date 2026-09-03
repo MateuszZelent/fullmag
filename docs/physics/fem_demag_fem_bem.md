@@ -144,10 +144,14 @@ skali nanometrowej.
 - diagnostyczny ACA H-matrix BEM raportuje deterministyczny fingerprint, near/far
   blocks, observed rank, resident bytes i estymatę błędu z niezależnych probes;
   estymata nie jest dowodem analitycznego error bound;
-- GPU uploaduje spłaszczone near/far blocks raz w setupie. Jawne synchronizacje
-  strumienia przed i po Hypre są liczone przez transfer audit; ścisły receipt
-  `device_resident` kończy się fail-closed, dopóki nie zastąpi ich auditowane
-  event interop. Nie wolno publikować zerowego licznika synchronizacji;
+- GPU uploaduje spłaszczone near/far blocks raz w setupie. Każdy solve Hypre
+  ma dwukierunkową zależność eventową między rzeczywistym strumieniem Fullmag
+  i pożyczonym strumieniem obliczeniowym Hypre; hot loop nie może wykonywać
+  hostowego `cudaStreamSynchronize` ani zakładać strumienia domyślnego;
+- niezależne residuum $A x-b$ jest wymagane po braku zbieżności raportowanej
+  przez Hypre lub po jawnym wymuszeniu przez politykę kwalifikacyjną. Zwykły
+  sukces reużywa residuum solvera, a norma RHS jest liczona co najwyżej raz,
+  gdy jest potrzebna do tolerancji absolutnej albo niezależnego residuum;
 - model nie jest dowodem jakości meshera ani dowodem zbieżności dla filmu
   500 x 500 x 10 nm.
 
@@ -291,17 +295,24 @@ estymatą diagnostyczną, nie analityczną gwarancją błędu; przekroczenie
 tolerancji kończy budowę błędem. Budżety pamięci, liczby bloków i wpisów są
 sprawdzane przed alokacją.
 
-### 8.4. Ścieżka GPU i brama synchronizacji
+### 8.4. Ścieżka GPU, interop strumieni i residuum
 
 `GpuDemagFemBemWorkspace` spłaszcza deterministyczne bloki ACA H-matrix near/far
 oraz ich fingerprint do buforów CUDA. Setup wykonuje jeden upload operatora;
 kernel liczy near sumy i $U(V^Tx)$ dla far blocks. Dwa układy Hypre rozwiązują
 $u_1$ i $u_2$, a recovery pola i redukcja energii są wykonywane na device.
-W hot loop nie ma pełnego wektora H2D/D2H ani wywołania CPU FK, ale obecne
-wejście i wyjście z Hypre wykonuje dwie jawne `cudaStreamSynchronize`. Audit
-nalicza je jako compute host sync, a ścisły receipt `device_resident` odrzuca
-próbę. Dlatego source/kernel/initialize→apply contract jest VERIFIED, lecz
-managed strict receipt pozostaje NOT VERIFIED.
+W hot loop nie ma pełnego wektora H2D/D2H ani wywołania CPU FK. Trwały
+`HypreStreamLease` pożycza do wersji przypięty strumień obliczeniowy Hypre i
+przechowuje event wejściowy oraz wyjściowy. Przed każdym `Mult` event nagrany
+na strumieniu Fullmag jest oczekiwany przez Hypre; po `Mult` odwrotna para
+eventów blokuje dalszego konsumenta Fullmag bez zatrzymywania hosta.
+
+Po zwykłym sukcesie Hypre wynikowa norma residuum solvera jest używana bez
+dodatkowego SpMV. `should_validate_independent_residual` wymusza $A x-b$ tylko
+po zgłoszonym braku zbieżności albo w jawnym trybie kwalifikacyjnym. Jeżeli
+włączono tolerancję absolutną, jedna norma RHS służy zarówno do przeliczenia
+residuum solvera, jak i do niezależnej walidacji. Kontrakt nie zmienia równań,
+znaków, jednostek ani wyboru solvera.
 
 Wskaźnik device workspace ma dokładnie jednego właściciela lifecycle:
 `DemagFemBemWorkspace` przechowuje callback destruktora dostarczony przez moduł
@@ -324,6 +335,8 @@ accounting. Powtórny teardown jest no-op.
 | potencjał | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.* | potential combine |
 | odzysk pola i energia | backends/fem/cpu/mfem/interactions/demag_poisson_recovery.*, demag_fem_bem_energy.* | H_demag, E_d |
 | operator GPU i Hypre | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.* | GpuDemagFemBemWorkspace, device FK apply |
+| interop CUDA/Hypre | backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.* | HypreStreamLease, hypre_wait_for_fullmag, fullmag_wait_for_hypre |
+| polityka residuum | backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.* | should_validate_independent_residual, resolve_hypre_residual_validation_needs |
 | kontrakt testowy | backends/fem/tests/demag_fem_bem_contract.cpp | fem_demag_fem_bem_contract |
 
 Operator FK nie dodaje nowej fizyki do Context ani mfem_bridge.cpp.
@@ -345,7 +358,8 @@ fem_demag_fem_bem_contract musi obejmować granicę kompletną, fasety
 niepoprawne, nie-manifold, skalowanie, typy/CSR, gauge wielu składowych,
 pełny CPU solve, fingerprint geometrii/opcji i bezpieczny pusty output `apply`.
 Osobny target GPU sprawdza pełne initialize→apply, upload true-DOF, device
-apply oraz fail-closed receipt dla synchronizacji Hypre. Istniejące
+apply, cztery event waits dla dwóch solve’ów, zerowy przyrost compute host sync
+i brak niezależnego SpMV po zwykłej zbieżności. Istniejące
 testy energii, skończoności macierzy i własności modułów pozostają aktywne.
 
 ### 10.2. Walidacja fizyczna
@@ -372,7 +386,7 @@ NOT VERIFIED.
 |---|---|---|---|
 | FEM CPU + tet4 + P1 + dense default | kod i pełny CPU solve contract | wymagany managed receipt | source/contract VERIFIED; managed runtime/physics NOT VERIFIED |
 | FEM CPU + all-tet/P2 Poisson accuracy | osobny planner contract | brak świeżego artefaktu filmu | NOT VERIFIED |
-| FEM GPU FK + diagnostyczny ACA H-matrix | initialize→apply i kernel smoke; sync jest auditowany | ścisły receipt fail-closed | source/contract VERIFIED; managed strict runtime/physics NOT VERIFIED |
+| FEM GPU FK + diagnostyczny ACA H-matrix | initialize→apply, kernel smoke i event interop contract | wymagany produkcyjny receipt, parity i profil | source/contract oraz focused managed GPU VERIFIED; produkcyjny runtime/physics NOT VERIFIED |
 | H2/FMM lub skalowalny BEM | brak prawdziwej implementacji H2/FMM | brak świeżego managed receiptu | NOT VERIFIED |
 
 Przejście do physics_validated lub production_qualified wymaga źródłowej
@@ -385,8 +399,9 @@ kompilacji ani dowód, że istnieje funkcja build, nie jest takim przejściem.
 - dense BEM nie skaluje się do dużych powierzchni; limit chroni pamięć, ale nie
   jest benchmarkiem produkcyjnego rozmiaru;
 - diagnostyczny ACA H-matrix nie jest H2 i nie zastępuje dense default bez A/B;
-  GPU ma source/kernel/initialize→apply contract, ale jawne synchronizacje Hypre
-  uniemożliwiają obecnie ścisły receipt device-resident; FMM pozostaje poza zakresem;
+  event interop usuwa jawne host fences, lecz bez świeżego managed receipt,
+  Nsight i CPU/GPU parity nie dowodzi przyspieszenia ani kwalifikacji fizycznej;
+  FMM pozostaje poza zakresem;
 - dopasowanie pojedynczego wyniku filmu 500 x 500 x 10 nm nie rozstrzyga, czy
   przyczyną rozbieżności jest rząd P1, topologia piramid, grading, granica czy
   błąd energii;
@@ -427,6 +442,8 @@ na managed CPU i GPU.
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | gpu_demag_fem_bem_initialize | jednorazowy upload i trwały workspace CUDA/Hypre |
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | destroy_owned_gpu_workspace | callback teardownu podpiętego GPU workspace wywoływany przed operatorami CPU i MFEM |
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu | fullmag_cuda_fem_bem_apply | device apply bloków near/far i mapowania P1 true DOF |
+| backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp | initialize_hypre_stream_interop, HypreStreamLease | trwały pożyczony strumień Hypre oraz eventy zależności wejścia/wyjścia |
+| backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp | should_validate_independent_residual | czysta polityka pomijania dodatkowego $A x-b$ po zwykłej zbieżności |
 | backends/fem/tests/demag_fem_bem_contract.cpp | main | wykonywalny kontrakt testowy |
 | backends/fem/tests/demag_fem_bem_gpu_contract.cpp | main | wykonywalny kontrakt CUDA near/far apply |
 

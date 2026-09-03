@@ -25,7 +25,7 @@ struct HypreApplyTimingEventPair {
     cudaEvent_t stop_event = nullptr;
 };
 
-struct HypreStreamInterop {
+struct HypreStreamLease {
     cudaStream_t hypre_stream = nullptr;
     cudaEvent_t fullmag_ready = nullptr;
     cudaEvent_t hypre_done = nullptr;
@@ -45,6 +45,8 @@ struct HypreStreamInterop {
     bool apply_timing_enabled = false;
     bool ready = false;
 };
+
+using HypreStreamInterop = HypreStreamLease;
 
 bool initialize_hypre_stream_interop(
     HypreStreamInterop &interop,

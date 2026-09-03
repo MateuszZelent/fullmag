@@ -11,6 +11,7 @@
 
 #include "cpu/mfem/interactions/demag_fem_bem_operator.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/state/component_field.hpp"
 
 #include <cstdint>
@@ -47,6 +48,7 @@ struct GpuFemBemLinearSystem {
 #endif
     uint64_t rows = 0;
     uint64_t solver_setup_count = 0;
+    uint64_t independent_residual_validation_count = 0;
     bool solver_setup_complete = false;
 };
 
@@ -97,10 +99,14 @@ struct GpuDemagFemBemWorkspace {
 
     GpuFemBemLinearSystem u1_system;
     GpuFemBemLinearSystem u2_system;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    HypreStreamLease stream_lease;
+#endif
     uint64_t u1_iterations = 0;
     uint64_t u2_iterations = 0;
     double u1_residual = 0.0;
     double u2_residual = 0.0;
+    bool force_independent_residual_validation = false;
     bool ready = false;
 };
 

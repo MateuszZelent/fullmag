@@ -107,7 +107,7 @@ void device_bem_apply_is_device_resident() {
 }
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
-void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_claim() {
+void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
     int device_count = 0;
     check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
           "managed FEM/BEM GPU contract requires a CUDA device");
@@ -217,6 +217,8 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
           "FEM/BEM GPU full initialization uploads boundary true DOFs");
     check(gpu_workspace->device_bytes > 0u,
           "FEM/BEM GPU workspace accounts uploaded device bytes");
+    check(gpu_workspace->stream_lease.ready,
+          "FEM/BEM GPU workspace owns a prepared HYPRE stream lease");
 
     constexpr uint64_t demag_mask =
         fullmag::fem::FEM_GPU_OPERATOR_DEMAG_RHS |
@@ -254,19 +256,24 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_cla
     check(gpu_workspace->boundary_operator_apply_count == 1u,
           "FEM/BEM GPU initialize-to-apply path executes one boundary operator");
     const auto after = fullmag::fem::transfer_audit_snapshot(ctx);
-    check(after.hot_loop_compute_host_sync_count >
+    check(after.hot_loop_compute_host_sync_count ==
               before.hot_loop_compute_host_sync_count,
-          "FEM/BEM GPU Hypre synchronization must be counted in the hot-loop audit");
-    check(ctx.transfer_audit.audit.hot_loop_violation,
-          "strict FEM/BEM GPU synchronization claim must fail closed");
-    check(!fullmag::fem::gpu_execution_receipt_update_attempt_transfer(
+          "FEM/BEM GPU HYPRE event interop must not add hot-loop host fences");
+    check(!ctx.transfer_audit.audit.hot_loop_violation,
+          "strict FEM/BEM GPU event interop must preserve the hot-loop contract");
+    check(fullmag::fem::gpu_execution_receipt_update_attempt_transfer(
               ctx.gpu_state.execution_receipt, after),
-          "device-resident receipt must reject audited FEM/BEM host synchronization");
+          "device-resident receipt must accept event-ordered FEM/BEM execution");
     const auto receipt = fullmag::fem::gpu_execution_receipt_snapshot(
         ctx.gpu_state.execution_receipt);
-    check(!receipt.accounting_valid &&
-              receipt.execution_class == fullmag::fem::FemGpuExecutionClass::Unknown,
-          "FEM/BEM strict receipt must not publish a false device-resident claim");
+    check(receipt.accounting_valid &&
+              receipt.execution_class == fullmag::fem::FemGpuExecutionClass::DeviceResident,
+          "FEM/BEM strict receipt must preserve the resolved device-resident class");
+    check(gpu_workspace->stream_lease.event_wait_count == 4u,
+          "two FEM/BEM HYPRE solves must enqueue exactly two dependency pairs");
+    check(gpu_workspace->u1_system.independent_residual_validation_count == 0u &&
+              gpu_workspace->u2_system.independent_residual_validation_count == 0u,
+          "ordinary converged FEM/BEM solves must skip independent residual SpMV");
 
     check(ctx.gpu_state.device.lifecycle.device_bytes > baseline_device_bytes,
           "FEM/BEM GPU initialization must account nested device allocations");
@@ -308,7 +315,7 @@ int main() {
 #if FULLMAG_HAS_CUDA_RUNTIME
     device_bem_apply_is_device_resident();
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
-    initialize_and_apply_uses_uploaded_boundary_tdofs_and_fails_strict_sync_claim();
+    initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences();
 #endif
 #endif
     return 0;

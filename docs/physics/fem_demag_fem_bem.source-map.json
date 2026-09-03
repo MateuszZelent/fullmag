@@ -155,6 +155,18 @@
       "responsibility": "Device apply bloków near i far z mapowaniem boundary row do P1 true DOF."
     },
     {
+      "id": "gpu-stream-interop",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp",
+      "symbol": "initialize_hypre_stream_interop",
+      "responsibility": "Do wersji przypięty pożyczony strumień HYPRE i eventy wejścia/wyjścia bez hostowych fence'ow."
+    },
+    {
+      "id": "gpu-residual-policy",
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp",
+      "symbol": "should_validate_independent_residual",
+      "responsibility": "Czysta polityka niezależnego residuum po braku zbieżności albo jawnym wymuszeniu kwalifikacyjnym."
+    },
+    {
       "id": "workspace",
       "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp",
       "symbol": "context_initialize_demag_fem_bem",
