@@ -517,9 +517,12 @@ bool launch_scalar_csr(
     cudaStream_t stream,
     const std::uint8_t *active_mask)
 {
-    if (!custom_variant(variant) || rows <= 0 || row_offsets == nullptr ||
+    if (rows <= 0 || row_offsets == nullptr ||
         col_indices == nullptr || values == nullptr || input == nullptr || output == nullptr) {
         return false;
+    }
+    if (!custom_variant(variant)) {
+        variant = SparseApplyVariant::ScalarRow;
     }
     if (variant == SparseApplyVariant::ScalarRow) {
         scalar_csr_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -549,10 +552,13 @@ bool launch_xyz_csr(
     cudaStream_t stream,
     const std::uint8_t *active_mask)
 {
-    if (!custom_variant(variant) || rows <= 0 || row_offsets == nullptr ||
+    if (rows <= 0 || row_offsets == nullptr ||
         col_indices == nullptr || values == nullptr || x == nullptr || y == nullptr ||
         z == nullptr || out_x == nullptr || out_y == nullptr || out_z == nullptr) {
         return false;
+    }
+    if (!custom_variant(variant)) {
+        variant = SparseApplyVariant::ScalarRow;
     }
     if (variant == SparseApplyVariant::ScalarRow) {
         scalar_xyz_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
@@ -582,11 +588,14 @@ bool launch_three_csr(
     cudaStream_t stream,
     const std::uint8_t *active_mask)
 {
-    if (!custom_variant(variant) || rows <= 0 ||
+    if (rows <= 0 ||
         row_offsets == nullptr || col_indices == nullptr || values_x == nullptr ||
         values_y == nullptr || values_z == nullptr || input == nullptr || out_x == nullptr ||
         out_y == nullptr || out_z == nullptr) {
         return false;
+    }
+    if (!custom_variant(variant)) {
+        variant = SparseApplyVariant::ScalarRow;
     }
     if (variant == SparseApplyVariant::Warp) {
         warp_three_csr_kernel<<<(rows + 7) / 8, kBlockSize, 0, stream>>>(
@@ -632,11 +641,14 @@ bool launch_rhs_csr(
     SparseApplyVariant variant,
     cudaStream_t stream)
 {
-    if (!custom_variant(variant) || rows <= 0 ||
+    if (rows <= 0 ||
         row_offsets == nullptr || col_indices == nullptr || values_x == nullptr ||
         values_y == nullptr || values_z == nullptr || x == nullptr || y == nullptr ||
         z == nullptr || output == nullptr) {
         return false;
+    }
+    if (!custom_variant(variant)) {
+        variant = SparseApplyVariant::ScalarRow;
     }
     if (variant == SparseApplyVariant::Warp) {
         warp_rhs_csr_kernel<<<(rows + 7) / 8, kBlockSize, 0, stream>>>(

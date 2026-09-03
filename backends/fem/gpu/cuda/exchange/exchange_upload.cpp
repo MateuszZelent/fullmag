@@ -319,7 +319,10 @@ bool gpu_exchange_upload_legacy_sparse(
         static_cast<uint32_t>(cols),
     };
     std::string plan_err;
-    legacy_exchange.plan.setup(ex_csr, nullptr, plan_err);
+    if (!legacy_exchange.plan.setup(ex_csr, nullptr, plan_err)) {
+        error = "failed to setup exchange sparse apply plan: " + plan_err;
+        return false;
+    }
     legacy_exchange.periodic_reduced_ready = periodic_reduced_requested;
     legacy_exchange.periodic_reduced_rows = periodic_reduced_requested
         ? periodic_reduced_node_count : 0u;

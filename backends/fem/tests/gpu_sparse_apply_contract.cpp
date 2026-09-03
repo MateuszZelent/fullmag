@@ -239,8 +239,21 @@ int main()
         exchange.find("SparseApplyVariant::ScalarRow") != std::string::npos &&
             exchange.find("compensated DD") != std::string::npos,
         "exchange kernels do not declare the guarded sparse accuracy policy");
+    check(exchange.find("(void)variant;") == std::string::npos,
+          "exchange kernels must not discard variant with (void)variant");
+    check(exchange.find("warp_sparse_exchange_kernel") != std::string::npos,
+          "exchange kernels must define warp_sparse_exchange_kernel");
+    check(exchange.find("subwarp_sparse_exchange_kernel") != std::string::npos,
+          "exchange kernels must define subwarp_sparse_exchange_kernel");
     check(demag.find("cudaStreamSynchronize") == std::string::npos, "demag sparse apply contains a host fence");
     check(exchange.find("cudaStreamSynchronize") == std::string::npos, "exchange sparse apply contains a host fence");
+
+    const std::string operators_src = read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "operators.cpp");
+    const std::string exchange_upload_src = read_text_file(root / "gpu" / "cuda" / "exchange" / "exchange_upload.cpp");
+    check(operators_src.find("if (!workspace.rhs_plan.setup") != std::string::npos,
+          "demag operators must check rhs_plan.setup return value");
+    check(exchange_upload_src.find("if (!legacy_exchange.plan.setup") != std::string::npos,
+          "exchange upload must check legacy_exchange.plan.setup return value");
 
     cudaFree(d_mask);
     cudaFree(d_out_z);

@@ -161,6 +161,123 @@ __global__ void legacy_sparse_exchange_kernel(
         -(2.0 / (kMu0 * ms_i)) * gpu_relax_dd::rounded(km) * inv_mass;
 }
 
+__device__ __forceinline__ gpu_relax_dd::Value warp_reduce_dd(gpu_relax_dd::Value val, unsigned int mask = 0xffffffff) {
+    for (int offset = 16; offset > 0; offset /= 2) {
+        gpu_relax_dd::Value other{
+            __shfl_down_sync(mask, val.hi, offset),
+            __shfl_down_sync(mask, val.lo, offset)
+        };
+        val = gpu_relax_dd::add(val, other);
+    }
+    return val;
+}
+
+__device__ __forceinline__ gpu_relax_dd::Value subwarp_reduce_dd_4(gpu_relax_dd::Value val, unsigned int mask) {
+    for (int offset = 2; offset > 0; offset /= 2) {
+        gpu_relax_dd::Value other{
+            __shfl_down_sync(mask, val.hi, offset),
+            __shfl_down_sync(mask, val.lo, offset)
+        };
+        val = gpu_relax_dd::add(val, other);
+    }
+    return val;
+}
+
+__global__ void warp_sparse_exchange_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ m_component,
+    const double *__restrict__ ms,
+    const double *__restrict__ inv_lumped_mass,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    double *__restrict__ h_component,
+    int rows)
+{
+    constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
+    const int lane = threadIdx.x & 31;
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    if (row >= rows) {
+        return;
+    }
+    if (magnetic_node_mask != nullptr && magnetic_node_mask[row] == 0u) {
+        if (lane == 0) h_component[row] = 0.0;
+        return;
+    }
+    const double ms_i = ms[row];
+    const double inv_mass = inv_lumped_mass[row];
+    if (ms_i <= 0.0 || inv_mass <= 0.0) {
+        if (lane == 0) h_component[row] = 0.0;
+        return;
+    }
+    gpu_relax_dd::Value km{0.0, 0.0};
+    const uint32_t begin = csr_row_offsets[row];
+    const uint32_t end = csr_row_offsets[row + 1];
+    const double m_row = m_component[row];
+    for (uint32_t cursor = begin + lane; cursor < end; cursor += 32) {
+        const uint32_t col = csr_col_indices[cursor];
+        if (col != static_cast<uint32_t>(row)) {
+            km = gpu_relax_dd::add(
+                km,
+                gpu_relax_dd::scale(
+                    gpu_relax_dd::two_diff(m_component[col], m_row),
+                    csr_values[cursor]));
+        }
+    }
+    km = warp_reduce_dd(km, 0xffffffff);
+    if (lane == 0) {
+        h_component[row] = -(2.0 / (kMu0 * ms_i)) * gpu_relax_dd::rounded(km) * inv_mass;
+    }
+}
+
+__global__ void subwarp_sparse_exchange_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ m_component,
+    const double *__restrict__ ms,
+    const double *__restrict__ inv_lumped_mass,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    double *__restrict__ h_component,
+    int rows)
+{
+    constexpr double kMu0 = 1.2566370614359172953850573533118e-6;
+    const int sub_lane = threadIdx.x & 3;
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / 4;
+    const unsigned int mask = 0xfu << (threadIdx.x & 28);
+    if (row >= rows) {
+        return;
+    }
+    if (magnetic_node_mask != nullptr && magnetic_node_mask[row] == 0u) {
+        if (sub_lane == 0) h_component[row] = 0.0;
+        return;
+    }
+    const double ms_i = ms[row];
+    const double inv_mass = inv_lumped_mass[row];
+    if (ms_i <= 0.0 || inv_mass <= 0.0) {
+        if (sub_lane == 0) h_component[row] = 0.0;
+        return;
+    }
+    gpu_relax_dd::Value km{0.0, 0.0};
+    const uint32_t begin = csr_row_offsets[row];
+    const uint32_t end = csr_row_offsets[row + 1];
+    const double m_row = m_component[row];
+    for (uint32_t cursor = begin + sub_lane; cursor < end; cursor += 4) {
+        const uint32_t col = csr_col_indices[cursor];
+        if (col != static_cast<uint32_t>(row)) {
+            km = gpu_relax_dd::add(
+                km,
+                gpu_relax_dd::scale(
+                    gpu_relax_dd::two_diff(m_component[col], m_row),
+                    csr_values[cursor]));
+        }
+    }
+    km = subwarp_reduce_dd_4(km, mask);
+    if (sub_lane == 0) {
+        h_component[row] = -(2.0 / (kMu0 * ms_i)) * gpu_relax_dd::rounded(km) * inv_mass;
+    }
+}
+
 __global__ void exchange_row_scale_kernel(
     const double *__restrict__ ms,
     double *__restrict__ row_scale,
@@ -232,6 +349,143 @@ __global__ void legacy_sparse_exchange_xyz_kernel(
     hx[row] = material_scale * gpu_relax_dd::rounded(kx) * inv_mass;
     hy[row] = material_scale * gpu_relax_dd::rounded(ky) * inv_mass;
     hz[row] = material_scale * gpu_relax_dd::rounded(kz) * inv_mass;
+}
+
+__global__ void warp_sparse_exchange_xyz_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ mx,
+    const double *__restrict__ my,
+    const double *__restrict__ mz,
+    const double *__restrict__ row_scale,
+    const double *__restrict__ inv_lumped_mass,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    double *__restrict__ hx,
+    double *__restrict__ hy,
+    double *__restrict__ hz,
+    int rows)
+{
+    const int lane = threadIdx.x & 31;
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    if (row >= rows) {
+        return;
+    }
+    if (magnetic_node_mask != nullptr && magnetic_node_mask[row] == 0u) {
+        if (lane == 0) {
+            hx[row] = 0.0;
+            hy[row] = 0.0;
+            hz[row] = 0.0;
+        }
+        return;
+    }
+    const double material_scale = row_scale[row];
+    const double inv_mass = inv_lumped_mass[row];
+    if (material_scale == 0.0 || inv_mass <= 0.0) {
+        if (lane == 0) {
+            hx[row] = 0.0;
+            hy[row] = 0.0;
+            hz[row] = 0.0;
+        }
+        return;
+    }
+    gpu_relax_dd::Value kx{0.0, 0.0};
+    gpu_relax_dd::Value ky{0.0, 0.0};
+    gpu_relax_dd::Value kz{0.0, 0.0};
+    const uint32_t begin = csr_row_offsets[row];
+    const uint32_t end = csr_row_offsets[row + 1];
+    const double mx_row = mx[row];
+    const double my_row = my[row];
+    const double mz_row = mz[row];
+    for (uint32_t cursor = begin + lane; cursor < end; cursor += 32) {
+        const uint32_t col = csr_col_indices[cursor];
+        if (col != static_cast<uint32_t>(row)) {
+            const double weight = csr_values[cursor];
+            kx = gpu_relax_dd::add(kx, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mx[col], mx_row), weight));
+            ky = gpu_relax_dd::add(ky, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(my[col], my_row), weight));
+            kz = gpu_relax_dd::add(kz, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mz[col], mz_row), weight));
+        }
+    }
+    kx = warp_reduce_dd(kx, 0xffffffff);
+    ky = warp_reduce_dd(ky, 0xffffffff);
+    kz = warp_reduce_dd(kz, 0xffffffff);
+    if (lane == 0) {
+        hx[row] = material_scale * gpu_relax_dd::rounded(kx) * inv_mass;
+        hy[row] = material_scale * gpu_relax_dd::rounded(ky) * inv_mass;
+        hz[row] = material_scale * gpu_relax_dd::rounded(kz) * inv_mass;
+    }
+}
+
+__global__ void subwarp_sparse_exchange_xyz_kernel(
+    const uint32_t *__restrict__ csr_row_offsets,
+    const uint32_t *__restrict__ csr_col_indices,
+    const double *__restrict__ csr_values,
+    const double *__restrict__ mx,
+    const double *__restrict__ my,
+    const double *__restrict__ mz,
+    const double *__restrict__ row_scale,
+    const double *__restrict__ inv_lumped_mass,
+    const uint8_t *__restrict__ magnetic_node_mask,
+    double *__restrict__ hx,
+    double *__restrict__ hy,
+    double *__restrict__ hz,
+    int rows)
+{
+    const int sub_lane = threadIdx.x & 3;
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / 4;
+    const unsigned int mask = 0xfu << (threadIdx.x & 28);
+    if (row >= rows) {
+        return;
+    }
+    if (magnetic_node_mask != nullptr && magnetic_node_mask[row] == 0u) {
+        if (sub_lane == 0) {
+            hx[row] = 0.0;
+            hy[row] = 0.0;
+            hz[row] = 0.0;
+        }
+        return;
+    }
+    const double material_scale = row_scale[row];
+    const double inv_mass = inv_lumped_mass[row];
+    if (material_scale == 0.0 || inv_mass <= 0.0) {
+        if (sub_lane == 0) {
+            hx[row] = 0.0;
+            hy[row] = 0.0;
+            hz[row] = 0.0;
+        }
+        return;
+    }
+    gpu_relax_dd::Value kx{0.0, 0.0};
+    gpu_relax_dd::Value ky{0.0, 0.0};
+    gpu_relax_dd::Value kz{0.0, 0.0};
+    const uint32_t begin = csr_row_offsets[row];
+    const uint32_t end = csr_row_offsets[row + 1];
+    const double mx_row = mx[row];
+    const double my_row = my[row];
+    const double mz_row = mz[row];
+    for (uint32_t cursor = begin + sub_lane; cursor < end; cursor += 4) {
+        const uint32_t col = csr_col_indices[cursor];
+        if (col != static_cast<uint32_t>(row)) {
+            const double weight = csr_values[cursor];
+            kx = gpu_relax_dd::add(kx, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mx[col], mx_row), weight));
+            ky = gpu_relax_dd::add(ky, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(my[col], my_row), weight));
+            kz = gpu_relax_dd::add(kz, gpu_relax_dd::scale(
+                gpu_relax_dd::two_diff(mz[col], mz_row), weight));
+        }
+    }
+    kx = subwarp_reduce_dd_4(kx, mask);
+    ky = subwarp_reduce_dd_4(ky, mask);
+    kz = subwarp_reduce_dd_4(kz, mask);
+    if (sub_lane == 0) {
+        hx[row] = material_scale * gpu_relax_dd::rounded(kx) * inv_mass;
+        hy[row] = material_scale * gpu_relax_dd::rounded(ky) * inv_mass;
+        hz[row] = material_scale * gpu_relax_dd::rounded(kz) * inv_mass;
+    }
 }
 
 __global__ void legacy_sparse_exchange_energy_blocks_kernel(
@@ -581,18 +835,43 @@ void fullmag_cuda_legacy_sparse_exchange(
     cudaStream_t stream,
     SparseApplyVariant variant)
 {
-    (void)variant;
-    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    legacy_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        csr_row_offsets,
-        csr_col_indices,
-        csr_values,
-        m_component,
-        ms,
-        inv_lumped_mass,
-        magnetic_node_mask,
-        h_component,
-        rows);
+    if (variant == SparseApplyVariant::Warp) {
+        const int num_blocks = (rows + 7) / 8;
+        warp_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets,
+            csr_col_indices,
+            csr_values,
+            m_component,
+            ms,
+            inv_lumped_mass,
+            magnetic_node_mask,
+            h_component,
+            rows);
+    } else if (variant == SparseApplyVariant::Subwarp) {
+        const int num_blocks = (rows + 63) / 64;
+        subwarp_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets,
+            csr_col_indices,
+            csr_values,
+            m_component,
+            ms,
+            inv_lumped_mass,
+            magnetic_node_mask,
+            h_component,
+            rows);
+    } else {
+        const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
+        legacy_sparse_exchange_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets,
+            csr_col_indices,
+            csr_values,
+            m_component,
+            ms,
+            inv_lumped_mass,
+            magnetic_node_mask,
+            h_component,
+            rows);
+    }
 }
 
 void fullmag_cuda_prepare_exchange_row_scale(
@@ -623,12 +902,25 @@ void fullmag_cuda_legacy_sparse_exchange_xyz(
     cudaStream_t stream,
     SparseApplyVariant variant)
 {
-    (void)variant;
-    const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
-    legacy_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
-        csr_row_offsets, csr_col_indices, csr_values,
-        mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
-        hx, hy, hz, rows);
+    if (variant == SparseApplyVariant::Warp) {
+        const int num_blocks = (rows + 7) / 8;
+        warp_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets, csr_col_indices, csr_values,
+            mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
+            hx, hy, hz, rows);
+    } else if (variant == SparseApplyVariant::Subwarp) {
+        const int num_blocks = (rows + 63) / 64;
+        subwarp_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets, csr_col_indices, csr_values,
+            mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
+            hx, hy, hz, rows);
+    } else {
+        const int num_blocks = (rows + kBlockSize - 1) / kBlockSize;
+        legacy_sparse_exchange_xyz_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+            csr_row_offsets, csr_col_indices, csr_values,
+            mx, my, mz, row_scale, inv_lumped_mass, magnetic_node_mask,
+            hx, hy, hz, rows);
+    }
 }
 
 void fullmag_cuda_periodic_legacy_sparse_exchange(
