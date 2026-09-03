@@ -265,11 +265,18 @@ def build_manifest(args: argparse.Namespace) -> Mapping[str, object]:
         },
         "native_libraries": native_libraries,
         "loader_trace": loader_contract,
-        "native_abi": dict(query_mesh_abi(fullmag_path, runtime_root)),
+        "dependencies": {
+            "mfem_version": getattr(args, "mfem_version", "4.9") or "4.9",
+            "hypre_version": getattr(args, "hypre_version", "3.1.0") or "3.1.0",
+            "libceed_version": getattr(args, "libceed_version", "0.12.0") or "0.12.0",
+            "petsc_version": getattr(args, "petsc_version", "3.24.6") or "3.24.6",
+            "slepc_version": getattr(args, "slepc_version", "3.24.3") or "3.24.3",
+            "cuda_toolkit": cuda_toolkit,
+        },
         "build": {
-            "mfem_version": "4.9",
-            "hypre_version": "3.1.0",
-            "libceed_version": "0.12.0",
+            "mfem_version": getattr(args, "mfem_version", "4.9") or "4.9",
+            "hypre_version": getattr(args, "hypre_version", "3.1.0") or "3.1.0",
+            "libceed_version": getattr(args, "libceed_version", "0.12.0") or "0.12.0",
             "cuda_toolkit": cuda_toolkit,
             "cuda_compiler": cuda_compiler,
             "requested_cuda_architectures": args.requested_cuda_architectures,
@@ -311,6 +318,11 @@ def main() -> None:
     parser.add_argument("--git-tree", required=True)
     parser.add_argument("--worktree-state", required=True)
     parser.add_argument("--source-snapshot-sha256", required=True)
+    parser.add_argument("--mfem-version")
+    parser.add_argument("--hypre-version")
+    parser.add_argument("--libceed-version")
+    parser.add_argument("--petsc-version")
+    parser.add_argument("--slepc-version")
     parser.add_argument("--cuobjdump", default="cuobjdump")
     parser.add_argument("--ldd", default="ldd")
     parser.add_argument("--readelf", default="readelf")

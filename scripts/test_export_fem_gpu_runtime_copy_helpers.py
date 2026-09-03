@@ -1542,6 +1542,74 @@ def test_task10_build_path_declares_fail_closed_hypre_variants() -> None:
     ) > runtime_stage.index("COPY --from=deps")
 
 
+def test_task11_stack_upgrades_and_mixed_precision_manifest() -> None:
+    dockerfile = (REPO_ROOT / "docker/fem-gpu/Dockerfile").read_text(encoding="utf-8")
+    compose_win = (REPO_ROOT / "compose.windows.yaml").read_text(encoding="utf-8")
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+
+    assert 'ARG FULLMAG_MFEM_REF="v4.9"' in dockerfile
+    assert 'ARG FULLMAG_HYPRE_REF="v3.1.0"' in dockerfile
+    assert 'FULLMAG_MFEM_REF' in compose_win
+    assert 'FULLMAG_HYPRE_REF' in compose_win
+    assert 'build-fem-gpu-stack-variant variant:' in justfile
+
+    expected_commit = "0123abcd" * 5
+    manifest = {
+        "schema": 3,
+        "runtime": "fem-gpu-host",
+        "variant": "mfem410-hypre32",
+        "parent_manifest_sha256": "0" * 64,
+        "source_provenance": {
+            "commit": expected_commit,
+            "git_commit": expected_commit,
+            "git_tree": "2" * 40,
+            "dirty": False,
+            "dirty_patch_sha256": None,
+            "source_inputs_sha256": "3" * 64,
+            "source_input_manifest": "scripts/managed_fem_runtime_source_inputs.v1.txt",
+        },
+        "dependencies": {
+            "mfem_version": "4.10.0",
+            "hypre_version": "3.2.0",
+            "libceed_version": "0.12.0",
+            "petsc_version": "3.25.0",
+            "slepc_version": "3.25.0",
+            "cuda_toolkit": "12.6",
+        },
+        "mixed_precision": {
+            "enabled": True,
+            "tensor_cores": True,
+            "refinement": "fp64",
+        },
+    }
+
+    assert manifest["dependencies"]["mfem_version"] >= "4.10.0"
+    assert manifest["dependencies"]["hypre_version"] >= "3.2.0"
+    assert manifest["source_provenance"]["commit"] == expected_commit
+    assert manifest["mixed_precision"]["refinement"] == "fp64"
+
+    validator = load_validator_module()
+    validator.validate_dependencies_contract(manifest, "mfem410-hypre32")
+    validator.validate_mixed_precision_contract(manifest)
+
+    downgraded = dict(manifest)
+    downgraded["dependencies"] = dict(manifest["dependencies"])
+    downgraded["dependencies"]["mfem_version"] = "4.9.0"
+    try:
+        validator.validate_dependencies_contract(downgraded, "mfem410-hypre32")
+        assert False, "downgraded mfem_version should fail closed"
+    except ValueError as exc:
+        assert "below required" in str(exc) or "mismatch" in str(exc)
+
+    invalid_mp = dict(manifest)
+    invalid_mp["mixed_precision"] = {"enabled": True, "refinement": "fp32"}
+    try:
+        validator.validate_mixed_precision_contract(invalid_mp)
+        assert False, "mixed precision with non-fp64 refinement should fail closed"
+    except ValueError as exc:
+        assert "refinement='fp64'" in str(exc)
+
+
 def test_managed_runtime_exports_cuda_dependency_closure_without_driver_libraries() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 

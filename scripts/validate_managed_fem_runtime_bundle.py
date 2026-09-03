@@ -359,6 +359,57 @@ def validate_hypre_memory_build_contract(build: Mapping[str, object]) -> None:
         raise ValueError("managed FEM HYPRE config-header SHA-256 is invalid")
 
 
+def validate_dependencies_contract(
+    manifest: Mapping[str, object],
+    variant: str | None = None,
+) -> None:
+    deps = manifest.get("dependencies")
+    if deps is None:
+        build = manifest.get("build")
+        if isinstance(build, Mapping):
+            deps = {
+                "mfem_version": build.get("mfem_version"),
+                "hypre_version": build.get("hypre_version"),
+                "libceed_version": build.get("libceed_version"),
+                "cuda_toolkit": build.get("cuda_toolkit"),
+            }
+    if not isinstance(deps, Mapping):
+        raise ValueError("managed FEM manifest is missing dependencies mapping")
+
+    variant_str = variant or str(manifest.get("variant", ""))
+    if variant_str == "mfem410-hypre32":
+        mfem_ver = str(deps.get("mfem_version", "")).lstrip("v")
+        hypre_ver = str(deps.get("hypre_version", "")).lstrip("v")
+        try:
+            mfem_parts = tuple(map(int, mfem_ver.split(".")[:2]))
+        except ValueError:
+            mfem_parts = (0, 0)
+        try:
+            hypre_parts = tuple(map(int, hypre_ver.split(".")[:2]))
+        except ValueError:
+            hypre_parts = (0, 0)
+
+        if mfem_parts < (4, 10):
+            raise ValueError(
+                f"mfem410-hypre32 variant requires mfem_version >= 4.10.0; got {mfem_ver} (below required)"
+            )
+        if hypre_parts < (3, 2):
+            raise ValueError(
+                f"mfem410-hypre32 variant requires hypre_version >= 3.2.0; got {hypre_ver} (below required)"
+            )
+
+
+def validate_mixed_precision_contract(manifest: Mapping[str, object]) -> None:
+    mp = manifest.get("mixed_precision")
+    if mp is not None and isinstance(mp, Mapping):
+        if mp.get("enabled") is True:
+            refinement = mp.get("refinement")
+            if refinement != "fp64":
+                raise ValueError(
+                    f"managed FEM mixed precision GPU solves require refinement='fp64'; got {refinement!r}"
+                )
+
+
 def resolve_bundle_path(runtime_root: Path, relative: object, label: str) -> Path:
     if not isinstance(relative, str) or not relative:
         raise ValueError(f"managed FEM manifest has no {label} path")
@@ -768,6 +819,8 @@ def validate_bundle(
             raise ValueError(f"managed FEM build metadata is missing {key}")
     validate_hypre_memory_build_contract(build)
     validate_source_build_inputs(build)
+    validate_dependencies_contract(manifest, variant)
+    validate_mixed_precision_contract(manifest)
     diagnostics = require_mapping(
         manifest.get("runtime_diagnostics"), "runtime_diagnostics"
     )

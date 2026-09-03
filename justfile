@@ -6620,6 +6620,30 @@ build-all-fem-hypre-memory-variants:
     just build-fem-hypre-memory-variant cuda_async
     just build-fem-hypre-memory-variant thrust_async
 
+# Build and export named FEM GPU stack upgrade variant.
+build-fem-gpu-stack-variant variant:
+    variant="{{variant}}"; \
+      case "$variant" in \
+        current|baseline) \
+          FULLMAG_FEM_RUNTIME_VARIANT="current" \
+          ./scripts/export_fem_gpu_runtime.sh ;; \
+        mfem410-hypre32) \
+          FULLMAG_MFEM_REF="v4.10.0" \
+          FULLMAG_HYPRE_REF="v3.2.0" \
+          FULLMAG_FEM_RUNTIME_VARIANT="mfem410-hypre32" \
+          ./scripts/export_fem_gpu_runtime.sh ;; \
+        petsc325-slepc325) \
+          FULLMAG_PETSC_REF="v3.25.0" \
+          FULLMAG_SLEPC_REF="v3.25.0" \
+          FULLMAG_FEM_RUNTIME_VARIANT="petsc325-slepc325" \
+          ./scripts/export_fem_gpu_runtime.sh ;; \
+        cuda133-experimental) \
+          FULLMAG_CUDA_BASE_IMAGE="nvidia/cuda:13.0.0-devel-ubuntu22.04" \
+          FULLMAG_FEM_RUNTIME_VARIANT="cuda133-experimental" \
+          ./scripts/export_fem_gpu_runtime.sh ;; \
+        *) echo "unsupported runtime variant: $variant" >&2; exit 2 ;; \
+      esac
+
 # Backward-compatible alias.
 rebuild-gpu-runtime:
     just rebuild-fem-runtime
