@@ -75,6 +75,31 @@
   padding: var(--fm-space-1) var(--fm-space-2);
 }
 
+/* ── Color swatch (native <input type="color">) polish ── */
+.fm-viz-color-swatch {
+  box-shadow: var(--fm-shadow-control);
+  transition:
+    box-shadow var(--fm-transition-fast),
+    transform var(--fm-duration-fast) ease;
+}
+
+.fm-viz-color-swatch:hover:not(:disabled) {
+  box-shadow: var(--fm-shadow-control-hover);
+  transform: translateY(-1px);
+}
+
+.fm-viz-color-swatch:active:not(:disabled) {
+  box-shadow: var(--fm-shadow-control-pressed);
+  transform: translateY(0);
+}
+
+.fm-viz-color-swatch:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent),
+    var(--fm-shadow-control);
+}
+
 /* ── Per-part vector toggles ── */
 .fm-visualization-part-toggles {
   display: grid;
@@ -164,6 +189,7 @@
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
+  box-shadow: var(--fm-shadow-control-inset);
   overflow: hidden;
 }
 
@@ -173,12 +199,16 @@
   min-height: var(--fm-control-height-compact);
 }
 
+.fm-viz-vector-accounting .fm-inspector-field-row:nth-child(even) {
+  background: color-mix(in srgb, var(--fm-bg-panel) 45%, transparent);
+}
+
 .fm-viz-vector-accounting .fm-inspector-field-row:not(:last-child) {
   border-bottom: 1px solid var(--fm-border-subtle);
 }
 
 .fm-viz-vector-accounting .fm-inspector-field-row:hover {
-  background: color-mix(in srgb, var(--fm-accent) 5%, transparent);
+  background: color-mix(in srgb, var(--fm-accent) 6%, transparent);
 }
 
 /* ── Vector section sub-groups (opacity, budget, etc.) ── */
@@ -319,11 +349,17 @@
   background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel-raised));
   color: var(--fm-accent);
   font-weight: 600;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fm-accent) 25%, transparent),
+    0 2px 8px -2px color-mix(in srgb, var(--fm-accent) 35%, transparent);
 }
 
 .fm-viz-render-mode-tile--active:hover:not(:disabled) {
   background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-panel-raised));
   transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--fm-accent) 35%, transparent),
+    0 3px 10px -2px color-mix(in srgb, var(--fm-accent) 42%, transparent);
 }
 
 .fm-viz-render-mode-tile:disabled {
@@ -416,13 +452,13 @@
   background: color-mix(in srgb, var(--fm-accent) 12%, var(--fm-bg-panel-raised));
   border-color: color-mix(in srgb, var(--fm-accent) 40%, transparent);
   color: var(--fm-accent);
-  box-shadow: 0 0 0 0px var(--fm-accent-soft);
+  box-shadow: 0 1px 4px -1px color-mix(in srgb, var(--fm-accent) 35%, transparent);
 }
 
 .fm-viz-layer-chip--on:hover:not(:disabled) {
   background: color-mix(in srgb, var(--fm-accent) 18%, var(--fm-bg-panel-raised));
   border-color: var(--fm-accent);
-  box-shadow: 0 0 0 2px var(--fm-accent-soft);
+  box-shadow: 0 2px 8px -1px color-mix(in srgb, var(--fm-accent) 40%, transparent);
 }
 
 /* ── Inspector Group nav variant ── */
@@ -453,6 +489,7 @@
   background: var(--fm-bg-surface);
   padding: var(--fm-space-1) 0 var(--fm-space-3);
   overflow: hidden;
+  box-shadow: var(--fm-shadow-sm), inset 0 1px 0 color-mix(in srgb, var(--fm-text-primary) 4%, transparent);
 }
 
 /* Override InspectorGroup header inside card */
@@ -492,6 +529,7 @@
   border-radius: var(--fm-radius-lg);
   background: var(--fm-bg-surface);
   overflow: hidden;
+  box-shadow: var(--fm-shadow-sm);
 }
 
 .fm-viz-nav-sections > [data-variant="nav"] {
@@ -591,6 +629,7 @@
 
 /* Metric strip cards: fixed height, consistent label/value alignment */
 .fm-inspector-metric-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
@@ -608,12 +647,44 @@
     transform 120ms ease;
 }
 
+/* Tone accent bar along the top edge, keyed to the value's data-state */
+.fm-inspector-metric-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--fm-border-subtle);
+  transition: background var(--fm-transition-fast);
+}
+
+.fm-inspector-metric-card:has([data-state="success"])::before {
+  background: var(--fm-success);
+}
+
+.fm-inspector-metric-card:has([data-state="warning"])::before {
+  background: var(--fm-warning);
+}
+
+.fm-inspector-metric-card:has([data-state="danger"])::before {
+  background: var(--fm-danger);
+}
+
+.fm-inspector-metric-card:has([data-state="degraded"])::before {
+  background: var(--fm-degraded);
+}
+
+.fm-inspector-metric-card:has([data-state="stale"])::before {
+  background: var(--fm-stale);
+}
+
 .fm-inspector-metric-card__label {
   display: block;
   font-size: var(--fm-font-size-2xs);
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.2;
   color: var(--fm-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -716,6 +787,7 @@ button:hover > .fm-inspector-group-icon-box {
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
   .fm-inspector-metric-card,
+  .fm-viz-color-swatch,
   .fm-visualization-toggle {
     transition: none !important;
     transform: none !important;

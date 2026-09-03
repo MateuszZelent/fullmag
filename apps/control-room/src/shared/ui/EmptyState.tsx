@@ -9,6 +9,8 @@ export interface EmptyStateProps extends ComponentPropsWithRef<"section"> {
   description?: ReactNode;
   /** Typically a <Button/>. */
   action?: ReactNode;
+  /** "compact" trims padding/typography for narrow hosts (e.g. Inspector panels). */
+  size?: "default" | "compact";
 }
 
 /**
@@ -23,11 +25,13 @@ export function EmptyState({
   description,
   action,
   className,
+  size = "default",
   ...props
 }: EmptyStateProps) {
   return (
     <section
       className={cn("fm-empty-state", className)}
+      data-size={size}
       data-slot="empty-state"
       {...props}
     >
