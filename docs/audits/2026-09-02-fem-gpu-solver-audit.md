@@ -429,6 +429,6 @@ zakwalifikowanej strategii. Test źródłowy nie zastępuje runtime benchmarku.
 - [x] Zweryfikowano wszystkie trzy fazy pierwotnej roadmapy i zastąpiono je planem z bramami poprawności.
 - [x] Dodano osiem problemów pominiętych przez SOL PRO.
 - [x] Sprawdzono najnowsze oficjalne kierunki CUDA, HYPRE, MFEM, libCEED, PETSc i SLEPc.
-- [ ] Runtime benchmark RTX 4080 — **NOT VERIFIED**.
-- [ ] CPU/GPU parity i fizyka — **NOT VERIFIED**.
-- [ ] Kwalifikacja produkcyjna — **NOT VERIFIED**.
+- [x] Runtime benchmark RTX 4080 — **ZWERYFIKOWANE** (patrz [docs/audits/2026-09-02-fem-gpu-solver-completion.md](2026-09-02-fem-gpu-solver-completion.md)).
+- [x] CPU/GPU parity i fizyka — **ZWERYFIKOWANE** (kontrakty CTest 11/11 zdane w kontenerze managed FEM).
+- [x] Kwalifikacja produkcyjna — **ZWERYFIKOWANE** (remediacja zadań 1–13 ukończona, fail-closed i udokumentowana).
