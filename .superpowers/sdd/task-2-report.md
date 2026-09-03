@@ -1,153 +1,180 @@
-# Task 2 — raport wykonania
+# Raport Task 2 — wersjonowany performance receipt i baseline faz
 
-## RED 1: hierarchia modala
+## Status
+
+**DONE_WITH_CONCERNS**
+
+Task 2 jest ukończony na poziomie kontraktu źródłowego, C ABI, Rust ABI,
+atomowej publikacji accepted-only oraz serializacji artefaktu. Istniejący ABI
+v1 pozostał bez zmian. Nie wykonano produkcyjnego managed run, benchmarku,
+parity ani walidacji fizycznej; te poziomy pozostają `NOT VERIFIED`.
+
+## Commit implementacyjny
+
+- `86333864451c12b958f317b3ddfb249cb6d4a027` —
+  `feat(fem): publish versioned GPU phase counters`
+
+Niniejszy raport jest śledzony osobnym commitem dokumentacyjnym, aby nie
+tworzyć niemożliwej self-referencji do własnego hasha.
+
+## Zakres implementacji
+
+- Dodano dokładny, append-only `fullmag_fem_gpu_performance_snapshot_v2`:
+  88 bajtów, alignment 8, `abi_version = 2`, `struct_size` i dziesięć pól
+  `uint64_t` w kolejności wymaganej przez brief.
+- Dodano symbol C
+  `fullmag_fem_backend_gpu_performance_snapshot_v2` z dokładnym handshake
+  wersji/rozmiaru i publikacją do bufora wyjściowego dopiero po pełnej
+  walidacji planu oraz accountingu.
+- Dodano wewnętrzny `FemGpuPerformancePhase` i osobne liczniki
+  `attempt_performance` / `accepted_performance` pod istniejącym mutexem
+  execution receipt.
+- `gpu_execution_receipt_commit_attempt` sumuje fazy i czasy wyłącznie po
+  ważnym accepted commit. `reject_attempt`, `fail_attempt` oraz invalid commit
+  czyszczą licznik próby bez zastępowania zaakceptowanego snapshotu.
+- Rust FFI odwzorowuje pola 1:1; `build.rs` generuje compile-time assertions
+  rozmiaru, alignmentu i wszystkich offsetów v2 obok niezmienionych assertions
+  v1.
+- Runner zawiera 12-polowy `FemGpuPerformanceSnapshotV2` oraz jawny payload
+  `fullmag.fem_gpu_performance_snapshot.v2` bez domyślania brakujących pól.
+- Dodano focused recipe `verify-fem-gpu-execution-receipt-contract`. Korzysta
+  z profilu Docker FEM GPU, nie wymaga hostowego `python3` ani checkoutowego
+  środowiska `.fullmag`, a CMake/Cargo zapisują wyłącznie pod `/tmp` kontenera.
+  Istniejąca szeroka recipe pozostała bez zmian.
+
+## TDD — RED
+
+### Environment seam szerokiej receptury
 
 Polecenie:
 
-```bash
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/SimulationPreparationMounted.test.tsx -t "auto-opens one precise failure dialog"
+```text
+just --shell "C:\Program Files\Git\bin\bash.exe" --shell-arg -lc verify-fem-time-domain-native-contract
 ```
 
-Wynik: `FAIL` — 1 test nie przeszedł, 10 pominięto. Asercja nie znalazła tekstu `What happened`; modal zawierał jeszcze `Detected constraints` i `Copy diagnostic report`.
+Wynik: `FAIL` przed kompilacją. `ensure-python` zgłosił brak hostowego
+`python3` i próbował wejść w checkoutowy model środowiska `.fullmag`. Ten wynik
+został sklasyfikowany jako environment seam, a nie jako czerwony dowód ABI.
+Nie osłabiono ani nie zmieniono istniejącej receptury.
 
-## GREEN: Task 2 przed rozszerzeniem review Task 1
+### Właściwy RED kontraktu v2
 
 Polecenie:
 
-```bash
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/SimulationPreparationMounted.test.tsx
+```text
+just --shell "C:\Program Files\Git\bin\bash.exe" --shell-arg -lc verify-fem-gpu-execution-receipt-contract
 ```
 
-Wynik: `PASS` — 1 plik, 11 testów przeszło. Obejmuje kopiowanie raportu, ponowienie po błędzie schowka i nawigację do Diagnostic Recorder.
+Sesja `24229`, wynik terminalny `exit 1`. `libfullmag_fem.so` zlinkowała się,
+a kompilacja `fem_gpu_execution_receipt_contract` zatrzymała się na dokładnie
+oczekiwanych brakach:
 
-## RED 2: niezależne ograniczenie analizy predykatów
+- `fullmag_fem_gpu_performance_snapshot_v2`;
+- `FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION`;
+- `fullmag_fem_backend_gpu_performance_snapshot_v2`;
+- `FemGpuPerformancePhase` i
+  `gpu_execution_receipt_note_performance_phase`.
+
+To był właściwy RED typu/symbolu v2 po przejściu repozytoryjnej trasy
+kontenerowej i pełnym linku biblioteki FEM.
+
+## TDD — GREEN
+
+### Pierwsza kontrola po implementacji i korekta bramki
+
+Sesja `4906` zakończyła się `exit 0`:
+
+- CTest `fem_gpu_execution_receipt_contract`: `1/1 PASS`, `0.08 s`;
+- runner type serialization: `1/1 PASS`;
+- runner artifact serialization: `1/1 PASS`.
+
+Krótki filtr testu `fullmag-fem-sys` połączony z `--exact` uruchomił jednak
+`0 tests` (`50 filtered out`). Nie został zaliczony jako GREEN. Recipe została
+poprawiona do pełnej nazwy
+`tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol` i wykonana
+ponownie.
+
+### Końcowa focused recipe
 
 Polecenie:
 
-```bash
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/SimulationPreparationMounted.test.tsx -t "auto-opens one precise failure dialog"
+```text
+just --shell "C:\Program Files\Git\bin\bash.exe" --shell-arg -lc verify-fem-gpu-execution-receipt-contract
 ```
 
-Wynik: `FAIL` — 1 test nie przeszedł, 10 pominięto. Brakuje tekstu `Predicate analysis was truncated; the raw diagnostic report remains complete.`. Aktualny model nadal nie udostępnia `predicateAnalysisTruncated`; używa jedynie `omittedPredicateCount`, który dla ograniczenia tekstu błędnie pokazuje liczbę pominiętych predykatów.
+Sesja `93096`, wynik terminalny `exit 0`:
 
-## Dodatkowe kontrole
+- pełny native target `fullmag_fem` oraz executable zbudowane z CUDA 12.4.131
+  i MFEM stack;
+- CTest `fem_gpu_execution_receipt_contract`: `1/1 PASS`, `0.08 s`;
+- exact Rust ABI/layout/symbol: `1/1 PASS`, `49 filtered out`;
+- exact runner type serialization: `1/1 PASS`, `1194 filtered out`;
+- exact runner artifact serialization: `1/1 PASS`, `1194 filtered out`.
 
-Polecenie:
+Kontrakt C++ sprawdza rozmiar, alignment i wszystkie offsety, wartości faz,
+czasów i kernel ID, baseline `setup_count <= apply_count + 1`, zerowy compute
+fence oraz byte-identyczny accepted snapshot po próbie rejected i failed.
+Sprawdza też, że istniejące liczniki rejected/failed rosną niezależnie. Ten sam
+executable nadal uruchamia wszystkie wcześniejsze testy lifecycle i ABI v1.
 
-```bash
-pnpm --dir apps/control-room typecheck
+## Dodatkowa weryfikacja
+
+```text
+rustfmt +nightly --edition 2021 --check crates/fullmag-fem-sys/build.rs crates/fullmag-fem-sys/src/lib.rs crates/fullmag-runner/src/types.rs crates/fullmag-runner/src/artifacts.rs
 ```
 
-Wynik: `PASS` — typy tras zostały wygenerowane, typecheck zakończył się powodzeniem.
+Wynik: `PASS`, exit `0`.
 
-Polecenie:
-
-```bash
-npx react-doctor@latest --verbose --scope changed
+```text
+git diff --check -- . ':(exclude).superpowers/sdd/progress.md'
 ```
 
-Wynik: zakończone z kodem 0 bez zgłoszeń.
+Wynik: `PASS`, exit `0`.
 
-## Zmienione pliki Task 2
-
-- `apps/control-room/src/kernel/layout/SimulationPreparationMounted.test.tsx`
-- `apps/control-room/src/kernel/layout/simulationPreparationTestDom.test-support.ts`
-- `apps/control-room/src/kernel/layout/SimulationPreparationFailureDialog.tsx`
-- `apps/control-room/src/design/styles/dialog-simulation-startup.css`
-- `.superpowers/sdd/task-2-report.md`
-
-`SimulationStartupOverlay.tsx` i `simulationPreparationDiagnostics.ts` nie wymagały zmiany: już przekazują pełny allowlistowany JSON do schowka i nie wprowadzają bezpośredniego transportu/API.
-
-## Integracja z poprawką Task 1
-
-Potwierdzony kontrakt to `failure.predicateAnalysisTruncated`, wyprowadzony w modelu z `analysisTruncated`. Fixture Task 2 skraca pojedynczy nieznany predykat, więc `predicateAnalysisTruncated` jest prawdziwe, a `omittedPredicateCount` pozostaje zerowe. Modal renderuje komunikat wyłącznie z booleana i nie wyprowadza z niego liczby pominiętych predykatów.
-
-## GREEN: końcowy Task 2
-
-Polecenie:
-
-```bash
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/SimulationPreparationMounted.test.tsx
-```
-
-Wynik: `PASS` — 1 plik, 11 testów przeszło. Test obejmuje automatyczne otwarcie, trzy sekcje, zalecenie FEM CPU, kod błędu, correlation ID, domyślną etykietę kopiowania, kopiowanie, retry i nawigację do Diagnostic Recorder.
-
-## Kontrola zakresu i self-review
-
-Polecenie:
-
-```bash
-git diff --check
-```
-
-Wynik: `PASS` — brak błędów białych znaków.
-
-Przegląd końcowy potwierdził:
-
-- brak `unsupported_cubic_anisotropy` w fixture modala Task 2;
-- ostrzeżenie zależy bezpośrednio od `failure.predicateAnalysisTruncated`;
-- `omittedPredicateCount` pozostaje wyłącznie komunikatem o rzeczywistej liczbie pominiętych pozycji;
-- pełny raport pozostaje allowlistowanym JSON-em w domyślnie zwiniętym `<details>`;
-- brak zmian w `SimulationStartupOverlay.tsx`, serializerze, modelu Task 1, Rust, API, OpenAPI i dokumentacji projektowej;
-- brak stagingu lub commitu.
-
-## Remediacja review Task 2
-
-### RED: rozłączne komunikaty i kompletność modala
-
-Polecenie:
-
-```bash
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/SimulationPreparationMounted.test.tsx
-```
-
-Wynik: `FAIL` — 1 plik, 2 testy nie przeszły, 10 przeszło. Modal nadal wyświetlał dwa sąsiadujące komunikaty (`2 additional predicate(s)...` i `Predicate analysis was truncated...`) oraz nie używał wymaganej precyzyjnej referencji do zwiniętego `Full diagnostic report`.
-
-### GREEN: remediacja review Task 2
-
-Polecenie:
-
-```bash
-env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/layout/SimulationPreparationMounted.test.tsx
-```
-
-Wynik: `PASS` — 1 plik, 12 testów przeszło.
-
-Nowe asercje montowane dowodzą:
-
-- dla skróconego predykatu bez pominiętej pozycji pokazuje się wyłącznie komunikat o ograniczonej analizie;
-- dla 34 predykatów pokazuje się dokładnie raz `2 predicate(s) were omitted...`, bez drugiego komunikatu o truncation;
-- oba warianty wskazują precyzyjnie zwinięty `Full diagnostic report`;
-- `<details>` istnieje, nie ma `open` domyślnie i po kliknięciu natywnego `<summary>` uzyskuje `open`;
-- requested `fem · gpu · double · strict · mfem` i resolved `fem · cpu · double · strict · mfem` są widoczne w `<dl>`;
-- raport schowka zawiera correlation ID, 9 etapów, oba execution summaries i ostatnie 200 logów, bez wstrzykniętych `host_path` ani `secret`.
-
-### Kontrole po remediacji
-
-Polecenie:
-
-```bash
-pnpm --dir apps/control-room typecheck
-```
-
-Wynik: `PASS` — generowanie typów tras i typecheck zakończone powodzeniem.
-
-Polecenie:
-
-```bash
-git diff --check
-```
-
-Wynik: `PASS` — brak błędów białych znaków.
-
-Polecenie:
-
-```bash
+```text
 git diff --cached --name-only
 ```
 
-Wynik: `PASS` — brak plików w stagingu.
+Przed commitem implementacyjnym wynik zawierał dokładnie dziesięć plików
+Task 2: źródła receipt/API, test C++, C/Rust ABI, runner type/artifact i
+`justfile`. `.superpowers/sdd/progress.md` nie był staged.
 
-Scoped search nie znalazł `fetch(`, `/v2/` ani `unsupported_cubic_anisotropy` w zmienionym modalu i jego teście. Zmiana `simulationPreparationTestDom.test-support.ts` emuluje natywny toggle `<summary>`/`<details>` wyłącznie w harnessie testu montowanego; nie jest testem ani modelem Task 1.
+## Self-review
 
-Browser smoke nie został uruchomiony zgodnie z przekazaniem tej bramki kontrolerowi po integracji.
+- Diff nagłówków C/Rust nie zmienia stałych, pól, rozmiaru ani symboli v1;
+  dodaje wyłącznie osobny typ i symbol v2.
+- Bufor publicznego API v2 nie jest nadpisywany przy błędnym handshake,
+  nierozwiązanym planie lub nieważnym accountingu; dane są składane lokalnie
+  i przypisywane dopiero na ścieżce sukcesu.
+- Aktywna próba ma osobny snapshot. Jedyną ścieżką przenoszącą go do
+  `accepted_performance` jest ważny `commit_attempt`; reject/failed używają
+  wspólnego `clear_attempt`.
+- Nie dodano stanu do ogólnego `Context` ani fizyki do `mfem_bridge.cpp`;
+  ownership pozostaje w dedykowanym ownerze GPU execution receipt.
+- Nie zmieniono capability matrix, planner semantics ani dokumentacji fizyki.
+  Wyników kontraktu nie opisuje się jako production performance, parity lub
+  walidacji naukowej.
+- Repozytoryjna recipe jest samowystarczalna względem hostowego Pythona i nie
+  pozostawia build/cache w checkoutcie.
+
+## Concerns
+
+1. Task 2 definiuje i testuje boundary licznika oraz artefaktu, ale nie podłącza
+   jeszcze producentów faz w rzeczywistych operatorach ani emisji artefaktu do
+   ukończonego runu. Dlatego kompilacja runnera zgłasza nowe ostrzeżenia
+   `dead_code` dla typu/helpera v2. Konsumpcja należy do kolejnej fali
+   benchmark/runtime, a rzeczywisty snapshot produkcyjny pozostaje
+   `NOT VERIFIED`.
+2. Nie wykonano managed FEM GPU run z source identity, runtime manifestem,
+   requested/resolved device i precision ani trwałym completed receipt.
+3. Nie wykonano benchmarku, Nsight, CPU/GPU parity ani walidacji fizycznej.
+   Żadna capability ani claim produkcyjny nie została wypromowana.
+4. Szeroka `verify-fem-time-domain-native-contract` nadal zależy od hostowego
+   `python3`/checkoutowego env i w tym środowisku zatrzymuje się przed buildem.
+   Nowa focused recipe omija ten environment seam bez zmiany istniejącej
+   receptury.
+5. Runner emituje liczne wcześniejsze ostrzeżenia unused/deprecated. Nie zostały
+   naprawiane poza zakresem Task 2.
+
+`.superpowers/sdd/progress.md` pozostaje niezależną zmianą koordynatora i nie
+został wystage'owany ani zawarty w commitach Task 2.
