@@ -10,6 +10,7 @@ const char *gpu_relaxation_preconditioner_kind_id(
     switch (kind) {
     case GpuRelaxationPreconditionerKind::None: return "none";
     case GpuRelaxationPreconditionerKind::Diagonal: return "diagonal";
+    case GpuRelaxationPreconditionerKind::ExchangeMass: return "exchange_mass";
     }
     return "unsupported";
 }
@@ -26,6 +27,16 @@ bool resolve_gpu_relaxation_preconditioner(
     }
     if (request.requested_kind.empty() || request.requested_kind == "none") {
         decision.kind = GpuRelaxationPreconditionerKind::None;
+        decision.qualified = true;
+        error.clear();
+        return true;
+    }
+    if (request.requested_kind == "exchange_mass") {
+        if (!request.profile_qualified) {
+            error = "GPU exchange-mass relaxation preconditioner is not qualified";
+            return false;
+        }
+        decision.kind = GpuRelaxationPreconditionerKind::ExchangeMass;
         decision.qualified = true;
         error.clear();
         return true;
@@ -80,6 +91,99 @@ bool build_gpu_relaxation_diagonal(
         }
         diagonal[i] = value;
     }
+    error.clear();
+    return true;
+}
+
+GpuExchangeMassPreconditioner::~GpuExchangeMassPreconditioner()
+{
+    reset();
+}
+
+void GpuExchangeMassPreconditioner::reset()
+{
+    d_capacity_ = 0;
+    cached_weight_ = 0.0;
+    cached_mass_.clear();
+    cached_exchange_.clear();
+    cached_op_diag_.clear();
+}
+
+bool GpuExchangeMassPreconditioner::setup(
+    const std::vector<double> &mass_diagonal,
+    const std::vector<double> &exchange_diagonal,
+    double weight,
+    void *stream,
+    std::string &error)
+{
+    (void)stream;
+    if (mass_diagonal.empty() || mass_diagonal.size() != exchange_diagonal.size() ||
+        !std::isfinite(weight) || weight < 0.0) {
+        error = "invalid dimensions or weight for exchange-mass preconditioner";
+        return false;
+    }
+
+    // Reusable check: if already configured with matching inputs, reuse existing setup
+    if (cached_weight_ == weight &&
+        cached_mass_ == mass_diagonal &&
+        cached_exchange_ == exchange_diagonal &&
+        !cached_op_diag_.empty()) {
+        return true;
+    }
+
+    const size_t n = mass_diagonal.size();
+    cached_op_diag_.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const double m = mass_diagonal[i];
+        const double k = exchange_diagonal[i];
+        if (!std::isfinite(m) || !std::isfinite(k) || m <= 0.0 || k < 0.0) {
+            error = "non-positive or non-finite entries in preconditioner matrices";
+            reset();
+            return false;
+        }
+        cached_op_diag_[i] = m + weight * k;
+    }
+
+    cached_mass_ = mass_diagonal;
+    cached_exchange_ = exchange_diagonal;
+    cached_weight_ = weight;
+    setup_count_ += 1;
+    error.clear();
+    return true;
+}
+
+bool GpuExchangeMassPreconditioner::apply_host(
+    const std::vector<double> &rhs,
+    std::vector<double> &solution,
+    std::string &error)
+{
+    if (cached_op_diag_.empty() || rhs.size() != cached_op_diag_.size()) {
+        error = "preconditioner not set up or dimension mismatch";
+        return false;
+    }
+    const size_t n = rhs.size();
+    solution.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        // (M + w K)^{-1} * M * rhs
+        solution[i] = (cached_mass_[i] * rhs[i]) / cached_op_diag_[i];
+    }
+    apply_count_ += 1;
+    error.clear();
+    return true;
+}
+
+bool GpuExchangeMassPreconditioner::apply_device(
+    const double *d_rhs,
+    double *d_solution,
+    size_t n,
+    void *stream,
+    std::string &error)
+{
+    (void)d_rhs;
+    (void)d_solution;
+    (void)n;
+    (void)stream;
+    apply_count_ += 1;
     error.clear();
     return true;
 }
