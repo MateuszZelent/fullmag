@@ -11,7 +11,8 @@ Commity implementacyjne:
 - `173bb27160f7069eff766b1f8d1869184f6eae12` — remediacja review: bieżący clean source snapshot, integralność binariów i uporządkowane fazy jednego capture,
 - `1f860804c905ff068c0bfc5af38274ffde4da106` — powiązanie faktycznie wykonywanego launchera ze zweryfikowaną ścieżką i SHA-256 z manifestu,
 - `bac04dadca5e8b118d7ec2718e5a8b334dd251ce` — formalna remediacja: kanoniczna tożsamość workloadu, wymagany `fullmag_fem`, wykonywalne recipes Windows i atomowe artefakty per-attempt,
-- `8f41c468406c8bc7e024068060e1b36c7fe8f039` — canonical owner Windows FEM w `run_fullmag_fem.ps1`, dwa cienkie aliasy zgodności i bezpieczny GUID attemptu.
+- `8f41c468406c8bc7e024068060e1b36c7fe8f039` — canonical owner Windows FEM w `run_fullmag_fem.ps1`, dwa cienkie aliasy zgodności i bezpieczny GUID attemptu,
+- `4269024d5c2b03cb3a230e0dd0b4f4888ba0c4f3` — hardening re-review: ścisły UUID v4/RFC variant bez końcowego newline oraz jawny zakaz wywołania WSL w aliasach.
 
 ## Zakres wykonany
 
@@ -161,7 +162,7 @@ AssertionError: compose.windows.yaml missing from run_fullmag_fem.ps1
 exit 1
 ```
 
-Minimalna implementacja przeniosła całą logikę Docker Desktop do `scripts/windows/run_fullmag_fem.ps1`. `run_fullmag_wsl.ps1` i `run_fullmag_docker.ps1` zawierają tylko bezpośrednie przekazanie `@args` do canonical launchera. Produkcyjne gałęzie `gpu-benchmark-baseline` i `gpu-nsight` występują wyłącznie w canonical owner. `ContractAttemptId` przyjmuje wyłącznie GUID w formacie `8-4-4-4-12` cyfr szesnastkowych.
+Minimalna implementacja przeniosła całą logikę Docker Desktop do `scripts/windows/run_fullmag_fem.ps1`. `run_fullmag_wsl.ps1` i `run_fullmag_docker.ps1` zawierają tylko bezpośrednie przekazanie `@args` do canonical launchera. Produkcyjne gałęzie `gpu-benchmark-baseline` i `gpu-nsight` występują wyłącznie w canonical owner. `ContractAttemptId` przyjmuje wyłącznie UUID v4 w formacie `8-4-4-4-12`, z wariantem RFC (`8`, `9`, `a` lub `b`) i ścisłym końcem `\z`.
 
 GREEN:
 
@@ -202,6 +203,32 @@ baseline dry-run: OK
 just --dry-run capture-fem-gpu-nsight
 Nsight dry-run: OK
 ```
+
+Pierwszy read-only re-review znalazł brak wymuszenia wersji v4/wariantu RFC i brak testowej blokady `wsl.exe` w aliasach. Cykl RED/GREEN hardeningu:
+
+```text
+python -c "... test_windows_fem_contract_attempt_id_is_a_safe_guid() ..."
+AssertionError: strict UUID v4 ValidatePattern missing
+exit 1
+
+python -m unittest scripts.test_fem_gpu_benchmark_contract
+.............
+Ran 13 tests in 0.164s
+OK
+
+python -c "... wszystkie zeroargumentowe testy scripts.test_windows_fullmag_launcher_contract ..."
+launcher contracts: 35/35 passed
+```
+
+Rzeczywisty binding po hardeningu odrzucił path traversal, UUID innej wersji i UUID z końcowym newline. Oba aliasy przekazały odrzucenie z canonical launchera:
+
+```text
+canonical UUID binding rejected path, non-v4, and trailing newline
+scripts/windows/run_fullmag_wsl.ps1 forwards canonical UUID rejection
+scripts/windows/run_fullmag_docker.ps1 forwards canonical UUID rejection
+```
+
+Ponowiony read-only re-review po `4269024d5c2b03cb3a230e0dd0b4f4888ba0c4f3`: `APPROVED` dla canonical owner, cienkich aliasów bez WSL/contract branches, ścisłego UUID v4/RFC i testów statycznych.
 
 ## Fail-closed baseline i Nsight
 
