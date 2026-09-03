@@ -161,6 +161,7 @@ set(FEM_SOURCES
     gpu/cuda/runtime/gpu_state_runtime.cpp
     gpu/cuda/runtime/execution_receipt.cpp
     gpu/cuda/runtime/performance_counters.cpp
+    gpu/cuda/runtime/multi_gpu_binding.cpp
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
@@ -849,6 +850,20 @@ target_include_directories(fem_gpu_small_dense_contract PRIVATE
 add_test(
     NAME fem_gpu_small_dense_contract
     COMMAND fem_gpu_small_dense_contract
+)
+
+add_executable(
+    fem_gpu_multi_gpu_binding_contract
+    tests/gpu_multi_gpu_binding_contract.cpp
+)
+target_link_libraries(fem_gpu_multi_gpu_binding_contract PRIVATE fullmag_fem)
+target_include_directories(fem_gpu_multi_gpu_binding_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(
+    NAME fem_gpu_multi_gpu_binding_contract
+    COMMAND fem_gpu_multi_gpu_binding_contract
 )
 
 add_executable(

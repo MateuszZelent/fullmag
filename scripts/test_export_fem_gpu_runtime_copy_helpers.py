@@ -1610,6 +1610,56 @@ def test_task11_stack_upgrades_and_mixed_precision_manifest() -> None:
         assert "refinement='fp64'" in str(exc)
 
 
+def test_task13_multi_gpu_scaling_and_binding() -> None:
+    from scripts.analysis.fem_gpu_multi_gpu_scaling import (
+        RankReceipt,
+        analyze_multi_gpu_scaling,
+    )
+
+    receipts_good = [
+        RankReceipt(0, 0, 0, "GPU-0", False, True, 0.22, 0.03, 0.25),
+        RankReceipt(1, 1, 1, "GPU-1", False, True, 0.21, 0.04, 0.25),
+        RankReceipt(2, 2, 2, "GPU-2", False, True, 0.23, 0.02, 0.25),
+        RankReceipt(3, 3, 3, "GPU-3", False, True, 0.22, 0.03, 0.25),
+    ]
+    report_good = analyze_multi_gpu_scaling(
+        receipts=receipts_good,
+        baseline_time_sec=1.0,
+        min_efficiency=0.70,
+        max_imbalance=0.20,
+        tol_parity=1.0e-9,
+        measured_error=1.0e-10,
+    )
+    assert report_good.promotable is True
+    assert report_good.speedup == 4.0
+    assert report_good.efficiency == 1.0
+    assert report_good.host_staging_detected is False
+    assert report_good.parity_passed is True
+
+    receipts_staging = [
+        RankReceipt(0, 0, 0, "GPU-0", True, True, 0.22, 0.03, 0.25),
+        RankReceipt(1, 1, 1, "GPU-1", False, True, 0.21, 0.04, 0.25),
+    ]
+    report_staging = analyze_multi_gpu_scaling(
+        receipts=receipts_staging,
+        baseline_time_sec=1.0,
+    )
+    assert report_staging.promotable is False
+    assert "Host staging detected" in (report_staging.rejection_reason or "")
+
+    receipts_slow = [
+        RankReceipt(0, 0, 0, "GPU-0", False, True, 0.8, 0.1, 0.9),
+        RankReceipt(1, 1, 1, "GPU-1", False, True, 0.8, 0.1, 0.9),
+    ]
+    report_slow = analyze_multi_gpu_scaling(
+        receipts=receipts_slow,
+        baseline_time_sec=1.0,
+        min_efficiency=0.70,
+    )
+    assert report_slow.promotable is False
+    assert "Scaling efficiency" in (report_slow.rejection_reason or "")
+
+
 def test_managed_runtime_exports_cuda_dependency_closure_without_driver_libraries() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
