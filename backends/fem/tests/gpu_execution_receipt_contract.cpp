@@ -592,6 +592,8 @@ void performance_snapshot_v2_publishes_only_accepted_phases() {
     gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::Apply, 13);
     gpu_execution_receipt_note_performance_phase(
         state, FemGpuPerformancePhase::KernelLaunch, 0, 17);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::SnapshotFence);
+    gpu_execution_receipt_note_performance_phase(state, FemGpuPerformancePhase::ExportFence);
     gpu_execution_receipt_note_performance_phase(
         state, FemGpuPerformancePhase::AcceptedFinalization, 19);
     gpu_execution_receipt_commit_attempt(state);
@@ -606,6 +608,8 @@ void performance_snapshot_v2_publishes_only_accepted_phases() {
     check(out.setup_count == 1 && out.apply_count == 1, "accepted setup/apply counts mismatch");
     check(out.kernel_launch_count == 1, "accepted kernel launch count mismatch");
     check(out.compute_fence_count == 0, "accepted compute phase must remain fence-free");
+    check(out.snapshot_fence_count == 1, "accepted snapshot fence count mismatch");
+    check(out.export_fence_count == 1, "accepted export fence count mismatch");
     check(out.selected_sparse_kernel_id == 17, "accepted sparse kernel id mismatch");
     check(out.setup_wall_time_ns == 11, "accepted setup wall time mismatch");
     check(out.apply_wall_time_ns == 13, "accepted apply wall time mismatch");
@@ -642,6 +646,58 @@ void performance_snapshot_v2_publishes_only_accepted_phases() {
     const auto receipt = gpu_execution_receipt_snapshot(state);
     check(receipt.rejected_attempt_count == 1, "reject counter must advance independently");
     check(receipt.failed_attempt_count == 1, "failure counter must advance independently");
+}
+
+void performance_snapshot_v2_rejects_preaccept_and_invalid_handshakes_without_writing() {
+    fullmag_fem_backend handle{};
+    auto &state = handle.context.gpu_state.execution_receipt;
+    gpu_execution_receipt_resolve_plan(
+        state,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        FEM_GPU_OPERATOR_EXCHANGE,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+
+    fullmag_fem_gpu_performance_snapshot_v2 out{};
+    std::memset(&out, 0xa5, sizeof(out));
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION;
+    out.struct_size = sizeof(out);
+    const auto preaccept = out;
+    check(
+        fullmag_fem_backend_gpu_performance_snapshot_v2(&handle, &out) ==
+            FULLMAG_FEM_ERR_UNAVAILABLE,
+        "performance snapshot v2 must be unavailable before the first accepted commit");
+    check(
+        std::memcmp(&out, &preaccept, sizeof(out)) == 0,
+        "pre-accept query must leave the complete output buffer unchanged");
+
+    std::memset(&out, 0x5a, sizeof(out));
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION + 1;
+    out.struct_size = sizeof(out);
+    const auto invalid_version = out;
+    check(
+        fullmag_fem_backend_gpu_performance_snapshot_v2(&handle, &out) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "performance snapshot v2 must reject an invalid abi_version");
+    check(
+        std::memcmp(&out, &invalid_version, sizeof(out)) == 0,
+        "invalid abi_version must leave the complete output buffer unchanged");
+
+    std::memset(&out, 0x3c, sizeof(out));
+    out.abi_version = FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION;
+    out.struct_size = sizeof(out) - 1;
+    const auto invalid_size = out;
+    check(
+        fullmag_fem_backend_gpu_performance_snapshot_v2(&handle, &out) ==
+            FULLMAG_FEM_ERR_INVALID,
+        "performance snapshot v2 must reject an invalid struct_size");
+    check(
+        std::memcmp(&out, &invalid_size, sizeof(out)) == 0,
+        "invalid struct_size must leave the complete output buffer unchanged");
 }
 
 void public_abi_v1_rejects_invalid_handshake_without_writing_output() {
@@ -806,6 +862,7 @@ int main() {
     invalid_commit_preserves_last_accepted_snapshot();
     begin_without_resolved_plan_fails_closed();
     performance_snapshot_v2_publishes_only_accepted_phases();
+    performance_snapshot_v2_rejects_preaccept_and_invalid_handshakes_without_writing();
     public_abi_v1_rejects_invalid_handshake_without_writing_output();
     return 0;
 }

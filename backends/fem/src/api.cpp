@@ -5699,6 +5699,12 @@ int fullmag_fem_backend_gpu_performance_snapshot_v2(
             "fullmag_fem_backend_gpu_performance_snapshot_v2 accounting is invalid");
         return FULLMAG_FEM_ERR_INTERNAL;
     }
+    if (execution.accepted_step_count == 0) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v2 has no accepted execution attempt");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
 
     const auto snapshot = fullmag::fem::gpu_execution_receipt_performance_snapshot(
         handle->context.gpu_state.execution_receipt);

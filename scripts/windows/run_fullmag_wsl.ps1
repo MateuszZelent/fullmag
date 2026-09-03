@@ -23,6 +23,9 @@ param(
 
   [switch]$BuildOnly,
 
+  [ValidateSet("gpu-execution-receipt")]
+  [string]$Contract,
+
   [ValidateRange(1, 65535)]
   [int]$WebPort = 3100
 )
@@ -446,6 +449,35 @@ $buildMutex = $null
 $buildMutexHeld = $false
 Push-Location $RepoRoot
 try {
+  if ($Contract -eq "gpu-execution-receipt") {
+    if ($BuildMode -eq "true") {
+      Invoke-DockerImageBuild
+    } else {
+      $null = Get-DockerImageId $RuntimeImage
+    }
+    $contractCommand = @"
+set -euo pipefail
+cd /workspace
+build_dir=/workspace/.fullmag-build/contracts/fem-gpu-execution-receipt
+cargo_target=/workspace/.fullmag-build/cargo-targets/fem-gpu-execution-receipt
+mkdir -p "`$build_dir" "`$cargo_target"
+rustup toolchain install nightly --profile minimal --no-self-update
+cmake -S native -B "`$build_dir" -DCMAKE_CUDA_ARCHITECTURES="`$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF
+cmake --build "`$build_dir" --target fem_gpu_execution_receipt_contract
+ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error -R '^fem_gpu_execution_receipt_contract$'
+FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2 -- --exact --nocapture
+"@
+    $contractCommand = $contractCommand.Replace("`r`n", "`n").Replace("`r", "`n")
+    $contractCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($contractCommand)
+    $contractCommandBase64 = [Convert]::ToBase64String($contractCommandBytes)
+    $contractCommandPayload = "printf '%s' '$contractCommandBase64' | base64 --decode | bash"
+    Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName, "bash", "-lc", $contractCommandPayload)
+    Write-Host "Windows FEM GPU execution receipt contract passed"
+    exit 0
+  }
+
   if ($BuildMode -eq "true") {
     # The dev and static targets intentionally share the local launcher and
     # Cargo target cache.  Serialize Windows builds so a concurrent frontend

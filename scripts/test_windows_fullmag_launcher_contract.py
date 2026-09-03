@@ -189,6 +189,30 @@ def test_windows_fem_entrypoint_is_windows_powerShell_to_docker_and_wsl_free() -
     assert "@args" in launcher
 
 
+def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    start = justfile.index("verify-fem-gpu-execution-receipt-contract:")
+    end = justfile.index("\nverify-fem-mesh-runner-abi-contract:", start)
+    recipe = justfile[start:end]
+
+    assert "scripts/windows/run_fullmag_fem.ps1" in recipe
+    assert "-Contract gpu-execution-receipt" in recipe
+    assert "docker compose" not in recipe
+    assert "compose.yaml" not in recipe
+
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+    for required in (
+        '[ValidateSet("gpu-execution-receipt")]',
+        "/workspace/.fullmag-build/contracts/fem-gpu-execution-receipt",
+        "/workspace/.fullmag-build/cargo-targets/fem-gpu-execution-receipt",
+        'Invoke-DockerCompose @("run", "--rm", "--no-deps", $ServiceName',
+        "tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol",
+        "types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field",
+        "artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2",
+    ):
+        assert required in launcher
+
+
 def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency() -> None:
     launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
