@@ -27,7 +27,7 @@ Szczegółowy werdykt dla każdego ID znajduje się w
 [10-finding-coverage-matrix.md](fem-gpu-performance-remediation-2026-09-01/10-finding-coverage-matrix.md).
 
 Korekta RL-01 z 2026-09-04: bieżąca klasa
-`GpuExchangeMassPreconditioner` realizuje tylko nieaktywną aproksymację
+`GpuDiagonalRelaxationPreconditioner` realizuje tylko nieaktywną aproksymację
 diagonalną/Jacobiego. Pełny sparse
 `exchange_mass_cg4|cg8` jest zatwierdzonym projektem, ale jego capability,
 runtime, CPU/GPU parity, physics validation i performance pozostają
@@ -2291,7 +2291,7 @@ DoD:
 
 ### Current source status (2026-09-04)
 
-Obecna klasa `GpuExchangeMassPreconditioner` ma status: diagonal/Jacobi approximation.
+Obecna klasa `GpuDiagonalRelaxationPreconditioner` ma status: diagonal/Jacobi approximation.
 Otrzymuje tylko przekątne $M$ i $K$ oraz mnoży punktowo przez
 $M_i/(M_i+wK_{ii})$. Nie wykonuje pełnego sparse $(M+wK)^{-1}M$, nie ma
 produkcyjnego wywołania setupu, a NCG/PG-BB nie propagują jeszcze błędu apply.

@@ -133,7 +133,9 @@
     {"id": "cpu-demag-increment", "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp", "symbol": "demag_poisson_energy_difference_from_endpoint_fields", "responsibility": "Evaluates the endpoint-field demag identity."},
     {"id": "pgbb-gradient", "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp", "symbol": "gpu_relax_compute_current_metrics", "responsibility": "Owns the current GPU PG-BB tangent-gradient path."},
     {"id": "ncg-gradient", "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp", "symbol": "gpu_relax_compute_effective_field_energy_gradient_and_direction", "responsibility": "Owns the current GPU NCG tangent-gradient path."},
-    {"id": "preconditioner-resolver", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "resolve_gpu_relaxation_preconditioner", "responsibility": "Keeps none as the current default and rejects unqualified profiles."}
+    {"id": "preconditioner-resolver", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "resolve_gpu_relaxation_preconditioner", "responsibility": "Keeps none as the current default and rejects unqualified profiles."},
+    {"id": "diagonal-preconditioner-setup", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuDiagonalRelaxationPreconditioner::setup", "responsibility": "Uploads the mass and exchange diagonals for the pointwise diagonal approximation."},
+    {"id": "diagonal-preconditioner-apply", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuDiagonalRelaxationPreconditioner::apply_device_component", "responsibility": "Applies the pointwise diagonal factor independently to x, y, and z."}
   ],
   "public_api": {"parameters": []}
 }

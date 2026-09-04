@@ -26,7 +26,10 @@ wersjonowany model identity i lifecycle, ale przechodzi własne bramy.
 Faza 1 nie obejmuje GPU tangent-plane implicit (TPI) ani manifold L-BFGS.
 Powstaną dla nich osobne projekty po zamknięciu tej fazy.
 
-## 2. Ustalony stan obecny
+## 2. Ustalony stan wejściowy przed Taskiem 2
+
+Poniższy audyt opisuje historyczny stan źródła, od którego rozpoczęto fazę 1;
+bieżące symbole produkcyjne i testowe są wskazane w indeksie źródeł w sekcji 13.
 
 | Obszar | Stan źródła | Wykonywalność | Walidacja | Wniosek |
 |---|---|---|---|---|
@@ -37,7 +40,7 @@ Powstaną dla nich osobne projekty po zamknięciu tej fazy.
 | TPI FEM GPU | brak ścieżki GPU | unsupported | brak | poza fazą 1 |
 | L-BFGS | brak implementacji | roadmap | brak | poza fazą 1 |
 
-Audyt kodu wykazał cztery błędy wymagające korekty przed dalszym pomiarem:
+Audyt wejściowego kodu wykazał cztery błędy wymagające korekty przed dalszym pomiarem:
 
 1. `GpuExchangeMassPreconditioner` używa tylko przekątnych $M$ i $K$ oraz
    wykonuje mnożenie przez $M_{ii}/(M_{ii}+wK_{ii})$. Jest to aproksymacja
@@ -449,11 +452,11 @@ oddzielne, identyfikowalne kampanie.
 
 | Teza | Ścieżka i stabilny symbol |
 |---|---|
-| Resolver i obecna aproksymacja diagonalna | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` — `resolve_gpu_relaxation_preconditioner`, `GpuExchangeMassPreconditioner::setup`, `apply_device_component` |
+| Resolver i obecna aproksymacja diagonalna | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` — `resolve_gpu_relaxation_preconditioner`, `GpuDiagonalRelaxationPreconditioner::setup`, `apply_device_component` |
 | NCG CUDA i obecny punkt wywołania | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` — `gpu_relax_compute_effective_field_energy_gradient_and_direction` |
 | PG-BB CUDA i obecny punkt wywołania | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` — `gpu_relax_compute_current_metrics` |
 | Stan device minimizerów | `backends/fem/gpu/cuda/relaxation/relaxation_state.hpp` — `FemGpuRelaxationDeviceState` |
-| Test, który nie obejmuje off-diagonal | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` — `ManufacturedSpdMatrix` |
+| Pełny SPD oracle dla negatywnego dowodu aproksymacji | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` — `ManufacturedFullSpdMatrix` |
 | CPU oracle preconditioned NCG/PG-BB | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` — `exchange_mass_preconditioned_gradient`; `backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp` — `next_direction_pr_plus` |
 | Device-resident pełny CSR x/y/z | `backends/fem/gpu/cuda/sparse/sparse_apply_plan.hpp` — `SparseApplyPlan::apply_xyz`; `backends/fem/gpu/cuda/exchange/exchange_state.hpp` — `LegacyGpuExchangeDeviceState` |
 | Benchmark i niedostępne `exchange_mass` | `scripts/analysis/fem_gpu_benchmark.py` — `RELAXATION_PRECONDITIONER_RUNTIME_NAMES`, `relaxation_preconditioner_runtime_name` |

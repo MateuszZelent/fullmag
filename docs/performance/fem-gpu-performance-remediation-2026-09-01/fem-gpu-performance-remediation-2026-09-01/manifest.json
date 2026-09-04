@@ -16,7 +16,7 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 13167,
+      "bytes": 13173,
       "lines": 287,
       "words": 1612
     },
@@ -58,7 +58,7 @@
     },
     {
       "path": "07-relaxation-preconditioning-remediation.md",
-      "bytes": 5147,
+      "bytes": 5153,
       "lines": 217,
       "words": 612
     },

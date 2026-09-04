@@ -319,12 +319,16 @@ przechodzic w ukryty CPU fallback.
 ## Status preconditionera direct minimizers
 
 Audyt z 2026-09-04 potwierdza, ze obecna klasa
-`GpuExchangeMassPreconditioner` nie realizuje pelnego sparse
+`GpuDiagonalRelaxationPreconditioner` nie realizuje pelnego sparse
 $(M+wK)^{-1}M$. Otrzymuje tylko przekatne mass/exchange i stosuje punktowy
 czynnik $M_i/(M_i+wK_{ii})$, czyli diagonalna aproksymacje Jacobiego. Setup tej
 klasy nie jest wywolywany przez produkcyjny NCG ani PG-BB, a ich warunkowe
 call-site'y nie propagują bledu apply. Benchmark nadal odrzuca
 `exchange_mass`, poniewaz mapuje go na brak realizacji C++.
+
+Kontrakt źródłowy zawiera niezależny pełny SPD oracle z niezerowymi wpisami
+pozadiagonalnymi i potwierdza, że wynik aproksymacji diagonalnej jest od niego
+różny; nie jest to implementacja pełnego sparse solve.
 
 Nota 0581 zachowuje osobno historyczny wynik no-go z 2026-07-26 i zatwierdzony
 projekt nowej realizacji `diagonal` oraz pelnego sparse
@@ -421,9 +425,9 @@ preconditioning oraz inne warianty zachowuja wlasne bramki i statusy.
 | Device-resident RK step | `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` | `gpu_rk_device_resident_step` | owns the CUDA RK hot-loop implementation | current source; qualification separate |
 | Transfer-audit policy | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `configure_transfer_audit_from_env` | configures fail-closed hot-loop assertions | current source |
 | Direct-minimizer resolver | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `resolve_gpu_relaxation_preconditioner` | keeps preconditioning on the current `none` default | full sparse `NOT VERIFIED` |
-| Direct-minimizer diagonal setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::setup` | uploads only mass and exchange diagonals | current source; production setup absent |
-| Direct-minimizer pointwise apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::apply_device_component` | applies the diagonal factor independently to x/y/z | current source; not full CSR |
+| Direct-minimizer diagonal setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuDiagonalRelaxationPreconditioner::setup` | uploads mass and exchange diagonals for the pointwise approximation | current source; production setup absent |
+| Direct-minimizer pointwise apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuDiagonalRelaxationPreconditioner::apply_device_component` | applies the diagonal factor independently to x/y/z | current source; not full CSR |
 | PG-BB call site | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_compute_current_metrics` | conditionally invokes the current apply without fail-closed status propagation | current source; qualification separate |
 | NCG call site | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_compute_effective_field_energy_gradient_and_direction` | conditionally invokes the current apply without fail-closed status propagation | current source; qualification separate |
-| Diagonal-only manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedSpdMatrix` | diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve | source test fixture; off-diagonal RED belongs to Task 2 |
-| Focused preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | exercises the current resolver and diagonal setup/apply; no sparse negative control | source test entry point; full sparse solve not proved |
+| Full-SPD manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedFullSpdMatrix` | provides an independent dense oracle with nonzero off-diagonal entries | source negative control; diagonal differs from the full sparse solve |
+| Focused preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | exercises fail-closed resolution and diagonal setup/apply against the full-SPD negative control | source test entry point; full sparse solve not implemented |

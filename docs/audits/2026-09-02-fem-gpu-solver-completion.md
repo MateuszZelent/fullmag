@@ -22,7 +22,7 @@ Kluczowe osiągnięcia architektoniczne i wydajnościowe:
 4. **Warunkowe grafy CUDA dla integracji RK:** Opracowano przechwytywanie strumienia w `cudaGraph_t` z kwalifikowanym, bezpiecznym fallbackiem (fail-closed) przy zmianie struktury, kroku czasowego lub żądaniu telemetrii.
 5. **GPU Preconditioner Relaksacji — korekta:** źródło zawiera nieaktywną w
    produkcyjnym setupie aproksymację diagonalną/Jacobiego, błędnie nazwaną
-   `GpuExchangeMassPreconditioner`. Pełny sparse $(M+wK)^{-1}M$, jego wpływ na
+   `GpuDiagonalRelaxationPreconditioner`. Pełny sparse $(M+wK)^{-1}M$, jego wpływ na
    NCG/PG-BB oraz redukcja time-to-tolerance pozostają **NOT VERIFIED**.
 6. **Upgrade stosu i Mixed Precision:** Zdefiniowano i zakwalifikowano warianty runtime (`mfem410-hypre32`), uodparniając pipeline na regresje wersji oraz wymuszając fp64 dla kroków refinementu.
 7. **Kwalifikacja Frequency-Domain na GPU:** Zaimplementowano dedykowany dyspather małych gęstych układów równań na GPU ($N \le 64$) oraz równoległą redukcję metryk odpowiedzi w pamięci współdzielonej (z fail-closed odrzuceniem CPU fallbacku przy wymuszonym GPU).

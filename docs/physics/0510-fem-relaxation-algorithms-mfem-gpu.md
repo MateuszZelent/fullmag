@@ -641,7 +641,7 @@ action, and demag fresh-solve linear response in the implicit operator, but is
 not yet a GPU/libCEED-resident tangent-plane solver.
 
 The 2026-09-04 source audit narrows the GPU preconditioner statement further.
-The current class named `GpuExchangeMassPreconditioner` receives only mass and
+The current class named `GpuDiagonalRelaxationPreconditioner` receives only mass and
 exchange diagonals and applies $M_i/(M_i+wK_{ii})$ pointwise. It is therefore a
 diagonal/Jacobi approximation, not the full sparse $(M+wK)^{-1}M$ operation.
 Its setup is not wired into production NCG or PG-BB, the current call sites do

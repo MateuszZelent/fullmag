@@ -87,13 +87,13 @@
     {
       "id": "direct-minimizer-setup",
       "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
-      "symbol": "GpuExchangeMassPreconditioner::setup",
-      "responsibility": "Uploads only the current mass and exchange diagonals."
+      "symbol": "GpuDiagonalRelaxationPreconditioner::setup",
+      "responsibility": "Uploads the current mass and exchange diagonals for the pointwise diagonal approximation."
     },
     {
       "id": "direct-minimizer-apply",
       "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
-      "symbol": "GpuExchangeMassPreconditioner::apply_device_component",
+      "symbol": "GpuDiagonalRelaxationPreconditioner::apply_device_component",
       "responsibility": "Applies the current pointwise factor independently to x, y and z."
     },
     {
@@ -111,14 +111,14 @@
     {
       "id": "direct-minimizer-spd-fixture",
       "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
-      "symbol": "struct ManufacturedSpdMatrix",
-      "responsibility": "Diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve."
+      "symbol": "struct ManufacturedFullSpdMatrix",
+      "responsibility": "Provides an independent dense oracle with nonzero off-diagonal entries."
     },
     {
       "id": "direct-minimizer-contract-main",
       "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
       "symbol": "main",
-      "responsibility": "Exercises the current resolver and diagonal setup and apply; no sparse negative control."
+      "responsibility": "Exercises fail-closed resolution and diagonal setup and apply against the full-SPD negative control."
     }
   ],
   "public_api": {

@@ -420,7 +420,7 @@ receipt; requested strict intent nie może uzupełniać brakującego wykonania.
 
 ### 9.2. Direct-minimizer preconditioner boundary
 
-The current GPU class named `GpuExchangeMassPreconditioner` is not a full
+The current GPU class named `GpuDiagonalRelaxationPreconditioner` is not a full
 exchange-mass inverse. Its setup consumes only mass and exchange diagonals and
 its apply performs the pointwise diagonal/Jacobi factor
 $M_i/(M_i+wK_{ii})$; off-diagonal CSR entries do not participate. Production
@@ -428,6 +428,10 @@ NCG and PG-BB do not call its setup, and their conditional apply call sites do
 not yet propagate the returned error. The benchmark consequently keeps
 `exchange_mass` unavailable. These source facts do not prove device runtime,
 physics, CPU/GPU parity, or performance.
+
+The source contract includes an independent full-SPD oracle with nonzero
+off-diagonal entries and verifies that the diagonal approximation differs from
+that full solve. It does not implement the sparse exchange-mass inverse.
 
 The phase-1 contract in note 0581 reserves `diagonal` for that approximation
 and `exchange_mass_cg4|cg8` for a future fixed-iteration solve over the full
@@ -663,10 +667,10 @@ qualification.
 | Managed recipe | `justfile` | `verify-fem-llg-time-domain-qualification-gpu` | zapisuje hash źródeł i uruchamia GPU gate | container-first; bez fresh pass brak promocji |
 | GPU direct-minimizer diagonal builder | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `build_gpu_relaxation_diagonal` | składa wyłącznie przekątną $M_i+wK_{ii}$ | FEM GPU, source only; qualification `NOT VERIFIED` |
 | GPU direct-minimizer resolver | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `resolve_gpu_relaxation_preconditioner` | zachowuje `none` jako default i odrzuca niezakwalifikowany profil | FEM GPU, source only |
-| GPU direct-minimizer setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::setup` | przyjmuje wyłącznie przekątne mass/exchange i wysyła czynnik punktowy | FEM GPU, source only; production setup absent |
-| GPU direct-minimizer apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::apply_device_component` | stosuje diagonalny czynnik niezależnie do x/y/z | FEM GPU, source only; not full CSR |
+| GPU direct-minimizer setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuDiagonalRelaxationPreconditioner::setup` | przyjmuje przekątne mass/exchange i wysyła czynnik punktowej aproksymacji diagonalnej | FEM GPU, source only; production setup absent |
+| GPU direct-minimizer apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuDiagonalRelaxationPreconditioner::apply_device_component` | stosuje diagonalny czynnik niezależnie do x/y/z | FEM GPU, source only; not full CSR |
 | PG-BB preconditioner call site | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_compute_current_metrics` | pokazuje warunkowy apply bez fail-closed propagacji statusu | FEM GPU, source only |
 | NCG preconditioner call site | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_compute_effective_field_energy_gradient_and_direction` | pokazuje warunkowy apply bez fail-closed propagacji statusu | FEM GPU, source only |
-| Diagonal-only manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedSpdMatrix` | diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve | source test fixture; off-diagonal RED belongs to Task 2 |
-| Focused GPU preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | sprawdza bieżący resolver i diagonal setup/apply; no sparse negative control | source test entry point; full sparse solve not proved |
+| Full-SPD manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedFullSpdMatrix` | provides an independent dense oracle with nonzero off-diagonal entries | source negative control; diagonal differs from the full sparse solve |
+| Focused GPU preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | sprawdza fail-closed resolver oraz diagonal setup/apply względem full-SPD negative control | source test entry point; full sparse solve not implemented |
 | Benchmark availability | `scripts/analysis/fem_gpu_benchmark.py` | `RELAXATION_PRECONDITIONER_RUNTIME_NAMES` | utrzymuje `exchange_mass` jako niedostępny runtime | benchmark source; performance `NOT VERIFIED` |

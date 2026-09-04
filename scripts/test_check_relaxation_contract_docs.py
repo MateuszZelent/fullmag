@@ -188,11 +188,11 @@ class DirectMinimizerDocumentationStatusTest(unittest.TestCase):
 
     def test_preconditioner_claim_maps_cover_owners_tests_and_history(self) -> None:
         common_symbols = {
-            "GpuExchangeMassPreconditioner::setup",
-            "GpuExchangeMassPreconditioner::apply_device_component",
+            "GpuDiagonalRelaxationPreconditioner::setup",
+            "GpuDiagonalRelaxationPreconditioner::apply_device_component",
             "gpu_relax_compute_current_metrics",
             "gpu_relax_compute_effective_field_energy_gradient_and_direction",
-            "struct ManufacturedSpdMatrix",
+            "struct ManufacturedFullSpdMatrix",
             "main",
         }
         for stem in (
@@ -227,10 +227,11 @@ class DirectMinimizerDocumentationStatusTest(unittest.TestCase):
             evidence_paths,
         )
 
-    def test_preconditioner_fixture_claims_state_the_diagonal_only_limit(self) -> None:
+    def test_preconditioner_fixture_claims_state_the_full_spd_negative_control(self) -> None:
         forbidden = (
-            "off-diagonal fixture",
-            "distinguishes the pointwise path from a full sparse solve",
+            "diagonal-only fixture",
+            "does not distinguish pointwise apply from a full sparse solve",
+            "no sparse negative control",
         )
         for stem in (
             "0560-all-in-gpu-fem-runtime",
@@ -243,7 +244,7 @@ class DirectMinimizerDocumentationStatusTest(unittest.TestCase):
             )
             fixture = next(
                 source for source in source_map["sources"]
-                if source["symbol"] == "struct ManufacturedSpdMatrix"
+                if source["symbol"] == "struct ManufacturedFullSpdMatrix"
             )
             contract = next(
                 source for source in source_map["sources"]
@@ -252,21 +253,76 @@ class DirectMinimizerDocumentationStatusTest(unittest.TestCase):
             )
             claims = f"{page}\n{fixture['responsibility']}\n{contract['responsibility']}".lower()
             with self.subTest(stem=stem):
-                self.assertIn("diagonal-only", fixture["responsibility"].lower())
+                self.assertIn("independent dense oracle", fixture["responsibility"].lower())
                 self.assertIn(
-                    "does not distinguish pointwise apply from a full sparse solve",
+                    "nonzero off-diagonal entries",
                     fixture["responsibility"].lower(),
                 )
-                self.assertIn("no sparse negative control", contract["responsibility"].lower())
+                self.assertIn("full-spd negative control", contract["responsibility"].lower())
                 for phrase in forbidden:
                     self.assertNotIn(phrase, claims)
 
         fixture_source = self._read(
             "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp"
         )
-        fixture_body = fixture_source.split("struct ManufacturedSpdMatrix", 1)[1].split("};", 1)[0]
-        self.assertIn("std::vector<double> diag", fixture_body)
-        self.assertIn("y[i] = diag[i] * x[i]", fixture_body)
+        fixture_body = fixture_source.split("struct ManufacturedFullSpdMatrix", 1)[1].split(
+            "void check_resolver_contract", 1
+        )[0]
+        self.assertIn("std::array<std::array<double, size>, size> entries", fixture_body)
+        self.assertIn("std::vector<double> solve", fixture_body)
+
+    def test_gpu_preconditioner_launch_checks_are_fail_closed_without_ub_fixture(self) -> None:
+        source = self._read(
+            "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp"
+        )
+        contract = self._read(
+            "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp"
+        )
+        helper = source.split("bool cuda_launch_ok", 1)[1].split("} // namespace", 1)[0]
+        self.assertIn("cudaPeekAtLastError()", helper)
+        self.assertNotIn("cudaStreamDestroy", contract)
+
+        scalar = source.split(
+            "bool GpuDiagonalRelaxationPreconditioner::apply_device(", 1
+        )[1].split(
+            "bool GpuDiagonalRelaxationPreconditioner::apply_device_component(", 1
+        )[0]
+        component = source.split(
+            "bool GpuDiagonalRelaxationPreconditioner::apply_device_component(", 1
+        )[1]
+        for body, wrapper in (
+            (scalar, "fullmag_cuda_relax_preconditioner_apply("),
+            (component, "fullmag_cuda_relax_preconditioner_apply_component("),
+        ):
+            with self.subTest(wrapper=wrapper):
+                self.assertLess(body.index(wrapper), body.index("cuda_launch_ok("))
+                self.assertLess(body.index("cuda_launch_ok("), body.index("apply_count_ += 1"))
+
+    def test_current_preconditioner_docs_reject_removed_class_name(self) -> None:
+        current_docs = (
+            "docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md",
+            "docs/performance/fem-gpu-performance-remediation-2026-09-01/"
+            "fem-gpu-performance-remediation-2026-09-01/README.md",
+            "docs/performance/fem-gpu-performance-remediation-2026-09-01/"
+            "fem-gpu-performance-remediation-2026-09-01/"
+            "07-relaxation-preconditioning-remediation.md",
+            "docs/performance/fem-gpu-performance-remediation-2026-09-01/"
+            "fem-gpu-performance-remediation-plan-combined-2026-09-01.md",
+            "docs/audits/2026-09-02-fem-gpu-solver-completion.md",
+            ".superpowers/sdd/task-2-direct-minimizers-report.md",
+        )
+        for path in current_docs:
+            with self.subTest(path=path):
+                self.assertNotIn("GpuExchangeMassPreconditioner", self._read(path))
+
+        source_map = json.loads(
+            self._read(
+                "docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.source-map.json"
+            )
+        )
+        mapped = {source["symbol"] for source in source_map["sources"]}
+        self.assertIn("GpuDiagonalRelaxationPreconditioner::setup", mapped)
+        self.assertIn("GpuDiagonalRelaxationPreconditioner::apply_device_component", mapped)
 
     def test_0510_maps_exact_index_operator_and_si_contracts(self) -> None:
         page = self._read("docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md")

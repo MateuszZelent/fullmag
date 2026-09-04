@@ -22,8 +22,8 @@ demagnetizing solves without changing the physical energy or stopping rule.
 
 ### Current source status (2026-09-04)
 
-The class currently named `GpuExchangeMassPreconditioner` is a
-diagonal/Jacobi approximation. Its setup receives only mass and exchange
+The `GpuDiagonalRelaxationPreconditioner` class is a diagonal/Jacobi
+approximation. Its setup receives only mass and exchange
 diagonals and uploads the pointwise factor $M_i/(M_i+wK_{ii})$, where the
 physical direct-minimizer contract requires
 $w=\lambda(2/\mu_0)$ for $K_A$ stored in joules; it
@@ -256,8 +256,8 @@ phase-1 tasks add and verify the corresponding source.
 ## 9. Implementation mapping
 
 The current pointwise implementation is owned by
-`build_gpu_relaxation_diagonal` and the misleadingly named
-`GpuExchangeMassPreconditioner` methods. `resolve_gpu_relaxation_preconditioner`
+`build_gpu_relaxation_diagonal` and
+`GpuDiagonalRelaxationPreconditioner`. `resolve_gpu_relaxation_preconditioner`
 defaults an empty request to `none`. The NCG and PG-BB call sites show the
 conditional in-place apply, while the benchmark's runtime-name map keeps the
 full strategy unavailable. `SparseApplyPlan::apply_xyz` is an available
@@ -317,8 +317,8 @@ Failure to pass leaves the production default at `none`.
 | Claim | Path | Symbol | Responsibility | Evidence status |
 |---|---|---|---|---|
 | Current diagonal builder | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `build_gpu_relaxation_diagonal` | constructs $M_i+wK_{ii}$ only, with physical $w=\lambda(2/\mu_0)$ | current source |
-| Current diagonal setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::setup` | validates and uploads mass and exchange diagonals with the supplied exchange-Hessian scale | current source; production setup absent |
-| Current pointwise device apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::apply_device_component` | applies the uploaded diagonal inverse independently to x/y/z | current source; not a sparse solve |
+| Current diagonal setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuDiagonalRelaxationPreconditioner::setup` | validates and uploads mass and exchange diagonals with the supplied exchange-Hessian scale | current source; production setup absent |
+| Current pointwise device apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuDiagonalRelaxationPreconditioner::apply_device_component` | applies the uploaded diagonal inverse independently to x/y/z | current source; not a sparse solve |
 | Default and qualified-profile resolver | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `resolve_gpu_relaxation_preconditioner` | defaults to `none` and rejects unqualified profiles | current source |
 | PG-BB conditional pointwise apply | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_compute_current_metrics` | shows inactive/in-place current integration boundary | current source, not qualification |
 | NCG conditional pointwise apply | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_compute_effective_field_energy_gradient_and_direction` | shows inactive/in-place current integration boundary | current source, not qualification |
@@ -327,8 +327,8 @@ Failure to pass leaves the production default at `none`.
 | Benchmark availability map | `scripts/analysis/fem_gpu_benchmark.py` | `RELAXATION_PRECONDITIONER_RUNTIME_NAMES` | keeps `exchange_mass` unavailable | current source |
 | SI exchange-Hessian scale | `backends/fem/src/relaxation_operator_units.hpp` | `exchange_hessian_scale_from_step_m_per_a` | preserves $\lambda(2/\mu_0)$ when $K_A$ is represented in joules | current source |
 | SI operator-unit contract | `backends/fem/tests/relaxation_operator_contract.cpp` | `void exchange_hessian_uses_si_field_scale` | checks the exchange scale and a manufactured two-node operator action | source test |
-| Diagonal-only manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedSpdMatrix` | diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve | source test fixture; off-diagonal RED belongs to Task 2 |
-| Focused GPU preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | exercises the current resolver and diagonal setup/apply; no sparse negative control | source test entry point; full sparse solve not proved |
+| Full-SPD manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedFullSpdMatrix` | provides an independent dense oracle with nonzero off-diagonal entries | source negative control; diagonal differs from the full sparse solve |
+| Focused GPU preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | exercises fail-closed resolution and diagonal setup/apply against the full-SPD negative control | source test entry point; full sparse solve not implemented |
 | Full sparse phase-1 contract | `docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md` | `DOC-ANCHOR:fem-gpu-preconditioner-full-sparse-contract` | defines target semantics without claiming runtime evidence | planned contract |
 
 ### Historical evidence index

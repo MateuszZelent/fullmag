@@ -21,7 +21,7 @@ Szczegółowy werdykt dla każdego ID znajduje się w
 [10-finding-coverage-matrix.md](10-finding-coverage-matrix.md).
 
 Korekta RL-01 z 2026-09-04: bieżąca klasa
-`GpuExchangeMassPreconditioner` realizuje tylko nieaktywną aproksymację
+`GpuDiagonalRelaxationPreconditioner` realizuje tylko nieaktywną aproksymację
 diagonalną/Jacobiego. Pełny sparse
 `exchange_mass_cg4|cg8` jest zatwierdzonym projektem, ale jego capability,
 runtime, CPU/GPU parity, physics validation i performance pozostają

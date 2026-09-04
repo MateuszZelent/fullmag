@@ -113,12 +113,12 @@
     {"id": "direct-minimizer-diagonal", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "build_gpu_relaxation_diagonal", "responsibility": "Składa wyłącznie bieżącą przekątną mass-plus-exchange."},
     {"id": "direct-minimizer-resolver", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "resolve_gpu_relaxation_preconditioner", "responsibility": "Zachowuje none jako default i odrzuca niezakwalifikowany profil."},
     {"id": "direct-minimizer-benchmark-map", "path": "scripts/analysis/fem_gpu_benchmark.py", "symbol": "RELAXATION_PRECONDITIONER_RUNTIME_NAMES", "responsibility": "Utrzymuje exchange_mass jako niedostępny w bieżącym benchmarku."},
-    {"id": "direct-minimizer-setup", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuExchangeMassPreconditioner::setup", "responsibility": "Przyjmuje wyłącznie bieżące przekątne mass/exchange i wysyła czynnik punktowy."},
-    {"id": "direct-minimizer-apply", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuExchangeMassPreconditioner::apply_device_component", "responsibility": "Stosuje bieżący diagonalny czynnik niezależnie do x, y i z."},
+    {"id": "direct-minimizer-setup", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuDiagonalRelaxationPreconditioner::setup", "responsibility": "Przyjmuje bieżące przekątne mass/exchange i wysyła czynnik punktowej aproksymacji diagonalnej."},
+    {"id": "direct-minimizer-apply", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuDiagonalRelaxationPreconditioner::apply_device_component", "responsibility": "Stosuje bieżący diagonalny czynnik niezależnie do x, y i z."},
     {"id": "direct-minimizer-pgbb-call", "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp", "symbol": "gpu_relax_compute_current_metrics", "responsibility": "Pokazuje warunkowy apply PG-BB bez fail-closed propagacji statusu."},
     {"id": "direct-minimizer-ncg-call", "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp", "symbol": "gpu_relax_compute_effective_field_energy_gradient_and_direction", "responsibility": "Pokazuje warunkowy apply NCG bez fail-closed propagacji statusu."},
-    {"id": "direct-minimizer-spd-fixture", "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp", "symbol": "struct ManufacturedSpdMatrix", "responsibility": "Diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve."},
-    {"id": "direct-minimizer-contract-main", "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp", "symbol": "main", "responsibility": "Sprawdza bieżący resolver i diagonal setup/apply; no sparse negative control."}
+    {"id": "direct-minimizer-spd-fixture", "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp", "symbol": "struct ManufacturedFullSpdMatrix", "responsibility": "Provides an independent dense oracle with nonzero off-diagonal entries."},
+    {"id": "direct-minimizer-contract-main", "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp", "symbol": "main", "responsibility": "Sprawdza fail-closed resolver oraz diagonal setup/apply względem full-SPD negative control."}
   ],
   "public_api": {
     "parameters": [

@@ -6,13 +6,26 @@
 
 namespace fullmag::fem {
 
+namespace {
+
+bool cuda_launch_ok(const char *operation, std::string &error)
+{
+    const cudaError_t rc = cudaPeekAtLastError();
+    if (rc == cudaSuccess) {
+        return true;
+    }
+    error = std::string(operation) + " failed: " + cudaGetErrorString(rc);
+    return false;
+}
+
+} // namespace
+
 const char *gpu_relaxation_preconditioner_kind_id(
     GpuRelaxationPreconditionerKind kind) noexcept
 {
     switch (kind) {
     case GpuRelaxationPreconditionerKind::None: return "none";
     case GpuRelaxationPreconditionerKind::Diagonal: return "diagonal";
-    case GpuRelaxationPreconditionerKind::ExchangeMass: return "exchange_mass";
     }
     return "unsupported";
 }
@@ -33,15 +46,11 @@ bool resolve_gpu_relaxation_preconditioner(
         error.clear();
         return true;
     }
-    if (request.requested_kind == "exchange_mass") {
-        if (!request.profile_qualified) {
-            error = "GPU exchange-mass relaxation preconditioner is not qualified";
-            return false;
-        }
-        decision.kind = GpuRelaxationPreconditionerKind::ExchangeMass;
-        decision.qualified = true;
-        error.clear();
-        return true;
+    if (request.requested_kind == "exchange_mass" ||
+        request.requested_kind == "exchange_mass_cg4" ||
+        request.requested_kind == "exchange_mass_cg8") {
+        error = "GPU exchange-mass relaxation preconditioner is not implemented";
+        return false;
     }
     if (request.requested_kind != "diagonal") {
         error = "unsupported GPU relaxation preconditioner: " +
@@ -85,6 +94,11 @@ bool build_gpu_relaxation_diagonal(
         if (!free) {
             continue;
         }
+        if (mass_diagonal[i] <= 0.0 || exchange_diagonal[i] < 0.0) {
+            error = "GPU relaxation diagonal has invalid entries on a free node";
+            diagonal.clear();
+            return false;
+        }
         const double value = mass_diagonal[i] + exchange_weight * exchange_diagonal[i];
         if (!std::isfinite(value) || value <= 0.0) {
             error = "GPU relaxation diagonal is non-positive on a free node";
@@ -97,17 +111,18 @@ bool build_gpu_relaxation_diagonal(
     return true;
 }
 
-GpuExchangeMassPreconditioner::~GpuExchangeMassPreconditioner()
+GpuDiagonalRelaxationPreconditioner::~GpuDiagonalRelaxationPreconditioner()
 {
     reset();
 }
 
-void GpuExchangeMassPreconditioner::reset()
+void GpuDiagonalRelaxationPreconditioner::reset()
 {
     if (d_op_diag_inv_ != nullptr) {
         cudaFree(d_op_diag_inv_);
         d_op_diag_inv_ = nullptr;
     }
+    configured_size_ = 0;
     d_capacity_ = 0;
     cached_weight_ = 0.0;
     cached_mass_.clear();
@@ -115,7 +130,7 @@ void GpuExchangeMassPreconditioner::reset()
     cached_op_diag_.clear();
 }
 
-bool GpuExchangeMassPreconditioner::setup(
+bool GpuDiagonalRelaxationPreconditioner::setup(
     const std::vector<double> &mass_diagonal,
     const std::vector<double> &exchange_diagonal,
     double weight,
@@ -124,7 +139,8 @@ bool GpuExchangeMassPreconditioner::setup(
 {
     if (mass_diagonal.empty() || mass_diagonal.size() != exchange_diagonal.size() ||
         !std::isfinite(weight) || weight < 0.0) {
-        error = "invalid dimensions or weight for exchange-mass preconditioner";
+        error = "invalid dimensions or weight for diagonal relaxation preconditioner";
+        reset();
         return false;
     }
 
@@ -136,7 +152,9 @@ bool GpuExchangeMassPreconditioner::setup(
         cached_exchange_ == exchange_diagonal &&
         !cached_op_diag_.empty() &&
         d_op_diag_inv_ != nullptr &&
+        configured_size_ == n &&
         d_capacity_ >= n) {
+        error.clear();
         return true;
     }
 
@@ -151,6 +169,11 @@ bool GpuExchangeMassPreconditioner::setup(
             return false;
         }
         const double denom = m + weight * k;
+        if (!std::isfinite(denom) || denom <= 0.0) {
+            error = "non-positive or non-finite diagonal preconditioner entry";
+            reset();
+            return false;
+        }
         cached_op_diag_[i] = denom;
         host_factors[i] = m / denom;
     }
@@ -186,12 +209,13 @@ bool GpuExchangeMassPreconditioner::setup(
     cached_mass_ = mass_diagonal;
     cached_exchange_ = exchange_diagonal;
     cached_weight_ = weight;
+    configured_size_ = n;
     setup_count_ += 1;
     error.clear();
     return true;
 }
 
-bool GpuExchangeMassPreconditioner::apply_host(
+bool GpuDiagonalRelaxationPreconditioner::apply_host(
     const std::vector<double> &rhs,
     std::vector<double> &solution,
     std::string &error)
@@ -203,7 +227,11 @@ bool GpuExchangeMassPreconditioner::apply_host(
     const size_t n = rhs.size();
     solution.resize(n);
     for (size_t i = 0; i < n; ++i) {
-        // (M + w K)^{-1} * M * rhs
+        if (!std::isfinite(rhs[i])) {
+            solution.clear();
+            error = "diagonal relaxation preconditioner RHS contains non-finite values";
+            return false;
+        }
         solution[i] = (cached_mass_[i] * rhs[i]) / cached_op_diag_[i];
     }
     apply_count_ += 1;
@@ -211,26 +239,30 @@ bool GpuExchangeMassPreconditioner::apply_host(
     return true;
 }
 
-bool GpuExchangeMassPreconditioner::apply_device(
+bool GpuDiagonalRelaxationPreconditioner::apply_device(
     const double *d_rhs,
     double *d_solution,
     size_t n,
     void *stream,
     std::string &error)
 {
-    if (d_op_diag_inv_ == nullptr || d_capacity_ < n || d_rhs == nullptr || d_solution == nullptr) {
-        error = "GPU preconditioner device buffers not allocated or null arguments";
+    if (d_op_diag_inv_ == nullptr || configured_size_ != n || d_capacity_ < n || n == 0 ||
+        d_rhs == nullptr || d_solution == nullptr) {
+        error = "GPU diagonal preconditioner has invalid device buffers or dimensions";
         return false;
     }
     cudaStream_t s = static_cast<cudaStream_t>(stream);
     fullmag_cuda_relax_preconditioner_apply(
         d_rhs, d_op_diag_inv_, d_solution, static_cast<int>(n), s);
+    if (!cuda_launch_ok("launch diagonal preconditioner apply", error)) {
+        return false;
+    }
     apply_count_ += 1;
     error.clear();
     return true;
 }
 
-bool GpuExchangeMassPreconditioner::apply_device_component(
+bool GpuDiagonalRelaxationPreconditioner::apply_device_component(
     const double *d_rhs_x,
     const double *d_rhs_y,
     const double *d_rhs_z,
@@ -241,13 +273,18 @@ bool GpuExchangeMassPreconditioner::apply_device_component(
     void *stream,
     std::string &error)
 {
-    if (d_op_diag_inv_ == nullptr || d_capacity_ < n) {
-        error = "GPU preconditioner device buffers not allocated";
+    if (d_op_diag_inv_ == nullptr || configured_size_ != n || d_capacity_ < n || n == 0 ||
+        d_rhs_x == nullptr || d_rhs_y == nullptr || d_rhs_z == nullptr ||
+        d_sol_x == nullptr || d_sol_y == nullptr || d_sol_z == nullptr) {
+        error = "GPU diagonal preconditioner has invalid component buffers or dimensions";
         return false;
     }
     cudaStream_t s = static_cast<cudaStream_t>(stream);
     fullmag_cuda_relax_preconditioner_apply_component(
         d_rhs_x, d_rhs_y, d_rhs_z, d_op_diag_inv_, d_sol_x, d_sol_y, d_sol_z, static_cast<int>(n), s);
+    if (!cuda_launch_ok("launch diagonal preconditioner component apply", error)) {
+        return false;
+    }
     apply_count_ += 1;
     error.clear();
     return true;

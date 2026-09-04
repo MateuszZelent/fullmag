@@ -9,7 +9,6 @@ namespace fullmag::fem {
 enum class GpuRelaxationPreconditionerKind {
     None,
     Diagonal,
-    ExchangeMass,
 };
 
 const char *gpu_relaxation_preconditioner_kind_id(
@@ -46,16 +45,18 @@ bool build_gpu_relaxation_diagonal(
     std::vector<double> &diagonal,
     std::string &error);
 
-/* Reusable exchange-mass preconditioner for GPU relaxation: (M + w K)^{-1} M.
- * Setup runs once per (mesh_version, weight), preserving device buffers across
- * iterations. Hot apply does not allocate and does not perform D2H. */
-class GpuExchangeMassPreconditioner {
+/* Reusable diagonal preconditioner for GPU relaxation.  Setup uploads the
+ * pointwise factor M_i / (M_i + w K_ii); w already contains the canonical
+ * exchange-Hessian scaling supplied by the call site. */
+class GpuDiagonalRelaxationPreconditioner {
 public:
-    GpuExchangeMassPreconditioner() = default;
-    ~GpuExchangeMassPreconditioner();
+    GpuDiagonalRelaxationPreconditioner() = default;
+    ~GpuDiagonalRelaxationPreconditioner();
 
-    GpuExchangeMassPreconditioner(const GpuExchangeMassPreconditioner &) = delete;
-    GpuExchangeMassPreconditioner &operator=(const GpuExchangeMassPreconditioner &) = delete;
+    GpuDiagonalRelaxationPreconditioner(
+        const GpuDiagonalRelaxationPreconditioner &) = delete;
+    GpuDiagonalRelaxationPreconditioner &operator=(
+        const GpuDiagonalRelaxationPreconditioner &) = delete;
 
     bool setup(
         const std::vector<double> &mass_diagonal,
@@ -103,6 +104,7 @@ private:
     std::vector<double> cached_exchange_;
     std::vector<double> cached_op_diag_;
     double *d_op_diag_inv_ = nullptr;
+    size_t configured_size_ = 0;
     size_t d_capacity_ = 0;
 };
 
