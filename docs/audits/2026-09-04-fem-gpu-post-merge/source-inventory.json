@@ -1,0 +1,3663 @@
+{
+  "captured_date": "2026-09-04",
+  "root": "C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation",
+  "commit": "5c96cacf0af005ed58a7ad83696281e00eb02136",
+  "scope": "Tracked backends/fem files in dirty audit snapshot; inventory is not a line-by-line review certificate.",
+  "files": [
+    {
+      "path": "backends/fem/CMakeLists.txt",
+      "sha256": "04937ad347e20b7ed4f21a61584ab121f27fd140f0cc30262ab3fa9fc3a265cb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cmake/FindPETSc.cmake",
+      "sha256": "c2b1939a58cc80c4b97949d7cb695c0eab1288009eccefc92c93ec02980fc5e1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cmake/FindSLEPc.cmake",
+      "sha256": "4f5e9fe763108cf555b7716f60ee8a3edb910205033520277c4d1298065b3629",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/adaptive_step_decision.hpp",
+      "sha256": "e7e357ea3912df0345327c65a5054e649a4106b692e252d3fc8c9f48dc4006b8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/demag_linear_solve_validation.cpp",
+      "sha256": "79c084ca193937a277233694d9960a7cf015d9d0168f619e80cba8f1572b5270",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/demag_linear_solve_validation.hpp",
+      "sha256": "9c7cea67c9be30cc8ddbb0eff38d07d1b279b1188cbe9eeb87b8bb17c4c736d5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/demag_solver_policy.cpp",
+      "sha256": "fe03999f9491f1fad7ee63e152a0f861babdb6a7cb8b7cd2a9c87e2d4afedc7c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/demag_solver_policy.hpp",
+      "sha256": "9550a9efda15b6980c85ef1c11b7e1d8b99a2eff9b3376937aeae746cafe60c7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_context_builder.cpp",
+      "sha256": "9330d24d22cd51d3f05bfd65672dabde21864d9ff541866b7ad07c11c8a21f59",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_context_builder.hpp",
+      "sha256": "251bd8cf3729b298775059232dda2f0283bfa59e0201870af71f7ba956cc8f4a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_element_quadrature_material.cpp",
+      "sha256": "7267ca2eafd9220b48830ec64677ff86b491c2aa954e4d000eb5f966ea977c02",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_element_quadrature_material.hpp",
+      "sha256": "0d61f35a9c3509ea27feb2939396613a8eb8991898ae5fc5d60b9afbdcc7a84a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_field_buffers.cpp",
+      "sha256": "56b084ae66d9fd1272ec1899b42c15bb077055727b33ba72aad546c3d154518e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_field_buffers.hpp",
+      "sha256": "6a43d55d91261404d3857f330c2375236a084a7419a63e517a47cb979a837def",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_material_fields.cpp",
+      "sha256": "bffa2bb7cfc414557dd2175bec49a3cc57989d156b6e4b9fa0868e5e27c61525",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_material_fields.hpp",
+      "sha256": "0857a27ac7dd984aab6e49cce88f53be522f8724bcc7cdc59bbb7fa5dc8ead5d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_material_runtime.cpp",
+      "sha256": "b0ec79bff5c33e828813d7f30cf80a54431a5c4b6f80dbf324eb9e037e0f362a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_material_runtime.hpp",
+      "sha256": "9174fd2f5862f2477f6decb61e70596e938d6970aebd4d3b0ccaf8df53fa472c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_mesh.cpp",
+      "sha256": "bce88856de7a7a33a806efc6e2a92c4685f1c16e58f48a1a17f0f5cdcb2b732e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_mesh.hpp",
+      "sha256": "0867845cd3dd259c84dcdf1ef89a4a851a91106a78d64d3fb94d82b97f65de72",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_plan_fields.cpp",
+      "sha256": "bdec6afeec32e37a8e282b3546bec8c7b915163e77ae3383f07355a671402331",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_plan_fields.hpp",
+      "sha256": "8d27b83d429b9030adac9ba3ed30659f80469a110fd18cb75a1f7b5452d3297d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_state.cpp",
+      "sha256": "abd16e7ecd98b1d0387f38f44e918a268aeeda78d955873384863907c2e32530",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/core/fem_state.hpp",
+      "sha256": "c72f87f59dda7289459bd9f3e6ddead69c4088338eb16ba561caa935efc392e9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/contour_interval_solver.cpp",
+      "sha256": "72bee4add8ff21d99a913f9c4984331c32f81deed0c3cecb2faf4a23e1a509eb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/contour_interval_solver.hpp",
+      "sha256": "0a7714124ad8be7b61c81c0f5e5f5d0ec914759a66639af0cd9c2539f85a3390",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/contour_quadrature.cpp",
+      "sha256": "7c2b48ebc8ec83a7c2ffafbd0bd30abbc1b03e1ac125d04171010838fda1cb78",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/contour_quadrature.hpp",
+      "sha256": "7f956690d0acbd3070b4fb2eed744c7529f6162ebd4d691f5b1c91efebc028ef",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/dense_driven_response.cpp",
+      "sha256": "43d0edbedb783b0d443e441e210ab308c2b9e7d8bc893b03b3d301ade717b329",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/dense_driven_response.hpp",
+      "sha256": "522d5eceeea492c683c20ed0f3b189a906c72adc2f29efd33768c76b47e9cab2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp",
+      "sha256": "cc631d092b83834b8f40be54a8c231108c8463f3b2db6a81adc80f10a58c0bb6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.cpp",
+      "sha256": "818eaa939b5dcf6dc46bcc0f3f9b40779405ebc42c573ce64ff97039f7e53668",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.hpp",
+      "sha256": "63051de747ce82e40fe6307d0df072dfbdb76de29286d06fbbd38bed24f11519",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.cpp",
+      "sha256": "632010475f1024a98f11667a476abb533db4cea9ea236a49a2a92becc02dc194",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.hpp",
+      "sha256": "f66c3465e639a076c3a0a48221dc3e07ba5b85c5ba1a930444664bada9e1635a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp",
+      "sha256": "ac6a7c23828745770f2bc6b2b97ab28bf772a0c08790e08fac515c48502382a5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.hpp",
+      "sha256": "126cca7c0947b573ce1499252301ba691be008445390ac8ef4640a7df63d91af",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/floquet_bloch_scalar.cpp",
+      "sha256": "44e37722299cf77418458a3276faa5a695644046a892af07980ed9fbddd22221",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/floquet_bloch_scalar.hpp",
+      "sha256": "345dea69b969ae43f900c05d063f4542ddbd6e4b31123a48bc29f70f5ea7965e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_dmi_operator.cpp",
+      "sha256": "51492c10582914603d0eb6cae298facf0fd7f45ab63e94771db0b5fb3a309bb3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_dmi_operator.hpp",
+      "sha256": "85eee92e8a2e6cfce6904490225f238e72abf28e5a4e58ea45ff429fb7d9b5f2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_driven_response_validation.cpp",
+      "sha256": "a186cc2625f028e43aeff48ec74ca275ab8318d4decec58ddb36cf3cc2dd4270",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_driven_response_validation.hpp",
+      "sha256": "481a700cf6149dada3c55c796178dc217f170027b4d5212572260a8c4c9766f6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_exchange_operator.cpp",
+      "sha256": "915147188b819d6ebae509f6bacf7f451ea0d45188299c65651916cf1793d2cd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_exchange_operator.hpp",
+      "sha256": "9ea0c78d2eedaaa127b999cb3d8244a2284aee32bef2e9593d2120a6e5b4bbf1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_linearized_operator.cpp",
+      "sha256": "597c30ac58bcc7c71d8f15d3208ea1d0cd458439a3b7e411f54b9e91cca454b0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_linearized_operator.hpp",
+      "sha256": "c090179c795c662e17998a3a89b3fe9632eaa21c32d8f3e121ff135d090ff2da",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_modal_operator_payload.cpp",
+      "sha256": "fdc9212e154df250f139a72250aafe2416021f9c8ae4b505366f067c32ed2b48",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_modal_operator_payload.hpp",
+      "sha256": "4e8139f1127672dc64330b8e1cfeded8b1fd506b14e1b5b56984522f03ec2ff8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_operator_context.cpp",
+      "sha256": "0b8266a32af94a3ea92eff5373886c107a3e89c416f8524eb976248d88db9a99",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_operator_context.hpp",
+      "sha256": "532e4abd8cafb0a5afd3f4ef7ee3a2c6e897116f2d65673432466fc6a61e8e1a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_tangent_space.cpp",
+      "sha256": "17a6daf62f9d7899875827d5ba24712f4857e070e85de3423f9b71d8ad5cc0ec",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_tangent_space.hpp",
+      "sha256": "58a393429a7225c94b5ea64c452afd1533f461425bc01b495b2f91f2c7386be9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_zeeman_operator.cpp",
+      "sha256": "f419c0b6617472fd20c25d727d36c0548081ebf3949ece91e91f65a938f2adcc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mfem_zeeman_operator.hpp",
+      "sha256": "21a79c11e1fd2fcbbc39f91c8161812597bf6d60d98052bfe700bcd3ba07ce34",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/modal_response.cpp",
+      "sha256": "b50e3744f6578ebf670449c03c06b543c29967b95809f860c046632aa1e3db9a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/modal_response.hpp",
+      "sha256": "cb1a53f1ed04923fc6d647dc693c02ef971e8a758879939f66debe1c6854ea8e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mode_deduplication.cpp",
+      "sha256": "b602d2036e753ce2a260205ba6c6eb976bfa8278d2c0948b515198b92b01ab36",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mode_deduplication.hpp",
+      "sha256": "9d6a5a7411eaf69dfc72f8598f0163854b259bac1f6f67f2b3a58bfef9454234",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mode_filter.cpp",
+      "sha256": "f33e30e0259a3c3d4fcf2d0a1492726fdfa7c0eba0946312f220ed3474296790",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/mode_filter.hpp",
+      "sha256": "b52ccfc6f913e7789039d504b240e5f11c9b9bf824dfb198e69f5dd3ef11dd7f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
+      "sha256": "c9559da42dac406d7d7cd7d8d3d1b4fb8f1cf792a5fcf7d7e3036d19690d98db",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
+      "sha256": "2db06ace7b969eafdac264701913c761669b7c01064e3c2c41d2498fb12ec29a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp",
+      "sha256": "0a46914ae7e706bc62f26e9616636a8c4a197936bcf811c4cd3598029a27f2ab",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.hpp",
+      "sha256": "5c83f1ebc3db2c4ee7d601034f1ba0cdc7de038bd2bef2d6b358419a6b3c09ab",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp",
+      "sha256": "5c31f138a329d48cdc2cbdefb37449f92f4362e4b310d9e7b5a18ec4fcca6233",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp",
+      "sha256": "325bc5574cfdbc13871b3983d8ef91cd7fa4c0d832e0c596ed9e0bbb18a94519",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_driven_response.cpp",
+      "sha256": "5b7e17b58ff357e816f54a0b1f60c714489256b0b01b4a15560752add0116a91",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_driven_response.hpp",
+      "sha256": "1f56d40d69596a8f55e124ae780af79a4bb72f9da22f690fddde6001af392146",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/production_cpu_modal_eigen.cpp",
+      "sha256": "3621bf1090fa3fd8031a6effd6a923d34faf175bec9e5d959c7481ba33a98c6c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.cpp",
+      "sha256": "d344019381171c9e84c199f3ccfc08e2d4a6ba9b0c558e79ae9354c7c88d165a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/slepc_modal_eigen.hpp",
+      "sha256": "44ffc168ee5efb5c54783de77a29b833632492220e2cb1301522888961e1d1c2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/spectral_transform.cpp",
+      "sha256": "bb7818d6dd8a09b2a1cf3fde33978ab04855ac3e5595aa7d950df0c93157695d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/spectral_transform.hpp",
+      "sha256": "010393e6c2e45a26f3f0ce52eea5736f821b0d7953e82efecc57fb3d42eac4e7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/window_partition.cpp",
+      "sha256": "b48782cc15f1ef5182ff259a4fc473f2664d46436e112e60fee7e1e108f19143",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/frequency_domain/window_partition.hpp",
+      "sha256": "323b5aab30f93ba1c09cf1ee20ab61c6d2eb22b7e03e101b6b36eac67035c880",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.cpp",
+      "sha256": "061bd8701f901dcf9c4d84e0893b43ef3542b7d88d7d3a057e6e59cffbf4a43b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/adaptive_dt.hpp",
+      "sha256": "f79bfdc71e1a05d137718abad5db6b854ec11e9a954ce349593c11ca2484ee86",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/heun.cpp",
+      "sha256": "39493bbd81f9e4fead4327a949d5dae6fa0b23d710d583ca1e16b9ad660aed95",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/llg_rhs.cpp",
+      "sha256": "36a3bb119393f8a2d53fce2cb653e44b341b8d939ede13c681732a0d01647b4a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/llg_rhs.hpp",
+      "sha256": "ae4a31befe334736cad015208ea29f8fb3b9425d9d7a86d6ebde87c02086ef06",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk23.cpp",
+      "sha256": "6182cdfa66778ec59410ebd5b2ca98418c45efb3a320018950df719e6373375b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk4.cpp",
+      "sha256": "5d442eb091254bb8cfd818c4dfcd41856a7514e59eacf241df3c770b72fb34a9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk45.cpp",
+      "sha256": "6930619ab5a49b324aa66233c83306a43ea9e4760dbc68f6c0b6c7f5d27b0c52",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_explicit.cpp",
+      "sha256": "b53c5c6ba50e60ce7eb57c06264cf47bf0f3d1b441da7223ccf0c133022008cd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_explicit.hpp",
+      "sha256": "55816fb3b96f49ef4f548eea2e69cee8799b33e2c651bc5e72b591c5d16b6b4b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp",
+      "sha256": "c511678a4960ba7d4b8ac53feb06b015b8f0ee3927f5d9ea3bf367d753a4824b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_explicit_step.hpp",
+      "sha256": "b4a28089c210123b696f1e7a0826bcb60ac607cee9a2cd24237ad9edf501dae0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.cpp",
+      "sha256": "a1b48a2b56a7e820058d2f13308156aedde1faa577a47a2b1334cfdf80c7c9ed",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_stage_rhs.hpp",
+      "sha256": "ca1a1e3302abb1dbc6334ed2f8543ac76705fa9214614fd23b20ebcf17fef8d5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_failure_injection.cpp",
+      "sha256": "5f0c10bbc71f5e8e0629288083d8f3388910d0b7687720f29f183c8801c8ddae",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_failure_injection.hpp",
+      "sha256": "78d6fcfc4c887e78afc8af4e22538c6fb9aae01ea022588473f1f9fbfec65784",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_transaction.cpp",
+      "sha256": "e3284105e4ad11d8b358a0b4d219d79ee3a150e6768a590acb64f6b277c46e14",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_step_transaction.hpp",
+      "sha256": "41f803af3c5e32650ec1355c45a6f394990a31e59bd75ef4376ce74892e7f39b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_stepper_workspace.hpp",
+      "sha256": "4549939a2ef8f9ce3fd554407824e0eb18dd11be14f7ca6f43beb914d05ef9b9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/rk_tableau.hpp",
+      "sha256": "d0049bc4797cf8467c9c38742b08ef03f39bbc395ce702685009b31cd7055463",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/integrators/tableaus.hpp",
+      "sha256": "5053b891703014abb9ac8df184b8b42b30907f1230f75e784e91e8259380161b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy.cpp",
+      "sha256": "8d8721d1f9a2ac10687abd9071127d8a39e2dbfaf2d36d90aa69a10613601271",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy.hpp",
+      "sha256": "6876b53ace8312f725109f35f32c818cb72e0ed07c5bebb1a00e315625f1fb4a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.cpp",
+      "sha256": "aa1505ab2ac7d2d41cd7cd2863b7f1a796b2e60c297b3fa90133cb4d65986512",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy_cubic.hpp",
+      "sha256": "dc7e9b4bfde3ae2c6005d079789bfa568d4ce97e5b7c23b51f89b39745eb1010",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp",
+      "sha256": "14b5ac649cacd542deee88ed46251bf09ed26b94056f5cb05cee07acc3baa68c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.hpp",
+      "sha256": "60ab8cd5fdd952ff4310fc1e04f44da53b70691c2962a4577c822489cf1d5955",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag.cpp",
+      "sha256": "dd613b19feabe74c34e99af01b37c352565eb83645c2df4993c8995cab61e21f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag.hpp",
+      "sha256": "94b555e3ff40c8a1a0fd8fc7a7685584e8186ccee35b61b6960f832d945e64e8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem.cpp",
+      "sha256": "ba025e5acea2e7779ab12395ddb03c3fa8dd506b26057ca06f6f04f575dce6ca",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem.hpp",
+      "sha256": "78d65ff56f6152e27ea8ef9ca7c5b8d54610e9ead89546e91f0a674489ec693a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.cpp",
+      "sha256": "41c57c61feef76779aedd2c56e5303fe5e7b7289af66a2ede3905945eb0073a8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_boundary_values.hpp",
+      "sha256": "f68d406803d9b37bcb14a6a064a935dd6cc6cec2be9423adf2f9b0058b3ca2a8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_energy.cpp",
+      "sha256": "7b6a077006663dff6100d3304f4a5d4a1925891815509699cccda86b78a08840",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_energy.hpp",
+      "sha256": "275af333207865cec1b3f71772444830886be4baa098e6d5d804494074bd8efa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.cpp",
+      "sha256": "eba50d6930a3909951e1023f12c2ec9bced02d4957cb783b7719bafa0ff98bfc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp",
+      "sha256": "b651e3ac044791b8ea5993ff78422da0b5098257c297ac596d24c945cebcc8e2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.cpp",
+      "sha256": "33413d62048ee86605a39a1367b63fc66f4793b0eb96298556c780f375285472",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_operator.hpp",
+      "sha256": "b8bb19bb47b519c58923760ffdb3b1e0b55710fd8e4945dcb287990da028166f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.cpp",
+      "sha256": "5d829d934f540de255d3ed5432a09adc01b866c685787038eadf645a4ac45342",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.hpp",
+      "sha256": "26d01604f4b417e526f8dc8103b4b9cbce7680fcea0ab146a4f6ece192184c44",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.cpp",
+      "sha256": "8b5eb1262c0a05f02c049bf585f8cfb66c9cee946ca43747adb898678f430036",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_rhs.hpp",
+      "sha256": "a8c1a962fa4189fb9b7f047476e591330f941b8644e27e0448feaf9a405ed68d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.cpp",
+      "sha256": "7132e9b4b8d6b3bba1ca8be327dbf7f791ed40f7e2815341935658031c0ad12e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_solve.hpp",
+      "sha256": "6a5504b3184524909acdbad86af501f533f645f394ccee80210f19e8e4f89812",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.cpp",
+      "sha256": "dd3e1bef87a08f32765346eb46a79ce26ee748723ff07df43dc5845b4990e912",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_surface.hpp",
+      "sha256": "33eba1132ecc26c7ae5d06786a1a3166ab935c3e190a2d6357cf426433c66fae",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_telemetry.cpp",
+      "sha256": "1a8b22b1b86b69f4b1429278050a9f880bdfb789852dab5626d27d5e089ea4bd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_telemetry.hpp",
+      "sha256": "dc9bc8ecf47043e9b792111b5f8e3799c68b9046213380a20d59f6ebb814566c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.cpp",
+      "sha256": "e6e589e3cbc2636a55d929c9f34edd74bdba7e40a05b1be75535c60e7468a0c8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_fem_bem_workspace.hpp",
+      "sha256": "44bc151e0c9b455929eb902a446ed1919f38a084066147004eefa2617c418b70",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson.cpp",
+      "sha256": "297f8e85323ba28e5a476e3f3a2a60bcd63c1cb10a02701538b65b52c506827f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson.hpp",
+      "sha256": "0851fb3b133ba8c1daa6360c2d3b9047ab6c3b84e0a1dbcf4e70d17e9c9473b1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.cpp",
+      "sha256": "3ebb12ba0bd18a9396240df612c15245d0e1cd0a61804bb16808714302327136",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_boundary.hpp",
+      "sha256": "ecaad25424e72e66639491e339de2ef6df462b94fdc017ae8d3e7c82fa8af94c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_cache.cpp",
+      "sha256": "ca17a5e742bbb3b7291c52e1378042d4f82a2543517d0ed4c8563cf1a1dc6c0f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_cache.hpp",
+      "sha256": "3b9c94735476b3b26d763e8d4b529a9dc458146d2d0d6fa4e0f86df8e3368261",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_dependency.cpp",
+      "sha256": "4c23d5a7745472e1076fbe37e8ad1b36d5c53bc0bd1d069501aa07b5a20f1d65",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp",
+      "sha256": "54eeb9eaac293d8436aa9250a33fe8ac09a1e3fc9bfc81beb71d9bc01f2b0cb9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_energy.hpp",
+      "sha256": "b48c44aad6ee8ccfa56ff0ad8a8be705c99fc2a4cf68fb491e4e5993023081dd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_field.cpp",
+      "sha256": "8149e51db8dfe3f5fdf49b370c2d7dbbca9d11cde7e0cd65fd707e5358ab7273",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_field.hpp",
+      "sha256": "a6326cdc2e0c54ae09b3887d63d15bf0bc48f300d4c7352aca4253319010de65",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.cpp",
+      "sha256": "29ef5d32b8fd9214a10190eb5498cca1e9d5cc26ad833fa70020c80bc0fc2d5f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_hypre.hpp",
+      "sha256": "bd7a8f5c6c19f3e7bc9f890218f04a62e9f18da70cd9de90df7f2aa53a3fd06c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_lifecycle.cpp",
+      "sha256": "f9bc49ce473e007a6d9fc87614bc2bbbe13f7e6279db0e1580569f088e6e7385",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_lifecycle.hpp",
+      "sha256": "d11857e8c5cf7ef241200716f999728fd1b509da5e476056108d320e15fa43b7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.cpp",
+      "sha256": "fb53ba0a6e42602311cd088e6ee0ac83d0c118846db5535d63c7913bf85b9d5f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_periodic.hpp",
+      "sha256": "c0364e058a0e3f1507ec7b3f0aeeceb7ad63b3de5381796e8a6c9b1d5528f707",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_ready.cpp",
+      "sha256": "8387ecb786e6e2e213e54f131451797585e2c82e2a5d726c353065ec8d014082",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_ready.hpp",
+      "sha256": "2786f07ea8d2bd253be80a5d5f5a02a8068e6b7383ed7c5e70a28d0de4466c60",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.cpp",
+      "sha256": "ba54fa574889183e2a26d518aaf793228d597bfecbdded7e910403f249a1fd8b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_recovery.hpp",
+      "sha256": "4f769f66379608f5189d4b39994dafc49d9ff9723d0135dc7013d3ce7ae99ae8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.cpp",
+      "sha256": "fc2d803ea1c83284a48b1ec2c683f65e8e78accd4eb6e607ac0a720868c43955",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_rhs.hpp",
+      "sha256": "12bf2a50ae04735ff3270812a4fc9dd78252928adb4686f9c73deb753eca2b75",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_runtime.hpp",
+      "sha256": "3c43aca9ed573941051f0aef6f1bfae54365ce9f39c56c03b2a741552b45529b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp",
+      "sha256": "7d88d313f3a6850d5969f70279684f439e3cfc77d9946df51fb2341ad59420d3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_solve.hpp",
+      "sha256": "32f5dca46e3f6006eb75553fa13cbf8e61b4169d13c7c5197cf1a5ef7ea21360",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_telemetry.cpp",
+      "sha256": "c78f2403b755167892b1e681a7408fabeff099e2ecd4268dfc4676aa4d0b824c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/demag_poisson_telemetry.hpp",
+      "sha256": "d5c700863834f59ed5a3ed9c7b9d8f3cdaf12e22f9af030b3ef28197fd27190a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi.cpp",
+      "sha256": "31d8d9ee4db1b1e6a3d360a2b39a8905f994ce08c30fa31d7eb08d0c104f5b4b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi.hpp",
+      "sha256": "b209953098ee28688efc953d83a576a3efc22b86e26c00ccae99da74c7fa118c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.cpp",
+      "sha256": "265203763b7e7b63132b251ed69fbffc9bb90f3e90a0af8cb8ced287f086ea7d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi_bulk.hpp",
+      "sha256": "9d0c1ec4a340c057274054cb894c9e2c7ca5d54ba004163c31c8b11d7e65575a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.cpp",
+      "sha256": "ec109f5881427b158c42071f8214ed3be67b3ec9a039f55486c3cb9d4a03004f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi_interfacial.hpp",
+      "sha256": "2a992b7c917fdaa992e8e0d58c6f21154e1b306a075c1134dfac1237774b8a1d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi_workspace.cpp",
+      "sha256": "651203f7bc2562011f98686e4046436cef697f6580f0acd81f54ec459b929ef8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/dmi_workspace.hpp",
+      "sha256": "a480ce63ed90b3b3c2532390d220a3852809e26b4d732b9869a5985fc04e558d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/effective_field.cpp",
+      "sha256": "c29c48018c7a48a94f098bfcce1a2d864166f565582bda4fe6f468d3fa07c83d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/effective_field.hpp",
+      "sha256": "307947271645edf868750e3315affef072c2a1fdbaa809574a8518d25d333120",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange.cpp",
+      "sha256": "7f5991d97ec1c4e12d42d2c54ad9d83bb5976dc3a3fb20df4dd7c6879cf50613",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange.hpp",
+      "sha256": "7d1d548d7ab141e331992d9b3f49a52f263f3fe053d8a7057d2ca4d2c72fdeab",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_energy_difference.cpp",
+      "sha256": "574b994a2852fb45c2ad45d5028a9b0d1cac599d2593c20f5fb1a8a400f2afee",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_energy_difference.hpp",
+      "sha256": "bfde2086293a8b1c117309cc936d73f20e4b91f06d0cc7a31a92a6dc47a510c4",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_fallback.cpp",
+      "sha256": "3c5db59c14e8fea1108afebdf2f756608cde09540d6a8e243e98df3a2ffdc03b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_fallback.hpp",
+      "sha256": "3d1d50c7d5a190bce5be094a3539f8bfda8265f7f2bd6ac996c3907cb1e80dfa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_field.cpp",
+      "sha256": "0ca3e668d931f2669039b0e31f9646a226d168319d4c459ae9c258a8f46ddf02",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_field.hpp",
+      "sha256": "9ef603f34e4907736194212f5664f8a7eb452b6dfea0b6dfcbc20e3d55762b9f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp",
+      "sha256": "42aef766b274712c19beab83107b1ba86805f9b0892274203c688d0991f9e00c",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.hpp",
+      "sha256": "b3407a4ccb6b40aec3896c254be078db18fc594d9039ab222bd6aca93ddeda39",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.cpp",
+      "sha256": "765a4541816ff5acd3b7d108bb19486b5ce1e302562ace291627b0e088a0447a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_mass_projection.hpp",
+      "sha256": "9dd20dade4bf2cf2fc779d4cef13c86bc901602487301749dbf57ecd5efdd7cb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_operator.cpp",
+      "sha256": "1855906a8e3e43d9965e04e21ef366c0ca065c19e35a3fcbd135f6d6be3658a1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_operator.hpp",
+      "sha256": "65751d83134ad79cdb2fb9089f89842c1fd7b5f54e341623ccdaea36e4deb84b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_runtime.cpp",
+      "sha256": "e6fef4c079d2c502622d75c9bee76bb7cd814372445dc0700f2ca59e196b7922",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/exchange_runtime.hpp",
+      "sha256": "3f79cee344b6933ffe7a82f0f9f718b3c9f0300dec38dd4326fe377e10b784e2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/frozen_spins.cpp",
+      "sha256": "6e8621d073343ed7e395076be89b5e662bc1febe6f8a78a2abe427251ef4e70f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/frozen_spins.hpp",
+      "sha256": "612af47d60c8cc2eeee6ca2e2f8278622c3a8eb5f7d878d3d7afe1135baf3a1b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic.cpp",
+      "sha256": "60495074b8a30cbf845e05096ea6db365817d54b28506bd79b7cd2c9858f6337",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic.hpp",
+      "sha256": "c844dfec94592f947c0b189d5ab7ac46501eab60bf7e440478d28aa27235d288",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_field.cpp",
+      "sha256": "b51971f2f87893a488da0476893188eb085ccc116cb8523f50fe64afec7f9a42",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_field.hpp",
+      "sha256": "c77e60a9a701feec627218a99fe6dc888f4de2a0f5b2c84ef3644e91fff05360",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.cpp",
+      "sha256": "8a20f233f0735f6d820785d13c9c836ddb7e426adf5af6a489dbc6e8b60b274c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/magnetoelastic_prescribed_strain.hpp",
+      "sha256": "a217735fcbe0d534273d989c19e198974ba927df25d6e8edd2fb1c305e5e37fe",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted.cpp",
+      "sha256": "80e5a2225af0c3b522f207e1ca5e173239fe5ddad07e41eda3954f2390a4b96b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted.hpp",
+      "sha256": "c937b3e6dddca9a2a06e89b3e06964cc38855a7a26e9de0604ad69ac4dd8bba2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.cpp",
+      "sha256": "faeb5fbeadac026419a9307b34733279c87fe2a7d181daabdb65f07481b2a076",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted/direct_tetra_quadrature.hpp",
+      "sha256": "86a332d9d52b6979e74ee00c258d49a680b692e53ed021ef24c3a1dd970b329b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.cpp",
+      "sha256": "550c48afe5b8774c0611b192125eb2594b898523e5978a86fff4b0aa92b4d984",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted/vector_potential.hpp",
+      "sha256": "a61b71279a9fb9d106171ffc5ebd77ad11394fd5905b886046cae74d158fbb0f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted_cylinder.cpp",
+      "sha256": "3aa972ac503a1a7811dcf8f59ab7e8d6363dbbe73aa8c38f08cb28a61bfbf45f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted_cylinder.hpp",
+      "sha256": "c3db2744a831077c45c21ed52653d6fcf5b1233ed53085e549203e3720cdc0d6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted_explicit.cpp",
+      "sha256": "317a30d1dd5b4886868b7ecf9d6bdaedc07983f00c9019ef67c05c0818c770c9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/oersted_explicit.hpp",
+      "sha256": "254155a29c17682971e9eee33fcbb7e2f33d9564982d21f9d0f0abda83218b74",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/operator_dependency.hpp",
+      "sha256": "6426918bed35879f7e5b9b1657fc9d0e01c480689a7c0d186f3d38d2c1e2bba1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/sot.cpp",
+      "sha256": "91d14cec2135fc5e845aab4cee82b3e91c915927ffa610a6d44769ff88d69462",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/sot.hpp",
+      "sha256": "f1a48b5219f8567cef64bce02852a256b598cc21dbb9ec71e3f3435d00f178ce",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/stt.cpp",
+      "sha256": "86b985a53bdc980f3c5cb171cadcb82d0eb7782d874d9b0ba1f3596774351fae",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/stt.hpp",
+      "sha256": "e73bf8f3b8af8449f9db201137ded958a408308eece64783b4824fbddcd7b03f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/stt_slonczewski.cpp",
+      "sha256": "63c9948fdf770708f70bc2ff8d4997e3dc7894213a710282799719e30a05fa84",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp",
+      "sha256": "7e3473863621341c522053355fe1eabdd4f2f5705fdd61e1b3d5c9007d411d77",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/stt_zhang_li.cpp",
+      "sha256": "b4f3c025e7ff4fad25fcbd409a218c5e213d3c61ab14db69cbe0093d089f9a57",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp",
+      "sha256": "1b13c0804386bb1437a3ac18d3e87923eca54a22171f1fa17764de013d5091be",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown.cpp",
+      "sha256": "d1da503be51b568613232dd16b9ec2cf879f6b43b4368b582e76d73c855671f7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown.hpp",
+      "sha256": "0e4c17edd354e02e9bddfadbc21d9a9559eafaad9360e4552af64fde3fdd5a49",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_field.cpp",
+      "sha256": "d2e00b9cfcff0b424dc744c009e14f4f75ec8f50a740e657d28e9616a52fc116",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_field.hpp",
+      "sha256": "fa425ee747307fff71e67272adaa34705fa1337ca1be2cefaa2106cf3f00824d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sampler.cpp",
+      "sha256": "c1c693c78b89babaabbbf821e604c3a2e4461035d50a6bca810236369aa2fd5a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sampler.hpp",
+      "sha256": "8974904249864a28cd84ce72d467b67a21dbb550268921c1461e520bff31a487",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sigma.cpp",
+      "sha256": "46813c0bb6c9ede625d1afeb7de565a001bfd3039f6d39a3318a7704f37a4fef",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/thermal_brown_sigma.hpp",
+      "sha256": "33d0a40c44da33f24021525a04120255f3bf8aa6a01cd352146723555ad4bad6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/transport_stage.cpp",
+      "sha256": "2667640fc1a770b2248bf557bfb7491bf88b14ca22002b3576dca365be4f3da8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/transport_stage.hpp",
+      "sha256": "a03fd9998c5286a832e20a0201b11f4447a2f302bf3fc678a8e810da6f192ffc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman.cpp",
+      "sha256": "91cd32b32dcafef60bf51a0fd004d3ce52165e1fc19f737f8dcf21e606f4c7e7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman.hpp",
+      "sha256": "0785c493bf952ea0ea7965e3e486a9819efbe7dc044d64732ee5b322ace703b7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_energy.cpp",
+      "sha256": "575112f4054e709c581b0552dbc7456248851c9f7f3f072a0a6efed99e91cd95",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_energy.hpp",
+      "sha256": "0489aee8ba254ead1527962059eaa25f1f2ff5c811ec78e578ba8be922e905c5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_field.cpp",
+      "sha256": "5210ea1fc52e64e937c026523cc0c1a8d3b1611a67e9eec5a94a95b938db4a83",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_field.hpp",
+      "sha256": "32d2aca97472665ad057c3e235ce7ae0309c6a9c0792633bb04c5f35838d5b43",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.cpp",
+      "sha256": "f8f529b014fff894ed60df0381c5fe9c2b85ea7527dd54cbdb32de4f301fcc81",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_regional_field.hpp",
+      "sha256": "bade38e026da5fdcd45738e30549a99bcdd62f78f7ba138051b51a31f3f20e65",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_time_dependence.cpp",
+      "sha256": "9e7b51c8d21156f5aad9293ab7e48fdede1764c3c1c561f201671398bc51f1b6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_time_dependence.hpp",
+      "sha256": "0011de3ceaf605dfdec2812dbc27da2d2c82d6557402097754dfdca8f2c4c4ad",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_uniform_field.cpp",
+      "sha256": "96fe3df13f0db0960fe3bee6e345fee88afa5123cb76ee1d0e2d4879b45cc69e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/interactions/zeeman_uniform_field.hpp",
+      "sha256": "4a1e9aae278977686eaf7f251c55638ecbcf0822024e2175d615ae0bb41246a9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/direct_energy_increment.cpp",
+      "sha256": "b26877002457eefc5069d1c66561151fa5474ca1f0d2a11da816db6b14f52088",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/direct_energy_increment.hpp",
+      "sha256": "bf20ba495db772cf8d87e811c8d9d53a3168aa24cb66787396082a817d3a7f6f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp",
+      "sha256": "15036cc1f8d17372ce650ade86310092b2dcf425ef3286437010886edb67a933",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/nonlinear_cg.hpp",
+      "sha256": "12146b47524a276aa28bbacefcdd12d61a57025b8f388adae87508dce0381170",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp",
+      "sha256": "41d400c7d287c518a3cebe1f562b1ad8270febd2e194477ac94ae8dcf9035f0c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/projected_gradient_bb.hpp",
+      "sha256": "f74253226a660cbe2dbac15fda06e6c89d2bf632267ce1346cc97387b32b181d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "sha256": "141f63b0d81611c8b6089e2e680fe621b12fc522a652132ad27c7b6a70f70783",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.hpp",
+      "sha256": "bf2e72988515bbd438c900ad3376761aefde44a5b414cf2fc3a4538ffb86b0f5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_step.cpp",
+      "sha256": "b4ce467891cfb52b001b1072f49de4b06882c2e3d11297f24f39425327710517",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_step.hpp",
+      "sha256": "5c7df74110c3522a2d3d9eaf2389aca44ad5eb03081844515faebd719f2c9d0f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp",
+      "sha256": "7329e3369215156b63265d11fdc3c0c28e5d47f95f9be6e4de2860c80be57a69",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.hpp",
+      "sha256": "fdf35fe32f061ef0b9ebae1cc4ce47d7a3eb6a294f83b3fe5d1c8b2b5ea0b856",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/aos_field.cpp",
+      "sha256": "4264ffe747c1f1f2a5410fdb07b23a96e9c731b638f87a4a4e1e34678e9a9e60",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/aos_field.hpp",
+      "sha256": "ba33bfa2c8086812d2d8d4a1046ce3c4f80db4fef4d246ff84d8411b0b9950d6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/availability.cpp",
+      "sha256": "f4280089cc303e830c520a5755d3293b0aee0a2315c339c7cdb20407714f2b62",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/availability.hpp",
+      "sha256": "61cfbecaa538daec38fe7b67a058a446d6db397f9a6a51f50fc72c4720586945",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/backend_lifecycle.cpp",
+      "sha256": "cf6f62d8aa2ad41c7ee59b7f6f70c6f6448d68d14af56c7f8e292cfc7697eda9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/backend_lifecycle.hpp",
+      "sha256": "71c226608af5c73eb0e74caad472aa8a706e49a5cc8be01b784d941676ee2aec",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/backend_step.cpp",
+      "sha256": "fc8ea046496873d935fa3e5302c1bf93fb266677397680e9afe9a978da092995",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/backend_step.hpp",
+      "sha256": "af68f130a0074858a1bb7d3a7db51013b403e21b5211f3de4a92782543468f62",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/cpu_threads.cpp",
+      "sha256": "b6952b3fc8884d90bdc703fc780c529173233d7a12707859b698dbd1903ba6e7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/cpu_threads.hpp",
+      "sha256": "948ddf62a62e7c368a238f5b449cb1af7aaec4fc7b125441bf22266b24256b97",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/eigen_dense.cpp",
+      "sha256": "02c2758c68eff853d1262df79b03ffd4e5f94f9fbe23c11e2febc7f5c8c6de7d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/eigen_dense.hpp",
+      "sha256": "7b3e5443177af973df42b422b6fa51fd577c9dd4b5ae22c396a4f705ee5b5d3e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/field_refresh.cpp",
+      "sha256": "ecdf7af3ebde52bf3fa5edd23f5536a4d05d31d0ef3f6c44609a7087bfc75636",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/field_refresh.hpp",
+      "sha256": "901c0d545f4bd1baa78f690509a458d553a4d3ec786cecc2b249b884fc62743a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/interrupt.cpp",
+      "sha256": "66054e5fc0f76c75120ca431c56ea835ccd6aa10a22a146d62741255794b15a3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/interrupt.hpp",
+      "sha256": "9860c0c8babb29c2d60a5fd08be98f78395c5038aec7ca66aa8322906d5582cf",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_context.cpp",
+      "sha256": "6c4d71175d3aaebb553de157e95ff28ed305ddb1b95545adf40c7a7e139bb3bc",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_context.hpp",
+      "sha256": "aac9f8aa81ec500f8d9e2e63f1613c373c2300442150bbc5c5d49d842ee7b291",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_device.cpp",
+      "sha256": "a8fd249c2f70c251fe771679e63140a41ed492fb00d8e8b75f58e5d0fbedc377",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_device.hpp",
+      "sha256": "ab1f636268c14ea152e7c7f0775959d50fadc5e2cffd2877b1c5e856799fdbb7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_host_access.hpp",
+      "sha256": "a0e91557fc119f57c859ac4a5a4d6c1a13eec940ff8faac86cd839290647ce94",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_mesh_builder.cpp",
+      "sha256": "05a8072c0acf56013c9c5103a845e9c0ada257cf7dec0a3bf60cc70909b536c6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mfem_mesh_builder.hpp",
+      "sha256": "62f9cdd75dab31fd26a5acee7ae08e11f3926207ff64e4e2837ca26dae3cf276",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/mpi_init.hpp",
+      "sha256": "3cedd5e8601d39c2ff680f2c47ff089440ecaa12d843376a6f16a468b5fc1650",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/phase_timings.hpp",
+      "sha256": "5a5a06de425cbe71a5f99fb19f395ce2c6a80b4926f085d668e0d4ab9e30e295",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/runtime_build_info.cpp",
+      "sha256": "9612428d0aeaba8b34668c5f6ee4288fa50bbf408906c9279edec85fad1015c8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/runtime_build_info.hpp",
+      "sha256": "3715417be718221a9c867b7244710b510a0df89fcaa6fce75b35765b7b7e1a5d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/snapshot.cpp",
+      "sha256": "d1277fe44859ff5ed8d1803cf2717188cc5b82d6ea69dafa38ba42558c8190bc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/snapshot.hpp",
+      "sha256": "2bc6f43c76b2ae613294f8f433fd87a7413494ec811e510b54243bc52b835718",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/stage_completion.cpp",
+      "sha256": "b768861230916c057d065ef194c0d76f309bcc4f6724be6ec431b72a267481d9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/stage_completion.hpp",
+      "sha256": "751b2778ae178c393ff9a85098b1401f7c28f39ed341372a4d1e68ecab6beb89",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/state_io.cpp",
+      "sha256": "b9c043835bbd873224f7c414c35f8637224094548509de34f8861f11e0a2a02e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/state_io.hpp",
+      "sha256": "f6fb52dd24907dd60dac208df49d5887fd6489a751a472ec5f97c15d2159eb13",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/step_metrics.cpp",
+      "sha256": "ac3b44e3c5ebd1e3e050ae70db3fc95cadb1df1a9d6f328ee7a239c54e400423",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/runtime/step_metrics.hpp",
+      "sha256": "f034f0c9de0fe30fd94095b8448d94725d58fc5db7e852dba2674e744ed4d3a5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/conservative_constraint_rank.cpp",
+      "sha256": "7818d5783ccb6c3ca3768e8ca4f9d0d0b43a450ae97c5a333fb361b259200a5d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/conservative_constraint_rank.hpp",
+      "sha256": "1059c3d6052faae24400d19cffd9a98078f863abfd88932f985cb2b48bf0d983",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.cpp",
+      "sha256": "4efc2ee48fc261b143c5d44d08a9c20924e2e41e56ce9f6b747cda5737957989",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/conservative_current_view.hpp",
+      "sha256": "580c813370bfadfcba768ed488d200c29ea86882cb01938ea5af0a67aaf948c7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/periodic_charge_potential.cpp",
+      "sha256": "8183a2829aa01b0513b3fc114721bbb088da8fcc8f3eef5d7b06e3d27309d6a1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/periodic_charge_potential.hpp",
+      "sha256": "64914637f92a9ee6becc4d23bec4528d931204cc718ff4abd5c9c02b1760fc49",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp",
+      "sha256": "05abe7f15216c77c1376e81cbb5fc34cd4d9eb9eace47d762be3073070d4eb0e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/steady_transport.hpp",
+      "sha256": "f6b97e3ebeaf2a8eaa4e9ddcee8ddc64d90af7366f310e7474fa187128b24827",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/cpu/mfem/transport/steady_transport_c_api.cpp",
+      "sha256": "8d8e4960b5c865f908b53045ded22782d561fd3beb6182d866e52eb1f7838c5e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/examples/pa_benchmark.cpp",
+      "sha256": "3c08635c99b02fca5799ae33792b51b394b2733b24e8d6060ea146b93a00a223",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/constraints/frozen_spins.cu",
+      "sha256": "5c43cc83f5b16eea8d29f05ec82876e9cb789d306b4851dec2441932f220c31a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/constraints/frozen_spins.cuh",
+      "sha256": "b3be5cbbfc7c712cc3b225b796c25661e7a47a2f66b163480aa08c9bff8a4507",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
+      "sha256": "bfb2100c03fd9589906004fae8bbacd41b8178fd4d4c2dfb286c4531e3fee0c7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.hpp",
+      "sha256": "1f08ac6346a9b27f13e697e13e40db9e5348813515a41da2aa8c22b0fa6a085a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp",
+      "sha256": "e55e5b1cab2be2f34c818b48de98a01b89a951ad69463ee782654814fa364d4b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu",
+      "sha256": "004d0ddd4cd6576f939a5bf6c4e3388785ddfe80c4e1680a13736933fff11492",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp",
+      "sha256": "d88b9b7133b4e302574723326f17a0bf4a6759c4e2fcf34d5f7d181d970b5610",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.cu",
+      "sha256": "13f53ccc4aaea3bb499110257b044c377c0abb87eac75cbdafe34484393ec721",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_kernels.hpp",
+      "sha256": "85b77526204c0d0e0e5a09a43008243f69964d9715d83b96dd3fb8037c3d480d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/demag_state.hpp",
+      "sha256": "28d6c806462655e4c59280280973310b6e4a54477864da5d0e912ce773b7fcab",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp",
+      "sha256": "cc4bb644daf044c6369624cf1422f8a326aa473cfd7bb45d4c9d75b3bb8add2d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.hpp",
+      "sha256": "fcfb927b574e9beda91bc29b16d94c302ba66c6fa35df0de4ff4324a7903f7c1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.cpp",
+      "sha256": "979830054333c605fa2e1918ec97c7e93e161bf420f795af71f05501fe299233",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp",
+      "sha256": "81587b5413165fca5cb990330c5d67b8a9b532d5ced23c0704e05f81d68e551e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp",
+      "sha256": "6cd28bc97a18d124315f7340af8f74e7946fdcec058f3ffdef0cd66b1ab047ae",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.hpp",
+      "sha256": "8a7638ee0e406841b11078c6411c407bb8eabca02e9841478e2739d6f9a245ec",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.cpp",
+      "sha256": "5beba84a58a3b14a6fcef81f035a9b17f175d91898399cb11d0d88b931456acf",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/operators.hpp",
+      "sha256": "46a5dde982fea8db641ec833850984ccb85383cb808a7e0292b6c8a906dcaabe",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/poisson.cpp",
+      "sha256": "a3fd8dac1f1ff33bc0564a16d064ec0ed20822c68d5542824b14a1fd871e742c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/poisson.hpp",
+      "sha256": "8c0f4b720187b8498fb5d149a1d6c0623137adea6103fb9568170e0828236bdb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp",
+      "sha256": "3d7e32134f101851a12929fb99ca74d04605c23ac6ab2800a45b5ab9359af312",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/demag_poisson/stage_compute.hpp",
+      "sha256": "4a97dcfdc7df1712aa7ed9bc806f5c497cdadf16f060002fa332683daa428c8c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.cu",
+      "sha256": "c86642abaf6326e7b3ddeee9a78d9c5ac3a7b93d814eca44b22fd80d31c38953",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_kernels.hpp",
+      "sha256": "a38707a37cb987348cd472b43eb22961e62adb8d8031b2158c0f9baed22528bb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_operator.cpp",
+      "sha256": "6d33bedc7d79a0d3b111cff9e5088dea4bd72dd9fc5a8b6b5f05f04e907c1bf2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_operator.hpp",
+      "sha256": "a1e39630111d9fc357d338c48ed0734a2f6d13f45d70fe52e330206e893bea6e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_plan.cpp",
+      "sha256": "f8624639fd1f86fda768a4ed8e528af42bd4802297fc70012b0d7e37c6e15216",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_plan.hpp",
+      "sha256": "b250b0062d406d8c1935cb7897691e20fa812305160499e5136c4a4b10bfc5f0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_state.hpp",
+      "sha256": "20ed32504c2894511f170ec9dc87ee70f995aaad6951a78c30f2fd4146a34e7d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_upload.cpp",
+      "sha256": "c38c0d25c737271c963602a880c60edeb4c920d4acc2725d7151f9f4a5d59589",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/exchange/exchange_upload.hpp",
+      "sha256": "f524894e3c226b7c4af1a998b5e71ab638e328fcf2dd325c9af941a40b0d2a36",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/field_buffer_memory.cpp",
+      "sha256": "8a7b1673abef550ff122f1ed21b08840d80f8f10bfe9e151edb45abc7f639b8c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/field_buffer_memory.hpp",
+      "sha256": "e23be0e0cba1ff5f26f762beb2a1d7c8bf2ffd583337a73232fdb82161da013b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/field_buffer_state.hpp",
+      "sha256": "74a9f11ee36dc6501fa9a1224b37f2b97fd1d61b82acdf3a8b71a379a9cd6519",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/field_buffer_upload.cpp",
+      "sha256": "87af6c713ef8d71b1b2c00f35aab2c88859b05d5b22a4168b2965539d1039744",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/field_buffer_upload.hpp",
+      "sha256": "67d279adcb32da8ef176b5d1a5604517846123b1cd0b65a449fc222fb9d5f96b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.cu",
+      "sha256": "5bec528075d732e59a4d26519fa6d2cc7860e85efa8e457369a05146c579e491",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/fields/vector_field_kernels.hpp",
+      "sha256": "f20b817f37abf9b119ace931caa682a8d58d4430850c330125b07b40d19f34d3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/frequency_domain/driven_response_gpu.cu",
+      "sha256": "c4f1906ba1074bf657d3d15f344edffbbe25af2a81169ad7875d0414459683d5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/frequency_domain/modal_krylov.cu",
+      "sha256": "eaa8527d07720f094da090a22c72af05af65b7f75db55cd38c86292ff229f904",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/frequency_domain/small_dense_dispatch.cu",
+      "sha256": "edea7ba4fc06d642aff4ac5a8bb54db118884c7a2b708ba29d6a96b97a71e645",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/frequency_domain/small_dense_dispatch.hpp",
+      "sha256": "90df53b9d6be5a05302165bc73c7e8a9429d5ef60fdebe808c54cd6b012e71c2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.cu",
+      "sha256": "8fe0f773168ddad190888af7e258f0e3bc2f111dff488ad708f902befd39fbc4",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/llg/llg_rhs_kernels.hpp",
+      "sha256": "847516217a5cc6e27005ba986924e85e3252efcf525ed12a35f498d49b06b7d8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.cu",
+      "sha256": "1e5bcc420b6c3c46694237e3f22dc352b85e1306307fdcc6f430a64e7508e362",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_kernels.hpp",
+      "sha256": "a5393a0ae3d5e8c0c0f97cb1267c687eb704f002d47d276362c76923191fe8cd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_policy.cpp",
+      "sha256": "af8702eb541a0a301173145e3c858823db78818b4e45905df0e2699da9adff3d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/adaptive_error_policy.hpp",
+      "sha256": "b45e006ad5afcec0a033d3610a44c8cce9c2b611987a81a6e470e4f169c23cd1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/heun_stage_sequence.cu",
+      "sha256": "0299eafb940d94af603396b4762140a06b2fd9b92ba79728d551b45412d6a9a8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/heun_stage_sequence.hpp",
+      "sha256": "7f71216b4a1d7c35f68c768ab538be90737bbc08200ee1b2e1a44fc560eb4983",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk.hpp",
+      "sha256": "88696db6dbf3fd8c5bfdabef7e77798c2efb6a5e96fad103b3e88350a27b8a4a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk23_adaptive_k3.cu",
+      "sha256": "0ee4d33a8848caacb0ff5f3ea62c3d5ee4779e906db6283aef0655eaaec2b059",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk23_adaptive_k3.hpp",
+      "sha256": "a8e7f57455acee8046797becbf03d105fdfa37a68e562a8a4a08ba06d7b6d521",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk23_stage_sequence.cu",
+      "sha256": "ec48fd80b18199ff118c6fd49a5f1eb69f5afddabf6a7d09368d9560c6b11a6d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk23_stage_sequence.hpp",
+      "sha256": "7165cfd2b6e159d2e6f4bfbc70e3fdb09b4422b0f5cd3879bf6f192c1c9e364e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk45_stage_sequence.cu",
+      "sha256": "e40ce56db7e7fa4da49d44f0edff9be9db87f4a8d496615cffadac1f6c2b32f3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk45_stage_sequence.hpp",
+      "sha256": "6c6846f457cc2a3851b2afa7f9f08ceac850146b1d31c980dae5e0d45ecec483",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk4_stage_sequence.cu",
+      "sha256": "036411c294ba91feb5506473b4dade062811a804b154c7281bed946cfbe92edd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk4_stage_sequence.hpp",
+      "sha256": "4bf7e105f7865f5cc7252f076e8785b13e49cfc126045dd7b6be320aa636257f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.cu",
+      "sha256": "bf724734623c3cc90bca040728953d894a3e3609dda3c7e11ec60cbb7cde252d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_decision_readback.hpp",
+      "sha256": "c17cf05375ee9c3cc8ecd1da02a48dd2a7c8ab359b283c627e3579fcb4f18c9d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_host_decision.hpp",
+      "sha256": "8d16721417069b98f9de62291d8f618ec28b5a6eb8fa21dbcd2713bda95b1fb7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.cu",
+      "sha256": "7fb685fd71e35b5dde17d16a210b2507920aabdc9d187a3b5b25adbdc3ed38f2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp",
+      "sha256": "153950d58cc5c012cfac7f60bde614234589f5cc7122b468ad7c4824bfeb8571",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.cu",
+      "sha256": "e23329fe1f13ca55a9add11af68e2673ea8c984ae7f69777b5c39d3ea24fb3bb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_energy_reductions.hpp",
+      "sha256": "8d549e0dcbf339eec176cd4faca4a24a9c6a35ccf48a81cc65fea26776e01f50",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.cu",
+      "sha256": "45f03a8fadc9d736425b92956c3cf6e40cc256ad4161181c4fb68ab672788e7f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_anisotropy_field.hpp",
+      "sha256": "539b4e52f0c6f9e8dc100b4248405b2ca8a438c5f23dbf90c6433f02ae91fb37",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_control_kernels.cu",
+      "sha256": "cd435bf7b41e54a096d609da0eda23ba40e4a60f916d042c95122e0f2262a816",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_control_kernels.hpp",
+      "sha256": "584a1af9c95552617a20527ff3ff2487c1be9409ef8b83d058fdb090b9bfaadf",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_control_memory.cpp",
+      "sha256": "7f669257a50bbee7d85f16ec495957783e8ff2240ecec73a1f7da29f3f11c68e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_control_memory.hpp",
+      "sha256": "2092b97a18ea3c830313d1f7180de21240f31ce9eee335847a3f2ad43dbdecc0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_control_state.hpp",
+      "sha256": "3b886cb6a75070e226b851ceaa292d7d153d4ddd7c39c228048811ca425216fa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu",
+      "sha256": "3597265cccde5e2ee0a4dd048995dee3ec830d1898b301b0b99df55d1c53f00a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.hpp",
+      "sha256": "755184f8e46633261118d18c061f0f46aeb6f74a33ab3d1a99e6b6ff12822226",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_setup.cu",
+      "sha256": "5d012b9c50c04efc92146a5471a48ec02fbb3af7947772d98aa0312fc78cceee",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_attempt_setup.hpp",
+      "sha256": "d6c9f4f8cc412ae187aed0225e88a839fa64b236fb9d340b0a4f69fd4a8206c7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_bs23_accept_kernel.cu",
+      "sha256": "58721dafcf88c0de87261b2eb7637bf4d12c1db62f426155e82b248fb205dcca",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_bs23_accept_kernel.hpp",
+      "sha256": "10497aae50db511bd0558632505e124154439a54033b5dd74fe220f084620b0a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_component_copy.cu",
+      "sha256": "8f62a6218d6e9492ae19b68cea5779acd8ba88cc155f94f8afebc1c350b934d8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_component_copy.hpp",
+      "sha256": "0cf6274076bd41287c16beb18a77e666dd03c0b0abeb92c63263533712c2a25e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_dispatch.cu",
+      "sha256": "969a496810fca8e0c3a78f2d52ae8216242d41fd7296f9e9a55de916630ed823",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_dispatch.hpp",
+      "sha256": "3f3216af10889d64a846c9147f587ceba5a755f4f5970c4b817a9e2086b59863",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_energy_reductions.cu",
+      "sha256": "863998bfaf0a4ec2104ec4da1af7f889f8f1bb47d6f60b0e741473ebc0e6068b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_energy_reductions.hpp",
+      "sha256": "6f8b142e261929466f3de68935fbd4558c55319d68119bbfd2fa052021b31a18",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_direct_torques.cu",
+      "sha256": "a0f39fbf63976ae0a8c0c24322e8c7f1457759e27ef0a37c72e88eb4f88774f8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_direct_torques.hpp",
+      "sha256": "ef817fbbd568508eb52d1cbe69cbc87a155d3c2e4ba1a7c1c27dd10cf537d105",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.cu",
+      "sha256": "251b6ea39459b7abfa0f790b85ec1332ed00196a91d7d9191f26f87497bd01ac",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_energy_reductions.hpp",
+      "sha256": "09c63c37c30acde8c0a52278fe19b98f3350946c573a9803e7265b22b0d7ce0c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.cu",
+      "sha256": "f1b1b30944bccac0a748585264166d6b4e1bbff745d70f511cdbbc185acb6555",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dmi_fields.hpp",
+      "sha256": "3fe4bba2a0ee42e8e7b5c7a3f7b86d4bd6d0c6dcd7dd08375e1fbb6af5348817",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dp54_accept_kernel.cu",
+      "sha256": "e9e2364d5dc720af6d6b55baae51da2e6a51207f901552fab61e52fe3459a67c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_dp54_accept_kernel.hpp",
+      "sha256": "647f10246a51754b6c5ba0470e8315ec4b31df49ce7a155c6e5a8b2338a41aff",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.cu",
+      "sha256": "b8c693820c1e0ef41e68b59e8e89e10dc86fd6ace5c3fe1e6e3e40e01fe904a0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_effective_field.hpp",
+      "sha256": "e6049a342007858f09dcbaba85f9e4cebf472400b0347cdf713eb907ced6f8e6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_energy_reductions.cu",
+      "sha256": "d5bdf81ca1fd143ba697877733dd88397e908f5249070f77f5a41678b6710340",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_energy_reductions.hpp",
+      "sha256": "09fb47e7f9d6c879cd97996c2e9c883b9cccb332aeb219b25b72f1c5b6383651",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_error_norm_runtime.cu",
+      "sha256": "024cb9dd85b515013d601122c9748170c1e8a97c950aa51122694bed4fa475e0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp",
+      "sha256": "725de7d235e475cc8f908ee0cb22b2bdc68143a717ad157d62a69756c25fe8b7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu",
+      "sha256": "3336cc54851dd42becbec372dc978e6b351111fc7494dbd37e1e5cbe678b981b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp",
+      "sha256": "20cbba50cae61a58b30a6c10998e0caea3dfc3dfc553790ed03f2fa333f41f4b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_energy_reductions.cu",
+      "sha256": "00642984aa38a7062e68acb410814c61b56a4ebaaef64f9163a52947ab7bbe72",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_exchange_energy_reductions.hpp",
+      "sha256": "e76c4dff4992af8aedbeb431eddbd585145edd7f44735c34014c29e4da03eb0e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_external_energy_reductions.cu",
+      "sha256": "f29c57c7ff356f1a14f933bc0912102798e226f5dd975816278ff2b98748785c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_external_energy_reductions.hpp",
+      "sha256": "0b9a30f2bce6e60f68ed14c5d2d4958eece006ce88912cace11eb82c241ca213",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_field_metric_reductions.cu",
+      "sha256": "69dc3d532481df9e51d0dac2353eb7d776d21d591391849455aa6cc2401e1b73",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_field_metric_reductions.hpp",
+      "sha256": "53d77c83fe880968695f3f87032c7c0bdaf7d4150b576514867a811dfdc06e9a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_final_refresh.cu",
+      "sha256": "38dc3a7ca360fd2a2a66095055bacd810da9353c7135f92e7176d40b4c42f17b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_final_refresh.hpp",
+      "sha256": "efe89df7c42013c814f8167b038d17b03cd40ceb10ef62e9c24712fffa18de4c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.cpp",
+      "sha256": "cebfddd2f9aaa836efe54d6c9b9c88c55c31d26cee6b597096054435a6795a9e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_fsal_policy.hpp",
+      "sha256": "34a083f371dc883904d36de4dcec329230ebc4dc28da7ef4f9770b543c156712",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_graph.cpp",
+      "sha256": "fe18d8a66230bfeba5a2f8f81af23be32fff30e4cec89a638b3a67949901bab9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_graph.hpp",
+      "sha256": "336e0c9a82833d73df2806d4c5688c22595127058e3d3d53aeee2a16103c0b5a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_heun_accept_kernel.cu",
+      "sha256": "dfaa2e4038ef73c8526fa3e71ee99d3c8ac63d22c9acefa98239c358c4d1531d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_heun_accept_kernel.hpp",
+      "sha256": "fbbf007f87c3db459b0e716ba895d03e43fe7e1ac93c78148e1adf0a00722d17",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.cu",
+      "sha256": "9f0ac57404bf97ebe617dd669d9fcc6ea0b76ed959c34dd40c2836c94f7ec578",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_llg_rhs_dispatch.hpp",
+      "sha256": "0c3c2078db17983678d71b8dba75bcf0e085157cb1da46d7baf5bdfb6bc49d3f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_local_fields.cu",
+      "sha256": "76b9fc8316aedf200e8cd32c4c1dd55030bc38b8917bde999cf5250ff591aded",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_local_fields.hpp",
+      "sha256": "ecab5c2e1709f61a5f4eb4d3c2c2c49406164ca0907f4a57175c8065a69ee3a5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_magnetization_reductions.cu",
+      "sha256": "b722476cca71efd2d1f280ddb0bc0baf8eded2dfb1327e29b7c16c7d05ff5e7f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_magnetization_reductions.hpp",
+      "sha256": "976011a4aa4ab0a7dd0fd0edb51b9e3ea3b293671fb9ced016301397f7394b2e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_magnetoelastic_energy_reductions.cu",
+      "sha256": "da6b82913a94acb30e9a60c08bed685a2756becd542429e8bf3325d4cb55c1e1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_magnetoelastic_energy_reductions.hpp",
+      "sha256": "8616513965899b17e15e20a7e29c308d2c076486827c06348024cd9adcbb238a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_magnetoelastic_field.cu",
+      "sha256": "7f576bba100b2419d3bf6662bf818a5b334092c98853f8f26755024b339ded93",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_magnetoelastic_field.hpp",
+      "sha256": "afccc5607581728d92114e937030fb7b4d3638d2479668a2c1d9945795603a25",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_observable_reductions.cu",
+      "sha256": "d7b6d6a899017d204057199f3af7fa45c11a51788e9ef4aa56ff7bb996375046",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_observable_reductions.hpp",
+      "sha256": "abe0c7088fc05ff56a5e53025f566657c85829edd941774ecf38fdd3c5f76dc6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_oersted_field.cu",
+      "sha256": "71568b142ae69e31c2c4d308a65027cc6a4923c087acff8f8fdf19bebaadc0b5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_oersted_field.hpp",
+      "sha256": "bbb39bceb08ac40cd610742798133b29de2c7ae5c24d20cc29deea6974c093f2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_output_control.cu",
+      "sha256": "cd9fa6ce6f1a2aad69c15bf65825d922b216bccfd6b366199fd6d33af680508e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_output_control.hpp",
+      "sha256": "8a8250e3defd6697bbf3e5d82020d7db8a6e2ae1b4350af9575e4e4283810010",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
+      "sha256": "9ded5eb08af5bde94680cfa922f6bae17d72c4dc209d3344b5f9b011624045eb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.cu",
+      "sha256": "644039f4b5bfac945afd05cb3c8814c851f5d960c15343fcbcc0be00e475deac",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rhs_runtime.hpp",
+      "sha256": "6b2ff8890490d32df0600a7c6977b9355f30017e0bc974e4f3b4eb4db4d08746",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rk4_accept_kernel.cu",
+      "sha256": "89434206ca53ff1d40de23a9ffbb391d7dabcb871dfca572ec3dac3ad5e923f1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_rk4_accept_kernel.hpp",
+      "sha256": "c88b80cb662340223283b60f83421a6c52d9ed88dcd5f033ea0e4dd454b578b1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_scalar_readback.cu",
+      "sha256": "3a13bdca3a11ba8e736b10bed8197e671a26ec36b96cfa981813536f25c82a21",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_scalar_readback.hpp",
+      "sha256": "9c8aaff4f52e8b8b98c689a41a1845c527643ee9e74f8874839222e6cd9f865f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_slonczewski_torque.cu",
+      "sha256": "c53d123140bc91e87ddbeeaf2ba8aff4cc455596d6508fb9f5a4d5b88df3a7da",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_slonczewski_torque.hpp",
+      "sha256": "5d1bcadedf06b9cdede61881e4b72df3343d784696113e67251c93bea8660e66",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_snapshot.cpp",
+      "sha256": "22cfeb5c27e6aa930c285a03c457f2dd104eeb81c0f8be57c4ac7bc5f329d7a9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_snapshot.cu",
+      "sha256": "239db55b58eaaf165fc35be73262c5b7cbf04a64f702c9bd293fa0a0f7af923c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_snapshot.hpp",
+      "sha256": "d6aaa9d5f60500e7915f6cee1b1c4ee6577ff91c316aa39a69650af1e50c895c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.cu",
+      "sha256": "f2d83528a09357b07ab3ef4882e3d0ab6a3eefce67e7f9bcf50bb66ba33a4f03",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_sot_torque.hpp",
+      "sha256": "958e9a4775f24312983f0b1a2afdebe9cedc7eecaa3f0680064a3141751eb23c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu",
+      "sha256": "c7a0487b9476c054258671676c6d3e95720517b56e2030bee671c3b5f76ce5d0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_stage_predictor_kernels.hpp",
+      "sha256": "0eca656609c1ea7e84a4c87f9b797c65e1c241aa54b37509f330fd3d29a1b455",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_stage_schedule.cu",
+      "sha256": "b4fa8cf94b9ed309d6169c3ab4800123c203550580ad932a8cb6e8639dfda662",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_stage_schedule.hpp",
+      "sha256": "f8e657b1e1233d48a7937c0d845a0559d5de97a5c255a7c92e69e0f0585129ca",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step.cu",
+      "sha256": "bc0fdafee26130f11c1e10ece83081eef6ca792e432e3c5bddbfab0fc10c6a04",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_preflight.cu",
+      "sha256": "1eb079604cb782b00365d20b603479822991b3ce7ad4d38d98566aae20c4b3af",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_preflight.hpp",
+      "sha256": "78b813f4e1bac800e49903ddd2d4b6113c054aa5e6c6f15c40c781e0fe293c74",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cpp",
+      "sha256": "846692a5944d45aa15df7e4ea356b4fcc96165cd4ca6384f61244e14242d6e50",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu",
+      "sha256": "8c7c87b4bccfd89f078c2b039ae80ff325cca45ef8a3932729e7b79d1b3e5d81",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats.hpp",
+      "sha256": "3414609350e69943ee3a7aa4220db699a43d2c9baecda52458e3be582ba5e2ae",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats_publication.cpp",
+      "sha256": "4f4d295683b06fada0ce2131de1c2e289de84249adc133716cfebcf89585545f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_stats_publication.hpp",
+      "sha256": "560b23bf6439fe2a549c9975806eb8dd69e85fc954b02f364cf8b292da3a29a0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_transaction_device.cu",
+      "sha256": "a89ff71363a992b450b686dfa3543e3799aca88274e0048719eb622a6d3d4c93",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step_transaction_device.hpp",
+      "sha256": "afb66f1f2d31d523547a038e2fc30ad5f4e617cdbd3ce2e411aee1c103247b23",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_thermal_field.cu",
+      "sha256": "54e63e19fa2a4ba8cdb4d1eb0871bcf671a2fd4ed046436e14fe374845534965",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_thermal_field.hpp",
+      "sha256": "d8bc66d9b37a9a3df4cad7c91147bb5f30b1ef42a9fe08ddec781c7fa61bd86e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_total_energy_reduction.cu",
+      "sha256": "0f2fbd53ec9a5ea25ffff196178147fdd1415f6d5d65c05048bacb2c44e39681",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_total_energy_reduction.hpp",
+      "sha256": "524172ffa0bd217bd8138ddecf13147db6b604948d7aa7051f1cfcca77c2cafa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_workspace_memory.cpp",
+      "sha256": "89e243638bad503da485e188bc2ec203251f500cd5bccc552e3927dd8e57afdf",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_workspace_memory.hpp",
+      "sha256": "fe608be3ff64d2131b434a642bb92e87aa19235ad93ef62e6b9dd69231faf4a9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_workspace_state.hpp",
+      "sha256": "d53538881a6c5ebfaed6d9dbe023b08efcf8cbdbb88b441baefe618b62f2eeba",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_zhang_li_torque.cu",
+      "sha256": "14d0dd34d6ff1b0de204e13011432852f2f7776dd225449a295d1ba079d34aca",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_zhang_li_torque.hpp",
+      "sha256": "2863ea9fb197145161ef8a9388e044ab84ae813cacdf536c21aaa2a968a2668c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.cu",
+      "sha256": "28e650b689f15c34964ba11d370fcbfbeaf2b2d0a9b0c04a5bc6b45aacfba572",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/anisotropy/anisotropy_kernels.hpp",
+      "sha256": "f318367a80d22445cefcdf9d0c318d8c79afb446ad3f8a0662ccc1cd266959d3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_geometry_cache.cu",
+      "sha256": "7b3943ed84d0aabfe6df632203bdf6e3e0675b8aabaec8a6449a2f9c82fb043d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_geometry_cache.hpp",
+      "sha256": "53495cdd57f33074e8734e27f5779ce1eb03e6b05ff2baf3c14e7a78028e1d96",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu",
+      "sha256": "828bd5c471f0f35de67d3cb8a1fd6c5a080f3b6a1ab1503041f009075b86990c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.hpp",
+      "sha256": "ed46cda15bc3d3033c5d16b8c1bf7a5a98469874057a561558da36bf19d5d302",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_tetra_math.cuh",
+      "sha256": "db5e20bb8686bd40de0383ca7a8d9f73e6e7b30672c42fd653e0faf2ca554d6a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/local_interaction_workspace_memory.cpp",
+      "sha256": "bdd455344b7d127765ec28b2bd387a9630fbd76893d0187485469b4f08430438",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/local_interaction_workspace_memory.hpp",
+      "sha256": "31a3eda42d817b5704cd9042e0cf53125b88510437f13fd1cd1e5db87600fc85",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/local_interaction_workspace_state.hpp",
+      "sha256": "0695c73a3705af17fab09331bd44f38bb333701410e7b20cc48ce6a24d8f79cc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu",
+      "sha256": "324f8d603c3d41a11e834a9a8481713c6c6ac6b89cfa64044c943bee39842155",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.hpp",
+      "sha256": "f775a66c6b072965ebfced55ca272012765b628093d7032fbec72211b6b80f29",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.cpp",
+      "sha256": "b86894e8bad749c72b9d7db55e35018be1003f2ab30c827f680048d616765696",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_memory.hpp",
+      "sha256": "deacdb8e5d333bfc0a999c2138945c9d99b86c7849468002aa756b25c2769f44",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_state.hpp",
+      "sha256": "79eb9eb13995bd7d29658ee28c66f65376c7750dfea16cb3c133b11c66f20689",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp",
+      "sha256": "0c22bbe9d6ec85a2612d20aa7a6a52301d9b9161b9746721f760dc5f4ca9e057",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.hpp",
+      "sha256": "2a981fbbc351a95d37b4a50264a4d709d8db696758ae2f852f6fd07ae1611539",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/oersted/oersted_kernels.cu",
+      "sha256": "fcc6308a3b631224ecaa181c6eee75de4fc5a4ba709c306a752c7fbfdfec0b3b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/oersted/oersted_kernels.hpp",
+      "sha256": "3ee7c29af03b7243bdd4dd55a3f396c63b926211c9e754cb6fcf5395ce575845",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/sot/sot_kernels.cu",
+      "sha256": "03d49206419364124328b90383998fd345b5e584a5613231d6f56c374213a5eb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/sot/sot_kernels.hpp",
+      "sha256": "a5d4dba9df3a22a958fb8958a94d924179924841f50b4f5864fdf1e2c51591ac",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/stt/stt_kernels.cu",
+      "sha256": "391eaf9fc2503131c46b05d5153b6e966174278ba10912d33544b77338bd044a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/stt/stt_kernels.hpp",
+      "sha256": "2d504df802a725a9827c1a9ed945da8edc92cc1d78b7d9c13e04a8ff82d3aeed",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.cu",
+      "sha256": "b134ebdecc59fd150d4cf514f417ce36beb95ecaa4314ff763af6cd94ebb359d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/thermal/thermal_kernels.hpp",
+      "sha256": "e065d8f9e5f6d255f11b1061ee7ed76cce45316464af31ada3e72ee08b251352",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cu",
+      "sha256": "24d8a0f42d0e0290dce630ee4f07c746c6083fb0c56a12c03782f49933ac135e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/regional_field_kernels.cuh",
+      "sha256": "16f2037fdc36a954bb6a8a1573909ab56d57cb6d3fe58a5181deb697b40cf839",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/time_dependence_device.cuh",
+      "sha256": "1f6086abba75e0f6ddb846f70043ac99c09ecb259089d285efa7da4a89920308",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/zeeman_kernels.cu",
+      "sha256": "5fa5aecdf03911a795402565148bf59025b942f01e9276ae50ba5200cb85502d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/interactions/zeeman/zeeman_kernels.hpp",
+      "sha256": "86579044649b248efb935aa157ef34473b90f0494444597231a68d811d3ca32a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/materials/material_state.hpp",
+      "sha256": "b1edfb25ea1a235f37169bff6242d882fcdb0295e907cc9b362ff49834d12575",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/mesh/mesh_geometry_state.hpp",
+      "sha256": "79d9edfb4abc02828a3767d1d9073740b4e7cb5e90302393943dc9ee12a41eb5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/mesh/mesh_geometry_upload.cpp",
+      "sha256": "ce073c3be82cb6cc13fa4a9d64736a2960c9c2dc30c7141d51c1a730657d1372",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/mesh/mesh_geometry_upload.hpp",
+      "sha256": "d732fa51f4c6bd9b40dd03b7e6965d619363b50ffa235a91b6939bd53a104a0d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/mesh/mesh_metrics_state.hpp",
+      "sha256": "f62cd6304d7e9704acc6fb2318c75a710d15640a32524216ffd5d962fcf9d260",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/mesh/mesh_regions_state.hpp",
+      "sha256": "2e7a2c2373a8899a6954ec63ff3b66087222214947b2deaf192e32bcf92e6ecc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/observables/observable_kernels.cu",
+      "sha256": "6fbd71545f0e300ecb3185766ca326874465e2a6e258087a8594364cf2252fc5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/observables/observable_kernels.hpp",
+      "sha256": "b3fda8e4c43305db50999bd69d629d6050157a3cf9d53d77833bcd3d68782182",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/reductions/reduction_kernels.cu",
+      "sha256": "53e6849ff19de778d7ff7b5f400f7a77d4744e52d6189a459b0041280c403de8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/reductions/reduction_kernels.hpp",
+      "sha256": "83bd555b64a4b13582139b880fd6c72aa8558ea57256102e5df84533bcf543e3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/reductions/reduction_workspace_memory.cpp",
+      "sha256": "60ef4219be540a01c59e65a1cf58eebfb392ce87e0727f4f26a24bc14eca2637",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/reductions/reduction_workspace_memory.hpp",
+      "sha256": "51ec665c1dca3a0a86ff3e68a01dca4f5fb22dd459352af052e273184a4fc1d3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/reductions/reduction_workspace_state.hpp",
+      "sha256": "9015f2d90a89bb5e5c4452422b15f412868d853c8b843f64ae7a58e2ac9e8507",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp",
+      "sha256": "988dcc0c8f493379196c733cd6c6b4873450b700227f7e491dc43d455b4606bb",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/direct_energy_increment.hpp",
+      "sha256": "d38de4181997e3562be1d02b9b56b8cdda7573ea4bb42e81f2ea9affaca36806",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/double_double.cuh",
+      "sha256": "aca8ba6dd88d5c200d409609925ab4e309fd513736eff2d710bab6799bf295fa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.cpp",
+      "sha256": "a0f8b6a6b8914cb91242bbf2a930ae424f2d3ec7e44463759bf4692331585ecb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp",
+      "sha256": "30839f95b99c1dbf99d131743b9192764944c445dc53186dcb2dd5a281937de5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_exchange_mass_preconditioner_kernels.cu",
+      "sha256": "94cc50f81d15aa21fd2fc1c21fa835e6d1fc0f8faeb96e5b927b1ad7691d4316",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_exchange_mass_preconditioner_kernels.hpp",
+      "sha256": "e4e67f5ee578b9b7911e3d080170d65091471c141afb4735388d44eea0a6bf9e",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "sha256": "9d7256d6427d053d24290c8a3cbe1e0410ff2be3b604a4dfdc2199f8bdc1a8d2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp",
+      "sha256": "bd7fdd8754cbbca6a3fc6b9ad4ce2bcbe21b009d45e9cafa0aebb820c104e7af",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp",
+      "sha256": "85e11eb674a8bd8cc8b5f47cd622dba2f15064f95652912025beb3b7af9131dd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.hpp",
+      "sha256": "c8c0b6abae06c4c6c422dc80f23d7a697c55f43bd7fcf7ff789b1a761d094ea0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
+      "sha256": "696dd1fc03befb1a8c8e1ed26963b4fe19674fdec3c9d93a7c6f37cb06357411",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.hpp",
+      "sha256": "57913fd28635887d215b38e4ab462ac10802cabd04a4d211057a3b94ac0389f7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb_kernels.cu",
+      "sha256": "8463728f233a8f6c445baec0e7373cb054812a1f5771b26d3dbbfeea46eb82ee",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb_kernels.hpp",
+      "sha256": "b3d64cead1d71adef04caae3c6c26eb47aca4f302d35a39310d6d41e059d803a",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/relaxation_memory.cpp",
+      "sha256": "91e7420d6c7b7282e239bb34c23626bde79019f3f77b1688654f759c4f0d0b99",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/relaxation_memory.hpp",
+      "sha256": "e2d3027b82b73a586ca020eb4b59fd4d869574b08294b3435fc1fd5fe5b5dfe2",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/relaxation/relaxation_state.hpp",
+      "sha256": "b49b6db7b138c43d544fe061ae2d2bcab7ccdaf2ed0e1552af81d3eb77bce14d",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/execution_receipt.cpp",
+      "sha256": "e51d917c9fb441cbd2355af04cc0f187881492f10eaeb5f2245147216f54f312",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/execution_receipt.hpp",
+      "sha256": "3173471226a5a324a73eff477d98a00ea0da9b68e9db3f1fbc592b88e465679f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp",
+      "sha256": "fc494a3456cc2f2253affb595bcfc456d44f93f5e1e3c31eece464a64ebf8f0a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/gpu_state_runtime.hpp",
+      "sha256": "b5884d80525ad88e7b034c6446c7b72bf3d7eaa761ef1d44c8b5bc8eea6c028c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/hypre_device_policy.cpp",
+      "sha256": "a92cd79261a4272302818fdbd6c1a8591b4e9e9a9a8f754b6fcb7f3f5c524afc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/hypre_device_policy.hpp",
+      "sha256": "88203e371fc735f5149804eb0634640fc28aae50cddec9d67f8576e10f7e24ef",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/multi_gpu_binding.cpp",
+      "sha256": "7e0cff2a58bc30f69fe5c20caebba60c8c272570201c56ba7ab0d59a940a775b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/multi_gpu_binding.hpp",
+      "sha256": "99c432047740ea1245743636c1e00a9dec2118e18f18cbff07863b88ba249740",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/nvtx_ranges.hpp",
+      "sha256": "b3bcf59671aa9a12507126985a827b4a5d69c7fca6565b7d0f8645adda1d0513",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.cpp",
+      "sha256": "8a47d36788e102851c20ea74d5081870a1d98b16101dabe08a22dda91e5ad24f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/runtime/performance_counters.hpp",
+      "sha256": "2542565246fd956f9f7255961675c57c46e1ba5734274223b530e7eadd2c5b6f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/sparse/sparse_apply_kernels.cu",
+      "sha256": "9262ae2b083b9b9550287dd2ea225c3a690e67410914181486287b0df2da8f17",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/sparse/sparse_apply_plan.cpp",
+      "sha256": "521aca9f65982e35984612f2b1ba796836be0225becb6c9e8010fdca6ae17081",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/sparse/sparse_apply_plan.hpp",
+      "sha256": "a8730ef7c7bfd430edee2be2e70258909ec7087c8d94466224daff46aef28b76",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/component_field.hpp",
+      "sha256": "2cc7721159df03565cf4c7626cc4ceca2a2f735546517e728e8f542b91ba4f90",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/device_memory.cpp",
+      "sha256": "c3f8121b5f509ef2c422be28ad8a84975a7798488fb6dce8419ead0d2788e0ba",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/device_memory.hpp",
+      "sha256": "4b0d6b3fb0a354d44a831a79efc2150b5f1efbde8e137356429bda3a444ddc7c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/gpu_state.cpp",
+      "sha256": "679937a2c43c530433ed22afbf8083e99ebe68cd69e58b63266a9ebe8a461e9e",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/gpu_state.hpp",
+      "sha256": "43b2c47efc20358575ee728879b608803bc9a662d4d392635665a6381c6a5e81",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/lifecycle_state.hpp",
+      "sha256": "03a52a85f5945cbfb835f70a5cf382b13fa535ad7063b9353332cd7a6e53ff6f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/magnetization_memory.cpp",
+      "sha256": "bd600190a4e1608bdf58be60404f59f06eefbcdcc872c105875f026ef1253dbd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/magnetization_memory.hpp",
+      "sha256": "4278531568f758ba858453de15f7887e43b3b70d0b06e291ffa46c433f692567",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/magnetization_state.hpp",
+      "sha256": "ba4120b658c6ad8bf85110217134d5560403cf690ab0c9b50873c72101ab3ee1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/magnetization_transfer.cpp",
+      "sha256": "df2c982eeabde5e3d7b6a0547c006405ecf8c2963e6906a5573b7d2f1d3a0e07",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/magnetization_transfer.hpp",
+      "sha256": "e05e45921be82f9d69ed35a91c17f713001c2307038a75dfe2aff4fb4240f89c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/residency_state.hpp",
+      "sha256": "8250900371cdaa7fc546994aea62714ef58ef99214bccb34a9a3681a4d4a165d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_memory.cpp",
+      "sha256": "421b989b84fa4dd9e37613401308acde69881958b1460795672bf0443e699182",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_memory.hpp",
+      "sha256": "be6a8808a9691b81a97250fb7ad68f97a971d8007aec289c583c7ee1e7be4c22",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_state.hpp",
+      "sha256": "4bb44c79357ab77112d51bc8733775b99e9e85f1175979942cab6e74678c8f5e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_upload.cpp",
+      "sha256": "6a58f78acab929334187daa92a1a3d643780147e8de33a22c8b544e932cf6f0d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/state/runtime_coefficients_upload.hpp",
+      "sha256": "ffa44d05906c0fb76b7623ee68dd88c701a9047f949c79ac27d8e00679da5b2f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/component_transfer.cpp",
+      "sha256": "0a76b3db383b5ccb5b3bf96f2cdca49bcecde6425da9b289aef853ed0346ae0a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/component_transfer.hpp",
+      "sha256": "b05dc6c5e5fd5382931d271238924dbd861827353cb3d37e408416a8b5b405ed",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/snapshot_pool.cpp",
+      "sha256": "1bcec0417d4a9b5e9733cb808173bd0ae40935ce266db044f8f02af4434c5718",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/snapshot_pool.hpp",
+      "sha256": "28d9b22df3bfcf66fd115d4705a35fae26a32465ebf011f238a65e4a376602c1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "sha256": "b6801e0e12c98d7153ce03207df6959156fdfe022ea99113a7061c14540949c1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.hpp",
+      "sha256": "c01d1b5f83241d3d7888566c9fad7c7169be7ec42ddc1257b55c5a7da83d8f07",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.cu",
+      "sha256": "ac81bdeb6a792a182b0c36ecec6b862c82dff39509ae5acb344cccf9aa5c9e90",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/cuda/transfer/transfer_kernels.hpp",
+      "sha256": "8dda5ed95d35e021d796bebba9c6a7baef4cb67c5e6d394ee634a7babbdcb797",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp",
+      "sha256": "d41fc517981cc11dcef3ebbe0ee9a4fa925c41d659724b28afed095d291cad2a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/backend_handle.hpp",
+      "sha256": "1f1d16e2c5eded2626aabab3b8ffcd456bedaece8b4dad95356bcecad3c90fd3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/context.hpp",
+      "sha256": "f2123f51d3f489a88d3276c61a940bf733b2ff61f35b3d8ada570c1b7e26373f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/dmi_weak_residual.hpp",
+      "sha256": "39e8586af0eb7912fcd775dd04407eacf1a68c53587b7822fd215ff7e4622649",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/fem_common.hpp",
+      "sha256": "365a6a32172296f1707597cd7320ee31549732e90c01b7d50bff6b13e73c2343",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/fem_geometry.hpp",
+      "sha256": "396930b64709cc634c86523265e1b44e5271f64c7918c86852e304d2d9e650b7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/anisotropy_operator.hpp",
+      "sha256": "8379d77d23de0e16db14fa929b0bab6288d17ab49c83634b16073bcc9f7e664b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/canonical_digest.hpp",
+      "sha256": "3f16a54fce41c452fea57cc0525e8af6857dfad0cfc5d39fb89d2ac5ed94b23a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/checked_extent.hpp",
+      "sha256": "59b80710d4addb44b3ca4df3ccaffe0172dd3d9f6bee42176f8b0ff322d43e53",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/dense_full_coupled_oracle.hpp",
+      "sha256": "ee07a07d646d8d9e84d5829c2ca7dead714254052d8d2971369f0faf0ba6fea8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/dense_poisson_airbox_eigen_oracle.hpp",
+      "sha256": "c615e69ead6cf700a2226591b14f5a4b7fd126b0b1ee60c8010e6bccaf0ed3be",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/driven_response_solver.hpp",
+      "sha256": "fdfee9b798598bc1b97d05b49f682f6099596119843ff2a6f0322b5c560b7be6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/equilibrium_state.hpp",
+      "sha256": "02830ddb366210a88beec95f5250f11192c83caa064dd93b8ce16de5f7554978",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/excitation.hpp",
+      "sha256": "a2d0e3994f6a9ec1cbcbe2c194e1f290ff2d6c33047ccfeae5aa068e27158781",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/frequency_domain_contract.hpp",
+      "sha256": "807f80cdf8bae7141f463440ddb9c27ce0b26e778de8d969e67054908ff3ebc2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/gpu_device_krylov.hpp",
+      "sha256": "e2143840573b345fd00b6521baddd562a701c030e29954317c0d08cc696a6be9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/linearization_state.hpp",
+      "sha256": "0e16be53def0c3117ca1b99bff588d278fb9b2a9a71fef29a4542d7069464bff",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/linearized_dynamic_pencil.hpp",
+      "sha256": "d9a1d4e2a1ca557bc78f9c0e660453279e7cd4085257c826219fa9eb82217740",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/mesh_symmetry_certificate.hpp",
+      "sha256": "81d051253a5d5e5bb392a28d1c4c74fc4a755eec1f97d1fbf5ba4186245e5b6e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/modal_basis.hpp",
+      "sha256": "99790bef8a455a75e912532115fc4bc4e7cff5ecb9082dd0695f498208b067d8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/modal_eigen_request.hpp",
+      "sha256": "23606cafe1de9282177660b44faa71efe6433b05e2c40f86e28428f4cb0aeb9b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/modal_eigen_result.hpp",
+      "sha256": "166056c3b8c1f9567598e0c7ee6592c4102696816149aa1b2dd34bcca44cc877",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/modal_eigen_solver.hpp",
+      "sha256": "c11c69dc7e46b475a481ea556b18b8c94b1ada1c0784dfc5219552bf8aeb95cc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/modal_gpu_krylov.hpp",
+      "sha256": "9070e1b72ef42343ae1b66901e5e53518b12d3b4b5adb84d92578546c7c464d2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/mode_kinematics.hpp",
+      "sha256": "6392e0cf79983ae11442fb3950cfb715a9321dcf5f90ed69965e620e5fedddfa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/operator_contract.hpp",
+      "sha256": "6e27e2c2bb3ec446da9794cd30bb79f0a9151e8cda0bae5a359f4a9be11d24a9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/operator_terms.hpp",
+      "sha256": "810db5adde45fb773615184c7bea6ce068811b5d55875f2960d431c7e7a6bcbb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/planner/frequency_solve_plan.hpp",
+      "sha256": "ef088b45422397e5054872a056b83e0338f552b24288bcc670bfa4bd57c7d83c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/planner/frequency_solve_planner.hpp",
+      "sha256": "c6acbff099e62a9c6706f3e87db9a034417b962fcc3facf31d5e49adb9d4eb33",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/real_frequency_rotated_pencil.hpp",
+      "sha256": "e3c9b99ea30d5c4aa15547ee25557a3524dd18799cab9f67ea652cf6a0169199",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/solver_progress.hpp",
+      "sha256": "cdd8bc917df01cd6c7daeefc05533f5698152d1d3836eb9d9166c7f02ea0501c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/tangent_frame.hpp",
+      "sha256": "211bd7c38fd18260376fa51c65d2982f749dbd0170601e86e7550566d42975cc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/include/frequency_domain/zeeman_operator.hpp",
+      "sha256": "30c9024f1ff96205f769f687dcebb9b59dfe0c4499e0c4fe95f490201a370823",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/api.cpp",
+      "sha256": "880a225b5f631bb2470e7a911c39e6beb3558c44530d7af87bcdbe053feac6f7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/context.cpp",
+      "sha256": "60c3b321201fe58b669c161409a9bf7372a3fc4304829c66954dcc2613a47f55",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/dmi_weak_residual.cpp",
+      "sha256": "97c8cd20ce6f93f54472f572556b94d6b93069e500559c5f4e80ceb50ec31b1c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/error.cpp",
+      "sha256": "1b74a0bb037675d1a4b73280f651d490954b75615e459329e594a33fb0236400",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/anisotropy_operator.cpp",
+      "sha256": "2495ecc64b4c3831711f7fa831f935661134e5f80987ca9febedd83b876a58e9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/canonical_digest.cpp",
+      "sha256": "5c464c54d24aefb402d3eda48c8c4f6a92aa94ae5d0c07dca53190c998b70328",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/dense_full_coupled_oracle.cpp",
+      "sha256": "d0656e44e02d6c332bfda2be2a06b3c0caca17abc5ae4204c14e8180e03fc419",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/driven_response_solver.cpp",
+      "sha256": "65d60d547811ac9d60732652cab3744776f845c61a20111588d5017073521a4a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/equilibrium_state.cpp",
+      "sha256": "c6e105b47740214d8943347dca1f4763815ec88cd104cbf52fc5f30420ba3114",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/excitation.cpp",
+      "sha256": "6480342b969937ae20b35b3793abefe4b4bb9b7747d47b4b8fb5ce1a1dd53978",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/frequency_domain_contract.cpp",
+      "sha256": "b579c83e2e955e179f8c881e18d476ed67e3aa562a535332d0f60a8efeafe064",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/linearization_state.cpp",
+      "sha256": "bd27504d2da4b6598745bf136796804c8fb69771e866f877814d324a42955f90",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/linearized_dynamic_pencil.cpp",
+      "sha256": "2e3174704c75f64122ce44cf208ec84756a33bfc798487d0fb79ef62f77b6b4a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/mesh_symmetry_certificate.cpp",
+      "sha256": "9638eadbfebc50aa44ee043c897f52e9a4eb05ac24e004eaac4dda75fb22390f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "sha256": "4c49ff09fe8178048bea59b1675641fc6a5176eadc35c5a6295d95900054c74b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/mode_kinematics.cpp",
+      "sha256": "54b14f253b274845974f30281b992d51148012efb41f90a4c729358fb357372d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/operator_contract.cpp",
+      "sha256": "e4f8675ce02303df0f4144c47aea14035332535843f38255b9151c646c49e50a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/operator_terms.cpp",
+      "sha256": "5fe19db723831270ca3c8af329c7731c0d425b0c6cf1ee65b63c3f9790561b00",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/real_frequency_rotated_pencil.cpp",
+      "sha256": "c9f716ca6df5af33569f84836674479e2b7dd8f0891b74304e7ce4c262481c89",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/solver_progress.cpp",
+      "sha256": "0ab125b22d5009191d21da6b68d465391dbc28033bbc3b45a8ccbdb7a24bfa34",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/tangent_frame.cpp",
+      "sha256": "732b19b4885a2b25de8b7619543195e03e529777820ec6a53e090d4d70601490",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/frequency_domain/zeeman_operator.cpp",
+      "sha256": "3a7101c15cfbaa144d8e015918af0a1af69e19e6d6617b29302cbba92454ddfa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/mfem_bridge.cpp",
+      "sha256": "0a6af7d64aad215700e3d4d974f7b1786159afa4b8f76356a3f6522fd3389dd3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/relaxation_numerics.hpp",
+      "sha256": "24d0be886e76c72d42123ef612628575a68afb0a44501987276aa81065e5fb8b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/src/relaxation_operator_units.hpp",
+      "sha256": "6f5a145ab77af477e1155d51ec56d9555a075e18712768346e3852782e78ba97",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/adaptive_dt_contract.cpp",
+      "sha256": "8cd9f1dc148bd48bbc2f314cef370da4efd97235f1943fa6f5726e3cc30fae68",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/adaptive_error_policy_contract.cpp",
+      "sha256": "4e3d07aa7b143829ee477f737543354587906c17b5399817b67011168a804134",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/anisotropy_contract.cpp",
+      "sha256": "972b6a226728711f34df54327c44e9c59c9d968b460bd576cd130de094028d8b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/aos_field_contract.cpp",
+      "sha256": "0b76d2f68dc2a5a32c185bcbd54d1ecd213847474377f30508024d0b8541bd5f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/availability_contract.cpp",
+      "sha256": "c6a009d74a413a24f282d518abc5101dd610169553f6f2542f26a947c2a69150",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/conservative_constraint_rank_contract.cpp",
+      "sha256": "2b440b92e071ffe74d731c729a19e30bf88b31f2d1da6df3d26b558df872a55c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/conservative_current_view_contract.cpp",
+      "sha256": "36f198d694b6e772f5b20a036d6ca2eba65fb67b9f8c897f9bbf1b6ace39f72e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/contract_validation.cpp",
+      "sha256": "80da837919febc51bfaaf7bf279ee0000c784e7e1a90edd21066ec3cca7c036d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cpu_threads_contract.cpp",
+      "sha256": "c49fa326198f40fcb3277bc9400c52e1d1667ab03e3ac96ea2c4b18e1f69e6ed",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_demag_field_only_contract.cpp",
+      "sha256": "958efc377181240c1d2af5117514a3a49921f8ec6b465d3cfc43871768fa42d9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_demag_robin_energy_contract.cpp",
+      "sha256": "1950624b32afee6232e1cdf14dc53d75ca990b3faa98cc830f9d9061ac7ea8e9",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_demag_timing_contract.cpp",
+      "sha256": "87737f2e1e6781f720b76ea8bda8040e0a23ab8c535c8ba35451250a1b0d1b3a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_periodic_demag_contract.cpp",
+      "sha256": "b17e54de5207fa28d8b5169cd3dd71c69d7443a98cacd1d7437b8fdc490a9297",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_periodic_exchange_contract.cpp",
+      "sha256": "394dc06891a51ba6d0fd223cc5ee4e1cb74bb16f1a8b22c849ecda18a1c0b6b1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_rk_guard_contract.cpp",
+      "sha256": "f319c6d8d461cf7eea26166fbcf95195b03c96dcba4c55a5128870ea5e805e59",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_slonczewski_contract.cpp",
+      "sha256": "c2880510c774f7ce821002723bd86ba0a231ca772d5175ebf9d45851ccd4f770",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_sot_contract.cpp",
+      "sha256": "7df31e579a1ad22d3b67785cf2c4d8066b9916ac4b6c3d1af7e94ba25a6f3e36",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/cuda_tetra_gradient_contract.cpp",
+      "sha256": "23ab5fe2de8781786d88f53660f0ab321dfe775d1bea0e3f087466c674ad4526",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/demag_contract.cpp",
+      "sha256": "70caaed527d45c71f74ed19e4e36a1ae4b370fea9f9c2eb66cca59dbda7229d6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/demag_delta_potential_contract.cpp",
+      "sha256": "a3017632fe3ccdca1b5101fd39837a7dc115b77fb842cea5f4dbd7b820b3818a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/demag_fem_bem_contract.cpp",
+      "sha256": "7a30c608e7149fe96a18bae39c695bb4e3fdb21b303016c8fb9edae36288e504",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/demag_fem_bem_gpu_contract.cpp",
+      "sha256": "dcb92d4f3cb9e9dfa311a600d067a7304885215f22cc1628a21ce3721d6ee9fd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/demag_poisson_contract.cpp",
+      "sha256": "3b0e767d366df15f522195f79a99f8bb9a10242d5ce9cc397f79dae9e04c6f14",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/dependency_stack_contract.cpp",
+      "sha256": "cdc19becb76e7a2592dd9e525ab84c0a3859c0d547ca382fbb67bb46f1cf4cae",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/dmi_contract.cpp",
+      "sha256": "5c851c1bc41a3d0cca8ab0278ca2871f39cf9bd4c61b7afb3e9b91364a0c81d3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/dmi_gpu_contract.cpp",
+      "sha256": "2a14bf86df59b534e27deb8674fc1666d6777f1741ef286ebbdd27228e85293a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/dmi_weak_residual.cpp",
+      "sha256": "c24261d265e1532ed5da0b77282e5f6967065eef7d5e16245924b02a668a0d26",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/effective_field_contract.cpp",
+      "sha256": "3df6db6cdaacc337c2171675d8fbe042c29364ede96ee96b92fbc979e7e4e5fd",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/element_dg0_workflow_contract.cpp",
+      "sha256": "dc6da97f088549d48e11b78a90b33688150c9bdfc58d4db73106b6805b825976",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/exchange_contract.cpp",
+      "sha256": "3194eaf9cab1ef0525abd7c3b79637bcf863e0ee8c1f39da47120f93c222518d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/exchange_operator_contract.cpp",
+      "sha256": "ab141e1be95675b4371421c9d316433d076b315d856796c8cd338dfa923d6f71",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_cubic_element_quadrature_contract.cpp",
+      "sha256": "5bbb5e523c6825393518a3a000d2c7e0b17b6eb8a3ae9ce53eae244d407e61db",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_element_quadrature_material_contract.cpp",
+      "sha256": "af81333ac07b04f193e0297cef2855510131ae034d274d959081731a117f44a0",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_field_buffers_contract.cpp",
+      "sha256": "3847a27e23246e8d13543d536b76ac7c3fb7d84975699cb16a7c07fc9fb9bf9e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_material_fields_contract.cpp",
+      "sha256": "69484f5f56f0608473e5a2863c1ca8100836f63bc480dbeee1b7f174d3d4b5ce",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_material_runtime_cubic_contract.cpp",
+      "sha256": "c866e964307aac023f00d319836c79264d29c7d7357db96acdb88fda25e3ef7e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_material_runtime_uniaxial_contract.cpp",
+      "sha256": "773c8b3aa5ec3d2714c37d9b3dd680b0270b4a83cd80a9536dd8bb078b57dc19",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_material_runtime_zeeman_contract.cpp",
+      "sha256": "15a298862f3541b9ecf2aae22b18b28f253d31f17fa00fa0c6e58d8789d0bacf",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_mesh_contract.cpp",
+      "sha256": "b5f08a19415b98836963574e50a7be51c6f7bb1823b9879f30fa3b2d56ae4001",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_mixed_p1_contract.cpp",
+      "sha256": "85237f108c34b3bb4c2adf9c95480df97ce098be7ad938dd663fa39df0d0bfd3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_plan_fields_contract.cpp",
+      "sha256": "3ea7bbebdf322f7ba0c279b0ec44d34ede72e8df5b168c33d5c1cdda902252c3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_state_contract.cpp",
+      "sha256": "1728174f56c204e49d46613454a50a213dca8cc6f5c1241dc9e0bf06ca8c74db",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_uniaxial_element_quadrature_contract.cpp",
+      "sha256": "660a36e9b503284e71fa0809fd316a65e0d95455fe9dc49ffc109e523845ea56",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/fem_zeeman_element_quadrature_contract.cpp",
+      "sha256": "a8e648dc92d1267e3748544a125e08b69f38052e4419507bd83edc2f9ad32235",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/field_refresh_contract.cpp",
+      "sha256": "c7e749278d4a06a67b6b3a2e792cf4c62d4fa478f858552998a8be4d9896fe85",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/checked_extent_test.cpp",
+      "sha256": "1da5bdc5c542f0fc6c4fee187b84756b80d2a5fc3ec799695cd420be16ead8bb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/contour_interval_solver_test.cpp",
+      "sha256": "4c03a7fb5d3148768e936362d02f43a2b579da84f59436e6c49b3f5c9b6ef1d2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/driven_response_contract_test.cpp",
+      "sha256": "d931339518e0cb7081ffae350d85f996ddca7fd37de197732ea072bc09fbda46",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/floquet_bloch_scalar_test.cpp",
+      "sha256": "b20334012e08b395792f52256b17f95607eee3d34e0404491b1467bde0f5db81",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/frequency_domain_contract.cpp",
+      "sha256": "53757fc59d34434f3c1209f262e485e9e0e565c08ae2bfc329a0f3d027ff79c2",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/gpu_hypre_device_policy_test.cpp",
+      "sha256": "e893b801ec7580bc62925259fc0675d819f3d8434b3d7b60683e17c831c56870",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp",
+      "sha256": "21a1c38a06a2d7a024b14169d39e71658c244b925f8c739e17604388b3a3475a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/gpu_petsc_slepc_runtime_test.cpp",
+      "sha256": "f83e24355cf8d6f83b1d95d198b1f38bb444adf2bd44c45d5cdcef4bc1c116d3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/gpu_small_dense_contract.cpp",
+      "sha256": "fa9fb2384815851ad78f674ae0b853f25da627d8c2a9c74286b02ffb21d25752",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/linearized_dynamic_pencil_test.cpp",
+      "sha256": "96dbbfed84e7bb6e918973d9471bb8ba96959c221875830635aa54f6907cd9ef",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/mesh_symmetry_certificate_v6_test.cpp",
+      "sha256": "82061db8774e48e41f73bf5372f7f558f938c1f949333fe54877f74c921c8756",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp",
+      "sha256": "96241d7ddd5be837342d10ba707995ddc246d0bbf5e926e19bd4b17118c2fe8a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/mode_deduplication_test.cpp",
+      "sha256": "3d10d758400f785388cb80a6df91177b7d3a3624726f3f36750320de7a0f4cee",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/mode_kinematics_test.cpp",
+      "sha256": "78d270a0c06ebc581436908e542720ba619096122aebbf1984c1ed222152623d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/operator_contract_test.cpp",
+      "sha256": "d05384f7dbee3c3225cf86665b3216d2b9ce9821e51f5d299192cca6ca42cb65",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_eigen_oracle_test.cpp",
+      "sha256": "0f420ab68a83bf9fc57644ef44feb464b059ab517aa6edd187c9997c68408ff1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp",
+      "sha256": "f8b99d58e59b42d508ae4ad27fcc977f4e855ca9cf75d2c1d80b8e0b31c5a2e5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_real_split_cpu_test.cpp",
+      "sha256": "204deb40cbc11a0aef898fc346701e875e7e12fbd1e5826dec075442339e928e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp",
+      "sha256": "318069bbd7b2b2d2e290f23a2976aa61a7da142a7b50fd1f3e42a035872009e6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/poisson_airbox_shared_domain_test.cpp",
+      "sha256": "19328eca99e4f1c34535a301586d6896e921f2e78fc7d8708fa51a0a29a413ac",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/real_frequency_rotated_pencil_test.cpp",
+      "sha256": "fa037ac309bd5d819e68c7cb44d3b6fc28b788fac1fbd70fd75a8b0a18c5a73e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frequency_domain/window_partition_test.cpp",
+      "sha256": "0174f6696c11c536063e7c750a437e93eedee0f71d674f027f6316b17ab519f7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/frozen_spins_contract.cpp",
+      "sha256": "0ec513c3983e4ec2ae4d0e52d32fba074b8f1bdee78b84470147e02a4761a683",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_execution_receipt_contract.cpp",
+      "sha256": "0e0770f549e9a545f35948b870d01ec9b24cb08ddfb7d10eafc0af8960101d57",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_multi_gpu_binding_contract.cpp",
+      "sha256": "43980ceb34955e0c55490f7cb29844e5f251558950f908af21ed7ab4e64682c6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_operator_fusion_contract.cpp",
+      "sha256": "5d538489edb818a9cb6b02d3915afa9a91b78640721e7f8e1954df530e72f96b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_pageable_scalar_readback_contract.cpp",
+      "sha256": "7283c26c40f284129e0c28fd7a0b59ca4595b6fb85315f4a48a86e52baa029d6",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_performance_snapshot_contract.cpp",
+      "sha256": "3b9440e5af151e24bbefcebb1f0b64f6f889f556448526eb797949a6d7c02e12",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
+      "sha256": "13c3e2e7760b06d7164581d872aaef02056c2ae67d78a010ed2fbbc4701cb8a6",
+      "modified": true
+    },
+    {
+      "path": "backends/fem/tests/gpu_rk_attempt_control_packet_contract.cpp",
+      "sha256": "62799fe784dffe1caf181aaa42a8975b6686a0038c9863dc14c95187dcfda579",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_rk_device_controller_contract.cpp",
+      "sha256": "109ed270d29b42073eb866273d48e31e3416dee40482f087a8f13a04d603f832",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_rk_graph_contract.cpp",
+      "sha256": "0ed85cf886ca969e555e8e9f44693bba09d4614778a61dfba58a2001b51ccae5",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_rk_plan.cpp",
+      "sha256": "fb949ac735bc6faa448bb90e1a188a01021807b493e41f2610ac1d2c6681819b",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_solver_docs_contract.cpp",
+      "sha256": "ceab76c3d277b56a6371cbeef48f06ef6067eaa3d85ccabd0fb418a92e207c20",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_sparse_apply_contract.cpp",
+      "sha256": "5fec5289aec922a1a8a129619a4a2203b835ba12f227bc8cc563e0b512057991",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_state_info.cpp",
+      "sha256": "f611fba4bc1d962931b742792886bff82484628472c0fd7878a8199be2118d90",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_state_runtime_contract.cpp",
+      "sha256": "5de8766df610345b0dc8f0dc489badd75e668c63cea3a99da8c6183419396d22",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/gpu_strict_execution_contract.cpp",
+      "sha256": "7440927a21df70408bed8a93b0ff60b1ac3922d0678080e5263c2c08e4d036ba",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/heun_step_contract.cpp",
+      "sha256": "92739700f1694746b457adefa4718bff83a16ee151bb4f12cf1901a7a79a90f3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/hypre_validation_policy_contract.cpp",
+      "sha256": "bff26b404628e712a3b683ce844abe621a8cb82b46f4862c274367ece6a80d86",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/interaction_docs_contract.cpp",
+      "sha256": "87ed67b3eb8d5ef602b4c65885288c4450624990b6d05286ccb7259044ea1ca7",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/interrupt_contract.cpp",
+      "sha256": "d90307d07aec7b5c780c539503b53641dc7f12935a09987e8779279f0af18150",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/llg_rhs_contract.cpp",
+      "sha256": "f17192bd85711f350307b48becce395ed24529b0865cfd8f23d28ba8647ee568",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/llg_time_domain_qualification.cpp",
+      "sha256": "888e77b4cd7b5b427b43850b69e17ade6699023c156c09358f3bb612baf72ef8",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/magnetoelastic_contract.cpp",
+      "sha256": "cf028b3462d0d7f3e05b974cb41595127cb81ec964365ff3561d57c1d1d1231a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/mfem_context_contract.cpp",
+      "sha256": "11bbf7fb45f0cd327af3d982e9a973afbfc0bc5df1ddacf5d4ca8127ee8b79c1",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/mfem_device_contract.cpp",
+      "sha256": "f03384007d4244fc24d41e1147dcee954d6e328fabc86fcd80050c80f94abf3e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/oersted_contract.cpp",
+      "sha256": "bb4367ec03d234947062ea848357ff378d6c082850ebb541fa403f3b9d85948d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/oersted_direct_tetra_contract.cpp",
+      "sha256": "6b9e1970e4e95fc7b344a716bd6c7f8debc17372a3c971dd05ea8071fb03f7a3",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/oersted_vector_potential_contract.cpp",
+      "sha256": "777dc8eed250e450a2541d65c5f525af8f3ed8faa2203a779445c6c190eac636",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/relaxation_energy_derivative_contract.cpp",
+      "sha256": "4daf28d4ff4aa6da44eba48def8a5ca4166df4ab0a54db7bcf07c2e20cf7ba72",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/relaxation_operator_contract.cpp",
+      "sha256": "33ecdd8626a00eea092e9d026b7f2ef4609eb495130bec620c4f8e84871a7700",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/relaxation_source_contract.cpp",
+      "sha256": "6455ed08b0c4528ae6cfeafd3079db5356af14a4af5bf3e375071a7c9d7b69bc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/rk_explicit_contract.cpp",
+      "sha256": "114a1aef921d768014d32ec884c734216e180aa4fa030ac46b8a5c9dd1d55cbb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/rk_transaction_fault_injection_contract.cpp",
+      "sha256": "4e23a442e5e5782dcf9417a3a9acbf72faee9a572663416b02b39daeb1e34132",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/snapshot_contract.cpp",
+      "sha256": "edf1a3b3f6fc6f64cab81004b6721fbb1dd528ed381f114e961bd7178f0bc53a",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/source_facade_contract.cpp",
+      "sha256": "1e76753e4a4ea1a8d04772b685d445c7f19d7e7498ae1e40a9585a23032b05aa",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/source_facade_contract_utils.hpp",
+      "sha256": "5b985c7fb8ea29736bf20f579bba2eca730a0b5df082ba00533ad1f5b812120d",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/source_facade_cuda_kernels_contract.cpp",
+      "sha256": "77d08f9bdd6732b302e1cf874fbaf8b898ef545db6c318b406e1ddc190e08059",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/source_facade_export_progress_contract.cpp",
+      "sha256": "5fb271c1ed3a6f54ba6f2303e95360d419fce98a6ac6cf7476e9af8d75c77fcb",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/source_facade_gpu_rk_contract.cpp",
+      "sha256": "61638112bb75552bb6116d9cba22f75d3e41d054180e0c25a9f4660f00f34122",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/source_facade_gpu_state_contract.cpp",
+      "sha256": "9e1ccfcd8b8dabf977150f3cac13fc373244600dd15d2dbc9a92a53e82f4bf00",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/stage_completion_contract.cpp",
+      "sha256": "6dced7be3accea9d9a8944caba0252dd28a3d39450fbc3cfd6e1b383bfb88b2c",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/state_io_contract.cpp",
+      "sha256": "ef6ba4e0dc12637b9f19b7b8287d28920620633a4134acaaf1f9c9971f38bdcc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/steady_transport_abi_contract.cpp",
+      "sha256": "8f0678a5c752ea4bbce1356d111884c812bba5f1d1df766fe14454002b8d4289",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/steady_transport_contract.cpp",
+      "sha256": "17763095bf11c55fbdc9c35e416424191ee0c8cca47b871ffe9d5b8a91daeccc",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/steady_transport_rt0_contract.cpp",
+      "sha256": "0df2ec215e04adfa949302420c25b74432a6412d872541cd81e6007d4b673103",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/step_metrics_contract.cpp",
+      "sha256": "a793d1611042f8b3d9926944818149b02f478d6f4adb4ec402aebf4cbb21050e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/stt_contract.cpp",
+      "sha256": "beacbfc968554e509e5f642c93cdd82d98151fce0748eaefaf016736f2829a2e",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/tetra_geometry_oracle.hpp",
+      "sha256": "311565f545b8573976c81258d7593694bc583e2440118414a3219e0e4fd80096",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/thermal_brown_contract.cpp",
+      "sha256": "3fd1655b4b15f718d8ebccabb9945898da41caf11d8ce7c5050c8882e4217834",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/transfer_audit.cpp",
+      "sha256": "d03742951bfa652821eb8c370cd8616b39e330bcfb5ff86edcd99e754988ff3f",
+      "modified": false
+    },
+    {
+      "path": "backends/fem/tests/zeeman_contract.cpp",
+      "sha256": "6e552ef1ad6fd7381ca1b9dae47d08e5ad485ec0858bc2eeb4e8e1f5d166774b",
+      "modified": false
+    }
+  ]
+}
