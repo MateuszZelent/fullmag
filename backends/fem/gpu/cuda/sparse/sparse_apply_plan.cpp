@@ -109,6 +109,8 @@ struct SparseApplyPlan::Impl {
 #if FULLMAG_HAS_CUDA_RUNTIME
     double *scratch_input = nullptr;
     double *scratch_output = nullptr;
+    std::size_t scratch_input_stride = 0;
+    std::size_t scratch_output_stride = 0;
     std::size_t scratch_input_count = 0;
     std::size_t scratch_output_count = 0;
 #if FULLMAG_HAS_CUSPARSE
@@ -200,6 +202,8 @@ void SparseApplyPlan::Impl::release_cuda_state() noexcept
     }
     scratch_input_count = 0;
     scratch_output_count = 0;
+    scratch_input_stride = 0;
+    scratch_output_stride = 0;
 }
 
 #if FULLMAG_HAS_CUSPARSE
@@ -275,6 +279,7 @@ bool SparseApplyPlan::Impl::apply_spmm3(
             vectors.z,
             scratch_input,
             static_cast<int>(csr.cols),
+            static_cast<int>(scratch_input_stride),
             stream)) {
         error = "sparse apply XYZ pack rejected parameters";
         return false;
@@ -313,6 +318,7 @@ bool SparseApplyPlan::Impl::apply_spmm3(
             vectors.out_y,
             vectors.out_z,
             static_cast<int>(csr.rows),
+            static_cast<int>(scratch_output_stride),
             stream,
             vectors.active_mask)) {
         error = "sparse apply XYZ unpack rejected parameters";
@@ -348,11 +354,11 @@ bool SparseApplyPlan::Impl::benchmark_variant(
     const int cols = static_cast<int>(csr.cols);
     const SparseApplyXyzDeviceView scratch_vectors{
         scratch_input,
-        scratch_input + cols,
-        scratch_input + 2 * cols,
+        scratch_input + scratch_input_stride,
+        scratch_input + 2 * scratch_input_stride,
         scratch_output,
-        scratch_output + rows,
-        scratch_output + 2 * rows,
+        scratch_output + scratch_output_stride,
+        scratch_output + 2 * scratch_output_stride,
         nullptr,
     };
     auto enqueue = [&]() {
@@ -542,8 +548,14 @@ bool SparseApplyPlan::setup(
         error = "sparse apply scratch dimensions overflow";
         return false;
     }
-    impl_->scratch_input_count = static_cast<std::size_t>(csr.cols) * 3u;
-    impl_->scratch_output_count = static_cast<std::size_t>(csr.rows) * 3u;
+    // CUDA 12.4 cuSPARSE may issue 16-byte vector accesses for FP64 SpMV.
+    // Keep every x/y/z component base 16-byte aligned even for odd dimensions.
+    impl_->scratch_input_stride =
+        (static_cast<std::size_t>(csr.cols) + 1u) & ~std::size_t{1u};
+    impl_->scratch_output_stride =
+        (static_cast<std::size_t>(csr.rows) + 1u) & ~std::size_t{1u};
+    impl_->scratch_input_count = impl_->scratch_input_stride * 3u;
+    impl_->scratch_output_count = impl_->scratch_output_stride * 3u;
     if (!cuda_ok(
             cudaMalloc(
                 reinterpret_cast<void **>(&impl_->scratch_input),
@@ -603,12 +615,12 @@ bool SparseApplyPlan::setup(
             cusparse_error);
     const std::array<double *, 3> input_scratch{
         impl_->scratch_input,
-        impl_->scratch_input + csr.cols,
-        impl_->scratch_input + 2u * csr.cols};
+        impl_->scratch_input + impl_->scratch_input_stride,
+        impl_->scratch_input + 2u * impl_->scratch_input_stride};
     const std::array<double *, 3> output_scratch{
         impl_->scratch_output,
-        impl_->scratch_output + csr.rows,
-        impl_->scratch_output + 2u * csr.rows};
+        impl_->scratch_output + impl_->scratch_output_stride,
+        impl_->scratch_output + 2u * impl_->scratch_output_stride};
     if (cusparse_ready) {
         for (std::size_t component = 0; component < 3u; ++component) {
             cusparse_ready =
@@ -637,7 +649,7 @@ bool SparseApplyPlan::setup(
                     &impl_->spmm_input,
                     csr.cols,
                     3,
-                    csr.cols,
+                    impl_->scratch_input_stride,
                     impl_->scratch_input,
                     CUDA_R_64F,
                     CUSPARSE_ORDER_COL),
@@ -648,7 +660,7 @@ bool SparseApplyPlan::setup(
                     &impl_->spmm_output,
                     csr.rows,
                     3,
-                    csr.rows,
+                    impl_->scratch_output_stride,
                     impl_->scratch_output,
                     CUDA_R_64F,
                     CUSPARSE_ORDER_COL),
@@ -744,8 +756,12 @@ bool SparseApplyPlan::setup(
         // selected by a caller.
         impl_->release_cuda_state();
         impl_->csr = csr;
-        impl_->scratch_input_count = static_cast<std::size_t>(csr.cols) * 3u;
-        impl_->scratch_output_count = static_cast<std::size_t>(csr.rows) * 3u;
+        impl_->scratch_input_stride =
+            (static_cast<std::size_t>(csr.cols) + 1u) & ~std::size_t{1u};
+        impl_->scratch_output_stride =
+            (static_cast<std::size_t>(csr.rows) + 1u) & ~std::size_t{1u};
+        impl_->scratch_input_count = impl_->scratch_input_stride * 3u;
+        impl_->scratch_output_count = impl_->scratch_output_stride * 3u;
         if (!cuda_ok(
                 cudaMalloc(
                     reinterpret_cast<void **>(&impl_->scratch_input),
@@ -952,6 +968,21 @@ std::uint64_t SparseApplyPlan::setup_count() const noexcept
 std::uint64_t SparseApplyPlan::apply_count() const noexcept
 {
     return impl_ == nullptr ? 0u : impl_->apply_count;
+}
+
+bool SparseApplyPlan::is_configured() const noexcept
+{
+    return impl_ != nullptr && impl_->configured;
+}
+
+std::uint32_t SparseApplyPlan::configured_rows() const noexcept
+{
+    return is_configured() ? impl_->csr.rows : 0u;
+}
+
+std::uint32_t SparseApplyPlan::configured_cols() const noexcept
+{
+    return is_configured() ? impl_->csr.cols : 0u;
 }
 
 } // namespace fullmag::fem

@@ -445,15 +445,16 @@ __global__ void pack_xyz_kernel(
     const double *__restrict__ y,
     const double *__restrict__ z,
     double *__restrict__ packed,
-    int rows)
+    int rows,
+    int component_stride)
 {
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= rows) {
         return;
     }
     packed[row] = x[row];
-    packed[rows + row] = y[row];
-    packed[2 * rows + row] = z[row];
+    packed[component_stride + row] = y[row];
+    packed[2 * component_stride + row] = z[row];
 }
 
 __global__ void unpack_xyz_kernel(
@@ -462,6 +463,7 @@ __global__ void unpack_xyz_kernel(
     double *__restrict__ y,
     double *__restrict__ z,
     int rows,
+    int component_stride,
     const std::uint8_t *__restrict__ active_mask)
 {
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
@@ -475,8 +477,8 @@ __global__ void unpack_xyz_kernel(
         return;
     }
     x[row] = packed[row];
-    y[row] = packed[rows + row];
-    z[row] = packed[2 * rows + row];
+    y[row] = packed[component_stride + row];
+    z[row] = packed[2 * component_stride + row];
 }
 
 __global__ void mask_xyz_kernel(
@@ -684,13 +686,15 @@ bool launch_pack_xyz(
     const double *z,
     double *packed,
     int rows,
+    int component_stride,
     cudaStream_t stream)
 {
-    if (rows <= 0 || x == nullptr || y == nullptr || z == nullptr || packed == nullptr) {
+    if (rows <= 0 || component_stride < rows ||
+        x == nullptr || y == nullptr || z == nullptr || packed == nullptr) {
         return false;
     }
     pack_xyz_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        x, y, z, packed, rows);
+        x, y, z, packed, rows, component_stride);
     return true;
 }
 
@@ -700,14 +704,16 @@ bool launch_unpack_xyz(
     double *y,
     double *z,
     int rows,
+    int component_stride,
     cudaStream_t stream,
     const std::uint8_t *active_mask)
 {
-    if (rows <= 0 || packed == nullptr || x == nullptr || y == nullptr || z == nullptr) {
+    if (rows <= 0 || component_stride < rows ||
+        packed == nullptr || x == nullptr || y == nullptr || z == nullptr) {
         return false;
     }
     unpack_xyz_kernel<<<(rows + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(
-        packed, x, y, z, rows, active_mask);
+        packed, x, y, z, rows, component_stride, active_mask);
     return true;
 }
 

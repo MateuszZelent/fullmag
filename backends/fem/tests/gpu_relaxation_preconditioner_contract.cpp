@@ -1,4 +1,6 @@
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
+#include "gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp"
+#include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 
 #include <cuda_runtime.h>
 
@@ -9,6 +11,8 @@
 #include <cstdlib>
 #include <limits>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -24,6 +28,226 @@ void check(bool condition, const char *message)
 bool close(double actual, double expected, double tolerance = 1.0e-13)
 {
     return std::abs(actual - expected) <= tolerance;
+}
+
+template <typename T>
+class DeviceBuffer {
+public:
+    explicit DeviceBuffer(size_t count) : count_(count)
+    {
+        const cudaError_t status =
+            cudaMalloc(reinterpret_cast<void **>(&data_), count * sizeof(T));
+        if (status != cudaSuccess) {
+            std::fprintf(
+                stderr,
+                "FAIL: cudaMalloc device test buffer (%zu bytes) failed: %s\n",
+                count * sizeof(T),
+                cudaGetErrorString(status));
+            std::exit(1);
+        }
+    }
+
+    ~DeviceBuffer()
+    {
+        cudaFree(data_);
+    }
+
+    DeviceBuffer(const DeviceBuffer &) = delete;
+    DeviceBuffer &operator=(const DeviceBuffer &) = delete;
+
+    T *get() const { return data_; }
+    size_t size() const { return count_; }
+
+    void copy_from(const std::vector<T> &host)
+    {
+        check(host.size() == count_, "device test upload size must match");
+        check(cudaMemcpy(data_, host.data(), count_ * sizeof(T), cudaMemcpyHostToDevice) ==
+                  cudaSuccess,
+              "device test upload must succeed");
+    }
+
+    std::vector<T> copy_to_host() const
+    {
+        std::vector<T> host(count_);
+        check(cudaMemcpy(host.data(), data_, count_ * sizeof(T), cudaMemcpyDeviceToHost) ==
+                  cudaSuccess,
+              "device test readback must succeed");
+        return host;
+    }
+
+private:
+    T *data_ = nullptr;
+    size_t count_ = 0;
+};
+
+using DenseMatrix = std::vector<std::vector<double>>;
+
+std::vector<double> solve_dense(DenseMatrix matrix, std::vector<double> rhs)
+{
+    const size_t n = rhs.size();
+    check(matrix.size() == n, "dense oracle matrix height must match RHS");
+    for (const auto &row : matrix) {
+        check(row.size() == n, "dense oracle matrix must be square");
+    }
+    for (size_t pivot = 0; pivot < n; ++pivot) {
+        size_t best = pivot;
+        for (size_t row = pivot + 1; row < n; ++row) {
+            if (std::abs(matrix[row][pivot]) > std::abs(matrix[best][pivot])) {
+                best = row;
+            }
+        }
+        check(std::abs(matrix[best][pivot]) > 1.0e-15,
+              "dense oracle requires a nonsingular operator");
+        std::swap(matrix[pivot], matrix[best]);
+        std::swap(rhs[pivot], rhs[best]);
+        for (size_t row = pivot + 1; row < n; ++row) {
+            const double factor = matrix[row][pivot] / matrix[pivot][pivot];
+            for (size_t col = pivot; col < n; ++col) {
+                matrix[row][col] -= factor * matrix[pivot][col];
+            }
+            rhs[row] -= factor * rhs[pivot];
+        }
+    }
+    std::vector<double> solution(n, 0.0);
+    for (size_t reverse = 0; reverse < n; ++reverse) {
+        const size_t row = n - 1u - reverse;
+        double value = rhs[row];
+        for (size_t col = row + 1u; col < n; ++col) {
+            value -= matrix[row][col] * solution[col];
+        }
+        solution[row] = value / matrix[row][row];
+    }
+    return solution;
+}
+
+double relative_residual(
+    const DenseMatrix &matrix,
+    const std::vector<double> &solution,
+    const std::vector<double> &rhs)
+{
+    double residual_sq = 0.0;
+    double rhs_sq = 0.0;
+    for (size_t row = 0; row < rhs.size(); ++row) {
+        double applied = 0.0;
+        for (size_t col = 0; col < rhs.size(); ++col) {
+            applied += matrix[row][col] * solution[col];
+        }
+        const double residual = applied - rhs[row];
+        residual_sq += residual * residual;
+        rhs_sq += rhs[row] * rhs[row];
+    }
+    return std::sqrt(residual_sq / rhs_sq);
+}
+
+double l2_error(
+    const std::vector<double> &actual,
+    const std::vector<double> &expected)
+{
+    check(actual.size() == expected.size(), "L2 error vectors must match");
+    double error_sq = 0.0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        const double difference = actual[i] - expected[i];
+        error_sq += difference * difference;
+    }
+    return std::sqrt(error_sq);
+}
+
+struct DeviceSparseOperator {
+    DeviceSparseOperator(
+        const DenseMatrix &exchange,
+        fullmag::fem::SparseApplyVariant variant =
+            fullmag::fem::SparseApplyVariant::ScalarRow)
+        : rows(exchange.size() + 1u),
+          columns(nonzero_count(exchange)),
+          values(columns.size())
+    {
+        std::vector<uint32_t> host_rows{0u};
+        std::vector<uint32_t> host_columns;
+        std::vector<double> host_values;
+        for (size_t row = 0; row < exchange.size(); ++row) {
+            check(exchange[row].size() == exchange.size(),
+                  "device sparse test operator must be square");
+            for (size_t col = 0; col < exchange.size(); ++col) {
+                if (exchange[row][col] != 0.0) {
+                    host_columns.push_back(static_cast<uint32_t>(col));
+                    host_values.push_back(exchange[row][col]);
+                }
+            }
+            host_rows.push_back(static_cast<uint32_t>(host_values.size()));
+        }
+        rows.copy_from(host_rows);
+        columns.copy_from(host_columns);
+        values.copy_from(host_values);
+        std::string error;
+        check(plan.setup(
+                  {rows.get(), columns.get(), values.get(),
+                   static_cast<uint32_t>(exchange.size()),
+                   static_cast<uint32_t>(exchange.size())},
+                  nullptr,
+                  error),
+              "device sparse test plan setup must succeed");
+        check(cudaDeviceSynchronize() == cudaSuccess,
+              "odd-sized sparse plan setup must not leave an asynchronous CUDA error");
+        check(plan.force_variant_for_test(variant, error),
+              "device sparse test plan variant must be selectable");
+    }
+
+    static size_t nonzero_count(const DenseMatrix &matrix)
+    {
+        size_t count = 0;
+        for (const auto &row : matrix) {
+            count += static_cast<size_t>(std::count_if(
+                row.begin(), row.end(), [](double value) { return value != 0.0; }));
+        }
+        return count;
+    }
+
+    DeviceBuffer<uint32_t> rows;
+    DeviceBuffer<uint32_t> columns;
+    DeviceBuffer<double> values;
+    fullmag::fem::SparseApplyPlan plan;
+};
+
+DenseMatrix chain_exchange(size_t n)
+{
+    DenseMatrix exchange(n, std::vector<double>(n, 0.0));
+    for (size_t i = 0; i < n; ++i) {
+        if (i > 0u) {
+            exchange[i][i - 1u] = -1.0;
+            exchange[i][i] += 1.0;
+        }
+        if (i + 1u < n) {
+            exchange[i][i + 1u] = -1.0;
+            exchange[i][i] += 1.0;
+        }
+    }
+    return exchange;
+}
+
+DenseMatrix exchange_mass_operator(
+    const std::vector<double> &mass,
+    const DenseMatrix &exchange,
+    double weight)
+{
+    DenseMatrix op = exchange;
+    for (size_t row = 0; row < mass.size(); ++row) {
+        for (size_t col = 0; col < mass.size(); ++col) {
+            op[row][col] *= weight;
+        }
+        op[row][row] += mass[row];
+    }
+    return op;
+}
+
+std::vector<double> mass_rhs(
+    const std::vector<double> &mass,
+    const std::vector<double> &gradient)
+{
+    std::vector<double> rhs(mass.size(), 0.0);
+    for (size_t i = 0; i < mass.size(); ++i) {
+        rhs[i] = mass[i] * gradient[i];
+    }
+    return rhs;
 }
 
 void check_vector_close(
@@ -115,16 +339,29 @@ void check_resolver_contract()
     check(std::string(gpu_relaxation_preconditioner_kind_id(decision.kind)) == "diagonal",
           "diagonal must have the stable diagonal identifier");
 
-    for (const char *requested : {
-             "exchange_mass", "exchange_mass_cg4", "exchange_mass_cg8"}) {
-        for (bool qualified : {false, true}) {
-            GpuRelaxationPreconditionerRequest request{requested, qualified, false};
-            check(!resolve_gpu_relaxation_preconditioner(request, decision, error),
-                  "full sparse exchange-mass profiles must remain unavailable");
-            check(error.find("not implemented") != std::string::npos ||
-                      error.find("unavailable") != std::string::npos,
-                  "unavailable sparse profiles must return an explicit error");
-        }
+    GpuRelaxationPreconditionerRequest ambiguous{"exchange_mass", true, false};
+    check(!resolve_gpu_relaxation_preconditioner(ambiguous, decision, error),
+          "base exchange_mass token must remain ambiguous and fail closed");
+    check(error.find("ambiguous") != std::string::npos,
+          "ambiguous exchange_mass token must return an explicit error");
+
+    for (const auto &[requested, fixed_iterations] :
+         std::array<std::pair<const char *, uint32_t>, 2>{
+             std::pair{"exchange_mass_cg4", 4u},
+             std::pair{"exchange_mass_cg8", 8u}}) {
+        GpuRelaxationPreconditionerRequest request{requested, false, false};
+        check(!resolve_gpu_relaxation_preconditioner(request, decision, error),
+              "unqualified sparse exchange-mass profile must fail closed");
+        request.profile_qualified = true;
+        check(resolve_gpu_relaxation_preconditioner(request, decision, error),
+              "qualified sparse exchange-mass profile must resolve");
+        check(decision.kind == GpuRelaxationPreconditionerKind::ExchangeMass,
+              "qualified sparse profile must resolve the exchange_mass family");
+        check(std::string(gpu_relaxation_preconditioner_kind_id(decision.kind)) ==
+                  "exchange_mass",
+              "exchange-mass family must have a stable identifier");
+        check(decision.fixed_iterations == fixed_iterations,
+              "exchange-mass decision must preserve exact fixed iteration count");
     }
 
     GpuRelaxationPreconditionerRequest unknown{"stale_unknown_profile", true, false};
@@ -133,6 +370,316 @@ void check_resolver_contract()
     diagonal.profile_stale = true;
     check(!resolve_gpu_relaxation_preconditioner(diagonal, decision, error),
           "stale diagonal profile must fail closed");
+}
+
+struct ExchangeMassResult {
+    std::vector<double> x;
+    std::vector<double> y;
+    std::vector<double> z;
+    std::array<double, 3> residual_squared{};
+    uint32_t iterations = 0;
+    uint32_t failure_latch = 0;
+};
+
+ExchangeMassResult apply_exchange_mass(
+    fullmag::fem::GpuExchangeMassPreconditioner &preconditioner,
+    const std::vector<double> &gradient_x,
+    const std::vector<double> &gradient_y,
+    const std::vector<double> &gradient_z,
+    double weight)
+{
+    const size_t n = gradient_x.size();
+    check(gradient_y.size() == n && gradient_z.size() == n,
+          "exchange-mass input component sizes must match");
+    DeviceBuffer<double> d_x(n);
+    DeviceBuffer<double> d_y(n);
+    DeviceBuffer<double> d_z(n);
+    DeviceBuffer<double> d_out_x(n);
+    DeviceBuffer<double> d_out_y(n);
+    DeviceBuffer<double> d_out_z(n);
+    d_x.copy_from(gradient_x);
+    d_y.copy_from(gradient_y);
+    d_z.copy_from(gradient_z);
+
+    std::string error;
+    check(preconditioner.apply_device_xyz(
+              d_x.get(), d_y.get(), d_z.get(),
+              d_out_x.get(), d_out_y.get(), d_out_z.get(),
+              n, weight, nullptr, error),
+          "exchange-mass device apply must enqueue successfully");
+    check(cudaDeviceSynchronize() == cudaSuccess,
+          "exchange-mass test apply must synchronize outside the hot apply");
+    check(d_x.copy_to_host() == gradient_x &&
+              d_y.copy_to_host() == gradient_y &&
+              d_z.copy_to_host() == gradient_z,
+          "exchange-mass apply must not modify its gradient inputs");
+
+    ExchangeMassResult result;
+    result.x = d_out_x.copy_to_host();
+    result.y = d_out_y.copy_to_host();
+    result.z = d_out_z.copy_to_host();
+    check(cudaMemcpy(
+              result.residual_squared.data(),
+              preconditioner.device_final_residual_squared(),
+              result.residual_squared.size() * sizeof(double),
+              cudaMemcpyDeviceToHost) == cudaSuccess,
+          "exchange-mass residual diagnostics readback must succeed");
+    check(cudaMemcpy(
+              &result.iterations,
+              preconditioner.device_iteration_count(),
+              sizeof(result.iterations),
+              cudaMemcpyDeviceToHost) == cudaSuccess,
+          "exchange-mass iteration diagnostics readback must succeed");
+    check(cudaMemcpy(
+              &result.failure_latch,
+              preconditioner.device_failure_latch(),
+              sizeof(result.failure_latch),
+              cudaMemcpyDeviceToHost) == cudaSuccess,
+          "exchange-mass failure diagnostics readback must succeed");
+    return result;
+}
+
+void check_sparse_exchange_mass_fixed_cg_contract()
+{
+    using namespace fullmag::fem;
+
+    constexpr size_t n = 12;
+    const DenseMatrix exchange = chain_exchange(n);
+    const std::vector<double> mass = {
+        0.8, 1.7, 0.6, 2.1, 1.2, 0.9, 1.9, 0.7, 1.4, 2.3, 1.0, 1.6};
+    const std::vector<uint8_t> free_mask(n, 1u);
+    const std::vector<double> gradient_x = {
+        -1.0, 0.25, 1.5, -0.75, 2.0, 0.1, -1.3, 0.8, 1.1, -0.2, 0.6, -1.7};
+    const std::vector<double> gradient_y = {
+        0.3, -1.2, 0.4, 1.8, -0.6, 0.9, -1.5, 0.2, 1.4, -0.8, 0.7, 1.0};
+    const std::vector<double> gradient_z = {
+        1.1, 0.5, -0.9, 0.2, -1.8, 1.3, 0.6, -0.4, 0.75, -1.1, 1.9, -0.25};
+    const double weight = 5.0;
+    const DenseMatrix op = exchange_mass_operator(mass, exchange, weight);
+    const auto rhs_x = mass_rhs(mass, gradient_x);
+    const auto rhs_y = mass_rhs(mass, gradient_y);
+    const auto rhs_z = mass_rhs(mass, gradient_z);
+    const auto oracle_x = solve_dense(op, rhs_x);
+    const auto oracle_y = solve_dense(op, rhs_y);
+    const auto oracle_z = solve_dense(op, rhs_z);
+
+    DeviceSparseOperator device_exchange(exchange);
+    DeviceBuffer<double> d_mass(n);
+    DeviceBuffer<uint8_t> d_mask(n);
+    d_mass.copy_from(mass);
+    d_mask.copy_from(free_mask);
+    std::string error;
+    const GpuExchangeMassSetupIdentity identity{101u, 203u, 307u};
+
+    GpuExchangeMassPreconditioner cg4(GpuExchangeMassCgVariant::Cg4);
+    GpuExchangeMassPreconditioner cg8(GpuExchangeMassCgVariant::Cg8);
+    check(cg4.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), n,
+              identity, nullptr, error),
+          "CG4 exchange-mass setup must succeed");
+    check(cg8.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), n,
+              identity, nullptr, error),
+          "CG8 exchange-mass setup must succeed");
+    check(cg4.borrowed_sparse_plan() == &device_exchange.plan &&
+              cg8.borrowed_sparse_plan() == &device_exchange.plan,
+          "fixed CG must borrow one existing sparse plan without copying CSR");
+    check(cg4.fixed_iterations() == 4u && cg8.fixed_iterations() == 8u,
+          "CG variants must expose exact fixed iteration counts");
+
+    const ExchangeMassResult result4 =
+        apply_exchange_mass(cg4, gradient_x, gradient_y, gradient_z, weight);
+    const ExchangeMassResult result8 =
+        apply_exchange_mass(cg8, gradient_x, gradient_y, gradient_z, weight);
+    check(result4.failure_latch == 0u && result8.failure_latch == 0u,
+          "valid fixed CG solves must leave the failure latch clear");
+    check(result4.iterations == 4u && result8.iterations == 8u,
+          "device diagnostics must prove exact iterations without early host stop");
+    check(device_exchange.plan.apply_count() == 12u,
+          "borrowed sparse plan must execute once per fixed CG iteration");
+
+    for (const auto &[actual4, actual8, oracle, rhs] :
+         std::array<std::tuple<const std::vector<double> *,
+                               const std::vector<double> *,
+                               const std::vector<double> *,
+                               const std::vector<double> *>, 3>{
+             std::tuple{&result4.x, &result8.x, &oracle_x, &rhs_x},
+             std::tuple{&result4.y, &result8.y, &oracle_y, &rhs_y},
+             std::tuple{&result4.z, &result8.z, &oracle_z, &rhs_z}}) {
+        const double residual4 = relative_residual(op, *actual4, *rhs);
+        const double residual8 = relative_residual(op, *actual8, *rhs);
+        check(residual4 < 2.5e-1,
+              "CG4 residual must meet its explicit bounded-iteration threshold");
+        check(residual8 < 2.0e-2,
+              "CG8 residual must meet its tighter explicit bounded-iteration threshold");
+        check(residual8 < residual4,
+              "CG8 must improve the residual for the incomplete Krylov fixture");
+        check(l2_error(*actual8, *oracle) < l2_error(*actual4, *oracle),
+              "CG8 must move closer to the independent dense oracle than CG4");
+    }
+    check(l2_error(result4.x, result8.x) > 1.0e-8,
+          "CG4 and CG8 must produce distinct results before Krylov closure");
+
+    std::vector<double> exchange_diagonal(n, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        exchange_diagonal[i] = exchange[i][i];
+    }
+    const auto diagonal_x =
+        diagonal_solution(mass, exchange_diagonal, weight, gradient_x);
+    check(l2_error(diagonal_x, oracle_x) > 1.0e-2,
+          "diagonal multiplication must remain detectably wrong for the full sparse oracle");
+
+    const double *const first_workspace = cg4.device_workspace_for_diagnostics();
+    check(cg4.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), n,
+              identity, nullptr, error),
+          "identical fixed-CG setup must be reusable");
+    check(cg4.setup_count() == 1u && cg4.setup_reuse_count() == 1u,
+          "identical fixed-CG setup must be a cache hit");
+    const GpuExchangeMassSetupIdentity changed_identity{102u, 203u, 307u};
+    check(cg4.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), n,
+              changed_identity, nullptr, error),
+          "changed operator identity must invalidate fixed-CG setup");
+    check(cg4.setup_count() == 2u,
+          "changed identity must count a fresh logical setup");
+    check(cg4.device_workspace_for_diagnostics() == first_workspace,
+          "same-size identity invalidation must reuse persistent allocation");
+
+    const std::vector<double> zero(n, 0.0);
+    const ExchangeMassResult zero_result =
+        apply_exchange_mass(cg4, zero, zero, zero, weight);
+    check(zero_result.failure_latch == 0u && zero_result.iterations == 4u,
+          "active zero RHS must execute the exact safe fixed schedule");
+    check_vector_close(zero_result.x, zero,
+                       "active zero RHS x output must remain exactly zero");
+    check_vector_close(zero_result.y, zero,
+                       "active zero RHS y output must remain exactly zero");
+    check_vector_close(zero_result.z, zero,
+                       "active zero RHS z output must remain exactly zero");
+
+    check(!cg4.apply_device_xyz(
+              nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+              n, weight, nullptr, error),
+          "null fixed-CG apply buffers must fail before launch");
+    check(!cg4.apply_device_xyz(
+              d_mass.get(), d_mass.get(), d_mass.get(),
+              d_mass.get(), d_mass.get(), d_mass.get(),
+              n - 1u, weight, nullptr, error),
+          "fixed-CG apply dimension mismatch must fail before launch");
+    check(!cg4.apply_device_xyz(
+              d_mass.get(), d_mass.get(), d_mass.get(),
+              d_mass.get(), d_mass.get(), d_mass.get(),
+              n, std::numeric_limits<double>::infinity(), nullptr, error),
+          "non-finite fixed-CG weight must fail before launch");
+}
+
+void check_sparse_exchange_mass_mask_and_failure_contract()
+{
+    using namespace fullmag::fem;
+
+    const DenseMatrix exchange = chain_exchange(3u);
+    DeviceSparseOperator device_exchange(exchange);
+    const std::vector<double> inactive_mass = {
+        -1.0, std::numeric_limits<double>::quiet_NaN(), 0.0};
+    const std::vector<uint8_t> inactive_mask = {0u, 0u, 0u};
+    DeviceBuffer<double> d_mass(3u);
+    DeviceBuffer<uint8_t> d_mask(3u);
+    d_mass.copy_from(inactive_mass);
+    d_mask.copy_from(inactive_mask);
+    GpuExchangeMassPreconditioner cg4(GpuExchangeMassCgVariant::Cg4);
+    std::string error;
+    check(cg4.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
+              {1u, 2u, 3u}, nullptr, error),
+          "inactive and fixed nodes must not require positive finite mass");
+    const std::vector<double> nonzero = {1.0, -2.0, 3.0};
+    const ExchangeMassResult zero_result =
+        apply_exchange_mass(cg4, nonzero, nonzero, nonzero, 0.75);
+    check(zero_result.iterations == 4u && zero_result.failure_latch == 0u,
+          "all-masked solve must still execute exactly four safe iterations");
+    check_vector_close(zero_result.x, {0.0, 0.0, 0.0},
+                       "inactive x output must be exactly zero");
+    check_vector_close(zero_result.y, {0.0, 0.0, 0.0},
+                       "inactive y output must be exactly zero");
+    check_vector_close(zero_result.z, {0.0, 0.0, 0.0},
+                       "inactive z output must be exactly zero");
+    std::vector<double> workspace(cg4.device_workspace_value_count());
+    check(cudaMemcpy(
+              workspace.data(), cg4.device_workspace_for_diagnostics(),
+              workspace.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess,
+          "masked fixed-CG workspace readback must succeed");
+    check(std::all_of(workspace.begin(), workspace.end(),
+                      [](double value) { return value == 0.0; }),
+          "inactive and fixed workspace entries must remain exactly zero");
+
+    SparseApplyPlan unconfigured_plan;
+    GpuExchangeMassPreconditioner invalid(GpuExchangeMassCgVariant::Cg4);
+    check(!invalid.setup(
+              unconfigured_plan, d_mass.get(), d_mask.get(), 3u,
+              {1u, 2u, 3u}, nullptr, error),
+          "fixed-CG setup must reject a missing CSR plan");
+    check(!invalid.setup(
+              device_exchange.plan, nullptr, d_mask.get(), 3u,
+              {1u, 2u, 3u}, nullptr, error),
+          "fixed-CG setup must reject a missing mass vector");
+    check(!invalid.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), 2u,
+              {1u, 2u, 3u}, nullptr, error),
+          "fixed-CG setup must reject a dimension inconsistent with CSR");
+
+    const std::vector<double> invalid_active_mass = {1.0, 0.0, 2.0};
+    const std::vector<uint8_t> active_mask = {1u, 1u, 1u};
+    d_mass.copy_from(invalid_active_mass);
+    d_mask.copy_from(active_mask);
+    check(!invalid.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
+              {4u, 5u, 6u}, nullptr, error),
+          "fixed-CG setup must reject non-positive active mass");
+
+    const std::vector<double> valid_mass = {1.0, 1.5, 2.0};
+    d_mass.copy_from(valid_mass);
+    GpuExchangeMassPreconditioner latched(GpuExchangeMassCgVariant::Cg4);
+    check(latched.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
+              {7u, 8u, 9u}, nullptr, error),
+          "failure-latch fixture setup must succeed");
+    const std::vector<double> invalid_rhs = {
+        1.0, std::numeric_limits<double>::infinity(), -1.0};
+    ExchangeMassResult failed =
+        apply_exchange_mass(latched, invalid_rhs, nonzero, nonzero, 0.75);
+    check(failed.failure_latch != 0u,
+          "non-finite device input must set the failure latch");
+    check_vector_close(failed.x, {0.0, 0.0, 0.0},
+                       "failed fixed-CG solve must zero partial output");
+    failed = apply_exchange_mass(latched, nonzero, nonzero, nonzero, 0.75);
+    check(failed.failure_latch != 0u,
+          "device failure latch must remain monotonic for one setup identity");
+    check_vector_close(failed.x, {0.0, 0.0, 0.0},
+                       "latched fixed-CG solve must remain fail-closed");
+
+    const DenseMatrix indefinite_exchange = {
+        {-2.0, 0.0},
+        {0.0, -2.0},
+    };
+    DeviceSparseOperator indefinite_device(indefinite_exchange);
+    DeviceBuffer<double> d_breakdown_mass(2u);
+    DeviceBuffer<uint8_t> d_breakdown_mask(2u);
+    d_breakdown_mass.copy_from({1.0, 1.0});
+    d_breakdown_mask.copy_from({1u, 1u});
+    GpuExchangeMassPreconditioner breakdown(GpuExchangeMassCgVariant::Cg4);
+    check(breakdown.setup(
+              indefinite_device.plan, d_breakdown_mass.get(), d_breakdown_mask.get(), 2u,
+              {10u, 11u, 12u}, nullptr, error),
+          "breakdown fixture setup must succeed before device recurrence");
+    const ExchangeMassResult breakdown_result =
+        apply_exchange_mass(breakdown, {1.0, -1.0}, {0.5, 2.0}, {-0.5, 1.0}, 1.0);
+    check(breakdown_result.iterations == 4u,
+          "breakdown path must preserve the fixed launch schedule");
+    check(breakdown_result.failure_latch != 0u,
+          "non-positive CG denominator must set the failure latch");
+    check_vector_close(breakdown_result.x, {0.0, 0.0},
+                       "breakdown must zero partial fixed-CG output");
 }
 
 void check_diagonal_builder_validation()
@@ -399,6 +946,8 @@ int main()
     check_diagonal_builder_validation();
     check_dense_oracle_separates_diagonal_from_sparse();
     check_diagonal_host_and_device_contract();
+    check_sparse_exchange_mass_fixed_cg_contract();
+    check_sparse_exchange_mass_mask_and_failure_contract();
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;
 }

@@ -9,6 +9,7 @@ namespace fullmag::fem {
 enum class GpuRelaxationPreconditionerKind {
     None,
     Diagonal,
+    ExchangeMass,
 };
 
 const char *gpu_relaxation_preconditioner_kind_id(
@@ -24,6 +25,7 @@ struct GpuRelaxationPreconditionerDecision {
     GpuRelaxationPreconditionerKind kind =
         GpuRelaxationPreconditionerKind::None;
     bool qualified = false;
+    uint32_t fixed_iterations = 0;
 };
 
 /* Resolve only explicitly qualified profiles.  Empty input selects the

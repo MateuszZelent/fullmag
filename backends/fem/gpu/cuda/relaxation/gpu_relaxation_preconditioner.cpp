@@ -26,6 +26,7 @@ const char *gpu_relaxation_preconditioner_kind_id(
     switch (kind) {
     case GpuRelaxationPreconditionerKind::None: return "none";
     case GpuRelaxationPreconditionerKind::Diagonal: return "diagonal";
+    case GpuRelaxationPreconditionerKind::ExchangeMass: return "exchange_mass";
     }
     return "unsupported";
 }
@@ -46,11 +47,22 @@ bool resolve_gpu_relaxation_preconditioner(
         error.clear();
         return true;
     }
-    if (request.requested_kind == "exchange_mass" ||
-        request.requested_kind == "exchange_mass_cg4" ||
-        request.requested_kind == "exchange_mass_cg8") {
-        error = "GPU exchange-mass relaxation preconditioner is not implemented";
+    if (request.requested_kind == "exchange_mass") {
+        error = "GPU exchange-mass relaxation preconditioner request is ambiguous";
         return false;
+    }
+    if (request.requested_kind == "exchange_mass_cg4" ||
+        request.requested_kind == "exchange_mass_cg8") {
+        if (!request.profile_qualified) {
+            error = "GPU exchange-mass relaxation preconditioner is not qualified";
+            return false;
+        }
+        decision.kind = GpuRelaxationPreconditionerKind::ExchangeMass;
+        decision.qualified = true;
+        decision.fixed_iterations =
+            request.requested_kind == "exchange_mass_cg4" ? 4u : 8u;
+        error.clear();
+        return true;
     }
     if (request.requested_kind != "diagonal") {
         error = "unsupported GPU relaxation preconditioner: " +

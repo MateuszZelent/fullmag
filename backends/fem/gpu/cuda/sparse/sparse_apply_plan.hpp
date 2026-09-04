@@ -90,6 +90,9 @@ public:
 
     std::uint64_t setup_count() const noexcept;
     std::uint64_t apply_count() const noexcept;
+    bool is_configured() const noexcept;
+    std::uint32_t configured_rows() const noexcept;
+    std::uint32_t configured_cols() const noexcept;
 
 private:
     struct Impl;
@@ -164,6 +167,7 @@ bool launch_pack_xyz(
     const double *z,
     double *packed,
     int rows,
+    int component_stride,
     cudaStream_t stream);
 
 bool launch_unpack_xyz(
@@ -172,6 +176,7 @@ bool launch_unpack_xyz(
     double *y,
     double *z,
     int rows,
+    int component_stride,
     cudaStream_t stream,
     const std::uint8_t *active_mask = nullptr);
 

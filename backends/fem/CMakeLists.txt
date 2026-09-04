@@ -59,6 +59,7 @@ set(FEM_SOURCES
     gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
     gpu/cuda/relaxation/pgbb.cpp
+    gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.cpp
     gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp
     gpu/cuda/relaxation/relaxation_memory.cpp
     gpu/cuda/state/device_memory.cpp
@@ -320,6 +321,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/demag_poisson/demag_kernels.cu
             gpu/cuda/demag_fem_bem/fem_bem_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
+            gpu/cuda/relaxation/gpu_exchange_mass_preconditioner_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
             gpu/cuda/reductions/reduction_kernels.cu
             gpu/cuda/transfer/transfer_kernels.cu
