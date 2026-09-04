@@ -2,6 +2,7 @@
 #include "gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/sparse/sparse_apply_plan.hpp"
+#include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 
 #include <cuda_runtime.h>
 
@@ -1083,6 +1084,76 @@ void check_diagonal_host_and_device_contract()
           "reset diagonal preconditioner must release device factors");
 }
 
+void check_pgbb_raw_gradient_fallback_contract()
+{
+    using namespace fullmag::fem;
+    constexpr size_t n = 16;
+    DeviceBuffer<double> raw_gx(n);
+    DeviceBuffer<double> raw_gy(n);
+    DeviceBuffer<double> raw_gz(n);
+    DeviceBuffer<double> z_x(n);
+    DeviceBuffer<double> z_y(n);
+    DeviceBuffer<double> z_z(n);
+
+    std::vector<double> host_gx(n), host_gy(n), host_gz(n);
+    std::vector<double> host_zx(n), host_zy(n), host_zz(n);
+    for (size_t i = 0; i < n; ++i) {
+        host_gx[i] = 1.0 + static_cast<double>(i) * 0.5;
+        host_gy[i] = 2.0 + static_cast<double>(i) * 0.5;
+        host_gz[i] = 3.0 + static_cast<double>(i) * 0.5;
+        // Non-descent preconditioned values
+        host_zx[i] = -10.0 - static_cast<double>(i);
+        host_zy[i] = -20.0 - static_cast<double>(i);
+        host_zz[i] = -30.0 - static_cast<double>(i);
+    }
+
+    raw_gx.copy_from(host_gx);
+    raw_gy.copy_from(host_gy);
+    raw_gz.copy_from(host_gz);
+    z_x.copy_from(host_zx);
+    z_y.copy_from(host_zy);
+    z_z.copy_from(host_zz);
+
+    FemGpuComponentField raw_g{};
+    raw_g.x = raw_gx.get();
+    raw_g.y = raw_gy.get();
+    raw_g.z = raw_gz.get();
+
+    FemGpuComponentField precond_z{};
+    precond_z.x = z_x.get();
+    precond_z.y = z_y.get();
+    precond_z.z = z_z.get();
+
+    std::string reason;
+    // The exact call from PG-BB fallback: copy raw gradient g into preconditioned z
+    const bool copy_ok = gpu_rk_copy_component_device(
+        raw_g,
+        precond_z,
+        n,
+        nullptr,
+        "cudaMemcpyAsync GPU projected-gradient BB raw-gradient descent fallback",
+        reason);
+    check(copy_ok, "gpu_rk_copy_component_device fallback copy must succeed");
+    check(cudaDeviceSynchronize() == cudaSuccess, "fallback copy synchronize must succeed");
+
+    std::vector<double> read_raw_gx = raw_gx.copy_to_host();
+    std::vector<double> read_raw_gy = raw_gy.copy_to_host();
+    std::vector<double> read_raw_gz = raw_gz.copy_to_host();
+    std::vector<double> read_zx = z_x.copy_to_host();
+    std::vector<double> read_zy = z_y.copy_to_host();
+    std::vector<double> read_zz = z_z.copy_to_host();
+
+    // 1. Raw gradient g must remain completely unchanged
+    check_vector_close(read_raw_gx, host_gx, "fallback must not modify raw gradient g.x");
+    check_vector_close(read_raw_gy, host_gy, "fallback must not modify raw gradient g.y");
+    check_vector_close(read_raw_gz, host_gz, "fallback must not modify raw gradient g.z");
+
+    // 2. Preconditioned gradient z must now match raw gradient g
+    check_vector_close(read_zx, host_gx, "fallback must copy raw gradient g.x into preconditioned z.x");
+    check_vector_close(read_zy, host_gy, "fallback must copy raw gradient g.y into preconditioned z.y");
+    check_vector_close(read_zz, host_gz, "fallback must copy raw gradient g.z into preconditioned z.z");
+}
+
 } // namespace
 
 int main()
@@ -1093,6 +1164,7 @@ int main()
     check_diagonal_host_and_device_contract();
     check_sparse_exchange_mass_fixed_cg_contract();
     check_sparse_exchange_mass_mask_and_failure_contract();
+    check_pgbb_raw_gradient_fallback_contract();
 
     // Preserve the integrated full-potential source wiring checks while the
     // focused device tests above own the numerical preconditioner contract.
@@ -1109,8 +1181,100 @@ int main()
     if (!pgbb_file.is_open()) pgbb_file.open("../backends/fem/gpu/cuda/relaxation/pgbb.cpp");
     check(pgbb_file.is_open(), "unable to open pgbb.cpp");
     std::string pgbb_src((std::istreambuf_iterator<char>(pgbb_file)), std::istreambuf_iterator<char>());
-    check(pgbb_src.find("gpu.relaxation.preconditioner.apply_device_component") != std::string::npos,
-          "pgbb.cpp must wire gpu.relaxation.preconditioner.apply_device_component");
+    check(pgbb_src.find("gpu_relaxation_apply_preconditioner") != std::string::npos,
+          "pgbb.cpp must dispatch preconditioning through the relaxation lifecycle");
+
+    // Task 4 RED contracts: PG-BB must resolve/setup a selected strategy,
+    // preserve raw g, write z to a distinct persistent field, and consume
+    // exchange-CG failures through the packed scalar control packet.
+    check(pgbb_src.find("gpu_relaxation_prepare_preconditioner") != std::string::npos,
+          "PG-BB must prepare the resolved preconditioner before metrics");
+    check(pgbb_src.find("operator_lifecycle.setup_complete") != std::string::npos,
+          "PG-BB must require a completed MFEM exchange operator lifecycle");
+    check(pgbb_src.find("key.fe_order") != std::string::npos,
+          "PG-BB preconditioner identity must include the finite-element order");
+    check(pgbb_src.find("preconditioned_gradient") != std::string::npos,
+          "PG-BB must keep a persistent preconditioned-gradient z buffer");
+    check(pgbb_src.find("gpu_relaxation_apply_preconditioner") != std::string::npos,
+          "PG-BB must dispatch the selected preconditioner instead of an in-place diagonal apply");
+    check(pgbb_src.find("kGpuPgbbCurrentPreconditionerFailureSlot") != std::string::npos,
+          "PG-BB must consume the preconditioner failure latch in its existing scalar packet");
+    check(pgbb_src.find("gpu_relaxation_enqueue_preconditioner_failure") !=
+              std::string::npos,
+          "PG-BB must enqueue the preconditioner failure latch");
+    std::ifstream metrics_file(
+        "/workspace/backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp");
+    if (!metrics_file.is_open()) {
+        metrics_file.open(
+            "backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp");
+    }
+    if (!metrics_file.is_open()) {
+        metrics_file.open(
+            "../backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp");
+    }
+    check(metrics_file.is_open(), "unable to open direct_energy_increment.cpp");
+    std::string metrics_src(
+        (std::istreambuf_iterator<char>(metrics_file)),
+        std::istreambuf_iterator<char>());
+    check(metrics_src.find("metrics.preconditioner_failure") !=
+              std::string::npos,
+          "PG-BB metrics unpack must fail closed on the preconditioner failure latch");
+    check(pgbb_src.find("gpu.rk.k[0].x,\n        gpu.rk.k[0].y,\n        gpu.rk.k[0].z,\n        gpu.rk.k[0].x") == std::string::npos,
+          "PG-BB must not overwrite raw g with z in the same field");
+    check(pgbb_src.find(
+              "gpu.rk.k[0],\n                gpu.relaxation.preconditioned_gradient,") !=
+              std::string::npos,
+          "PG-BB raw-gradient recovery must copy g into the distinct z field");
+
+    std::ifstream exchange_upload_file(
+        "/workspace/backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp");
+    if (!exchange_upload_file.is_open()) {
+        exchange_upload_file.open(
+            "backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp");
+    }
+    if (!exchange_upload_file.is_open()) {
+        exchange_upload_file.open(
+            "../backends/fem/cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp");
+    }
+    check(exchange_upload_file.is_open(),
+          "unable to open exchange_legacy_gpu_upload.cpp");
+    std::string exchange_upload_src(
+        (std::istreambuf_iterator<char>(exchange_upload_file)),
+        std::istreambuf_iterator<char>());
+    check(exchange_upload_src.find("canonical_values, true, error") !=
+              std::string::npos,
+          "legacy GPU exchange upload must materialize the Laplacian diagonal for M+wK");
+
+    std::ifstream context_file(
+        "/workspace/backends/fem/cpu/mfem/runtime/mfem_context.cpp");
+    if (!context_file.is_open()) {
+        context_file.open("backends/fem/cpu/mfem/runtime/mfem_context.cpp");
+    }
+    if (!context_file.is_open()) {
+        context_file.open("../backends/fem/cpu/mfem/runtime/mfem_context.cpp");
+    }
+    check(context_file.is_open(), "unable to open mfem_context.cpp");
+    std::string context_src(
+        (std::istreambuf_iterator<char>(context_file)),
+        std::istreambuf_iterator<char>());
+    check(context_src.find("canonical_values, true, error") != std::string::npos,
+          "PG-BB preconditioner inputs must retain the full exchange diagonal");
+    check(context_src.find("GPU relaxation preconditioner setup masks do not match MFEM dimensions") !=
+              std::string::npos,
+          "PG-BB preconditioner setup must reject mask dimensions that do not match MFEM");
+
+    std::ifstream state_file("/workspace/backends/fem/gpu/cuda/relaxation/relaxation_state.hpp");
+    if (!state_file.is_open()) state_file.open("backends/fem/gpu/cuda/relaxation/relaxation_state.hpp");
+    if (!state_file.is_open()) state_file.open("../backends/fem/gpu/cuda/relaxation/relaxation_state.hpp");
+    check(state_file.is_open(), "unable to open relaxation_state.hpp");
+    std::string state_src((std::istreambuf_iterator<char>(state_file)), std::istreambuf_iterator<char>());
+    check(state_src.find("preconditioned_gradient") != std::string::npos,
+          "relaxation state must own the persistent z field");
+    check(state_src.find("exchange_mass_cg4") != std::string::npos &&
+              state_src.find("exchange_mass_cg8") != std::string::npos,
+          "relaxation state must own concrete CG4 and CG8 dispatch objects");
+    check(state_src.find("GpuRelaxationPreconditionerSetupIdentity") != std::string::npos,
+          "relaxation state must retain setup identity for invalidation");
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;
 }

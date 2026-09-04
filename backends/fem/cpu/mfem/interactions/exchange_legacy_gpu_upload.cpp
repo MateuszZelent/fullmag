@@ -162,7 +162,7 @@ bool upload_legacy_sparse_exchange_to_gpu_state(
 
     std::vector<double> canonical_values(values_raw, values_raw + nnz);
     if (!canonicalize_legacy_exchange_graph_laplacian(
-            row_offsets, col_indices, canonical_values, false, error)) {
+            row_offsets, col_indices, canonical_values, true, error)) {
         return false;
     }
 

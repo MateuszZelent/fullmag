@@ -331,6 +331,8 @@ bool gpu_state_upload_mesh_geometry(
     if (uploaded) {
         state.rk.fsal_valid = false;
         invalidate_rk_endpoint(state);
+        gpu_relax_mark_preconditioner_invalid(state.relaxation);
+        gpu_relax_note_external_state_change(state.relaxation);
     }
     return uploaded;
 }
@@ -432,6 +434,8 @@ bool gpu_state_upload_runtime_coefficients(
     if (uploaded) {
         state.rk.fsal_valid = false;
         invalidate_rk_endpoint(state);
+        gpu_relax_mark_preconditioner_invalid(state.relaxation);
+        gpu_relax_note_external_state_change(state.relaxation);
     }
     return uploaded;
 }
@@ -721,6 +725,8 @@ bool gpu_state_upload_frozen_spins(
     mesh_regions.frozen_reference_z = d_rz;
     mesh_regions.frozen_node_count = frozen_mask_len;
     invalidate_rk_endpoint(state);
+    gpu_relax_mark_preconditioner_invalid(state.relaxation);
+    gpu_relax_note_external_state_change(state.relaxation);
     return true;
 #else
     (void)magnetic_node_mask;
@@ -779,6 +785,8 @@ bool gpu_state_upload_exchange_legacy_sparse(
     if (uploaded) {
         state.rk.fsal_valid = false;
         invalidate_rk_endpoint(state);
+        gpu_relax_mark_preconditioner_invalid(state.relaxation);
+        gpu_relax_note_external_state_change(state.relaxation);
     }
     return uploaded;
 }

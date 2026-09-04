@@ -718,6 +718,22 @@ bool gpu_unpack_pgbb_current_metrics(
         packed_scalars[kGpuPgbbCurrentFiniteFlagsSlot + 1u] != 0.0;
     metrics.projected_gradient_norm_finite =
         packed_scalars[kGpuPgbbCurrentFiniteFlagsSlot + 2u] != 0.0;
+    // The packet stores z dot g.  PG-BB's actual direction is d=-z, so expose
+    // the directional derivative d dot g to the line-search caller.
+    metrics.direction_dot_gradient =
+        -packed_scalars[kGpuPgbbCurrentDirectionDotGradientSlot];
+    metrics.preconditioner_failure =
+        packed_scalars[kGpuPgbbCurrentPreconditionerFailureSlot] != 0.0;
+    if (metrics.preconditioner_failure) {
+        reason =
+            "GPU projected-gradient BB preconditioner device failure latch was set";
+        return false;
+    }
+    if (!std::isfinite(metrics.direction_dot_gradient)) {
+        reason =
+            "GPU projected-gradient BB produced a non-finite preconditioned descent metric";
+        return false;
+    }
     metrics.gradient_norm_sq =
         packed_scalars[kGpuPgbbCurrentGradientNormSlot];
     metrics.projected_gradient_norm_sq =

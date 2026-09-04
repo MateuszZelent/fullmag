@@ -415,6 +415,40 @@ __global__ void tangent_gradient_norm_kernel(
     }
 }
 
+__global__ void project_tangent_field_kernel(
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const uint8_t *magnetic_node_mask,
+    const double *vx,
+    const double *vy,
+    const double *vz,
+    double *px,
+    double *py,
+    double *pz,
+    int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    if (!active_node(magnetic_node_mask, i)) {
+        px[i] = 0.0;
+        py[i] = 0.0;
+        pz[i] = 0.0;
+        return;
+    }
+    double projected_x = 0.0;
+    double projected_y = 0.0;
+    double projected_z = 0.0;
+    project_node_tangent(
+        mx[i], my[i], mz[i], vx[i], vy[i], vz[i],
+        projected_x, projected_y, projected_z);
+    px[i] = projected_x;
+    py[i] = projected_y;
+    pz[i] = projected_z;
+}
+
 __global__ void metric_dot_kernel(
     const double *ax,
     const double *ay,
@@ -1122,6 +1156,29 @@ void fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
         gz,
         block_norm_sq,
         n);
+}
+
+void fullmag_cuda_relax_project_tangent_field(
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const uint8_t *magnetic_node_mask,
+    const double *vx,
+    const double *vy,
+    const double *vz,
+    double *px,
+    double *py,
+    double *pz,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    project_tangent_field_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        mx, my, mz, magnetic_node_mask,
+        vx, vy, vz, px, py, pz, n);
 }
 
 void fullmag_cuda_relax_metric_dot_blocks(

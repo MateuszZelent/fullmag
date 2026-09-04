@@ -10,11 +10,14 @@
  */
 
 #include "gpu/cuda/state/component_field.hpp"
+#include "gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp"
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 namespace fullmag::fem {
 
@@ -40,8 +43,63 @@ enum class GpuRelaxNcgFailurePoint : uint32_t {
     DuringAcceptedStatistics = 2,
 };
 
+/*
+ * Identity of the immutable state used to configure a direct-minimizer
+ * preconditioner.  The fields deliberately remain runtime-local: the
+ * optimization is not part of Python/ProblemIR.  A changed field makes the
+ * previous setup stale and forces a new setup before the next apply.
+ */
+struct GpuRelaxationPreconditionerSetupIdentity {
+    uint64_t mesh_topology_revision = 0;
+    uint64_t geometry_revision = 0;
+    uint64_t operator_revision = 0;
+    uint64_t material_revision = 0;
+    uint64_t mass_revision = 0;
+    uint64_t mask_revision = 0;
+    uint64_t precision_revision = 0;
+    uint64_t runtime_revision = 0;
+    uint64_t gpu_revision = 0;
+
+    bool operator==(const GpuRelaxationPreconditionerSetupIdentity &other) const noexcept
+    {
+        return mesh_topology_revision == other.mesh_topology_revision &&
+            geometry_revision == other.geometry_revision &&
+            operator_revision == other.operator_revision &&
+            material_revision == other.material_revision &&
+            mass_revision == other.mass_revision &&
+            mask_revision == other.mask_revision &&
+            precision_revision == other.precision_revision &&
+            runtime_revision == other.runtime_revision &&
+            gpu_revision == other.gpu_revision;
+    }
+
+    bool operator!=(const GpuRelaxationPreconditionerSetupIdentity &other) const noexcept
+    {
+        return !(*this == other);
+    }
+};
+
+/* Inputs consumed only by setup.  All pointers are borrowed and must remain
+ * valid for the configured lifetime.  The apply hot path receives no setup
+ * inputs, performs no host reads, and performs no allocation. */
+struct GpuRelaxationPreconditionerSetupRequest {
+    GpuRelaxationPreconditionerRequest profile{};
+    GpuRelaxationPreconditionerSetupIdentity identity{};
+    const std::vector<double> *mass_diagonal = nullptr;
+    const std::vector<double> *exchange_diagonal = nullptr;
+    const std::vector<double> *mass_ms = nullptr;
+    SparseApplyPlan *sparse_plan = nullptr;
+    const double *d_mass_ms = nullptr;
+    const uint8_t *d_active_mask = nullptr;
+    uint64_t node_count = 0;
+    double exchange_weight = 0.0;
+    void *stream = nullptr;
+};
+
 struct FemGpuRelaxationDeviceState {
     FemGpuComponentField projected_gradient_accepted_h_eff;
+    /* Raw tangent gradient g lives in RK k[0]; z always has its own storage. */
+    FemGpuComponentField preconditioned_gradient;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
     uint64_t node_count = 0;
@@ -56,7 +114,25 @@ struct FemGpuRelaxationDeviceState {
     uint64_t nonlinear_cg_failures_injected = 0;
     uint32_t direct_energy_refinements_current_step = 0;
     uint64_t direct_energy_refinements = 0;
+    GpuRelaxationPreconditionerRequest preconditioner_request{};
+    GpuRelaxationPreconditionerDecision resolved_preconditioner{};
+    GpuRelaxationPreconditionerSetupIdentity preconditioner_setup_identity{};
+    std::string preconditioner_setup_profile;
+    double preconditioner_setup_weight = 0.0;
+    bool preconditioner_setup_complete = false;
+    uint64_t preconditioner_setup_hits = 0;
+    uint64_t preconditioner_setup_misses = 0;
+    uint64_t preconditioner_setup_invalidations = 0;
+    uint64_t preconditioner_apply_failures = 0;
+    std::vector<double> preconditioner_mass_diagonal;
+    std::vector<double> preconditioner_exchange_diagonal;
+    std::vector<double> preconditioner_mass_ms;
+    double *preconditioner_mass_ms_device = nullptr;
     GpuDiagonalRelaxationPreconditioner preconditioner{};
+    GpuExchangeMassPreconditioner exchange_mass_cg4{
+        GpuExchangeMassCgVariant::Cg4};
+    GpuExchangeMassPreconditioner exchange_mass_cg8{
+        GpuExchangeMassCgVariant::Cg8};
 };
 
 inline void gpu_relax_invalidate_accepted_evaluation(
@@ -83,6 +159,20 @@ inline void gpu_relax_note_external_state_change(
 {
     state.state_generation += 1;
     gpu_relax_invalidate_accepted_evaluation(state);
+}
+
+inline void gpu_relax_mark_preconditioner_invalid(
+    FemGpuRelaxationDeviceState &state) noexcept
+{
+    state.preconditioner.reset();
+    state.exchange_mass_cg4.reset();
+    state.exchange_mass_cg8.reset();
+    state.preconditioner_setup_complete = false;
+    state.preconditioner_setup_identity = {};
+    state.preconditioner_setup_profile.clear();
+    state.preconditioner_setup_weight = 0.0;
+    state.resolved_preconditioner = {};
+    state.preconditioner_setup_invalidations += 1u;
 }
 
 } // namespace fullmag::fem

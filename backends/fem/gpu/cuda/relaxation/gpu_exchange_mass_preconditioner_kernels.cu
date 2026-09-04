@@ -281,6 +281,15 @@ __global__ void cleanup_kernel(
     }
 }
 
+__global__ void export_failure_latch_kernel(
+    const std::uint32_t *failure_latch,
+    double *failure_slot)
+{
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        *failure_slot = *failure_latch != 0u ? 1.0 : 0.0;
+    }
+}
+
 int block_count(int n)
 {
     return (n + kBlockSize - 1) / kBlockSize;
@@ -412,6 +421,14 @@ void fullmag_cuda_exchange_mass_cleanup(
     cleanup_kernel<<<block_count(count), kBlockSize, 0, stream>>>(
         solution_x, solution_y, solution_z, workspace, scalars,
         active_mask, failure_latch, workspace_stride, n);
+}
+
+void fullmag_cuda_exchange_mass_export_failure_latch(
+    const std::uint32_t *failure_latch,
+    double *failure_slot,
+    cudaStream_t stream)
+{
+    export_failure_latch_kernel<<<1, 1, 0, stream>>>(failure_latch, failure_slot);
 }
 
 } // namespace fullmag::fem

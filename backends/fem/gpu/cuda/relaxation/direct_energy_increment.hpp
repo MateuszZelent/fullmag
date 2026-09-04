@@ -66,8 +66,12 @@ static constexpr size_t kGpuPgbbCurrentProjectedGradientNormSlot =
     kGpuPgbbCurrentGradientNormSlot + 1u;
 static constexpr size_t kGpuPgbbCurrentFiniteFlagsSlot =
     kGpuPgbbCurrentProjectedGradientNormSlot + 1u;
-static constexpr size_t kGpuPgbbCurrentPackedScalarCount =
+static constexpr size_t kGpuPgbbCurrentDirectionDotGradientSlot =
     kGpuPgbbCurrentFiniteFlagsSlot + 3u;
+static constexpr size_t kGpuPgbbCurrentPreconditionerFailureSlot =
+    kGpuPgbbCurrentDirectionDotGradientSlot + 1u;
+static constexpr size_t kGpuPgbbCurrentPackedScalarCount =
+    kGpuPgbbCurrentPreconditionerFailureSlot + 1u;
 static_assert(
     kGpuPgbbCurrentPackedScalarCount <= FEM_GPU_SCALAR_RESULT_SLOTS,
     "GPU PG-BB packed current metrics must fit in the shared scalar result buffer");
@@ -76,9 +80,11 @@ struct GpuPgbbCurrentMetrics {
     GpuDirectEnergySnapshot energy_snapshot{};
     double gradient_norm_sq = 0.0;
     double projected_gradient_norm_sq = 0.0;
+    double direction_dot_gradient = 0.0;
     bool energy_snapshot_finite = false;
     bool gradient_norm_finite = false;
     bool projected_gradient_norm_finite = false;
+    bool preconditioner_failure = false;
 };
 
 struct GpuDirectArmijoResult {

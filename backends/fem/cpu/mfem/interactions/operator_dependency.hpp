@@ -47,6 +47,12 @@ struct OperatorDependencyKey {
     }
 };
 
+inline std::uint64_t operator_key_geometry_revision(
+    const OperatorDependencyKey &key) noexcept
+{
+    return key.mesh_geometry_revision;
+}
+
 /*
  * Ownership boundary: the enclosing exchange-operator runtime owns this
  * value receipt together with its assembled forms, matrices, preconditioner,

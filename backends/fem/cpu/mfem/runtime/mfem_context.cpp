@@ -32,6 +32,7 @@
 #include <memory>
 #include <optional>
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -387,6 +388,129 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
     return false;
 }
 
+bool build_gpu_relaxation_preconditioner_inputs(
+    const Context &ctx,
+    const mfem::SparseMatrix &exchange_spmat,
+    std::vector<double> &mass_diagonal,
+    std::vector<double> &exchange_diagonal,
+    std::vector<double> &mass_ms,
+    std::string &error)
+{
+    const int height = exchange_spmat.Height();
+    const int width = exchange_spmat.Width();
+    const int nnz = exchange_spmat.NumNonZeroElems();
+    if (height <= 0 || width != height || nnz < 0 ||
+        ctx.integration_weights.mfem_lumped_mass.size() !=
+            static_cast<std::size_t>(height)) {
+        error =
+            "GPU relaxation preconditioner setup inputs have inconsistent MFEM dimensions";
+        return false;
+    }
+
+    const int *row_offsets_raw = exchange_spmat.GetI();
+    const int *col_indices_raw = exchange_spmat.GetJ();
+    const double *values_raw = exchange_spmat.GetData();
+    if (row_offsets_raw == nullptr || col_indices_raw == nullptr ||
+        values_raw == nullptr) {
+        error = "GPU relaxation preconditioner setup inputs have null MFEM CSR data";
+        return false;
+    }
+
+    std::vector<std::uint32_t> row_offsets(
+        static_cast<std::size_t>(height) + 1u);
+    for (int row = 0; row <= height; ++row) {
+        if (row_offsets_raw[row] < 0 ||
+            static_cast<std::uint64_t>(row_offsets_raw[row]) >
+                std::numeric_limits<std::uint32_t>::max()) {
+            error = "GPU relaxation preconditioner setup has invalid MFEM CSR row offsets";
+            return false;
+        }
+        row_offsets[static_cast<std::size_t>(row)] =
+            static_cast<std::uint32_t>(row_offsets_raw[row]);
+    }
+    if (row_offsets.back() != static_cast<std::uint32_t>(nnz)) {
+        error = "GPU relaxation preconditioner setup MFEM CSR offsets do not match nnz";
+        return false;
+    }
+
+    std::vector<std::uint32_t> col_indices(static_cast<std::size_t>(nnz));
+    std::vector<double> canonical_values(
+        values_raw, values_raw + static_cast<std::size_t>(nnz));
+    for (int entry = 0; entry < nnz; ++entry) {
+        if (col_indices_raw[entry] < 0 || col_indices_raw[entry] >= width) {
+            error = "GPU relaxation preconditioner setup has invalid MFEM CSR column index";
+            return false;
+        }
+        col_indices[static_cast<std::size_t>(entry)] =
+            static_cast<std::uint32_t>(col_indices_raw[entry]);
+    }
+    if (!canonicalize_legacy_exchange_graph_laplacian(
+            row_offsets, col_indices, canonical_values, true, error)) {
+        error = "GPU relaxation preconditioner setup CSR canonicalization failed: " +
+            error;
+        return false;
+    }
+
+    const auto &magnetic_mask = ctx.mesh.magnetic_node_mask;
+    const auto &frozen_mask = ctx.frozen_spins.mask();
+    const double uniform_ms =
+        ctx.material_fields.material.saturation_magnetisation;
+    if ((!magnetic_mask.empty() &&
+         magnetic_mask.size() != static_cast<std::size_t>(height)) ||
+        (ctx.frozen_spins.enabled() &&
+         frozen_mask.size() != static_cast<std::size_t>(height))) {
+        error =
+            "GPU relaxation preconditioner setup masks do not match MFEM dimensions";
+        return false;
+    }
+    mass_diagonal.assign(static_cast<std::size_t>(height), 1.0);
+    exchange_diagonal.assign(static_cast<std::size_t>(height), 0.0);
+    mass_ms.assign(static_cast<std::size_t>(height), 0.0);
+    for (int row = 0; row < height; ++row) {
+        const std::size_t index = static_cast<std::size_t>(row);
+        const bool magnetic = magnetic_mask.empty() ||
+            (index < magnetic_mask.size() && magnetic_mask[index] != 0u);
+        const bool frozen = ctx.frozen_spins.enabled() &&
+            index < frozen_mask.size() && frozen_mask[index] != 0u;
+        const bool free = magnetic && !frozen;
+        if (!free) {
+            continue;
+        }
+
+        const double volume = ctx.integration_weights.mfem_lumped_mass[index];
+        const double ms = scalar_field_value(
+            ctx.material_fields.Ms_field, index, uniform_ms);
+        if (!std::isfinite(volume) || volume <= 0.0 || !std::isfinite(ms) ||
+            ms <= 0.0) {
+            error =
+                "GPU relaxation preconditioner setup requires positive finite free-node mass and Ms";
+            return false;
+        }
+
+        double diagonal = 0.0;
+        bool found_diagonal = false;
+        for (std::uint32_t entry = row_offsets[index];
+             entry < row_offsets[index + 1u]; ++entry) {
+            if (col_indices[entry] == static_cast<std::uint32_t>(row)) {
+                diagonal = canonical_values[entry];
+                found_diagonal = true;
+                break;
+            }
+        }
+        if (!found_diagonal || !std::isfinite(diagonal) || diagonal < 0.0) {
+            error =
+                "GPU relaxation preconditioner setup requires a finite non-negative free-node exchange diagonal";
+            return false;
+        }
+
+        mass_diagonal[index] = ms * volume;
+        exchange_diagonal[index] = diagonal;
+        mass_ms[index] = mass_diagonal[index];
+    }
+    error.clear();
+    return true;
+}
+
 bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
 {
     if (!ctx.mfem_context.ready) {
@@ -398,6 +522,18 @@ bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
         error = "legacy sparse exchange GPU upload requested without MFEM exchange form";
         return false;
     }
+    std::vector<double> mass_diagonal;
+    std::vector<double> exchange_diagonal;
+    std::vector<double> mass_ms;
+    if (!build_gpu_relaxation_preconditioner_inputs(
+            ctx,
+            exchange_form->SpMat(),
+            mass_diagonal,
+            exchange_diagonal,
+            mass_ms,
+            error)) {
+        return false;
+    }
     if (!upload_legacy_sparse_exchange_to_gpu_state(
             ctx,
             exchange_form->SpMat(),
@@ -405,6 +541,10 @@ bool context_upload_mfem_exchange_to_gpu_state(Context &ctx, std::string &error)
         error = "legacy sparse exchange GPU upload failed: " + error;
         return false;
     }
+    auto &relaxation = ctx.gpu_state.device.relaxation;
+    relaxation.preconditioner_mass_diagonal = std::move(mass_diagonal);
+    relaxation.preconditioner_exchange_diagonal = std::move(exchange_diagonal);
+    relaxation.preconditioner_mass_ms = std::move(mass_ms);
     return true;
 }
 

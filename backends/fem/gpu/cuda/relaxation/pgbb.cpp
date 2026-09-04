@@ -26,8 +26,10 @@
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
+#include "gpu/cuda/relaxation/relaxation_memory.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "src/relaxation_numerics.hpp"
+#include "src/relaxation_operator_units.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -156,6 +158,11 @@ bool gpu_relax_pgbb_preflight(
         reason = "GPU projected-gradient BB requires legacy_sparse_gpu exchange operator mode";
         return false;
     }
+    if (!ctx.exchange.mfem.operator_lifecycle.setup_complete) {
+        reason =
+            "GPU projected-gradient BB requires a completed MFEM exchange operator lifecycle";
+        return false;
+    }
     const auto &gpu = ctx.gpu_state.device;
     if (gpu.lifecycle.node_count == 0 ||
         gpu.lifecycle.dof_len != gpu.lifecycle.node_count * 3ull) {
@@ -226,6 +233,76 @@ bool gpu_relax_pgbb_preflight(
             "GPU projected-gradient BB requires persistent accepted-state H_eff storage";
         return false;
     }
+    if (gpu.relaxation.preconditioned_gradient.x == nullptr ||
+        gpu.relaxation.preconditioned_gradient.y == nullptr ||
+        gpu.relaxation.preconditioned_gradient.z == nullptr) {
+        reason =
+            "GPU projected-gradient BB requires persistent preconditioned-gradient storage";
+        return false;
+    }
+    return true;
+}
+
+uint64_t gpu_relax_pgbb_revision_mix(uint64_t seed, uint64_t value) noexcept
+{
+    return seed ^ (value + UINT64_C(0x9e3779b97f4a7c15) +
+        (seed << 6u) + (seed >> 2u));
+}
+
+GpuRelaxationPreconditionerSetupIdentity gpu_relax_pgbb_setup_identity(
+    const Context &ctx)
+{
+    const auto &key = ctx.exchange.mfem.operator_lifecycle.active_key;
+    GpuRelaxationPreconditionerSetupIdentity identity{};
+    identity.mesh_topology_revision = key.mesh_topology_revision;
+    identity.geometry_revision = operator_key_geometry_revision(key);
+    identity.operator_revision = gpu_relax_pgbb_revision_mix(
+        gpu_relax_pgbb_revision_mix(
+            gpu_relax_pgbb_revision_mix(
+                gpu_relax_pgbb_revision_mix(key.material_coefficient_revision,
+                                            key.boundary_revision),
+                key.periodic_revision),
+            key.fe_order),
+        key.device_mode);
+    identity.material_revision = key.material_coefficient_revision;
+    identity.mass_revision = key.material_coefficient_revision;
+    identity.mask_revision = gpu_relax_pgbb_revision_mix(
+        gpu_relax_pgbb_revision_mix(key.boundary_revision,
+                                    key.periodic_revision),
+        ctx.mesh.periodic_map_revision);
+    identity.precision_revision = sizeof(double);
+    identity.runtime_revision = ctx.gpu_state.device.relaxation.state_generation;
+    identity.gpu_revision = gpu_relax_pgbb_revision_mix(
+        static_cast<uint64_t>(ctx.mfem_context.selected_device_index + 1),
+        static_cast<uint64_t>(key.device_mode));
+    return identity;
+}
+
+bool gpu_relax_pgbb_prepare_preconditioner(
+    Context &ctx,
+    double trial_step,
+    cudaStream_t stream,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    auto &relaxation = gpu.relaxation;
+    GpuRelaxationPreconditionerSetupRequest request{};
+    request.profile = relaxation.preconditioner_request;
+    request.identity = gpu_relax_pgbb_setup_identity(ctx);
+    request.mass_diagonal = &relaxation.preconditioner_mass_diagonal;
+    request.exchange_diagonal = &relaxation.preconditioner_exchange_diagonal;
+    request.mass_ms = &relaxation.preconditioner_mass_ms;
+    request.sparse_plan = &gpu.legacy_exchange.plan;
+    request.d_mass_ms = relaxation.preconditioner_mass_ms_device;
+    request.d_active_mask = gpu_relax_pgbb_node_mask(ctx);
+    request.node_count = gpu.lifecycle.node_count;
+    request.exchange_weight =
+        relaxation::exchange_hessian_scale_from_step_m_per_a(trial_step);
+    request.stream = stream;
+    if (!gpu_relaxation_prepare_preconditioner(relaxation, request, reason)) {
+        reason = "GPU projected-gradient BB preconditioner setup failed: " + reason;
+        return false;
+    }
     return true;
 }
 
@@ -255,6 +332,7 @@ bool gpu_relax_compute_current_metrics(
     cudaStream_t stream,
     int n,
     int blocks,
+    double exchange_weight,
     FemGpuComponentField &gradient,
     GpuPgbbCurrentMetrics &metrics,
     std::string &reason)
@@ -286,18 +364,36 @@ bool gpu_relax_compute_current_metrics(
         gpu.reductions.scalar_workspace,
         n,
         stream);
-    if (gpu.relaxation.preconditioner.is_active()) {
-        std::string prec_err;
-        gpu.relaxation.preconditioner.apply_device_component(
-            gradient.x,
-            gradient.y,
-            gradient.z,
-            gradient.x,
-            gradient.y,
-            gradient.z,
-            static_cast<size_t>(n),
+    std::string preconditioner_error;
+    if (!gpu_relaxation_apply_preconditioner(
+            gpu.relaxation,
+            gradient,
+            gpu.relaxation.preconditioned_gradient,
+            static_cast<uint64_t>(n),
+            exchange_weight,
             stream,
-            prec_err);
+            preconditioner_error)) {
+        reason = "GPU projected-gradient BB preconditioner apply failed: " +
+            preconditioner_error;
+        return false;
+    }
+    fullmag_cuda_relax_project_tangent_field(
+        gpu.magnetization.m.x,
+        gpu.magnetization.m.y,
+        gpu.magnetization.m.z,
+        gpu_relax_pgbb_node_mask(ctx),
+        gpu.relaxation.preconditioned_gradient.x,
+        gpu.relaxation.preconditioned_gradient.y,
+        gpu.relaxation.preconditioned_gradient.z,
+        gpu.relaxation.preconditioned_gradient.x,
+        gpu.relaxation.preconditioned_gradient.y,
+        gpu.relaxation.preconditioned_gradient.z,
+        n,
+        stream);
+    if (!cuda_launch_ok(
+            "launch GPU projected-gradient BB preconditioned tangent projection",
+            reason)) {
+        return false;
     }
     fullmag_cuda_relax_energy_weighted_dot_blocks(
         gradient.x,
@@ -310,6 +406,19 @@ bool gpu_relax_compute_current_metrics(
         gpu.mesh_metrics.lumped_mass,
         gpu_relax_pgbb_node_mask(ctx),
         gpu.rk.error.x,
+        n,
+        stream);
+    fullmag_cuda_relax_energy_weighted_dot_blocks(
+        gpu.relaxation.preconditioned_gradient.x,
+        gpu.relaxation.preconditioned_gradient.y,
+        gpu.relaxation.preconditioned_gradient.z,
+        gradient.x,
+        gradient.y,
+        gradient.z,
+        gpu.materials.ms,
+        gpu.mesh_metrics.lumped_mass,
+        gpu_relax_pgbb_node_mask(ctx),
+        gpu.rk.error.y,
         n,
         stream);
     if (!cuda_launch_ok("launch GPU projected-gradient BB tangent-gradient blocks", reason) ||
@@ -329,6 +438,21 @@ bool gpu_relax_compute_current_metrics(
             gpu.reductions.scalar_result +
                 kGpuPgbbCurrentProjectedGradientNormSlot,
             "launch GPU projected-gradient BB energy gradient norm reduction",
+            reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.rk.error.y,
+            blocks,
+            gpu.reductions.scalar_result +
+                kGpuPgbbCurrentDirectionDotGradientSlot,
+            "launch GPU projected-gradient BB preconditioned descent reduction",
+            reason) ||
+        !gpu_relaxation_enqueue_preconditioner_failure(
+            gpu.relaxation,
+            gpu.reductions.scalar_result +
+                kGpuPgbbCurrentPreconditionerFailureSlot,
+            stream,
             reason)) {
         return false;
     }
@@ -586,12 +710,28 @@ int gpu_relax_projected_gradient_bb_step(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
 
+    double trial_step = kDefaultStepSize;
+    if (std::isfinite(ctx.relaxation.step_size) &&
+        ctx.relaxation.step_size > 0.0) {
+        trial_step =
+            std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize);
+    }
+    if (!gpu_relax_pgbb_prepare_preconditioner(ctx, trial_step, stream, reason)) {
+        return gpu_relax_restore_previous_magnetization_after_failure(
+            ctx,
+            stream,
+            "projected-gradient BB preconditioner setup failure",
+            reason,
+            error);
+    }
+
     GpuPgbbCurrentMetrics current_metrics{};
     if (!gpu_relax_compute_current_metrics(
             ctx,
             stream,
             n,
             blocks,
+            relaxation::exchange_hessian_scale_from_step_m_per_a(trial_step),
             gpu.rk.k[0],
             current_metrics,
             reason)) {
@@ -665,11 +805,30 @@ int gpu_relax_projected_gradient_bb_step(
         return FULLMAG_FEM_OK;
     }
 
-    double trial_step = kDefaultStepSize;
-    if (std::isfinite(ctx.relaxation.step_size) &&
-        ctx.relaxation.step_size > 0.0) {
-        trial_step =
-            std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize);
+    bool used_raw_gradient_descent_fallback = false;
+    if (!(current_metrics.direction_dot_gradient < 0.0)) {
+        if (!std::isfinite(energy_gradient_norm_sq) ||
+            energy_gradient_norm_sq <= 0.0 ||
+            !gpu_rk_copy_component_device(
+                gpu.rk.k[0],
+                gpu.relaxation.preconditioned_gradient,
+                gpu.lifecycle.node_count,
+                stream,
+                "cudaMemcpyAsync GPU projected-gradient BB raw-gradient descent fallback",
+                reason)) {
+            const std::string fallback_error =
+                !reason.empty()
+                    ? reason
+                    : "GPU projected-gradient BB produced a non-descent preconditioned direction";
+            return gpu_relax_restore_previous_magnetization_after_failure(
+                ctx,
+                stream,
+                "non-descent preconditioned direction",
+                fallback_error,
+                error);
+        }
+        used_raw_gradient_descent_fallback = true;
+        current_metrics.direction_dot_gradient = -energy_gradient_norm_sq;
     }
     double last_trial_energy_j = current_energy;
     uint32_t backtracks = 0;
@@ -698,9 +857,9 @@ int gpu_relax_projected_gradient_bb_step(
                 gpu.rk.m_backup.x,
                 gpu.rk.m_backup.y,
                 gpu.rk.m_backup.z,
-                gpu.rk.k[0].x,
-                gpu.rk.k[0].y,
-                gpu.rk.k[0].z,
+                gpu.relaxation.preconditioned_gradient.x,
+                gpu.relaxation.preconditioned_gradient.y,
+                gpu.relaxation.preconditioned_gradient.z,
                 gpu_relax_pgbb_node_mask(ctx),
                 -trial_step,
                 gpu.rk.m_stage.x,
@@ -899,6 +1058,8 @@ int gpu_relax_projected_gradient_bb_step(
             std::to_string(last_refinement_attempted) +
             " direct_refinement_accepted=" +
             std::to_string(last_refinement_accepted) +
+            " raw_gradient_descent_fallback=" +
+            std::to_string(used_raw_gradient_descent_fallback) +
             " last_trial_step=" + format_gpu_relax_pgbb_scalar(trial_step) +
             " gradient_norm_sq=" +
             format_gpu_relax_pgbb_scalar(energy_gradient_norm_sq) +
@@ -914,7 +1075,7 @@ int gpu_relax_projected_gradient_bb_step(
             format_gpu_relax_pgbb_scalar(
                 last_direct_difference.delta_joules / trial_step) +
             " predicted_directional_derivative_j_per_m_per_a=" +
-            format_gpu_relax_pgbb_scalar(-energy_gradient_norm_sq) +
+            format_gpu_relax_pgbb_scalar(current_metrics.direction_dot_gradient) +
             " direct_local_delta_j=" +
             format_gpu_relax_pgbb_scalar(last_local_direct_delta) +
             " residual_delta_j=" +

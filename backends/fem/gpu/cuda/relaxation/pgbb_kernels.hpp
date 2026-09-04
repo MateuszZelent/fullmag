@@ -28,6 +28,23 @@ void fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
     int n,
     cudaStream_t stream = nullptr);
 
+/* Project an already computed vector back to the nodal tangent plane.  The
+ * input and output component buffers may alias; inactive/fixed nodes are
+ * written as exact zero. */
+void fullmag_cuda_relax_project_tangent_field(
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const uint8_t *magnetic_node_mask,
+    const double *vx,
+    const double *vy,
+    const double *vz,
+    double *px,
+    double *py,
+    double *pz,
+    int n,
+    cudaStream_t stream = nullptr);
+
 void fullmag_cuda_relax_metric_dot_blocks(
     const double *ax,
     const double *ay,

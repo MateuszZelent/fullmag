@@ -92,5 +92,12 @@ void fullmag_cuda_exchange_mass_cleanup(
     int n,
     cudaStream_t stream);
 
+/* Fold the asynchronous device failure latch into a double slot owned by the
+ * caller's existing control/scalar packet.  No host transfer is performed. */
+void fullmag_cuda_exchange_mass_export_failure_latch(
+    const std::uint32_t *failure_latch,
+    double *failure_slot,
+    cudaStream_t stream);
+
 } // namespace fullmag::fem
 #endif
