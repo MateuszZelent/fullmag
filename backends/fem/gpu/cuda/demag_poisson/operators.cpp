@@ -1228,7 +1228,7 @@ bool upload_demag_poisson_operators(
         static_cast<uint32_t>(workspace.rhs.rows),
     };
     std::string plan_err;
-    if (!workspace.rhs_plan.setup(rhs_csr, nullptr, plan_err)) {
+    if (!workspace.rhs_plan.setup(rhs_csr, nullptr, plan_err, /*allow_cusparse=*/false)) {
         error = "failed to setup demag rhs sparse apply plan: " + plan_err;
         return false;
     }
@@ -1239,7 +1239,7 @@ bool upload_demag_poisson_operators(
         static_cast<uint32_t>(workspace.recovery_x.rows),
         static_cast<uint32_t>(workspace.recovery_x.rows),
     };
-    if (!workspace.recovery_plan.setup(rec_csr, nullptr, plan_err)) {
+    if (!workspace.recovery_plan.setup(rec_csr, nullptr, plan_err, /*allow_cusparse=*/false)) {
         error = "failed to setup demag recovery sparse apply plan: " + plan_err;
         return false;
     }

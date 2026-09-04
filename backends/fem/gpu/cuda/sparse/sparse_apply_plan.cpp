@@ -480,7 +480,8 @@ void SparseApplyPlan::reset() noexcept
 bool SparseApplyPlan::setup(
     const SparseApplyCsrDeviceView &csr,
     FullmagSparseApplyStream stream,
-    std::string &error)
+    std::string &error,
+    bool allow_cusparse)
 {
     if (impl_ == nullptr) {
         error = "sparse apply plan allocation failed";
@@ -602,6 +603,7 @@ bool SparseApplyPlan::setup(
     impl_->supported[variant_index(SparseApplyVariant::Warp)] = true;
 
 #if FULLMAG_HAS_CUSPARSE
+    if (allow_cusparse) {
     std::string cusparse_error;
     bool cusparse_ready =
         cusparse_ok(cusparseCreate(&impl_->handle), "cusparseCreate", cusparse_error) &&
@@ -800,6 +802,9 @@ bool SparseApplyPlan::setup(
         impl_->supported[variant_index(SparseApplyVariant::Subwarp)] = true;
         impl_->supported[variant_index(SparseApplyVariant::Warp)] = true;
     }
+    }
+#else
+    (void)allow_cusparse;
 #endif
 
     SparseApplyVariant best_variant = SparseApplyVariant::ScalarRow;

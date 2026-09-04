@@ -154,6 +154,7 @@ void test_dmi_geometry_cache()
     check(cache.is_built(), "cache must be built");
     check(cache.build_count() == 1u, "build count must be 1");
     check(cache.degenerate_tet_count() == 0u, "expected 0 degenerate tetrahedra for valid mesh");
+    check(cache.accumulation_mode() == fullmag::fem::DmiAccumulationMode::AtomicAdd, "default accumulation mode must be AtomicAdd");
 
     // 1. Run unfused reference on valid elements
     check_cuda(fullmag::fem::fullmag_cuda_dmi_field_energy(

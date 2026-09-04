@@ -243,7 +243,7 @@ bool DmiGeometryCache::build(
         return true;
     }
 
-    if (element_count_ != element_count) {
+    if (element_count_ != element_count || d_grads_ == nullptr) {
         release();
         const size_t grads_bytes = static_cast<size_t>(element_count) * 12u * sizeof(double);
         const size_t volume_bytes = static_cast<size_t>(element_count) * sizeof(double);
@@ -354,27 +354,29 @@ bool DmiGeometryCache::build(
         d_color_offsets_ = nullptr;
         d_colored_elements_ = nullptr;
 
-        bool coloring_qualified = false;
+        accumulation_mode_ = DmiAccumulationMode::AtomicAdd;
         if (num_colors <= 32) {
             cudaError_t err_off = cudaMalloc(reinterpret_cast<void **>(&d_color_offsets_), static_cast<size_t>(num_colors + 1) * sizeof(std::uint32_t));
             cudaError_t err_elem = cudaMalloc(reinterpret_cast<void **>(&d_colored_elements_), static_cast<size_t>(element_count) * sizeof(std::uint32_t));
-            if (err_off == cudaSuccess && err_elem == cudaSuccess) {
-                cudaError_t cpy_off = cudaMemcpyAsync(d_color_offsets_, h_color_offsets.data(), static_cast<size_t>(num_colors + 1) * sizeof(std::uint32_t), cudaMemcpyHostToDevice, stream);
-                cudaError_t cpy_elem = cudaMemcpyAsync(d_colored_elements_, h_colored_elements.data(), static_cast<size_t>(element_count) * sizeof(std::uint32_t), cudaMemcpyHostToDevice, stream);
-                if (cpy_off == cudaSuccess && cpy_elem == cudaSuccess) {
-                    num_colors_ = num_colors;
-                    h_color_offsets_ = std::move(h_color_offsets);
-                    accumulation_mode_ = DmiAccumulationMode::Coloring;
-                    coloring_qualified = true;
-                }
-            }
-            if (!coloring_qualified) {
+            if (err_off != cudaSuccess || err_elem != cudaSuccess) {
                 if (d_color_offsets_ != nullptr) { cudaFree(d_color_offsets_); d_color_offsets_ = nullptr; }
                 if (d_colored_elements_ != nullptr) { cudaFree(d_colored_elements_); d_colored_elements_ = nullptr; }
-                accumulation_mode_ = DmiAccumulationMode::AtomicAdd;
+                error = "cudaMalloc for DMI coloring offsets/elements failed";
+                return false;
             }
-        } else {
-            accumulation_mode_ = DmiAccumulationMode::AtomicAdd;
+            cudaError_t cpy_off = cudaMemcpyAsync(d_color_offsets_, h_color_offsets.data(), static_cast<size_t>(num_colors + 1) * sizeof(std::uint32_t), cudaMemcpyHostToDevice, stream);
+            cudaError_t cpy_elem = cudaMemcpyAsync(d_colored_elements_, h_colored_elements.data(), static_cast<size_t>(element_count) * sizeof(std::uint32_t), cudaMemcpyHostToDevice, stream);
+            if (cpy_off == cudaSuccess && cpy_elem == cudaSuccess) {
+                num_colors_ = num_colors;
+                h_color_offsets_ = std::move(h_color_offsets);
+                // Default accumulation mode remains AtomicAdd; coloring is not promoted without qualification
+                accumulation_mode_ = DmiAccumulationMode::AtomicAdd;
+            } else {
+                if (d_color_offsets_ != nullptr) { cudaFree(d_color_offsets_); d_color_offsets_ = nullptr; }
+                if (d_colored_elements_ != nullptr) { cudaFree(d_colored_elements_); d_colored_elements_ = nullptr; }
+                error = "cudaMemcpyAsync for DMI coloring offsets/elements failed";
+                return false;
+            }
         }
     }
 

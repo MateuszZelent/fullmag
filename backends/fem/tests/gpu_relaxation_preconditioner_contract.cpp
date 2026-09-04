@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <tuple>
@@ -1092,6 +1093,24 @@ int main()
     check_diagonal_host_and_device_contract();
     check_sparse_exchange_mass_fixed_cg_contract();
     check_sparse_exchange_mass_mask_and_failure_contract();
+
+    // Preserve the integrated full-potential source wiring checks while the
+    // focused device tests above own the numerical preconditioner contract.
+    std::ifstream ncg_file("/workspace/backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp");
+    if (!ncg_file.is_open()) ncg_file.open("backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp");
+    if (!ncg_file.is_open()) ncg_file.open("../backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp");
+    check(ncg_file.is_open(), "unable to open nonlinear_cg.cpp");
+    std::string ncg_src((std::istreambuf_iterator<char>(ncg_file)), std::istreambuf_iterator<char>());
+    check(ncg_src.find("gpu.relaxation.preconditioner.apply_device_component") != std::string::npos,
+          "nonlinear_cg.cpp must wire gpu.relaxation.preconditioner.apply_device_component");
+
+    std::ifstream pgbb_file("/workspace/backends/fem/gpu/cuda/relaxation/pgbb.cpp");
+    if (!pgbb_file.is_open()) pgbb_file.open("backends/fem/gpu/cuda/relaxation/pgbb.cpp");
+    if (!pgbb_file.is_open()) pgbb_file.open("../backends/fem/gpu/cuda/relaxation/pgbb.cpp");
+    check(pgbb_file.is_open(), "unable to open pgbb.cpp");
+    std::string pgbb_src((std::istreambuf_iterator<char>(pgbb_file)), std::istreambuf_iterator<char>());
+    check(pgbb_src.find("gpu.relaxation.preconditioner.apply_device_component") != std::string::npos,
+          "pgbb.cpp must wire gpu.relaxation.preconditioner.apply_device_component");
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;
 }

@@ -189,12 +189,12 @@ bool rk_candidate_upload_m(
             hz[i] = host_m[3 * i + 2];
         }
         const size_t bytes = static_cast<size_t>(node_count) * sizeof(double);
-        cudaError_t rc = cudaMemcpyAsync(candidate.m_candidate.x, hx.data(), bytes, cudaMemcpyHostToDevice, stream);
-        if (rc != cudaSuccess) { error = "cudaMemcpyAsync candidate.x failed"; return false; }
-        rc = cudaMemcpyAsync(candidate.m_candidate.y, hy.data(), bytes, cudaMemcpyHostToDevice, stream);
-        if (rc != cudaSuccess) { error = "cudaMemcpyAsync candidate.y failed"; return false; }
-        rc = cudaMemcpyAsync(candidate.m_candidate.z, hz.data(), bytes, cudaMemcpyHostToDevice, stream);
-        if (rc != cudaSuccess) { error = "cudaMemcpyAsync candidate.z failed"; return false; }
+        cudaError_t rc = cudaMemcpy(candidate.m_candidate.x, hx.data(), bytes, cudaMemcpyHostToDevice);
+        if (rc != cudaSuccess) { error = "cudaMemcpy candidate.x failed"; return false; }
+        rc = cudaMemcpy(candidate.m_candidate.y, hy.data(), bytes, cudaMemcpyHostToDevice);
+        if (rc != cudaSuccess) { error = "cudaMemcpy candidate.y failed"; return false; }
+        rc = cudaMemcpy(candidate.m_candidate.z, hz.data(), bytes, cudaMemcpyHostToDevice);
+        if (rc != cudaSuccess) { error = "cudaMemcpy candidate.z failed"; return false; }
     }
     return true;
 }

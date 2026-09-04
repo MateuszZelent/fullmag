@@ -114,6 +114,7 @@ bool gpu_rk_compute_legacy_sparse_exchange(
             stream);
         periodic_reduced_path = true;
     } else {
+        const auto ex_variant = gpu.legacy_exchange.plan.selected_variant();
         if (gpu.legacy_exchange.row_scale == nullptr) {
             // Keep the legacy three-launch realization as a compatibility
             // path for hand-built states that predate row-scale storage.
@@ -127,7 +128,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_ex.x,
                 rows,
-                stream);
+                stream,
+                ex_variant);
             fullmag_cuda_legacy_sparse_exchange(
                 gpu.legacy_exchange.csr_row_offsets,
                 gpu.legacy_exchange.csr_col_indices,
@@ -138,7 +140,8 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_ex.y,
                 rows,
-                stream);
+                stream,
+                ex_variant);
             fullmag_cuda_legacy_sparse_exchange(
                 gpu.legacy_exchange.csr_row_offsets,
                 gpu.legacy_exchange.csr_col_indices,
@@ -149,7 +152,15 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 gpu.mesh_regions.magnetic_node_mask,
                 gpu.fields.h_ex.z,
                 rows,
-                stream);
+                stream,
+                ex_variant);
+            if (execution_receipt != nullptr) {
+                gpu_execution_receipt_note_performance_phase(
+                    *execution_receipt,
+                    FemGpuPerformancePhase::KernelLaunch,
+                    0,
+                    gpu.legacy_exchange.plan.selected_variant_id());
+            }
         } else {
             if (!gpu.legacy_exchange.row_scale_ready) {
                 fullmag_cuda_prepare_exchange_row_scale(
@@ -162,7 +173,6 @@ bool gpu_rk_compute_legacy_sparse_exchange(
                 }
                 gpu.legacy_exchange.row_scale_ready = true;
             }
-            const auto ex_variant = gpu.legacy_exchange.plan.selected_variant();
             fullmag_cuda_legacy_sparse_exchange_xyz(
                 gpu.legacy_exchange.csr_row_offsets,
                 gpu.legacy_exchange.csr_col_indices,

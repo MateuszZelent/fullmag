@@ -224,6 +224,14 @@ void test_device_candidate_capture_and_fail_closed_allocation() {
     check(src.find("rk_candidate_capture_device") != std::string::npos,
           "rk_output_control.cu must provide rk_candidate_capture_device");
 
+    std::ifstream loop_file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu");
+    if (!loop_file.is_open()) loop_file.open("backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu");
+    if (!loop_file.is_open()) loop_file.open("../backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu");
+    check(loop_file.is_open(), "unable to open rk_attempt_loop.cu");
+    std::string loop_src((std::istreambuf_iterator<char>(loop_file)), std::istreambuf_iterator<char>());
+    check(loop_src.find("rk_launch_device_decision_kernel") != std::string::npos,
+          "rk_attempt_loop.cu must wire rk_launch_device_decision_kernel for device decision slots");
+
     // Verify candidate capture device-to-device
     RkCandidateState candidate{};
     std::string error;

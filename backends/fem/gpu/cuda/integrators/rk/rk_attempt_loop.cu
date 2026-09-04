@@ -223,6 +223,23 @@ bool gpu_rk_run_accepted_attempt_loop(
             error_estimate = adaptive_decision.error_norm;
             const auto adaptive_result = adaptive_decision.adaptive_result;
             suggested_dt = adaptive_result.dt_next;
+            if (gpu.rk.candidate.d_slots != nullptr) {
+                const int slot_idx = gpu.rk.candidate.active_slot;
+                rk_launch_device_decision_kernel(
+                    tableau.order_est,
+                    ctx.adaptive_dt.dt_min,
+                    ctx.adaptive_dt.dt_max,
+                    ctx.adaptive_dt.safety_factor,
+                    ctx.adaptive_dt.dt_grow_max,
+                    ctx.adaptive_dt.dt_shrink_min,
+                    active_dt,
+                    error_estimate,
+                    ctx.adaptive_dt.prev_error_norm,
+                    ctx.adaptive_dt.has_prev_error_norm,
+                    gpu.rk.candidate.d_slots + slot_idx,
+                    stream);
+                gpu.rk.candidate.active_slot = 1 - slot_idx;
+            }
             if (ctx.stepper.attempt_trace.records.size() >= RkAttemptTraceState::max_records) {
                 reason = "adaptive GPU RK attempt trace capacity exceeded";
                 return false;

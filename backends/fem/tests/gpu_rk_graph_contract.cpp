@@ -100,6 +100,14 @@ void test_graph_stream_capture_source_contract() {
           "rk_graph.cpp must verify non-empty graph via cudaGraphGetNodes");
     check(src.find("cudaGraphCreate(&graph_, 0)") == std::string::npos,
           "rk_graph.cpp must not instantiate an empty graph created via cudaGraphCreate");
+
+    std::ifstream step_file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_step.cu");
+    if (!step_file.is_open()) step_file.open("backends/fem/gpu/cuda/integrators/rk/rk_step.cu");
+    if (!step_file.is_open()) step_file.open("../backends/fem/gpu/cuda/integrators/rk/rk_step.cu");
+    check(step_file.is_open(), "unable to open rk_step.cu");
+    std::string step_src((std::istreambuf_iterator<char>(step_file)), std::istreambuf_iterator<char>());
+    check(step_src.find("executed_via_graph") != std::string::npos,
+          "rk_step.cu must gate standard attempt loop on !executed_via_graph");
 }
 
 } // namespace
