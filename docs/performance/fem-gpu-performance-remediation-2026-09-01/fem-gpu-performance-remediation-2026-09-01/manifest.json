@@ -7,72 +7,78 @@
   "verified_date": "2026-09-01",
   "verification_scope": "source_contracts_and_justfile_only",
   "managed_gpu_runtime": "NOT VERIFIED",
+  "relaxation_preconditioner_capability": "NOT VERIFIED",
+  "relaxation_preconditioner_runtime": "NOT VERIFIED",
+  "relaxation_preconditioner_parity": "NOT VERIFIED",
+  "relaxation_preconditioner_physics": "NOT VERIFIED",
+  "relaxation_preconditioner_performance": "NOT VERIFIED",
+  "relaxation_preconditioner_default": "none",
   "files": [
     {
       "path": "README.md",
-      "bytes": 13060,
-      "lines": 281,
-      "words": 1577
+      "bytes": 13167,
+      "lines": 287,
+      "words": 1612
     },
     {
       "path": "01-runtime-truth-build-and-instrumentation.md",
-      "bytes": 15310,
-      "lines": 439,
+      "bytes": 15023,
+      "lines": 438,
       "words": 1414
     },
     {
       "path": "02-exchange-operator-remediation.md",
-      "bytes": 12370,
-      "lines": 438,
+      "bytes": 11958,
+      "lines": 437,
       "words": 1418
     },
     {
       "path": "03-rk-pipeline-and-synchronization-remediation.md",
-      "bytes": 12169,
-      "lines": 443,
+      "bytes": 11781,
+      "lines": 442,
       "words": 1407
     },
     {
       "path": "04-adaptive-error-controller-remediation.md",
-      "bytes": 4665,
-      "lines": 178,
+      "bytes": 4506,
+      "lines": 177,
       "words": 540
     },
     {
       "path": "05-demag-hypre-remediation.md",
-      "bytes": 6606,
-      "lines": 244,
+      "bytes": 6379,
+      "lines": 243,
       "words": 743
     },
     {
       "path": "06-effective-field-reductions-and-memory-remediation.md",
-      "bytes": 5234,
-      "lines": 209,
+      "bytes": 5032,
+      "lines": 208,
       "words": 601
     },
     {
       "path": "07-relaxation-preconditioning-remediation.md",
-      "bytes": 5092,
-      "lines": 211,
-      "words": 578
+      "bytes": 5147,
+      "lines": 217,
+      "words": 612
     },
     {
       "path": "08-operator-planner-partial-assembly-and-autotuning.md",
-      "bytes": 4042,
-      "lines": 166,
+      "bytes": 3891,
+      "lines": 165,
       "words": 470
     },
     {
       "path": "09-pr-sequence-tests-and-definition-of-done.md",
-      "bytes": 5006,
-      "lines": 208,
+      "bytes": 4805,
+      "lines": 207,
       "words": 607
     },
     {
       "path": "10-finding-coverage-matrix.md",
-      "bytes": 10517,
-      "lines": 69,
-      "words": 1316
+      "bytes": 10735,
+      "lines": 68,
+      "words": 1343
     }
   ],
   "finding_ids": [

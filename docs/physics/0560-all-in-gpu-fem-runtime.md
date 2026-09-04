@@ -1,11 +1,12 @@
 # ALL IN GPU FEM runtime contract
 
-Data: 2026-05-15
+Data: 2026-05-15; korekta statusu direct minimizers: 2026-09-04
 
 Ten dokument definiuje kontrakt wykonawczy dla migracji time-domain FEM na
 GPU. Jest uzupelnieniem dokumentow fizyki FEM/MFEM GPU i planu
 `docs/plans/active/all-in-gpu-fem-rollout-plan-2026-05-15.md`.
 
+(all-in-gpu-fem-problem-statement)=
 ## Znaczenie ALL IN GPU
 
 `ALL IN GPU FEM` oznacza, ze device jest zrodlem prawdy dla hot loopu
@@ -21,6 +22,29 @@ CPU pozostaje odpowiedzialny za orchestration, kontrolny event loop,
 meshing, I/O, snapshot scheduling i male pakiety telemetryczne. CPU nie moze
 byc elementem obliczeniowym w kazdym RHS/stage.
 
+(all-in-gpu-fem-governing-equations)=
+## Kontrakt hot-loop
+
+Dla zaakceptowanego strict GPU hot-loop obowiazuje budzet
+
+```{math}
+:label: all-in-gpu-fem-hot-loop-budget
+N_{\mathrm{H2D}}^{\mathrm{hot}}
+=N_{\mathrm{D2H}}^{\mathrm{hot}}
+=N_{\mathrm{sync}}^{\mathrm{hot}}=0.
+```
+
+(all-in-gpu-fem-symbols-and-si-units)=
+
+| Symbol | Znaczenie | Jednostka SI |
+|---|---|---|
+| $N_{\mathrm{H2D}}^{\mathrm{hot}}$ | liczba transferow H2D w hot-loop | $1$ |
+| $N_{\mathrm{D2H}}^{\mathrm{hot}}$ | liczba transferow D2H w hot-loop | $1$ |
+| $N_{\mathrm{sync}}^{\mathrm{hot}}$ | liczba synchronizacji hosta w hot-loop | $1$ |
+
+Pola `hot_loop_*_bytes` maja jednostke bajtow, a czasy profilera jednostke
+nanosekund.
+
 ## Dozwolone transfery
 
 Host/device transfer jest dozwolony tylko w jawnych miejscach:
@@ -34,6 +58,7 @@ Nieplanowany `HostRead`, `HostWrite`, D2H albo H2D w hot loopie jest
 regresja. Transfer pola po kazdym kroku nie jest snapshotem, tylko ukrytym
 hostowym stepperem.
 
+(all-in-gpu-fem-assumptions-and-validity)=
 ## Jawne tryby runtime
 
 GPU FEM musi raportowac prawde o tym, czy Poisson demag jest wykonywany na
@@ -63,6 +88,54 @@ hot-loop host sync, runtime moze przejsc na:
 - `all_in_gpu_legacy_sparse`, albo
 - `all_in_gpu_partial_assembly`.
 
+(all-in-gpu-fem-python-api)=
+## Python API
+
+Publiczny skrypt wyraza fizyczny problem i jawne zadanie FEM GPU, a nie
+wewnetrzne liczniki residency:
+
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("all_in_gpu_fem")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.mode("strict")
+
+# %%
+film = study.geometry(
+    fm.Box(size=(80e-9, 40e-9, 8e-9), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange(enabled=True)
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="llg_overdamped",
+    max_steps=1,
+)
+```
+
+(all-in-gpu-fem-problem-ir)=
+## ProblemIR i planner
+
+ProblemIR zachowuje engine, device, precision, mode, fizyke i stage. Pola
+residency, transfer audit oraz resolved operator modes sa wynikiem planowania i
+wykonania, nie dodatkowymi parametrami fizycznymi.
+
+(all-in-gpu-fem-round-trip-and-failure-semantics)=
+## Round-trip i failure semantics
+
+Requested intent zachowuje jawne zadanie strict FEM GPU. Resolved execution
+publikuje faktyczny tryb operatorow i residency. Validation errors oraz
+unsupported combinations koncza run przed lub przy pierwszym naruszeniu;
+brak GPU, nieobslugiwany operator i transfer hot-loop nie moga uruchomic
+ukrytego CPU fallbacku.
+
+(all-in-gpu-fem-discrete-realization)=
 ## Kolejnosc Fullmag/HYPRE bez globalnej bariery
 
 Strict GPU Poisson uzywa dwoch jawnych strumieni. Fullmag zapisuje zdarzenie
@@ -74,6 +147,7 @@ device-wide compatibility barrier is not strict GPU. `cudaDeviceSynchronize` moz
 jedynie w jawnym trybie compatibility/debug i musi obnizyc provenance z trybu
 strict; nie jest dopuszczalnym ukrytym fallbackiem.
 
+(all-in-gpu-fem-implementation-mapping)=
 ## TransferAudit
 
 Natywny backend publikuje `fullmag_fem_transfer_audit` w C ABI. Liczniki
@@ -242,6 +316,25 @@ shared-domain airbox Poisson z Dirichlet/Robin. `fe_order > 1`, periodic
 demag oraz Fredkin-Koehler FEM/BEM na GPU maja failowac z diagnostyka zamiast
 przechodzic w ukryty CPU fallback.
 
+## Status preconditionera direct minimizers
+
+Audyt z 2026-09-04 potwierdza, ze obecna klasa
+`GpuExchangeMassPreconditioner` nie realizuje pelnego sparse
+$(M+wK)^{-1}M$. Otrzymuje tylko przekatne mass/exchange i stosuje punktowy
+czynnik $M_i/(M_i+wK_{ii})$, czyli diagonalna aproksymacje Jacobiego. Setup tej
+klasy nie jest wywolywany przez produkcyjny NCG ani PG-BB, a ich warunkowe
+call-site'y nie propagują bledu apply. Benchmark nadal odrzuca
+`exchange_mass`, poniewaz mapuje go na brak realizacji C++.
+
+Nota 0581 zachowuje osobno historyczny wynik no-go z 2026-07-26 i zatwierdzony
+projekt nowej realizacji `diagonal` oraz pelnego sparse
+`exchange_mass_cg4|cg8`. Sam projekt nie jest dowodem ALL IN GPU. Dla nowej
+realizacji capability, runtime, physics validation, CPU/GPU parity i
+performance pozostaja `NOT VERIFIED`; produkcyjny default pozostaje `none`.
+Brak setupu, blad sparse/CUDA/fixed-CG albo niezgodnosc identity musza zakonczyc
+strict GPU bez diagonalnego ani CPU fallbacku.
+
+(all-in-gpu-fem-validation)=
 ## Bramka pierwszego kamienia milowego
 
 Pierwszy prawdziwy kamien milowy po zmianie 2026-05-23 to
@@ -301,3 +394,36 @@ skroty argparse, wiec smoke/CI musi uzywac jawnych nazw flag.
 
 Do tego momentu UI, benchmarki i provenance nie moga nazywac obecnego GPU FEM
 pelnym solverem GPU.
+
+(all-in-gpu-fem-limitations)=
+## Ograniczenia
+
+Kontrakt nie kwalifikuje automatycznie zadnego operatora ani algorytmu.
+Nieobslugiwane PBC, high-order, consistent mass, direct-minimizer
+preconditioning oraz inne warianty zachowuja wlasne bramki i statusy.
+
+(all-in-gpu-fem-scientific-bibliography)=
+## Bibliografia techniczna
+
+- NVIDIA, *CUDA C++ Programming Guide*,
+  [docs.nvidia.com/cuda/cuda-c-programming-guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/).
+- R. D. Falgout and U. M. Yang, "hypre: a Library of High Performance
+  Preconditioners", *Computational Science — ICCS 2002*,
+  [doi:10.1007/3-540-47789-6_66](https://doi.org/10.1007/3-540-47789-6_66).
+
+(all-in-gpu-fem-source-code-index)=
+## Source-code index
+
+| Claim | Path | Symbol | Responsibility | Evidence status |
+|---|---|---|---|---|
+| Transfer-audit ABI | `native/include/fullmag_fem.h` | `fullmag_fem_backend_get_transfer_audit` | exposes transfer counters to the runner | current source |
+| GPU RK plan ABI | `native/include/fullmag_fem.h` | `fullmag_fem_backend_get_gpu_rk_plan_info` | exposes the resolved GPU RK plan | current source |
+| Device-resident RK step | `backends/fem/gpu/cuda/integrators/rk/rk_step.cu` | `gpu_rk_device_resident_step` | owns the CUDA RK hot-loop implementation | current source; qualification separate |
+| Transfer-audit policy | `backends/fem/gpu/cuda/transfer/transfer_audit.cpp` | `configure_transfer_audit_from_env` | configures fail-closed hot-loop assertions | current source |
+| Direct-minimizer resolver | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `resolve_gpu_relaxation_preconditioner` | keeps preconditioning on the current `none` default | full sparse `NOT VERIFIED` |
+| Direct-minimizer diagonal setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::setup` | uploads only mass and exchange diagonals | current source; production setup absent |
+| Direct-minimizer pointwise apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::apply_device_component` | applies the diagonal factor independently to x/y/z | current source; not full CSR |
+| PG-BB call site | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_compute_current_metrics` | conditionally invokes the current apply without fail-closed status propagation | current source; qualification separate |
+| NCG call site | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_compute_effective_field_energy_gradient_and_direction` | conditionally invokes the current apply without fail-closed status propagation | current source; qualification separate |
+| Diagonal-only manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedSpdMatrix` | diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve | source test fixture; off-diagonal RED belongs to Task 2 |
+| Focused preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | exercises the current resolver and diagonal setup/apply; no sparse negative control | source test entry point; full sparse solve not proved |

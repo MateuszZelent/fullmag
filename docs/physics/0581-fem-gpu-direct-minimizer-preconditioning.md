@@ -1,382 +1,339 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: measured no-go; no production implementation or selector retained
+- Status: approved phase-1 remediation design; implementation and qualification
+  remain `NOT VERIFIED`
 - Owners: Fullmag FEM backend
-- Last updated: 2026-07-26
+- Last updated: 2026-09-04
 - Related physics notes:
+  - `docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md`
+  - `docs/physics/0560-all-in-gpu-fem-runtime.md`
   - `docs/physics/0900-native-fem-operator-contracts-and-validation.md`
-- Related specs:
-  - `docs/specs/native-fem-backend-architecture-v1.md`
-  - `docs/specs/capability-matrix-v0.md`
+- Related design:
+  - `docs/superpowers/specs/2026-09-04-fem-gpu-direct-minimizers-phase1-design.md`
 
+(fem-gpu-preconditioner-problem-statement)=
 ## 1. Problem statement
 
-The strict FEM GPU nonlinear conjugate-gradient (NCG) minimizer currently uses
-the tangent energy gradient without a device-side approximation of the local
-exchange stiffness. On refined or exchange-dominated meshes this can increase
-the number of accepted steps, Armijo trials, and expensive demagnetizing-field
-solves needed to reach the unchanged physical stopping tolerance.
+FEM GPU nonlinear conjugate gradient (NCG) and projected-gradient
+Barzilai--Borwein (PG-BB) use raw tangent gradients in the current production
+default. On refined or exchange-dominated meshes, a qualified approximation to
+the exchange-plus-mass inverse could reduce accepted steps, Armijo trials, and
+demagnetizing solves without changing the physical energy or stopping rule.
 
-This note records the contract that was used to evaluate a bounded,
-device-resident exchange-mass preconditioner for the strict GPU NCG path. The
-preconditioner is an optimization of the search
-direction only. It must not redefine energy, the Armijo condition, accepted
-state, convergence tolerance, or any reported physical observable. It becomes
-an automatic production choice only after the literal qualification gate in
-Section 7 passes. The measured candidates did not pass, so the experimental
-runtime implementation and selector were removed. This note remains as the
-scientific design and no-go record; it does not describe a reachable production
-feature.
+### Current source status (2026-09-04)
 
-## 2. Physical and numerical model
+The class currently named `GpuExchangeMassPreconditioner` is a
+diagonal/Jacobi approximation. Its setup receives only mass and exchange
+diagonals and uploads the pointwise factor $M_i/(M_i+wK_{ii})$, where the
+physical direct-minimizer contract requires
+$w=\lambda(2/\mu_0)$ for $K_A$ stored in joules; it
+does not apply the off-diagonal entries of the sparse exchange matrix. Its `setup()` is
+called by the focused contract test, not by the production NCG or PG-BB setup.
+The two production call sites conditionally invoke the pointwise apply only
+when the object is active and currently ignore the returned status.
 
-### 2.1 Governing equations
+The benchmark makes this boundary explicit: `exchange_mass` maps to `None` and
+is rejected as having no C++ runtime realization. Therefore the current source
+does not implement the full operator $(M+wK)^{-1}M$, does not provide a
+fail-closed active runtime path, and does not prove fewer NCG or PG-BB steps.
 
-Let `g` be the raw tangent energy gradient in the existing direct-minimizer
-field convention. For nonnegative `lambda`, define
+### Historical no-go (2026-07-26)
 
-```text
-P_lambda = diag(M_s M_lumped) + lambda * (2/mu0) K_A
-z = Pi_T(m) P_lambda^{-1} diag(M_s M_lumped) g
+The preserved historical campaign requested 75 GPU rows and promoted no
+strategy. Its strengthened validator classified the matrix as `invalid`, not a
+qualifying `no_go`: the fine `none` baseline did not reach tolerance, separate
+CPU/GPU parity was absent, cumulative work fields and immutable workload
+identity were incomplete, and `stagnation_triggered_cg8` executed zero
+preconditioner iterations. This remains a production no-go for that campaign;
+it is not evidence against every future implementation.
+
+The immutable historical record remains in
+`docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv`,
+`docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json`,
+and `.superpowers/sdd/task-11-report.md`.
+
+### Phase 1 remediation (approved, not qualified)
+
+The approved phase-1 design replaces the misleading diagonal realization with
+two explicit families: `diagonal` for the pointwise approximation and
+`exchange_mass_cg4|cg8` for a future fixed-iteration solve using the complete
+device CSR. At this documentation checkpoint that full sparse implementation,
+its algorithm integration, receipt, parity, and benchmark campaign do not yet
+exist. Approval of the design is not runtime evidence.
+
+Evidence status for the new phase-1 candidate is intentionally fail-closed:
+
+- Capability: `NOT VERIFIED`
+- Runtime: `NOT VERIFIED`
+- CPU/GPU parity: `NOT VERIFIED`
+- Physics validation: `NOT VERIFIED`
+- Performance: `NOT VERIFIED`
+
+The production default remains `none`. No public selector, automatic promotion,
+or Python/ProblemIR field is introduced by this note.
+
+(fem-gpu-preconditioner-governing-equations)=
+## 2. Governing equations
+
+Let $\mathbf{g}$ be the raw tangent energy gradient. On the active magnetic
+subspace, define the intended full operator
+
+```{math}
+:label: fem-gpu-preconditioner-operator
+\mathbf{P}_{\lambda}
+=\operatorname{diag}(M_s M_{\mathrm{lumped}})
++\lambda\frac{2}{\mu_0}\mathbf{K}_A.
 ```
 
-`K_A` is the scalar heterogeneous-exchange FEM stiffness operator already
-uploaded as the production exchange CSR. The same scalar operator is applied
-independently to the three Cartesian components. `Pi_T(m)` is the nodal
-tangent projection
+The intended preconditioned direction is
 
-```text
-Pi_T(m) v = v - (m . v) m.
+```{math}
+:label: fem-gpu-preconditioner-direction
+\mathbf{z}
+=\Pi_T(\mathbf{m})\mathbf{P}_{\lambda}^{-1}
+\operatorname{diag}(M_sM_{\mathrm{lumped}})\mathbf{g}.
 ```
 
-For the direct minimizer, `lambda` is the finite, nonnegative, bounded accepted
-step parameter derived from `step_m_per_a`. It is part of the resolved
-preconditioner parameters and operator signature. No trial step may silently
-change the operator used to form an already accepted NCG history vector.
+The nodal tangent projector is
 
-### 2.2 Symbols and SI units
-
-| Quantity | Symbol | SI unit |
-|---|---:|---:|
-| reduced magnetization | `m` | `1` |
-| saturation magnetization | `M_s` | `A/m` |
-| lumped nodal volume | `M_lumped` | `m^3` |
-| vacuum permeability | `mu0` | `N/A^2` |
-| exchange stiffness matrix | `K_A` | `J` |
-| raw and preconditioned gradients | `g`, `z` | `A/m` |
-| step/preconditioner weight | `lambda` | `m/A` |
-| mass diagonal | `M_s M_lumped` | `A m^2` |
-| weighted exchange term | `lambda (2/mu0) K_A` | `A m^2` |
-| right-hand side | `diag(M_s M_lumped) g` | `A^2 m` |
-
-Thus both terms of `P_lambda` have unit `A m^2`, and applying its inverse to
-the right-hand side returns `z` in `A/m`.
-
-### 2.3 SPD condition, magnetic mask, and invalid input
-
-On the active magnetic subspace, `P_lambda` is symmetric positive definite
-provided that:
-
-1. every active node has finite `M_s > 0` and finite `M_lumped > 0`;
-2. `lambda` is finite and nonnegative;
-3. the uploaded heterogeneous-exchange operator `K_A` is symmetric positive
-   semidefinite under its documented boundary and material policy.
-
-Nodes outside the magnetic mask, including zero-`M_s` airbox nodes, are
-excluded from the active solve. Their right-hand side, work vectors, and output
-are exactly zero. A masked node never divides by `M_s M_lumped`. A non-finite
-or nonpositive active mass, invalid operator entry, invalid fixed-CG scalar, or
-non-finite output sets a device finite flag. That flag is folded into the
-existing final per-step scalar readback and causes strict GPU execution to fail
-closed; it must not trigger CPU fallback, an extra scalar copy, or acceptance
-of a degraded direction.
-
-If a valid right-hand side is already zero, fixed CG keeps the solution and
-remaining iterates at zero without treating exact convergence as an error.
-
-### 2.4 Relation to the CPU preconditioner
-
-The CPU direct minimizer remains the backend-neutral numerical oracle for
-energy, stopping, and tangent-gradient semantics. Its MFEM realization uses a
-consistent `M_s`-weighted mass action and a converged host linear solve of the
-mass-plus-exchange system.
-
-The GPU realization intentionally differs only in its bounded numerical
-approximation: it uses the uploaded lumped mass and exactly four or eight
-device-side CG iterations. Manufactured problems compare that approximation
-against a dense CPU solve of the *same lumped operator*. CPU/GPU relaxation
-qualification continues to compare physical energies, torque/stopping state,
-magnetization, and norm defect; it does not require identical intermediate NCG
-directions from the two mass realizations.
-
-## 3. Resolved strategy contract
-
-The internal resolved strategy vocabulary is exactly:
-
-| Token | Operation |
-|---|---|
-| `none` | Preserve the unpreconditioned tangent gradient, `z = g`. |
-| `diagonal_mass` | Apply the mass-only diagonal inverse; algebraically this is `lambda = 0`, so active-node `z = Pi_T(m) g`. It exists as an instrumented device baseline, not as a claimed exchange preconditioner. |
-| `lumped_exchange_mass_cg4` | Solve the lumped exchange-mass system with exactly four device CG iterations. |
-| `lumped_exchange_mass_cg8` | Solve the lumped exchange-mass system with exactly eight device CG iterations. |
-| `stagnation_triggered_cg8` | Resolve to `none` normally and use the exact CG8 operation on the next gradient after an existing NCG restart or a rejected-trial sequence that exhausts the current backtrack budget; it reads only already-host-visible restart/Armijo state. |
-
-The automatic selector may resolve independently by qualified mesh-size range.
-It may legally select `none` for the small problem. Environment/test overrides
-may force one of the five tokens for qualification, but are not public physics
-inputs and must be rejected if misspelled. Unqualified strategies must not
-remain reachable in a production binary after a no-go decision.
-
-NCG retains the raw gradient `g` for the Armijo slope and physical stopping
-test. The preconditioned vector `z` is used only in the NCG search-direction
-recurrence. Restart uses `-z`; Polak-Ribiere uses the existing mass-weighted
-preconditioned form with denominator `g_old . z_old`, and descent remains
-checked against raw `g`. Strict Armijo acceptance and the accepted energy are
-unchanged.
-
-## 4. Device residency, cache, and synchronization
-
-`ExchangeMassPreconditionerState` owns only bounded device work vectors and a
-bounded operator signature. Fixed CG executes all four or eight iterations on
-the established CUDA stream with device-resident scalar recurrences. It has no
-host convergence criterion and performs no per-iteration device-to-host copy,
-stream synchronization, or allocation.
-
-The finite flag is one additional value in the existing accepted-step final
-readback. Therefore CG4 and CG8 add exactly zero host scalar synchronizations
-and do not change the strict NCG per-step scalar-readback budget.
-
-The cached operator signature contains:
-
-- the exact bounded `step_m_per_a`/`lambda` bit pattern;
-- the mesh signature, including node count and uploaded exchange CSR identity,
-  dimensions, nonzero count, and generation;
-- the material signature, including active-mask, `M_s`, lumped-mass, exchange
-  coefficient identity, and generation.
-
-A step, mesh signature, or material signature change invalidates the cache and
-records one miss when the operator is next used. Exact signature reuse records
-one hit. Invalidation never downloads or rebuilds the CSR on the host. The
-uploaded exchange CSR, lumped mass, active mask, tangent gradient, and bounded
-step are the only operator inputs.
-
-## 5. Energy, convergence, and backend semantics
-
-The preconditioner does not change:
-
-- any interaction energy or effective field;
-- fresh-zero strict demagnetizing solves for candidate evaluations;
-- the raw-gradient Armijo directional derivative or sufficient-decrease rule;
-- accepted-state energy ownership or rollback;
-- the torque-based stop condition or its tolerance;
-- unit-length projection and norm-defect limits;
-- GPU fail-closed behavior, device residency, or existing synchronization
-  budgets.
-
-FDM has no implementation impact. FEM CPU keeps its existing consistent-mass
-preconditioner. Hybrid execution receives no new behavior. The optimization is
-owned by the strict FEM GPU direct-minimizer runtime and shares only the
-backend-neutral equations, signs, units, energy, and observable contracts.
-
-## 6. API, IR, planner, runtime, and provenance impact
-
-### 6.1 Python API and ProblemIR
-
-Python API impact: `none`.
-
-ProblemIR impact: `none`.
-
-Users continue to request a physical relaxation study and explicit execution
-device. Preconditioner strategy is a resolved runtime optimization, not a
-physical model parameter. Canonical Python export and UI-authored ProblemIR
-therefore do not contain any of the internal strategy tokens.
-
-### 6.2 Planner and capability matrix
-
-The planner adds no public capability. The candidate is legal only for the
-already-supported strict, double-precision FEM GPU direct NCG lane with the
-uploaded production exchange CSR. Other relaxers, devices, precisions, and
-unsupported FEM configurations resolve to their existing behavior rather than
-silently changing lanes.
-
-### 6.3 Runtime, artifacts, diagnostics, and provenance
-
-During the rejected experiment, native step stats and benchmark provenance
-exposed the resolved values:
-
-```text
-relaxation_preconditioner_strategy
-relaxation_preconditioner_iterations
-relaxation_preconditioner_lambda_m_per_a
-relaxation_preconditioner_wall_time_ns
-relaxation_preconditioner_cache_hits
-relaxation_preconditioner_cache_misses
+```{math}
+:label: fem-gpu-preconditioner-tangent-projector
+\Pi_T(\mathbf{m})\mathbf{v}
+=\mathbf{v}
+-\mathbf{m}\frac{\mathbf{m}\cdot\mathbf{v}}
+{\mathbf{m}\cdot\mathbf{m}}.
 ```
 
-`strategy` was one exact token from Section 3. `iterations` was `0`, `4`, or
-`8` for the operation actually used by the sampled step. `lambda_m_per_a` was
-the finite bounded coefficient actually used. These experimental fields are
-not retained in the production runtime, ABI, OpenAPI, or generated frontend
-types. The qualification harness keeps only the schema needed to reject stale
-or incomplete evidence.
+The current CUDA source implements only the diagonal/Jacobi approximation
 
-Requested physical intent and resolved execution provenance remain separate.
-Artifacts must be sufficient to reconstruct which strategy and parameters
-produced a timing/qualification sample without presenting that strategy as a
-portable physical input.
-
-## 7. Validation and qualification plan
-
-### 7.1 Manufactured operator tests
-
-For small SPD matrices assembled from a positive mass diagonal and symmetric
-positive-semidefinite exchange matrix:
-
-1. run the device operator and fixed CG4/CG8;
-2. compare operator products and fixed-iteration vectors against an independent
-   dense CPU oracle using the same initial zero vector and recurrence;
-3. compare against the exact dense solution to verify residual improvement from
-   CG4 to CG8 without pretending fixed CG must converge exactly;
-4. cover `lambda = 0`, exchange-null modes, masked/zero-`M_s` nodes,
-   heterogeneous mass and exchange, zero RHS, and invalid active mass;
-5. assert tangent output and finite-flag behavior;
-6. assert no new host scalar synchronization for CG4 or CG8.
-
-### 7.2 Physics and cross-backend gates
-
-Each strategy must preserve:
-
-- monotone accepted energy under strict Armijo;
-- the existing energy-directional-derivative contract;
-- accepted-state/fresh-zero demag accounting;
-- the torque stopping tolerance;
-- maximum magnetization norm defect;
-- CPU/GPU energy, magnetization, and stopping parity;
-- strict residency and the existing exact NCG scalar-readback budget.
-
-Qualification evidence is valid only when both sweeps match the immutable
-execution identity supplied to the validator: active managed runtime/source/
-native-library hashes; accepted GPU UUID, name, and compute capability; exact
-per-resolution mesh byte hash, runtime mesh signature, node/element counts;
-and the executed canonical ProblemIR hash for the fixed Task 11 workload.
-Requested values cannot substitute for values reported by the execution
-payload.
-
-The CPU/GPU parity artifact must declare `observable=m`, unit `1`, and a final
-step equal to the executed relaxation step. Its content hash must be present,
-its vector count must equal the pinned solver-mesh node count, and both CPU and
-GPU final torques must be finite and no greater than the requested 8000 A/m
-tolerance.
-
-### 7.3 Five-strategy performance matrix
-
-Run `none`, `diagonal_mass`, `lumped_exchange_mass_cg4`,
-`lumped_exchange_mass_cg8`, and `stagnation_triggered_cg8` on the same coarse,
-medium, and fine managed FEM GPU scenarios with sufficient repeats for p50 and
-p95. For every strategy and size report:
-
-- time-to-tolerance;
-- accepted steps;
-- Armijo trials;
-- demagnetizing solves;
-- preconditioner wall time;
-- HYPRE wall time;
-- energy monotonicity;
-- maximum norm defect;
-- CPU/GPU parity.
-
-### 7.4 Literal go/no-go rule
-
-A strategy may become an automatic default only when, relative to `none`:
-
-1. p50 time-to-tolerance improves by at least 10% on at least two of the three
-   sizes;
-2. no size has p50 time-to-tolerance worse by more than 5%;
-3. p95 time-to-tolerance is not worse by more than 5% on any size;
-4. every physics, parity, residency, synchronization, and fail-closed gate
-   passes.
-
-The small-problem selector may choose `none`. If no candidate satisfies all
-four conditions, the decision is no-go: remove the runtime implementation and
-selection code, retain this note plus the no-go report/evidence, and do not
-leave a dead feature flag.
-
-### 7.5 Managed verification
-
-Final evidence uses the repository-owned managed/container commands:
-
-```bash
-just verify-fem-exchange-runtime
-just verify-fem-relaxation-source-contract
-just verify-fem-relaxation-runtime
-just verify-fem-relaxation-cpu-gpu-consistency-smoke
-just verify-fem-gpu-performance-regression
+```{math}
+:label: fem-gpu-preconditioner-diagonal-approximation
+z_i
+=\left[\frac{M_i}{M_i+\lambda\frac{2}{\mu_0}K_{ii}}\right]g_i,
+\qquad
+M_i=M_{s,i}M_{\mathrm{lumped},i},
 ```
 
-Host builds and synthetic source checks are diagnostic only and cannot replace
-these runtime and device-identity-pinned gates.
+before the already-required tangent projection. This equation is not the full
+sparse solve whenever $\mathbf{K}_A$ has nonzero off-diagonal entries.
 
-### 7.6 Measured outcome and evidence status
+(fem-gpu-preconditioner-symbols-and-si-units)=
+## 3. Symbols and SI units
 
-The 2026-07-26 experiment produced all 75 requested GPU rows and selected no
-strategy. The strengthened post-review validator classifies that historical
-matrix as `invalid`, not as a valid qualifying `no_go`, because:
+| Symbol | Meaning | SI unit |
+|---|---|---|
+| $\mathbf{m}$ | reduced magnetization | $1$ |
+| $\mathbf{g}$ | raw tangent energy gradient | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf{z}$ | preconditioned tangent direction input | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf{v}$ | vector projected onto the nodal tangent plane | $\mathrm{A\,m^{-1}}$ |
+| $\Pi_T$ | nodal tangent projector | $1$ |
+| $\mathbf{P}_{\lambda}$ | exchange-plus-mass preconditioner operator | $\mathrm{A\,m^2}$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $M_{\mathrm{lumped}}$ | lumped nodal volume | $\mathrm{m^3}$ |
+| $M_i$ | active nodal mass $M_{s,i}M_{\mathrm{lumped},i}$ | $\mathrm{A\,m^2}$ |
+| $\mathbf{K}_A$ | heterogeneous exchange stiffness matrix | $\mathrm{J}$ |
+| $K_{ii}$ | diagonal entry of $\mathbf{K}_A$ | $\mathrm{J}$ |
+| $\lambda$ | direct-minimizer step/preconditioner weight | $\mathrm{m\,A^{-1}}$ |
+| $w=\lambda(2/\mu_0)$ | exchange-Hessian scale passed to the diagonal builder | $\mathrm{A\,m\,N^{-1}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $i$ | active nodal index | $1$ |
 
-- the `none` baseline did not reach the torque tolerance on the fine mesh and
-  is therefore ineligible as a time-to-tolerance reference;
-- CPU/GPU magnetization, energy, and stop-state parity was not captured as the
-  required separate six-row baseline under the same runtime and mesh identity;
-- accepted-step, cumulative Armijo-trial, cumulative demag-solve, cumulative
-  preconditioner-time, and cumulative HYPRE-time fields were not all recorded;
-- every `stagnation_triggered_cg8` row reported zero resolved iterations and
-  zero preconditioner wall time, so that candidate was a measured no-op.
-- the historical rows did not capture the accepted GPU UUID, solver-mesh byte
-  hashes, or executed canonical ProblemIR hashes required by the immutable
-  execution-identity contract.
+Both terms in $\mathbf{P}_{\lambda}$ have unit $\mathrm{A\,m^2}$, while
+$\operatorname{diag}(M_sM_{\mathrm{lumped}})\mathbf{g}$ has unit
+$\mathrm{A^2\,m}$; the result $\mathbf{z}$ is therefore in
+$\mathrm{A\,m^{-1}}$.
 
-This is still a literal production no-go: no candidate is promoted, and the
-experimental implementation, selector, ABI fields, and runtime tests remain
-removed. The immutable raw CSV, corrected fail-closed JSON, and hashes are in
-`docs/audits/evidence/task-11/`. The full interpretation and managed gate
-ledger are in `.superpowers/sdd/task-11-report.md`.
+(fem-gpu-preconditioner-assumptions-and-validity)=
+## 4. Assumptions, validity, and backend lanes
 
-## 8. Completeness checklist
+The intended full operator is SPD only when active nodal masses are finite and
+positive, $\lambda$ is finite and nonnegative, and $\mathbf{K}_A$ is symmetric
+positive semidefinite under the selected exchange boundary/material policy.
+Inactive and fixed nodes have exactly zero right-hand side, work vectors, and
+result. Invalid mass, operator, CG scalar, CUDA status, or non-finite result is
+a terminal strict-GPU error; diagonal substitution is not a fallback.
 
-- [x] Physical problem and governing equations
-- [x] Symbols and SI units
-- [x] SPD, mask, zero-`M_s`, and fail-closed semantics
-- [x] FDM, FEM CPU, FEM GPU, and hybrid interpretations
-- [x] Python API impact (`none`)
-- [x] ProblemIR impact (`none`)
-- [x] Planner and capability-matrix impact
-- [x] Runtime, artifact, diagnostics, and provenance impact
-- [x] Validation and literal go/no-go plan
-- [x] Five-strategy managed measurement captured and preserved
-- [x] Literal no-go decision recorded; no strategy promoted
-- [x] Experimental implementation and production selector removed
-- [ ] Valid cumulative-work and separate CPU/GPU parity qualification evidence
+| Solver | Device | Source support at this checkpoint | Qualification |
+|---|---|---|---|
+| FDM | CPU | not applicable; FDM owns a separate relaxation implementation | not applicable |
+| FDM | GPU | not applicable; FEM CSR and FEM mass semantics do not transfer to FDM | not applicable |
+| FEM | CPU | existing consistent exchange-plus-mass preconditioned direct minimizers | phase-1 CPU/GPU parity `NOT VERIFIED` |
+| FEM | GPU | inactive diagonal/Jacobi source candidate; full sparse fixed-CG not implemented | capability/runtime/physics/parity/performance `NOT VERIFIED` |
 
-## 9. Known limits and deferred work
+(fem-gpu-preconditioner-python-api)=
+## 5. Python API
 
-- The candidate is limited to the strict FEM GPU direct NCG lane, double
-  precision, P1 operator contract, and already-supported exchange CSR.
-- Higher-order FEM, periodic exchange variants outside the current uploaded
-  contract, mixed precision, other minimizers, and time integration require
-  separate numerical and qualification records.
-- A more adaptive Krylov tolerance, host convergence test, AMG hierarchy, or
-  learned selector is explicitly out of scope because it would change the
-  synchronization, memory, and qualification contract.
-- Production thresholds and mesh-size selector boundaries remain unavailable;
-  the historical matrix is invalid qualification evidence and cannot justify
-  either.
+Preconditioner strategy is an internal resolved runtime optimization. The
+public script continues to author the physical relaxation problem and never
+names `diagonal` or `exchange_mass`:
 
-## 10. References
+```python
+# %%
+import fullmag as fm
+
+study = fm.study("fem_gpu_direct_minimizer")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.mode("strict")
+
+# %%
+film = study.geometry(
+    fm.Box(size=(80e-9, 40e-9, 8e-9), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+study.exchange(enabled=True)
+
+# %%
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolA=1.0e-4,
+)
+```
+
+No new public constructor or parameter is added. Parameter types, defaults,
+units, and validation for this stage-first workflow remain owned by note 0510
+and the Python DSL; this note changes none of them.
+
+The internal qualification vocabulary is not a public API:
+
+| Internal token | Type | Default | SI unit | Validation | Meaning | Backend support | Owner |
+|---|---|---|---|---|---|---|---|
+| `none` | enum token | `none` | $1$ | always legal for the existing direct-minimizer lane | unpreconditioned search direction | FEM GPU NCG/PG-BB | runtime resolver |
+| `diagonal` | enum token | not automatic | $1$ | explicit qualified profile only | pointwise $M_i/[M_i+\lambda(2/\mu_0)K_{ii}]$ candidate | FEM GPU NCG/PG-BB, inactive now | runtime resolver |
+| `exchange_mass_cg4` | enum token | unavailable | $1$ | full sparse setup and fixed 4-iteration receipt required | bounded full-CSR candidate | FEM GPU NCG/PG-BB, planned | phase-1 design |
+| `exchange_mass_cg8` | enum token | unavailable | $1$ | full sparse setup and fixed 8-iteration receipt required | bounded full-CSR candidate | FEM GPU NCG/PG-BB, planned | phase-1 design |
+
+(fem-gpu-preconditioner-problem-ir)=
+## 6. ProblemIR and planner boundary
+
+ProblemIR impact is `none`. The script lowers the requested physical
+relaxation algorithm, engine, device, precision, geometry, material, exchange,
+and stop controls through the existing fields. It does not persist an internal
+preconditioner token. The planner may later bind a qualified internal profile,
+but requested intent and resolved execution must remain separate from executed
+receipt evidence.
+
+(fem-gpu-preconditioner-round-trip-and-failure-semantics)=
+## 7. Round-trip and failure semantics
+
+UI-to-Python round-trip preserves requested intent without adding an internal
+optimization knob. Resolved execution must report the actual algorithm and
+strategy; it cannot be reconstructed from a request or documentation.
+Validation errors include stale/unqualified profiles, invalid mass or operator
+data, unknown tokens, failed sparse/CUDA apply, and fixed-CG breakdown.
+Unsupported combinations fail before the first step. A requested full sparse strategy may
+never degrade to the diagonal approximation or CPU execution.
+
+(fem-gpu-preconditioner-discrete-realization)=
+## 8. Discrete realization and lifecycle
+
+The approved target reuses the uploaded heterogeneous exchange CSR through
+`SparseApplyPlan::apply_xyz`, with independent x/y/z CG recurrences and a
+fixed iteration count of four or eight. The complete CSR, including
+off-diagonal entries, participates in each apply. RHS, solution, Krylov
+vectors, scalar recurrence, and failure latch remain device-resident. Setup may
+upload immutable state, while hot apply performs no allocation, H2D, D2H, or
+host convergence test.
+
+Raw $\mathbf{g}$ and preconditioned $\mathbf{z}$ are separate buffers.
+$\mathbf{g}$ remains the source of physical stop metrics, descent, and Armijo;
+$\mathbf{z}$ is used only to construct directions. PG-BB uses
+$\mathbf{d}=-\mathbf{z}$ and checks $\mathbf{d}\cdot\mathbf{g}<0$. NCG uses
+preconditioned PR+ with the previous $\mathbf{g}$ and $\mathbf{z}$ and restarts
+from $-\mathbf{z}$. These are target contracts, not claims about current GPU
+execution.
+
+(fem-gpu-preconditioner-full-sparse-contract)=
+The full sparse fixed-CG realization remains a planned contract until later
+phase-1 tasks add and verify the corresponding source.
+
+(fem-gpu-preconditioner-implementation-mapping)=
+## 9. Implementation mapping
+
+The current pointwise implementation is owned by
+`build_gpu_relaxation_diagonal` and the misleadingly named
+`GpuExchangeMassPreconditioner` methods. `resolve_gpu_relaxation_preconditioner`
+defaults an empty request to `none`. The NCG and PG-BB call sites show the
+conditional in-place apply, while the benchmark's runtime-name map keeps the
+full strategy unavailable. `SparseApplyPlan::apply_xyz` is an available
+building block for the approved target, not evidence that the target is wired.
+
+(fem-gpu-preconditioner-validation)=
+## 10. Validation and promotion gate
+
+The first numerical RED must use a small SPD matrix with nonzero off-diagonal
+entries and a dense independent oracle. Later gates cover heterogeneous
+$M_s$/mass/exchange, $\lambda=0$, zero RHS, inactive/fixed nodes, invalid data,
+x/y/z, setup reuse, cache invalidation, status propagation, and strict rollback.
+
+Managed verification must use repository-owned container `just` recipes. For
+NCG and PG-BB separately, source/contract evidence, managed runtime evidence,
+physics validation, CPU/GPU parity, performance, and Nsight remain distinct.
+At this checkpoint the latter five are `NOT VERIFIED`.
+
+An individual algorithm/strategy may be promoted only when, relative to
+`none`, it satisfies all of the following for the same immutable workload:
+
+1. at least 10% p50 time-to-tolerance improvement on at least two of three
+   mesh sizes;
+2. no p50 regression greater than 5% on any size;
+3. no p95 regression greater than 5% on any size;
+4. complete physics, parity, residency, synchronization, and fail-closed gates.
+
+The campaign uses one warm-up and exactly five measured repeats per algorithm,
+strategy, and mesh size, plus a separate Nsight capture with the same identity.
+Failure to pass leaves the production default at `none`.
+
+(fem-gpu-preconditioner-limitations)=
+## 11. Limitations and deferred work
+
+- Full sparse `exchange_mass_cg4|cg8` is not yet implemented or executable.
+- Current diagonal code is inactive in normal NCG/PG-BB setup and its apply
+  status is not propagated fail-closed.
+- Receipt v2, snapshot v3, direct-minimizer publication identity, managed
+  runtime, physics, parity, and performance evidence remain unavailable.
+- TPI, L-BFGS, FP32/mixed precision, HYPRE/AMG variants, and public selection
+  are outside phase 1.
+- The 2026-07-26 evidence remains historical and cannot qualify new source.
+
+(fem-gpu-preconditioner-scientific-bibliography)=
+## 12. Scientific bibliography
 
 - J. Nocedal and S. J. Wright, *Numerical Optimization*, second edition,
-  Springer, 2006.
-- R. E. Bank and D. J. Rose, "Parameter selection for Newton-like methods
-  applicable to nonlinear partial differential equations," *SIAM Journal on
-  Numerical Analysis* 17(6), 1980.
-- `docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv`
-- `docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json`
-- `.superpowers/sdd/task-11-report.md`
+  Springer, 2006, [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
+- R. E. Bank and D. J. Rose, “Parameter selection for Newton-like methods
+  applicable to nonlinear partial differential equations”, *SIAM Journal on
+  Numerical Analysis* 17(6), 1980,
+  [doi:10.1137/0717061](https://doi.org/10.1137/0717061).
+
+(fem-gpu-preconditioner-source-code-index)=
+## 13. Source-code index
+
+| Claim | Path | Symbol | Responsibility | Evidence status |
+|---|---|---|---|---|
+| Current diagonal builder | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `build_gpu_relaxation_diagonal` | constructs $M_i+wK_{ii}$ only, with physical $w=\lambda(2/\mu_0)$ | current source |
+| Current diagonal setup | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::setup` | validates and uploads mass and exchange diagonals with the supplied exchange-Hessian scale | current source; production setup absent |
+| Current pointwise device apply | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `GpuExchangeMassPreconditioner::apply_device_component` | applies the uploaded diagonal inverse independently to x/y/z | current source; not a sparse solve |
+| Default and qualified-profile resolver | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `resolve_gpu_relaxation_preconditioner` | defaults to `none` and rejects unqualified profiles | current source |
+| PG-BB conditional pointwise apply | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_compute_current_metrics` | shows inactive/in-place current integration boundary | current source, not qualification |
+| NCG conditional pointwise apply | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_compute_effective_field_energy_gradient_and_direction` | shows inactive/in-place current integration boundary | current source, not qualification |
+| CPU exchange-mass oracle | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `exchange_mass_preconditioned_gradient` | owns the existing CPU solve semantics | current source |
+| Device sparse x/y/z building block | `backends/fem/gpu/cuda/sparse/sparse_apply_plan.cpp` | `SparseApplyPlan::apply_xyz` | applies an existing CSR to three device components | available primitive, not wired proof |
+| Benchmark availability map | `scripts/analysis/fem_gpu_benchmark.py` | `RELAXATION_PRECONDITIONER_RUNTIME_NAMES` | keeps `exchange_mass` unavailable | current source |
+| SI exchange-Hessian scale | `backends/fem/src/relaxation_operator_units.hpp` | `exchange_hessian_scale_from_step_m_per_a` | preserves $\lambda(2/\mu_0)$ when $K_A$ is represented in joules | current source |
+| SI operator-unit contract | `backends/fem/tests/relaxation_operator_contract.cpp` | `void exchange_hessian_uses_si_field_scale` | checks the exchange scale and a manufactured two-node operator action | source test |
+| Diagonal-only manufactured fixture | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `struct ManufacturedSpdMatrix` | diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve | source test fixture; off-diagonal RED belongs to Task 2 |
+| Focused GPU preconditioner contract | `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` | `main` | exercises the current resolver and diagonal setup/apply; no sparse negative control | source test entry point; full sparse solve not proved |
+| Full sparse phase-1 contract | `docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md` | `DOC-ANCHOR:fem-gpu-preconditioner-full-sparse-contract` | defines target semantics without claiming runtime evidence | planned contract |
+
+### Historical evidence index
+
+| Path | Identity | Responsibility |
+|---|---|---|
+| `docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv` | immutable Task 11 campaign rows | records the 75 requested historical GPU rows |
+| `docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json` | immutable Task 11 qualification verdict | records the `invalid` campaign result and missing gates |

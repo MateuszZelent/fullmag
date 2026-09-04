@@ -201,6 +201,37 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
 
         self.assertEqual([], self.errors(manifest))
 
+    def test_existing_typed_and_multiline_cpp_symbol_formats_remain_supported(self) -> None:
+        cases = (
+            ("typed.cpp", "void typed_contract() {}\n", "void typed_contract"),
+            ("multiline.cpp", "bool\nmultiline_contract() { return true; }\n", "multiline_contract"),
+            ("contract.ts", "function typescript_contract() {}\n", "function typescript_contract"),
+        )
+        for filename, declaration, symbol in cases:
+            with self.subTest(symbol=symbol):
+                source = self.repo / f"src/{filename}"
+                source.parent.mkdir(exist_ok=True)
+                source.write_text(declaration, encoding="utf-8")
+                manifest = copy.deepcopy(self.manifest)
+                manifest["sources"][0]["path"] = f"src/{filename}"
+                manifest["sources"][0]["symbol"] = symbol
+                original = self.page_path.read_text(encoding="utf-8")
+                self.page_path.write_text(
+                    original + f"\n| source | src/{filename} | {symbol} |\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual([], self.errors(manifest))
+                self.page_path.write_text(original, encoding="utf-8")
+
+    def test_rendered_display_mathjax_is_allowed(self) -> None:
+        rendered = self.repo / "exchange.html"
+        rendered.write_text(
+            '<html><span class="math notranslate nohighlight">\\[E=0\\]</span>'
+            '<button class="copybutton">Copy</button></html>',
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_page(self.repo, self.manifest, rendered))
+
     def test_rust_enum_is_a_stable_source_symbol(self) -> None:
         source = self.repo / "src/error.rs"
         source.parent.mkdir(exist_ok=True)

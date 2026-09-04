@@ -109,7 +109,16 @@
     {"id": "receipt-comparator", "path": "scripts/compare_fem_llg_time_domain_qualification.py", "symbol": "validate_gpu_execution_receipt", "responsibility": "Wiąże parity z source hash i odrzuca hybrid lub niepełne operator IDs."},
     {"id": "receipt-comparator-tests", "path": "scripts/test_compare_fem_llg_time_domain_qualification.py", "symbol": "class ComparatorBehaviorTests", "responsibility": "Uruchamia funkcję i CLI dla pełnego receipt oraz wymaganych przypadków fail-closed."},
     {"id": "semantic-lowering-check", "path": "scripts/check_llg_time_domain_contract_docs.py", "symbol": "_lowered_example_values", "responsibility": "Uruchamia dokładny przykład strony przez canonical export-run-config i porównuje 32 wartości oraz granice."},
-    {"id": "managed-gpu-gate", "path": "justfile", "symbol": "verify-fem-llg-time-domain-qualification-gpu", "responsibility": "Uruchamia container-first kwalifikację i zapisuje source snapshot identity."}
+    {"id": "managed-gpu-gate", "path": "justfile", "symbol": "verify-fem-llg-time-domain-qualification-gpu", "responsibility": "Uruchamia container-first kwalifikację i zapisuje source snapshot identity."},
+    {"id": "direct-minimizer-diagonal", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "build_gpu_relaxation_diagonal", "responsibility": "Składa wyłącznie bieżącą przekątną mass-plus-exchange."},
+    {"id": "direct-minimizer-resolver", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "resolve_gpu_relaxation_preconditioner", "responsibility": "Zachowuje none jako default i odrzuca niezakwalifikowany profil."},
+    {"id": "direct-minimizer-benchmark-map", "path": "scripts/analysis/fem_gpu_benchmark.py", "symbol": "RELAXATION_PRECONDITIONER_RUNTIME_NAMES", "responsibility": "Utrzymuje exchange_mass jako niedostępny w bieżącym benchmarku."},
+    {"id": "direct-minimizer-setup", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuExchangeMassPreconditioner::setup", "responsibility": "Przyjmuje wyłącznie bieżące przekątne mass/exchange i wysyła czynnik punktowy."},
+    {"id": "direct-minimizer-apply", "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp", "symbol": "GpuExchangeMassPreconditioner::apply_device_component", "responsibility": "Stosuje bieżący diagonalny czynnik niezależnie do x, y i z."},
+    {"id": "direct-minimizer-pgbb-call", "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp", "symbol": "gpu_relax_compute_current_metrics", "responsibility": "Pokazuje warunkowy apply PG-BB bez fail-closed propagacji statusu."},
+    {"id": "direct-minimizer-ncg-call", "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp", "symbol": "gpu_relax_compute_effective_field_energy_gradient_and_direction", "responsibility": "Pokazuje warunkowy apply NCG bez fail-closed propagacji statusu."},
+    {"id": "direct-minimizer-spd-fixture", "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp", "symbol": "struct ManufacturedSpdMatrix", "responsibility": "Diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve."},
+    {"id": "direct-minimizer-contract-main", "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp", "symbol": "main", "responsibility": "Sprawdza bieżący resolver i diagonal setup/apply; no sparse negative control."}
   ],
   "public_api": {
     "parameters": [

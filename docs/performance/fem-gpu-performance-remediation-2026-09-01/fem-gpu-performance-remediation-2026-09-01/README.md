@@ -20,6 +20,13 @@ wydajności, parytet urządzenia i kwalifikacja naukowa pozostają `NOT VERIFIED
 Szczegółowy werdykt dla każdego ID znajduje się w
 [10-finding-coverage-matrix.md](10-finding-coverage-matrix.md).
 
+Korekta RL-01 z 2026-09-04: bieżąca klasa
+`GpuExchangeMassPreconditioner` realizuje tylko nieaktywną aproksymację
+diagonalną/Jacobiego. Pełny sparse
+`exchange_mass_cg4|cg8` jest zatwierdzonym projektem, ale jego capability,
+runtime, CPU/GPU parity, physics validation i performance pozostają
+`NOT VERIFIED`. Domyślna strategia pozostaje `none`.
+
 Stosowane statusy:
 
 - `POTWIERDZONE` — diagnoza wynika bezpośrednio z aktualnego kodu;

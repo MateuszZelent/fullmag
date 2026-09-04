@@ -26,6 +26,13 @@ wydajności, parytet urządzenia i kwalifikacja naukowa pozostają `NOT VERIFIED
 Szczegółowy werdykt dla każdego ID znajduje się w
 [10-finding-coverage-matrix.md](fem-gpu-performance-remediation-2026-09-01/10-finding-coverage-matrix.md).
 
+Korekta RL-01 z 2026-09-04: bieżąca klasa
+`GpuExchangeMassPreconditioner` realizuje tylko nieaktywną aproksymację
+diagonalną/Jacobiego. Pełny sparse
+`exchange_mass_cg4|cg8` jest zatwierdzonym projektem, ale jego capability,
+runtime, CPU/GPU parity, physics validation i performance pozostają
+`NOT VERIFIED`. Domyślna strategia pozostaje `none`.
+
 Stosowane statusy:
 
 - `POTWIERDZONE` — diagnoza wynika bezpośrednio z aktualnego kodu;
@@ -34,10 +41,9 @@ Stosowane statusy:
 - `NOT VERIFIED` — oczekiwany wpływ wydajnościowy lub zachowanie runtime nie
   ma aktualnego, immutable receipt z managed GPU.
 
-Pseudokod i planowane cele w dokumentach 01–09 należy czytać razem z macierzą:
-część kontraktów, implementacji i testów istnieje już w bieżącym worktree, ale
-bez kompilacji, parytetu i managed receipt nie jest jeszcze kwalifikacją.
-Ścieżki zaczynające się od `gpu/` lub `cpu/` są względne wobec `backends/fem/`.
+Pseudokod, nowe pliki, typy i testy w dokumentach 01–09 są celami
+implementacyjnymi, o ile nie oznaczono ich jako istniejące. Ścieżki zaczynające
+się od `gpu/` lub `cpu/` są względne wobec `backends/fem/`.
 
 ## 1. Cel
 
@@ -2283,15 +2289,22 @@ DoD:
 
 **Ustalenia:** RL-01 oraz RD-01/RK-02 w NCG i PG-BB.
 
-**Status po weryfikacji:** CPU exchange-mass preconditioner i brak analogicznego
-preconditionera GPU NCG są potwierdzone. Istnieje fail-closed builder/resolver
-diagonalnego preconditionera, ale nie jest on podłączony do NCG/PG-BB runtime.
-Nie wynika z tego, że preconditioner GPU skróci time-to-`tolA`; to pozostaje
-`NOT VERIFIED`. GPU ma poprawny unpreconditioned PR+, tangent transport,
-restart, fallback i persistent state. Chebyshev/PCG, device Armijo packet i
-device PG-BB control pozostają celami. Istniejący managed target
-`verify-fem-gpu-relaxation-preconditioner-qualification` i jego evidence należy
-rozszerzyć lub zastąpić, nie dublować.
+### Current source status (2026-09-04)
+
+Obecna klasa `GpuExchangeMassPreconditioner` ma status: diagonal/Jacobi approximation.
+Otrzymuje tylko przekątne $M$ i $K$ oraz mnoży punktowo przez
+$M_i/(M_i+wK_{ii})$. Nie wykonuje pełnego sparse $(M+wK)^{-1}M$, nie ma
+produkcyjnego wywołania setupu, a NCG/PG-BB nie propagują jeszcze błędu apply.
+Benchmark mapuje `exchange_mass` na brak realizacji C++.
+
+Historyczny eksperyment z 2026-07-26 pozostaje osobnym no-go i nie jest
+przepisywany. Zatwierdzony projekt fazy 1 rozdziela `diagonal` od przyszłego
+pełnego sparse `exchange_mass_cg4|cg8`, lecz nowa realizacja i kwalifikacja
+jeszcze nie istnieją. Capability, runtime, CPU/GPU parity, physics validation i
+performance pozostają `NOT VERIFIED`. The production default remains `none`.
+
+Dalsze sekcje zachowują pierwotny plan RL-01 jako materiał historyczny. Nie są
+dowodem wykonania ani promocją strategii.
 
 ## 1. CPU jako kontrakt
 
@@ -2924,7 +2937,7 @@ oznaczone jako `NOT VERIFIED`.
 | HF-01 | `POTWIERDZONE` | `rk_effective_field.cu` nadal składa component-wise, ale przekazuje rzeczywiste `has_external_field` zamiast stałego `true` | Fused base compose nie istnieje; ext on/off wymaga jawnego planu/testu | `NOT VERIFIED` | PR-11 |
 | HF-02 | `POTWIERDZONE` | Separate field buffers i component-wise adds pozostają w `rk_effective_field.cu` | Lazy materialization i masks nie istnieją w plannerze/API | `NOT VERIFIED` | PR-11+ |
 | RD-01 | `POTWIERDZONE` | `reduction_kernels.*` ma scalar sum/max, a LLG metric można wyłączyć dla stage RHS | Typed adaptive/Armijo/NCG/observable reducers nadal nie istnieją | `NOT VERIFIED` | PR-12 |
-| RL-01 | `POTWIERDZONE` | `gpu_relaxation_preconditioner.cpp` ma fail-closed resolver/builder; GPU NCG nie włącza go do runtime | GPU PR+ pozostaje poprawny dla raw gradient; zysk diagonal/Chebyshev/PCG nieudowodniony | `NOT VERIFIED` | PR-13 |
+| RL-01 | `NOT VERIFIED` | `gpu_relaxation_preconditioner.cpp::build_gpu_relaxation_diagonal` tworzy tylko diagonalę; błędnie nazwana klasa nie używa off-diagonal CSR, setup nie jest podłączony do NCG/PG-BB, a benchmark odrzuca `exchange_mass` | Historyczny no-go pozostaje osobny; `diagonal` i pełny sparse `exchange_mass_cg4\|cg8` są zatwierdzonym projektem fazy 1. Capability, runtime, parity, physics i performance są nieudowodnione; default pozostaje `none` | `NOT VERIFIED` | faza 1 |
 | RT-01 | `NIEPRAWDA` w pierwotnym brzmieniu | Istniejący strict receipt nadal odrzuca hybrid/host/unknown/maski/transfers; dodano transactional `GpuPerformanceCounterState`, C ABI snapshot i Rust validator | Snapshot nie jest jeszcze wpięty do pełnego publicznego provenance, a managed runtime pozostaje niezweryfikowany | `NOT VERIFIED` | PR-00 |
 | MEM-01 | `CZĘŚCIOWO` | RK ma dedykowany pinned `GpuRkAttemptControlPacket`; inne redukcje nadal mają pinned scalar buffer z pageable fallback | Packet nie obejmuje jeszcze wszystkich control/data-plane readbacków | `NOT VERIFIED` | PR-04 |
 | BL-01 | `CZĘŚCIOWO` | Inspektor i walidator bundle mają `--require-native-cubin`; `export_fem_gpu_runtime.sh` już wymaga domyślnie `8.9`, `fullmag_fem=sm_89` i `hypre=sm_89` | Brak ogólnego wykryte CC→`sm_xy` zamiast stałego `sm_89` oraz immutable benchmark receipt; historyczne `sm_52` nie dowodzi aktualnego `sm_89` | `NOT VERIFIED` | PR-00 |

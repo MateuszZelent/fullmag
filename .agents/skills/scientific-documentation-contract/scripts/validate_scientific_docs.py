@@ -81,9 +81,10 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
         pattern = re.compile(rf"^\({anchor}\)=\s*$", re.MULTILINE)
         return pattern.findall(text)
     escaped = re.escape(symbol)
-    if symbol.startswith("class "):
-        class_name = re.escape(symbol.removeprefix("class ").rstrip(":"))
-        pattern = re.compile(rf"^\s*class\s+{class_name}\b", re.MULTILINE)
+    if symbol.startswith(("class ", "struct ")):
+        keyword, type_name = symbol.split(maxsplit=1)
+        type_name = re.escape(type_name.rstrip(":"))
+        pattern = re.compile(rf"^\s*{keyword}\s+{type_name}\b", re.MULTILINE)
     elif path.endswith(".py"):
         pattern = re.compile(
             rf"^(?:\s*(?:async\s+)?def\s+{escaped}\s*\("

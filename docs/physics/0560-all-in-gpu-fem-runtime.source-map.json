@@ -1,0 +1,127 @@
+{
+  "document": {
+    "path": "docs/physics/0560-all-in-gpu-fem-runtime.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented-reference"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented-unqualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The page defines FEM MFEM, HYPRE and CUDA residency semantics."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FDM GPU has a separate runtime and transfer-audit owner."
+    }
+  ],
+  "equations": [
+    {
+      "id": "all-in-gpu-fem-hot-loop-budget",
+      "symbols": ["hot-h2d", "hot-d2h", "hot-sync"],
+      "sources": ["transfer-audit-abi", "transfer-audit-policy"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "hot-h2d",
+      "latex": "N_{\\mathrm{H2D}}^{\\mathrm{hot}}",
+      "meaning": "liczba transferow H2D w hot-loop",
+      "si_unit": "1"
+    },
+    {
+      "id": "hot-d2h",
+      "latex": "N_{\\mathrm{D2H}}^{\\mathrm{hot}}",
+      "meaning": "liczba transferow D2H w hot-loop",
+      "si_unit": "1"
+    },
+    {
+      "id": "hot-sync",
+      "latex": "N_{\\mathrm{sync}}^{\\mathrm{hot}}",
+      "meaning": "liczba synchronizacji hosta w hot-loop",
+      "si_unit": "1"
+    }
+  ],
+  "sources": [
+    {
+      "id": "transfer-audit-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_get_transfer_audit",
+      "responsibility": "Exposes the FEM transfer-audit counters to the runner."
+    },
+    {
+      "id": "gpu-rk-plan-abi",
+      "path": "native/include/fullmag_fem.h",
+      "symbol": "fullmag_fem_backend_get_gpu_rk_plan_info",
+      "responsibility": "Exposes the resolved FEM GPU RK plan."
+    },
+    {
+      "id": "gpu-rk-step",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_step.cu",
+      "symbol": "gpu_rk_device_resident_step",
+      "responsibility": "Owns the CUDA RK device-resident hot loop."
+    },
+    {
+      "id": "transfer-audit-policy",
+      "path": "backends/fem/gpu/cuda/transfer/transfer_audit.cpp",
+      "symbol": "configure_transfer_audit_from_env",
+      "responsibility": "Configures fail-closed hot-loop transfer and synchronization assertions."
+    },
+    {
+      "id": "direct-minimizer-resolver",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "resolve_gpu_relaxation_preconditioner",
+      "responsibility": "Keeps direct-minimizer preconditioning on the current none default."
+    },
+    {
+      "id": "direct-minimizer-setup",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "GpuExchangeMassPreconditioner::setup",
+      "responsibility": "Uploads only the current mass and exchange diagonals."
+    },
+    {
+      "id": "direct-minimizer-apply",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "GpuExchangeMassPreconditioner::apply_device_component",
+      "responsibility": "Applies the current pointwise factor independently to x, y and z."
+    },
+    {
+      "id": "direct-minimizer-pgbb-call",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
+      "symbol": "gpu_relax_compute_current_metrics",
+      "responsibility": "Shows the PG-BB conditional apply boundary without fail-closed status propagation."
+    },
+    {
+      "id": "direct-minimizer-ncg-call",
+      "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp",
+      "symbol": "gpu_relax_compute_effective_field_energy_gradient_and_direction",
+      "responsibility": "Shows the NCG conditional apply boundary without fail-closed status propagation."
+    },
+    {
+      "id": "direct-minimizer-spd-fixture",
+      "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
+      "symbol": "struct ManufacturedSpdMatrix",
+      "responsibility": "Diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve."
+    },
+    {
+      "id": "direct-minimizer-contract-main",
+      "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Exercises the current resolver and diagonal setup and apply; no sparse negative control."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

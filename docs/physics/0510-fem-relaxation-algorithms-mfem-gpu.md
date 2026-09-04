@@ -4,7 +4,7 @@
 - Status: executable implementation paths for LLG/PG-BB/NCG; qualification
   remains unvalidated; TPI under development
 - Owners: Fullmag core
-- Last updated: 2026-07-27
+- Last updated: 2026-09-04
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -18,11 +18,13 @@
   - `docs/physics/0530-shared-relaxation-stop-and-field-refresh-semantics.md`
   - `docs/physics/0500-fdm-relaxation-algorithms.md`
   - `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
+  - `docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md`
 
 The cross-layer equilibrium, legality, observable, and completion contract is
 canonical in `0580`. This note retains FEM implementation and qualification
 detail; any conflicting historical statement here is superseded by `0580`.
 
+(fem-relaxation-problem-statement)=
 ## 1. Problem statement
 
 This note defines the current FEM relaxation / energy-minimization algorithms
@@ -103,37 +105,41 @@ Recommended algorithm families:
 4. tangent-plane linearly implicit relaxation on CPU/MFEM,
 5. later: manifold L-BFGS or Newton-like methods.
 
+(fem-relaxation-governing-equations)=
 ## 2. Physical model
 
 ### 2.1 Constrained minimization
 
 The equilibrium problem is
 
-\[
+```{math}
+:label: fem-relaxation-equilibrium-minimization
 \min_{m_h \in V_h^3,\ |m_h(\mathbf{x})| \approx 1} E[m_h].
-\]
+```
 
 In discrete DOFs, the tangent gradient is represented by the FE residual projected through the mass operator.
 
 For a discrete state `u`, define the FE gradient `g(u)` through
 
-\[
+```{math}
+:label: fem-relaxation-fe-gradient
 M g(u) = -G(u),
-\]
+```
 
 where `G(u)` is the assembled energy residual and `M` is the vector mass operator.
 
 The tangent projection at nodal/DOF level must remain exact for the
 representable state stored by the solver. Although nodal retraction targets a
 unit vector, binary64 normalization can leave
-\(m_i\mathbin{\cdot}m_i\ne 1\) by one or more ulps. Therefore the canonical
+$m_i\mathbin{\cdot}m_i\ne 1$ by one or more ulps. Therefore the canonical
 projector is
 
-\[
+```{math}
+:label: fem-relaxation-tangent-projection
 P_m v = v-m\frac{m\mathbin{\cdot}v}{m\mathbin{\cdot}m},
 \qquad
 g_T=P_m g,
-\]
+```
 
 interpreted cellwise / nodewise according to the chosen DOF layout. Replacing
 the denominator by one is not equivalent in floating-point arithmetic: a
@@ -142,19 +148,21 @@ whose squared norm pollutes the Armijo slope.
 
 For normalization retraction
 
-\[
+```{math}
+:label: fem-relaxation-normalization-retraction
 R_m(\lambda p)=\frac{m+\lambda p}{\lVert m+\lambda p\rVert},
-\]
+```
 
 the actual derivative at the representable base state is
 
-\[
+```{math}
+:label: fem-relaxation-retraction-derivative
 \left.\frac{dR_m(\lambda p)}{d\lambda}\right|_{\lambda=0}
 =\frac{P_m p}{\lVert m\rVert}.
-\]
+```
 
 Consequently a line-search directional derivative must use this retraction
-derivative, including the per-node \(1/\lVert m_i\rVert\) factor; it must not
+derivative, including the per-node $1/\lVert m_i\rVert$ factor; it must not
 silently substitute the ambient direction. Zero-norm magnetic states remain
 invalid input and are not repaired by a tolerance or projector fallback.
 The binary64 projector evaluates the denominator explicitly and applies one
@@ -166,24 +174,26 @@ tolerance.
 For an actual production trial, the sufficient-decrease owner uses the
 representable chord
 
-\[
+```{math}
+:label: fem-relaxation-representable-chord
 s_i=R_{m_i}(\lambda p_i)_{\mathrm{fp}}-m_i
-\]
+```
 
 and the current ambient energy gradient:
 
-\[
+```{math}
+:label: fem-relaxation-chord-linear-increment
 \Delta E_{\mathrm{lin,fp}}
 =-\mu_0\sum_i M_{s,i}V_i
  H_{\mathrm{eff},i}(m)\mathbin{\cdot}s_i.
-\]
+```
 
 The strict Armijo threshold is
-\(c_1\Delta E_{\mathrm{lin,fp}}\), and a trial is eligible only when this
+$c_1\Delta E_{\mathrm{lin,fp}}$, and a trial is eligible only when this
 quantity is finite and strictly negative. A zero/non-descent chord is rejected;
 an unchanged chord is never accepted. For a unit state and tangent direction
-in exact arithmetic, \(s=\lambda p+O(\lambda^2)\), so the rule recovers the
-classical \(c_1\lambda\phi'(0)\) threshold. The representable form is required
+in exact arithmetic, $s=\lambda p+O(\lambda^2)$, so the rule recovers the
+classical $c_1\lambda\phi'(0)$ threshold. The representable form is required
 because binary64 normalization can leave one component bitwise fixed even when
 the analytic retraction derivative has a nonzero component. No norm, energy,
 or component tolerance is introduced.
@@ -215,19 +225,96 @@ induction residual in `T`, not mechanical torque. `max_rhs_norm_per_s` is the
 separate `max |dm/dt|` dynamic observable in `1/s`; no stop path reconstructs
 field torque from it.
 
+(fem-relaxation-symbols-and-si-units)=
 ### 2.3 Symbols and SI units
 
 | Symbol | Meaning | Unit |
 |---|---|---|
-| `u` | FE DOF vector for magnetization | 1 |
-| `G(u)` | assembled energy residual | implementation-dependent residual scale |
-| `M` | vector mass operator | m^3 |
-| `g(u)` | tangent field gradient `-P_m H_eff` | A/m |
-| `p` | production PG-BB/NCG search direction | A/m |
-| `q` | dimensionless tangent direction used by the derivative oracle | 1 |
-| `\lambda` | production line-search step in `R(m + \lambda p)` | m/A |
-| `\tau` | torque residual `m x H_eff` | A/m |
+| $m_h$ | discrete reduced magnetization | $1$ |
+| $V_h^3$ | discrete vector finite-element space | $1$ |
+| $\mathbf{x}$ | spatial position | $\mathrm{m}$ |
+| $i$ | active nodal index | $1$ |
+| $k$ | accepted direct-minimizer iteration index | $1$ |
+| $n$ | tangent-plane iteration index | $1$ |
+| $E$ | total micromagnetic energy | $\mathrm{J}$ |
+| $u$ | FE DOF vector for reduced magnetization | $1$ |
+| $G(u)$ | assembled field residual | $\mathrm{A\,m^2}$ |
+| $M$ | vector mass operator | $\mathrm{m^3}$ |
+| $M_L$ | lumped vector mass operator | $\mathrm{m^3}$ |
+| $g(u)$ | tangent field gradient $-P_mH_{\mathrm{eff}}$ | $\mathrm{A\,m^{-1}}$ |
+| $g$ | ambient tangent-gradient field | $\mathrm{A\,m^{-1}}$ |
+| $g_i$ | tangent gradient at node $i$ | $\mathrm{A\,m^{-1}}$ |
+| $g_k$ | tangent-gradient field at accepted iteration $k$ | $\mathrm{A\,m^{-1}}$ |
+| $g_T$ | projected tangent gradient | $\mathrm{A\,m^{-1}}$ |
+| $P_m$ | exact projector for the representable nodal state | $1$ |
+| $P_{m_i}$ | exact projector at representable node $i$ | $1$ |
+| $P_{m_k}$ | exact projector at accepted state $m_k$ | $1$ |
+| $m$ | representable reduced magnetization | $1$ |
+| $m_i$ | representable reduced magnetization at node $i$ | $1$ |
+| $m_k$ | accepted reduced-magnetization state at iteration $k$ | $1$ |
+| $m_{k-1}$ | previous accepted reduced-magnetization state | $1$ |
+| $m_n$ | tangent-plane base state at iteration $n$ | $1$ |
+| $m_{n+1}$ | tangent-plane updated state | $1$ |
+| $m_0,m_1$ | current and trial endpoint states | $1$ |
+| $m_{0,i},m_{1,i}$ | current and trial endpoint states at node $i$ | $1$ |
+| $v$ | field-like vector projected by $P_m$ | $\mathrm{A\,m^{-1}}$ |
+| $p$ | production PG-BB/NCG search direction | $\mathrm{A\,m^{-1}}$ |
+| $p_i$ | production search direction at node $i$ | $\mathrm{A\,m^{-1}}$ |
+| $\lambda$ | production line-search step in $R_m(\lambda p)$ | $\mathrm{m\,A^{-1}}$ |
+| $R_m$ | normalization retraction at state $m$ | $1$ |
+| $R_{m_i}$ | nodal normalization retraction at state $m_i$ | $1$ |
+| $R_{m_n}$ | tangent-plane normalization retraction at state $m_n$ | $1$ |
+| $s_i$ | representable retraction chord at node $i$ | $1$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $M_{s,i}$ | nodal saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $V_i$ | lumped nodal volume | $\mathrm{m^3}$ |
+| $H_{\mathrm{eff},i}$ | nodal effective field | $\mathrm{A\,m^{-1}}$ |
+| $H_{\mathrm{eff},i}(m)$ | nodal effective field evaluated at state $m$ | $\mathrm{A\,m^{-1}}$ |
+| $u^{\mathrm{trial}}$ | projected-gradient trial state | $1$ |
+| $\widetilde{s}_k$ | transported accepted-state chord | $1$ |
+| $\widetilde{y}_k$ | transported tangent-gradient difference | $\mathrm{A\,m^{-1}}$ |
+| $\widetilde{s}_{k,i}$ | transported accepted-state chord at node $i$ | $1$ |
+| $\widetilde{y}_{k,i}$ | transported tangent-gradient difference at node $i$ | $\mathrm{A\,m^{-1}}$ |
+| $g_{k-1}$ | previous accepted tangent-gradient field | $\mathrm{A\,m^{-1}}$ |
+| $S_{ss}$ | energy-weighted state-chord self product | $\mathrm{J\,m\,A^{-1}}$ |
+| $S_{sy}$ | energy-weighted chord-gradient product | $\mathrm{J}$ |
+| $S_{yy}$ | energy-weighted gradient self product | $\mathrm{J\,A\,m^{-1}}$ |
+| $\gamma_N$ | floating-point reduction error factor | $1$ |
+| $N$ | number of active scalar reduction terms | $1$ |
+| $\epsilon_{64}$ | binary64 machine epsilon | $1$ |
+| $v_n$ | tangent-plane state update | $1$ |
+| $\mathcal{T}_{m_n}$ | tangent space at $m_n$ | $1$ |
+| $K_A$ | symmetric discrete exchange-energy operator | $\mathrm{J}$ |
+| $\Delta E_{\mathrm{ex}}$ | direct exchange-energy increment | $\mathrm{J}$ |
+| $\widehat{\Delta E}$ | computed direct total-energy increment | $\mathrm{J}$ |
+| $B_{\Delta E}$ | forward-error bound for the direct increment | $\mathrm{J}$ |
+| $\Delta E_{\mathrm{upper}}$ | upper endpoint of the direct-increment interval | $\mathrm{J}$ |
+| $\Delta E_{\mathrm{lin,fp}}$ | representable-chord linear energy model | $\mathrm{J}$ |
+| $c_1$ | Armijo sufficient-decrease coefficient | $1$ |
+| $a_i$ | nodal uniaxial easy-axis unit vector | $1$ |
+| $s_{k,i}$ | projection $m_{k,i}\mathbin{\cdot}a_i$ | $1$ |
+| $s_{0,i},s_{1,i}$ | current and trial uniaxial-axis projections | $1$ |
+| $K_{u1,i}$ | first-order uniaxial anisotropy density | $\mathrm{J\,m^{-3}}$ |
+| $K_{u2,i}$ | second-order uniaxial anisotropy density | $\mathrm{J\,m^{-3}}$ |
+| $\Delta E_{\mathrm{ani}}$ | direct uniaxial-anisotropy increment | $\mathrm{J}$ |
+| $H_{d,0,i},H_{d,1,i}$ | current and trial nodal demagnetizing fields | $\mathrm{A\,m^{-1}}$ |
+| $\Delta E_d$ | direct demagnetizing-energy increment | $\mathrm{J}$ |
+| $q$ | tangent direction used by the derivative oracle | $1$ |
+| $\tau$ | field torque residual $m\mathbin{\times}H_{\mathrm{eff}}$ | $\mathrm{A\,m^{-1}}$ |
+| $\mathrm{fp}$ | floating-point evaluation marker | $1$ |
+| $\min$ | constrained minimization operator | $1$ |
+| $\sum_i$ | sum over active magnetic nodes | $1$ |
+| $\mathbin{\cdot}$ | Euclidean dot-product operator | $1$ |
+| $\lVert\cdot\rVert$ | Euclidean norm operator | $1$ |
+| $(\cdot)^T$ | algebraic transpose operator | $1$ |
+| $\frac{d}{d\lambda}$ | derivative with respect to the line-search step | $\mathrm{A\,m^{-1}}$ |
+| $|\cdot|$ | Euclidean magnitude operator | $1$ |
+| $\approx$ | approximate-equality relation | $1$ |
+| $\in$ | set-membership relation | $1$ |
+| $\le$ | non-strict ordering relation | $1$ |
+| $<$ | strict ordering relation | $1$ |
 
+(fem-relaxation-assumptions-and-validity)=
 ### 2.4 Assumptions and approximations
 
 This note targets deterministic equilibrium search only.
@@ -238,6 +325,7 @@ Deferred:
 - saddle search,
 - full Newton methods with exact Hessians.
 
+(fem-relaxation-discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
@@ -281,35 +369,54 @@ Cons:
 
 Compute a mass-projected gradient
 
-\[
+```{math}
+:label: fem-relaxation-lumped-gradient
 M_L g = -G(u),
-\]
+```
 
 preferably with lumped mass for efficient diagonal-mass updates.
 Take a projected step
 
-\[
+```{math}
+:label: fem-relaxation-projected-trial
 u^{trial} = u - \lambda g_T,
-\]
+```
 
 then retract to the nodal sphere constraint.
 
 Use BB step-length formulas with line search and the physical FEM energy
-weight. For nodal vectors `a` and `b`, define
+weight. The three concrete products used by BB are
 
-\[
-\langle a,b\rangle_E = \mu_0\sum_i M_{s,i}V_i a_i\mathbin{\cdot}b_i.
-\]
+```{math}
+:label: fem-relaxation-bb-ss-product
+S_{ss}=\mu_0\sum_i M_{s,i}V_i
+\widetilde{s}_{k,i}\mathbin{\cdot}\widetilde{s}_{k,i},
+```
+
+```{math}
+:label: fem-relaxation-bb-sy-product
+S_{sy}=\mu_0\sum_i M_{s,i}V_i
+\widetilde{s}_{k,i}\mathbin{\cdot}\widetilde{y}_{k,i},
+```
+
+and
+
+```{math}
+:label: fem-relaxation-bb-yy-product
+S_{yy}=\mu_0\sum_i M_{s,i}V_i
+\widetilde{y}_{k,i}\mathbin{\cdot}\widetilde{y}_{k,i}.
+```
 The admissible FEM state is a product of nodal spheres, so successive tangent
 gradients must first be compared in the accepted tangent space. With the
 normalization retraction, both lanes use the representable-state projection
 transport `P_m(v)=v-m(m dot v)/(m dot m)` and form
 
-\[
+```{math}
+:label: fem-relaxation-transported-bb-secant
 \widetilde{s}_k=P_{m_k}(m_k-m_{k-1}),
 \qquad
 \widetilde{y}_k=g_k-P_{m_k}g_{k-1}.
-\]
+```
 
 The weighted products of `s_tilde` and `y_tilde` have units `J m/A`, `J`, and
 `J A/m` for `ss`, `sy`, and `yy`, respectively, so both BB1 `ss/sy` and BB2
@@ -320,9 +427,10 @@ absolute floor is forbidden because no single number can have all three
 units. For `N=3 n_m` active scalar terms, both lanes instead bound reduction
 roundoff with
 
-\[
+```{math}
+:label: fem-relaxation-roundoff-gamma
 \gamma_N = \frac{N\epsilon_{64}}{1-N\epsilon_{64}}.
-\]
+```
 
 Positive curvature is numerically resolved only when
 `sy > gamma_N sqrt(ss yy)`. The square-root scale has units `J`, matching
@@ -368,11 +476,12 @@ This is the most important production-target FEM relaxation method.
 
 At state `m_n`, solve for an update `v_n` in the tangent space:
 
-\[
+```{math}
+:label: fem-relaxation-tangent-plane-constraint
 v_n \in \mathcal{T}_{m_n},
 \qquad
 m_n \cdot v_n = 0,
-\]
+```
 
 using a linearized or semi-implicit system built from the exchange, demag, DMI, and Zeeman operators.
 The current CPU/MFEM implementation includes exchange, local uniaxial/cubic
@@ -382,9 +491,10 @@ is the full GPU/libCEED/device-resident tangent-plane solve path, not the
 CPU/MFEM demag operator action.
 Then update via
 
-\[
-m_{n+1} = \mathcal{R}_{m_n}(v_n),
-\]
+```{math}
+:label: fem-relaxation-tangent-plane-update
+m_{n+1} = R_{m_n}(v_n),
+```
 
 with a norm-preserving retraction.
 
@@ -423,17 +533,36 @@ Deferred.
 
 ## 4. API, IR, and planner impact
 
+(fem-relaxation-python-api)=
 ### 4.1 Python API surface
 
 Recommended study object shared with FDM:
 
 ```python
-fm.Relaxation(
-    algorithm="tangent_plane_implicit",   # or "llg_overdamped", "projected_gradient_bb", "nonlinear_cg"
-    torque_tolerance=1e-4,
-    energy_tolerance=1e-10,
-    max_steps=50000,
-    outputs=[...],
+# %%
+import fullmag as fm
+
+study = fm.study("fem_relaxation")
+study.engine("fem")
+study.device("gpu", precision="double")
+study.mode("strict")
+
+# %%
+film = study.geometry(
+    fm.Box(size=(80e-9, 40e-9, 8e-9), name="film"),
+    name="film",
+)
+film.Ms = 8.0e5
+film.Aex = 1.3e-11
+film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
+study.exchange(enabled=True)
+
+# %%
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="nonlinear_cg",
+    max_steps=50_000,
+    tolA=1.0e-4,
 )
 ```
 
@@ -510,6 +639,17 @@ native CPU/MFEM lane through a global tangent-plane `mass + step * exchange`
 solve; it includes local anisotropy, Zeeman curvature, DMI weak-residual
 action, and demag fresh-solve linear response in the implicit operator, but is
 not yet a GPU/libCEED-resident tangent-plane solver.
+
+The 2026-09-04 source audit narrows the GPU preconditioner statement further.
+The current class named `GpuExchangeMassPreconditioner` receives only mass and
+exchange diagonals and applies $M_i/(M_i+wK_{ii})$ pointwise. It is therefore a
+diagonal/Jacobi approximation, not the full sparse $(M+wK)^{-1}M$ operation.
+Its setup is not wired into production NCG or PG-BB, the current call sites do
+not propagate apply failure, and the benchmark keeps `exchange_mass`
+unavailable. The approved full-CSR fixed-CG4/CG8 remediation is documented in
+note 0581, but capability, runtime, physics validation, CPU/GPU parity, and
+performance remain `NOT VERIFIED`. The production default remains `none`.
+
 Both CPU/MFEM and CUDA direct-minimizer Armijo loops require the sufficient
 decrease inequality. The comparison is evaluated as the directly reduced
 increment `Delta E = E_trial - E_current`, rather than by comparing two
@@ -533,9 +673,10 @@ and trial operands, not from the already cancelled residual.
 
 For the symmetric discrete CPU exchange operator `K_A`, PG-BB evaluates
 
-\[
+```{math}
+:label: fem-relaxation-polarized-exchange-increment
 \Delta E_{\mathrm{ex}}=(m_1-m_0)^T K_A(m_1+m_0),
-\]
+```
 
 using the same energy normalization and SI-joule convention as the canonical
 exchange owner. This polarized identity remains accurate near an exchange
@@ -576,24 +717,26 @@ Every accepted CPU/MFEM or CUDA PG-BB or NCG line-search step must export
 `accepted_energy_proof_available=true` and the exact decision quantities
 produced by its native direct-increment owner. For an accepted trial, let
 `accepted_energy_delta_j` be the computed direct
-increment \(\widehat{\Delta E}\), let
+increment $\widehat{\Delta E}$, let
 `accepted_energy_roundoff_bound_j` be its nonnegative forward-error bound
-\(B_{\Delta E}\), and define
+$B_{\Delta E}$, and define
 
-\[
+```{math}
+:label: fem-relaxation-energy-upper-bound
 \Delta E_{\mathrm{upper}}
 =\widehat{\Delta E}+B_{\Delta E}.
-\]
+```
 
 The artifact field `accepted_energy_delta_upper_j` records this upper endpoint,
 and `armijo_increment_rhs_j` records the accepted representable-chord Armijo
-threshold \(c_1\Delta E_{\mathrm{lin,fp}}\). All four fields have SI unit `J`. An ordinary accepted
+threshold $c_1\Delta E_{\mathrm{lin,fp}}$. All four fields have SI unit `J`. An ordinary accepted
 step proves
 
-\[
+```{math}
+:label: fem-relaxation-armijo-proof
 \Delta E_{\mathrm{upper}}
 \le c_1\Delta E_{\mathrm{lin,fp}}<0.
-\]
+```
 
 These are acceptance-decision observables, not reconstructed diagnostics.
 They are read after an accepted step through the caller-sized, versioned
@@ -670,22 +813,23 @@ live field.
 
 #### 3.2.4 Cancellation-resistant uniaxial increment
 
-For uniaxial anisotropy with unit axis \(a_i\), nodal coefficient-volume
-weights \(K_{u1,i}V_i\) and \(K_{u2,i}V_i\) in joules, and
-\(s_{k,i}=m_{k,i}\cdot a_i\), the direct accepted trial increment must use the
+For uniaxial anisotropy with unit axis $a_i$, nodal coefficient-volume
+weights $K_{u1,i}V_i$ and $K_{u2,i}V_i$ in joules, and
+$s_{k,i}=m_{k,i}\cdot a_i$, the direct accepted trial increment must use the
 factored identity
 
-\[
+```{math}
+:label: fem-relaxation-uniaxial-increment
 \Delta E_{\mathrm{ani}}
 =-\sum_i V_i(s_{1,i}-s_{0,i})(s_{1,i}+s_{0,i})
   \left[K_{u1,i}+K_{u2,i}(s_{1,i}^2+s_{0,i}^2)\right],
-\]
+```
 
 which is algebraically identical to subtracting the canonical endpoint energy
-\(V_i[K_{u1,i}(1-s_{k,i}^2)+K_{u2,i}(1-s_{k,i}^4)]\) but does not first form
+$V_i[K_{u1,i}(1-s_{k,i}^2)+K_{u2,i}(1-s_{k,i}^4)]$ but does not first form
 two nearly equal powers. Equivalently, the quadratic owner uses
-\((s_1-s_0)(s_1+s_0)\), and the quartic owner multiplies that factor by
-\((s_1^2+s_0^2)\). The sign, joule unit, per-node material semantics, magnetic
+$(s_1-s_0)(s_1+s_0)$, and the quartic owner multiplies that factor by
+$(s_1^2+s_0^2)$. The sign, joule unit, per-node material semantics, magnetic
 masking, and CPU/GPU reduction domain remain unchanged. The forward-error
 owner must also accumulate an absolute component scale from the two factored
 products; it must not use the already-cancelled increment as its roundoff
@@ -702,16 +846,17 @@ acceptance at the observed near-aligned failure scale.
 For Poisson demag, with endpoint fields from deterministic fresh solves, the
 direct increment uses the polarized quadratic identity
 
-\[
+```{math}
+:label: fem-relaxation-demag-increment
 \Delta E_d=-\frac{\mu_0}{2}\sum_i M_{s,i}V_i
   (m_{1,i}-m_{0,i})\mathbin{\cdot}(H_{d,0,i}+H_{d,1,i}),
-\]
+```
 
 For an airbox Robin realization, the same identity remains complete: each
-endpoint field is recovered from \((K+\beta M_\Gamma)u=b(M)\), so the Robin
-condition is already part of \(H_d\). Adding
-\(\mu_0\beta u^TM_\Gamma u/2\) separately double-counts the boundary form
-and breaks the variational identity \(\delta E/\delta m=-\mu_0M_sH_d\).
+endpoint field is recovered from $(K+\beta M_\Gamma)u=b(M)$, so the Robin
+condition is already part of $H_d$. Adding
+$\mu_0\beta u^TM_\Gamma u/2$ separately double-counts the boundary form
+and breaks the variational identity $\delta E/\delta m=-\mu_0M_sH_d$.
 Local and exchange terms are reduced as local energy-density differences. If
 the direct floating-point interval overlaps
 the Armijo threshold, the native lane repeats current and trial demag snapshots
@@ -721,8 +866,8 @@ unchanged strict inequality; unresolved ambiguity fails closed and restores
 the accepted state. No user-visible noise tolerance, algorithm substitution,
 or device fallback is permitted.
 
-For an accepted CUDA NCG endpoint \(m_{k+1}\), the already evaluated tuple
-\((m_{k+1}, H_d(m_{k+1}), H_\mathrm{eff}(m_{k+1}), E(m_{k+1}))\) may seed
+For an accepted CUDA NCG endpoint $m_{k+1}$, the already evaluated tuple
+$(m_{k+1}, H_d(m_{k+1}), H_\mathrm{eff}(m_{k+1}), E(m_{k+1}))$ may seed
 exactly one next-step current evaluation. Reuse is legal only when the state,
 drive, material, enabled-interaction, linear-solver policy, tolerance,
 direct-increment refinement, device-residency, and workspace signatures all
@@ -742,9 +887,10 @@ exports that runtime measurement.
 
 The field tangent gradient is intentionally retained as
 
-\[
-g_i=-P_{m_i}H_{\mathrm{eff},i},
-\]
+```{math}
+:label: fem-relaxation-tangent-gradient
+g_i=-P_{m_i}H_{\mathrm{eff},i}.
+```
 
 with units `A/m`. Its lumped-volume norm is a solver and stop-control
 quantity; it is not an energy derivative and therefore remains independent of
@@ -752,21 +898,23 @@ the Armijo product. Production PG-BB/NCG directions `p` also have units
 `A/m`, and the trial state is `R(m + lambda p)` with `lambda` in `m/A`.
 For nodal lumped volumes `V_i`, the exact-arithmetic physical line-search slope is
 
-\[
-\frac{dE(R(m+\lambda p))}{d\lambda}\bigg|_{\lambda=0}
+```{math}
+:label: fem-relaxation-line-search-slope
+\frac{dE(R_m(\lambda p))}{d\lambda}\bigg|_{\lambda=0}
 =-\mu_0\sum_i M_{s,i}V_i H_{\mathrm{eff},i}\mathbin{\cdot}p_i
 =\mu_0\sum_i M_{s,i}V_i g_i\mathbin{\cdot}p_i,
-\]
+```
 
 with units `J A/m`. Its classical Armijo decrement
 `lambda * phi'(0)` is in joules. Production binary64 PG-BB evaluates the
 equivalent first-order model on the representable retraction chord instead:
 
-\[
+```{math}
+:label: fem-relaxation-representable-linear-model
 \Delta E_{\mathrm{lin,fp}}
 =-\mu_0\sum_i M_{s,i}V_iH_{\mathrm{eff},i}(m)\mathbin{\cdot}
 \left[R_m(\lambda p)_{\mathrm{fp},i}-m_i\right].
-\]
+```
 
 This is the value multiplied by `c1` and published as
 `armijo_increment_rhs_j`. It is required to be strictly negative. At ordinary
@@ -866,6 +1014,7 @@ resolved provenance is required.
 Public final-state and total-energy meanings remain unchanged. This is valid for nodal material fields. Discontinuous
 element `Ms` requires the separate material-interface qualification work.
 
+(fem-relaxation-problem-ir)=
 ### 4.2 ProblemIR representation
 
 Use a shared `StudyIR::Relaxation` shape across backends.
@@ -890,6 +1039,16 @@ Planner must:
 
 Capability matrix should separate explicit relaxation support from tangent-plane implicit support.
 
+(fem-relaxation-round-trip-and-failure-semantics)=
+### 4.4 Round-trip and failure semantics
+
+Requested intent contains the authored relaxation algorithm and stopping
+controls. Resolved execution records the actual FEM CPU/GPU realization and
+must not be inferred from that request. Validation errors and unsupported combinations
+fail before execution; strict GPU cannot silently resolve to a
+CPU or diagonal-preconditioner fallback.
+
+(fem-relaxation-validation)=
 ## 5. Validation strategy
 
 ### 5.1 Analytical checks
@@ -911,6 +1070,7 @@ Capability matrix should separate explicit relaxation support from tangent-plane
 - tangent-plane linear solve convergence benchmark,
 - CPU fallback vs GPU partial-assembly parity.
 
+(fem-relaxation-implementation-mapping)=
 ### 5.4 GPU/libCEED implementation entry point
 
 GPU/libCEED relaxation production units belong under
@@ -957,6 +1117,7 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - [ ] Extended benchmark campaign across mesh refinements, adaptive timesteps, and publication-scale physics cases
 - [x] Documentation (this note + `0500-fdm-relaxation-algorithms.md`)
 
+(fem-relaxation-limitations)=
 ## 7. Known limits and deferred work
 
 - no full Newton/Hessian methods,
@@ -965,9 +1126,41 @@ lane with explicit provenance; forced GPU rejects with a clear diagnostic.
 - explicit relaxation can still be stiff on fine meshes,
 - tangent-plane implicit design needs careful linear algebra ownership.
 
+(fem-relaxation-scientific-bibliography)=
 ## 8. References
+
+Scientific references:
+
+- J. Barzilai and J. M. Borwein, "Two-Point Step Size Gradient Methods",
+  *IMA Journal of Numerical Analysis* 8(1), 1988,
+  [doi:10.1093/imanum/8.1.141](https://doi.org/10.1093/imanum/8.1.141).
+- J. Nocedal and S. J. Wright, *Numerical Optimization*, second edition,
+  Springer, 2006,
+  [doi:10.1007/978-0-387-40065-5](https://doi.org/10.1007/978-0-387-40065-5).
 
 Internal references:
 
 - `docs/physics/0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md`
 - `docs/physics/0500-fdm-relaxation-algorithms.md`
+
+(fem-relaxation-source-code-index)=
+## 9. Source-code index
+
+| Claim | Path | Symbol | Responsibility | Evidence status |
+|---|---|---|---|---|
+| Native relaxation boundary | `native/include/fullmag_fem.h` | `fullmag_fem_backend_relax_step` | exposes the FEM relaxation step ABI | current source |
+| CPU tangent projector | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `project_node_tangent` | projects field-like nodal vectors with the representable-state denominator | current source |
+| CPU tangent-gradient owner | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `tangent_gradient_from_field` | forms the field tangent gradient from the accepted effective field | current source |
+| CPU normalization retraction | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `void retracted_step_into` | constructs representable retracted trial states | current source |
+| CPU representable-chord model | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `representable_chord_energy_linear_increment` | evaluates the physical Armijo linear increment | current source |
+| CPU energy-weighted product | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `energy_weighted_dot_fields` | evaluates the nodal $\mu_0M_sV$ product | current source |
+| CPU transported BB secant | `backends/fem/cpu/mfem/relaxation/relaxation_math.cpp` | `transported_bb_secant` | transports accepted-state chords and gradient differences | current source |
+| CPU PG-BB step | `backends/fem/cpu/mfem/relaxation/projected_gradient_bb.cpp` | `run_projected_gradient_bb_step` | owns lumped-gradient trials, BB safeguards, and Armijo acceptance | current source |
+| CPU tangent-plane step | `backends/fem/cpu/mfem/relaxation/tangent_plane_implicit.cpp` | `run_tangent_plane_implicit_step` | owns the constrained implicit update and retraction | current source |
+| CPU direct-increment aggregate | `backends/fem/cpu/mfem/relaxation/direct_energy_increment.cpp` | `direct_energy_difference` | assembles the term-complete direct increment and its bound | current source |
+| CPU polarized exchange increment | `backends/fem/cpu/mfem/interactions/exchange_energy_difference.cpp` | `exchange_energy_difference` | evaluates the symmetric exchange-energy difference | current source |
+| CPU uniaxial increment | `backends/fem/cpu/mfem/interactions/anisotropy_uniaxial.cpp` | `uniaxial_anisotropy_energy_difference` | evaluates the cancellation-resistant anisotropy increment | current source |
+| CPU polarized demag increment | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` | `demag_poisson_energy_difference_from_endpoint_fields` | evaluates the endpoint-field demag identity | current source |
+| GPU PG-BB gradient boundary | `backends/fem/gpu/cuda/relaxation/pgbb.cpp` | `gpu_relax_compute_current_metrics` | owns the current PG-BB tangent-gradient path | current source; qualification separate |
+| GPU NCG gradient boundary | `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp` | `gpu_relax_compute_effective_field_energy_gradient_and_direction` | owns the current NCG tangent-gradient path | current source; qualification separate |
+| GPU preconditioner resolver | `backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp` | `resolve_gpu_relaxation_preconditioner` | keeps `none` as the current default | current source; full sparse `NOT VERIFIED` |

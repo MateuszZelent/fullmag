@@ -1,0 +1,170 @@
+{
+  "document": {
+    "path": "docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented-unqualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "not-verified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "not-applicable",
+      "reason": "The page defines FEM mass and sparse exchange semantics; FDM relaxation has a separate owner."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "not-applicable",
+      "reason": "FEM nodal mass and FEM exchange CSR are not an FDM preconditioner contract."
+    }
+  ],
+  "equations": [
+    {
+      "id": "fem-gpu-preconditioner-operator",
+      "symbols": ["P", "lambda", "Ms", "Mlumped", "mu0", "KA"],
+      "sources": ["full-sparse-contract", "cpu-oracle"]
+    },
+    {
+      "id": "fem-gpu-preconditioner-direction",
+      "symbols": ["z", "PiT", "m", "P", "Ms", "Mlumped", "g"],
+      "sources": ["full-sparse-contract", "cpu-oracle"]
+    },
+    {
+      "id": "fem-gpu-preconditioner-tangent-projector",
+      "symbols": ["PiT", "m", "v"],
+      "sources": ["pgbb-current-metrics", "ncg-current-direction"]
+    },
+    {
+      "id": "fem-gpu-preconditioner-diagonal-approximation",
+      "symbols": ["z", "Mi", "lambda", "mu0", "Kii", "g", "Ms", "Mlumped", "i"],
+      "sources": ["current-diagonal", "current-setup", "si-exchange-scale", "si-operator-test"]
+    }
+  ],
+  "symbols": [
+    {"id": "m", "latex": "\\mathbf{m}", "meaning": "reduced magnetization", "si_unit": "1"},
+    {"id": "g", "latex": "\\mathbf{g}", "meaning": "raw tangent energy gradient", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "z", "latex": "\\mathbf{z}", "meaning": "preconditioned tangent direction input", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "v", "latex": "\\mathbf{v}", "meaning": "vector projected onto the nodal tangent plane", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "PiT", "latex": "\\Pi_T", "meaning": "nodal tangent projector", "si_unit": "1"},
+    {"id": "P", "latex": "\\mathbf{P}_{\\lambda}", "meaning": "exchange-plus-mass preconditioner operator", "si_unit": "\\mathrm{A\\,m^2}"},
+    {"id": "Ms", "latex": "M_s", "meaning": "saturation magnetization", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Mlumped", "latex": "M_{\\mathrm{lumped}}", "meaning": "lumped nodal volume", "si_unit": "\\mathrm{m^3}"},
+    {"id": "Mi", "latex": "M_i", "meaning": "active nodal mass $M_{s,i}M_{\\mathrm{lumped},i}$", "si_unit": "\\mathrm{A\\,m^2}"},
+    {"id": "KA", "latex": "\\mathbf{K}_A", "meaning": "heterogeneous exchange stiffness matrix", "si_unit": "\\mathrm{J}"},
+    {"id": "Kii", "latex": "K_{ii}", "meaning": "diagonal entry of $\\mathbf{K}_A$", "si_unit": "\\mathrm{J}"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "direct-minimizer step/preconditioner weight", "si_unit": "\\mathrm{m\\,A^{-1}}"},
+    {"id": "w", "latex": "w=\\lambda(2/\\mu_0)", "meaning": "exchange-Hessian scale passed to the diagonal builder", "si_unit": "\\mathrm{A\\,m\\,N^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "vacuum permeability", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "i", "latex": "i", "meaning": "active nodal index", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "current-diagonal",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "build_gpu_relaxation_diagonal",
+      "responsibility": "Constructs the current pointwise mass-plus-exchange diagonal."
+    },
+    {
+      "id": "resolver",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "resolve_gpu_relaxation_preconditioner",
+      "responsibility": "Keeps an empty request on the none baseline and rejects unqualified profiles."
+    },
+    {
+      "id": "current-setup",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "GpuExchangeMassPreconditioner::setup",
+      "responsibility": "Validates and uploads the current mass and exchange diagonals with the supplied scale."
+    },
+    {
+      "id": "current-apply",
+      "path": "backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp",
+      "symbol": "GpuExchangeMassPreconditioner::apply_device_component",
+      "responsibility": "Applies the current pointwise diagonal inverse independently to x, y and z."
+    },
+    {
+      "id": "pgbb-current-metrics",
+      "path": "backends/fem/gpu/cuda/relaxation/pgbb.cpp",
+      "symbol": "gpu_relax_compute_current_metrics",
+      "responsibility": "Owns the current PG-BB tangent gradient and conditional pointwise apply boundary."
+    },
+    {
+      "id": "ncg-current-direction",
+      "path": "backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp",
+      "symbol": "gpu_relax_compute_effective_field_energy_gradient_and_direction",
+      "responsibility": "Owns the current NCG tangent gradient and conditional pointwise apply boundary."
+    },
+    {
+      "id": "cpu-oracle",
+      "path": "backends/fem/cpu/mfem/relaxation/relaxation_math.cpp",
+      "symbol": "exchange_mass_preconditioned_gradient",
+      "responsibility": "Implements the existing CPU exchange-plus-mass preconditioned gradient."
+    },
+    {
+      "id": "sparse-xyz",
+      "path": "backends/fem/gpu/cuda/sparse/sparse_apply_plan.cpp",
+      "symbol": "SparseApplyPlan::apply_xyz",
+      "responsibility": "Provides the existing device CSR x/y/z apply primitive proposed for the full candidate."
+    },
+    {
+      "id": "benchmark-map",
+      "path": "scripts/analysis/fem_gpu_benchmark.py",
+      "symbol": "RELAXATION_PRECONDITIONER_RUNTIME_NAMES",
+      "responsibility": "Marks exchange_mass as unavailable to the current benchmark runtime."
+    },
+    {
+      "id": "si-exchange-scale",
+      "path": "backends/fem/src/relaxation_operator_units.hpp",
+      "symbol": "exchange_hessian_scale_from_step_m_per_a",
+      "responsibility": "Preserves lambda times two over mu0 when the exchange matrix is represented in joules."
+    },
+    {
+      "id": "si-operator-test",
+      "path": "backends/fem/tests/relaxation_operator_contract.cpp",
+      "symbol": "void exchange_hessian_uses_si_field_scale",
+      "responsibility": "Checks the SI exchange-Hessian scale and manufactured operator action."
+    },
+    {
+      "id": "manufactured-spd-fixture",
+      "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
+      "symbol": "struct ManufacturedSpdMatrix",
+      "responsibility": "Diagonal-only fixture; does not distinguish pointwise apply from a full sparse solve."
+    },
+    {
+      "id": "gpu-preconditioner-contract-main",
+      "path": "backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp",
+      "symbol": "main",
+      "responsibility": "Exercises the current resolver and diagonal setup and apply; no sparse negative control."
+    },
+    {
+      "id": "full-sparse-contract",
+      "path": "docs/physics/0581-fem-gpu-direct-minimizer-preconditioning.md",
+      "symbol": "DOC-ANCHOR:fem-gpu-preconditioner-full-sparse-contract",
+      "responsibility": "Defines the approved full sparse target without asserting executed runtime evidence.",
+      "evidence_status": "planned_contract"
+    }
+  ],
+  "evidence_artifacts": [
+    {
+      "path": "docs/audits/evidence/task-11/task-11-relaxation-preconditioner.csv",
+      "identity": "immutable Task 11 campaign rows",
+      "responsibility": "Records the 75 requested historical GPU rows."
+    },
+    {
+      "path": "docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json",
+      "identity": "immutable Task 11 qualification verdict",
+      "responsibility": "Records the invalid campaign result and missing qualification gates."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

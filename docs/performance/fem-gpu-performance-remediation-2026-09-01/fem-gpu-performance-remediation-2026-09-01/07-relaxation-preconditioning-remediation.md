@@ -2,15 +2,22 @@
 
 **Ustalenia:** RL-01 oraz RD-01/RK-02 w NCG i PG-BB.
 
-**Status po weryfikacji:** CPU exchange-mass preconditioner i brak analogicznego
-preconditionera GPU NCG są potwierdzone. Istnieje fail-closed builder/resolver
-diagonalnego preconditionera, ale nie jest on podłączony do NCG/PG-BB runtime.
-Nie wynika z tego, że preconditioner GPU skróci time-to-`tolA`; to pozostaje
-`NOT VERIFIED`. GPU ma poprawny unpreconditioned PR+, tangent transport,
-restart, fallback i persistent state. Chebyshev/PCG, device Armijo packet i
-device PG-BB control pozostają celami. Istniejący managed target
-`verify-fem-gpu-relaxation-preconditioner-qualification` i jego evidence należy
-rozszerzyć lub zastąpić, nie dublować.
+### Current source status (2026-09-04)
+
+Obecna klasa `GpuExchangeMassPreconditioner` ma status: diagonal/Jacobi approximation.
+Otrzymuje tylko przekątne $M$ i $K$ oraz mnoży punktowo przez
+$M_i/(M_i+wK_{ii})$. Nie wykonuje pełnego sparse $(M+wK)^{-1}M$, nie ma
+produkcyjnego wywołania setupu, a NCG/PG-BB nie propagują jeszcze błędu apply.
+Benchmark mapuje `exchange_mass` na brak realizacji C++.
+
+Historyczny eksperyment z 2026-07-26 pozostaje osobnym no-go i nie jest
+przepisywany. Zatwierdzony projekt fazy 1 rozdziela `diagonal` od przyszłego
+pełnego sparse `exchange_mass_cg4|cg8`, lecz nowa realizacja i kwalifikacja
+jeszcze nie istnieją. Capability, runtime, CPU/GPU parity, physics validation i
+performance pozostają `NOT VERIFIED`. The production default remains `none`.
+
+Dalsze sekcje zachowują pierwotny plan RL-01 jako materiał historyczny. Nie są
+dowodem wykonania ani promocją strategii.
 
 ## 1. CPU jako kontrakt
 
