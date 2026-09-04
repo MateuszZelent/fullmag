@@ -1,5 +1,6 @@
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
 #include "gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp"
+#include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 
 #include <cuda_runtime.h>
@@ -12,10 +13,18 @@
 #include <limits>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
+
+using DeviceSumFunction = cudaError_t (*)(
+    const double *, int, double *, void *, size_t &, cudaStream_t);
+static_assert(
+    std::is_same_v<
+        decltype(&fullmag::fem::fullmag_cuda_device_sum), DeviceSumFunction>,
+    "device sum wrapper must return the immediate CUB CUDA status");
 
 void check(bool condition, const char *message)
 {
@@ -137,6 +146,23 @@ double relative_residual(
         rhs_sq += rhs[row] * rhs[row];
     }
     return std::sqrt(residual_sq / rhs_sq);
+}
+
+double residual_squared(
+    const DenseMatrix &matrix,
+    const std::vector<double> &solution,
+    const std::vector<double> &rhs)
+{
+    double result = 0.0;
+    for (size_t row = 0; row < rhs.size(); ++row) {
+        double applied = 0.0;
+        for (size_t col = 0; col < rhs.size(); ++col) {
+            applied += matrix[row][col] * solution[col];
+        }
+        const double residual = applied - rhs[row];
+        result += residual * residual;
+    }
+    return result;
 }
 
 double l2_error(
@@ -517,6 +543,22 @@ void check_sparse_exchange_mass_fixed_cg_contract()
         check(l2_error(*actual8, *oracle) < l2_error(*actual4, *oracle),
               "CG8 must move closer to the independent dense oracle than CG4");
     }
+    const std::array<const std::vector<double> *, 3> actual4{
+        &result4.x, &result4.y, &result4.z};
+    const std::array<const std::vector<double> *, 3> actual8{
+        &result8.x, &result8.y, &result8.z};
+    const std::array<const std::vector<double> *, 3> rhs{
+        &rhs_x, &rhs_y, &rhs_z};
+    for (size_t component = 0; component < 3u; ++component) {
+        const double expected4 = residual_squared(op, *actual4[component], *rhs[component]);
+        const double expected8 = residual_squared(op, *actual8[component], *rhs[component]);
+        check(std::abs(result4.residual_squared[component] - expected4) <=
+                  1.0e-10 * std::max(1.0, expected4),
+              "copied CG4 final residual diagnostic must match the host residual");
+        check(std::abs(result8.residual_squared[component] - expected8) <=
+                  1.0e-10 * std::max(1.0, expected8),
+              "copied CG8 final residual diagnostic must match the host residual");
+    }
     check(l2_error(result4.x, result8.x) > 1.0e-8,
           "CG4 and CG8 must produce distinct results before Krylov closure");
 
@@ -545,6 +587,20 @@ void check_sparse_exchange_mass_fixed_cg_contract()
           "changed identity must count a fresh logical setup");
     check(cg4.device_workspace_for_diagnostics() == first_workspace,
           "same-size identity invalidation must reuse persistent allocation");
+
+    const uint64_t first_plan_generation =
+        device_exchange.plan.configuration_generation();
+    DeviceSparseOperator replacement_exchange(exchange);
+    check(replacement_exchange.plan.configuration_generation() != first_plan_generation,
+          "independent sparse plan setup must have a distinct generation");
+    device_exchange.plan = std::move(replacement_exchange.plan);
+    const uint64_t setup_count_before_plan_reconfigure = cg4.setup_count();
+    check(cg4.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), n,
+              changed_identity, nullptr, error),
+          "same-address sparse plan reconfiguration must be accepted by fresh setup");
+    check(cg4.setup_count() == setup_count_before_plan_reconfigure + 1u,
+          "sparse plan generation change must invalidate exchange-mass setup reuse");
 
     const std::vector<double> zero(n, 0.0);
     const ExchangeMassResult zero_result =
@@ -579,7 +635,13 @@ void check_sparse_exchange_mass_mask_and_failure_contract()
     using namespace fullmag::fem;
 
     const DenseMatrix exchange = chain_exchange(3u);
+#if FULLMAG_HAS_CUSPARSE
+    DeviceSparseOperator device_exchange(exchange, SparseApplyVariant::CusparseSpmv);
+    check(device_exchange.plan.selected_variant() == SparseApplyVariant::CusparseSpmv,
+          "CUDA cuSPARSE build must force CusparseSpmv for the odd-N core regression");
+#else
     DeviceSparseOperator device_exchange(exchange);
+#endif
     const std::vector<double> inactive_mass = {
         -1.0, std::numeric_limits<double>::quiet_NaN(), 0.0};
     const std::vector<uint8_t> inactive_mask = {0u, 0u, 0u};
@@ -593,6 +655,9 @@ void check_sparse_exchange_mass_mask_and_failure_contract()
               device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
               {1u, 2u, 3u}, nullptr, error),
           "inactive and fixed nodes must not require positive finite mass");
+    check(cg4.device_workspace_component_stride() == 4u &&
+              cg4.device_workspace_value_count() == 60u,
+          "odd-N fixed-CG workspace must expose 15 padded, aligned blocks");
     const std::vector<double> nonzero = {1.0, -2.0, 3.0};
     const ExchangeMassResult zero_result =
         apply_exchange_mass(cg4, nonzero, nonzero, nonzero, 0.75);
@@ -637,13 +702,92 @@ void check_sparse_exchange_mass_mask_and_failure_contract()
               {4u, 5u, 6u}, nullptr, error),
           "fixed-CG setup must reject non-positive active mass");
 
-    const std::vector<double> valid_mass = {1.0, 1.5, 2.0};
+    const std::vector<double> valid_mass = {2.0, 2.0, 2.0};
     d_mass.copy_from(valid_mass);
     GpuExchangeMassPreconditioner latched(GpuExchangeMassCgVariant::Cg4);
     check(latched.setup(
               device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
               {7u, 8u, 9u}, nullptr, error),
           "failure-latch fixture setup must succeed");
+
+    DeviceBuffer<double> d_gradient_x(3u);
+    DeviceBuffer<double> d_gradient_y(3u);
+    DeviceBuffer<double> d_gradient_z(3u);
+    DeviceBuffer<double> d_solution_x(3u);
+    DeviceBuffer<double> d_solution_y(3u);
+    DeviceBuffer<double> d_solution_z(3u);
+    d_gradient_x.copy_from(nonzero);
+    d_gradient_y.copy_from(nonzero);
+    d_gradient_z.copy_from(nonzero);
+    const std::array<const double *, 3> gradients{
+        d_gradient_x.get(), d_gradient_y.get(), d_gradient_z.get()};
+    const std::array<double *, 3> independent_solutions{
+        d_solution_x.get(), d_solution_y.get(), d_solution_z.get()};
+    for (size_t input = 0; input < gradients.size(); ++input) {
+        for (size_t output = 0; output < independent_solutions.size(); ++output) {
+            auto solutions = independent_solutions;
+            solutions[output] = const_cast<double *>(gradients[input]);
+            (void)cudaGetLastError();
+            check(!latched.apply_device_xyz(
+                      gradients[0], gradients[1], gradients[2],
+                      solutions[0], solutions[1], solutions[2],
+                      3u, 0.75, nullptr, error),
+                  "every gradient/solution cross-alias must fail before launch");
+            check(error.find("alias") != std::string::npos,
+                  "gradient/solution alias rejection must be explicit");
+            check(cudaPeekAtLastError() == cudaSuccess,
+                  "gradient/solution alias rejection must not enqueue CUDA work");
+        }
+    }
+
+    const ExchangeMassResult zero_weight =
+        apply_exchange_mass(latched, nonzero, nonzero, nonzero, 0.0);
+    check(zero_weight.failure_latch == 0u,
+          "zero exchange weight must remain a valid mass-only solve");
+    check_vector_close(zero_weight.x, nonzero,
+                       "zero exchange weight x must solve Mz=Mg");
+    check_vector_close(zero_weight.y, nonzero,
+                       "zero exchange weight y must solve Mz=Mg");
+    check_vector_close(zero_weight.z, nonzero,
+                       "zero exchange weight z must solve Mz=Mg");
+    check(std::all_of(
+              zero_weight.residual_squared.begin(),
+              zero_weight.residual_squared.end(),
+              [](double value) { return value <= 1.0e-24; }),
+          "zero exchange weight final residual diagnostics must be zero");
+
+    const std::vector<uint8_t> mixed_mask = {1u, 0u, 1u};
+    d_mask.copy_from(mixed_mask);
+    GpuExchangeMassPreconditioner mixed(GpuExchangeMassCgVariant::Cg4);
+    check(mixed.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
+              {10u, 11u, 12u}, nullptr, error),
+          "mixed active/fixed fixture setup must succeed");
+    const ExchangeMassResult mixed_result =
+        apply_exchange_mass(mixed, nonzero, nonzero, nonzero, 0.75);
+    check(mixed_result.failure_latch == 0u,
+          "mixed active/fixed solve must remain valid");
+    check(mixed_result.x[1] == 0.0 && mixed_result.y[1] == 0.0 &&
+              mixed_result.z[1] == 0.0,
+          "mixed fixed-node outputs must remain exactly zero");
+    const std::vector<double> mixed_workspace = [&]() {
+        std::vector<double> host(mixed.device_workspace_value_count());
+        check(cudaMemcpy(
+                  host.data(), mixed.device_workspace_for_diagnostics(),
+                  host.size() * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess,
+              "mixed fixed-CG workspace readback must succeed");
+        return host;
+    }();
+    for (size_t block = 0; block < 15u; ++block) {
+        check(mixed_workspace[block * mixed.device_workspace_component_stride() + 1u] == 0.0,
+              "mixed fixed-node workspace entries must remain exactly zero");
+    }
+
+    d_mask.copy_from(active_mask);
+    check(latched.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), 3u,
+              {13u, 14u, 15u}, nullptr, error),
+          "active failure-latch fixture re-setup must succeed");
     const std::vector<double> invalid_rhs = {
         1.0, std::numeric_limits<double>::infinity(), -1.0};
     ExchangeMassResult failed =

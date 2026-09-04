@@ -90,6 +90,7 @@ public:
 
     std::uint64_t setup_count() const noexcept;
     std::uint64_t apply_count() const noexcept;
+    std::uint64_t configuration_generation() const noexcept;
     bool is_configured() const noexcept;
     std::uint32_t configured_rows() const noexcept;
     std::uint32_t configured_cols() const noexcept;

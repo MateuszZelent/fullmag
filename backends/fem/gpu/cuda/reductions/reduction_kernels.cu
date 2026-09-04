@@ -33,16 +33,17 @@ void fullmag_cuda_device_min(
     cub::DeviceReduce::Min(temp_storage, temp_storage_bytes, data, result, N, stream);
 }
 
-void fullmag_cuda_device_sum(
+cudaError_t fullmag_cuda_device_sum(
     const double *data, int N, double *result,
     void *temp_storage, size_t &temp_storage_bytes,
     cudaStream_t stream)
 {
     if (temp_storage == nullptr) {
-        cub::DeviceReduce::Sum(nullptr, temp_storage_bytes, data, result, N, stream);
-        return;
+        return cub::DeviceReduce::Sum(
+            nullptr, temp_storage_bytes, data, result, N, stream);
     }
-    cub::DeviceReduce::Sum(temp_storage, temp_storage_bytes, data, result, N, stream);
+    return cub::DeviceReduce::Sum(
+        temp_storage, temp_storage_bytes, data, result, N, stream);
 }
 
 } // namespace fullmag::fem

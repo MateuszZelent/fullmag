@@ -26,7 +26,7 @@ void fullmag_cuda_device_min(
     cudaStream_t stream = nullptr);
 
 /// Query/execute CUB device-wide sum reduction.
-void fullmag_cuda_device_sum(
+cudaError_t fullmag_cuda_device_sum(
     const double *data, int N, double *result,
     void *temp_storage, size_t &temp_storage_bytes,
     cudaStream_t stream = nullptr);

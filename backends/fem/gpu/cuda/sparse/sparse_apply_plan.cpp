@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -35,6 +36,12 @@ namespace {
 
 constexpr std::size_t kVariantCount = 5u;
 constexpr int kBenchmarkRepetitions = 2;
+
+std::uint64_t next_configuration_generation() noexcept
+{
+    static std::atomic<std::uint64_t> next{1u};
+    return next.fetch_add(1u, std::memory_order_relaxed);
+}
 
 std::size_t variant_index(SparseApplyVariant variant) noexcept
 {
@@ -103,6 +110,7 @@ struct SparseApplyPlan::Impl {
     std::array<bool, kVariantCount> supported{};
     std::uint64_t setup_count = 0;
     std::uint64_t apply_count = 0;
+    std::uint64_t configuration_generation = 0;
     bool configured = false;
     std::string provenance;
 
@@ -838,6 +846,7 @@ bool SparseApplyPlan::setup(
     impl_->selected = best_variant;
     impl_->configured = true;
     impl_->setup_count = 1u;
+    impl_->configuration_generation = next_configuration_generation();
     benchmark_provenance << ";selected_id=" << sparse_apply_variant_id(best_variant)
                          << ";selected=" << sparse_apply_variant_name(best_variant);
     impl_->provenance = benchmark_provenance.str();
@@ -934,6 +943,7 @@ bool SparseApplyPlan::force_variant_for_test(SparseApplyVariant variant, std::st
         return false;
     }
     impl_->selected = variant;
+    impl_->configuration_generation = next_configuration_generation();
     impl_->provenance += ";forced_for_test=";
     impl_->provenance += sparse_apply_variant_name(variant);
     error.clear();
@@ -968,6 +978,11 @@ std::uint64_t SparseApplyPlan::setup_count() const noexcept
 std::uint64_t SparseApplyPlan::apply_count() const noexcept
 {
     return impl_ == nullptr ? 0u : impl_->apply_count;
+}
+
+std::uint64_t SparseApplyPlan::configuration_generation() const noexcept
+{
+    return is_configured() ? impl_->configuration_generation : 0u;
 }
 
 bool SparseApplyPlan::is_configured() const noexcept

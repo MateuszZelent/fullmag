@@ -76,7 +76,8 @@ public:
     const std::uint32_t *device_iteration_count() const noexcept { return d_iterations_; }
     const std::uint32_t *device_failure_latch() const noexcept { return d_failure_latch_; }
     const double *device_workspace_for_diagnostics() const noexcept { return d_workspace_; }
-    std::size_t device_workspace_value_count() const noexcept { return configured_size_ * 15u; }
+    std::size_t device_workspace_component_stride() const noexcept { return workspace_stride_; }
+    std::size_t device_workspace_value_count() const noexcept { return workspace_stride_ * 15u; }
 
 private:
     bool allocate_workspace(std::size_t n, void *stream, std::string &error);
@@ -89,6 +90,8 @@ private:
     GpuExchangeMassSetupIdentity identity_{};
     std::size_t configured_size_ = 0;
     std::size_t capacity_ = 0;
+    std::size_t workspace_stride_ = 0;
+    std::uint64_t sparse_plan_generation_ = 0;
 
     double *d_workspace_ = nullptr;
     double *d_scalars_ = nullptr;

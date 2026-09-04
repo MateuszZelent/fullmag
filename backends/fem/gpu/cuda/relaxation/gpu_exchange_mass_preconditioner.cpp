@@ -30,10 +30,26 @@ bool launch_ok(const char *operation, std::string &error)
     return cuda_ok(cudaPeekAtLastError(), operation, error);
 }
 
+bool ranges_overlap(
+    const double *input,
+    const double *output,
+    std::size_t count) noexcept
+{
+    const std::uintptr_t input_address =
+        reinterpret_cast<std::uintptr_t>(input);
+    const std::uintptr_t output_address =
+        reinterpret_cast<std::uintptr_t>(output);
+    const std::size_t bytes = count * sizeof(double);
+    return input_address <= output_address
+        ? output_address - input_address < bytes
+        : input_address - output_address < bytes;
+}
+
 bool reduce_components(
     double *terms,
     double *results,
     int n,
+    std::size_t component_stride,
     void *storage,
     std::size_t storage_bytes,
     cudaStream_t stream,
@@ -41,19 +57,24 @@ bool reduce_components(
 {
     for (std::size_t component = 0; component < kComponents; ++component) {
         std::size_t bytes = storage_bytes;
-        fullmag_cuda_device_sum(
-            terms + component * static_cast<std::size_t>(n),
-            n,
-            results + component,
-            storage,
-            bytes,
-            stream);
+        if (!cuda_ok(
+                fullmag_cuda_device_sum(
+                    terms + component * component_stride,
+                    n,
+                    results + component,
+                    storage,
+                    bytes,
+                    stream),
+                "enqueue exchange-mass component reduction",
+                error)) {
+            return false;
+        }
         if (bytes > storage_bytes) {
             error = "persistent exchange-mass reduction workspace is too small";
             return false;
         }
     }
-    return launch_ok("enqueue exchange-mass component reductions", error);
+    return launch_ok("check exchange-mass component reduction launch", error);
 }
 
 } // namespace
@@ -95,7 +116,9 @@ void GpuExchangeMassPreconditioner::reset() noexcept
     d_reduction_storage_ = nullptr;
     reduction_storage_bytes_ = 0;
     capacity_ = 0;
+    workspace_stride_ = 0;
     configured_size_ = 0;
+    sparse_plan_generation_ = 0;
     sparse_plan_ = nullptr;
     d_mass_ms_ = nullptr;
     d_active_mask_ = nullptr;
@@ -108,21 +131,24 @@ bool GpuExchangeMassPreconditioner::allocate_workspace(
     void *stream,
     std::string &error)
 {
-    if (capacity_ >= n && d_workspace_ != nullptr && d_scalars_ != nullptr &&
+    const std::size_t requested_stride = (n + 1u) & ~std::size_t{1u};
+    if (capacity_ >= n && workspace_stride_ >= requested_stride &&
+        d_workspace_ != nullptr && d_scalars_ != nullptr &&
         d_iterations_ != nullptr && d_failure_latch_ != nullptr &&
         d_reduction_storage_ != nullptr) {
         return true;
     }
 
     reset();
-    if (n > std::numeric_limits<std::size_t>::max() / kWorkspaceValuesPerNode) {
+    if (requested_stride >
+        std::numeric_limits<std::size_t>::max() / kWorkspaceValuesPerNode) {
         error = "exchange-mass workspace dimensions overflow";
         return false;
     }
     if (!cuda_ok(
             cudaMalloc(
                 reinterpret_cast<void **>(&d_workspace_),
-                n * kWorkspaceValuesPerNode * sizeof(double)),
+                requested_stride * kWorkspaceValuesPerNode * sizeof(double)),
             "cudaMalloc exchange-mass Krylov workspace",
             error) ||
         !cuda_ok(
@@ -149,14 +175,16 @@ bool GpuExchangeMassPreconditioner::allocate_workspace(
 
     cudaStream_t cuda_stream = static_cast<cudaStream_t>(stream);
     std::size_t required_bytes = 0;
-    fullmag_cuda_device_sum(
-        d_workspace_,
-        static_cast<int>(n),
-        d_scalars_,
-        nullptr,
-        required_bytes,
-        cuda_stream);
-    if (!launch_ok("query exchange-mass reduction workspace", error) ||
+    if (!cuda_ok(
+            fullmag_cuda_device_sum(
+                d_workspace_,
+                static_cast<int>(n),
+                d_scalars_,
+                nullptr,
+                required_bytes,
+                cuda_stream),
+            "query exchange-mass reduction workspace",
+            error) ||
         required_bytes == 0u ||
         !cuda_ok(
             cudaMalloc(&d_reduction_storage_, required_bytes),
@@ -167,6 +195,7 @@ bool GpuExchangeMassPreconditioner::allocate_workspace(
     }
     reduction_storage_bytes_ = required_bytes;
     capacity_ = n;
+    workspace_stride_ = requested_stride;
     return true;
 }
 
@@ -195,9 +224,17 @@ bool GpuExchangeMassPreconditioner::setup(
         sparse_plan_ = nullptr;
         return false;
     }
+    const std::uint64_t plan_generation =
+        sparse_plan.configuration_generation();
+    if (plan_generation == 0u) {
+        error = "exchange-mass setup requires a generated sparse plan identity";
+        sparse_plan_ = nullptr;
+        return false;
+    }
     if (sparse_plan_ == &sparse_plan && d_mass_ms_ == d_mass_ms &&
         d_active_mask_ == d_active_mask && configured_size_ == n &&
-        identity_ == identity && stream_ == stream) {
+        sparse_plan_generation_ == plan_generation && identity_ == identity &&
+        stream_ == stream) {
         setup_reuse_count_ += 1u;
         error.clear();
         return true;
@@ -214,7 +251,9 @@ bool GpuExchangeMassPreconditioner::setup(
             error) ||
         !cuda_ok(
             cudaMemsetAsync(
-                d_workspace_, 0, n * kWorkspaceValuesPerNode * sizeof(double), cuda_stream),
+                d_workspace_, 0,
+                workspace_stride_ * kWorkspaceValuesPerNode * sizeof(double),
+                cuda_stream),
             "clear exchange-mass setup Krylov workspace",
             error) ||
         !cuda_ok(
@@ -257,6 +296,7 @@ bool GpuExchangeMassPreconditioner::setup(
     d_mass_ms_ = d_mass_ms;
     d_active_mask_ = d_active_mask;
     configured_size_ = n;
+    sparse_plan_generation_ = plan_generation;
     identity_ = identity;
     stream_ = stream;
     setup_count_ += 1u;
@@ -283,6 +323,18 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
         error = "exchange-mass apply has invalid device buffers or dimensions";
         return false;
     }
+    const double *const gradients[kComponents] = {
+        d_gradient_x, d_gradient_y, d_gradient_z};
+    const double *const solutions[kComponents] = {
+        d_solution_x, d_solution_y, d_solution_z};
+    for (const double *gradient : gradients) {
+        for (const double *solution : solutions) {
+            if (ranges_overlap(gradient, solution, n)) {
+                error = "exchange-mass gradient and solution buffers must not alias";
+                return false;
+            }
+        }
+    }
     if (!std::isfinite(exchange_weight) || exchange_weight < 0.0) {
         error = "exchange-mass apply has invalid exchange weight";
         return false;
@@ -293,7 +345,8 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
     }
     if (!sparse_plan_->is_configured() ||
         sparse_plan_->configured_rows() != n ||
-        sparse_plan_->configured_cols() != n) {
+        sparse_plan_->configured_cols() != n ||
+        sparse_plan_->configuration_generation() != sparse_plan_generation_) {
         error = "exchange-mass sparse plan is no longer valid for apply";
         return false;
     }
@@ -313,12 +366,14 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
         d_gradient_x, d_gradient_y, d_gradient_z,
         d_mass_ms_, d_active_mask_,
         d_solution_x, d_solution_y, d_solution_z,
-        d_workspace_, d_failure_latch_, static_cast<int>(n), cuda_stream);
+        d_workspace_, d_failure_latch_, workspace_stride_,
+        static_cast<int>(n), cuda_stream);
     if (!launch_ok("enqueue exchange-mass initialization", error) ||
         !reduce_components(
-            d_workspace_ + 12u * n,
+            d_workspace_ + 12u * workspace_stride_,
             d_scalars_,
             static_cast<int>(n),
+            workspace_stride_,
             d_reduction_storage_,
             reduction_storage_bytes_,
             cuda_stream,
@@ -327,18 +382,18 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
     }
 
     double *const residual = d_workspace_;
-    double *const direction = d_workspace_ + 3u * n;
-    double *const applied = d_workspace_ + 6u * n;
-    double *const exchange_applied = d_workspace_ + 9u * n;
-    double *const terms = d_workspace_ + 12u * n;
+    double *const direction = d_workspace_ + 3u * workspace_stride_;
+    double *const applied = d_workspace_ + 6u * workspace_stride_;
+    double *const exchange_applied = d_workspace_ + 9u * workspace_stride_;
+    double *const terms = d_workspace_ + 12u * workspace_stride_;
     for (std::uint32_t iteration = 0; iteration < fixed_iterations(); ++iteration) {
         if (!sparse_plan_->apply_xyz(
                 {direction,
-                 direction + n,
-                 direction + 2u * n,
+                 direction + workspace_stride_,
+                 direction + 2u * workspace_stride_,
                  exchange_applied,
-                 exchange_applied + n,
-                 exchange_applied + 2u * n,
+                 exchange_applied + workspace_stride_,
+                 exchange_applied + 2u * workspace_stride_,
                  d_active_mask_},
                 cuda_stream,
                 error)) {
@@ -346,12 +401,14 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
         }
         fullmag_cuda_exchange_mass_form_operator_and_dot(
             d_mass_ms_, d_active_mask_, exchange_weight,
-            d_workspace_, d_failure_latch_, static_cast<int>(n), cuda_stream);
+            d_workspace_, d_failure_latch_, workspace_stride_,
+            static_cast<int>(n), cuda_stream);
         if (!launch_ok("enqueue exchange-mass operator composition", error) ||
             !reduce_components(
                 terms,
                 d_scalars_ + 6u,
                 static_cast<int>(n),
+                workspace_stride_,
                 d_reduction_storage_,
                 reduction_storage_bytes_,
                 cuda_stream,
@@ -363,12 +420,13 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
         fullmag_cuda_exchange_mass_update_solution_and_residual(
             d_active_mask_, d_solution_x, d_solution_y, d_solution_z,
             d_workspace_, d_scalars_, d_failure_latch_,
-            static_cast<int>(n), cuda_stream);
+            workspace_stride_, static_cast<int>(n), cuda_stream);
         if (!launch_ok("enqueue exchange-mass solution update", error) ||
             !reduce_components(
                 terms,
                 d_scalars_ + 3u,
                 static_cast<int>(n),
+                workspace_stride_,
                 d_reduction_storage_,
                 reduction_storage_bytes_,
                 cuda_stream,
@@ -379,7 +437,7 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
             d_scalars_, d_iterations_, d_failure_latch_, cuda_stream);
         fullmag_cuda_exchange_mass_update_direction(
             d_active_mask_, d_workspace_, d_scalars_, d_failure_latch_,
-            static_cast<int>(n), cuda_stream);
+            workspace_stride_, static_cast<int>(n), cuda_stream);
         if (!launch_ok("enqueue exchange-mass direction update", error)) {
             return false;
         }
@@ -393,7 +451,7 @@ bool GpuExchangeMassPreconditioner::apply_device_xyz(
     fullmag_cuda_exchange_mass_cleanup(
         d_solution_x, d_solution_y, d_solution_z,
         d_workspace_, d_scalars_, d_active_mask_, d_failure_latch_,
-        static_cast<int>(n), cuda_stream);
+        workspace_stride_, static_cast<int>(n), cuda_stream);
     if (!launch_ok("enqueue exchange-mass final validation", error)) {
         return false;
     }

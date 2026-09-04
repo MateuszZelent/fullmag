@@ -44,6 +44,7 @@ __global__ void initialize_kernel(
     double *solution_z,
     double *workspace,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -54,7 +55,7 @@ __global__ void initialize_kernel(
     solution_y[i] = 0.0;
     solution_z[i] = 0.0;
     for (int block = 0; block < kVectorBlocks * kComponents; ++block) {
-        workspace[block * n + i] = 0.0;
+        workspace[block * workspace_stride + i] = 0.0;
     }
     if (active_mask[i] == 0u || *failure_latch != 0u) {
         return;
@@ -68,9 +69,9 @@ __global__ void initialize_kernel(
             latch_failure(failure_latch);
             continue;
         }
-        workspace[component * n + i] = value;
-        workspace[(kComponents + component) * n + i] = value;
-        workspace[(4 * kComponents + component) * n + i] = value * value;
+        workspace[component * workspace_stride + i] = value;
+        workspace[(kComponents + component) * workspace_stride + i] = value;
+        workspace[(4 * kComponents + component) * workspace_stride + i] = value * value;
         if (!isfinite(value * value)) {
             latch_failure(failure_latch);
         }
@@ -83,6 +84,7 @@ __global__ void form_operator_and_dot_kernel(
     double exchange_weight,
     double *workspace,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -91,16 +93,16 @@ __global__ void form_operator_and_dot_kernel(
     }
     const bool failed = *failure_latch != 0u;
     for (int component = 0; component < kComponents; ++component) {
-        double &q = workspace[(2 * kComponents + component) * n + i];
-        double &kp = workspace[(3 * kComponents + component) * n + i];
-        double &term = workspace[(4 * kComponents + component) * n + i];
+        double &q = workspace[(2 * kComponents + component) * workspace_stride + i];
+        double &kp = workspace[(3 * kComponents + component) * workspace_stride + i];
+        double &term = workspace[(4 * kComponents + component) * workspace_stride + i];
         if (failed || active_mask[i] == 0u) {
             q = 0.0;
             kp = 0.0;
             term = 0.0;
             continue;
         }
-        const double p = workspace[(kComponents + component) * n + i];
+        const double p = workspace[(kComponents + component) * workspace_stride + i];
         q = mass[i] * p + exchange_weight * kp;
         term = p * q;
         if (!isfinite(p) || !isfinite(kp) || !isfinite(q) || !isfinite(term)) {
@@ -145,6 +147,7 @@ __global__ void update_solution_and_residual_kernel(
     double *workspace,
     const double *scalars,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -155,29 +158,30 @@ __global__ void update_solution_and_residual_kernel(
     if (*failure_latch != 0u || active_mask[i] == 0u) {
         for (int component = 0; component < kComponents; ++component) {
             solutions[component][i] = 0.0;
-            workspace[component * n + i] = 0.0;
-            workspace[(4 * kComponents + component) * n + i] = 0.0;
+            workspace[component * workspace_stride + i] = 0.0;
+            workspace[(4 * kComponents + component) * workspace_stride + i] = 0.0;
         }
         return;
     }
     for (int component = 0; component < kComponents; ++component) {
         const double alpha = scalars[3 * kComponents + component];
-        const double p = workspace[(kComponents + component) * n + i];
-        const double q = workspace[(2 * kComponents + component) * n + i];
+        const double p = workspace[(kComponents + component) * workspace_stride + i];
+        const double q = workspace[(2 * kComponents + component) * workspace_stride + i];
         const double next_solution = solutions[component][i] + alpha * p;
-        const double next_residual = workspace[component * n + i] - alpha * q;
+        const double next_residual =
+            workspace[component * workspace_stride + i] - alpha * q;
         const double residual_squared = next_residual * next_residual;
         if (!isfinite(next_solution) || !isfinite(next_residual) ||
             !isfinite(residual_squared)) {
             solutions[component][i] = 0.0;
-            workspace[component * n + i] = 0.0;
-            workspace[(4 * kComponents + component) * n + i] = 0.0;
+            workspace[component * workspace_stride + i] = 0.0;
+            workspace[(4 * kComponents + component) * workspace_stride + i] = 0.0;
             latch_failure(failure_latch);
             continue;
         }
         solutions[component][i] = next_solution;
-        workspace[component * n + i] = next_residual;
-        workspace[(4 * kComponents + component) * n + i] = residual_squared;
+        workspace[component * workspace_stride + i] = next_residual;
+        workspace[(4 * kComponents + component) * workspace_stride + i] = residual_squared;
     }
 }
 
@@ -217,6 +221,7 @@ __global__ void update_direction_kernel(
     double *workspace,
     const double *scalars,
     const std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -224,11 +229,11 @@ __global__ void update_direction_kernel(
         return;
     }
     for (int component = 0; component < kComponents; ++component) {
-        double &p = workspace[(kComponents + component) * n + i];
+        double &p = workspace[(kComponents + component) * workspace_stride + i];
         if (*failure_latch != 0u || active_mask[i] == 0u) {
             p = 0.0;
         } else {
-            p = workspace[component * n + i] +
+            p = workspace[component * workspace_stride + i] +
                 scalars[4 * kComponents + component] * p;
         }
     }
@@ -258,6 +263,7 @@ __global__ void cleanup_kernel(
     double *scalars,
     const std::uint8_t *active_mask,
     const std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -267,7 +273,7 @@ __global__ void cleanup_kernel(
         solution_y[i] = 0.0;
         solution_z[i] = 0.0;
         for (int block = 0; block < kVectorBlocks * kComponents; ++block) {
-            workspace[block * n + i] = 0.0;
+            workspace[block * workspace_stride + i] = 0.0;
         }
     }
     if (failed && i < kScalarCount) {
@@ -304,12 +310,14 @@ void fullmag_cuda_exchange_mass_initialize(
     double *solution_z,
     double *workspace,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream)
 {
     initialize_kernel<<<block_count(n), kBlockSize, 0, stream>>>(
         gradient_x, gradient_y, gradient_z, mass, active_mask,
-        solution_x, solution_y, solution_z, workspace, failure_latch, n);
+        solution_x, solution_y, solution_z, workspace, failure_latch,
+        workspace_stride, n);
 }
 
 void fullmag_cuda_exchange_mass_form_operator_and_dot(
@@ -318,11 +326,13 @@ void fullmag_cuda_exchange_mass_form_operator_and_dot(
     double exchange_weight,
     double *workspace,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream)
 {
     form_operator_and_dot_kernel<<<block_count(n), kBlockSize, 0, stream>>>(
-        mass, active_mask, exchange_weight, workspace, failure_latch, n);
+        mass, active_mask, exchange_weight, workspace, failure_latch,
+        workspace_stride, n);
 }
 
 void fullmag_cuda_exchange_mass_compute_alpha(
@@ -341,12 +351,13 @@ void fullmag_cuda_exchange_mass_update_solution_and_residual(
     double *workspace,
     const double *scalars,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream)
 {
     update_solution_and_residual_kernel<<<block_count(n), kBlockSize, 0, stream>>>(
         active_mask, solution_x, solution_y, solution_z, workspace, scalars,
-        failure_latch, n);
+        failure_latch, workspace_stride, n);
 }
 
 void fullmag_cuda_exchange_mass_compute_beta_and_advance(
@@ -364,11 +375,12 @@ void fullmag_cuda_exchange_mass_update_direction(
     double *workspace,
     const double *scalars,
     const std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream)
 {
     update_direction_kernel<<<block_count(n), kBlockSize, 0, stream>>>(
-        active_mask, workspace, scalars, failure_latch, n);
+        active_mask, workspace, scalars, failure_latch, workspace_stride, n);
 }
 
 void fullmag_cuda_exchange_mass_validate_output(
@@ -392,13 +404,14 @@ void fullmag_cuda_exchange_mass_cleanup(
     double *scalars,
     const std::uint8_t *active_mask,
     const std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream)
 {
     const int count = std::max(n, kScalarCount);
     cleanup_kernel<<<block_count(count), kBlockSize, 0, stream>>>(
         solution_x, solution_y, solution_z, workspace, scalars,
-        active_mask, failure_latch, n);
+        active_mask, failure_latch, workspace_stride, n);
 }
 
 } // namespace fullmag::fem

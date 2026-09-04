@@ -2,6 +2,7 @@
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
+#include <cstddef>
 #include <cstdint>
 
 namespace fullmag::fem {
@@ -24,6 +25,7 @@ void fullmag_cuda_exchange_mass_initialize(
     double *solution_z,
     double *workspace,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream);
 
@@ -33,6 +35,7 @@ void fullmag_cuda_exchange_mass_form_operator_and_dot(
     double exchange_weight,
     double *workspace,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream);
 
@@ -49,6 +52,7 @@ void fullmag_cuda_exchange_mass_update_solution_and_residual(
     double *workspace,
     const double *scalars,
     std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream);
 
@@ -63,6 +67,7 @@ void fullmag_cuda_exchange_mass_update_direction(
     double *workspace,
     const double *scalars,
     const std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream);
 
@@ -83,6 +88,7 @@ void fullmag_cuda_exchange_mass_cleanup(
     double *scalars,
     const std::uint8_t *active_mask,
     const std::uint32_t *failure_latch,
+    std::size_t workspace_stride,
     int n,
     cudaStream_t stream);
 
