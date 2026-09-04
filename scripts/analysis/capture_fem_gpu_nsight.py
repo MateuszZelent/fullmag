@@ -78,6 +78,25 @@ TRACE_PHASE_RANGES = {
 }
 NCU_SECTIONS = ("LaunchStats", "Occupancy", "SpeedOfLight", "WarpStateStats")
 NCU_TIMEOUT_SECONDS = 120
+DIRECT_MINIMIZER_CAPTURE_ALGORITHMS = (
+    "nonlinear_cg",
+    "projected_gradient_bb",
+)
+DIRECT_MINIMIZER_CAPTURE_STRATEGIES = (
+    "none",
+    "diagonal",
+    "exchange_mass_cg4",
+    "exchange_mass_cg8",
+)
+DIRECT_MINIMIZER_CAPTURE_IDENTITY_FIELDS = (
+    "source_commit",
+    "source_snapshot_sha256",
+    "workload_sha256",
+    "mesh_sha256",
+    "gpu_uuid",
+    "runtime_manifest_sha256",
+    "final_artifact_sha256",
+)
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -858,6 +877,58 @@ def collect_bundle_identity(runtime_root: Path) -> dict[str, object]:
         "nvtx_enabled": instrumentation.get("nvtx_enabled") is True,
         "binaries": binary_digests,
         "libraries": library_digests,
+    }
+
+
+def direct_minimizer_capture_summary(
+    capture_case: Mapping[str, object],
+    benchmark_case: Mapping[str, object],
+) -> dict[str, object]:
+    """Bind one Nsight repeat-1 capture to, but never replace, five repeats."""
+    blockers: list[str] = []
+    if capture_case.get("repeat_count") != 1:
+        blockers.append("Nsight direct-minimizer capture requires repeat_count=1")
+    if capture_case.get("relaxation_algorithm") not in DIRECT_MINIMIZER_CAPTURE_ALGORITHMS:
+        blockers.append("Nsight direct-minimizer capture has an unsupported algorithm")
+    if (
+        capture_case.get("relaxation_preconditioner_strategy")
+        not in DIRECT_MINIMIZER_CAPTURE_STRATEGIES
+    ):
+        blockers.append("Nsight direct-minimizer capture has an unsupported strategy")
+    if benchmark_case.get("measured_repetitions") != 5:
+        blockers.append(
+            "Nsight repeat-1 capture cannot replace the required five benchmark repetitions"
+        )
+    capture_identity = capture_case.get("identity")
+    benchmark_identity = benchmark_case.get("identity")
+    if not isinstance(capture_identity, Mapping) or not isinstance(
+        benchmark_identity, Mapping
+    ):
+        blockers.append("Nsight capture and benchmark require complete identity objects")
+    else:
+        for field in DIRECT_MINIMIZER_CAPTURE_IDENTITY_FIELDS:
+            capture_value = capture_identity.get(field)
+            benchmark_value = benchmark_identity.get(field)
+            if not capture_value or not benchmark_value:
+                blockers.append(f"Nsight identity {field} is missing")
+            elif capture_value != benchmark_value:
+                blockers.append(
+                    f"Nsight identity {field} differs from the five-repeat benchmark"
+                )
+    return {
+        "schema": "fullmag.fem_gpu.direct_minimizer_nsight_capture.v1",
+        "qualification_status": "NOT VERIFIED",
+        "repeat_count": capture_case.get("repeat_count"),
+        "benchmark_measured_repetitions": benchmark_case.get("measured_repetitions"),
+        "relaxation_algorithm": capture_case.get("relaxation_algorithm"),
+        "relaxation_preconditioner_strategy": capture_case.get(
+            "relaxation_preconditioner_strategy"
+        ),
+        "blockers": blockers,
+        "promotion_blocker": (
+            "Nsight is a separate residency capture and does not qualify a "
+            "direct-minimizer strategy without five timing repeats, parity and physics"
+        ),
     }
 
 

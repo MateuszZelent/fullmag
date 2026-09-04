@@ -231,6 +231,16 @@ RELAXATION_PRECONDITIONER_STRATEGIES = tuple(
 )
 RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES = ("coarse", "medium", "fine")
 RELAXATION_PRECONDITIONER_REQUIRED_REPEATS = 5
+DIRECT_MINIMIZER_QUALIFICATION_ALGORITHMS = (
+    "nonlinear_cg",
+    "projected_gradient_bb",
+)
+DIRECT_MINIMIZER_QUALIFICATION_STRATEGIES = (
+    "none",
+    "diagonal",
+    "exchange_mass_cg4",
+    "exchange_mass_cg8",
+)
 CPU_ONLY_RELAXATION_ALGORITHMS = {"tangent_plane_implicit"}
 NONCONSERVATIVE_RELAXATION_SCENARIOS = {"stt_oersted"}
 ENERGY_MINIMIZER_RELAXATION_ALGORITHMS = {
@@ -690,6 +700,119 @@ BENCHMARK_V2_COUNTER_FIELDS = (
     "compute_fence_count",
     "kernel_launch_count",
 )
+
+
+def direct_minimizer_benchmark_matrix_summary(
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Validate the five-repeat direct-minimizer evidence matrix.
+
+    This is deliberately a structural validator.  It never promotes a runtime
+    or reports a performance result: physics, parity and Nsight remain
+    independent qualification lanes.
+    """
+    expected_keys = {
+        (algorithm, strategy, mesh_size, repeat_index)
+        for algorithm in DIRECT_MINIMIZER_QUALIFICATION_ALGORITHMS
+        for strategy in DIRECT_MINIMIZER_QUALIFICATION_STRATEGIES
+        for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+        for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
+    }
+    rows_by_key: dict[tuple[str, str, str, int], list[Mapping[str, object]]] = {}
+    failures: list[str] = []
+    for row in rows:
+        algorithm = row_relaxation_algorithm(row)
+        strategy = row.get("requested_relaxation_preconditioner_strategy")
+        mesh_size = row.get("mesh_size")
+        repeat_index = as_int(row.get("repeat_index"))
+        if (
+            algorithm not in DIRECT_MINIMIZER_QUALIFICATION_ALGORITHMS
+            or strategy not in DIRECT_MINIMIZER_QUALIFICATION_STRATEGIES
+            or mesh_size not in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
+            or repeat_index is None
+        ):
+            failures.append(
+                "row has invalid direct-minimizer algorithm/strategy/mesh_size/repeat_index: "
+                f"{algorithm!r}/{strategy!r}/{mesh_size!r}/{repeat_index!r}"
+            )
+            continue
+        rows_by_key.setdefault(
+            (str(algorithm), str(strategy), str(mesh_size), repeat_index), []
+        ).append(row)
+    for key in sorted(expected_keys):
+        count = len(rows_by_key.get(key, []))
+        if count != 1:
+            failures.append(
+                f"matrix key {key!r} has {count} rows; requires exactly one repeat_index"
+            )
+    for key in sorted(set(rows_by_key) - expected_keys):
+        failures.append(f"unexpected matrix key {key!r}")
+
+    common_identity_fields = {
+        "source": "runtime_git_commit",
+        "source snapshot": "runtime_source_snapshot_sha256",
+        "workload": "executed_problem_ir_sha256",
+        "GPU": "device_uuid",
+        "runtime": "runtime_manifest_sha256",
+    }
+    for label, field in common_identity_fields.items():
+        values = {str(row.get(field) or "") for row in rows}
+        if "" in values or len(values) != 1:
+            failures.append(
+                f"{label} identity field {field} must be nonempty and identical across the matrix"
+            )
+    for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES:
+        values = {
+            str(row.get("solver_mesh_sha256") or "")
+            for row in rows
+            if row.get("mesh_size") == mesh_size
+        }
+        if "" in values or len(values) != 1:
+            failures.append(
+                f"mesh identity solver_mesh_sha256 must be nonempty and identical for {mesh_size}"
+            )
+    for row in rows:
+        artifact_sha256 = str(row.get("final_artifact_sha256") or "")
+        receipt_artifact_sha256 = str(row.get("receipt_final_artifact_sha256") or "")
+        if row.get("final_artifact_status") != "ready":
+            failures.append("final artifact status is not ready")
+        elif (
+            len(artifact_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in artifact_sha256)
+        ):
+            failures.append("final artifact sha256 is not a canonical digest")
+        elif receipt_artifact_sha256 != artifact_sha256:
+            failures.append("receipt final artifact sha256 does not bind the published artifact")
+
+    identity = {
+        "source_commit": next(
+            iter({str(row.get("runtime_git_commit") or "") for row in rows}), ""
+        ),
+        "workload_sha256": next(
+            iter({str(row.get("executed_problem_ir_sha256") or "") for row in rows}), ""
+        ),
+        "source_snapshot_sha256": next(
+            iter({str(row.get("runtime_source_snapshot_sha256") or "") for row in rows}), ""
+        ),
+        "gpu_uuid": next(iter({str(row.get("device_uuid") or "") for row in rows}), ""),
+        "runtime_manifest_sha256": next(
+            iter({str(row.get("runtime_manifest_sha256") or "") for row in rows}), ""
+        ),
+    }
+    return {
+        "schema": "fullmag.fem_gpu.direct_minimizer_benchmark_matrix.v1",
+        "qualification_status": "NOT VERIFIED",
+        "matrix_complete": not failures,
+        "measured_repetitions": RELAXATION_PRECONDITIONER_REQUIRED_REPEATS,
+        "algorithms": list(DIRECT_MINIMIZER_QUALIFICATION_ALGORITHMS),
+        "strategies": list(DIRECT_MINIMIZER_QUALIFICATION_STRATEGIES),
+        "identity": identity,
+        "failures": failures,
+        "promotion_blocker": (
+            "five-repeat timing evidence alone does not qualify runtime, parity, "
+            "physics, or Nsight residency"
+        ),
+    }
 
 
 def _benchmark_v2_oracle(cpu_oracle: object) -> tuple[object, Sequence[object]]:

@@ -1068,3 +1068,43 @@ def test_commands_use_exact_nsys_reports_and_same_managed_fixture_image() -> Non
     assert 'runtime_root="$(readlink -f "$active")"' in recipe
     assert '-v "$runtime_root:/workspace/.fullmag/runtime:ro"' in recipe
     assert "--runtime-root /workspace/.fullmag/runtime" in recipe
+
+
+def test_direct_minimizer_capture_is_repeat_one_and_never_replaces_five_repeats() -> None:
+    capture = load_capture_module()
+    identity = {
+        "source_commit": "a" * 40,
+        "source_snapshot_sha256": "f" * 64,
+        "workload_sha256": "b" * 64,
+        "mesh_sha256": "c" * 64,
+        "gpu_uuid": "GPU-01234567-89ab-cdef-0123-456789abcdef",
+        "runtime_manifest_sha256": "d" * 64,
+        "final_artifact_sha256": "e" * 64,
+    }
+    benchmark_case = {"measured_repetitions": 5, "identity": identity}
+    capture_case = {
+        "repeat_count": 1,
+        "relaxation_algorithm": "nonlinear_cg",
+        "relaxation_preconditioner_strategy": "exchange_mass_cg4",
+        "identity": identity,
+    }
+
+    summary = capture.direct_minimizer_capture_summary(
+        capture_case, benchmark_case
+    )
+
+    assert summary["qualification_status"] == "NOT VERIFIED"
+    assert summary["repeat_count"] == 1
+    assert summary["benchmark_measured_repetitions"] == 5
+    assert summary["blockers"] == []
+
+    invalid = capture.direct_minimizer_capture_summary(
+        capture_case, {"measured_repetitions": 1, "identity": identity}
+    )
+    assert invalid["qualification_status"] == "NOT VERIFIED"
+    assert any("five" in blocker for blocker in invalid["blockers"])
+
+    mismatched = dict(capture_case)
+    mismatched["identity"] = {**identity, "gpu_uuid": "GPU-other"}
+    invalid = capture.direct_minimizer_capture_summary(mismatched, benchmark_case)
+    assert any("gpu_uuid" in blocker for blocker in invalid["blockers"])

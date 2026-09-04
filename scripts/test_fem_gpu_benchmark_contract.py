@@ -576,6 +576,95 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             self.assertEqual(overwrite_csv.read_text(), "stale\n")
 
 
+class DirectMinimizerBenchmarkContractTests(unittest.TestCase):
+    def direct_minimizer_rows(self) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for algorithm in ("nonlinear_cg", "projected_gradient_bb"):
+            for strategy in (
+                "none",
+                "diagonal",
+                "exchange_mass_cg4",
+                "exchange_mass_cg8",
+            ):
+                for mesh_size in ("coarse", "medium", "fine"):
+                    for repeat_index in range(5):
+                        row = accepted_row(repeat_index)
+                        row.update(
+                            {
+                                "reported_relaxation_algorithm": algorithm,
+                                "requested_relaxation_preconditioner_strategy": strategy,
+                                "mesh_size": mesh_size,
+                                "final_artifact_status": "ready",
+                                "final_artifact_sha256": "f" * 64,
+                                "receipt_final_artifact_sha256": "f" * 64,
+                            }
+                        )
+                        rows.append(row)
+        return rows
+
+    def test_matrix_requires_exactly_five_valid_repeat_indices(self) -> None:
+        summary = benchmark.direct_minimizer_benchmark_matrix_summary(
+            self.direct_minimizer_rows()
+        )
+
+        self.assertTrue(summary["matrix_complete"])
+        self.assertEqual(summary["qualification_status"], "NOT VERIFIED")
+        self.assertEqual(summary["measured_repetitions"], 5)
+
+    def test_matrix_rejects_duplicate_and_missing_repeat_indices(self) -> None:
+        rows = self.direct_minimizer_rows()
+        rows[4]["repeat_index"] = 0
+        summary = benchmark.direct_minimizer_benchmark_matrix_summary(rows)
+
+        self.assertFalse(summary["matrix_complete"])
+        self.assertTrue(
+            any("repeat_index" in failure for failure in summary["failures"])
+        )
+
+    def test_matrix_binds_source_workload_mesh_gpu_runtime_and_final_artifact(self) -> None:
+        fields = (
+            ("runtime_git_commit", "source"),
+            ("runtime_source_snapshot_sha256", "source"),
+            ("executed_problem_ir_sha256", "workload"),
+            ("solver_mesh_sha256", "mesh"),
+            ("device_uuid", "GPU"),
+            ("runtime_manifest_sha256", "runtime"),
+            ("final_artifact_sha256", "artifact"),
+        )
+        for field, expected in fields:
+            with self.subTest(field=field):
+                rows = self.direct_minimizer_rows()
+                rows[-1][field] = "0" * 64 if "sha256" in field else "other"
+                summary = benchmark.direct_minimizer_benchmark_matrix_summary(rows)
+                self.assertFalse(summary["matrix_complete"])
+                self.assertTrue(
+                    any(expected.lower() in failure.lower() for failure in summary["failures"])
+                )
+
+        rows = self.direct_minimizer_rows()
+        rows[-1]["final_artifact_status"] = "incomplete"
+        summary = benchmark.direct_minimizer_benchmark_matrix_summary(rows)
+        self.assertTrue(any("artifact" in failure for failure in summary["failures"]))
+
+    def test_matrix_keeps_algorithms_and_fixed_cg_variants_distinct(self) -> None:
+        summary = benchmark.direct_minimizer_benchmark_matrix_summary(
+            self.direct_minimizer_rows()
+        )
+
+        self.assertEqual(
+            summary["algorithms"], ["nonlinear_cg", "projected_gradient_bb"]
+        )
+        self.assertEqual(
+            summary["strategies"],
+            ["none", "diagonal", "exchange_mass_cg4", "exchange_mass_cg8"],
+        )
+        rows = self.direct_minimizer_rows()
+        rows[-1]["reported_relaxation_algorithm"] = "nonlinear_cg"
+        summary = benchmark.direct_minimizer_benchmark_matrix_summary(rows)
+        self.assertFalse(summary["matrix_complete"])
+        self.assertTrue(any("matrix key" in failure for failure in summary["failures"]))
+
+
 class NsightPhaseContractTests(unittest.TestCase):
     def test_production_emits_missing_setup_and_accepted_finalization_ranges(self) -> None:
         gpu_setup = (
