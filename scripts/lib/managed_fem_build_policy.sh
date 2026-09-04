@@ -1,5 +1,36 @@
 #!/usr/bin/env bash
 
+managed_fem_directory_exists() {
+  [ -d "$1" ]
+}
+
+resolve_windows_worktree_gitdir_path() {
+  local gitdir_record="$1"
+  local drive
+  local relative_gitdir
+  local wsl_gitdir
+  local git_bash_gitdir=""
+
+  drive="$(printf '%s' "${gitdir_record%%:*}" | tr '[:upper:]' '[:lower:]')"
+  relative_gitdir="${gitdir_record#?:/}"
+  wsl_gitdir="/mnt/${drive}/${relative_gitdir}"
+  if managed_fem_directory_exists "${wsl_gitdir}"; then
+    printf '%s' "${wsl_gitdir}"
+    return 0
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    if git_bash_gitdir="$(cygpath -u "${gitdir_record}" 2>/dev/null)" &&
+      [ -n "${git_bash_gitdir}" ] &&
+      managed_fem_directory_exists "${git_bash_gitdir}"; then
+      printf '%s' "${git_bash_gitdir}"
+      return 0
+    fi
+  fi
+
+  echo "[managed_fem_build_policy] Windows worktree gitdir is unavailable: ${wsl_gitdir}${git_bash_gitdir:+ or ${git_bash_gitdir}}" >&2
+  return 2
+}
+
 resolve_managed_fem_build_policy() {
   local repo_root="${FULLMAG_REPO_ROOT:-${PWD}}"
   local gitdir_record=""
@@ -8,20 +39,12 @@ resolve_managed_fem_build_policy() {
   fi
   case "${gitdir_record}" in
     [A-Za-z]:/*)
-      local drive
       local git_config_count
       local git_config_key_var
       local git_config_value_var
-      local relative_gitdir
-      local wsl_gitdir
-      drive="$(printf '%s' "${gitdir_record%%:*}" | tr '[:upper:]' '[:lower:]')"
-      relative_gitdir="${gitdir_record#?:/}"
-      wsl_gitdir="/mnt/${drive}/${relative_gitdir}"
-      if [ ! -d "${wsl_gitdir}" ]; then
-        echo "[managed_fem_build_policy] Windows worktree gitdir is unavailable in WSL: ${wsl_gitdir}" >&2
-        return 2
-      fi
-      export GIT_DIR="${wsl_gitdir}"
+      local resolved_gitdir
+      resolved_gitdir="$(resolve_windows_worktree_gitdir_path "${gitdir_record}")" || return $?
+      export GIT_DIR="${resolved_gitdir}"
       export GIT_WORK_TREE="${repo_root}"
 
       # The Windows checkout is populated with core.autocrlf=true and without

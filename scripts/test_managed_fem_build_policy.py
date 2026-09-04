@@ -11,6 +11,32 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HELPER = REPO_ROOT / "scripts" / "lib" / "managed_fem_build_policy.sh"
 
 
+def resolve_windows_gitdir_path(
+    *, existing_path: str, cygpath_result: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            'source "$1"; expected_directory="$2"; cygpath_result="$3"; '
+            'managed_fem_directory_exists() { [ "$1" = "$expected_directory" ]; }; '
+            'cygpath() { printf "%s" "$cygpath_result"; }; '
+            'resolve_windows_worktree_gitdir_path '
+            '"C:/git/fullmag/fullmag/.git/worktrees/task"',
+            "bash",
+            str(HELPER),
+            existing_path,
+            cygpath_result,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def resolve_policy(*, profile: str | None, reuse: str | None) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment.pop("FULLMAG_NATIVE_STORAGE_PROFILE", None)
@@ -101,6 +127,40 @@ def test_windows_worktree_git_environment_matches_checkout_semantics() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "true|false"
+
+
+def test_windows_worktree_gitdir_uses_wsl_mount_when_available() -> None:
+    expected = "/mnt/c/git/fullmag/fullmag/.git/worktrees/task"
+
+    result = resolve_windows_gitdir_path(
+        existing_path=expected,
+        cygpath_result="/c/git/fullmag/fullmag/.git/worktrees/task",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
+def test_windows_worktree_gitdir_uses_git_bash_mount_when_wsl_mount_is_absent() -> None:
+    expected = "/c/git/fullmag/fullmag/.git/worktrees/task"
+
+    result = resolve_windows_gitdir_path(
+        existing_path=expected,
+        cygpath_result=expected,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == expected
+
+
+def test_windows_worktree_gitdir_fails_closed_when_no_mapping_exists() -> None:
+    result = resolve_windows_gitdir_path(
+        existing_path="/unavailable",
+        cygpath_result="/c/git/fullmag/fullmag/.git/worktrees/task",
+    )
+
+    assert result.returncode == 2
+    assert "Windows worktree gitdir is unavailable" in result.stderr
 
 
 def test_nightly_checksum_freshness_rebuilds_rust_source_with_old_mtime(
