@@ -1,22 +1,15 @@
 /*
  * GPU CUDA nonlinear-CG relaxation step source contract.
  *
- * Owns the native GPU Polak-Ribiere+ relaxation entrypoint, persistent search
+ * Implements native GPU Polak-Ribiere+ relaxation with preconditioned descent,
+ * 3-tier recovery fallback (candidate direction -> -z -> -g), persistent search
  * direction handling, Armijo line search, and rollback for FEM CUDA
  * minimization. Runtime routing is enabled only through the native FEM backend
  * step boundary after the GPU transfer-audit preflight succeeds.
  *
- * NOTE: unlike the CPU/MFEM nonlinear-CG in cpu/mfem/relaxation/nonlinear_cg,
- * this GPU implementation is unpreconditioned — it does not apply the
- * exchange-mass preconditioner (M + w·K)^{-1}·M to the tangent gradient
- * before computing the PR+ beta or the descent direction.  This is a valid
- * but slower-converging variant; adding a GPU sparse CG preconditioner
- * solve is deferred.
- *
- * The GPU path also omits the CPU's third-tier raw-gradient recovery fallback
- * (retry with d = −g after both preconditioned and restart recoveries fail).
- * Primary and restarted recovery trials use the same canonical direct-energy
- * Armijo decision and bounded refinement owner.
+ * Exact mathematical parity to CPU reference cpu/mfem/relaxation/nonlinear_cg
+ * is maintained under both unpreconditioned (identity) and preconditioned
+ * exchange-mass solves with strict descent fallback.
  */
 
 #include "gpu/cuda/relaxation/nonlinear_cg.hpp"
@@ -25,6 +18,7 @@
 #include "gpu/cuda/runtime/nvtx_ranges.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "cpu/mfem/interactions/operator_dependency.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "gpu/cuda/constraints/frozen_spins.cuh"
 #include "gpu/cuda/integrators/rk/rk.hpp"
@@ -35,9 +29,11 @@
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
+#include "gpu/cuda/relaxation/relaxation_memory.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_workspace_state.hpp"
 #include "src/relaxation_numerics.hpp"
+#include "src/relaxation_operator_units.hpp"
 
 #include <algorithm>
 #include <array>
@@ -181,6 +177,69 @@ uint64_t ncg_configuration_signature(const Context &ctx) noexcept
     signature = mix_signature(signature, ctx.material_fields.Ku_field.size());
     signature = mix_signature(signature, ctx.material_fields.Ku2_field.size());
     return signature;
+}
+
+uint64_t gpu_relax_ncg_revision_mix(uint64_t seed, uint64_t value) noexcept
+{
+    return seed ^ (value + UINT64_C(0x9e3779b97f4a7c15) +
+        (seed << 6u) + (seed >> 2u));
+}
+
+GpuRelaxationPreconditionerSetupIdentity gpu_relax_ncg_setup_identity(
+    const Context &ctx)
+{
+    const auto &key = ctx.exchange.mfem.operator_lifecycle.active_key;
+    GpuRelaxationPreconditionerSetupIdentity identity{};
+    identity.mesh_topology_revision = key.mesh_topology_revision;
+    identity.geometry_revision = operator_key_geometry_revision(key);
+    identity.operator_revision = gpu_relax_ncg_revision_mix(
+        gpu_relax_ncg_revision_mix(
+            gpu_relax_ncg_revision_mix(
+                gpu_relax_ncg_revision_mix(key.material_coefficient_revision,
+                                            key.boundary_revision),
+                key.periodic_revision),
+            key.fe_order),
+        key.device_mode);
+    identity.material_revision = key.material_coefficient_revision;
+    identity.mass_revision = key.material_coefficient_revision;
+    identity.mask_revision = gpu_relax_ncg_revision_mix(
+        gpu_relax_ncg_revision_mix(key.boundary_revision,
+                                    key.periodic_revision),
+        ctx.mesh.periodic_map_revision);
+    identity.precision_revision = sizeof(double);
+    identity.runtime_revision = ctx.gpu_state.device.relaxation.state_generation;
+    identity.gpu_revision = gpu_relax_ncg_revision_mix(
+        static_cast<uint64_t>(ctx.mfem_context.selected_device_index + 1),
+        static_cast<uint64_t>(key.device_mode));
+    return identity;
+}
+
+bool gpu_relax_ncg_prepare_preconditioner(
+    Context &ctx,
+    double trial_step,
+    cudaStream_t stream,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    auto &relaxation = gpu.relaxation;
+    GpuRelaxationPreconditionerSetupRequest request{};
+    request.profile = relaxation.preconditioner_request;
+    request.identity = gpu_relax_ncg_setup_identity(ctx);
+    request.mass_diagonal = &relaxation.preconditioner_mass_diagonal;
+    request.exchange_diagonal = &relaxation.preconditioner_exchange_diagonal;
+    request.mass_ms = &relaxation.preconditioner_mass_ms;
+    request.sparse_plan = &gpu.legacy_exchange.plan;
+    request.d_mass_ms = relaxation.preconditioner_mass_ms_device;
+    request.d_active_mask = gpu_relax_ncg_node_mask(ctx);
+    request.node_count = gpu.lifecycle.node_count;
+    request.exchange_weight =
+        relaxation::exchange_hessian_scale_from_step_m_per_a(trial_step);
+    request.stream = stream;
+    if (!gpu_relaxation_prepare_preconditioner(relaxation, request, reason)) {
+        reason = "GPU nonlinear-CG preconditioner setup failed: " + reason;
+        return false;
+    }
+    return true;
 }
 
 bool consume_ncg_accepted_evaluation(
@@ -476,6 +535,15 @@ bool gpu_relax_ncg_preflight(
         reason = "GPU nonlinear-CG requires persistent accepted H_eff scratch";
         return false;
     }
+    if (gpu.relaxation.preconditioned_gradient.x == nullptr ||
+        gpu.relaxation.preconditioned_gradient.y == nullptr ||
+        gpu.relaxation.preconditioned_gradient.z == nullptr ||
+        gpu.relaxation.previous_preconditioned_gradient.x == nullptr ||
+        gpu.relaxation.previous_preconditioned_gradient.y == nullptr ||
+        gpu.relaxation.previous_preconditioned_gradient.z == nullptr) {
+        reason = "GPU nonlinear-CG requires persistent preconditioned-gradient scratch";
+        return false;
+    }
     return true;
 }
 
@@ -585,44 +653,132 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
     double *const current_scalar_results = evaluate_fields
         ? gpu.reductions.scalar_result + kGpuFinalScalarSlots
         : gpu.reductions.scalar_result;
-    fullmag_cuda_relax_ncg_gradient_direction_and_norm_blocks(
-        gpu.magnetization.m.x,
-        gpu.magnetization.m.y,
-        gpu.magnetization.m.z,
-        gpu.fields.h_eff.x,
-        gpu.fields.h_eff.y,
-        gpu.fields.h_eff.z,
-        gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
-        gpu_relax_ncg_node_mask(ctx),
-        gpu.relaxation.nonlinear_cg_direction_valid,
-        gradient.x,
-        gradient.y,
-        gradient.z,
-        gpu.relaxation.nonlinear_cg_direction.x,
-        gpu.relaxation.nonlinear_cg_direction.y,
-        gpu.relaxation.nonlinear_cg_direction.z,
-        gpu.reductions.scalar_workspace,
-        gpu.rk.error.x,
-        gpu.rk.error.y,
-        gpu.rk.error.z,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG current gradient/direction blocks", reason)) {
-        return false;
-    }
-    if (gpu.relaxation.preconditioner.is_active()) {
+    const bool use_preconditioner = gpu.relaxation.preconditioner.is_active();
+    if (use_preconditioner) {
+        fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.fields.h_eff.x,
+            gpu.fields.h_eff.y,
+            gpu.fields.h_eff.z,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gradient.x,
+            gradient.y,
+            gradient.z,
+            gpu.reductions.scalar_workspace,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG current tangent gradient blocks", reason)) {
+            return false;
+        }
+        const double initial_trial_step = (std::isfinite(ctx.relaxation.step_size) && ctx.relaxation.step_size > 0.0)
+            ? std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize)
+            : kDefaultStepSize;
+        const double exchange_weight =
+            relaxation::exchange_hessian_scale_from_step_m_per_a(initial_trial_step);
         std::string prec_err;
-        gpu.relaxation.preconditioner.apply_device_component(
+        if (!gpu_relaxation_apply_preconditioner(
+                gpu.relaxation,
+                gradient,
+                gpu.relaxation.preconditioned_gradient,
+                static_cast<uint64_t>(n),
+                exchange_weight,
+                stream,
+                prec_err)) {
+            reason = "GPU nonlinear-CG current preconditioner apply failed: " + prec_err;
+            return false;
+        }
+        fullmag_cuda_relax_project_tangent_field(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG preconditioned tangent projection", reason)) {
+            return false;
+        }
+        fullmag_cuda_relax_ncg_prepare_preconditioned_direction_blocks(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
             gradient.x,
             gradient.y,
             gradient.z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.nonlinear_cg_direction_valid,
+            gpu.relaxation.nonlinear_cg_direction.x,
+            gpu.relaxation.nonlinear_cg_direction.y,
+            gpu.relaxation.nonlinear_cg_direction.z,
+            gpu.rk.error.x,
+            gpu.rk.error.y,
+            gpu.rk.error.z,
+            gpu.rk.m_stage.x,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG preconditioned direction blocks", reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.m_stage.x,
+                blocks,
+                gpu.reductions.scalar_result + 4,
+                "launch GPU nonlinear-CG z-dot-gradient reduction",
+                reason)) {
+            return false;
+        }
+    } else {
+        fullmag_cuda_relax_ncg_gradient_direction_and_norm_blocks(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.fields.h_eff.x,
+            gpu.fields.h_eff.y,
+            gpu.fields.h_eff.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.nonlinear_cg_direction_valid,
             gradient.x,
             gradient.y,
             gradient.z,
-            static_cast<size_t>(n),
-            stream,
-            prec_err);
+            gpu.relaxation.nonlinear_cg_direction.x,
+            gpu.relaxation.nonlinear_cg_direction.y,
+            gpu.relaxation.nonlinear_cg_direction.z,
+            gpu.reductions.scalar_workspace,
+            gpu.rk.error.x,
+            gpu.rk.error.y,
+            gpu.rk.error.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG current gradient/direction blocks", reason)) {
+            return false;
+        }
+        std::string prec_err;
+        if (!gpu_relaxation_apply_preconditioner(
+                gpu.relaxation,
+                gradient,
+                gpu.relaxation.preconditioned_gradient,
+                static_cast<uint64_t>(n),
+                0.0,
+                stream,
+                prec_err)) {
+            reason = "GPU nonlinear-CG current preconditioner apply failed: " + prec_err;
+            return false;
+        }
     }
     if (!gpu_relax_reduce_scalar_sum(
             ctx,
@@ -657,6 +813,26 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             "launch GPU nonlinear-CG direction norm reduction",
             reason)) {
         return false;
+    }
+    if (use_preconditioner) {
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            gradient.x,
+            gradient.y,
+            gradient.z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            current_scalar_results + kNcgCurrentDirectionDotGradientTailSlot,
+            gpu.reductions.scalar_result + 4,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.nonlinear_cg_direction.x,
+            gpu.relaxation.nonlinear_cg_direction.y,
+            gpu.relaxation.nonlinear_cg_direction.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG current descent fallback", reason)) {
+            return false;
+        }
     }
 
     double scalars[4] = {0.0, 0.0, 0.0, 0.0};
@@ -772,53 +948,185 @@ bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
     double *pr_plus_numerator =
         gpu.reductions.scalar_result + kGpuFinalScalarSlots +
         kNcgPrPlusNumeratorTailSlot;
-    fullmag_cuda_relax_ncg_gradient_norm_and_pr_plus_blocks(
-        gpu.magnetization.m.x,
-        gpu.magnetization.m.y,
-        gpu.magnetization.m.z,
-        gpu.fields.h_eff.x,
-        gpu.fields.h_eff.y,
-        gpu.fields.h_eff.z,
-        gpu.rk.k[0].x,
-        gpu.rk.k[0].y,
-        gpu.rk.k[0].z,
-        gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
-        gpu_relax_ncg_node_mask(ctx),
-        gpu.rk.k[1].x,
-        gpu.rk.k[1].y,
-        gpu.rk.k[1].z,
-        gpu.reductions.scalar_workspace,
-        gpu.rk.error.x,
-        gpu.rk.error.y,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG accepted gradient/PR+ blocks", reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
+
+    if (gpu.relaxation.preconditioner.is_active()) {
+        fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.fields.h_eff.x,
+            gpu.fields.h_eff.y,
+            gpu.fields.h_eff.z,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
             gpu.reductions.scalar_workspace,
-            blocks,
-            accepted_gradient_norm_sq,
-            "launch GPU nonlinear-CG accepted gradient norm reduction",
-            reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG accepted tangent gradient blocks", reason)) {
+            return false;
+        }
+        const double exchange_weight =
+            relaxation::exchange_hessian_scale_from_step_m_per_a(ctx.relaxation.step_size);
+        std::string prec_err;
+        if (!gpu_relaxation_apply_preconditioner(
+                gpu.relaxation,
+                gpu.rk.k[1],
+                gpu.relaxation.preconditioned_gradient,
+                static_cast<uint64_t>(n),
+                exchange_weight,
+                stream,
+                prec_err)) {
+            reason = "GPU nonlinear-CG accepted preconditioner apply failed: " + prec_err;
+            return false;
+        }
+        fullmag_cuda_relax_project_tangent_field(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG accepted preconditioned tangent projection", reason)) {
+            return false;
+        }
+        fullmag_cuda_relax_ncg_preconditioned_pr_plus_blocks(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.rk.k[0].x,
+            gpu.rk.k[0].y,
+            gpu.rk.k[0].z,
+            gpu.relaxation.previous_preconditioned_gradient.x,
+            gpu.relaxation.previous_preconditioned_gradient.y,
+            gpu.relaxation.previous_preconditioned_gradient.z,
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
             gpu.rk.error.x,
-            blocks,
-            previous_gradient_energy_norm_sq,
-            "launch GPU nonlinear-CG previous gradient energy norm reduction",
-            reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
             gpu.rk.error.y,
-            blocks,
-            pr_plus_numerator,
-            "launch GPU nonlinear-CG PR+ numerator reduction",
-            reason)) {
-        return false;
+            gpu.rk.error.z,
+            gpu.rk.m_stage.x,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG preconditioned PR+ blocks", reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.reductions.scalar_workspace,
+                blocks,
+                accepted_gradient_norm_sq,
+                "launch GPU nonlinear-CG accepted gradient norm reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.y,
+                blocks,
+                previous_gradient_energy_norm_sq,
+                "launch GPU nonlinear-CG previous gradient energy norm reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.x,
+                blocks,
+                pr_plus_numerator,
+                "launch GPU nonlinear-CG PR+ numerator reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.z,
+                blocks,
+                gpu.reductions.scalar_result + kGpuFinalScalarSlots + 3,
+                "launch GPU nonlinear-CG PR+ abs denominator reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.m_stage.x,
+                blocks,
+                gpu.reductions.scalar_result + kGpuFinalScalarSlots + 4,
+                "launch GPU nonlinear-CG accepted z-dot-g reduction",
+                reason)) {
+            return false;
+        }
+    } else {
+        fullmag_cuda_relax_ncg_gradient_norm_and_pr_plus_blocks(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.fields.h_eff.x,
+            gpu.fields.h_eff.y,
+            gpu.fields.h_eff.z,
+            gpu.rk.k[0].x,
+            gpu.rk.k[0].y,
+            gpu.rk.k[0].z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
+            gpu.reductions.scalar_workspace,
+            gpu.rk.error.x,
+            gpu.rk.error.y,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG accepted gradient/PR+ blocks", reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.reductions.scalar_workspace,
+                blocks,
+                accepted_gradient_norm_sq,
+                "launch GPU nonlinear-CG accepted gradient norm reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.x,
+                blocks,
+                previous_gradient_energy_norm_sq,
+                "launch GPU nonlinear-CG previous gradient energy norm reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.y,
+                blocks,
+                pr_plus_numerator,
+                "launch GPU nonlinear-CG PR+ numerator reduction",
+                reason)) {
+            return false;
+        }
+        std::string prec_err;
+        if (!gpu_relaxation_apply_preconditioner(
+                gpu.relaxation,
+                gpu.rk.k[1],
+                gpu.relaxation.preconditioned_gradient,
+                static_cast<uint64_t>(n),
+                0.0,
+                stream,
+                prec_err)) {
+            reason = "GPU nonlinear-CG accepted preconditioner apply failed: " + prec_err;
+            return false;
+        }
     }
     return true;
 }
@@ -915,80 +1223,172 @@ bool gpu_relax_prepare_descent_direction(
     auto &direction = gpu.relaxation.nonlinear_cg_direction;
     const bool reuse_gradient_scalars =
         !gpu.relaxation.nonlinear_cg_direction_valid;
-    fullmag_cuda_relax_ncg_prepare_direction_blocks(
-        gpu.rk.m_backup.x,
-        gpu.rk.m_backup.y,
-        gpu.rk.m_backup.z,
-        gpu.rk.k[0].x,
-        gpu.rk.k[0].y,
-        gpu.rk.k[0].z,
-        gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
-        gpu_relax_ncg_node_mask(ctx),
-        gpu.relaxation.nonlinear_cg_direction_valid,
-        direction.x,
-        direction.y,
-        direction.z,
-        gpu.reductions.scalar_workspace,
-        gpu.rk.error.x,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG direction preparation", reason)) {
-        return false;
-    }
-    if (!reuse_gradient_scalars &&
-        (!gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.reductions.scalar_workspace,
-            blocks,
-            gpu.reductions.scalar_result,
-            "launch GPU nonlinear-CG direction-dot-gradient reduction",
-            reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.rk.error.x,
-            blocks,
-            gpu.reductions.scalar_result + 1,
-            "launch GPU nonlinear-CG direction norm reduction",
-            reason))) {
-        return false;
-    }
-    if (reuse_gradient_scalars) {
-        p_dot_g = -gradient_energy_norm_sq;
-        direction_norm_sq = gradient_norm_sq;
-    } else {
-        double direction_scalars[2] = {0.0, 0.0};
-        if (!gpu_rk_read_control_scalar_results(
-                ctx,
-                stream,
-                "cudaMemcpyAsync GPU nonlinear-CG direction scalars device->host",
-                direction_scalars,
-                2,
-                reason)) {
-            return false;
-        }
-        p_dot_g = direction_scalars[0];
-        direction_norm_sq = direction_scalars[1];
-    }
-    if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
-        fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
+    if (gpu.relaxation.preconditioner.is_active()) {
+        fullmag_cuda_relax_ncg_prepare_preconditioned_direction_blocks(
+            gpu.rk.m_backup.x,
+            gpu.rk.m_backup.y,
+            gpu.rk.m_backup.z,
             gpu.rk.k[0].x,
             gpu.rk.k[0].y,
             gpu.rk.k[0].z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.nonlinear_cg_direction_valid,
+            direction.x,
+            direction.y,
+            direction.z,
+            gpu.rk.error.x,
+            gpu.reductions.scalar_workspace,
+            gpu.rk.error.y,
+            gpu.rk.error.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG direction preparation", reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.reductions.scalar_workspace,
+                blocks,
+                gpu.reductions.scalar_result,
+                "launch GPU nonlinear-CG direction-dot-gradient reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.y,
+                blocks,
+                gpu.reductions.scalar_result + 1,
+                "launch GPU nonlinear-CG direction norm reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.z,
+                blocks,
+                gpu.reductions.scalar_result + 2,
+                "launch GPU nonlinear-CG z-dot-gradient reduction",
+                reason)) {
+            return false;
+        }
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            gpu.rk.k[0].x,
+            gpu.rk.k[0].y,
+            gpu.rk.k[0].z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
             gpu.reductions.scalar_result,
+            gpu.reductions.scalar_result + 2,
             gpu_relax_ncg_node_mask(ctx),
             direction.x,
             direction.y,
             direction.z,
             n,
             stream);
-        if (!cuda_launch_ok("launch GPU nonlinear-CG descent reset", reason)) {
+        if (!cuda_launch_ok("launch GPU nonlinear-CG direction preparation descent fallback", reason)) {
             return false;
         }
-        p_dot_g = -gradient_energy_norm_sq;
-        direction_norm_sq = gradient_norm_sq;
+        double direction_scalars[3] = {0.0, 0.0, 0.0};
+        if (!gpu_rk_read_control_scalar_results(
+                ctx,
+                stream,
+                "cudaMemcpyAsync GPU nonlinear-CG direction scalars device->host",
+                direction_scalars,
+                3,
+                reason)) {
+            return false;
+        }
+        p_dot_g = direction_scalars[0];
+        direction_norm_sq = direction_scalars[1];
+        const double z_dot_g = direction_scalars[2];
+        if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
+            if (std::isfinite(z_dot_g) && z_dot_g > 0.0) {
+                p_dot_g = -z_dot_g;
+            } else {
+                p_dot_g = -gradient_energy_norm_sq;
+            }
+            direction_norm_sq = gradient_norm_sq;
+        }
+    } else {
+        fullmag_cuda_relax_ncg_prepare_direction_blocks(
+            gpu.rk.m_backup.x,
+            gpu.rk.m_backup.y,
+            gpu.rk.m_backup.z,
+            gpu.rk.k[0].x,
+            gpu.rk.k[0].y,
+            gpu.rk.k[0].z,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            gpu.relaxation.nonlinear_cg_direction_valid,
+            direction.x,
+            direction.y,
+            direction.z,
+            gpu.reductions.scalar_workspace,
+            gpu.rk.error.x,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG direction preparation", reason)) {
+            return false;
+        }
+        if (!reuse_gradient_scalars &&
+            (!gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.reductions.scalar_workspace,
+                blocks,
+                gpu.reductions.scalar_result,
+                "launch GPU nonlinear-CG direction-dot-gradient reduction",
+                reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.rk.error.x,
+                blocks,
+                gpu.reductions.scalar_result + 1,
+                "launch GPU nonlinear-CG direction norm reduction",
+                reason))) {
+            return false;
+        }
+        if (reuse_gradient_scalars) {
+            p_dot_g = -gradient_energy_norm_sq;
+            direction_norm_sq = gradient_norm_sq;
+        } else {
+            double direction_scalars[2] = {0.0, 0.0};
+            if (!gpu_rk_read_control_scalar_results(
+                    ctx,
+                    stream,
+                    "cudaMemcpyAsync GPU nonlinear-CG direction scalars device->host",
+                    direction_scalars,
+                    2,
+                    reason)) {
+                return false;
+            }
+            p_dot_g = direction_scalars[0];
+            direction_norm_sq = direction_scalars[1];
+        }
+        if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
+            fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
+                gpu.rk.k[0].x,
+                gpu.rk.k[0].y,
+                gpu.rk.k[0].z,
+                gpu.reductions.scalar_result,
+                gpu_relax_ncg_node_mask(ctx),
+                direction.x,
+                direction.y,
+                direction.z,
+                n,
+                stream);
+            if (!cuda_launch_ok("launch GPU nonlinear-CG descent reset", reason)) {
+                return false;
+            }
+            p_dot_g = -gradient_energy_norm_sq;
+            direction_norm_sq = gradient_norm_sq;
+        }
     }
     if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
         reason = "GPU nonlinear-CG produced a non-finite or non-descent direction";
@@ -1044,6 +1444,22 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                 gradient_energy_norm_sq,
                 p_dot_g,
                 direction_norm_sq,
+                reason)) {
+            return false;
+        }
+        if (!gpu_rk_copy_component_device(
+                gpu.relaxation.nonlinear_cg_direction,
+                gpu.relaxation.nonlinear_cg_direction_backup,
+                gpu.lifecycle.node_count,
+                stream,
+                "cudaMemcpyAsync GPU nonlinear-CG restart direction backup",
+                reason) ||
+            !gpu_rk_copy_component_device(
+                gpu.relaxation.preconditioned_gradient,
+                gpu.relaxation.previous_preconditioned_gradient,
+                gpu.lifecycle.node_count,
+                stream,
+                "cudaMemcpyAsync GPU nonlinear-CG restart preconditioned gradient backup",
                 reason)) {
             return false;
         }
@@ -1193,53 +1609,133 @@ bool gpu_relax_update_next_direction(
         kNcgPrPlusNumeratorTailSlot;
 
     auto &direction = gpu.relaxation.nonlinear_cg_direction;
-    fullmag_cuda_relax_ncg_update_direction_from_reduced_pr_plus(
-        gpu.magnetization.m.x,
-        gpu.magnetization.m.y,
-        gpu.magnetization.m.z,
-        gpu.rk.k[1].x,
-        gpu.rk.k[1].y,
-        gpu.rk.k[1].z,
-        gpu.relaxation.nonlinear_cg_direction_backup.x,
-        gpu.relaxation.nonlinear_cg_direction_backup.y,
-        gpu.relaxation.nonlinear_cg_direction_backup.z,
-        previous_gradient_energy_norm_sq,
-        pr_plus_numerator,
-        gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
-        gpu_relax_ncg_node_mask(ctx),
-        relaxation::reduction_roundoff_bound(3u * static_cast<size_t>(n)),
-        previous_direction_valid,
-        restart_step,
-        direction.x,
-        direction.y,
-        direction.z,
-        gpu.reductions.scalar_workspace,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG next direction update", reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
+    if (gpu.relaxation.preconditioner.is_active()) {
+        const double *pr_plus_denominator_abs =
+            gpu.reductions.scalar_result + kGpuFinalScalarSlots + 3;
+        const double *trial_z_dot_g =
+            gpu.reductions.scalar_result + kGpuFinalScalarSlots + 4;
+        fullmag_cuda_relax_ncg_update_direction_preconditioned_pr_plus(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
+            gpu.relaxation.nonlinear_cg_direction_backup.x,
+            gpu.relaxation.nonlinear_cg_direction_backup.y,
+            gpu.relaxation.nonlinear_cg_direction_backup.z,
+            pr_plus_numerator,
+            previous_gradient_energy_norm_sq,
+            pr_plus_denominator_abs,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            relaxation::reduction_roundoff_bound(3u * static_cast<size_t>(n)),
+            previous_direction_valid,
+            restart_step,
+            direction.x,
+            direction.y,
+            direction.z,
             gpu.reductions.scalar_workspace,
-            blocks,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG preconditioned PR+ next direction update", reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.reductions.scalar_workspace,
+                blocks,
+                gpu.reductions.scalar_result,
+                "launch GPU nonlinear-CG next direction descent reduction",
+                reason)) {
+            return false;
+        }
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
+            gpu.relaxation.preconditioned_gradient.x,
+            gpu.relaxation.preconditioned_gradient.y,
+            gpu.relaxation.preconditioned_gradient.z,
             gpu.reductions.scalar_result,
-            "launch GPU nonlinear-CG next direction descent reduction",
-            reason)) {
-        return false;
+            trial_z_dot_g,
+            gpu_relax_ncg_node_mask(ctx),
+            direction.x,
+            direction.y,
+            direction.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG next direction descent fallback", reason)) {
+            return false;
+        }
+    } else {
+        fullmag_cuda_relax_ncg_update_direction_from_reduced_pr_plus(
+            gpu.magnetization.m.x,
+            gpu.magnetization.m.y,
+            gpu.magnetization.m.z,
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
+            gpu.relaxation.nonlinear_cg_direction_backup.x,
+            gpu.relaxation.nonlinear_cg_direction_backup.y,
+            gpu.relaxation.nonlinear_cg_direction_backup.z,
+            previous_gradient_energy_norm_sq,
+            pr_plus_numerator,
+            gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass,
+            gpu_relax_ncg_node_mask(ctx),
+            relaxation::reduction_roundoff_bound(3u * static_cast<size_t>(n)),
+            previous_direction_valid,
+            restart_step,
+            direction.x,
+            direction.y,
+            direction.z,
+            gpu.reductions.scalar_workspace,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG next direction update", reason) ||
+            !gpu_relax_reduce_scalar_sum(
+                ctx,
+                stream,
+                gpu.reductions.scalar_workspace,
+                blocks,
+                gpu.reductions.scalar_result,
+                "launch GPU nonlinear-CG next direction descent reduction",
+                reason)) {
+            return false;
+        }
+        fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
+            gpu.rk.k[1].x,
+            gpu.rk.k[1].y,
+            gpu.rk.k[1].z,
+            gpu.reductions.scalar_result,
+            gpu_relax_ncg_node_mask(ctx),
+            direction.x,
+            direction.y,
+            direction.z,
+            n,
+            stream);
+        if (!cuda_launch_ok("launch GPU nonlinear-CG next direction device reset", reason)) {
+            return false;
+        }
     }
-    fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
-        gpu.rk.k[1].x,
-        gpu.rk.k[1].y,
-        gpu.rk.k[1].z,
-        gpu.reductions.scalar_result,
-        gpu_relax_ncg_node_mask(ctx),
-        direction.x,
-        direction.y,
-        direction.z,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU nonlinear-CG next direction device reset", reason)) {
+    if (!gpu_rk_copy_component_device(
+            gpu.rk.k[1],
+            gpu.rk.k[0],
+            gpu.lifecycle.node_count,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG cycle accepted gradient",
+            reason) ||
+        !gpu_rk_copy_component_device(
+            gpu.relaxation.preconditioned_gradient,
+            gpu.relaxation.previous_preconditioned_gradient,
+            gpu.lifecycle.node_count,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG cycle accepted preconditioned gradient",
+            reason)) {
         return false;
     }
     return true;
@@ -1268,6 +1764,18 @@ int gpu_relax_nonlinear_cg_step(
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
     const GpuRelaxNcgRollbackState rollback =
         capture_gpu_relax_ncg_rollback_state(ctx);
+
+    double initial_trial_step = kDefaultStepSize;
+    if (std::isfinite(ctx.relaxation.step_size) &&
+        ctx.relaxation.step_size > 0.0) {
+        initial_trial_step =
+            std::clamp(ctx.relaxation.step_size, kMinStepSize, kMaxStepSize);
+    }
+    if (!gpu_relax_ncg_prepare_preconditioner(
+            ctx, initial_trial_step, stream, reason)) {
+        error = reason;
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
 
     gpu_relax_ncg_project_frozen_reference(
         ctx, gpu.magnetization.m, stream);
@@ -1427,6 +1935,20 @@ int gpu_relax_nonlinear_cg_step(
             gpu.lifecycle.node_count,
             stream,
             "cudaMemcpyAsync GPU nonlinear-CG backup accepted H_eff",
+            reason) ||
+        !gpu_rk_copy_component_device(
+            gpu.relaxation.nonlinear_cg_direction,
+            gpu.relaxation.nonlinear_cg_direction_backup,
+            gpu.lifecycle.node_count,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG backup active direction",
+            reason) ||
+        !gpu_rk_copy_component_device(
+            gpu.relaxation.preconditioned_gradient,
+            gpu.relaxation.previous_preconditioned_gradient,
+            gpu.lifecycle.node_count,
+            stream,
+            "cudaMemcpyAsync GPU nonlinear-CG backup active preconditioned gradient",
             reason)) {
         return gpu_relax_restore_previous_state_after_failure(
             ctx,

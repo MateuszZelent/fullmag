@@ -1120,6 +1120,267 @@ __global__ void ncg_reset_direction_if_not_descent_kernel(
     pz[i] = -gz[i];
 }
 
+__global__ void ncg_preconditioned_pr_plus_kernel(
+    const double *trial_mx,
+    const double *trial_my,
+    const double *trial_mz,
+    const double *previous_gx,
+    const double *previous_gy,
+    const double *previous_gz,
+    const double *previous_zx,
+    const double *previous_zy,
+    const double *previous_zz,
+    const double *trial_gx,
+    const double *trial_gy,
+    const double *trial_gz,
+    const double *trial_zx,
+    const double *trial_zy,
+    const double *trial_zz,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double *block_numerator,
+    double *block_denominator,
+    double *block_denominator_abs,
+    double *block_trial_z_dot_g,
+    int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    double local_num = 0.0;
+    double local_den = 0.0;
+    double local_abs_den = 0.0;
+    double local_z_dot_g = 0.0;
+    if (i < n && active_node(magnetic_node_mask, i)) {
+        const double weight = kMu0 * ms[i] * node_weight(lumped_mass, i);
+
+        // 1. Transport previous z_k to tangent space of trial_m_{k+1}:
+        double z_trans_x = 0.0;
+        double z_trans_y = 0.0;
+        double z_trans_z = 0.0;
+        project_node_tangent(
+            trial_mx[i], trial_my[i], trial_mz[i],
+            previous_zx[i], previous_zy[i], previous_zz[i],
+            z_trans_x, z_trans_y, z_trans_z);
+
+        // 2. y_z = trial_z - z_transported
+        const double yz_x = trial_zx[i] - z_trans_x;
+        const double yz_y = trial_zy[i] - z_trans_y;
+        const double yz_z = trial_zz[i] - z_trans_z;
+
+        // 3. Numerator = < trial_g, y_z >_M
+        local_num = weight * (trial_gx[i] * yz_x + trial_gy[i] * yz_y + trial_gz[i] * yz_z);
+
+        // 4. Denominator = < previous_g, previous_z >_M
+        const double prev_gx = previous_gx[i];
+        const double prev_gy = previous_gy[i];
+        const double prev_gz = previous_gz[i];
+        const double prev_zx = previous_zx[i];
+        const double prev_zy = previous_zy[i];
+        const double prev_zz = previous_zz[i];
+
+        local_den = weight * (prev_gx * prev_zx + prev_gy * prev_zy + prev_gz * prev_zz);
+        local_abs_den = weight * (fabs(prev_gx * prev_zx) + fabs(prev_gy * prev_zy) + fabs(prev_gz * prev_zz));
+
+        // 5. trial_z_dot_g = < trial_z, trial_g >_M
+        local_z_dot_g = weight * (trial_zx[i] * trial_gx[i] + trial_zy[i] * trial_gy[i] + trial_zz[i] * trial_gz[i]);
+    }
+    double sum_num = 0.0;
+    double sum_den = 0.0;
+    double sum_abs_den = 0.0;
+    double sum_z_dot_g = 0.0;
+    block_reduce_quad_sum(
+        local_num, local_den, local_abs_den, local_z_dot_g,
+        sum_num, sum_den, sum_abs_den, sum_z_dot_g);
+    if (threadIdx.x == 0) {
+        block_numerator[blockIdx.x] = sum_num;
+        block_denominator[blockIdx.x] = sum_den;
+        block_denominator_abs[blockIdx.x] = sum_abs_den;
+        block_trial_z_dot_g[blockIdx.x] = sum_z_dot_g;
+    }
+}
+
+__global__ void ncg_update_direction_preconditioned_pr_plus_kernel(
+    const double *trial_mx,
+    const double *trial_my,
+    const double *trial_mz,
+    const double *trial_gx,
+    const double *trial_gy,
+    const double *trial_gz,
+    const double *trial_zx,
+    const double *trial_zy,
+    const double *trial_zz,
+    const double *previous_px,
+    const double *previous_py,
+    const double *previous_pz,
+    const double *pr_plus_numerator_scalar,
+    const double *pr_plus_denominator_scalar,
+    const double *pr_plus_denominator_abs_scalar,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double relative_roundoff_bound,
+    bool previous_direction_valid,
+    bool restart_step,
+    double *next_px,
+    double *next_py,
+    double *next_pz,
+    double *block_p_dot_g,
+    int n)
+{
+    const double den = pr_plus_denominator_scalar[0];
+    const double den_abs = pr_plus_denominator_abs_scalar[0];
+    const double num = pr_plus_numerator_scalar[0];
+    const double threshold = relative_roundoff_bound * den_abs;
+    double beta = 0.0;
+    if (previous_direction_valid &&
+        !restart_step &&
+        isfinite(den) && isfinite(den_abs) && isfinite(num) &&
+        isfinite(threshold) && den > threshold) {
+        beta = fmax(0.0, num / den);
+    }
+
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    double local_p_dot_g = 0.0;
+    if (i < n && active_node(magnetic_node_mask, i)) {
+        double transported_x = 0.0;
+        double transported_y = 0.0;
+        double transported_z = 0.0;
+        if (beta != 0.0) {
+            project_node_tangent(
+                trial_mx[i], trial_my[i], trial_mz[i],
+                previous_px[i], previous_py[i], previous_pz[i],
+                transported_x, transported_y, transported_z);
+        }
+        const double px = -trial_zx[i] + beta * transported_x;
+        const double py = -trial_zy[i] + beta * transported_y;
+        const double pz = -trial_zz[i] + beta * transported_z;
+        next_px[i] = px;
+        next_py[i] = py;
+        next_pz[i] = pz;
+        local_p_dot_g = kMu0 * ms[i] * node_weight(lumped_mass, i) *
+            (px * trial_gx[i] + py * trial_gy[i] + pz * trial_gz[i]);
+    } else if (i < n) {
+        next_px[i] = 0.0;
+        next_py[i] = 0.0;
+        next_pz[i] = 0.0;
+    }
+    const double sum = block_reduce_sum(local_p_dot_g);
+    if (threadIdx.x == 0) {
+        block_p_dot_g[blockIdx.x] = sum;
+    }
+}
+
+__global__ void ncg_preconditioned_descent_fallback_kernel(
+    const double *trial_gx,
+    const double *trial_gy,
+    const double *trial_gz,
+    const double *trial_zx,
+    const double *trial_zy,
+    const double *trial_zz,
+    const double *p_dot_g_scalar,
+    const double *trial_z_dot_g_scalar,
+    const uint8_t *magnetic_node_mask,
+    double *px,
+    double *py,
+    double *pz,
+    int n)
+{
+    const double p_dot_g = p_dot_g_scalar[0];
+    if (isfinite(p_dot_g) && p_dot_g < 0.0) {
+        return;
+    }
+
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    if (!active_node(magnetic_node_mask, i)) {
+        px[i] = 0.0;
+        py[i] = 0.0;
+        pz[i] = 0.0;
+        return;
+    }
+
+    const double z_dot_g = trial_z_dot_g_scalar[0];
+    if (isfinite(z_dot_g) && z_dot_g > 0.0) {
+        px[i] = -trial_zx[i];
+        py[i] = -trial_zy[i];
+        pz[i] = -trial_zz[i];
+    } else {
+        px[i] = -trial_gx[i];
+        py[i] = -trial_gy[i];
+        pz[i] = -trial_gz[i];
+    }
+}
+
+__global__ void ncg_prepare_preconditioned_direction_kernel(
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const double *gx,
+    const double *gy,
+    const double *gz,
+    const double *zx,
+    const double *zy,
+    const double *zz,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    bool direction_valid,
+    double *px,
+    double *py,
+    double *pz,
+    double *block_gradient_energy_norm_sq,
+    double *block_p_dot_g,
+    double *block_direction_norm_sq,
+    double *block_z_dot_g,
+    int n)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    double local_gradient_energy_norm = 0.0;
+    double local_p_dot_g = 0.0;
+    double local_direction_norm = 0.0;
+    double local_z_dot_g = 0.0;
+    if (i < n && active_node(magnetic_node_mask, i)) {
+        double dir_x = -zx[i];
+        double dir_y = -zy[i];
+        double dir_z = -zz[i];
+        if (direction_valid) {
+            project_node_tangent(
+                mx[i], my[i], mz[i],
+                px[i], py[i], pz[i],
+                dir_x, dir_y, dir_z);
+        }
+        px[i] = dir_x;
+        py[i] = dir_y;
+        pz[i] = dir_z;
+
+        const double volume_weight = node_weight(lumped_mass, i);
+        const double energy_weight = kMu0 * ms[i] * volume_weight;
+        local_gradient_energy_norm = energy_weight * (gx[i] * gx[i] + gy[i] * gy[i] + gz[i] * gz[i]);
+        local_p_dot_g = energy_weight * (dir_x * gx[i] + dir_y * gy[i] + dir_z * gz[i]);
+        local_direction_norm = volume_weight * (dir_x * dir_x + dir_y * dir_y + dir_z * dir_z);
+        local_z_dot_g = energy_weight * (zx[i] * gx[i] + zy[i] * gy[i] + zz[i] * gz[i]);
+    } else if (i < n) {
+        px[i] = 0.0;
+        py[i] = 0.0;
+        pz[i] = 0.0;
+    }
+    double sum_gradient_energy_norm = 0.0;
+    double sum_p_dot_g = 0.0;
+    double sum_direction_norm = 0.0;
+    double sum_z_dot_g = 0.0;
+    block_reduce_quad_sum(
+        local_gradient_energy_norm, local_p_dot_g, local_direction_norm, local_z_dot_g,
+        sum_gradient_energy_norm, sum_p_dot_g, sum_direction_norm, sum_z_dot_g);
+    if (threadIdx.x == 0) {
+        block_gradient_energy_norm_sq[blockIdx.x] = sum_gradient_energy_norm;
+        block_p_dot_g[blockIdx.x] = sum_p_dot_g;
+        block_direction_norm_sq[blockIdx.x] = sum_direction_norm;
+        block_z_dot_g[blockIdx.x] = sum_z_dot_g;
+    }
+}
+
 } // namespace
 
 void fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
@@ -1745,6 +2006,212 @@ void fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
         px,
         py,
         pz,
+        n);
+}
+
+void fullmag_cuda_relax_ncg_preconditioned_pr_plus_blocks(
+    const double *trial_mx,
+    const double *trial_my,
+    const double *trial_mz,
+    const double *previous_gx,
+    const double *previous_gy,
+    const double *previous_gz,
+    const double *previous_zx,
+    const double *previous_zy,
+    const double *previous_zz,
+    const double *trial_gx,
+    const double *trial_gy,
+    const double *trial_gz,
+    const double *trial_zx,
+    const double *trial_zy,
+    const double *trial_zz,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double *block_numerator,
+    double *block_denominator,
+    double *block_denominator_abs,
+    double *block_trial_z_dot_g,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    ncg_preconditioned_pr_plus_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        trial_mx,
+        trial_my,
+        trial_mz,
+        previous_gx,
+        previous_gy,
+        previous_gz,
+        previous_zx,
+        previous_zy,
+        previous_zz,
+        trial_gx,
+        trial_gy,
+        trial_gz,
+        trial_zx,
+        trial_zy,
+        trial_zz,
+        ms,
+        lumped_mass,
+        magnetic_node_mask,
+        block_numerator,
+        block_denominator,
+        block_denominator_abs,
+        block_trial_z_dot_g,
+        n);
+}
+
+void fullmag_cuda_relax_ncg_update_direction_preconditioned_pr_plus(
+    const double *trial_mx,
+    const double *trial_my,
+    const double *trial_mz,
+    const double *trial_gx,
+    const double *trial_gy,
+    const double *trial_gz,
+    const double *trial_zx,
+    const double *trial_zy,
+    const double *trial_zz,
+    const double *previous_px,
+    const double *previous_py,
+    const double *previous_pz,
+    const double *pr_plus_numerator_scalar,
+    const double *pr_plus_denominator_scalar,
+    const double *pr_plus_denominator_abs_scalar,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    double relative_roundoff_bound,
+    bool previous_direction_valid,
+    bool restart_step,
+    double *next_px,
+    double *next_py,
+    double *next_pz,
+    double *block_p_dot_g,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    ncg_update_direction_preconditioned_pr_plus_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        trial_mx,
+        trial_my,
+        trial_mz,
+        trial_gx,
+        trial_gy,
+        trial_gz,
+        trial_zx,
+        trial_zy,
+        trial_zz,
+        previous_px,
+        previous_py,
+        previous_pz,
+        pr_plus_numerator_scalar,
+        pr_plus_denominator_scalar,
+        pr_plus_denominator_abs_scalar,
+        ms,
+        lumped_mass,
+        magnetic_node_mask,
+        relative_roundoff_bound,
+        previous_direction_valid,
+        restart_step,
+        next_px,
+        next_py,
+        next_pz,
+        block_p_dot_g,
+        n);
+}
+
+void fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+    const double *trial_gx,
+    const double *trial_gy,
+    const double *trial_gz,
+    const double *trial_zx,
+    const double *trial_zy,
+    const double *trial_zz,
+    const double *p_dot_g_scalar,
+    const double *trial_z_dot_g_scalar,
+    const uint8_t *magnetic_node_mask,
+    double *px,
+    double *py,
+    double *pz,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    ncg_preconditioned_descent_fallback_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        trial_gx,
+        trial_gy,
+        trial_gz,
+        trial_zx,
+        trial_zy,
+        trial_zz,
+        p_dot_g_scalar,
+        trial_z_dot_g_scalar,
+        magnetic_node_mask,
+        px,
+        py,
+        pz,
+        n);
+}
+
+void fullmag_cuda_relax_ncg_prepare_preconditioned_direction_blocks(
+    const double *mx,
+    const double *my,
+    const double *mz,
+    const double *gx,
+    const double *gy,
+    const double *gz,
+    const double *zx,
+    const double *zy,
+    const double *zz,
+    const double *ms,
+    const double *lumped_mass,
+    const uint8_t *magnetic_node_mask,
+    bool direction_valid,
+    double *px,
+    double *py,
+    double *pz,
+    double *block_gradient_energy_norm_sq,
+    double *block_p_dot_g,
+    double *block_direction_norm_sq,
+    double *block_z_dot_g,
+    int n,
+    cudaStream_t stream)
+{
+    if (n <= 0) {
+        return;
+    }
+    const int blocks = (n + kBlockSize - 1) / kBlockSize;
+    ncg_prepare_preconditioned_direction_kernel<<<blocks, kBlockSize, 0, stream>>>(
+        mx,
+        my,
+        mz,
+        gx,
+        gy,
+        gz,
+        zx,
+        zy,
+        zz,
+        ms,
+        lumped_mass,
+        magnetic_node_mask,
+        direction_valid,
+        px,
+        py,
+        pz,
+        block_gradient_energy_norm_sq,
+        block_p_dot_g,
+        block_direction_norm_sq,
+        block_z_dot_g,
         n);
 }
 

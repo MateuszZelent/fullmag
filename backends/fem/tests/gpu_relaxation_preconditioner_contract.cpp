@@ -1,8 +1,10 @@
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
 #include "gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp"
+#include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
+#include "src/relaxation_numerics.hpp"
 
 #include <cuda_runtime.h>
 
@@ -1154,6 +1156,249 @@ void check_pgbb_raw_gradient_fallback_contract()
     check_vector_close(read_zz, host_gz, "fallback must copy raw gradient g.z into preconditioned z.z");
 }
 
+void check_ncg_preconditioned_pr_plus_parity_contract()
+{
+    using namespace fullmag::fem;
+    constexpr size_t n = 16;
+    constexpr double mu0 = 1.25663706212e-6;
+
+    std::vector<double> host_mx(n), host_my(n), host_mz(n);
+    std::vector<double> host_prev_gx(n), host_prev_gy(n), host_prev_gz(n);
+    std::vector<double> host_prev_zx(n), host_prev_zy(n), host_prev_zz(n);
+    std::vector<double> host_trial_gx(n), host_trial_gy(n), host_trial_gz(n);
+    std::vector<double> host_trial_zx(n), host_trial_zy(n), host_trial_zz(n);
+    std::vector<double> host_prev_px(n), host_prev_py(n), host_prev_pz(n);
+    std::vector<double> host_ms(n, 8.0e5);
+    std::vector<double> host_mass(n, 1.0e-24);
+    std::vector<uint8_t> host_mask(n, 1);
+
+    host_mask[0] = 0; // inactive node
+
+    for (size_t i = 0; i < n; ++i) {
+        const double angle = 0.2 * static_cast<double>(i);
+        host_mx[i] = std::cos(angle) * 0.8;
+        host_my[i] = std::sin(angle) * 0.8;
+        host_mz[i] = std::sqrt(std::max(0.0, 1.0 - host_mx[i] * host_mx[i] - host_my[i] * host_my[i]));
+
+        host_prev_gx[i] = 100.0 + 5.0 * static_cast<double>(i);
+        host_prev_gy[i] = 50.0 - 2.0 * static_cast<double>(i);
+        host_prev_gz[i] = 30.0 + 3.0 * static_cast<double>(i);
+
+        host_prev_zx[i] = host_prev_gx[i] * 1.5;
+        host_prev_zy[i] = host_prev_gy[i] * 0.8;
+        host_prev_zz[i] = host_prev_gz[i] * 2.0;
+
+        const double g_raw[3] = {-80.0 + 4.0 * static_cast<double>(i), 120.0 + static_cast<double>(i), -60.0 + 2.0 * static_cast<double>(i)};
+        const double dot_m = g_raw[0] * host_mx[i] + g_raw[1] * host_my[i] + g_raw[2] * host_mz[i];
+        host_trial_gx[i] = g_raw[0] - dot_m * host_mx[i];
+        host_trial_gy[i] = g_raw[1] - dot_m * host_my[i];
+        host_trial_gz[i] = g_raw[2] - dot_m * host_mz[i];
+
+        const double z_raw[3] = {host_trial_gx[i] * 1.8, host_trial_gy[i] * 0.9, host_trial_gz[i] * 1.4};
+        const double dot_mz = z_raw[0] * host_mx[i] + z_raw[1] * host_my[i] + z_raw[2] * host_mz[i];
+        host_trial_zx[i] = z_raw[0] - dot_mz * host_mx[i];
+        host_trial_zy[i] = z_raw[1] - dot_mz * host_my[i];
+        host_trial_zz[i] = z_raw[2] - dot_mz * host_mz[i];
+
+        host_prev_px[i] = -host_prev_zx[i] * 0.5;
+        host_prev_py[i] = -host_prev_zy[i] * 0.5;
+        host_prev_pz[i] = -host_prev_zz[i] * 0.5;
+    }
+
+    // CPU reference computation
+    double cpu_num = 0.0;
+    double cpu_den = 0.0;
+    double cpu_abs_den = 0.0;
+    double cpu_trial_z_dot_g = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        if (host_mask[i] == 0) continue;
+        const double w = mu0 * host_ms[i] * host_mass[i];
+        const double dot_m_z = host_mx[i] * host_prev_zx[i] +
+                               host_my[i] * host_prev_zy[i] +
+                               host_mz[i] * host_prev_zz[i];
+        const double z_trans_x = host_prev_zx[i] - dot_m_z * host_mx[i];
+        const double z_trans_y = host_prev_zy[i] - dot_m_z * host_my[i];
+        const double z_trans_z = host_prev_zz[i] - dot_m_z * host_mz[i];
+
+        const double yz_x = host_trial_zx[i] - z_trans_x;
+        const double yz_y = host_trial_zy[i] - z_trans_y;
+        const double yz_z = host_trial_zz[i] - z_trans_z;
+
+        cpu_num += w * (host_trial_gx[i] * yz_x + host_trial_gy[i] * yz_y + host_trial_gz[i] * yz_z);
+        cpu_den += w * (host_prev_gx[i] * host_prev_zx[i] + host_prev_gy[i] * host_prev_zy[i] + host_prev_gz[i] * host_prev_zz[i]);
+        cpu_abs_den += w * (std::abs(host_prev_gx[i] * host_prev_zx[i]) +
+                            std::abs(host_prev_gy[i] * host_prev_zy[i]) +
+                            std::abs(host_prev_gz[i] * host_prev_zz[i]));
+        cpu_trial_z_dot_g += w * (host_trial_zx[i] * host_trial_gx[i] +
+                                  host_trial_zy[i] * host_trial_gy[i] +
+                                  host_trial_zz[i] * host_trial_gz[i]);
+    }
+
+    const double roundoff = relaxation::reduction_roundoff_bound(3 * n);
+    double cpu_beta = 0.0;
+    if (cpu_den > roundoff * cpu_abs_den && std::isfinite(cpu_den) && std::isfinite(cpu_num)) {
+        cpu_beta = std::max(0.0, cpu_num / cpu_den);
+    }
+
+    std::vector<double> cpu_next_px(n, 0.0), cpu_next_py(n, 0.0), cpu_next_pz(n, 0.0);
+    double cpu_p_dot_g = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        if (host_mask[i] == 0) continue;
+        const double dot_m_p = host_mx[i] * host_prev_px[i] +
+                               host_my[i] * host_prev_py[i] +
+                               host_mz[i] * host_prev_pz[i];
+        const double p_trans_x = host_prev_px[i] - dot_m_p * host_mx[i];
+        const double p_trans_y = host_prev_py[i] - dot_m_p * host_my[i];
+        const double p_trans_z = host_prev_pz[i] - dot_m_p * host_mz[i];
+
+        const double px = -host_trial_zx[i] + cpu_beta * p_trans_x;
+        const double py = -host_trial_zy[i] + cpu_beta * p_trans_y;
+        const double pz = -host_trial_zz[i] + cpu_beta * p_trans_z;
+        cpu_next_px[i] = px;
+        cpu_next_py[i] = py;
+        cpu_next_pz[i] = pz;
+
+        const double w = mu0 * host_ms[i] * host_mass[i];
+        cpu_p_dot_g += w * (px * host_trial_gx[i] + py * host_trial_gy[i] + pz * host_trial_gz[i]);
+    }
+    if (!std::isfinite(cpu_p_dot_g) || cpu_p_dot_g >= 0.0) {
+        if (std::isfinite(cpu_trial_z_dot_g) && cpu_trial_z_dot_g > 0.0) {
+            for (size_t i = 0; i < n; ++i) {
+                if (host_mask[i] == 0) continue;
+                cpu_next_px[i] = -host_trial_zx[i];
+                cpu_next_py[i] = -host_trial_zy[i];
+                cpu_next_pz[i] = -host_trial_zz[i];
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                if (host_mask[i] == 0) continue;
+                cpu_next_px[i] = -host_trial_gx[i];
+                cpu_next_py[i] = -host_trial_gy[i];
+                cpu_next_pz[i] = -host_trial_gz[i];
+            }
+        }
+    }
+
+    DeviceBuffer<double> d_mx(n), d_my(n), d_mz(n);
+    DeviceBuffer<double> d_prev_gx(n), d_prev_gy(n), d_prev_gz(n);
+    DeviceBuffer<double> d_prev_zx(n), d_prev_zy(n), d_prev_zz(n);
+    DeviceBuffer<double> d_trial_gx(n), d_trial_gy(n), d_trial_gz(n);
+    DeviceBuffer<double> d_trial_zx(n), d_trial_zy(n), d_trial_zz(n);
+    DeviceBuffer<double> d_prev_px(n), d_prev_py(n), d_prev_pz(n);
+    DeviceBuffer<double> d_next_px(n), d_next_py(n), d_next_pz(n);
+    DeviceBuffer<double> d_ms(n), d_mass(n);
+    DeviceBuffer<uint8_t> d_mask(n);
+
+    d_mx.copy_from(host_mx); d_my.copy_from(host_my); d_mz.copy_from(host_mz);
+    d_prev_gx.copy_from(host_prev_gx); d_prev_gy.copy_from(host_prev_gy); d_prev_gz.copy_from(host_prev_gz);
+    d_prev_zx.copy_from(host_prev_zx); d_prev_zy.copy_from(host_prev_zy); d_prev_zz.copy_from(host_prev_zz);
+    d_trial_gx.copy_from(host_trial_gx); d_trial_gy.copy_from(host_trial_gy); d_trial_gz.copy_from(host_trial_gz);
+    d_trial_zx.copy_from(host_trial_zx); d_trial_zy.copy_from(host_trial_zy); d_trial_zz.copy_from(host_trial_zz);
+    d_prev_px.copy_from(host_prev_px); d_prev_py.copy_from(host_prev_py); d_prev_pz.copy_from(host_prev_pz);
+    d_ms.copy_from(host_ms); d_mass.copy_from(host_mass); d_mask.copy_from(host_mask);
+
+    const int blocks = (static_cast<int>(n) + 256 - 1) / 256;
+    DeviceBuffer<double> block_num(blocks), block_den(blocks), block_abs_den(blocks), block_z_dot_g(blocks);
+    DeviceBuffer<double> block_p_dot_g(blocks);
+    DeviceBuffer<double> d_scalar_num(1), d_scalar_den(1), d_scalar_abs_den(1), d_scalar_z_dot_g(1);
+    DeviceBuffer<double> d_scalar_p_dot_g(1);
+
+    fullmag_cuda_relax_ncg_preconditioned_pr_plus_blocks(
+        d_mx.get(), d_my.get(), d_mz.get(),
+        d_prev_gx.get(), d_prev_gy.get(), d_prev_gz.get(),
+        d_prev_zx.get(), d_prev_zy.get(), d_prev_zz.get(),
+        d_trial_gx.get(), d_trial_gy.get(), d_trial_gz.get(),
+        d_trial_zx.get(), d_trial_zy.get(), d_trial_zz.get(),
+        d_ms.get(), d_mass.get(), d_mask.get(),
+        block_num.get(), block_den.get(), block_abs_den.get(), block_z_dot_g.get(),
+        static_cast<int>(n), nullptr);
+
+    size_t temp_bytes = 0;
+    fullmag_cuda_device_sum(block_num.get(), blocks, d_scalar_num.get(), nullptr, temp_bytes, nullptr);
+    DeviceBuffer<uint8_t> temp_storage(temp_bytes);
+    fullmag_cuda_device_sum(block_num.get(), blocks, d_scalar_num.get(), temp_storage.get(), temp_bytes, nullptr);
+    fullmag_cuda_device_sum(block_den.get(), blocks, d_scalar_den.get(), temp_storage.get(), temp_bytes, nullptr);
+    fullmag_cuda_device_sum(block_abs_den.get(), blocks, d_scalar_abs_den.get(), temp_storage.get(), temp_bytes, nullptr);
+    fullmag_cuda_device_sum(block_z_dot_g.get(), blocks, d_scalar_z_dot_g.get(), temp_storage.get(), temp_bytes, nullptr);
+
+    fullmag_cuda_relax_ncg_update_direction_preconditioned_pr_plus(
+        d_mx.get(), d_my.get(), d_mz.get(),
+        d_trial_gx.get(), d_trial_gy.get(), d_trial_gz.get(),
+        d_trial_zx.get(), d_trial_zy.get(), d_trial_zz.get(),
+        d_prev_px.get(), d_prev_py.get(), d_prev_pz.get(),
+        d_scalar_num.get(), d_scalar_den.get(), d_scalar_abs_den.get(),
+        d_ms.get(), d_mass.get(), d_mask.get(),
+        roundoff, true, false,
+        d_next_px.get(), d_next_py.get(), d_next_pz.get(),
+        block_p_dot_g.get(), static_cast<int>(n), nullptr);
+
+    fullmag_cuda_device_sum(block_p_dot_g.get(), blocks, d_scalar_p_dot_g.get(), temp_storage.get(), temp_bytes, nullptr);
+
+    fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+        d_trial_gx.get(), d_trial_gy.get(), d_trial_gz.get(),
+        d_trial_zx.get(), d_trial_zy.get(), d_trial_zz.get(),
+        d_scalar_p_dot_g.get(), d_scalar_z_dot_g.get(), d_mask.get(),
+        d_next_px.get(), d_next_py.get(), d_next_pz.get(),
+        static_cast<int>(n), nullptr);
+
+    check(cudaDeviceSynchronize() == cudaSuccess, "ncg kernels synchronize must succeed");
+
+    std::vector<double> gpu_num = d_scalar_num.copy_to_host();
+    std::vector<double> gpu_den = d_scalar_den.copy_to_host();
+    std::vector<double> gpu_abs_den = d_scalar_abs_den.copy_to_host();
+    std::vector<double> gpu_z_dot_g = d_scalar_z_dot_g.copy_to_host();
+    std::vector<double> read_next_px = d_next_px.copy_to_host();
+    std::vector<double> read_next_py = d_next_py.copy_to_host();
+    std::vector<double> read_next_pz = d_next_pz.copy_to_host();
+
+    check(close(gpu_num[0], cpu_num, 1.0e-12), "preconditioned PR+ numerator must match CPU reference");
+    check(close(gpu_den[0], cpu_den, 1.0e-12), "preconditioned PR+ denominator must match CPU reference");
+    check(close(gpu_abs_den[0], cpu_abs_den, 1.0e-12), "preconditioned PR+ abs denominator must match CPU reference");
+    check(close(gpu_z_dot_g[0], cpu_trial_z_dot_g, 1.0e-12), "preconditioned z_dot_g must match CPU reference");
+
+    check_vector_close(read_next_px, cpu_next_px, "preconditioned PR+ next_px must match CPU reference");
+    check_vector_close(read_next_py, cpu_next_py, "preconditioned PR+ next_py must match CPU reference");
+    check_vector_close(read_next_pz, cpu_next_pz, "preconditioned PR+ next_pz must match CPU reference");
+
+    // Tier 2 Fallback Test: Force candidate p_dot_g >= 0 with positive z_dot_g
+    {
+        double bad_p_dot_g = 100.0;
+        double good_z_dot_g = 50.0;
+        d_scalar_p_dot_g.copy_from({bad_p_dot_g});
+        d_scalar_z_dot_g.copy_from({good_z_dot_g});
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            d_trial_gx.get(), d_trial_gy.get(), d_trial_gz.get(),
+            d_trial_zx.get(), d_trial_zy.get(), d_trial_zz.get(),
+            d_scalar_p_dot_g.get(), d_scalar_z_dot_g.get(), d_mask.get(),
+            d_next_px.get(), d_next_py.get(), d_next_pz.get(),
+            static_cast<int>(n), nullptr);
+        check(cudaDeviceSynchronize() == cudaSuccess, "fallback Tier 2 synchronize must succeed");
+        read_next_px = d_next_px.copy_to_host();
+        for (size_t i = 1; i < n; ++i) {
+            check(close(read_next_px[i], -host_trial_zx[i], 1.0e-12), "fallback Tier 2 must select -z");
+        }
+    }
+
+    // Tier 3 Fallback Test: Force candidate p_dot_g >= 0 and z_dot_g <= 0 (non-descent -z)
+    {
+        double bad_p_dot_g = 100.0;
+        double bad_z_dot_g = -50.0;
+        d_scalar_p_dot_g.copy_from({bad_p_dot_g});
+        d_scalar_z_dot_g.copy_from({bad_z_dot_g});
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            d_trial_gx.get(), d_trial_gy.get(), d_trial_gz.get(),
+            d_trial_zx.get(), d_trial_zy.get(), d_trial_zz.get(),
+            d_scalar_p_dot_g.get(), d_scalar_z_dot_g.get(), d_mask.get(),
+            d_next_px.get(), d_next_py.get(), d_next_pz.get(),
+            static_cast<int>(n), nullptr);
+        check(cudaDeviceSynchronize() == cudaSuccess, "fallback Tier 3 synchronize must succeed");
+        read_next_px = d_next_px.copy_to_host();
+        for (size_t i = 1; i < n; ++i) {
+            check(close(read_next_px[i], -host_trial_gx[i], 1.0e-12), "fallback Tier 3 must select -g");
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -1165,6 +1410,7 @@ int main()
     check_sparse_exchange_mass_fixed_cg_contract();
     check_sparse_exchange_mass_mask_and_failure_contract();
     check_pgbb_raw_gradient_fallback_contract();
+    check_ncg_preconditioned_pr_plus_parity_contract();
 
     // Preserve the integrated full-potential source wiring checks while the
     // focused device tests above own the numerical preconditioner contract.
@@ -1173,8 +1419,8 @@ int main()
     if (!ncg_file.is_open()) ncg_file.open("../backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp");
     check(ncg_file.is_open(), "unable to open nonlinear_cg.cpp");
     std::string ncg_src((std::istreambuf_iterator<char>(ncg_file)), std::istreambuf_iterator<char>());
-    check(ncg_src.find("gpu.relaxation.preconditioner.apply_device_component") != std::string::npos,
-          "nonlinear_cg.cpp must wire gpu.relaxation.preconditioner.apply_device_component");
+    check(ncg_src.find("gpu_relaxation_apply_preconditioner") != std::string::npos,
+          "nonlinear_cg.cpp must wire gpu_relaxation_apply_preconditioner");
 
     std::ifstream pgbb_file("/workspace/backends/fem/gpu/cuda/relaxation/pgbb.cpp");
     if (!pgbb_file.is_open()) pgbb_file.open("backends/fem/gpu/cuda/relaxation/pgbb.cpp");

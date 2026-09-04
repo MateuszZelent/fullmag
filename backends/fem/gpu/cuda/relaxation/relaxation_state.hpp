@@ -100,6 +100,7 @@ struct FemGpuRelaxationDeviceState {
     FemGpuComponentField projected_gradient_accepted_h_eff;
     /* Raw tangent gradient g lives in RK k[0]; z always has its own storage. */
     FemGpuComponentField preconditioned_gradient;
+    FemGpuComponentField previous_preconditioned_gradient;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
     uint64_t node_count = 0;
