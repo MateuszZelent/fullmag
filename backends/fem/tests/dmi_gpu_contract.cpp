@@ -1,4 +1,5 @@
 #include "gpu/cuda/interactions/dmi/dmi_kernels.hpp"
+#include "gpu/cuda/interactions/dmi/dmi_geometry_cache.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_workspace_memory.hpp"
 #include "gpu/cuda/reductions/reduction_workspace_state.hpp"
@@ -173,6 +174,128 @@ void regular_case(bool bulk, FemGpuReductionWorkspaceDeviceState &workspace)
     require(close(energy,expected.energy),"energy oracle mismatch");
 }
 
+void colored_energy_repeated_case()
+{
+    constexpr int element_count = 257;
+    constexpr int node_count = 4 * element_count;
+    constexpr double sentinel = 9.87654321e123;
+    const std::array<std::array<double, 4>, 3> m = {{
+        {{0.2, 0.8, -0.1, 0.4}},
+        {{-0.3, 0.1, 0.7, -0.2}},
+        {{0.9, -0.4, 0.2, 0.5}},
+    }};
+    std::vector<double> host_nodes(static_cast<std::size_t>(node_count) * 3u);
+    std::vector<uint32_t> host_elements(static_cast<std::size_t>(element_count) * 4u);
+    std::vector<double> host_mx(node_count), host_my(node_count), host_mz(node_count);
+    for (int element = 0; element < element_count; ++element) {
+        const double base = 2.0 * static_cast<double>(element);
+        const int node = 4 * element;
+        const double coordinates[4][3] = {
+            {base, 0.0, 0.0},
+            {base + 1.0, 0.0, 0.0},
+            {base, 1.0, 0.0},
+            {base, 0.0, 1.0},
+        };
+        for (int local = 0; local < 4; ++local) {
+            host_elements[static_cast<std::size_t>(node + local)] =
+                static_cast<uint32_t>(node + local);
+            for (int component = 0; component < 3; ++component) {
+                host_nodes[static_cast<std::size_t>(3 * (node + local) + component)] =
+                    coordinates[local][component];
+            }
+            host_mx[node + local] = m[0][local];
+            host_my[node + local] = m[1][local];
+            host_mz[node + local] = m[2][local];
+        }
+    }
+    DeviceBuffer<double> nodes(host_nodes), mx(host_mx), my(host_my), mz(host_mz);
+    DeviceBuffer<uint32_t> elements(host_elements);
+    DeviceBuffer<uint8_t> element_mask(std::vector<uint8_t>(element_count, 1));
+    DeviceBuffer<uint8_t> node_mask(std::vector<uint8_t>(node_count, 1));
+    DeviceBuffer<double> ms(std::vector<double>(node_count, 8.0e5));
+    DeviceBuffer<double> mass(std::vector<double>(node_count, 1.0 / 24.0));
+    DeviceBuffer<double> rx(node_count), ry(node_count), rz(node_count);
+    DeviceBuffer<double> hx(node_count), hy(node_count), hz(node_count);
+
+    fullmag::fem::DmiGeometryCache cache;
+    std::string error;
+    require(
+        cache.build(
+            nodes.get(), elements.get(), element_mask.get(), element_count,
+            node_count, nullptr, error),
+        "colored DMI cache build failed");
+    require(cache.num_colors() == 1, "disjoint tetrahedra must use one color");
+    cache.set_accumulation_mode(fullmag::fem::DmiAccumulationMode::Coloring);
+
+    FemGpuReductionWorkspaceDeviceState workspace{};
+    uint64_t device_bytes = 0, workspace_bytes = 0;
+    require(
+        fullmag::fem::gpu_reduction_workspace_allocate(
+            workspace, node_count, device_bytes, workspace_bytes, error),
+        "colored DMI reduction workspace allocation failed");
+    const int partial_count = fullmag::fem::dmi_energy_partial_count(node_count);
+    const std::vector<double> sentinels(partial_count, sentinel);
+    const double expected_energy =
+        reference_dmi(m, false).energy * static_cast<double>(element_count);
+    auto *diagnostics = reinterpret_cast<DmiDiagnostics *>(workspace.dmi_diagnostics);
+
+    for (int repetition = 0; repetition < 2; ++repetition) {
+        cuda_require(
+            cudaMemcpy(
+                workspace.scalar_workspace, sentinels.data(),
+                static_cast<std::size_t>(partial_count) * sizeof(double),
+                cudaMemcpyHostToDevice),
+            "colored DMI energy sentinel upload");
+        cuda_require(
+            fullmag::fem::fullmag_cuda_dmi_field_energy_cached(
+                cache.device_view(), elements.get(), element_mask.get(), mx.get(), my.get(),
+                mz.get(), ms.get(), nullptr, mass.get(), node_mask.get(), rx.get(), ry.get(),
+                rz.get(), hx.get(), hy.get(), hz.get(), workspace.scalar_workspace,
+                diagnostics, DmiApplyRequest{true, true}, 8.0e5, 2.5e-3, 0.0, 0.0,
+                1.0, false, false, element_count, node_count, nullptr,
+                cache.accumulation_mode()),
+            "colored DMI field and energy");
+        size_t reduce_bytes = static_cast<std::size_t>(workspace.temp_storage_bytes);
+        fullmag::fem::fullmag_cuda_device_sum(
+            workspace.scalar_workspace, partial_count, workspace.scalar_result,
+            workspace.temp_storage, reduce_bytes);
+        cuda_require(cudaDeviceSynchronize(), "colored DMI energy synchronize");
+        double energy = 0.0;
+        cuda_require(
+            cudaMemcpy(
+                &energy, workspace.scalar_result, sizeof(double), cudaMemcpyDeviceToHost),
+            "colored DMI energy download");
+        require(close(energy, expected_energy), "colored DMI energy accumulated stale partials");
+    }
+
+    cuda_require(
+        cudaMemcpy(
+            workspace.scalar_workspace, sentinels.data(),
+            static_cast<std::size_t>(partial_count) * sizeof(double),
+            cudaMemcpyHostToDevice),
+        "colored DMI field-only sentinel upload");
+    cuda_require(
+        fullmag::fem::fullmag_cuda_dmi_field_energy_cached(
+            cache.device_view(), elements.get(), element_mask.get(), mx.get(), my.get(), mz.get(),
+            ms.get(), nullptr, mass.get(), node_mask.get(), rx.get(), ry.get(), rz.get(), hx.get(),
+            hy.get(), hz.get(), workspace.scalar_workspace, diagnostics,
+            DmiApplyRequest{true, false}, 8.0e5, 2.5e-3, 0.0, 0.0, 1.0, false, false,
+            element_count, node_count, nullptr, cache.accumulation_mode()),
+        "colored DMI field-only");
+    cuda_require(cudaDeviceSynchronize(), "colored DMI field-only synchronize");
+    std::vector<double> untouched(partial_count);
+    cuda_require(
+        cudaMemcpy(
+            untouched.data(), workspace.scalar_workspace,
+            static_cast<std::size_t>(partial_count) * sizeof(double),
+            cudaMemcpyDeviceToHost),
+        "colored DMI field-only sentinel download");
+    require(untouched == sentinels, "colored DMI field-only touched energy storage");
+    const auto counts = download_diagnostics(diagnostics);
+    require(counts[0] == 0 && counts[1] == 0, "colored DMI diagnostics nonzero");
+    fullmag::fem::gpu_reduction_workspace_free(workspace);
+}
+
 void invalid_case(bool nonfinite, DmiDiagnostics *diagnostics)
 {
     std::vector<double> host_nodes={0,0,0,1,0,0,0,1,0,0,0,nonfinite?1.0:0.0};
@@ -198,7 +321,7 @@ int main()
     require(device_bytes==workspace_bytes,"reduction workspace device-byte accounting mismatch");
     auto *diagnostics=reinterpret_cast<DmiDiagnostics*>(workspace.dmi_diagnostics);
     require(fullmag::fem::dmi_energy_partial_count(INT_MAX)==INT_MAX/256+(INT_MAX%256!=0),"partial count overflow");
-    regular_case(false,workspace); regular_case(true,workspace); invalid_case(false,diagnostics); invalid_case(true,diagnostics);
+    regular_case(false,workspace); regular_case(true,workspace); colored_energy_repeated_case(); invalid_case(false,diagnostics); invalid_case(true,diagnostics);
     DeviceBuffer<double> values(std::vector<double>{1,2,3,4,5}),scratch(5),result(1);
     cuda_require(fullmag::fem::fullmag_cuda_dmi_pairwise_sum(values.get(),scratch.get(),5,result.get()),"pairwise reduction");
     cuda_require(cudaDeviceSynchronize(),"pairwise synchronize"); require(result.download()[0]==15.0,"pairwise mismatch");

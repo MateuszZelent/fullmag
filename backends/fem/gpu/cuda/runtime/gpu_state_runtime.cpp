@@ -9,7 +9,9 @@
 
 #include "context.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
+#include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
+#include "gpu/cuda/runtime/nvtx_ranges.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/transfer/snapshot_pool.hpp"
@@ -40,7 +42,26 @@ bool gpu_bootstrap_failed(Context &ctx, std::string &error) {
 
 } // namespace
 
+bool initialize_context_gpu_demag_workspace(Context &ctx, std::string &error)
+{
+#if FULLMAG_HAS_MFEM_STACK
+    switch (ctx.poisson_demag.gpu_demag_mode) {
+    case FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON:
+        return gpu_demag_poisson_initialize(ctx, error);
+    case FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM:
+        return gpu_demag_fem_bem_initialize(ctx, error);
+    default:
+        return true;
+    }
+#else
+    (void)ctx;
+    (void)error;
+    return true;
+#endif
+}
+
 bool initialize_context_gpu_state(Context &ctx, std::string &error) {
+    FULLMAG_NVTX_RANGE("fem.gpu.setup");
     bool allocate_gpu_state = false;
 #if FULLMAG_HAS_CUDA_RUNTIME
     allocate_gpu_state = ctx.mfem_device.device_info_cache.is_gpu_enabled != 0;
@@ -79,7 +100,8 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     }
 #endif
 #if FULLMAG_HAS_MFEM_STACK
-    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+    if ((ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+         ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) &&
         !ctx.gpu_state.device.lifecycle.allocated) {
         error =
             "strict FEM GPU demag requires an MFEM GPU device before FemGpuState demag buffers can be allocated";
@@ -209,7 +231,7 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
     if (!context_upload_mfem_exchange_to_gpu_state(ctx, error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
-    if (!gpu_demag_poisson_initialize(ctx, error)) {
+    if (!initialize_context_gpu_demag_workspace(ctx, error)) {
         return gpu_bootstrap_failed(ctx, error);
     }
 #endif

@@ -139,6 +139,48 @@ void destroy_scalar_operator(DeviceCsrScalar &operator_data)
 }
 #endif
 
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+bool hypre_vector_norm_l2(
+    mfem::HypreParVector &vector,
+    double &norm,
+    const char *operation,
+    std::string &error)
+{
+    HYPRE_Real norm_squared = 0.0;
+    HYPRE_ClearAllErrors();
+    const HYPRE_Int status = HYPRE_ParVectorInnerProd(
+        vector, vector, &norm_squared);
+    if (status != 0) {
+        error = std::string(operation) + " failed with HYPRE status " +
+            std::to_string(status);
+        return false;
+    }
+    if (!std::isfinite(norm_squared) || norm_squared < 0.0) {
+        error = std::string(operation) + " returned an invalid squared norm";
+        return false;
+    }
+    norm = std::sqrt(norm_squared);
+    return true;
+}
+
+bool hypre_vector_axpy(
+    double alpha,
+    mfem::HypreParVector &x,
+    mfem::HypreParVector &y,
+    const char *operation,
+    std::string &error)
+{
+    HYPRE_ClearAllErrors();
+    const HYPRE_Int status = HYPRE_ParVectorAxpy(alpha, x, y);
+    if (status == 0) {
+        return true;
+    }
+    error = std::string(operation) + " failed with HYPRE status " +
+        std::to_string(status);
+    return false;
+}
+#endif
+
 #if FULLMAG_HAS_MFEM_STACK
 bool copy_sparse_matrix_to_device_scalar(
     const mfem::SparseMatrix &source,
@@ -429,20 +471,32 @@ bool solve_linear_system(
         validate_independent_residual ||
         ctx.demag.solver.has_absolute_tolerance != 0;
     double rhs_norm = 0.0;
-    if (rhs_norm_required) {
-        rhs_norm = system.b_par->Norml2();
+    if (rhs_norm_required &&
+        !hypre_vector_norm_l2(
+            *system.b_par,
+            rhs_norm,
+            "strict FEM GPU Fredkin-Koehler RHS norm",
+            error)) {
+        return close_hypre_dependency(false);
     }
     double absolute_residual =
         rhs_norm_required ? relative_residual * rhs_norm : 0.0;
     bool residual_independently_certified = false;
     if (validate_independent_residual) {
         system.A_par->Mult(*system.x_par, *system.residual);
-        if (!mfem_default_stream_wait_for_hypre_validation(
-                stream_lease, error)) {
+        if (!hypre_vector_axpy(
+                -1.0,
+                *system.b_par,
+                *system.residual,
+                "strict FEM GPU Fredkin-Koehler residual AXPY",
+                error) ||
+            !hypre_vector_norm_l2(
+                *system.residual,
+                absolute_residual,
+                "strict FEM GPU Fredkin-Koehler residual norm",
+                error)) {
             return close_hypre_dependency(false);
         }
-        system.residual->Add(-1.0, *system.b_par);
-        absolute_residual = system.residual->Norml2();
         relative_residual = rhs_norm > 0.0
             ? absolute_residual / rhs_norm
             : absolute_residual;

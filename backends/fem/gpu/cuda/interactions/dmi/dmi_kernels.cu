@@ -455,8 +455,7 @@ __global__ void dmi_cached_element_residual_colored_kernel(
     int total_element_count,
     int node_count)
 {
-    __shared__ double block_energy[kBlockSize];
-    double thread_energy = 0.0;
+    (void)energy_partials;
 
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
          idx < color_count;
@@ -574,21 +573,6 @@ __global__ void dmi_cached_element_residual_colored_kernel(
             }
         }
 
-        double energy = 0.0;
-        if (request.energy) {
-            if (bulk_mode) {
-                energy = elem_d *
-                    (m_q[0] * curl_m[0] + m_q[1] * curl_m[1] + m_q[2] * curl_m[2]) *
-                    weight;
-            } else {
-                const double m_grad_mn =
-                    m_q[0] * grad_m_dot_n[0] +
-                    m_q[1] * grad_m_dot_n[1] +
-                    m_q[2] * grad_m_dot_n[2];
-                energy = elem_d * (m_dot_n * div_m - m_grad_mn) * weight;
-            }
-            finite_result = finite_result && isfinite(energy);
-        }
         if (!finite_result) {
             atomicAdd(
                 reinterpret_cast<unsigned long long *>(&diagnostics->nonfinite_count),
@@ -603,23 +587,6 @@ __global__ void dmi_cached_element_residual_colored_kernel(
                 dmi_atomic_add_double(&residual_y[node], element_residual[local][1]);
                 dmi_atomic_add_double(&residual_z[node], element_residual[local][2]);
             }
-        }
-        if (request.energy) {
-            thread_energy += energy;
-        }
-    }
-
-    if (request.energy) {
-        block_energy[threadIdx.x] = thread_energy;
-        __syncthreads();
-        for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
-            if (threadIdx.x < offset) {
-                block_energy[threadIdx.x] += block_energy[threadIdx.x + offset];
-            }
-            __syncthreads();
-        }
-        if (threadIdx.x == 0 && energy_partials != nullptr) {
-            atomicAdd(&energy_partials[0], block_energy[0]);
         }
     }
 }
@@ -1039,8 +1006,9 @@ cudaError_t fullmag_cuda_dmi_field_energy_cached(
 
     const int node_blocks = dmi_energy_partial_count(node_count);
     if (element_count > 0) {
-        if (mode == DmiAccumulationMode::Coloring && geometry_cache.num_colors > 0 &&
+        if (request.field && mode == DmiAccumulationMode::Coloring && geometry_cache.num_colors > 0 &&
             geometry_cache.host_color_offsets != nullptr && geometry_cache.colored_elements != nullptr) {
+            const DmiApplyRequest field_only_request{true, false};
             for (int c = 0; c < geometry_cache.num_colors; ++c) {
                 const uint32_t offset = geometry_cache.host_color_offsets[c];
                 const uint32_t count = geometry_cache.host_color_offsets[c + 1] - offset;
@@ -1063,9 +1031,45 @@ cudaError_t fullmag_cuda_dmi_field_energy_cached(
                     residual_x,
                     residual_y,
                     residual_z,
+                    nullptr,
+                    diagnostics,
+                    field_only_request,
+                    uniform_d,
+                    nx,
+                    ny,
+                    nz,
+                    use_d_field,
+                    bulk_mode,
+                    element_count,
+                    node_count);
+                status = cudaPeekAtLastError();
+                if (status != cudaSuccess) {
+                    return status;
+                }
+            }
+            if (request.energy) {
+                status = cudaMemsetAsync(
+                    diagnostics, 0, sizeof(DmiDiagnostics), stream);
+                if (status != cudaSuccess) {
+                    return status;
+                }
+                dmi_cached_element_residual_kernel<<<node_blocks, kBlockSize, 0, stream>>>(
+                    geometry_cache.grads,
+                    geometry_cache.volume,
+                    geometry_cache.valid_mask,
+                    elements,
+                    magnetic_element_mask,
+                    mx,
+                    my,
+                    mz,
+                    ms,
+                    d_field,
+                    residual_x,
+                    residual_y,
+                    residual_z,
                     energy_partials,
                     diagnostics,
-                    request,
+                    DmiApplyRequest{false, true},
                     uniform_d,
                     nx,
                     ny,

@@ -1755,6 +1755,7 @@ int gpu_relax_nonlinear_cg_step(
             error);
     }
 
+    FULLMAG_NVTX_RANGE("fem.gpu.accepted_finalization");
     const uint64_t accepted_step = ctx.relaxation.accepted_steps + 1u;
     if (!gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
             ctx,

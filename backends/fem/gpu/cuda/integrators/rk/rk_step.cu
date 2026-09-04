@@ -17,6 +17,7 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 
+#include <chrono>
 #include <string>
 
 namespace fullmag::fem {
@@ -79,6 +80,7 @@ bool gpu_rk_device_resident_step(
         }
     }
 
+    const auto finalization_start = std::chrono::steady_clock::now();
     if (!gpu_rk_finalize_accepted_step(
             ctx,
             preflight.stream,
@@ -101,6 +103,14 @@ bool gpu_rk_device_resident_step(
         }
         return false;
     }
+    const auto finalization_wall_time_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - finalization_start)
+            .count());
+    gpu_execution_receipt_note_performance_phase(
+        ctx.gpu_state.execution_receipt,
+        FemGpuPerformancePhase::AcceptedFinalization,
+        finalization_wall_time_ns);
     gpu_execution_receipt_note_device(
         ctx.gpu_state.execution_receipt,
         FEM_GPU_OPERATOR_RK_STEPPER);

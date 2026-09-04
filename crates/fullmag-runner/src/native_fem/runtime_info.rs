@@ -1,12 +1,9 @@
 use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
-use crate::fem::execution_receipt::{
-    validate_fem_gpu_performance_snapshot, FemGpuPerformanceSnapshotSummary,
-    FemGpuPerformanceSnapshotValidationError, FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
-    FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
+use crate::types::{
+    FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuPerformanceSnapshotV2, RunError,
 };
-use crate::types::{FemGpuExecutionClass, FemGpuExecutionReceipt, RunError};
 
 use std::ffi::CStr;
 
@@ -441,84 +438,43 @@ impl NativeFemGpuExecutionReceipt {
     }
 }
 
-/// Validated native performance evidence.  The raw append-only ABI is kept
-/// alongside the compact summary so diagnostics can expose every counter
-/// without inventing a second counter vocabulary in Rust.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NativeFemGpuPerformanceSnapshot {
-    pub(crate) summary: FemGpuPerformanceSnapshotSummary,
-    pub(crate) raw: ffi::fullmag_fem_gpu_performance_snapshot_v1,
+    pub(crate) snapshot: FemGpuPerformanceSnapshotV2,
 }
 
 impl NativeFemGpuPerformanceSnapshot {
     pub(crate) fn from_ffi(
-        snapshot: ffi::fullmag_fem_gpu_performance_snapshot_v1,
+        snapshot: ffi::fullmag_fem_gpu_performance_snapshot_v2,
     ) -> Result<Self, RunError> {
-        let execution_class = match snapshot.execution_class {
-            value
-                if value
-                    == ffi::fullmag_fem_gpu_execution_class_v1::
-                        FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
-                        as u32 => FemGpuExecutionClass::DeviceResident,
-            value
-                if value
-                    == ffi::fullmag_fem_gpu_execution_class_v1::
-                        FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER
-                        as u32 => FemGpuExecutionClass::GpuOperatorHostSolver,
-            value
-                if value
-                    == ffi::fullmag_fem_gpu_execution_class_v1::
-                        FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
-                        as u32 => FemGpuExecutionClass::HybridCpuPoisson,
-            value
-                if value
-                    == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_CPU
-                        as u32 => FemGpuExecutionClass::Cpu,
-            _ => return Err(receipt_error("performance_snapshot_unknown_execution_class")),
-        };
-        let summary = FemGpuPerformanceSnapshotSummary {
-            abi_version: snapshot.abi_version,
-            struct_size: snapshot.struct_size,
-            available: snapshot.available != 0,
-            execution_class,
-            completed_step: snapshot.completed_step,
-            completed_attempt_count: snapshot.completed_attempt_count,
-            rejected_attempt_count: snapshot.rejected_attempt_count,
-            failed_attempt_count: snapshot.failed_attempt_count,
-            physical_rhs_evaluations: snapshot.physical_rhs_evaluations,
-            accepted_rhs_evaluations: snapshot.accepted_rhs_evaluations,
-            physical_device_to_device_bytes: snapshot.physical_device_to_device_bytes,
-            accepted_device_to_device_bytes: snapshot.accepted_device_to_device_bytes,
-        };
-        validate_fem_gpu_performance_snapshot(&summary).map_err(|error| {
-            let token = match error {
-                FemGpuPerformanceSnapshotValidationError::AbiMismatch => {
-                    "performance_snapshot_abi_mismatch"
-                }
-                FemGpuPerformanceSnapshotValidationError::Unavailable => {
-                    "performance_snapshot_unavailable"
-                }
-                FemGpuPerformanceSnapshotValidationError::ExecutionClassMismatch => {
-                    "performance_snapshot_execution_class_mismatch"
-                }
-                FemGpuPerformanceSnapshotValidationError::NoCompletedStep => {
-                    "performance_snapshot_no_completed_step"
-                }
-                FemGpuPerformanceSnapshotValidationError::AcceptedCountersExceedPhysical => {
-                    "performance_snapshot_accounting_invalid"
-                }
-            };
-            receipt_error(token)
-        })?;
+        if snapshot.abi_version != ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION
+            || snapshot.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v2>() as u32
+        {
+            return Err(receipt_error("performance_snapshot_v2_abi_mismatch"));
+        }
         Ok(Self {
-            summary,
-            raw: snapshot,
+            snapshot: FemGpuPerformanceSnapshotV2 {
+                abi_version: snapshot.abi_version,
+                struct_size: snapshot.struct_size,
+                setup_count: snapshot.setup_count,
+                apply_count: snapshot.apply_count,
+                kernel_launch_count: snapshot.kernel_launch_count,
+                compute_fence_count: snapshot.compute_fence_count,
+                snapshot_fence_count: snapshot.snapshot_fence_count,
+                export_fence_count: snapshot.export_fence_count,
+                selected_sparse_kernel_id: snapshot.selected_sparse_kernel_id,
+                setup_wall_time_ns: snapshot.setup_wall_time_ns,
+                apply_wall_time_ns: snapshot.apply_wall_time_ns,
+                accepted_finalization_wall_time_ns: snapshot.accepted_finalization_wall_time_ns,
+            },
         })
     }
 
     pub(crate) fn abi_is_current(&self) -> bool {
-        self.summary.abi_version == FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1
-            && self.summary.struct_size == FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE
+        self.snapshot.abi_version == ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION
+            && self.snapshot.struct_size
+                == std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v2>() as u32
     }
 }
 
@@ -786,33 +742,34 @@ mod tests {
     }
 
     #[test]
-    fn performance_snapshot_maps_and_validates_native_evidence() {
-        let mut raw = ffi::fullmag_fem_gpu_performance_snapshot_v1 {
-            abi_version: FEM_GPU_PERFORMANCE_SNAPSHOT_ABI_V1,
-            struct_size: FEM_GPU_PERFORMANCE_SNAPSHOT_V1_SIZE,
-            available: 1,
-            execution_class:
-                ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
-                    as u32,
-            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
-            integrator: ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK23_BS as u32,
-            device_ordinal: 0,
-            completed_step: 1,
-            completed_attempt_count: 1,
-            physical_rhs_evaluations: 4,
-            accepted_rhs_evaluations: 3,
-            physical_device_to_device_bytes: 96,
-            accepted_device_to_device_bytes: 72,
-            ..Default::default()
+    fn performance_snapshot_v2_maps_every_native_field_without_v1_derivation() {
+        let mut raw = ffi::fullmag_fem_gpu_performance_snapshot_v2 {
+            abi_version: ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v2>() as u32,
+            setup_count: 1,
+            apply_count: 2,
+            kernel_launch_count: 3,
+            compute_fence_count: 4,
+            snapshot_fence_count: 5,
+            export_fence_count: 6,
+            selected_sparse_kernel_id: 7,
+            setup_wall_time_ns: 8,
+            apply_wall_time_ns: 9,
+            accepted_finalization_wall_time_ns: 10,
         };
         let parsed = NativeFemGpuPerformanceSnapshot::from_ffi(raw).unwrap();
         assert!(parsed.abi_is_current());
-        assert_eq!(
-            parsed.summary.execution_class,
-            FemGpuExecutionClass::DeviceResident
-        );
-        assert_eq!(parsed.summary.accepted_rhs_evaluations, 3);
-        raw.available = 0;
+        assert_eq!(parsed.snapshot.setup_count, 1);
+        assert_eq!(parsed.snapshot.apply_count, 2);
+        assert_eq!(parsed.snapshot.kernel_launch_count, 3);
+        assert_eq!(parsed.snapshot.compute_fence_count, 4);
+        assert_eq!(parsed.snapshot.snapshot_fence_count, 5);
+        assert_eq!(parsed.snapshot.export_fence_count, 6);
+        assert_eq!(parsed.snapshot.selected_sparse_kernel_id, 7);
+        assert_eq!(parsed.snapshot.setup_wall_time_ns, 8);
+        assert_eq!(parsed.snapshot.apply_wall_time_ns, 9);
+        assert_eq!(parsed.snapshot.accepted_finalization_wall_time_ns, 10);
+        raw.abi_version = 0;
         assert!(NativeFemGpuPerformanceSnapshot::from_ffi(raw).is_err());
     }
 

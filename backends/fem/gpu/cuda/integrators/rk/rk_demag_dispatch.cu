@@ -13,6 +13,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag.hpp"
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
+#include "gpu/cuda/demag_fem_bem/fem_bem_dispatch.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -118,8 +119,15 @@ bool gpu_rk_compute_demag_for_device_stage(
             ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON
                 ? gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
                       ctx, m, stream, reason, true)
-                : compute_device_demag_for_device_stage_fresh(
-                      ctx, m, stream, kRkStageDemagRequest, reason);
+                : ctx.poisson_demag.gpu_demag_mode ==
+                        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM
+                ? compute_device_demag_fem_bem_for_device_stage(
+                      ctx, m, stream, true, false, reason)
+                : ctx.poisson_demag.gpu_demag_mode ==
+                        FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON
+                ? compute_device_demag_for_device_stage_fresh(
+                      ctx, m, stream, kRkStageDemagRequest, reason)
+                : (reason = "GPU RK demag requires an explicit supported GPU demag mode", false);
         if (refreshed) {
             ctx.poisson_demag.fresh_initial_guess_required = false;
         }
@@ -128,6 +136,14 @@ bool gpu_rk_compute_demag_for_device_stage(
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
         return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
             ctx, m, stream, reason, false);
+    }
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return compute_device_demag_fem_bem_for_device_stage(
+            ctx, m, stream, false, false, reason);
+    }
+    if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        reason = "GPU RK demag requires an explicit supported GPU demag mode";
+        return false;
     }
     return compute_device_demag_for_device_stage(
         ctx, m, stream, kRkStageDemagRequest, reason);
@@ -145,6 +161,14 @@ bool gpu_rk_compute_demag_for_device_stage_fresh(
     if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_HYBRID_CPU_POISSON) {
         return gpu_rk_compute_hybrid_cpu_demag_for_device_stage(
             ctx, m, stream, reason, true);
+    }
+    if (ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+        return compute_device_demag_fem_bem_for_device_stage(
+            ctx, m, stream, true, false, reason);
+    }
+    if (ctx.poisson_demag.gpu_demag_mode != FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        reason = "GPU RK demag requires an explicit supported GPU demag mode";
+        return false;
     }
     return compute_device_demag_for_device_stage_fresh(
         ctx, m, stream, kRkStageDemagRequest, reason);

@@ -9,6 +9,7 @@
 #include "gpu/cuda/integrators/rk/rk.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/exchange/exchange_plan.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
@@ -237,7 +238,8 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
             plan.hypre_execution_policy = "host";
             plan.demag_residency = "host_device_roundtrip";
             plan.execution_class = FemGpuExecutionClass::HybridCpuPoisson;
-        } else {
+        } else if (ctx.poisson_demag.gpu_demag_mode ==
+                   FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
             plan.demag_operator_mode = gpu_demag_poisson_operator_mode(ctx);
             plan.hypre_execution_policy = gpu_demag_poisson_hypre_policy(ctx);
             plan.demag_residency = gpu_demag_poisson_ready(ctx) ? "device" : "unavailable";
@@ -246,6 +248,18 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
                 reason = "GPU RK strict demag requires device_hypre_poisson workspace";
                 return plan;
             }
+        } else if (ctx.poisson_demag.gpu_demag_mode ==
+                   FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+            plan.demag_operator_mode = gpu_demag_fem_bem_operator_mode(ctx);
+            plan.hypre_execution_policy = "device_hypre";
+            plan.demag_residency = gpu_demag_fem_bem_ready(ctx) ? "device" : "unavailable";
+            if (!gpu_demag_fem_bem_ready(ctx)) {
+                reason = "GPU RK strict demag requires device_hypre_fem_bem workspace";
+                return plan;
+            }
+        } else {
+            reason = "GPU RK strict demag requires an explicit device_hypre_poisson or device_hypre_fem_bem mode";
+            return plan;
         }
 #else
         reason = "GPU RK demag requires MFEM stack";

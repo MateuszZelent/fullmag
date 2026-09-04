@@ -499,6 +499,9 @@ ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error
 FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol -- --exact --nocapture
 CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field -- --exact --nocapture
 CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2 -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::runtime_info::tests::performance_snapshot_v2_maps_every_native_field_without_v1_derivation -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu fem::relax::finalize::tests::completed_strict_finalization_publishes_complete_v2_performance_artifact -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu fem::relax::finalize::tests::noncompleted_or_nonstrict_finalization_never_publishes_performance_evidence -- --exact --nocapture
 "@
     $contractCommand = $contractCommand.Replace("`r`n", "`n").Replace("`r", "`n")
     $contractCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($contractCommand)

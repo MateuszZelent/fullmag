@@ -1,8 +1,10 @@
 # FEM Fredkin–Koehler: demagnetyzacja otwartej granicy
 
-- Status: źródło zaimportowane; wykonywalny kontrakt CPU full-solve oraz smoke
-  kernela i initialize→apply GPU VERIFIED; ścisły managed receipt, parity i
-  walidacja fizyczna filmu 500 x 500 x 10 nm pozostają NOT VERIFIED
+- Status: źródło zaimportowane; wykonywalny kontrakt CPU full-solve VERIFIED.
+  Remediacja GPU bootstrap→plan→dispatcher→snapshot oraz kontrakty stream
+  interop są source/contract VERIFIED w kontenerowej bramce 13 testów. Ścisły
+  managed production receipt, parity i walidacja fizyczna filmu
+  500 x 500 x 10 nm pozostają NOT VERIFIED.
 - Wersja dokumentu: 2026-09-02
 - Zakres: body-only tet4, skalarne FEM P1, dense BEM CPU i diagnostyczny
   ACA H-matrix BEM dla CUDA/Hypre GPU
@@ -320,6 +322,14 @@ walidacji, w tym po niezależnym `A*x-b`; ścieżka błędu nie niszczy eventu a
 nie pozwala kolejnemu konsumentowi Fullmag ominąć oczekiwania na strumień
 HYPRE. Kontrakt nie zmienia równań, znaków, jednostek ani wyboru solvera.
 
+Produkcyjna ścieżka GPU wybiera `device_hypre_fem_bem` jawnie w bootstrapie,
+plannerze i dispatcherze RK. Bootstrap tworzy wyłącznie
+`GpuDemagFemBemWorkspace`; dispatcher nie może przekierować tego trybu do
+Poissona, a snapshoty `H_demag` i `H_eff` pozostają na tej samej ścieżce RHS.
+Brak gotowego workspace, apply albo snapshotu kończy strict request błędem
+przed publikacją receiptu; nie istnieje fallback do `device_hypre_poisson` ani
+`hybrid_cpu_poisson`.
+
 Wskaźnik device workspace ma dokładnie jednego właściciela lifecycle:
 `DemagFemBemWorkspace` przechowuje callback destruktora dostarczony przez moduł
 CUDA. Reinicjalizacja FK oraz zwykły `context_destroy_mfem` wywołują go przed
@@ -341,6 +351,10 @@ accounting. Powtórny teardown jest no-op.
 | potencjał | backends/fem/cpu/mfem/interactions/demag_fem_bem_potential.* | potential combine |
 | odzysk pola i energia | backends/fem/cpu/mfem/interactions/demag_poisson_recovery.*, demag_fem_bem_energy.* | H_demag, E_d |
 | operator GPU i Hypre | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.* | GpuDemagFemBemWorkspace, device FK apply |
+| bootstrap GPU | backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp | initialize_context_gpu_state, initialize_context_gpu_demag_workspace |
+| publiczny upload stanu GPU | backends/fem/cpu/mfem/runtime/state_io.cpp | context_upload_magnetization_f64 |
+| plan i dispatcher RK | backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp, rk_demag_dispatch.cu | gpu_rk_plan_device_resident, gpu_rk_compute_demag_for_device_stage |
+| snapshot obserwowalnych | backends/fem/src/api.cpp | gpu_snapshot_source_field, prepare_gpu_full_domain_snapshot |
 | interop CUDA/Hypre | backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.* | HypreStreamLease, hypre_wait_for_fullmag, fullmag_wait_for_hypre |
 | polityka residuum | backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.* | should_validate_independent_residual, resolve_hypre_residual_validation_needs |
 | kontrakt testowy | backends/fem/tests/demag_fem_bem_contract.cpp | fem_demag_fem_bem_contract |
@@ -363,9 +377,13 @@ just --shell 'C:\Program Files\Git\bin\bash.exe' --shell-arg -lc verify-fem-dema
 fem_demag_fem_bem_contract musi obejmować granicę kompletną, fasety
 niepoprawne, nie-manifold, skalowanie, typy/CSR, gauge wielu składowych,
 pełny CPU solve, fingerprint geometrii/opcji i bezpieczny pusty output `apply`.
-Osobny target GPU sprawdza pełne initialize→apply, upload true-DOF, device
-apply, cztery event waits dla dwóch solve’ów, zerowy przyrost compute host sync
-i zerowy `compute_fence_count` w receipcie. Sprawdza również brak niezależnego
+Osobny target GPU sprawdza na rzeczywistym `Context` i FK workspace produkcyjne
+plan→dispatcher→snapshot, upload true-DOF, device apply, deltowy accounting
+eventów zależności dla cold failure, cold success, dispatchera i snapshotu,
+zerowy przyrost compute host sync oraz zerowy `compute_fence_count` w receipcie.
+Bootstrap jest osobno źródłowo przypięty; target nie wywołuje całego
+`initialize_context_gpu_state`, bo jego fixture musiałby także skonfigurować
+wszystkie niezwiązane operatory RK. Sprawdza również brak niezależnego
 SpMV po zwykłej zbieżności, dwa wymuszone residua oraz domknięcie outbound event
 po celowo odrzuconej walidacji. Istniejące
 testy energii, skończoności macierzy i własności modułów pozostają aktywne.
@@ -394,7 +412,7 @@ NOT VERIFIED.
 |---|---|---|---|
 | FEM CPU + tet4 + P1 + dense default | kod i pełny CPU solve contract | wymagany managed receipt | source/contract VERIFIED; managed runtime/physics NOT VERIFIED |
 | FEM CPU + all-tet/P2 Poisson accuracy | osobny planner contract | brak świeżego artefaktu filmu | NOT VERIFIED |
-| FEM GPU FK + diagnostyczny ACA H-matrix | initialize→apply, kernel smoke i event interop contract | wymagany produkcyjny receipt, parity i profil | source/contract oraz focused managed GPU VERIFIED; produkcyjny runtime/physics NOT VERIFIED |
+| FEM GPU FK + diagnostyczny ACA H-matrix | bootstrap→plan→dispatcher→snapshot, initialize→apply, kernel smoke i event interop contract | finalny `ctest`, produkcyjny receipt, parity i profil | remediation source/contract NOT VERIFIED; managed runtime/physics NOT VERIFIED |
 | H2/FMM lub skalowalny BEM | brak prawdziwej implementacji H2/FMM | brak świeżego managed receiptu | NOT VERIFIED |
 
 Przejście do physics_validated lub production_qualified wymaga źródłowej
@@ -450,6 +468,11 @@ na managed CPU i GPU.
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | gpu_demag_fem_bem_initialize | jednorazowy upload i trwały workspace CUDA/Hypre |
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp | destroy_owned_gpu_workspace | callback teardownu podpiętego GPU workspace wywoływany przed operatorami CPU i MFEM |
 | backends/fem/gpu/cuda/demag_fem_bem/fem_bem_kernels.cu | fullmag_cuda_fem_bem_apply | device apply bloków near/far i mapowania P1 true DOF |
+| backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp | initialize_context_gpu_state, initialize_context_gpu_demag_workspace | wspólny wybór FK GPU w produkcyjnym bootstrapie bez fallbacku do Poissona |
+| backends/fem/cpu/mfem/runtime/state_io.cpp | context_upload_magnetization_f64 | strict FK upload pozostaje device-resident i wymusza cold demag solve |
+| backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp | gpu_rk_plan_device_resident | strict plan rozpoznaje gotowy FK device workspace |
+| backends/fem/gpu/cuda/integrators/rk/rk_demag_dispatch.cu | gpu_rk_compute_demag_for_device_stage | per-stage FK device apply bez routingu do Poissona |
+| backends/fem/src/api.cpp | gpu_snapshot_source_field, prepare_gpu_full_domain_snapshot | H_demag i H_eff snapshot przez wspólną ścieżkę strict FK RHS |
 | backends/fem/gpu/cuda/demag_poisson/hypre_stream_interop.hpp | initialize_hypre_stream_interop, HypreStreamLease | trwały pożyczony strumień Hypre oraz eventy zależności wejścia/wyjścia |
 | backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp | should_validate_independent_residual | czysta polityka pomijania dodatkowego $A x-b$ po zwykłej zbieżności |
 | backends/fem/gpu/cuda/demag_poisson/hypre_validation_policy.cpp | read_force_independent_residual_validation | strict odczyt `FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL` dla kwalifikacyjnego wymuszenia residuum |

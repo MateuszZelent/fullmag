@@ -18,6 +18,7 @@
 #include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -132,6 +133,7 @@ bool gpu_rk_run_accepted_attempt_loop(
         PerformanceAttemptGuard performance_attempt(
             ctx.gpu_state.performance_counters,
             ctx.state.step_count + 1u);
+        const auto setup_start = std::chrono::steady_clock::now();
         ctx.adaptive_dt.current_dt = active_dt;
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
         const uint32_t rhs_before_attempt = total_stage_rhs_evaluations;
@@ -139,7 +141,18 @@ bool gpu_rk_run_accepted_attempt_loop(
         if (adaptive) {
             attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
         }
+        const auto setup_wall_time_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - setup_start)
+                .count());
+        gpu_execution_receipt_note_performance_phase(
+            ctx.gpu_state.execution_receipt,
+            FemGpuPerformancePhase::Setup,
+            setup_wall_time_ns);
         GpuRkStageAttemptResult stage_attempt{};
+        // The ABI records host wall-clock work here, including asynchronous
+        // kernel enqueue. It is not a GPU elapsed-time measurement.
+        const auto apply_start = std::chrono::steady_clock::now();
         if (!gpu_rk_run_stage_attempt(
                 ctx,
                 stream,
@@ -160,6 +173,14 @@ bool gpu_rk_run_accepted_attempt_loop(
             reason = failure_reason;
             return false;
         }
+        const auto apply_wall_time_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - apply_start)
+                .count());
+        gpu_execution_receipt_note_performance_phase(
+            ctx.gpu_state.execution_receipt,
+            FemGpuPerformancePhase::Apply,
+            apply_wall_time_ns);
         total_stage_rhs_evaluations += stage_attempt.rhs_evaluations;
         fsal_reused = stage_attempt.fsal_reused;
         GpuPerformanceCounterDelta performance_delta{};

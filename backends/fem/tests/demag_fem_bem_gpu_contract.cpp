@@ -3,9 +3,14 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_fem_bem.hpp"
 #include "cpu/mfem/runtime/mfem_context.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem.hpp"
 #include "gpu/cuda/demag_fem_bem/fem_bem_kernels.hpp"
+#include "gpu/cuda/integrators/rk/rk.hpp"
+#include "gpu/cuda/integrators/rk/rk_demag_dispatch.hpp"
+#include "gpu/cuda/integrators/rk/rk_snapshot.hpp"
 #include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -131,6 +136,7 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
     auto *fes = new mfem::FiniteElementSpace(mesh, fec);
     fullmag::fem::Context ctx;
     ctx.base_plan.fe_order = 1u;
+    ctx.base_plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
     ctx.mfem_context.mesh = mesh;
     ctx.mfem_context.fec = fec;
     ctx.mfem_context.fes = fes;
@@ -206,10 +212,29 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
               ctx.transfer_audit.audit,
               error),
           "FEM/BEM GPU contract runtime coefficient upload");
+    const std::vector<uint32_t> exchange_row_offsets = {0u, 1u, 2u, 3u, 4u};
+    const std::vector<uint32_t> exchange_col_indices = {0u, 1u, 2u, 3u};
+    const std::vector<double> exchange_values(4u, 0.0);
+    const std::vector<double> inverse_node_volumes(4u, 24.0);
+    check(fullmag::fem::gpu_state_upload_exchange_legacy_sparse(
+              ctx.gpu_state.device,
+              4u,
+              4u,
+              exchange_row_offsets.data(), exchange_row_offsets.size(),
+              exchange_col_indices.data(), exchange_col_indices.size(),
+              exchange_values.data(), exchange_values.size(),
+              ctx.mesh.node_volumes.data(), ctx.mesh.node_volumes.size(),
+              inverse_node_volumes.data(), inverse_node_volumes.size(),
+              ctx.transfer_audit.audit,
+              error),
+          "FEM/BEM production GPU snapshot exchange upload");
+    ctx.exchange.enabled = true;
+    ctx.gpu_state.legacy_exchange.legacy_sparse_metadata_ready = true;
+    ctx.gpu_state.legacy_exchange.lumped_mass_ready = true;
     const uint64_t baseline_device_bytes =
         ctx.gpu_state.device.lifecycle.device_bytes;
-    check(fullmag::fem::gpu_demag_fem_bem_initialize(ctx, error),
-          "FEM/BEM GPU full initialization must accept Fredkin-Koehler");
+    check(fullmag::fem::initialize_context_gpu_demag_workspace(ctx, error),
+          "FEM/BEM GPU bootstrap demag selection must accept Fredkin-Koehler");
     auto *gpu_workspace = static_cast<fullmag::fem::GpuDemagFemBemWorkspace *>(
         cpu_workspace == nullptr ? nullptr : cpu_workspace->gpu_workspace);
     check(gpu_workspace != nullptr && gpu_workspace->ready,
@@ -228,6 +253,43 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
         fullmag::fem::FEM_GPU_OPERATOR_DEMAG_SOLVE |
         fullmag::fem::FEM_GPU_OPERATOR_DEMAG_RECOVERY |
         fullmag::fem::FEM_GPU_OPERATOR_PRECONDITIONER;
+    std::string plan_reason;
+    const auto production_plan = fullmag::fem::gpu_rk_plan_device_resident(
+        ctx, plan_reason);
+    check(production_plan.enabled &&
+              std::string(production_plan.demag_operator_mode) ==
+                  "device_hypre_fem_bem_aca_hmatrix" &&
+              (production_plan.resolved_device_operator_mask & demag_mask) == demag_mask,
+          "forced FEM/BEM must publish a strict production GPU plan without Poisson fallback");
+    check(fullmag::fem::context_upload_magnetization_f64(
+              ctx, magnetization.data(), magnetization.size(), error) == FULLMAG_FEM_OK,
+          "public FEM/BEM GPU state upload must remain device-resident");
+    check(cpu_workspace->cpu_boundary_operator == nullptr,
+          "public FEM/BEM GPU state upload must not construct a CPU boundary operator");
+    check(ctx.poisson_demag.fresh_initial_guess_required,
+          "public FEM/BEM GPU state upload must request a cold demag solve");
+    const uint64_t event_waits_before_failed_cold_start =
+        gpu_workspace->stream_lease.event_wait_count;
+    ctx.demag.solver.max_iterations = 0;
+    check(!fullmag::fem::gpu_rk_compute_demag_for_device_stage(
+              ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
+          "failed cold FEM/BEM dispatcher solve must fail closed");
+    check(gpu_workspace->stream_lease.event_wait_count ==
+              event_waits_before_failed_cold_start + 2u,
+          "failed cold FEM/BEM dispatcher solve must close both HYPRE dependencies");
+    check(ctx.poisson_demag.fresh_initial_guess_required,
+          "failed cold FEM/BEM dispatcher solve must retain the cold-start intent");
+    ctx.demag.solver.max_iterations = 500;
+    const uint64_t event_waits_before_successful_cold_start =
+        gpu_workspace->stream_lease.event_wait_count;
+    check(fullmag::fem::gpu_rk_compute_demag_for_device_stage(
+              ctx, ctx.gpu_state.device.magnetization.m, nullptr, error),
+          "cold FEM/BEM dispatcher solve must succeed after upload");
+    check(gpu_workspace->stream_lease.event_wait_count ==
+              event_waits_before_successful_cold_start + 4u,
+          "successful cold FEM/BEM dispatcher solve must enqueue two solve dependency pairs");
+    check(!ctx.poisson_demag.fresh_initial_guess_required,
+          "successful cold FEM/BEM dispatcher solve must clear the cold-start intent");
     fullmag::fem::gpu_execution_receipt_resolve_plan(
         ctx.gpu_state.execution_receipt,
         demag_mask,
@@ -243,21 +305,24 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
         ctx.gpu_state.execution_receipt, before);
     ctx.transfer_audit.audit.assert_no_hot_loop_host_sync = true;
     ctx.transfer_audit.audit.assert_no_hot_loop_compute_sync = true;
+    const uint64_t event_waits_before_ordinary_dispatch =
+        gpu_workspace->stream_lease.event_wait_count;
     {
         fullmag::fem::TransferAuditScope hot_loop(
             ctx.transfer_audit.audit,
             fullmag::fem::TransferAuditScopeKind::HotLoop);
-        check(fullmag::fem::compute_device_demag_fem_bem_for_device_stage(
+        check(fullmag::fem::gpu_rk_compute_demag_for_device_stage(
                   ctx,
                   ctx.gpu_state.device.magnetization.m,
                   nullptr,
-                  true,
-                  false,
                   error),
-              "FEM/BEM GPU initialize-to-apply device stage");
+              "FEM/BEM production RK dispatcher device stage");
     }
-    check(gpu_workspace->boundary_operator_apply_count == 1u,
-          "FEM/BEM GPU initialize-to-apply path executes one boundary operator");
+    check(gpu_workspace->boundary_operator_apply_count == 2u,
+          "FEM/BEM upload cold start and ordinary dispatcher each execute the boundary operator");
+    check(gpu_workspace->stream_lease.event_wait_count ==
+              event_waits_before_ordinary_dispatch + 4u,
+          "ordinary FEM/BEM dispatcher solve must enqueue two solve dependency pairs");
     const auto after = fullmag::fem::transfer_audit_snapshot(ctx);
     check(after.hot_loop_compute_host_sync_count ==
               before.hot_loop_compute_host_sync_count,
@@ -274,13 +339,21 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
           "FEM/BEM strict receipt must preserve the resolved device-resident class");
     fullmag::fem::gpu_execution_receipt_commit_attempt(
         ctx.gpu_state.execution_receipt);
+    fullmag_fem_step_stats snapshot_stats{};
+    const uint64_t event_waits_before_snapshot =
+        gpu_workspace->stream_lease.event_wait_count;
+    check(fullmag::fem::gpu_rk_snapshot_current_state(ctx, snapshot_stats, error),
+          "FEM/BEM production RK snapshot must reuse the FK dispatcher");
+    check(ctx.gpu_state.device.fields.accepted_observables_valid,
+          "FEM/BEM production snapshot must publish accepted observables");
     const auto performance =
         fullmag::fem::gpu_execution_receipt_performance_snapshot(
             ctx.gpu_state.execution_receipt);
     check(performance.compute_fence_count == 0u,
           "versioned FEM/BEM performance receipt must report zero compute fences");
-    check(gpu_workspace->stream_lease.event_wait_count == 4u,
-          "two ordinary FEM/BEM solves must enqueue exactly two dependency pairs");
+    check(gpu_workspace->stream_lease.event_wait_count ==
+              event_waits_before_snapshot + 4u,
+          "FEM/BEM snapshot solve must enqueue two solve dependency pairs");
     check(gpu_workspace->u1_system.independent_residual_validation_count == 0u &&
               gpu_workspace->u2_system.independent_residual_validation_count == 0u,
           "ordinary converged FEM/BEM solves must skip independent residual SpMV");
@@ -301,8 +374,8 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
           "forced FEM/BEM solve must independently validate both residuals");
     check(
         gpu_workspace->stream_lease.event_wait_count ==
-            event_waits_before_forced_validation + 6u,
-        "forced FEM/BEM solve must close both solve and validation dependencies");
+            event_waits_before_forced_validation + 4u,
+        "forced FEM/BEM solve must retain exactly two stream dependencies per solve");
 
     const uint64_t event_waits_before_failed_validation =
         gpu_workspace->stream_lease.event_wait_count;
@@ -317,7 +390,7 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
           "invalid post-solve iteration limit must fail FEM/BEM residual validation");
     check(
         gpu_workspace->stream_lease.event_wait_count ==
-            event_waits_before_failed_validation + 3u,
+            event_waits_before_failed_validation + 2u,
         "failed validation after HYPRE A*x must still close the outbound dependency");
     check(error.find("max_iterations=0") != std::string::npos,
           "failed FEM/BEM validation must report the deterministic iteration limit");

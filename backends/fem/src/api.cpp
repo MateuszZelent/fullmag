@@ -378,6 +378,11 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
                 FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
             return &context.gpu_state.device.demag_poisson.poisson_gradient;
         }
+        if (context.demag.enabled &&
+            context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
+            return &context.gpu_state.device.fields.h_demag;
+        }
         return nullptr;
     case FULLMAG_FEM_OBSERVABLE_H_EXT:
         return &context.gpu_state.device.fields.h_ext;
@@ -398,7 +403,9 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_EFF:
         if (!context.demag.enabled ||
             context.poisson_demag.gpu_demag_mode ==
-                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON ||
+            context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_FEM_BEM) {
             return &context.gpu_state.device.fields.h_eff;
         }
         return nullptr;

@@ -11,8 +11,8 @@
     {
       "solver": "FEM",
       "device": "GPU",
-      "status": "source/contract VERIFIED",
-      "reason": "Kernel smoke i initialize-to-apply contract są VERIFIED; managed strict receipt i fizyka pozostają NOT VERIFIED."
+      "status": "remediation source/contract VERIFIED",
+      "reason": "Kontenerowa bramka 13 testów potwierdza bootstrap, planner, dispatcher, snapshot i stream interop; managed strict production receipt, parity, performance i fizyka pozostają NOT VERIFIED."
     },
     {
       "solver": "FDM",
@@ -147,6 +147,36 @@
       "path": "backends/fem/gpu/cuda/demag_fem_bem/fem_bem.cpp",
       "symbol": "gpu_demag_fem_bem_initialize",
       "responsibility": "Jednorazowy upload operatora, trwały workspace CUDA/Hypre i callback jego destruktora dla Fredkina-Koehlera."
+    },
+    {
+      "id": "gpu-production-bootstrap",
+      "path": "backends/fem/gpu/cuda/runtime/gpu_state_runtime.cpp",
+      "symbol": "initialize_context_gpu_state, initialize_context_gpu_demag_workspace",
+      "responsibility": "Production bootstrap i jego wykonywalny harness wybierają wyłącznie workspace FK dla device_hypre_fem_bem i fail-closed odrzucają brak inicjalizacji."
+    },
+    {
+      "id": "gpu-production-dispatch",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_demag_dispatch.cu",
+      "symbol": "gpu_rk_compute_demag_for_device_stage",
+      "responsibility": "RK dispatcher kieruje device_hypre_fem_bem do FK apply bez fallbacku do Poissona."
+    },
+    {
+      "id": "gpu-production-plan",
+      "path": "backends/fem/gpu/cuda/integrators/rk/rk_plan.cpp",
+      "symbol": "gpu_rk_plan_device_resident",
+      "responsibility": "Strict plan wymaga gotowego FK workspace dla pełnej maski demag device."
+    },
+    {
+      "id": "gpu-production-snapshot",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "gpu_snapshot_source_field, prepare_gpu_full_domain_snapshot",
+      "responsibility": "Snapshot H_demag i H_eff wybiera body-only pole FK; korekta full-domain pozostaje wyłączna dla Poissona."
+    },
+    {
+      "id": "gpu-production-state-upload",
+      "path": "backends/fem/cpu/mfem/runtime/state_io.cpp",
+      "symbol": "context_upload_magnetization_f64",
+      "responsibility": "Publiczny upload strict FK pozostaje device-resident, nie odświeża CPU H_eff i wymusza cold demag solve po udanym uploadzie."
     },
     {
       "id": "gpu-kernel",
