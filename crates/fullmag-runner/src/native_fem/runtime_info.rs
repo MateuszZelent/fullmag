@@ -2,7 +2,9 @@ use fullmag_fem_sys as ffi;
 use fullmag_ir::{StageCompletionIR, StageMetricKind, StageStopReason};
 
 use crate::types::{
-    FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuPerformanceSnapshotV2, RunError,
+    FemGpuAttemptModel, FemGpuControlPolicy, FemGpuExecutionClass, FemGpuExecutionKind,
+    FemGpuExecutionReceipt, FemGpuExecutionReceiptV2, FemGpuPerformanceSnapshotV2,
+    FemGpuPerformanceSnapshotV3, FemGpuRelaxationAlgorithm, FemGpuTerminalOutcome, RunError,
 };
 
 use std::ffi::CStr;
@@ -287,6 +289,14 @@ const FEM_GPU_KNOWN_OPERATOR_MASK: u64 = ffi::FULLMAG_FEM_GPU_OPERATOR_EXCHANGE
     | ffi::FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS
     | ffi::FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER;
 
+const FEM_GPU_KNOWN_OPERATOR_MASK_V2: u64 = FEM_GPU_KNOWN_OPERATOR_MASK
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_MINIMIZER
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_RETRACTION
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_LINE_SEARCH
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_ARMIJO_ENERGY
+    | ffi::FULLMAG_FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NativeFemGpuExecutionReceipt {
     execution_class: FemGpuExecutionClass,
@@ -475,6 +485,577 @@ impl NativeFemGpuPerformanceSnapshot {
         self.snapshot.abi_version == ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION
             && self.snapshot.struct_size
                 == std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v2>() as u32
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeFemGpuExecutionReceiptV2 {
+    pub(crate) receipt: FemGpuExecutionReceiptV2,
+}
+
+impl NativeFemGpuExecutionReceiptV2 {
+    pub(crate) fn from_ffi(
+        receipt: ffi::fullmag_fem_gpu_execution_receipt_v2,
+        requested: &str,
+    ) -> Result<Self, RunError> {
+        if receipt.abi_version != ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2
+            || receipt.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_gpu_execution_receipt_v2>() as u32
+        {
+            return Err(receipt_error("execution_receipt_v2_abi_mismatch"));
+        }
+        let execution_class = match receipt.execution_class {
+            x if x
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32 =>
+            {
+                FemGpuExecutionClass::DeviceResident
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER
+                    as u32 =>
+            {
+                FemGpuExecutionClass::GpuOperatorHostSolver
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
+                    as u32 =>
+            {
+                FemGpuExecutionClass::HybridCpuPoisson
+            }
+            x if x == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_CPU as u32 => {
+                FemGpuExecutionClass::Cpu
+            }
+            _ => return Err(receipt_error("unknown_execution_class")),
+        };
+        let precision = match receipt.precision {
+            x if x == ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_SINGLE as u32 => "single",
+            x if x == ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32 => "double",
+            _ => return Err(receipt_error("unknown_precision")),
+        };
+        let integrator = match receipt.integrator {
+            0 => "none",
+            value if value == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_HEUN as u32 => {
+                "heun"
+            }
+            value if value == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK4 as u32 => {
+                "rk4"
+            }
+            value
+                if value == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK23_BS as u32 =>
+            {
+                "rk23"
+            }
+            value
+                if value
+                    == ffi::fullmag_fem_integrator::FULLMAG_FEM_INTEGRATOR_RK45_DP54 as u32 =>
+            {
+                "rk45"
+            }
+            _ => return Err(receipt_error("unknown_integrator")),
+        };
+        let execution_kind = match receipt.execution_kind {
+            x if x
+                == ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_UNKNOWN
+                    as u32 =>
+            {
+                FemGpuExecutionKind::Unknown
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR
+                    as u32 =>
+            {
+                FemGpuExecutionKind::RkTimeIntegrator
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER
+                    as u32 =>
+            {
+                FemGpuExecutionKind::DirectMinimizer
+            }
+            _ => return Err(receipt_error("unknown_execution_kind")),
+        };
+        let relaxation_algorithm = match receipt.relaxation_algorithm {
+            x if x
+                == ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE
+                    as u32 =>
+            {
+                FemGpuRelaxationAlgorithm::None
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG
+                    as u32 =>
+            {
+                FemGpuRelaxationAlgorithm::NonlinearCg
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB
+                    as u32 =>
+            {
+                FemGpuRelaxationAlgorithm::ProjectedGradientBb
+            }
+            _ => return Err(receipt_error("unknown_relaxation_algorithm")),
+        };
+        let attempt_model = match receipt.attempt_model {
+            x if x
+                == ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_UNKNOWN
+                    as u32 =>
+            {
+                FemGpuAttemptModel::Unknown
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE
+                    as u32 =>
+            {
+                FemGpuAttemptModel::RkCandidate
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES
+                    as u32 =>
+            {
+                FemGpuAttemptModel::OuterStepWithArmijoCandidates
+            }
+            _ => return Err(receipt_error("unknown_attempt_model")),
+        };
+        let control_policy = match receipt.control_policy {
+            x if x
+                == ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_UNKNOWN
+                    as u32 =>
+            {
+                FemGpuControlPolicy::Unknown
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL
+                    as u32 =>
+            {
+                FemGpuControlPolicy::DeviceControl
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL
+                    as u32 =>
+            {
+                FemGpuControlPolicy::BoundedHostScalarControl
+            }
+            _ => return Err(receipt_error("unknown_control_policy")),
+        };
+        let terminal_outcome = match receipt.terminal_outcome {
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_NONE
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::None
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::CompletedAccepted
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::CompletedObservation
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::Cancelled
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_PAUSED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::Paused
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_FAILED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::Failed
+            }
+            _ => return Err(receipt_error("unknown_terminal_outcome")),
+        };
+        let all_masks = receipt.required_operator_mask
+            | receipt.resolved_device_operator_mask
+            | receipt.resolved_host_operator_mask
+            | receipt.resolved_unknown_operator_mask
+            | receipt.executed_device_operator_mask
+            | receipt.executed_host_operator_mask
+            | receipt.executed_unknown_operator_mask;
+        if all_masks & !FEM_GPU_KNOWN_OPERATOR_MASK_V2 != 0 {
+            return Err(receipt_error("unknown_operator_bits"));
+        }
+        let resolved = execution_class_name(execution_class);
+        let executed = if receipt.accepted_step_count == 0 {
+            "none"
+        } else {
+            match execution_class {
+                FemGpuExecutionClass::DeviceResident => "cuda_fem",
+                FemGpuExecutionClass::GpuOperatorHostSolver => "cuda_fem_host_solver",
+                FemGpuExecutionClass::HybridCpuPoisson => "cuda_fem_hybrid_cpu_poisson",
+                FemGpuExecutionClass::Cpu => "cpu_fem",
+            }
+        };
+        Ok(Self {
+            receipt: FemGpuExecutionReceiptV2 {
+                requested: requested.to_string(),
+                resolved: resolved.to_string(),
+                executed: executed.to_string(),
+                execution_class,
+                device_ordinal: receipt.device_ordinal,
+                precision: precision.to_string(),
+                integrator: integrator.to_string(),
+                required_operator_mask: receipt.required_operator_mask,
+                resolved_device_operator_mask: receipt.resolved_device_operator_mask,
+                resolved_host_operator_mask: receipt.resolved_host_operator_mask,
+                resolved_unknown_operator_mask: receipt.resolved_unknown_operator_mask,
+                executed_device_operator_mask: receipt.executed_device_operator_mask,
+                executed_host_operator_mask: receipt.executed_host_operator_mask,
+                executed_unknown_operator_mask: receipt.executed_unknown_operator_mask,
+                fallback_count: receipt.fallback_count,
+                accepted_step_count: receipt.accepted_step_count,
+                rejected_attempt_count: receipt.rejected_attempt_count,
+                failed_attempt_count: receipt.failed_attempt_count,
+                hot_loop_compute_h2d_bytes: receipt.hot_loop_compute_h2d_bytes,
+                hot_loop_compute_d2h_bytes: receipt.hot_loop_compute_d2h_bytes,
+                hot_loop_compute_host_sync_count: receipt.hot_loop_compute_host_sync_count,
+                execution_kind,
+                relaxation_algorithm,
+                attempt_model,
+                control_policy,
+                execution_generation_id: receipt.execution_generation_id,
+                terminal_outcome,
+                compute_closed: receipt.compute_closed != 0,
+                observation_closed: receipt.observation_closed != 0,
+                outer_attempt_count: receipt.outer_attempt_count,
+                rejected_candidate_count: receipt.rejected_candidate_count,
+                failed_candidate_count: receipt.failed_candidate_count,
+                stationary_observation_count: receipt.stationary_observation_count,
+                cancelled_outer_attempt_count: receipt.cancelled_outer_attempt_count,
+                paused_outer_attempt_count: receipt.paused_outer_attempt_count,
+                refinement_evaluation_count: receipt.refinement_evaluation_count,
+                allowed_transfer_mask: receipt.allowed_transfer_mask,
+                observed_transfer_mask: receipt.observed_transfer_mask,
+                transfer_violation_mask: receipt.transfer_violation_mask,
+                setup_h2d_bytes: receipt.setup_h2d_bytes,
+                setup_d2h_bytes: receipt.setup_d2h_bytes,
+                setup_host_sync_count: receipt.setup_host_sync_count,
+                compute_h2d_bytes: receipt.compute_h2d_bytes,
+                compute_d2h_bytes: receipt.compute_d2h_bytes,
+                compute_host_sync_count: receipt.compute_host_sync_count,
+                control_h2d_bytes: receipt.control_h2d_bytes,
+                control_d2h_bytes: receipt.control_d2h_bytes,
+                control_host_sync_count: receipt.control_host_sync_count,
+                exchange_h2d_bytes: receipt.exchange_h2d_bytes,
+                exchange_d2h_bytes: receipt.exchange_d2h_bytes,
+                exchange_host_sync_count: receipt.exchange_host_sync_count,
+                snapshot_h2d_bytes: receipt.snapshot_h2d_bytes,
+                snapshot_d2h_bytes: receipt.snapshot_d2h_bytes,
+                snapshot_host_sync_count: receipt.snapshot_host_sync_count,
+                export_h2d_bytes: receipt.export_h2d_bytes,
+                export_d2h_bytes: receipt.export_d2h_bytes,
+                export_host_sync_count: receipt.export_host_sync_count,
+                initial_residency: receipt.initial_residency,
+                final_residency: receipt.final_residency,
+                residency_transition_count: receipt.residency_transition_count,
+                residency_violation_count: receipt.residency_violation_count,
+                kernel_launch_coverage_mask: receipt.kernel_launch_coverage_mask,
+                required_coverage_mask: receipt.required_coverage_mask,
+                unclassified_event_count: receipt.unclassified_event_count,
+                accounting_valid: receipt.accounting_valid != 0,
+                lifecycle_valid: receipt.lifecycle_valid != 0,
+                identity_valid: receipt.identity_valid != 0,
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeFemGpuPerformanceSnapshotV3 {
+    pub(crate) snapshot: FemGpuPerformanceSnapshotV3,
+}
+
+impl NativeFemGpuPerformanceSnapshotV3 {
+    pub(crate) fn from_ffi(
+        snapshot: ffi::fullmag_fem_gpu_performance_snapshot_v3,
+    ) -> Result<Self, RunError> {
+        if snapshot.abi_version != ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION
+            || snapshot.struct_size
+                != std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v3>() as u32
+        {
+            return Err(receipt_error("performance_snapshot_v3_abi_mismatch"));
+        }
+        let execution_class = match snapshot.execution_class {
+            x if x
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT
+                    as u32 =>
+            {
+                FemGpuExecutionClass::DeviceResident
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_GPU_OPERATOR_HOST_SOLVER
+                    as u32 =>
+            {
+                FemGpuExecutionClass::GpuOperatorHostSolver
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_HYBRID_CPU_POISSON
+                    as u32 =>
+            {
+                FemGpuExecutionClass::HybridCpuPoisson
+            }
+            x if x == ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_CPU as u32 => {
+                FemGpuExecutionClass::Cpu
+            }
+            _ => return Err(receipt_error("unknown_execution_class")),
+        };
+        let precision = match snapshot.precision {
+            x if x == ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_SINGLE as u32 => "single",
+            x if x == ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32 => "double",
+            _ => return Err(receipt_error("unknown_precision")),
+        };
+        let execution_kind = match snapshot.execution_kind {
+            x if x
+                == ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_UNKNOWN
+                    as u32 =>
+            {
+                FemGpuExecutionKind::Unknown
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR
+                    as u32 =>
+            {
+                FemGpuExecutionKind::RkTimeIntegrator
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER
+                    as u32 =>
+            {
+                FemGpuExecutionKind::DirectMinimizer
+            }
+            _ => return Err(receipt_error("unknown_execution_kind")),
+        };
+        let relaxation_algorithm = match snapshot.relaxation_algorithm {
+            x if x
+                == ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE
+                    as u32 =>
+            {
+                FemGpuRelaxationAlgorithm::None
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG
+                    as u32 =>
+            {
+                FemGpuRelaxationAlgorithm::NonlinearCg
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB
+                    as u32 =>
+            {
+                FemGpuRelaxationAlgorithm::ProjectedGradientBb
+            }
+            _ => return Err(receipt_error("unknown_relaxation_algorithm")),
+        };
+        let attempt_model = match snapshot.attempt_model {
+            x if x
+                == ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_UNKNOWN
+                    as u32 =>
+            {
+                FemGpuAttemptModel::Unknown
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE
+                    as u32 =>
+            {
+                FemGpuAttemptModel::RkCandidate
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES
+                    as u32 =>
+            {
+                FemGpuAttemptModel::OuterStepWithArmijoCandidates
+            }
+            _ => return Err(receipt_error("unknown_attempt_model")),
+        };
+        let control_policy = match snapshot.control_policy {
+            x if x
+                == ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_UNKNOWN
+                    as u32 =>
+            {
+                FemGpuControlPolicy::Unknown
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL
+                    as u32 =>
+            {
+                FemGpuControlPolicy::DeviceControl
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL
+                    as u32 =>
+            {
+                FemGpuControlPolicy::BoundedHostScalarControl
+            }
+            _ => return Err(receipt_error("unknown_control_policy")),
+        };
+        let terminal_outcome = match snapshot.terminal_outcome {
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_NONE
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::None
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::CompletedAccepted
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::CompletedObservation
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::Cancelled
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_PAUSED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::Paused
+            }
+            x if x
+                == ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_FAILED
+                    as u32 =>
+            {
+                FemGpuTerminalOutcome::Failed
+            }
+            _ => return Err(receipt_error("unknown_terminal_outcome")),
+        };
+        Ok(Self {
+            snapshot: FemGpuPerformanceSnapshotV3 {
+                abi_version: snapshot.abi_version,
+                struct_size: snapshot.struct_size,
+                setup_count: snapshot.setup_count,
+                apply_count: snapshot.apply_count,
+                kernel_launch_count: snapshot.kernel_launch_count,
+                compute_fence_count: snapshot.compute_fence_count,
+                snapshot_fence_count: snapshot.snapshot_fence_count,
+                export_fence_count: snapshot.export_fence_count,
+                selected_sparse_kernel_id: snapshot.selected_sparse_kernel_id,
+                setup_wall_time_ns: snapshot.setup_wall_time_ns,
+                apply_wall_time_ns: snapshot.apply_wall_time_ns,
+                accepted_finalization_wall_time_ns: snapshot.accepted_finalization_wall_time_ns,
+                execution_kind,
+                relaxation_algorithm,
+                attempt_model,
+                control_policy,
+                terminal_outcome,
+                execution_class,
+                precision: precision.to_string(),
+                device_ordinal: snapshot.device_ordinal,
+                execution_generation_id: snapshot.execution_generation_id,
+                available: snapshot.available != 0,
+                compute_closed: snapshot.compute_closed != 0,
+                observation_closed: snapshot.observation_closed != 0,
+                frozen: snapshot.frozen != 0,
+                accepted_step_count: snapshot.accepted_step_count,
+                physical_outer_attempt_count: snapshot.physical_outer_attempt_count,
+                rejected_candidate_count: snapshot.rejected_candidate_count,
+                failed_candidate_count: snapshot.failed_candidate_count,
+                cancelled_outer_attempt_count: snapshot.cancelled_outer_attempt_count,
+                paused_outer_attempt_count: snapshot.paused_outer_attempt_count,
+                failed_outer_attempt_count: snapshot.failed_outer_attempt_count,
+                stationary_observation_count: snapshot.stationary_observation_count,
+                refinement_evaluation_count: snapshot.refinement_evaluation_count,
+                physical_effective_field_applies: snapshot.physical_effective_field_applies,
+                physical_energy_evaluations: snapshot.physical_energy_evaluations,
+                physical_armijo_candidates: snapshot.physical_armijo_candidates,
+                physical_rhs_evaluations: snapshot.physical_rhs_evaluations,
+                physical_exchange_applies: snapshot.physical_exchange_applies,
+                physical_exchange_launches: snapshot.physical_exchange_launches,
+                physical_exchange_nnz_visited: snapshot.physical_exchange_nnz_visited,
+                physical_demag_solves: snapshot.physical_demag_solves,
+                physical_demag_iterations: snapshot.physical_demag_iterations,
+                physical_normalization_launches: snapshot.physical_normalization_launches,
+                physical_normalization_readbacks: snapshot.physical_normalization_readbacks,
+                physical_adaptive_readbacks: snapshot.physical_adaptive_readbacks,
+                physical_control_fences: snapshot.physical_control_fences,
+                physical_endpoint_cache_hits: snapshot.physical_endpoint_cache_hits,
+                physical_endpoint_cache_misses: snapshot.physical_endpoint_cache_misses,
+                physical_endpoint_cache_invalidations: snapshot.physical_endpoint_cache_invalidations,
+                accepted_effective_field_applies: snapshot.accepted_effective_field_applies,
+                accepted_energy_evaluations: snapshot.accepted_energy_evaluations,
+                accepted_armijo_candidates: snapshot.accepted_armijo_candidates,
+                accepted_rhs_evaluations: snapshot.accepted_rhs_evaluations,
+                accepted_exchange_applies: snapshot.accepted_exchange_applies,
+                accepted_exchange_launches: snapshot.accepted_exchange_launches,
+                accepted_exchange_nnz_visited: snapshot.accepted_exchange_nnz_visited,
+                accepted_demag_solves: snapshot.accepted_demag_solves,
+                accepted_demag_iterations: snapshot.accepted_demag_iterations,
+                accepted_normalization_launches: snapshot.accepted_normalization_launches,
+                accepted_normalization_readbacks: snapshot.accepted_normalization_readbacks,
+                accepted_adaptive_readbacks: snapshot.accepted_adaptive_readbacks,
+                accepted_control_fences: snapshot.accepted_control_fences,
+                accepted_endpoint_cache_hits: snapshot.accepted_endpoint_cache_hits,
+                accepted_endpoint_cache_misses: snapshot.accepted_endpoint_cache_misses,
+                accepted_endpoint_cache_invalidations: snapshot.accepted_endpoint_cache_invalidations,
+                physical_device_to_device_bytes: snapshot.physical_device_to_device_bytes,
+                accepted_device_to_device_bytes: snapshot.accepted_device_to_device_bytes,
+                setup_h2d_bytes: snapshot.setup_h2d_bytes,
+                setup_d2h_bytes: snapshot.setup_d2h_bytes,
+                compute_h2d_bytes: snapshot.compute_h2d_bytes,
+                compute_d2h_bytes: snapshot.compute_d2h_bytes,
+                control_h2d_bytes: snapshot.control_h2d_bytes,
+                control_d2h_bytes: snapshot.control_d2h_bytes,
+                exchange_h2d_bytes: snapshot.exchange_h2d_bytes,
+                exchange_d2h_bytes: snapshot.exchange_d2h_bytes,
+                snapshot_h2d_bytes: snapshot.snapshot_h2d_bytes,
+                snapshot_d2h_bytes: snapshot.snapshot_d2h_bytes,
+                export_h2d_bytes: snapshot.export_h2d_bytes,
+                export_d2h_bytes: snapshot.export_d2h_bytes,
+                compute_host_sync_count: snapshot.compute_host_sync_count,
+                control_host_sync_count: snapshot.control_host_sync_count,
+                exchange_host_sync_count: snapshot.exchange_host_sync_count,
+                snapshot_host_sync_count: snapshot.snapshot_host_sync_count,
+                export_host_sync_count: snapshot.export_host_sync_count,
+                kernel_launch_coverage_mask: snapshot.kernel_launch_coverage_mask,
+                required_coverage_mask: snapshot.required_coverage_mask,
+                unclassified_event_count: snapshot.unclassified_event_count,
+                initial_residency: snapshot.initial_residency,
+                final_residency: snapshot.final_residency,
+                residency_transition_count: snapshot.residency_transition_count,
+                residency_violation_count: snapshot.residency_violation_count,
+                physical_exchange_elapsed_ns: snapshot.physical_exchange_elapsed_ns,
+                physical_demag_assemble_elapsed_ns: snapshot.physical_demag_assemble_elapsed_ns,
+                physical_demag_recover_elapsed_ns: snapshot.physical_demag_recover_elapsed_ns,
+                physical_demag_energy_elapsed_ns: snapshot.physical_demag_energy_elapsed_ns,
+                physical_rhs_elapsed_ns: snapshot.physical_rhs_elapsed_ns,
+                accepted_exchange_elapsed_ns: snapshot.accepted_exchange_elapsed_ns,
+                accepted_demag_assemble_elapsed_ns: snapshot.accepted_demag_assemble_elapsed_ns,
+                accepted_demag_recover_elapsed_ns: snapshot.accepted_demag_recover_elapsed_ns,
+                accepted_demag_energy_elapsed_ns: snapshot.accepted_demag_energy_elapsed_ns,
+                accepted_rhs_elapsed_ns: snapshot.accepted_rhs_elapsed_ns,
+                gradient_wall_time_ns: snapshot.gradient_wall_time_ns,
+                retraction_wall_time_ns: snapshot.retraction_wall_time_ns,
+                line_search_wall_time_ns: snapshot.line_search_wall_time_ns,
+                direction_update_wall_time_ns: snapshot.direction_update_wall_time_ns,
+                refinement_wall_time_ns: snapshot.refinement_wall_time_ns,
+            },
+        })
+    }
+
+    pub(crate) fn abi_is_current(&self) -> bool {
+        self.snapshot.abi_version == ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION
+            && self.snapshot.struct_size
+                == std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v3>() as u32
     }
 }
 
@@ -771,6 +1352,233 @@ mod tests {
         assert_eq!(parsed.snapshot.accepted_finalization_wall_time_ns, 10);
         raw.abi_version = 0;
         assert!(NativeFemGpuPerformanceSnapshot::from_ffi(raw).is_err());
+    }
+
+    fn execution_receipt_v2_fixture() -> ffi::fullmag_fem_gpu_execution_receipt_v2 {
+        ffi::fullmag_fem_gpu_execution_receipt_v2 {
+            abi_version: ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_execution_receipt_v2>() as u32,
+            execution_class: ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT as u32,
+            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
+            integrator: 0,
+            device_ordinal: 0,
+            required_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK_V2,
+            resolved_device_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK_V2,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: FEM_GPU_KNOWN_OPERATOR_MASK_V2,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 5,
+            rejected_attempt_count: 1,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            execution_kind: ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER as u32,
+            relaxation_algorithm: ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG as u32,
+            attempt_model: ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES as u32,
+            control_policy: ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL as u32,
+            execution_generation_id: 1001,
+            terminal_outcome: ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED as u32,
+            compute_closed: 1,
+            observation_closed: 1,
+            reserved_terminal: 0,
+            outer_attempt_count: 5,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            stationary_observation_count: 1,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            refinement_evaluation_count: 3,
+            allowed_transfer_mask: ffi::FULLMAG_FEM_GPU_TRANSFER_SETUP | ffi::FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR,
+            observed_transfer_mask: ffi::FULLMAG_FEM_GPU_TRANSFER_SETUP,
+            transfer_violation_mask: 0,
+            setup_h2d_bytes: 1024,
+            setup_d2h_bytes: 0,
+            setup_host_sync_count: 1,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            control_host_sync_count: 4,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            exchange_host_sync_count: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 512,
+            snapshot_host_sync_count: 1,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            export_host_sync_count: 0,
+            initial_residency: 1,
+            final_residency: 1,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            accounting_valid: 1,
+            lifecycle_valid: 1,
+            identity_valid: 1,
+            reserved_valid: 0,
+        }
+    }
+
+    #[test]
+    fn execution_receipt_v2_maps_every_native_field() {
+        let raw = execution_receipt_v2_fixture();
+        let parsed = NativeFemGpuExecutionReceiptV2::from_ffi(raw, "strict_device").unwrap();
+        assert_eq!(parsed.receipt.requested, "strict_device");
+        assert_eq!(parsed.receipt.resolved, "device_resident");
+        assert_eq!(parsed.receipt.executed, "cuda_fem");
+        assert_eq!(parsed.receipt.execution_kind, FemGpuExecutionKind::DirectMinimizer);
+        assert_eq!(parsed.receipt.relaxation_algorithm, FemGpuRelaxationAlgorithm::NonlinearCg);
+        assert_eq!(parsed.receipt.attempt_model, FemGpuAttemptModel::OuterStepWithArmijoCandidates);
+        assert_eq!(parsed.receipt.control_policy, FemGpuControlPolicy::BoundedHostScalarControl);
+        assert_eq!(parsed.receipt.execution_generation_id, 1001);
+        assert_eq!(parsed.receipt.terminal_outcome, FemGpuTerminalOutcome::CompletedAccepted);
+        assert!(parsed.receipt.compute_closed);
+        assert!(parsed.receipt.observation_closed);
+        assert_eq!(parsed.receipt.outer_attempt_count, 5);
+        assert_eq!(parsed.receipt.rejected_candidate_count, 2);
+        assert_eq!(parsed.receipt.refinement_evaluation_count, 3);
+        assert_eq!(parsed.receipt.setup_h2d_bytes, 1024);
+        assert_eq!(parsed.receipt.control_d2h_bytes, 32);
+        assert_eq!(parsed.receipt.control_host_sync_count, 4);
+        assert!(parsed.receipt.accounting_valid);
+        assert!(parsed.receipt.lifecycle_valid);
+        assert!(parsed.receipt.identity_valid);
+    }
+
+    #[test]
+    fn performance_snapshot_v3_maps_every_native_field() {
+        let raw = ffi::fullmag_fem_gpu_performance_snapshot_v3 {
+            abi_version: ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v3>() as u32,
+            setup_count: 1,
+            apply_count: 2,
+            kernel_launch_count: 15,
+            compute_fence_count: 0,
+            snapshot_fence_count: 1,
+            export_fence_count: 0,
+            selected_sparse_kernel_id: 3,
+            setup_wall_time_ns: 100,
+            apply_wall_time_ns: 200,
+            accepted_finalization_wall_time_ns: 50,
+            execution_kind: ffi::fullmag_fem_gpu_execution_kind_v2::FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER as u32,
+            relaxation_algorithm: ffi::fullmag_fem_gpu_relaxation_algorithm_v2::FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG as u32,
+            attempt_model: ffi::fullmag_fem_gpu_attempt_model_v2::FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES as u32,
+            control_policy: ffi::fullmag_fem_gpu_control_policy_v2::FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL as u32,
+            terminal_outcome: ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED as u32,
+            execution_class: ffi::fullmag_fem_gpu_execution_class_v1::FULLMAG_FEM_GPU_EXECUTION_DEVICE_RESIDENT as u32,
+            precision: ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE as u32,
+            device_ordinal: 0,
+            execution_generation_id: 1001,
+            available: 1,
+            compute_closed: 1,
+            observation_closed: 1,
+            frozen: 1,
+            accepted_step_count: 2,
+            physical_outer_attempt_count: 2,
+            rejected_candidate_count: 1,
+            failed_candidate_count: 0,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            failed_outer_attempt_count: 0,
+            stationary_observation_count: 0,
+            refinement_evaluation_count: 1,
+            physical_effective_field_applies: 10,
+            physical_energy_evaluations: 12,
+            physical_armijo_candidates: 3,
+            physical_rhs_evaluations: 10,
+            physical_exchange_applies: 10,
+            physical_exchange_launches: 10,
+            physical_exchange_nnz_visited: 5000,
+            physical_demag_solves: 10,
+            physical_demag_iterations: 40,
+            physical_normalization_launches: 15,
+            physical_normalization_readbacks: 3,
+            physical_adaptive_readbacks: 0,
+            physical_control_fences: 3,
+            physical_endpoint_cache_hits: 2,
+            physical_endpoint_cache_misses: 1,
+            physical_endpoint_cache_invalidations: 0,
+            accepted_effective_field_applies: 8,
+            accepted_energy_evaluations: 10,
+            accepted_armijo_candidates: 2,
+            accepted_rhs_evaluations: 8,
+            accepted_exchange_applies: 8,
+            accepted_exchange_launches: 8,
+            accepted_exchange_nnz_visited: 4000,
+            accepted_demag_solves: 8,
+            accepted_demag_iterations: 32,
+            accepted_normalization_launches: 12,
+            accepted_normalization_readbacks: 2,
+            accepted_adaptive_readbacks: 0,
+            accepted_control_fences: 2,
+            accepted_endpoint_cache_hits: 2,
+            accepted_endpoint_cache_misses: 0,
+            accepted_endpoint_cache_invalidations: 0,
+            physical_device_to_device_bytes: 4096,
+            accepted_device_to_device_bytes: 3072,
+            setup_h2d_bytes: 1024,
+            setup_d2h_bytes: 0,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 64,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 512,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_host_sync_count: 2,
+            exchange_host_sync_count: 0,
+            snapshot_host_sync_count: 1,
+            export_host_sync_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            initial_residency: 1,
+            final_residency: 1,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            physical_exchange_elapsed_ns: 50,
+            physical_demag_assemble_elapsed_ns: 40,
+            physical_demag_recover_elapsed_ns: 30,
+            physical_demag_energy_elapsed_ns: 20,
+            physical_rhs_elapsed_ns: 80,
+            accepted_exchange_elapsed_ns: 40,
+            accepted_demag_assemble_elapsed_ns: 30,
+            accepted_demag_recover_elapsed_ns: 25,
+            accepted_demag_energy_elapsed_ns: 15,
+            accepted_rhs_elapsed_ns: 65,
+            gradient_wall_time_ns: 70,
+            retraction_wall_time_ns: 15,
+            line_search_wall_time_ns: 85,
+            direction_update_wall_time_ns: 25,
+            refinement_wall_time_ns: 10,
+        };
+        let parsed = NativeFemGpuPerformanceSnapshotV3::from_ffi(raw).unwrap();
+        assert!(parsed.abi_is_current());
+        assert_eq!(parsed.snapshot.setup_count, 1);
+        assert_eq!(parsed.snapshot.apply_count, 2);
+        assert_eq!(parsed.snapshot.execution_generation_id, 1001);
+        assert_eq!(parsed.snapshot.execution_kind, FemGpuExecutionKind::DirectMinimizer);
+        assert_eq!(parsed.snapshot.relaxation_algorithm, FemGpuRelaxationAlgorithm::NonlinearCg);
+        assert_eq!(parsed.snapshot.terminal_outcome, FemGpuTerminalOutcome::CompletedAccepted);
+        assert!(parsed.snapshot.available);
+        assert!(parsed.snapshot.compute_closed);
+        assert!(parsed.snapshot.observation_closed);
+        assert!(parsed.snapshot.frozen);
+        assert_eq!(parsed.snapshot.accepted_effective_field_applies, 8);
+        assert_eq!(parsed.snapshot.physical_effective_field_applies, 10);
+        assert_eq!(parsed.snapshot.refinement_wall_time_ns, 10);
     }
 
     fn metric_name(name: &str) -> [i8; 64] {

@@ -5599,6 +5599,14 @@ int fullmag_fem_backend_gpu_execution_receipt_v1(
             "fullmag_fem_backend_gpu_execution_receipt_v1 has no resolved execution plan");
         return FULLMAG_FEM_ERR_INVALID;
     }
+    const auto receipt_v2 = fullmag::fem::gpu_execution_receipt_snapshot_v2(
+        handle->context.gpu_state.execution_receipt);
+    if (receipt_v2.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v1 is unavailable for direct minimizer execution; query fullmag_fem_backend_gpu_execution_receipt_v2");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
     if (!snapshot.accounting_valid) {
         fullmag_fem_set_handle_error(
             handle,
@@ -5730,6 +5738,177 @@ int fullmag_fem_backend_gpu_performance_snapshot_v2(
     out.accepted_finalization_wall_time_ns =
         snapshot.accepted_finalization_wall_time_ns;
     *out_snapshot = out;
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_execution_begin_v2(
+    fullmag_fem_backend *handle,
+    uint64_t *out_execution_generation_id
+) {
+    if (out_execution_generation_id == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_begin_v2 received null out_execution_generation_id");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_execution_begin_v2 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_execution_generation_id =
+        fullmag::fem::gpu_execution_receipt_begin_v2(handle->context.gpu_state.execution_receipt);
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_execution_close_compute_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_terminal_outcome_v2 terminal_outcome
+) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_execution_close_compute_v2 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const bool ok = fullmag::fem::gpu_execution_receipt_close_compute_v2(
+        handle->context.gpu_state.execution_receipt,
+        terminal_outcome);
+    if (!ok) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_close_compute_v2 failed lifecycle validation");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_execution_close_observation_v2(
+    fullmag_fem_backend *handle
+) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_execution_close_observation_v2 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const bool ok = fullmag::fem::gpu_execution_receipt_close_observation_v2(
+        handle->context.gpu_state.execution_receipt);
+    if (!ok) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_close_observation_v2 failed lifecycle validation");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_execution_receipt_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_execution_receipt_v2 *out_receipt
+) {
+    if (out_receipt == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v2 received null out_receipt");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_execution_receipt_v2 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_receipt->abi_version != FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v2 received unsupported abi_version");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_receipt->struct_size != sizeof(fullmag_fem_gpu_execution_receipt_v2)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v2 received unsupported struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const auto snapshot = fullmag::fem::gpu_execution_receipt_snapshot(
+        handle->context.gpu_state.execution_receipt);
+    if (!snapshot.plan_resolved) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v2 has no resolved execution plan");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!snapshot.accounting_valid) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_execution_receipt_v2 accounting is invalid");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+
+    *out_receipt = fullmag::fem::gpu_execution_receipt_snapshot_v2(
+        handle->context.gpu_state.execution_receipt);
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_gpu_performance_snapshot_v3(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_performance_snapshot_v3 *out_snapshot
+) {
+    if (out_snapshot == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v3 received null out_snapshot");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_gpu_performance_snapshot_v3 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_snapshot->abi_version !=
+            FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION ||
+        out_snapshot->struct_size !=
+            sizeof(fullmag_fem_gpu_performance_snapshot_v3)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v3 received unsupported abi_version or struct_size");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto execution = fullmag::fem::gpu_execution_receipt_snapshot(
+        handle->context.gpu_state.execution_receipt);
+    if (!execution.plan_resolved) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v3 has no resolved execution plan");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (!execution.accounting_valid) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v3 accounting is invalid");
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    const auto receipt = fullmag::fem::gpu_execution_receipt_snapshot_v2(
+        handle->context.gpu_state.execution_receipt);
+    if (receipt.accepted_step_count == 0 && receipt.stationary_observation_count == 0) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "fullmag_fem_backend_gpu_performance_snapshot_v3 has no accepted execution attempt");
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
+
+    *out_snapshot = fullmag::fem::gpu_performance_snapshot_v3(
+        handle->context.gpu_state.execution_receipt,
+        handle->context.gpu_state.performance_counters);
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;

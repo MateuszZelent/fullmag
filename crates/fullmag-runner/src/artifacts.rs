@@ -36,6 +36,33 @@ pub(crate) fn fem_gpu_performance_snapshot_artifact(
     })
 }
 
+pub(crate) fn fem_gpu_execution_receipt_v2_artifact(
+    receipt: &crate::types::FemGpuExecutionReceiptV2,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "fullmag.fem_gpu_execution_receipt.v2",
+        "receipt": receipt,
+    })
+}
+
+pub(crate) fn fem_gpu_performance_snapshot_v3_artifact(
+    snapshot: &crate::types::FemGpuPerformanceSnapshotV3,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "fullmag.fem_gpu_performance_snapshot.v3",
+        "snapshot": snapshot,
+    })
+}
+
+pub(crate) fn fem_gpu_performance_publication_v1_artifact(
+    publication: &crate::types::FemGpuPerformancePublicationV1,
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "fullmag.fem_gpu_performance_publication.v1",
+        "publication": publication,
+    })
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SolverDiagnosticTraceArtifact {
     schema_version: String,
@@ -5321,6 +5348,214 @@ mod tests {
     }
 
     #[test]
+    fn artifact_serializes_complete_fem_gpu_receipt_v2_and_snapshot_v3() {
+        let receipt = crate::types::FemGpuExecutionReceiptV2 {
+            requested: "strict_device".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fem".into(),
+            execution_class: crate::types::FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "none".into(),
+            required_operator_mask: 0x7fff,
+            resolved_device_operator_mask: 0x7fff,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x7fff,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 5,
+            rejected_attempt_count: 1,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            execution_kind: crate::types::FemGpuExecutionKind::DirectMinimizer,
+            relaxation_algorithm: crate::types::FemGpuRelaxationAlgorithm::NonlinearCg,
+            attempt_model: crate::types::FemGpuAttemptModel::OuterStepWithArmijoCandidates,
+            control_policy: crate::types::FemGpuControlPolicy::BoundedHostScalarControl,
+            execution_generation_id: 1001,
+            terminal_outcome: crate::types::FemGpuTerminalOutcome::CompletedAccepted,
+            compute_closed: true,
+            observation_closed: true,
+            outer_attempt_count: 5,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            stationary_observation_count: 0,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            refinement_evaluation_count: 1,
+            allowed_transfer_mask: 0x3,
+            observed_transfer_mask: 0x1,
+            transfer_violation_mask: 0,
+            setup_h2d_bytes: 1024,
+            setup_d2h_bytes: 0,
+            setup_host_sync_count: 1,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            control_host_sync_count: 4,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            exchange_host_sync_count: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 512,
+            snapshot_host_sync_count: 1,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            export_host_sync_count: 0,
+            initial_residency: 1,
+            final_residency: 1,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            accounting_valid: true,
+            lifecycle_valid: true,
+            identity_valid: true,
+        };
+        let receipt_val = fem_gpu_execution_receipt_v2_artifact(&receipt);
+        assert_eq!(receipt_val["schema"], "fullmag.fem_gpu_execution_receipt.v2");
+        assert_eq!(receipt_val["receipt"], serde_json::to_value(&receipt).unwrap());
+
+        let snapshot = crate::types::FemGpuPerformanceSnapshotV3 {
+            abi_version: 3,
+            struct_size: 792,
+            setup_count: 1,
+            apply_count: 5,
+            kernel_launch_count: 20,
+            compute_fence_count: 0,
+            snapshot_fence_count: 1,
+            export_fence_count: 0,
+            selected_sparse_kernel_id: 1,
+            setup_wall_time_ns: 100,
+            apply_wall_time_ns: 500,
+            accepted_finalization_wall_time_ns: 50,
+            execution_kind: crate::types::FemGpuExecutionKind::DirectMinimizer,
+            relaxation_algorithm: crate::types::FemGpuRelaxationAlgorithm::NonlinearCg,
+            attempt_model: crate::types::FemGpuAttemptModel::OuterStepWithArmijoCandidates,
+            control_policy: crate::types::FemGpuControlPolicy::BoundedHostScalarControl,
+            terminal_outcome: crate::types::FemGpuTerminalOutcome::CompletedAccepted,
+            execution_class: crate::types::FemGpuExecutionClass::DeviceResident,
+            precision: "double".into(),
+            device_ordinal: 0,
+            execution_generation_id: 1001,
+            available: true,
+            compute_closed: true,
+            observation_closed: true,
+            frozen: true,
+            accepted_step_count: 5,
+            physical_outer_attempt_count: 5,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            failed_outer_attempt_count: 0,
+            stationary_observation_count: 0,
+            refinement_evaluation_count: 1,
+            physical_effective_field_applies: 10,
+            physical_energy_evaluations: 12,
+            physical_armijo_candidates: 4,
+            physical_rhs_evaluations: 10,
+            physical_exchange_applies: 10,
+            physical_exchange_launches: 10,
+            physical_exchange_nnz_visited: 5000,
+            physical_demag_solves: 10,
+            physical_demag_iterations: 40,
+            physical_normalization_launches: 15,
+            physical_normalization_readbacks: 3,
+            physical_adaptive_readbacks: 0,
+            physical_control_fences: 4,
+            physical_endpoint_cache_hits: 2,
+            physical_endpoint_cache_misses: 1,
+            physical_endpoint_cache_invalidations: 0,
+            accepted_effective_field_applies: 10,
+            accepted_energy_evaluations: 12,
+            accepted_armijo_candidates: 4,
+            accepted_rhs_evaluations: 10,
+            accepted_exchange_applies: 10,
+            accepted_exchange_launches: 10,
+            accepted_exchange_nnz_visited: 5000,
+            accepted_demag_solves: 10,
+            accepted_demag_iterations: 40,
+            accepted_normalization_launches: 15,
+            accepted_normalization_readbacks: 3,
+            accepted_adaptive_readbacks: 0,
+            accepted_control_fences: 4,
+            accepted_endpoint_cache_hits: 2,
+            accepted_endpoint_cache_misses: 1,
+            accepted_endpoint_cache_invalidations: 0,
+            physical_device_to_device_bytes: 4096,
+            accepted_device_to_device_bytes: 4096,
+            setup_h2d_bytes: 1024,
+            setup_d2h_bytes: 0,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 512,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_host_sync_count: 4,
+            exchange_host_sync_count: 0,
+            snapshot_host_sync_count: 1,
+            export_host_sync_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            initial_residency: 1,
+            final_residency: 1,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            physical_exchange_elapsed_ns: 50,
+            physical_demag_assemble_elapsed_ns: 40,
+            physical_demag_recover_elapsed_ns: 30,
+            physical_demag_energy_elapsed_ns: 20,
+            physical_rhs_elapsed_ns: 80,
+            accepted_exchange_elapsed_ns: 50,
+            accepted_demag_assemble_elapsed_ns: 40,
+            accepted_demag_recover_elapsed_ns: 30,
+            accepted_demag_energy_elapsed_ns: 20,
+            accepted_rhs_elapsed_ns: 80,
+            gradient_wall_time_ns: 70,
+            retraction_wall_time_ns: 15,
+            line_search_wall_time_ns: 85,
+            direction_update_wall_time_ns: 25,
+            refinement_wall_time_ns: 10,
+        };
+        let snapshot_val = fem_gpu_performance_snapshot_v3_artifact(&snapshot);
+        assert_eq!(snapshot_val["schema"], "fullmag.fem_gpu_performance_snapshot.v3");
+        assert_eq!(snapshot_val["snapshot"], serde_json::to_value(&snapshot).unwrap());
+
+        let publ = crate::types::FemGpuPerformancePublicationV1 {
+            schema: "fullmag.fem_gpu_performance_publication.v1".into(),
+            receipt_sha256: "abc".into(),
+            snapshot_sha256: "def".into(),
+            source_snapshot_sha256: "ghi".into(),
+            problem_ir_digest: "jkl".into(),
+            mesh_topology_digest: "mno".into(),
+            runtime_bundle_digest: "pqr".into(),
+            gpu_uuid: "stu".into(),
+            driver_version: "535".into(),
+            toolkit_version: "12.2".into(),
+            execution_generation_id: 1001,
+            atomic_write_flush_confirmed: true,
+            publication_wall_time_ns: 1234,
+        };
+        let pub_val = fem_gpu_performance_publication_v1_artifact(&publ);
+        assert_eq!(pub_val["schema"], "fullmag.fem_gpu_performance_publication.v1");
+        assert_eq!(pub_val["publication"], serde_json::to_value(&publ).unwrap());
+    }
+
+    #[test]
     fn dmi_field_artifact_units_include_bulk_quantity() {
         assert_eq!(field_unit("H_dmi"), "A/m");
         assert_eq!(field_unit("H_dmi.x"), "A/m");
@@ -8861,6 +9096,7 @@ mod tests {
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
+            fem_gpu_execution_receipt_v2: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -9757,6 +9993,7 @@ mod tests {
             fdm_cpu_evaluation_telemetry: None,
             fdm_fft_execution: None,
             fem_gpu_execution_receipt: None,
+            fem_gpu_execution_receipt_v2: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),

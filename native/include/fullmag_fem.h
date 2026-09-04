@@ -2844,6 +2844,12 @@ typedef enum {
 #define FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER (UINT64_C(1) << 7)
 #define FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS (UINT64_C(1) << 8)
 #define FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER (UINT64_C(1) << 9)
+#define FULLMAG_FEM_GPU_OPERATOR_DIRECT_MINIMIZER (UINT64_C(1) << 10)
+#define FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE (UINT64_C(1) << 11)
+#define FULLMAG_FEM_GPU_OPERATOR_RETRACTION (UINT64_C(1) << 12)
+#define FULLMAG_FEM_GPU_OPERATOR_LINE_SEARCH (UINT64_C(1) << 13)
+#define FULLMAG_FEM_GPU_OPERATOR_ARMIJO_ENERGY (UINT64_C(1) << 14)
+#define FULLMAG_FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT (UINT64_C(1) << 15)
 
 typedef struct {
     uint32_t abi_version;
@@ -2963,6 +2969,263 @@ typedef struct {
     uint64_t apply_wall_time_ns;
     uint64_t accepted_finalization_wall_time_ns;
 } fullmag_fem_gpu_performance_snapshot_v2;
+
+#define FULLMAG_FEM_GPU_TRANSFER_SETUP (UINT64_C(1) << 0)
+#define FULLMAG_FEM_GPU_TRANSFER_COMPUTE (UINT64_C(1) << 1)
+#define FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR (UINT64_C(1) << 2)
+#define FULLMAG_FEM_GPU_TRANSFER_EXCHANGE_INTEROP (UINT64_C(1) << 3)
+#define FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT (UINT64_C(1) << 4)
+#define FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT (UINT64_C(1) << 5)
+#define FULLMAG_FEM_GPU_TRANSFER_UNKNOWN (UINT64_C(1) << 6)
+
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE (UINT64_C(1) << 0)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RHS (UINT64_C(1) << 1)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_HYPRE_SOLVE_BOUNDARY (UINT64_C(1) << 2)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RECOVERY (UINT64_C(1) << 3)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_LOCAL_FIELDS (UINT64_C(1) << 4)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT (UINT64_C(1) << 5)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION (UINT64_C(1) << 6)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY (UINT64_C(1) << 7)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_REDUCTIONS (UINT64_C(1) << 8)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECTION_UPDATE (UINT64_C(1) << 9)
+#define FULLMAG_FEM_GPU_KERNEL_COVERAGE_NORMALIZATION (UINT64_C(1) << 10)
+
+typedef enum {
+    FULLMAG_FEM_GPU_EXECUTION_KIND_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR = 1,
+    FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER = 2,
+} fullmag_fem_gpu_execution_kind_v2;
+
+typedef enum {
+    FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE = 0,
+    FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG = 1,
+    FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB = 2,
+} fullmag_fem_gpu_relaxation_algorithm_v2;
+
+typedef enum {
+    FULLMAG_FEM_GPU_ATTEMPT_MODEL_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE = 1,
+    FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES = 2,
+} fullmag_fem_gpu_attempt_model_v2;
+
+typedef enum {
+    FULLMAG_FEM_GPU_CONTROL_POLICY_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL = 1,
+    FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL = 2,
+} fullmag_fem_gpu_control_policy_v2;
+
+typedef enum {
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_NONE = 0,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED = 1,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION = 2,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED = 3,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_PAUSED = 4,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_FAILED = 5,
+} fullmag_fem_gpu_terminal_outcome_v2;
+
+#define FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2 2u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t execution_class;
+    uint32_t precision;
+    uint32_t integrator;
+    int32_t device_ordinal;
+    uint64_t required_operator_mask;
+    uint64_t resolved_device_operator_mask;
+    uint64_t resolved_host_operator_mask;
+    uint64_t resolved_unknown_operator_mask;
+    uint64_t executed_device_operator_mask;
+    uint64_t executed_host_operator_mask;
+    uint64_t executed_unknown_operator_mask;
+    uint64_t fallback_count;
+    uint64_t accepted_step_count;
+    uint64_t rejected_attempt_count;
+    uint64_t failed_attempt_count;
+    uint64_t hot_loop_compute_h2d_bytes;
+    uint64_t hot_loop_compute_d2h_bytes;
+    uint64_t hot_loop_compute_host_sync_count;
+
+    uint32_t execution_kind;
+    uint32_t relaxation_algorithm;
+    uint32_t attempt_model;
+    uint32_t control_policy;
+
+    uint64_t execution_generation_id;
+
+    uint32_t terminal_outcome;
+    uint32_t compute_closed;
+    uint32_t observation_closed;
+    uint32_t reserved_terminal;
+
+    uint64_t outer_attempt_count;
+    uint64_t rejected_candidate_count;
+    uint64_t failed_candidate_count;
+    uint64_t stationary_observation_count;
+    uint64_t cancelled_outer_attempt_count;
+    uint64_t paused_outer_attempt_count;
+    uint64_t refinement_evaluation_count;
+
+    uint64_t allowed_transfer_mask;
+    uint64_t observed_transfer_mask;
+    uint64_t transfer_violation_mask;
+
+    uint64_t setup_h2d_bytes;
+    uint64_t setup_d2h_bytes;
+    uint64_t setup_host_sync_count;
+    uint64_t compute_h2d_bytes;
+    uint64_t compute_d2h_bytes;
+    uint64_t compute_host_sync_count;
+    uint64_t control_h2d_bytes;
+    uint64_t control_d2h_bytes;
+    uint64_t control_host_sync_count;
+    uint64_t exchange_h2d_bytes;
+    uint64_t exchange_d2h_bytes;
+    uint64_t exchange_host_sync_count;
+    uint64_t snapshot_h2d_bytes;
+    uint64_t snapshot_d2h_bytes;
+    uint64_t snapshot_host_sync_count;
+    uint64_t export_h2d_bytes;
+    uint64_t export_d2h_bytes;
+    uint64_t export_host_sync_count;
+
+    uint32_t initial_residency;
+    uint32_t final_residency;
+    uint64_t residency_transition_count;
+    uint64_t residency_violation_count;
+
+    uint64_t kernel_launch_coverage_mask;
+    uint64_t required_coverage_mask;
+    uint64_t unclassified_event_count;
+
+    uint32_t accounting_valid;
+    uint32_t lifecycle_valid;
+    uint32_t identity_valid;
+    uint32_t reserved_valid;
+} fullmag_fem_gpu_execution_receipt_v2;
+
+#define FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION 3u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t setup_count;
+    uint64_t apply_count;
+    uint64_t kernel_launch_count;
+    uint64_t compute_fence_count;
+    uint64_t snapshot_fence_count;
+    uint64_t export_fence_count;
+    uint64_t selected_sparse_kernel_id;
+    uint64_t setup_wall_time_ns;
+    uint64_t apply_wall_time_ns;
+    uint64_t accepted_finalization_wall_time_ns;
+
+    uint32_t execution_kind;
+    uint32_t relaxation_algorithm;
+    uint32_t attempt_model;
+    uint32_t control_policy;
+    uint32_t terminal_outcome;
+    uint32_t execution_class;
+    uint32_t precision;
+    int32_t device_ordinal;
+
+    uint64_t execution_generation_id;
+    uint32_t available;
+    uint32_t compute_closed;
+    uint32_t observation_closed;
+    uint32_t frozen;
+
+    uint64_t accepted_step_count;
+    uint64_t physical_outer_attempt_count;
+    uint64_t rejected_candidate_count;
+    uint64_t failed_candidate_count;
+    uint64_t cancelled_outer_attempt_count;
+    uint64_t paused_outer_attempt_count;
+    uint64_t failed_outer_attempt_count;
+    uint64_t stationary_observation_count;
+    uint64_t refinement_evaluation_count;
+
+    uint64_t physical_effective_field_applies;
+    uint64_t physical_energy_evaluations;
+    uint64_t physical_armijo_candidates;
+    uint64_t physical_rhs_evaluations;
+    uint64_t physical_exchange_applies;
+    uint64_t physical_exchange_launches;
+    uint64_t physical_exchange_nnz_visited;
+    uint64_t physical_demag_solves;
+    uint64_t physical_demag_iterations;
+    uint64_t physical_normalization_launches;
+    uint64_t physical_normalization_readbacks;
+    uint64_t physical_adaptive_readbacks;
+    uint64_t physical_control_fences;
+    uint64_t physical_endpoint_cache_hits;
+    uint64_t physical_endpoint_cache_misses;
+    uint64_t physical_endpoint_cache_invalidations;
+
+    uint64_t accepted_effective_field_applies;
+    uint64_t accepted_energy_evaluations;
+    uint64_t accepted_armijo_candidates;
+    uint64_t accepted_rhs_evaluations;
+    uint64_t accepted_exchange_applies;
+    uint64_t accepted_exchange_launches;
+    uint64_t accepted_exchange_nnz_visited;
+    uint64_t accepted_demag_solves;
+    uint64_t accepted_demag_iterations;
+    uint64_t accepted_normalization_launches;
+    uint64_t accepted_normalization_readbacks;
+    uint64_t accepted_adaptive_readbacks;
+    uint64_t accepted_control_fences;
+    uint64_t accepted_endpoint_cache_hits;
+    uint64_t accepted_endpoint_cache_misses;
+    uint64_t accepted_endpoint_cache_invalidations;
+
+    uint64_t physical_device_to_device_bytes;
+    uint64_t accepted_device_to_device_bytes;
+    uint64_t setup_h2d_bytes;
+    uint64_t setup_d2h_bytes;
+    uint64_t compute_h2d_bytes;
+    uint64_t compute_d2h_bytes;
+    uint64_t control_h2d_bytes;
+    uint64_t control_d2h_bytes;
+    uint64_t exchange_h2d_bytes;
+    uint64_t exchange_d2h_bytes;
+    uint64_t snapshot_h2d_bytes;
+    uint64_t snapshot_d2h_bytes;
+    uint64_t export_h2d_bytes;
+    uint64_t export_d2h_bytes;
+
+    uint64_t compute_host_sync_count;
+    uint64_t control_host_sync_count;
+    uint64_t exchange_host_sync_count;
+    uint64_t snapshot_host_sync_count;
+    uint64_t export_host_sync_count;
+
+    uint64_t kernel_launch_coverage_mask;
+    uint64_t required_coverage_mask;
+    uint64_t unclassified_event_count;
+
+    uint32_t initial_residency;
+    uint32_t final_residency;
+    uint64_t residency_transition_count;
+    uint64_t residency_violation_count;
+
+    uint64_t physical_exchange_elapsed_ns;
+    uint64_t physical_demag_assemble_elapsed_ns;
+    uint64_t physical_demag_recover_elapsed_ns;
+    uint64_t physical_demag_energy_elapsed_ns;
+    uint64_t physical_rhs_elapsed_ns;
+    uint64_t accepted_exchange_elapsed_ns;
+    uint64_t accepted_demag_assemble_elapsed_ns;
+    uint64_t accepted_demag_recover_elapsed_ns;
+    uint64_t accepted_demag_energy_elapsed_ns;
+    uint64_t accepted_rhs_elapsed_ns;
+    uint64_t gradient_wall_time_ns;
+    uint64_t retraction_wall_time_ns;
+    uint64_t line_search_wall_time_ns;
+    uint64_t direction_update_wall_time_ns;
+    uint64_t refinement_wall_time_ns;
+} fullmag_fem_gpu_performance_snapshot_v3;
 
 typedef struct fullmag_fem_backend fullmag_fem_backend;
 typedef struct fullmag_fem_field_snapshot fullmag_fem_field_snapshot;
@@ -3371,6 +3634,30 @@ int fullmag_fem_backend_gpu_performance_snapshot_v1(
 int fullmag_fem_backend_gpu_performance_snapshot_v2(
     fullmag_fem_backend *handle,
     fullmag_fem_gpu_performance_snapshot_v2 *out_snapshot
+);
+
+int fullmag_fem_backend_gpu_execution_begin_v2(
+    fullmag_fem_backend *handle,
+    uint64_t *out_execution_generation_id
+);
+
+int fullmag_fem_backend_gpu_execution_close_compute_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_terminal_outcome_v2 terminal_outcome
+);
+
+int fullmag_fem_backend_gpu_execution_close_observation_v2(
+    fullmag_fem_backend *handle
+);
+
+int fullmag_fem_backend_gpu_execution_receipt_v2(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_execution_receipt_v2 *out_receipt
+);
+
+int fullmag_fem_backend_gpu_performance_snapshot_v3(
+    fullmag_fem_backend *handle,
+    fullmag_fem_gpu_performance_snapshot_v3 *out_snapshot
 );
 
 int fullmag_fem_backend_upload_strain(

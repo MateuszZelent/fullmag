@@ -68,7 +68,7 @@ use crate::types::FemPoissonDemagProvenance;
 #[cfg(feature = "fem-gpu")]
 use crate::types::FieldSnapshot;
 use crate::types::{
-    AuxiliaryArtifact, ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer,
+    ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer,
     ResolvedFallback, RunError,
 };
 
@@ -862,7 +862,7 @@ fn apply_fem_gpu_plan_constraints(
     plan: &FemPlanIR,
     mut resolution: EngineResolution<FemEngine>,
     forced_gpu: bool,
-    mut fem_crossover_decision: Option<crate::types::FemCrossoverDecision>,
+    fem_crossover_decision: Option<crate::types::FemCrossoverDecision>,
 ) -> Result<FemPlanEngineResolution, RunError> {
     if resolution.engine == FemEngine::NativeGpu {
         if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(plan) {
@@ -3469,7 +3469,10 @@ fn execute_native_fem(
     let paused: bool;
     let preview_handoff: crate::fem::relax::preview::FemPreviewHandoff;
 
-    let requires_gpu_rk_execution_receipt = native_relaxation_step.is_none();
+    if engine == FemEngine::NativeGpu {
+        let _generation_id = backend.gpu_execution_begin_v2()?;
+    }
+
     if let Some(native_step_control) = native_relaxation_step {
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
@@ -3543,7 +3546,7 @@ fn execute_native_fem(
             cancelled,
             paused,
             preview_handoff,
-            fem_gpu_receipt_request: requires_gpu_rk_execution_receipt.then(|| {
+            fem_gpu_receipt_request: (engine == FemEngine::NativeGpu).then(|| {
                 if execution_mode == ExecutionMode::Strict {
                     "strict_device".to_string()
                 } else if native_execution_mode == "hybrid_legacy_sparse" {

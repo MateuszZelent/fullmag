@@ -513,6 +513,89 @@ int run_backend_relaxation_step(
         ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
         ctx.poisson_demag.step_recover_wall_time_ns = 0;
         ctx.poisson_demag.step_energy_wall_time_ns = 0;
+
+        if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+            if (!gpu_execution_receipt_snapshot(ctx.gpu_state.execution_receipt).plan_resolved) {
+                uint64_t required_mask =
+                    FEM_GPU_OPERATOR_EXCHANGE |
+                    FEM_GPU_OPERATOR_REDUCTIONS |
+                    FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+                    FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE |
+                    FEM_GPU_OPERATOR_RETRACTION |
+                    FEM_GPU_OPERATOR_LINE_SEARCH |
+                    FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+                if (ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
+                    ctx.zeeman.has_external_field ||
+                    ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
+                    ctx.magnetoelastic.enabled ||
+                    ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
+                    ctx.thermal_brown.temperature > 0.0) {
+                    required_mask |= FEM_GPU_OPERATOR_LOCAL_FIELDS;
+                }
+                if (ctx.stt.slonczewski_enabled || ctx.stt.zhang_li_enabled || ctx.sot.enabled) {
+                    required_mask |= FEM_GPU_OPERATOR_DIRECT_TORQUES;
+                }
+                if (ctx.demag.enabled) {
+                    required_mask |=
+                        FEM_GPU_OPERATOR_DEMAG_RHS |
+                        FEM_GPU_OPERATOR_DEMAG_SOLVE |
+                        FEM_GPU_OPERATOR_DEMAG_RECOVERY |
+                        FEM_GPU_OPERATOR_PRECONDITIONER;
+                }
+#if FULLMAG_HAS_CUDA_RUNTIME
+                if (!ctx.gpu_state.device.relaxation.preconditioner_request.requested_kind.empty()) {
+                    required_mask |= FEM_GPU_OPERATOR_PRECONDITIONER;
+                }
+#endif
+                uint64_t required_coverage =
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE |
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT |
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION |
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY |
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_REDUCTIONS |
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECTION_UPDATE |
+                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_NORMALIZATION;
+                if (ctx.demag.enabled) {
+                    required_coverage |=
+                        FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RHS |
+                        FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RECOVERY;
+                }
+                if (required_mask & FEM_GPU_OPERATOR_LOCAL_FIELDS) {
+                    required_coverage |= FULLMAG_FEM_GPU_KERNEL_COVERAGE_LOCAL_FIELDS;
+                }
+                uint64_t allowed_transfers =
+                    FULLMAG_FEM_GPU_TRANSFER_SETUP |
+                    FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+                    FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+                    FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT;
+                gpu_execution_receipt_resolve_plan_v2(
+                    ctx.gpu_state.execution_receipt,
+                    required_mask,
+                    required_mask,
+                    0,
+                    0,
+                    FemGpuExecutionClass::DeviceResident,
+                    ctx.mfem_context.selected_device_index,
+                    static_cast<uint32_t>(ctx.base_plan.precision),
+                    0,
+                    required_coverage,
+                    allowed_transfers);
+                gpu_performance_configure(
+                    ctx.gpu_state.performance_counters,
+                    true,
+                    static_cast<uint32_t>(FemGpuExecutionClass::DeviceResident),
+                    static_cast<uint32_t>(ctx.base_plan.precision),
+                    0,
+                    ctx.mfem_context.selected_device_index);
+            }
+            gpu_performance_begin_attempt(
+                ctx.gpu_state.performance_counters,
+                ctx.gpu_state.execution_receipt.accepted_step_count + 1);
+            gpu_execution_receipt_begin_attempt(
+                ctx.gpu_state.execution_receipt,
+                ctx.transfer_audit.audit.counters);
+        }
+
         int gpu_status = FULLMAG_FEM_OK;
         {
             TransferAuditScope hot_loop(
@@ -527,6 +610,10 @@ int run_backend_relaxation_step(
             }
         }
         if (ctx.transfer_audit.audit.hot_loop_violation) {
+            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+                gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+                gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
+            }
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
@@ -537,6 +624,10 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         if (ctx.interrupt.step_interrupted) {
+            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+                gpu_execution_receipt_cancel_attempt(ctx.gpu_state.execution_receipt);
+                gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
+            }
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED,
@@ -547,12 +638,36 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERRUPTED;
         }
         if (gpu_status != FULLMAG_FEM_OK) {
+            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+                gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+                gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
+            }
             set_stage_completion(
                 ctx,
                 FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
                 nullptr,
                 0.0,
                 0.0);
+            return gpu_status;
+        }
+        if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG &&
+            gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+            if (!gpu_execution_receipt_update_attempt_transfer(
+                    ctx.gpu_state.execution_receipt,
+                    ctx.transfer_audit.audit.counters)) {
+                error = "strict FEM GPU execution rejected current-attempt hot-loop compute host transfer or synchronization";
+                gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
+                gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
+                set_stage_completion(
+                    ctx,
+                    FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+                    nullptr,
+                    0.0,
+                    0.0);
+                return FULLMAG_FEM_ERR_INTERNAL;
+            }
+            gpu_execution_receipt_commit_attempt(ctx.gpu_state.execution_receipt);
+            gpu_performance_commit_attempt(ctx.gpu_state.performance_counters);
         }
         return gpu_status;
     }

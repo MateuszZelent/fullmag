@@ -32,8 +32,11 @@ pub const FULLMAG_FEM_SOT_FORMULA_PRESCRIBED_V1: u32 = 1;
 pub const FULLMAG_FEM_SOT_ENVELOPE_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_FROZEN_SPINS_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1: u32 = 1;
+pub const FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2: u32 = 2;
 pub const FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V1_ABI_VERSION: u32 = 1;
 pub const FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V2_ABI_VERSION: u32 = 2;
+pub const FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION: u32 = 3;
+
 pub const FULLMAG_FEM_GPU_OPERATOR_EXCHANGE: u64 = 1 << 0;
 pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_RHS: u64 = 1 << 1;
 pub const FULLMAG_FEM_GPU_OPERATOR_DEMAG_SOLVE: u64 = 1 << 2;
@@ -44,6 +47,80 @@ pub const FULLMAG_FEM_GPU_OPERATOR_LLG_RHS: u64 = 1 << 6;
 pub const FULLMAG_FEM_GPU_OPERATOR_RK_STEPPER: u64 = 1 << 7;
 pub const FULLMAG_FEM_GPU_OPERATOR_REDUCTIONS: u64 = 1 << 8;
 pub const FULLMAG_FEM_GPU_OPERATOR_PRECONDITIONER: u64 = 1 << 9;
+pub const FULLMAG_FEM_GPU_OPERATOR_DIRECT_MINIMIZER: u64 = 1 << 10;
+pub const FULLMAG_FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE: u64 = 1 << 11;
+pub const FULLMAG_FEM_GPU_OPERATOR_RETRACTION: u64 = 1 << 12;
+pub const FULLMAG_FEM_GPU_OPERATOR_LINE_SEARCH: u64 = 1 << 13;
+pub const FULLMAG_FEM_GPU_OPERATOR_ARMIJO_ENERGY: u64 = 1 << 14;
+pub const FULLMAG_FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT: u64 = 1 << 15;
+
+pub const FULLMAG_FEM_GPU_TRANSFER_SETUP: u64 = 1 << 0;
+pub const FULLMAG_FEM_GPU_TRANSFER_COMPUTE: u64 = 1 << 1;
+pub const FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR: u64 = 1 << 2;
+pub const FULLMAG_FEM_GPU_TRANSFER_EXCHANGE_INTEROP: u64 = 1 << 3;
+pub const FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT: u64 = 1 << 4;
+pub const FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT: u64 = 1 << 5;
+pub const FULLMAG_FEM_GPU_TRANSFER_UNKNOWN: u64 = 1 << 6;
+
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE: u64 = 1 << 0;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RHS: u64 = 1 << 1;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_HYPRE_SOLVE_BOUNDARY: u64 = 1 << 2;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RECOVERY: u64 = 1 << 3;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_LOCAL_FIELDS: u64 = 1 << 4;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT: u64 = 1 << 5;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION: u64 = 1 << 6;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY: u64 = 1 << 7;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_REDUCTIONS: u64 = 1 << 8;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECTION_UPDATE: u64 = 1 << 9;
+pub const FULLMAG_FEM_GPU_KERNEL_COVERAGE_NORMALIZATION: u64 = 1 << 10;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_execution_kind_v2 {
+    FULLMAG_FEM_GPU_EXECUTION_KIND_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR = 1,
+    FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_relaxation_algorithm_v2 {
+    FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE = 0,
+    FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG = 1,
+    FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_attempt_model_v2 {
+    FULLMAG_FEM_GPU_ATTEMPT_MODEL_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE = 1,
+    FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_control_policy_v2 {
+    FULLMAG_FEM_GPU_CONTROL_POLICY_UNKNOWN = 0,
+    FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL = 1,
+    FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_gpu_terminal_outcome_v2 {
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_NONE = 0,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED = 1,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION = 2,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED = 3,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_PAUSED = 4,
+    FULLMAG_FEM_GPU_TERMINAL_OUTCOME_FAILED = 5,
+}
+
+pub use fullmag_fem_gpu_terminal_outcome_v2::*;
+pub const FULLMAG_FEM_GPU_TERMINAL_OUTCOME_ACCEPTED: fullmag_fem_gpu_terminal_outcome_v2 =
+    fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED;
+
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2677,6 +2754,210 @@ pub struct fullmag_fem_gpu_performance_snapshot_v1 {
     pub accepted_rhs_elapsed_ns: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_gpu_execution_receipt_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub execution_class: u32,
+    pub precision: u32,
+    pub integrator: u32,
+    pub device_ordinal: i32,
+    pub required_operator_mask: u64,
+    pub resolved_device_operator_mask: u64,
+    pub resolved_host_operator_mask: u64,
+    pub resolved_unknown_operator_mask: u64,
+    pub executed_device_operator_mask: u64,
+    pub executed_host_operator_mask: u64,
+    pub executed_unknown_operator_mask: u64,
+    pub fallback_count: u64,
+    pub accepted_step_count: u64,
+    pub rejected_attempt_count: u64,
+    pub failed_attempt_count: u64,
+    pub hot_loop_compute_h2d_bytes: u64,
+    pub hot_loop_compute_d2h_bytes: u64,
+    pub hot_loop_compute_host_sync_count: u64,
+
+    pub execution_kind: u32,
+    pub relaxation_algorithm: u32,
+    pub attempt_model: u32,
+    pub control_policy: u32,
+
+    pub execution_generation_id: u64,
+
+    pub terminal_outcome: u32,
+    pub compute_closed: u32,
+    pub observation_closed: u32,
+    pub reserved_terminal: u32,
+
+    pub outer_attempt_count: u64,
+    pub rejected_candidate_count: u64,
+    pub failed_candidate_count: u64,
+    pub stationary_observation_count: u64,
+    pub cancelled_outer_attempt_count: u64,
+    pub paused_outer_attempt_count: u64,
+    pub refinement_evaluation_count: u64,
+
+    pub allowed_transfer_mask: u64,
+    pub observed_transfer_mask: u64,
+    pub transfer_violation_mask: u64,
+
+    pub setup_h2d_bytes: u64,
+    pub setup_d2h_bytes: u64,
+    pub setup_host_sync_count: u64,
+    pub compute_h2d_bytes: u64,
+    pub compute_d2h_bytes: u64,
+    pub compute_host_sync_count: u64,
+    pub control_h2d_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub control_host_sync_count: u64,
+    pub exchange_h2d_bytes: u64,
+    pub exchange_d2h_bytes: u64,
+    pub exchange_host_sync_count: u64,
+    pub snapshot_h2d_bytes: u64,
+    pub snapshot_d2h_bytes: u64,
+    pub snapshot_host_sync_count: u64,
+    pub export_h2d_bytes: u64,
+    pub export_d2h_bytes: u64,
+    pub export_host_sync_count: u64,
+
+    pub initial_residency: u32,
+    pub final_residency: u32,
+    pub residency_transition_count: u64,
+    pub residency_violation_count: u64,
+
+    pub kernel_launch_coverage_mask: u64,
+    pub required_coverage_mask: u64,
+    pub unclassified_event_count: u64,
+
+    pub accounting_valid: u32,
+    pub lifecycle_valid: u32,
+    pub identity_valid: u32,
+    pub reserved_valid: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_gpu_performance_snapshot_v3 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub setup_count: u64,
+    pub apply_count: u64,
+    pub kernel_launch_count: u64,
+    pub compute_fence_count: u64,
+    pub snapshot_fence_count: u64,
+    pub export_fence_count: u64,
+    pub selected_sparse_kernel_id: u64,
+    pub setup_wall_time_ns: u64,
+    pub apply_wall_time_ns: u64,
+    pub accepted_finalization_wall_time_ns: u64,
+
+    pub execution_kind: u32,
+    pub relaxation_algorithm: u32,
+    pub attempt_model: u32,
+    pub control_policy: u32,
+    pub terminal_outcome: u32,
+    pub execution_class: u32,
+    pub precision: u32,
+    pub device_ordinal: i32,
+
+    pub execution_generation_id: u64,
+    pub available: u32,
+    pub compute_closed: u32,
+    pub observation_closed: u32,
+    pub frozen: u32,
+
+    pub accepted_step_count: u64,
+    pub physical_outer_attempt_count: u64,
+    pub rejected_candidate_count: u64,
+    pub failed_candidate_count: u64,
+    pub cancelled_outer_attempt_count: u64,
+    pub paused_outer_attempt_count: u64,
+    pub failed_outer_attempt_count: u64,
+    pub stationary_observation_count: u64,
+    pub refinement_evaluation_count: u64,
+
+    pub physical_effective_field_applies: u64,
+    pub physical_energy_evaluations: u64,
+    pub physical_armijo_candidates: u64,
+    pub physical_rhs_evaluations: u64,
+    pub physical_exchange_applies: u64,
+    pub physical_exchange_launches: u64,
+    pub physical_exchange_nnz_visited: u64,
+    pub physical_demag_solves: u64,
+    pub physical_demag_iterations: u64,
+    pub physical_normalization_launches: u64,
+    pub physical_normalization_readbacks: u64,
+    pub physical_adaptive_readbacks: u64,
+    pub physical_control_fences: u64,
+    pub physical_endpoint_cache_hits: u64,
+    pub physical_endpoint_cache_misses: u64,
+    pub physical_endpoint_cache_invalidations: u64,
+
+    pub accepted_effective_field_applies: u64,
+    pub accepted_energy_evaluations: u64,
+    pub accepted_armijo_candidates: u64,
+    pub accepted_rhs_evaluations: u64,
+    pub accepted_exchange_applies: u64,
+    pub accepted_exchange_launches: u64,
+    pub accepted_exchange_nnz_visited: u64,
+    pub accepted_demag_solves: u64,
+    pub accepted_demag_iterations: u64,
+    pub accepted_normalization_launches: u64,
+    pub accepted_normalization_readbacks: u64,
+    pub accepted_adaptive_readbacks: u64,
+    pub accepted_control_fences: u64,
+    pub accepted_endpoint_cache_hits: u64,
+    pub accepted_endpoint_cache_misses: u64,
+    pub accepted_endpoint_cache_invalidations: u64,
+
+    pub physical_device_to_device_bytes: u64,
+    pub accepted_device_to_device_bytes: u64,
+    pub setup_h2d_bytes: u64,
+    pub setup_d2h_bytes: u64,
+    pub compute_h2d_bytes: u64,
+    pub compute_d2h_bytes: u64,
+    pub control_h2d_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub exchange_h2d_bytes: u64,
+    pub exchange_d2h_bytes: u64,
+    pub snapshot_h2d_bytes: u64,
+    pub snapshot_d2h_bytes: u64,
+    pub export_h2d_bytes: u64,
+    pub export_d2h_bytes: u64,
+
+    pub compute_host_sync_count: u64,
+    pub control_host_sync_count: u64,
+    pub exchange_host_sync_count: u64,
+    pub snapshot_host_sync_count: u64,
+    pub export_host_sync_count: u64,
+
+    pub kernel_launch_coverage_mask: u64,
+    pub required_coverage_mask: u64,
+    pub unclassified_event_count: u64,
+
+    pub initial_residency: u32,
+    pub final_residency: u32,
+    pub residency_transition_count: u64,
+    pub residency_violation_count: u64,
+
+    pub physical_exchange_elapsed_ns: u64,
+    pub physical_demag_assemble_elapsed_ns: u64,
+    pub physical_demag_recover_elapsed_ns: u64,
+    pub physical_demag_energy_elapsed_ns: u64,
+    pub physical_rhs_elapsed_ns: u64,
+    pub accepted_exchange_elapsed_ns: u64,
+    pub accepted_demag_assemble_elapsed_ns: u64,
+    pub accepted_demag_recover_elapsed_ns: u64,
+    pub accepted_demag_energy_elapsed_ns: u64,
+    pub accepted_rhs_elapsed_ns: u64,
+    pub gradient_wall_time_ns: u64,
+    pub retraction_wall_time_ns: u64,
+    pub line_search_wall_time_ns: u64,
+    pub direction_update_wall_time_ns: u64,
+    pub refinement_wall_time_ns: u64,
+}
+
 include!(concat!(
     env!("OUT_DIR"),
     "/gpu_execution_receipt_abi_assertions.rs"
@@ -3043,6 +3324,25 @@ extern "C" {
     pub fn fullmag_fem_backend_gpu_performance_snapshot_v2(
         handle: *mut fullmag_fem_backend,
         out_snapshot: *mut fullmag_fem_gpu_performance_snapshot_v2,
+    ) -> i32;
+    pub fn fullmag_fem_backend_gpu_execution_begin_v2(
+        handle: *mut fullmag_fem_backend,
+        out_execution_generation_id: *mut u64,
+    ) -> i32;
+    pub fn fullmag_fem_backend_gpu_execution_close_compute_v2(
+        handle: *mut fullmag_fem_backend,
+        terminal_outcome: fullmag_fem_gpu_terminal_outcome_v2,
+    ) -> i32;
+    pub fn fullmag_fem_backend_gpu_execution_close_observation_v2(
+        handle: *mut fullmag_fem_backend,
+    ) -> i32;
+    pub fn fullmag_fem_backend_gpu_execution_receipt_v2(
+        handle: *mut fullmag_fem_backend,
+        out_receipt: *mut fullmag_fem_gpu_execution_receipt_v2,
+    ) -> i32;
+    pub fn fullmag_fem_backend_gpu_performance_snapshot_v3(
+        handle: *mut fullmag_fem_backend,
+        out_snapshot: *mut fullmag_fem_gpu_performance_snapshot_v3,
     ) -> i32;
 
     pub fn fullmag_fem_backend_last_error(handle: *mut fullmag_fem_backend) -> *const c_char;
@@ -6190,5 +6490,83 @@ mod tests {
             *mut fullmag_fem_backend,
             *mut fullmag_fem_gpu_performance_snapshot_v2,
         ) -> i32 = fullmag_fem_backend_gpu_performance_snapshot_v2;
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn gpu_execution_receipt_v2_has_stable_layout_and_symbol() {
+        use std::mem::{align_of, offset_of, size_of};
+
+        assert_eq!(FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2, 2);
+        assert_eq!(size_of::<fullmag_fem_gpu_execution_receipt_v2>(), 464);
+        assert_eq!(align_of::<fullmag_fem_gpu_execution_receipt_v2>(), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, struct_size), 4);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, execution_class), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, precision), 12);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, integrator), 16);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, device_ordinal), 20);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, required_operator_mask), 24);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, hot_loop_compute_host_sync_count), 128);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, execution_kind), 136);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, relaxation_algorithm), 140);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, attempt_model), 144);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, control_policy), 148);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, execution_generation_id), 152);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, terminal_outcome), 160);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, compute_closed), 164);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, observation_closed), 168);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, outer_attempt_count), 176);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, setup_h2d_bytes), 256);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, compute_h2d_bytes), 280);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, initial_residency), 400);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, kernel_launch_coverage_mask), 424);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, accounting_valid), 448);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, lifecycle_valid), 452);
+        assert_eq!(offset_of!(fullmag_fem_gpu_execution_receipt_v2, identity_valid), 456);
+
+        let _symbol_begin: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut u64,
+        ) -> i32 = fullmag_fem_backend_gpu_execution_begin_v2;
+        let _symbol_close_compute: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            fullmag_fem_gpu_terminal_outcome_v2,
+        ) -> i32 = fullmag_fem_backend_gpu_execution_close_compute_v2;
+        let _symbol_close_obs: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+        ) -> i32 = fullmag_fem_backend_gpu_execution_close_observation_v2;
+        let _symbol_receipt: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut fullmag_fem_gpu_execution_receipt_v2,
+        ) -> i32 = fullmag_fem_backend_gpu_execution_receipt_v2;
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn gpu_performance_snapshot_v3_has_stable_layout_and_symbol() {
+        use std::mem::{align_of, offset_of, size_of};
+
+        assert_eq!(FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION, 3);
+        assert_eq!(size_of::<fullmag_fem_gpu_performance_snapshot_v3>(), 792);
+        assert_eq!(align_of::<fullmag_fem_gpu_performance_snapshot_v3>(), 8);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, abi_version), 0);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, struct_size), 4);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, execution_kind), 88);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, execution_generation_id), 120);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, accepted_step_count), 144);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, physical_effective_field_applies), 216);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, accepted_effective_field_applies), 344);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, physical_device_to_device_bytes), 472);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, compute_host_sync_count), 584);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, kernel_launch_coverage_mask), 624);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, initial_residency), 648);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, physical_exchange_elapsed_ns), 672);
+        assert_eq!(offset_of!(fullmag_fem_gpu_performance_snapshot_v3, refinement_wall_time_ns), 784);
+
+        let _symbol_snap3: unsafe extern "C" fn(
+            *mut fullmag_fem_backend,
+            *mut fullmag_fem_gpu_performance_snapshot_v3,
+        ) -> i32 = fullmag_fem_backend_gpu_performance_snapshot_v3;
     }
 }

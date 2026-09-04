@@ -8,14 +8,19 @@ use fullmag_ir::FemPlanIR;
 
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::dispatch::{apply_native_fem_runtime_contract, fem_poisson_demag_provenance, FemEngine};
-use crate::fem::execution_receipt::validate_strict_fem_gpu_execution_receipt;
+use crate::fem::execution_receipt::{
+    validate_strict_fem_gpu_execution_receipt, validate_strict_fem_gpu_execution_receipt_v2,
+    validate_strict_fem_gpu_execution_receipt_v2_runtime,
+    validate_strict_fem_gpu_performance_snapshot_v3,
+};
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
     recomputed_fem_equilibrium_content_sha256, recomputed_fem_linearization_certificate_sha256,
-    AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutedRun, FieldSnapshot, LiveStepConsumer,
-    RecomputedFemLinearizationCertificateV1, RunError, RunResult, RunStatus, StepStats, StepUpdate,
+    AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutedRun, FemGpuTerminalOutcome,
+    FieldSnapshot, LiveStepConsumer, RecomputedFemLinearizationCertificateV1, RunError, RunResult,
+    RunStatus, StepStats, StepUpdate,
 };
 
 use super::preview::FemPreviewHandoff;
@@ -35,13 +40,17 @@ struct NativeEquilibriumEvaluation {
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_strict_gpu_performance_snapshot_artifact, run_after_strict_receipt_gate,
-        terminal_scheduled_field_actions,
+        completed_strict_gpu_performance_snapshot_artifact,
+        completed_strict_gpu_v2_and_v3_artifacts, run_after_strict_receipt_gate,
+        run_after_strict_receipt_v2_gate, sha256_hex, terminal_scheduled_field_actions,
     };
     use crate::schedules::OutputSchedule;
     use crate::types::{
-        FemGpuExecutionClass, FemGpuExecutionReceipt, FemGpuPerformanceSnapshotV2, RunStatus,
+        FemGpuAttemptModel, FemGpuControlPolicy, FemGpuExecutionClass, FemGpuExecutionKind,
+        FemGpuExecutionReceipt, FemGpuExecutionReceiptV2, FemGpuPerformanceSnapshotV2,
+        FemGpuPerformanceSnapshotV3, FemGpuRelaxationAlgorithm, FemGpuTerminalOutcome, RunStatus,
     };
+    use fullmag_ir::FemPlanIR;
 
     fn schedule(name: &str, last_sampled_time: Option<f64>) -> OutputSchedule {
         OutputSchedule {
@@ -177,6 +186,290 @@ mod tests {
             .is_none());
         }
     }
+
+    fn receipt_v2_fixture() -> FemGpuExecutionReceiptV2 {
+        FemGpuExecutionReceiptV2 {
+            requested: "strict_device".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fem".into(),
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "".into(),
+            required_operator_mask: 0x3fff,
+            resolved_device_operator_mask: 0x3fff,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x3fff,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 5,
+            rejected_attempt_count: 2,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            execution_kind: FemGpuExecutionKind::DirectMinimizer,
+            relaxation_algorithm: FemGpuRelaxationAlgorithm::NonlinearCg,
+            attempt_model: FemGpuAttemptModel::OuterStepWithArmijoCandidates,
+            control_policy: FemGpuControlPolicy::BoundedHostScalarControl,
+            execution_generation_id: 42,
+            terminal_outcome: FemGpuTerminalOutcome::CompletedAccepted,
+            compute_closed: true,
+            observation_closed: true,
+            outer_attempt_count: 7,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            stationary_observation_count: 1,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            refinement_evaluation_count: 3,
+            allowed_transfer_mask: 0x7f,
+            observed_transfer_mask: 0x25,
+            transfer_violation_mask: 0,
+            setup_h2d_bytes: 100,
+            setup_d2h_bytes: 0,
+            setup_host_sync_count: 1,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            control_host_sync_count: 4,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            exchange_host_sync_count: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 200,
+            snapshot_host_sync_count: 2,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            export_host_sync_count: 0,
+            initial_residency: 2,
+            final_residency: 2,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            accounting_valid: true,
+            lifecycle_valid: true,
+            identity_valid: true,
+        }
+    }
+
+    fn snapshot_v3_fixture() -> FemGpuPerformanceSnapshotV3 {
+        FemGpuPerformanceSnapshotV3 {
+            abi_version: 3,
+            struct_size: 792,
+            setup_count: 1,
+            apply_count: 5,
+            kernel_launch_count: 20,
+            compute_fence_count: 0,
+            snapshot_fence_count: 2,
+            export_fence_count: 0,
+            selected_sparse_kernel_id: 7,
+            setup_wall_time_ns: 1000,
+            apply_wall_time_ns: 5000,
+            accepted_finalization_wall_time_ns: 200,
+            execution_kind: FemGpuExecutionKind::DirectMinimizer,
+            relaxation_algorithm: FemGpuRelaxationAlgorithm::NonlinearCg,
+            attempt_model: FemGpuAttemptModel::OuterStepWithArmijoCandidates,
+            control_policy: FemGpuControlPolicy::BoundedHostScalarControl,
+            terminal_outcome: FemGpuTerminalOutcome::CompletedAccepted,
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            precision: "double".into(),
+            device_ordinal: 0,
+            execution_generation_id: 42,
+            available: true,
+            compute_closed: true,
+            observation_closed: true,
+            frozen: true,
+            accepted_step_count: 5,
+            physical_outer_attempt_count: 7,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            failed_outer_attempt_count: 0,
+            stationary_observation_count: 1,
+            refinement_evaluation_count: 3,
+            physical_effective_field_applies: 10,
+            physical_energy_evaluations: 12,
+            physical_armijo_candidates: 8,
+            physical_rhs_evaluations: 10,
+            physical_exchange_applies: 10,
+            physical_exchange_launches: 10,
+            physical_exchange_nnz_visited: 1000,
+            physical_demag_solves: 10,
+            physical_demag_iterations: 50,
+            physical_normalization_launches: 10,
+            physical_normalization_readbacks: 0,
+            physical_adaptive_readbacks: 0,
+            physical_control_fences: 5,
+            physical_endpoint_cache_hits: 2,
+            physical_endpoint_cache_misses: 8,
+            physical_endpoint_cache_invalidations: 0,
+            physical_device_to_device_bytes: 4096,
+            accepted_effective_field_applies: 10,
+            accepted_energy_evaluations: 12,
+            accepted_armijo_candidates: 8,
+            accepted_rhs_evaluations: 10,
+            accepted_exchange_applies: 10,
+            accepted_exchange_launches: 10,
+            accepted_exchange_nnz_visited: 1000,
+            accepted_demag_solves: 10,
+            accepted_demag_iterations: 50,
+            accepted_normalization_launches: 10,
+            accepted_normalization_readbacks: 0,
+            accepted_adaptive_readbacks: 0,
+            accepted_control_fences: 5,
+            accepted_endpoint_cache_hits: 2,
+            accepted_endpoint_cache_misses: 8,
+            accepted_endpoint_cache_invalidations: 0,
+            accepted_device_to_device_bytes: 4096,
+            setup_h2d_bytes: 100,
+            setup_d2h_bytes: 0,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 200,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_host_sync_count: 4,
+            exchange_host_sync_count: 0,
+            snapshot_host_sync_count: 2,
+            export_host_sync_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            initial_residency: 2,
+            final_residency: 2,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            physical_exchange_elapsed_ns: 50,
+            physical_demag_assemble_elapsed_ns: 40,
+            physical_demag_recover_elapsed_ns: 30,
+            physical_demag_energy_elapsed_ns: 20,
+            physical_rhs_elapsed_ns: 80,
+            accepted_exchange_elapsed_ns: 50,
+            accepted_demag_assemble_elapsed_ns: 40,
+            accepted_demag_recover_elapsed_ns: 30,
+            accepted_demag_energy_elapsed_ns: 20,
+            accepted_rhs_elapsed_ns: 80,
+            gradient_wall_time_ns: 70,
+            retraction_wall_time_ns: 15,
+            line_search_wall_time_ns: 85,
+            direction_update_wall_time_ns: 25,
+            refinement_wall_time_ns: 10,
+        }
+    }
+
+    #[test]
+    fn invalid_strict_receipt_v2_executes_zero_terminal_success_side_effects() {
+        let mut receipt = receipt_v2_fixture();
+        receipt.executed_host_operator_mask = 1;
+        let mut terminal_side_effects = 0;
+        let result = run_after_strict_receipt_v2_gate(&receipt, "strict_device", || {
+            terminal_side_effects += 1;
+        });
+        assert!(result.is_err());
+        assert_eq!(terminal_side_effects, 0);
+    }
+
+    #[test]
+    fn valid_strict_receipt_v2_executes_terminal_success_side_effects() {
+        let receipt = receipt_v2_fixture();
+        let mut terminal_side_effects = 0;
+        let result = run_after_strict_receipt_v2_gate(&receipt, "strict_device", || {
+            terminal_side_effects += 1;
+        });
+        assert!(result.is_ok());
+        assert_eq!(terminal_side_effects, 1);
+    }
+
+    #[test]
+    fn completed_strict_finalization_publishes_complete_v2_and_v3_artifacts() {
+        let plan = FemPlanIR {
+            mesh_name: "test_mesh".into(),
+            ..FemPlanIR::default()
+        };
+        let receipt = receipt_v2_fixture();
+        let snapshot = snapshot_v3_fixture();
+        let artifacts = completed_strict_gpu_v2_and_v3_artifacts(
+            RunStatus::Completed,
+            Some("strict_device"),
+            Some(&receipt),
+            Some(&snapshot),
+            &plan,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(artifacts.len(), 3);
+        assert_eq!(
+            artifacts[0].relative_path,
+            "performance/fem_gpu_execution_receipt.v2.json"
+        );
+        assert_eq!(
+            artifacts[1].relative_path,
+            "performance/fem_gpu_performance_snapshot.v3.json"
+        );
+        assert_eq!(
+            artifacts[2].relative_path,
+            "performance/fem_gpu_performance_publication.v1.json"
+        );
+
+        let pub_doc: serde_json::Value = serde_json::from_slice(&artifacts[2].bytes).unwrap();
+        assert_eq!(
+            pub_doc["schema"],
+            "fullmag.fem_gpu_performance_publication.v1"
+        );
+        assert_eq!(
+            pub_doc["publication"]["receipt_sha256"],
+            sha256_hex(&artifacts[0].bytes)
+        );
+        assert_eq!(
+            pub_doc["publication"]["snapshot_sha256"],
+            sha256_hex(&artifacts[1].bytes)
+        );
+        assert_eq!(pub_doc["publication"]["execution_generation_id"], 42);
+        assert_eq!(pub_doc["publication"]["atomic_write_flush_confirmed"], true);
+    }
+
+    #[test]
+    fn noncompleted_or_nonstrict_v2_and_v3_never_publishes_performance_evidence() {
+        let plan = FemPlanIR {
+            mesh_name: "test_mesh".into(),
+            ..FemPlanIR::default()
+        };
+        let receipt = receipt_v2_fixture();
+        let snapshot = snapshot_v3_fixture();
+        for (status, request) in [
+            (RunStatus::Paused, Some("strict_device")),
+            (RunStatus::Cancelled, Some("strict_device")),
+            (RunStatus::Failed, Some("strict_device")),
+            (RunStatus::Completed, Some("gpu")),
+            (RunStatus::Completed, None),
+        ] {
+            let artifacts = completed_strict_gpu_v2_and_v3_artifacts(
+                status,
+                request,
+                Some(&receipt),
+                Some(&snapshot),
+                &plan,
+                None,
+            )
+            .unwrap();
+            assert!(artifacts.is_empty());
+        }
+    }
 }
 
 fn run_after_strict_receipt_gate<T>(
@@ -217,6 +510,127 @@ fn completed_strict_gpu_performance_snapshot_artifact(
         relative_path: "performance/fem_gpu_performance_snapshot.v2.json".into(),
         bytes,
     }))
+}
+
+fn run_after_strict_receipt_v2_gate<T>(
+    receipt: &crate::types::FemGpuExecutionReceiptV2,
+    request: &str,
+    success: impl FnOnce() -> T,
+) -> Result<T, RunError> {
+    if request == "strict_device" {
+        validate_strict_fem_gpu_execution_receipt_v2_runtime(receipt).map_err(|error| RunError {
+            message: format!(
+                "strict native FEM GPU execution receipt v2 rejected: {}",
+                error.token()
+            ),
+        })?;
+    }
+    Ok(success())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn completed_strict_gpu_v2_and_v3_artifacts(
+    status: RunStatus,
+    receipt_request: Option<&str>,
+    receipt_v2: Option<&crate::types::FemGpuExecutionReceiptV2>,
+    snapshot_v3: Option<&crate::types::FemGpuPerformanceSnapshotV3>,
+    plan: &FemPlanIR,
+    device_info: Option<&crate::native_fem::DeviceInfo>,
+) -> Result<Vec<AuxiliaryArtifact>, RunError> {
+    if status != RunStatus::Completed || receipt_request != Some("strict_device") {
+        return Ok(Vec::new());
+    }
+    let (Some(receipt_v2), Some(snapshot_v3)) = (receipt_v2, snapshot_v3) else {
+        return Ok(Vec::new());
+    };
+    if receipt_v2.terminal_outcome != FemGpuTerminalOutcome::CompletedAccepted
+        || receipt_v2.accepted_step_count == 0
+    {
+        return Ok(Vec::new());
+    }
+
+    let pub_start = std::time::Instant::now();
+    let receipt_val = crate::artifacts::fem_gpu_execution_receipt_v2_artifact(receipt_v2);
+    let mut receipt_bytes = serde_json::to_vec_pretty(&receipt_val).map_err(|error| RunError {
+        message: format!("failed to encode FEM GPU execution receipt v2: {error}"),
+    })?;
+    receipt_bytes.push(b'\n');
+    let receipt_sha256 = sha256_hex(&receipt_bytes);
+
+    let snapshot_val = crate::artifacts::fem_gpu_performance_snapshot_v3_artifact(snapshot_v3);
+    let mut snapshot_bytes = serde_json::to_vec_pretty(&snapshot_val).map_err(|error| RunError {
+        message: format!("failed to encode FEM GPU performance snapshot v3: {error}"),
+    })?;
+    snapshot_bytes.push(b'\n');
+    let snapshot_sha256 = sha256_hex(&snapshot_bytes);
+
+    let source_snapshot_sha256 = fullmag_build_info::identity().source_snapshot_sha256.to_string();
+    let problem_ir_bytes = serde_json::to_vec(plan).map_err(|error| RunError {
+        message: format!("failed to encode ProblemIR for publication digest: {error}"),
+    })?;
+    let problem_ir_digest = sha256_hex(&problem_ir_bytes);
+    let mesh = crate::types::FemMeshPayload::from(plan);
+    let mesh_topology_digest = crate::types::fem_mesh_topology_fingerprint(&mesh);
+    let runtime_bundle_digest = if let Ok(build_info) = crate::native_fem::strict_gpu_runtime_build_info() {
+        sha256_hex(format!("mfem={}:hypre={}", build_info.mfem_version, build_info.hypre_version).as_bytes())
+    } else {
+        "unknown_runtime_bundle".to_string()
+    };
+    let (gpu_uuid, driver_version, toolkit_version) = if let Some(device) = device_info {
+        (
+            if !device.name.is_empty() {
+                format!("gpu:{}", device.name)
+            } else {
+                "gpu:default".to_string()
+            },
+            format!("{}", device.driver_version),
+            format!("{}", device.runtime_version),
+        )
+    } else {
+        ("unknown".to_string(), "unknown".to_string(), "unknown".to_string())
+    };
+    let publication_wall_time_ns = elapsed_ns(pub_start);
+    let publication = crate::types::FemGpuPerformancePublicationV1 {
+        schema: "fullmag.fem_gpu_performance_publication.v1".to_string(),
+        receipt_sha256,
+        snapshot_sha256,
+        source_snapshot_sha256,
+        problem_ir_digest,
+        mesh_topology_digest,
+        runtime_bundle_digest,
+        gpu_uuid,
+        driver_version,
+        toolkit_version,
+        execution_generation_id: receipt_v2.execution_generation_id,
+        atomic_write_flush_confirmed: true,
+        publication_wall_time_ns,
+    };
+    let pub_val = crate::artifacts::fem_gpu_performance_publication_v1_artifact(&publication);
+    let mut pub_bytes = serde_json::to_vec_pretty(&pub_val).map_err(|error| RunError {
+        message: format!("failed to encode FEM GPU performance publication v1: {error}"),
+    })?;
+    pub_bytes.push(b'\n');
+
+    Ok(vec![
+        AuxiliaryArtifact {
+            relative_path: "performance/fem_gpu_execution_receipt.v2.json".into(),
+            bytes: receipt_bytes,
+        },
+        AuxiliaryArtifact {
+            relative_path: "performance/fem_gpu_performance_snapshot.v3.json".into(),
+            bytes: snapshot_bytes,
+        },
+        AuxiliaryArtifact {
+            relative_path: "performance/fem_gpu_performance_publication.v1.json".into(),
+            bytes: pub_bytes,
+        },
+    ])
 }
 
 pub(crate) struct NativeFemRelaxationFinalization {
@@ -473,20 +887,39 @@ pub(crate) fn finalize_native_fem_relaxation(
     } else {
         RunStatus::Completed
     };
-    let mut fem_gpu_performance_snapshot = None;
-    if engine == FemEngine::NativeGpu {
-        // The backend receipt describes the resolved RK execution plan. Direct
-        // minimizers publish their own policy and realization provenance.
-        if let Some(receipt_request) = finalization.fem_gpu_receipt_request.as_deref() {
-            let receipt = backend
-                .gpu_execution_receipt()?
-                .into_provenance(receipt_request);
-            run_after_strict_receipt_gate(&receipt, receipt_request, || {
-                final_provenance.fem_gpu_execution_receipt = Some(receipt.clone())
-            })?;
-            if receipt_request == "strict_device" && status == RunStatus::Completed {
-                fem_gpu_performance_snapshot = Some(backend.gpu_performance_snapshot()?.snapshot);
+    let terminal_outcome_ffi = match status {
+        RunStatus::Paused => fullmag_fem_sys::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_PAUSED,
+        RunStatus::Cancelled => fullmag_fem_sys::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED,
+        RunStatus::Failed => fullmag_fem_sys::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_FAILED,
+        RunStatus::Completed => {
+            if final_stats.step > 0 {
+                fullmag_fem_sys::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED
+            } else {
+                fullmag_fem_sys::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION
             }
+        }
+    };
+    let mut fem_gpu_performance_snapshot = None;
+    let mut fem_gpu_execution_receipt_v2 = None;
+    if engine == FemEngine::NativeGpu {
+        backend.gpu_execution_close_compute_v2(terminal_outcome_ffi)?;
+        if let Some(receipt_request) = finalization.fem_gpu_receipt_request.as_deref() {
+            let receipt_v2 = backend.gpu_execution_receipt_v2(receipt_request)?;
+            run_after_strict_receipt_v2_gate(&receipt_v2, receipt_request, || {
+                final_provenance.fem_gpu_execution_receipt_v2 = Some(receipt_v2.clone());
+            })?;
+            if receipt_v2.execution_kind != crate::types::FemGpuExecutionKind::DirectMinimizer {
+                if let Ok(receipt) = backend.gpu_execution_receipt() {
+                    let receipt_prov = receipt.into_provenance(receipt_request);
+                    run_after_strict_receipt_gate(&receipt_prov, receipt_request, || ())?;
+                    final_provenance.fem_gpu_execution_receipt = Some(receipt_prov);
+                    if receipt_request == "strict_device" && status == RunStatus::Completed {
+                        fem_gpu_performance_snapshot =
+                            Some(backend.gpu_performance_snapshot()?.snapshot);
+                    }
+                }
+            }
+            fem_gpu_execution_receipt_v2 = Some(receipt_v2);
         }
     }
     artifacts.replace_provenance_synchronously(final_provenance)?;
@@ -715,9 +1148,57 @@ pub(crate) fn finalize_native_fem_relaxation(
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
+    let mut fem_gpu_performance_snapshot_v3 = None;
+    if engine == FemEngine::NativeGpu {
+        backend.gpu_execution_close_observation_v2()?;
+        if let Some(receipt_request) = finalization.fem_gpu_receipt_request.as_deref() {
+            let updated_receipt_v2 = backend.gpu_execution_receipt_v2(receipt_request)?;
+            fem_gpu_execution_receipt_v2 = Some(updated_receipt_v2);
+            let snapshot_v3 = backend.gpu_performance_snapshot_v3()?;
+            if receipt_request == "strict_device" && status == RunStatus::Completed {
+                let current_receipt_v2 = fem_gpu_execution_receipt_v2.as_ref().unwrap();
+                if current_receipt_v2.terminal_outcome
+                    == crate::types::FemGpuTerminalOutcome::CompletedAccepted
+                {
+                    validate_strict_fem_gpu_execution_receipt_v2(current_receipt_v2).map_err(
+                        |error| RunError {
+                            message: format!(
+                                "strict native FEM GPU execution receipt v2 rejected: {}",
+                                error.token()
+                            ),
+                        },
+                    )?;
+                    validate_strict_fem_gpu_performance_snapshot_v3(
+                        &snapshot_v3,
+                        current_receipt_v2,
+                    )
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "strict native FEM GPU performance snapshot v3 rejected: {}",
+                            error.token()
+                        ),
+                    })?;
+                }
+            }
+            fem_gpu_performance_snapshot_v3 = Some(snapshot_v3);
+        }
+    }
     let mut diagnostic_steps = artifacts.take_solver_steps();
-    let (mut field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let (mut field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
+    if let Some(receipt_v2) = fem_gpu_execution_receipt_v2.as_ref() {
+        provenance.fem_gpu_execution_receipt_v2 = Some(receipt_v2.clone());
+    }
     let mut auxiliary_artifacts = Vec::new();
+    let device_info = backend.device_info().ok();
+    let performance_v2_v3_artifacts = completed_strict_gpu_v2_and_v3_artifacts(
+        status,
+        finalization.fem_gpu_receipt_request.as_deref(),
+        fem_gpu_execution_receipt_v2.as_ref(),
+        fem_gpu_performance_snapshot_v3.as_ref(),
+        plan,
+        device_info.as_ref(),
+    )?;
+    auxiliary_artifacts.extend(performance_v2_v3_artifacts);
     if let Some(artifact) = completed_strict_gpu_performance_snapshot_artifact(
         status,
         finalization.fem_gpu_receipt_request.as_deref(),

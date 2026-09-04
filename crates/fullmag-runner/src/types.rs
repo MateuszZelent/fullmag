@@ -3607,6 +3607,271 @@ pub struct FemGpuPerformanceSnapshotV2 {
     pub accepted_finalization_wall_time_ns: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuExecutionKind {
+    Unknown,
+    RkTimeIntegrator,
+    DirectMinimizer,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuRelaxationAlgorithm {
+    None,
+    NonlinearCg,
+    ProjectedGradientBb,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuAttemptModel {
+    Unknown,
+    RkCandidate,
+    OuterStepWithArmijoCandidates,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuControlPolicy {
+    Unknown,
+    DeviceControl,
+    BoundedHostScalarControl,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FemGpuTerminalOutcome {
+    None,
+    CompletedAccepted,
+    CompletedObservation,
+    Cancelled,
+    Paused,
+    Failed,
+}
+
+/// Append-only native FEM GPU execution receipt v2 preserving direct minimizer evidence.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuExecutionReceiptV2 {
+    pub requested: String,
+    pub resolved: String,
+    pub executed: String,
+    pub execution_class: FemGpuExecutionClass,
+    pub device_ordinal: i32,
+    pub precision: String,
+    pub integrator: String,
+    pub required_operator_mask: u64,
+    pub resolved_device_operator_mask: u64,
+    pub resolved_host_operator_mask: u64,
+    pub resolved_unknown_operator_mask: u64,
+    pub executed_device_operator_mask: u64,
+    pub executed_host_operator_mask: u64,
+    pub executed_unknown_operator_mask: u64,
+    pub fallback_count: u64,
+    pub accepted_step_count: u64,
+    pub rejected_attempt_count: u64,
+    pub failed_attempt_count: u64,
+    pub hot_loop_compute_h2d_bytes: u64,
+    pub hot_loop_compute_d2h_bytes: u64,
+    pub hot_loop_compute_host_sync_count: u64,
+
+    pub execution_kind: FemGpuExecutionKind,
+    pub relaxation_algorithm: FemGpuRelaxationAlgorithm,
+    pub attempt_model: FemGpuAttemptModel,
+    pub control_policy: FemGpuControlPolicy,
+
+    pub execution_generation_id: u64,
+
+    pub terminal_outcome: FemGpuTerminalOutcome,
+    pub compute_closed: bool,
+    pub observation_closed: bool,
+
+    pub outer_attempt_count: u64,
+    pub rejected_candidate_count: u64,
+    pub failed_candidate_count: u64,
+    pub stationary_observation_count: u64,
+    pub cancelled_outer_attempt_count: u64,
+    pub paused_outer_attempt_count: u64,
+    pub refinement_evaluation_count: u64,
+
+    pub allowed_transfer_mask: u64,
+    pub observed_transfer_mask: u64,
+    pub transfer_violation_mask: u64,
+
+    pub setup_h2d_bytes: u64,
+    pub setup_d2h_bytes: u64,
+    pub setup_host_sync_count: u64,
+    pub compute_h2d_bytes: u64,
+    pub compute_d2h_bytes: u64,
+    pub compute_host_sync_count: u64,
+    pub control_h2d_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub control_host_sync_count: u64,
+    pub exchange_h2d_bytes: u64,
+    pub exchange_d2h_bytes: u64,
+    pub exchange_host_sync_count: u64,
+    pub snapshot_h2d_bytes: u64,
+    pub snapshot_d2h_bytes: u64,
+    pub snapshot_host_sync_count: u64,
+    pub export_h2d_bytes: u64,
+    pub export_d2h_bytes: u64,
+    pub export_host_sync_count: u64,
+
+    pub initial_residency: u32,
+    pub final_residency: u32,
+    pub residency_transition_count: u64,
+    pub residency_violation_count: u64,
+
+    pub kernel_launch_coverage_mask: u64,
+    pub required_coverage_mask: u64,
+    pub unclassified_event_count: u64,
+
+    pub accounting_valid: bool,
+    pub lifecycle_valid: bool,
+    pub identity_valid: bool,
+}
+
+/// Append-only native FEM GPU performance snapshot v3 combining receipt lifecycle
+/// and lifetime performance counters.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuPerformanceSnapshotV3 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub setup_count: u64,
+    pub apply_count: u64,
+    pub kernel_launch_count: u64,
+    pub compute_fence_count: u64,
+    pub snapshot_fence_count: u64,
+    pub export_fence_count: u64,
+    pub selected_sparse_kernel_id: u64,
+    pub setup_wall_time_ns: u64,
+    pub apply_wall_time_ns: u64,
+    pub accepted_finalization_wall_time_ns: u64,
+
+    pub execution_kind: FemGpuExecutionKind,
+    pub relaxation_algorithm: FemGpuRelaxationAlgorithm,
+    pub attempt_model: FemGpuAttemptModel,
+    pub control_policy: FemGpuControlPolicy,
+    pub terminal_outcome: FemGpuTerminalOutcome,
+    pub execution_class: FemGpuExecutionClass,
+    pub precision: String,
+    pub device_ordinal: i32,
+
+    pub execution_generation_id: u64,
+    pub available: bool,
+    pub compute_closed: bool,
+    pub observation_closed: bool,
+    pub frozen: bool,
+
+    pub accepted_step_count: u64,
+    pub physical_outer_attempt_count: u64,
+    pub rejected_candidate_count: u64,
+    pub failed_candidate_count: u64,
+    pub cancelled_outer_attempt_count: u64,
+    pub paused_outer_attempt_count: u64,
+    pub failed_outer_attempt_count: u64,
+    pub stationary_observation_count: u64,
+    pub refinement_evaluation_count: u64,
+
+    pub physical_effective_field_applies: u64,
+    pub physical_energy_evaluations: u64,
+    pub physical_armijo_candidates: u64,
+    pub physical_rhs_evaluations: u64,
+    pub physical_exchange_applies: u64,
+    pub physical_exchange_launches: u64,
+    pub physical_exchange_nnz_visited: u64,
+    pub physical_demag_solves: u64,
+    pub physical_demag_iterations: u64,
+    pub physical_normalization_launches: u64,
+    pub physical_normalization_readbacks: u64,
+    pub physical_adaptive_readbacks: u64,
+    pub physical_control_fences: u64,
+    pub physical_endpoint_cache_hits: u64,
+    pub physical_endpoint_cache_misses: u64,
+    pub physical_endpoint_cache_invalidations: u64,
+
+    pub accepted_effective_field_applies: u64,
+    pub accepted_energy_evaluations: u64,
+    pub accepted_armijo_candidates: u64,
+    pub accepted_rhs_evaluations: u64,
+    pub accepted_exchange_applies: u64,
+    pub accepted_exchange_launches: u64,
+    pub accepted_exchange_nnz_visited: u64,
+    pub accepted_demag_solves: u64,
+    pub accepted_demag_iterations: u64,
+    pub accepted_normalization_launches: u64,
+    pub accepted_normalization_readbacks: u64,
+    pub accepted_adaptive_readbacks: u64,
+    pub accepted_control_fences: u64,
+    pub accepted_endpoint_cache_hits: u64,
+    pub accepted_endpoint_cache_misses: u64,
+    pub accepted_endpoint_cache_invalidations: u64,
+
+    pub physical_device_to_device_bytes: u64,
+    pub accepted_device_to_device_bytes: u64,
+    pub setup_h2d_bytes: u64,
+    pub setup_d2h_bytes: u64,
+    pub compute_h2d_bytes: u64,
+    pub compute_d2h_bytes: u64,
+    pub control_h2d_bytes: u64,
+    pub control_d2h_bytes: u64,
+    pub exchange_h2d_bytes: u64,
+    pub exchange_d2h_bytes: u64,
+    pub snapshot_h2d_bytes: u64,
+    pub snapshot_d2h_bytes: u64,
+    pub export_h2d_bytes: u64,
+    pub export_d2h_bytes: u64,
+
+    pub compute_host_sync_count: u64,
+    pub control_host_sync_count: u64,
+    pub exchange_host_sync_count: u64,
+    pub snapshot_host_sync_count: u64,
+    pub export_host_sync_count: u64,
+
+    pub kernel_launch_coverage_mask: u64,
+    pub required_coverage_mask: u64,
+    pub unclassified_event_count: u64,
+
+    pub initial_residency: u32,
+    pub final_residency: u32,
+    pub residency_transition_count: u64,
+    pub residency_violation_count: u64,
+
+    pub physical_exchange_elapsed_ns: u64,
+    pub physical_demag_assemble_elapsed_ns: u64,
+    pub physical_demag_recover_elapsed_ns: u64,
+    pub physical_demag_energy_elapsed_ns: u64,
+    pub physical_rhs_elapsed_ns: u64,
+    pub accepted_exchange_elapsed_ns: u64,
+    pub accepted_demag_assemble_elapsed_ns: u64,
+    pub accepted_demag_recover_elapsed_ns: u64,
+    pub accepted_demag_energy_elapsed_ns: u64,
+    pub accepted_rhs_elapsed_ns: u64,
+    pub gradient_wall_time_ns: u64,
+    pub retraction_wall_time_ns: u64,
+    pub line_search_wall_time_ns: u64,
+    pub direction_update_wall_time_ns: u64,
+    pub refinement_wall_time_ns: u64,
+}
+
+/// Immutable publication receipt binding receipt v2 and snapshot v3.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FemGpuPerformancePublicationV1 {
+    pub schema: String,
+    pub receipt_sha256: String,
+    pub snapshot_sha256: String,
+    pub source_snapshot_sha256: String,
+    pub problem_ir_digest: String,
+    pub mesh_topology_digest: String,
+    pub runtime_bundle_digest: String,
+    pub gpu_uuid: String,
+    pub driver_version: String,
+    pub toolkit_version: String,
+    pub execution_generation_id: u64,
+    pub atomic_write_flush_confirmed: bool,
+    pub publication_wall_time_ns: u64,
+}
+
 #[cfg(test)]
 mod fem_gpu_execution_receipt_contract_tests {
     use super::*;
@@ -3680,6 +3945,204 @@ mod fem_gpu_execution_receipt_contract_tests {
         assert_eq!(value["setup_wall_time_ns"], 8);
         assert_eq!(value["apply_wall_time_ns"], 9);
         assert_eq!(value["accepted_finalization_wall_time_ns"], 10);
+    }
+
+    #[test]
+    fn receipt_v2_serializes_every_native_field() {
+        let receipt = FemGpuExecutionReceiptV2 {
+            requested: "strict_device".into(),
+            resolved: "device_resident".into(),
+            executed: "cuda_fem".into(),
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            device_ordinal: 0,
+            precision: "double".into(),
+            integrator: "".into(),
+            required_operator_mask: 0x3fff,
+            resolved_device_operator_mask: 0x3fff,
+            resolved_host_operator_mask: 0,
+            resolved_unknown_operator_mask: 0,
+            executed_device_operator_mask: 0x3fff,
+            executed_host_operator_mask: 0,
+            executed_unknown_operator_mask: 0,
+            fallback_count: 0,
+            accepted_step_count: 5,
+            rejected_attempt_count: 2,
+            failed_attempt_count: 0,
+            hot_loop_compute_h2d_bytes: 0,
+            hot_loop_compute_d2h_bytes: 0,
+            hot_loop_compute_host_sync_count: 0,
+            execution_kind: FemGpuExecutionKind::DirectMinimizer,
+            relaxation_algorithm: FemGpuRelaxationAlgorithm::NonlinearCg,
+            attempt_model: FemGpuAttemptModel::OuterStepWithArmijoCandidates,
+            control_policy: FemGpuControlPolicy::BoundedHostScalarControl,
+            execution_generation_id: 42,
+            terminal_outcome: FemGpuTerminalOutcome::CompletedAccepted,
+            compute_closed: true,
+            observation_closed: true,
+            outer_attempt_count: 7,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            stationary_observation_count: 1,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            refinement_evaluation_count: 3,
+            allowed_transfer_mask: 0x7f,
+            observed_transfer_mask: 0x25,
+            transfer_violation_mask: 0,
+            setup_h2d_bytes: 100,
+            setup_d2h_bytes: 0,
+            setup_host_sync_count: 1,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            control_host_sync_count: 4,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            exchange_host_sync_count: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 200,
+            snapshot_host_sync_count: 2,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            export_host_sync_count: 0,
+            initial_residency: 2,
+            final_residency: 2,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            accounting_valid: true,
+            lifecycle_valid: true,
+            identity_valid: true,
+        };
+        let value = serde_json::to_value(receipt).expect("serialize receipt v2");
+        assert_eq!(value["execution_kind"], "direct_minimizer");
+        assert_eq!(value["relaxation_algorithm"], "nonlinear_cg");
+        assert_eq!(value["terminal_outcome"], "completed_accepted");
+        assert_eq!(value["execution_generation_id"], 42);
+        assert_eq!(value["compute_closed"], true);
+    }
+
+    #[test]
+    fn performance_snapshot_v3_serializes_every_native_field() {
+        let snapshot = FemGpuPerformanceSnapshotV3 {
+            abi_version: 3,
+            struct_size: 792,
+            setup_count: 1,
+            apply_count: 5,
+            kernel_launch_count: 20,
+            compute_fence_count: 0,
+            snapshot_fence_count: 2,
+            export_fence_count: 0,
+            selected_sparse_kernel_id: 7,
+            setup_wall_time_ns: 1000,
+            apply_wall_time_ns: 5000,
+            accepted_finalization_wall_time_ns: 200,
+            execution_kind: FemGpuExecutionKind::DirectMinimizer,
+            relaxation_algorithm: FemGpuRelaxationAlgorithm::NonlinearCg,
+            attempt_model: FemGpuAttemptModel::OuterStepWithArmijoCandidates,
+            control_policy: FemGpuControlPolicy::BoundedHostScalarControl,
+            terminal_outcome: FemGpuTerminalOutcome::CompletedAccepted,
+            execution_class: FemGpuExecutionClass::DeviceResident,
+            precision: "double".into(),
+            device_ordinal: 0,
+            execution_generation_id: 42,
+            available: true,
+            compute_closed: true,
+            observation_closed: true,
+            frozen: true,
+            accepted_step_count: 5,
+            physical_outer_attempt_count: 7,
+            rejected_candidate_count: 2,
+            failed_candidate_count: 0,
+            cancelled_outer_attempt_count: 0,
+            paused_outer_attempt_count: 0,
+            failed_outer_attempt_count: 0,
+            stationary_observation_count: 1,
+            refinement_evaluation_count: 3,
+            physical_effective_field_applies: 10,
+            physical_energy_evaluations: 12,
+            physical_armijo_candidates: 8,
+            physical_rhs_evaluations: 10,
+            physical_exchange_applies: 10,
+            physical_exchange_launches: 10,
+            physical_exchange_nnz_visited: 1000,
+            physical_demag_solves: 10,
+            physical_demag_iterations: 50,
+            physical_normalization_launches: 10,
+            physical_normalization_readbacks: 0,
+            physical_adaptive_readbacks: 0,
+            physical_control_fences: 5,
+            physical_endpoint_cache_hits: 2,
+            physical_endpoint_cache_misses: 8,
+            physical_endpoint_cache_invalidations: 0,
+            accepted_effective_field_applies: 8,
+            accepted_energy_evaluations: 10,
+            accepted_armijo_candidates: 6,
+            accepted_rhs_evaluations: 8,
+            accepted_exchange_applies: 8,
+            accepted_exchange_launches: 8,
+            accepted_exchange_nnz_visited: 800,
+            accepted_demag_solves: 8,
+            accepted_demag_iterations: 40,
+            accepted_normalization_launches: 8,
+            accepted_normalization_readbacks: 0,
+            accepted_adaptive_readbacks: 0,
+            accepted_control_fences: 4,
+            accepted_endpoint_cache_hits: 2,
+            accepted_endpoint_cache_misses: 6,
+            accepted_endpoint_cache_invalidations: 0,
+            physical_device_to_device_bytes: 4096,
+            accepted_device_to_device_bytes: 3072,
+            setup_h2d_bytes: 100,
+            setup_d2h_bytes: 0,
+            compute_h2d_bytes: 0,
+            compute_d2h_bytes: 0,
+            control_h2d_bytes: 0,
+            control_d2h_bytes: 32,
+            exchange_h2d_bytes: 0,
+            exchange_d2h_bytes: 0,
+            snapshot_h2d_bytes: 0,
+            snapshot_d2h_bytes: 200,
+            export_h2d_bytes: 0,
+            export_d2h_bytes: 0,
+            compute_host_sync_count: 0,
+            control_host_sync_count: 4,
+            exchange_host_sync_count: 0,
+            snapshot_host_sync_count: 2,
+            export_host_sync_count: 0,
+            kernel_launch_coverage_mask: 0x7ff,
+            required_coverage_mask: 0x7ff,
+            unclassified_event_count: 0,
+            initial_residency: 2,
+            final_residency: 2,
+            residency_transition_count: 0,
+            residency_violation_count: 0,
+            physical_exchange_elapsed_ns: 2000,
+            physical_demag_assemble_elapsed_ns: 1000,
+            physical_demag_recover_elapsed_ns: 500,
+            physical_demag_energy_elapsed_ns: 500,
+            physical_rhs_elapsed_ns: 3000,
+            accepted_exchange_elapsed_ns: 1600,
+            accepted_demag_assemble_elapsed_ns: 800,
+            accepted_demag_recover_elapsed_ns: 400,
+            accepted_demag_energy_elapsed_ns: 400,
+            accepted_rhs_elapsed_ns: 2400,
+            gradient_wall_time_ns: 1500,
+            retraction_wall_time_ns: 500,
+            line_search_wall_time_ns: 2000,
+            direction_update_wall_time_ns: 500,
+            refinement_wall_time_ns: 500,
+        };
+        let value = serde_json::to_value(snapshot).expect("serialize snapshot v3");
+        assert_eq!(value["abi_version"], 3);
+        assert_eq!(value["struct_size"], 792);
+        assert_eq!(value["execution_kind"], "direct_minimizer");
+        assert_eq!(value["execution_generation_id"], 42);
+        assert_eq!(value["frozen"], true);
     }
 }
 /// Attestation returned by the native modal boundary after planner selection.
@@ -3983,6 +4446,9 @@ pub struct ExecutionProvenance {
     /// GPU residency without inferring execution from the RK plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fem_gpu_execution_receipt: Option<FemGpuExecutionReceipt>,
+    /// Native FEM receipt v2 preserving direct minimizer execution evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_gpu_execution_receipt_v2: Option<FemGpuExecutionReceiptV2>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.

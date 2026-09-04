@@ -43,7 +43,16 @@ struct GpuPerformanceCounterDelta {
     uint64_t rhs_elapsed_ns = 0;
     double demag_rhs_norm_sum = 0.0;
     double demag_stage_energy_sum_joules = 0.0;
+    uint64_t effective_field_applies = 0;
+    uint64_t energy_evaluations = 0;
+    uint64_t armijo_candidates = 0;
+    uint64_t gradient_wall_time_ns = 0;
+    uint64_t retraction_wall_time_ns = 0;
+    uint64_t line_search_wall_time_ns = 0;
+    uint64_t direction_update_wall_time_ns = 0;
+    uint64_t refinement_wall_time_ns = 0;
 };
+
 
 struct GpuPerformanceCounterState {
     GpuPerformanceCounterState() = default;
@@ -108,5 +117,11 @@ void gpu_performance_fail_attempt(GpuPerformanceCounterState &state);
 
 fullmag_fem_gpu_performance_snapshot_v1 gpu_performance_snapshot(
     const GpuPerformanceCounterState &state);
+
+struct FemGpuExecutionReceiptRuntimeState;
+
+fullmag_fem_gpu_performance_snapshot_v3 gpu_performance_snapshot_v3(
+    const FemGpuExecutionReceiptRuntimeState &receipt_state,
+    const GpuPerformanceCounterState &perf_state);
 
 } // namespace fullmag::fem

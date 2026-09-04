@@ -3171,6 +3171,87 @@ impl NativeFemBackend {
         runtime_info::NativeFemGpuPerformanceSnapshot::from_ffi(snapshot)
     }
 
+    pub(crate) fn gpu_execution_begin_v2(&self) -> Result<u64, RunError> {
+        let mut generation_id = 0u64;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_gpu_execution_begin_v2(self.handle, &mut generation_id)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU execution begin v2 failed"));
+        }
+        Ok(generation_id)
+    }
+
+    pub(crate) fn gpu_execution_close_compute_v2(
+        &self,
+        terminal_outcome: ffi::fullmag_fem_gpu_terminal_outcome_v2,
+    ) -> Result<(), RunError> {
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_gpu_execution_close_compute_v2(self.handle, terminal_outcome)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU execution close compute v2 failed"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn gpu_execution_close_observation_v2(&self) -> Result<(), RunError> {
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_gpu_execution_close_observation_v2(self.handle)
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU execution close observation v2 failed"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn gpu_execution_receipt_v2(
+        &self,
+        requested: &str,
+    ) -> Result<crate::types::FemGpuExecutionReceiptV2, RunError> {
+        let mut receipt = std::mem::MaybeUninit::<ffi::fullmag_fem_gpu_execution_receipt_v2>::zeroed();
+        unsafe {
+            let p = receipt.as_mut_ptr();
+            (*p).abi_version = ffi::FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2;
+            (*p).struct_size =
+                std::mem::size_of::<ffi::fullmag_fem_gpu_execution_receipt_v2>() as u32;
+        }
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_gpu_execution_receipt_v2(self.handle, receipt.as_mut_ptr())
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU execution receipt v2 read failed"));
+        }
+        let raw = unsafe { receipt.assume_init() };
+        let parsed = runtime_info::NativeFemGpuExecutionReceiptV2::from_ffi(raw, requested)?;
+        Ok(parsed.receipt)
+    }
+
+    pub(crate) fn gpu_performance_snapshot_v3(
+        &self,
+    ) -> Result<crate::types::FemGpuPerformanceSnapshotV3, RunError> {
+        let mut snapshot =
+            std::mem::MaybeUninit::<ffi::fullmag_fem_gpu_performance_snapshot_v3>::zeroed();
+        unsafe {
+            let p = snapshot.as_mut_ptr();
+            (*p).abi_version = ffi::FULLMAG_FEM_GPU_PERFORMANCE_SNAPSHOT_V3_ABI_VERSION;
+            (*p).struct_size =
+                std::mem::size_of::<ffi::fullmag_fem_gpu_performance_snapshot_v3>() as u32;
+        }
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_gpu_performance_snapshot_v3(
+                self.handle,
+                snapshot.as_mut_ptr(),
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM GPU performance snapshot v3 read failed"));
+        }
+        let raw = unsafe { snapshot.assume_init() };
+        let parsed = runtime_info::NativeFemGpuPerformanceSnapshotV3::from_ffi(raw)?;
+        Ok(parsed.snapshot)
+    }
+
     fn attach_transfer_audit(&self, stats: &mut StepStats) -> Result<(), RunError> {
         let audit = self.transfer_audit()?;
         stats.hot_loop_h2d_bytes = audit.hot_loop_h2d_bytes;
