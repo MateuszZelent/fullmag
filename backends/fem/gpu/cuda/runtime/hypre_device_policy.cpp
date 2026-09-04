@@ -158,6 +158,7 @@ HypreDevicePolicySnapshot configure_hypre_cuda_device_policy() noexcept
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && \
     (defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || \
      defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP))
+        clear_all_errors();
         const HypreDevicePolicyApi api{
             set_memory_location_device,
             set_execution_policy_device,

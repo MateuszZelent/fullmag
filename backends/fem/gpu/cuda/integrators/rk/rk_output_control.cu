@@ -231,6 +231,10 @@ bool commit_candidate(
     cudaStream_t stream,
     std::string &error)
 {
+    if (candidate.force_commit_failure) {
+        error = "injected commit_candidate failure";
+        return false;
+    }
     auto &gpu = ctx.gpu_state.device;
     if (gpu.lifecycle.allocated && candidate.m_candidate.x != nullptr && gpu.magnetization.m.x != nullptr) {
         if (!gpu_rk_copy_component_device(

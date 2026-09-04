@@ -20,6 +20,7 @@
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
+#include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -2254,6 +2255,10 @@ void mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step() {
     check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
           "managed mixed-P1 GPU Poisson contract requires a CUDA device");
 
+    if (!mfem::Device::IsConfigured()) {
+        static mfem::Device mfem_device("cuda");
+    }
+
     for (const int realization : {
              FULLMAG_FEM_DEMAG_AIRBOX_ROBIN,
              FULLMAG_FEM_DEMAG_AIRBOX_DIRICHLET}) {
@@ -3819,7 +3824,37 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
 
 } // namespace
 
+void poisson_force_independent_residual_validation_honors_qualification_env() {
+    bool forced = false;
+    std::string error;
+    check(setenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL", "1", 1) == 0, "setenv 1");
+    check(fullmag::fem::read_force_independent_residual_validation(forced, error), "read_force_independent_residual_validation true");
+    check(forced, "FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL=1 must set forced=true");
+    auto needs_forced = fullmag::fem::resolve_hypre_residual_validation_needs(true, false, forced);
+    check(needs_forced.independent_residual, "forced residual validation must request independent residual");
+    check(needs_forced.rhs_norm, "forced residual validation must request rhs norm");
+
+    check(setenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL", "0", 1) == 0, "setenv 0");
+    check(fullmag::fem::read_force_independent_residual_validation(forced, error), "read_force_independent_residual_validation false");
+    check(!forced, "FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL=0 must set forced=false");
+    auto needs_unforced = fullmag::fem::resolve_hypre_residual_validation_needs(true, false, forced);
+    check(!needs_unforced.independent_residual, "unforced converged solve must not request independent residual");
+
+    unsetenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL");
+
+    std::ifstream solver_file("/workspace/backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp");
+    if (!solver_file.is_open()) solver_file.open("backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp");
+    if (!solver_file.is_open()) solver_file.open("../backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp");
+    check(solver_file.is_open(), "unable to open hypre_device_solver.cpp");
+    std::string solver_src((std::istreambuf_iterator<char>(solver_file)), std::istreambuf_iterator<char>());
+    check(solver_src.find("read_force_independent_residual_validation") != std::string::npos,
+          "hypre_device_solver.cpp must read qualification environment via read_force_independent_residual_validation");
+    check(solver_src.find("constexpr bool force_independent_validation = false;") == std::string::npos,
+          "hypre_device_solver.cpp must not hardcode force_independent_validation to false");
+}
+
 int main() {
+    poisson_force_independent_residual_validation_honors_qualification_env();
     demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
     demag_linear_solve_validation_rejects_invalid_results();
     poisson_runtime_wrappers_are_owned_by_separate_modules();
@@ -3854,9 +3889,7 @@ int main() {
     airbox_dirichlet_and_robin_match_manufactured_slab_oracle();
     mixed_poisson_rhs_is_magnetic_only_with_air_present();
     mixed_p1_gpu_rhs_and_magnetic_recovery_match_cpu_mfem();
-#if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
-    mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step();
-#endif
+
     mixed_poisson_uses_continuous_weak_flux_not_continuous_physical_hn();
     mixed_poisson_robin_mass_uses_outer_tri_and_quad_only();
     mixed_poisson_energy_sign_and_directional_derivative();
@@ -3888,5 +3921,8 @@ int main() {
     demag_call_profile_format_is_owned_by_poisson_module();
     demag_visual_effective_field_preserves_full_domain_demag();
     demag_recovered_field_finalize_projects_periodic_and_syncs_visual();
+#if FULLMAG_HAS_CUDA_RUNTIME && defined(MFEM_USE_MPI)
+    mixed_p1_gpu_robin_and_dirichlet_device_hypre_match_cpu_one_step();
+#endif
     return 0;
 }

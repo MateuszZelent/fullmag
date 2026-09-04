@@ -112,8 +112,14 @@ bool copy_host_vector(
 #endif
 
 void zero_poisson_essential_values(const Context &ctx, mfem::Vector &vec) {
+    if (ctx.poisson_demag.ess_tdof_list.empty() || vec.Size() == 0) {
+        return;
+    }
+    double *data = audited_host_read_write(vec);
     for (const int tdof : ctx.poisson_demag.ess_tdof_list) {
-        vec(tdof) = 0.0;
+        if (tdof >= 0 && tdof < vec.Size()) {
+            data[tdof] = 0.0;
+        }
     }
 }
 

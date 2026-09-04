@@ -70,6 +70,7 @@ struct RkCandidateState {
     uint32_t active_slot = 0;
     RkOutputControlMask mask{};
     RkCandidateReceipt receipt{};
+    bool force_commit_failure = false;
 
     void advance_slot() {
         active_slot = (active_slot + 1) % 2;

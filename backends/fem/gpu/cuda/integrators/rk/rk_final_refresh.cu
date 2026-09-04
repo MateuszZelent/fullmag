@@ -181,7 +181,11 @@ bool gpu_rk_finalize_accepted_step(
     }
 
     std::string commit_err;
-    commit_candidate(ctx, gpu.rk.candidate, stream, commit_err);
+    if (!commit_candidate(ctx, gpu.rk.candidate, stream, commit_err)) {
+        gpu.rk.fsal_valid = false;
+        reason = "commit_candidate failed: " + commit_err;
+        return false;
+    }
     stats.step = ctx.state.step_count;
     stats.time_seconds = ctx.state.current_time;
     stats.dt_seconds = active_dt;

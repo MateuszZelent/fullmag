@@ -42,21 +42,11 @@ bool gpu_rk_device_resident_step(
     auto &gpu = ctx.gpu_state.device;
     GpuRkAcceptedAttemptResult accepted_attempt{};
     bool executed_via_graph = false;
-    if (gpu.rk.graph_plan.mode() == RkGraphMode::Captured && !preflight.adaptive) {
-        if (gpu.rk.graph_plan.launch(ctx, preflight.stream, reason)) {
-            executed_via_graph = true;
-            accepted_attempt.active_dt = dt_seconds;
-            accepted_attempt.suggested_dt = dt_seconds;
-            accepted_attempt.error_estimate = 0.0;
-            accepted_attempt.rejected_attempts = 0;
-            accepted_attempt.total_stage_rhs_evaluations = static_cast<uint32_t>(tableau.stages);
-            accepted_attempt.fsal_reused = false;
-        } else {
-            // Qualified fallback to standard attempt loop on graph launch failure
-            gpu.rk.graph_plan.set_mode(RkGraphMode::Fallback);
-        }
+    // Incomplete graph capture must not bypass actual RHS stages and candidate evolution.
+    // Captured mode safely falls back to the qualified standard attempt loop.
+    if (gpu.rk.graph_plan.mode() == RkGraphMode::Captured) {
+        gpu.rk.graph_plan.set_mode(RkGraphMode::Fallback);
     }
-
     if (!executed_via_graph) {
         if (!gpu_rk_run_accepted_attempt_loop(
                 ctx,

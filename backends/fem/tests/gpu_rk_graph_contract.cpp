@@ -11,6 +11,7 @@
 
 #include "gpu/cuda/integrators/rk/rk_graph.hpp"
 #include "context.hpp"
+#include "gpu/cuda/integrators/rk/rk_output_control.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -110,12 +111,66 @@ void test_graph_stream_capture_source_contract() {
           "rk_step.cu must gate standard attempt loop on !executed_via_graph");
 }
 
+void test_graph_captured_mode_falls_back_without_bypassing_rhs() {
+    std::ifstream step_file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_step.cu");
+    if (!step_file.is_open()) step_file.open("backends/fem/gpu/cuda/integrators/rk/rk_step.cu");
+    if (!step_file.is_open()) step_file.open("../backends/fem/gpu/cuda/integrators/rk/rk_step.cu");
+    check(step_file.is_open(), "unable to open rk_step.cu");
+    std::string step_src((std::istreambuf_iterator<char>(step_file)), std::istreambuf_iterator<char>());
+
+    check(step_src.find("gpu.rk.graph_plan.set_mode(RkGraphMode::Fallback)") != std::string::npos,
+          "rk_step.cu must downgrade Captured mode to Fallback in production dispatch");
+    check(step_src.find("accepted_attempt.total_stage_rhs_evaluations = static_cast<uint32_t>(tableau.stages)") == std::string::npos,
+          "rk_step.cu must not fabricate RHS evaluation counts without running stages");
+
+    using namespace fullmag::fem;
+    Context ctx{};
+    RkGraphPlan graph{};
+    std::string error;
+    check(graph.capture(ctx, nullptr, error), "capture graph");
+    check(graph.mode() == RkGraphMode::Captured, "mode is Captured");
+    graph.set_mode(RkGraphMode::Fallback);
+    check(graph.mode() == RkGraphMode::Fallback, "mode transitioned to Fallback");
+}
+
+void test_commit_candidate_fault_injection_and_propagation() {
+    using namespace fullmag::fem;
+    Context ctx{};
+    ctx.state.current_time = 1.0e-12;
+    ctx.state.step_count = 10;
+    RkCandidateState candidate{};
+    candidate.node_count = 2;
+    candidate.time = 1.0e-12;
+    candidate.dt = 1.0e-13;
+    candidate.force_commit_failure = true;
+
+    std::string error;
+    bool committed = commit_candidate(ctx, candidate, nullptr, error);
+    check(!committed, "commit_candidate with force_commit_failure must return false");
+    check(error.find("injected commit_candidate failure") != std::string::npos,
+          "error diagnostic must report injected failure");
+    check(ctx.state.current_time == 1.0e-12, "current_time must remain unchanged on commit failure");
+    check(ctx.state.step_count == 10, "step_count must remain unchanged on commit failure");
+
+    std::ifstream refresh_file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_final_refresh.cu");
+    if (!refresh_file.is_open()) refresh_file.open("backends/fem/gpu/cuda/integrators/rk/rk_final_refresh.cu");
+    if (!refresh_file.is_open()) refresh_file.open("../backends/fem/gpu/cuda/integrators/rk/rk_final_refresh.cu");
+    check(refresh_file.is_open(), "unable to open rk_final_refresh.cu");
+    std::string refresh_src((std::istreambuf_iterator<char>(refresh_file)), std::istreambuf_iterator<char>());
+    check(refresh_src.find("if (!commit_candidate") != std::string::npos,
+          "rk_final_refresh.cu must propagate commit_candidate failure");
+    check(refresh_src.find("gpu.rk.fsal_valid = false;") != std::string::npos,
+          "rk_final_refresh.cu must invalidate FSAL on commit failure");
+}
+
 } // namespace
 
 int main() {
     test_graph_capture_and_rollback();
     test_graph_fallback_mode();
     test_graph_stream_capture_source_contract();
+    test_graph_captured_mode_falls_back_without_bypassing_rhs();
+    test_commit_candidate_fault_injection_and_propagation();
     std::printf("PASS: gpu_rk_graph_contract\n");
     return 0;
 }

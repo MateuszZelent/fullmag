@@ -176,6 +176,7 @@ bool initialize_demag_poisson_hypre_device_solver(
     std::string &error)
 {
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    ensure_mpi_initialized();
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
     const HypreDevicePolicySnapshot hypre_policy =
@@ -197,7 +198,6 @@ bool initialize_demag_poisson_hypre_device_solver(
             : "GPU Poisson demag requires an initialized Poisson boundary-conditioned operator";
         return false;
     }
-    ensure_mpi_initialized();
     const HYPRE_BigInt glob_size = static_cast<HYPRE_BigInt>(A_bc->NumRows());
     if (ctx.gpu_state.device.demag_poisson.scalar_dof_count !=
         static_cast<uint64_t>(glob_size)) {
@@ -377,7 +377,11 @@ bool validate_demag_poisson_hypre_device_solve(
     read_demag_poisson_hypre_solver_stats(
         ctx, workspace, iterations, residual, solver_reported_converged);
 
-    constexpr bool force_independent_validation = false;
+    bool force_independent_validation = false;
+    if (!read_force_independent_residual_validation(
+            force_independent_validation, error)) {
+        return false;
+    }
     const auto validation_needs = resolve_hypre_residual_validation_needs(
         solver_reported_converged,
         ctx.demag.solver.has_absolute_tolerance != 0,

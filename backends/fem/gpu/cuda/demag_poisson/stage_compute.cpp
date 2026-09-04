@@ -298,7 +298,15 @@ bool compute_device_demag_for_device_stage_impl(
                 const auto host_api_start = timings.enabled
                     ? FemSteadyClock::now()
                     : FemSteadyClock::time_point{};
-                workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+                if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_CG) {
+                    static_cast<mfem::HyprePCG *>(workspace->solver.get())->Mult(
+                        *workspace->b_par, *workspace->x_par);
+                } else if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
+                    static_cast<mfem::HypreGMRES *>(workspace->solver.get())->Mult(
+                        *workspace->b_par, *workspace->x_par);
+                } else {
+                    workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
+                }
                 if (timings.enabled) {
                     ctx.poisson_demag.step_hypre_host_api_wall_time_ns +=
                         elapsed_ns(host_api_start);
