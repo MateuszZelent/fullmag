@@ -7378,7 +7378,12 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
     let relaxation = |ir: &mut ProblemIR, algorithm| {
         ir.study = fullmag_ir::StudyIR::Relaxation {
             algorithm,
-            dynamics: Some(ir.study.dynamics().clone()),
+            dynamics: match algorithm {
+                fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped => {
+                    Some(ir.study.dynamics().clone())
+                }
+                _ => None,
+            },
             stop: fullmag_ir::RelaxStopIR {
                 torque_tolerance_apm: Some(1e-3),
                 energy_tolerance_j: None,

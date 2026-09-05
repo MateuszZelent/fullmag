@@ -1817,6 +1817,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                 cand_perf.effective_field_applies = 1;
                 cand_perf.armijo_candidates = 1;
                 cand_perf.energy_evaluations = 1;
+                cand_perf.demag_solves = ctx.demag.enabled ? 1 : 0;
                 gpu_performance_note(ctx.gpu_state.performance_counters, cand_perf);
             }
 
@@ -1864,6 +1865,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT);
                 GpuPerformanceCounterDelta ref_perf{};
                 ref_perf.energy_evaluations = armijo_result.refinement_rhs_evaluations;
+                ref_perf.demag_solves = ctx.demag.enabled ? armijo_result.refinement_rhs_evaluations : 0;
                 gpu_performance_note(ctx.gpu_state.performance_counters, ref_perf);
                 gpu.relaxation.direct_energy_refinements_current_step += 1;
                 gpu.relaxation.direct_energy_refinements += 1;
@@ -2159,6 +2161,7 @@ int gpu_relax_nonlinear_cg_step(
         grad_perf.energy_evaluations = reused_current ? 0 : 1;
         grad_perf.endpoint_cache_hits = reused_current ? 1 : 0;
         grad_perf.endpoint_cache_misses = reused_current ? 0 : 1;
+        grad_perf.demag_solves = (reused_current || !ctx.demag.enabled) ? 0 : 1;
         gpu_performance_note(ctx.gpu_state.performance_counters, grad_perf);
     }
     const double current_torque_apm = current_snapshot.terms_j[
@@ -2362,6 +2365,7 @@ int gpu_relax_nonlinear_cg_step(
                 cand_perf.effective_field_applies = 1;
                 cand_perf.armijo_candidates = 1;
                 cand_perf.energy_evaluations = 1;
+                cand_perf.demag_solves = ctx.demag.enabled ? 1 : 0;
                 gpu_performance_note(ctx.gpu_state.performance_counters, cand_perf);
             }
 
@@ -2421,6 +2425,7 @@ int gpu_relax_nonlinear_cg_step(
                     FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT);
                 GpuPerformanceCounterDelta ref_perf{};
                 ref_perf.energy_evaluations = armijo_result.refinement_rhs_evaluations;
+                ref_perf.demag_solves = ctx.demag.enabled ? armijo_result.refinement_rhs_evaluations : 0;
                 gpu_performance_note(ctx.gpu_state.performance_counters, ref_perf);
                 gpu.relaxation.direct_energy_refinements_current_step += 1;
                 gpu.relaxation.direct_energy_refinements += 1;

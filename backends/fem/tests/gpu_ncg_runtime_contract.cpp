@@ -407,7 +407,7 @@ bool try_ncg_refinement_case(
     check(
         std::isfinite(stats.total_energy_joules) && stats.max_torque_Apm > 0.0,
         "demag NCG refinement candidate must publish a nonstationary finite step");
-    take_energy_proof(handle);
+    const auto proof = take_energy_proof(handle);
     const auto performance = query_performance(handle);
     check_device_execution(handle);
 
@@ -416,7 +416,6 @@ bool try_ncg_refinement_case(
         fullmag_fem_backend_destroy(handle);
         return false;
     }
-
     check(
         performance.accepted_endpoint_cache_misses >= 1u &&
             performance.accepted_armijo_candidates == 1u &&
@@ -672,6 +671,12 @@ void check_ncg_refined_energy_reuse()
 {
     // These are ordinary physical parameter variants, not instrumentation
     // switches. The test fails closed if production never enters refinement.
+    static constexpr double symmetry_axis[12] = {
+        0.5773502691896257, 0.5773502691896257, 0.5773502691896257,
+        0.5773502691896257, 0.5773502691896257, 0.5773502691896257,
+        0.5773502691896257, 0.5773502691896257, 0.5773502691896257,
+        0.5773502691896257, 0.5773502691896257, 0.5773502691896257,
+    };
     static constexpr double near_uniform[12] = {
         1.0, 0.0, 0.0,
         0.9701425001453319, 0.24253562503633297, 0.0,
@@ -684,17 +689,24 @@ void check_ncg_refined_energy_reuse()
         0.9995503035223668, 0.02998950910567098, 0.0,
         0.9992009592320494, -0.039968038369922, 0.0,
     };
+    static constexpr double kRefinedWitnessMagnetization[12] = {
+        0x1.d8fd4ab624277p-1, 0x1.65616159ddde6p-2, 0x1.425c9ffcca1c8p-3,
+        0x1.f26d2ce96f3fbp-1, 0x1.4b3da445c74ffp-3, 0x1.4b3da445c74ffp-3,
+        0x1.f863e9fb9e4bdp-1, -0x1.2abf445afdb0bp-5, 0x1.57c3471d7f195p-3,
+        0x1.f26d2ce96f3fbp-1, 0x1.4b3da445c74ffp-3, 0x1.4b3da445c74ffp-3,
+    };
     static constexpr struct {
         const double *initial_magnetization;
         double external_field_y;
         double demag_relative_tolerance;
         const char *name;
     } cases[] = {
+        {kRefinedWitnessMagnetization, 0.0, 1.0e-12, "exact-armijo-refinement"},
         {kNonstationaryMagnetization, 1.0e5, 1.0e-12, "tilted-H1e5-rtol1e-12"},
         {near_uniform, 1.0e3, 1.0e-12, "near-uniform-H1e3-rtol1e-12"},
         {weakly_tilted, 1.0e2, 1.0e-12, "weak-tilt-H1e2-rtol1e-12"},
-        {near_uniform, 1.0e-6, 1.0e-12, "near-uniform-H1e-6-rtol1e-12"},
-        {weakly_tilted, 1.0e-8, 1.0e-12, "weak-tilt-H1e-8-rtol1e-12"},
+        {symmetry_axis, 1.0e1, 1.0e-12, "symmetry-axis-H1e1-rtol1e-12"},
+        {symmetry_axis, 0.0, 1.0e-12, "symmetry-axis-zero-field-rtol1e-12"},
     };
     for (const auto &item : cases) {
         if (try_ncg_refinement_case(

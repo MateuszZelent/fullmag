@@ -442,8 +442,11 @@ bool direct_difference(
         reason)) {
         return false;
     }
+    const double non_demag_local_absolute =
+        std::max(0.0, local_absolute - result.demag_absolute_term_sum_j);
     const double owner_roundoff_bound =
-        relaxation::reduction_roundoff_bound(reduction_counts.local) * local_absolute +
+        result.demag_roundoff_bound_j +
+        relaxation::reduction_roundoff_bound(reduction_counts.local) * non_demag_local_absolute +
         relaxation::reduction_roundoff_bound(reduction_counts.exchange) * exchange_absolute +
         relaxation::reduction_roundoff_bound(reduction_counts.interfacial_dmi) * interfacial_dmi_absolute +
         relaxation::reduction_roundoff_bound(reduction_counts.bulk_dmi) * bulk_dmi_absolute +
@@ -958,6 +961,14 @@ bool gpu_direct_armijo_refine(
             reason)) {
         return false;
     }
+    const double ordinary_demag_bound = result.demag_roundoff_bound_j;
+    const double refined_demag_bound =
+        ordinary_demag_bound * (refined_rtol / ordinary_rtol);
+    result.demag_roundoff_bound_j = refined_demag_bound;
+    result.difference.roundoff_bound_joules = std::max(
+        0.0,
+        result.difference.roundoff_bound_joules -
+            (ordinary_demag_bound - refined_demag_bound));
     const GpuDirectEnergySnapshot refined_trial = result.trial_snapshot;
     const relaxation::EnergyDifference refined_difference = result.difference;
     result.refinement_accepted =
