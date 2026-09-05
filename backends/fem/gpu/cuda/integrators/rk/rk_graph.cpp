@@ -160,12 +160,15 @@ bool RkGraphPlan::launch(Context &ctx, cudaStream_t stream, std::string &error) 
         auto &gpu = ctx.gpu_state.device;
         if (gpu.lifecycle.allocated && gpu.magnetization.m.x != nullptr && gpu.rk.candidate.m_candidate.x != nullptr) {
             std::string cap_err;
-            rk_candidate_capture_device(
-                gpu.rk.candidate,
-                gpu.magnetization.m,
-                gpu.lifecycle.node_count,
-                stream,
-                cap_err);
+            if (!rk_candidate_capture_device(
+                    gpu.rk.candidate,
+                    gpu.magnetization.m,
+                    gpu.lifecycle.node_count,
+                    stream,
+                    cap_err)) {
+                error = "RkGraphPlan launch fallback candidate capture failed: " + cap_err;
+                return false;
+            }
         }
         error.clear();
         return true;

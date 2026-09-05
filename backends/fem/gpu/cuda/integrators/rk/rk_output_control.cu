@@ -138,6 +138,7 @@ bool rk_candidate_state_allocate(
     candidate.active_slot = 0;
     candidate.candidate_version = 0;
     candidate.accepted_version = 0;
+    candidate.base_accepted_version = 0;
     candidate.candidate_valid = false;
     candidate.fsal_valid = false;
     error.clear();
@@ -165,6 +166,7 @@ void rk_candidate_state_destroy(
     }
     candidate.host_m.clear();
     candidate.node_count = 0;
+    candidate.base_accepted_version = 0;
     candidate.candidate_valid = false;
 }
 
@@ -206,6 +208,7 @@ bool rk_candidate_capture_device(
     cudaStream_t stream,
     std::string &error)
 {
+    candidate.candidate_valid = false;
     if (node_count != candidate.node_count || candidate.m_candidate.x == nullptr) {
         error = "candidate unallocated or dimension mismatch";
         return false;
@@ -220,7 +223,12 @@ bool rk_candidate_capture_device(
         return false;
     }
     candidate.candidate_valid = true;
-    candidate.candidate_version += 1;
+    if (candidate.candidate_version == UINT64_MAX) {
+        candidate.candidate_version = 1;
+        candidate.accepted_version = 0;
+    } else {
+        candidate.candidate_version += 1;
+    }
     error.clear();
     return true;
 }
@@ -235,7 +243,34 @@ bool commit_candidate(
         error = "injected commit_candidate failure";
         return false;
     }
+    if (!candidate.candidate_valid) {
+        error = "commit_candidate called on invalid candidate token";
+        return false;
+    }
     auto &gpu = ctx.gpu_state.device;
+    if (gpu.lifecycle.allocated && candidate.node_count != gpu.lifecycle.node_count) {
+        error = "commit_candidate node count mismatch with device lifecycle";
+        return false;
+    }
+    if (candidate.candidate_version <= candidate.accepted_version) {
+        error = "commit_candidate called on stale candidate version <= accepted_version";
+        return false;
+    }
+    if (candidate.base_accepted_version != ctx.state.step_count) {
+        error = "commit_candidate base_accepted_version mismatch with current step_count";
+        return false;
+    }
+    if (!std::isfinite(candidate.dt) || candidate.dt <= 0.0) {
+        error = "commit_candidate called with non-finite or non-positive dt";
+        return false;
+    }
+    const double expected_time = ctx.state.current_time + candidate.dt;
+    if (!std::isfinite(candidate.time) ||
+        std::abs(candidate.time - expected_time) > 1e-11 * std::max(1.0, std::abs(expected_time))) {
+        error = "commit_candidate candidate time mismatch with current_time + dt";
+        return false;
+    }
+
     if (gpu.lifecycle.allocated && candidate.m_candidate.x != nullptr && gpu.magnetization.m.x != nullptr) {
         if (!gpu_rk_copy_component_device(
                 candidate.m_candidate,
@@ -254,7 +289,7 @@ bool commit_candidate(
     ctx.state.current_time += candidate.dt;
     ctx.state.step_count += 1;
     candidate.accepted_version = candidate.candidate_version;
-    candidate.candidate_valid = true;
+    candidate.candidate_valid = false; // Consume candidate token upon successful commit
     candidate.receipt.accepted_step_count += 1;
 
     if (candidate.fsal_valid) {

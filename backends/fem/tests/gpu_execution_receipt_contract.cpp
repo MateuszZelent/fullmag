@@ -1455,6 +1455,127 @@ void direct_minimizer_ncg_pgbb_llg_transitions_and_outcomes() {
           "llg terminal_outcome must be completed_observation");
 }
 
+void rk_v1_plan_allows_control_scalar_and_prevents_false_violation() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t req =
+        FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_LLG_RHS |
+        FEM_GPU_OPERATOR_RK_STEPPER;
+
+    gpu_execution_receipt_resolve_plan(
+        state, req, req, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+
+    check(state.plan_resolved, "RK plan must be resolved");
+    check(state.accounting_valid, "accounting must be valid after resolve_plan");
+    check((state.allowed_transfer_mask & FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR) != 0,
+          "device-resident RK plan must include FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR in allowed_transfer_mask");
+
+    gpu_execution_receipt_record_transfer(
+        state,
+        FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR,
+        0,
+        sizeof(double),
+        1);
+    check(state.accounting_valid,
+          "recording allowed control scalar transfer must not trigger false violation or invalidate accounting");
+    check(state.transfer_violation_mask == 0,
+          "transfer_violation_mask must remain 0 for allowed control scalar transfer");
+}
+
+void transfer_recording_during_active_attempt_avoids_double_counting() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t req =
+        FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_LLG_RHS |
+        FEM_GPU_OPERATOR_RK_STEPPER;
+
+    gpu_execution_receipt_resolve_plan(
+        state, req, req, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+
+    fullmag_fem_transfer_audit audit{};
+    gpu_execution_receipt_begin_attempt(state, audit);
+
+    // Simulate scalar readback updating audit and calling record_transfer
+    audit.hot_loop_control_scalar_d2h_bytes = 64;
+    audit.hot_loop_control_scalar_host_sync_count = 1;
+    gpu_execution_receipt_update_attempt_transfer(state, audit);
+
+    // Direct record_transfer during active attempt (as called in rk_scalar_readback.cu)
+    gpu_execution_receipt_record_transfer(
+        state,
+        FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR,
+        0,
+        64,
+        1);
+
+    gpu_execution_receipt_note_device(state, req);
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(state.accounting_valid, "accounting must remain valid after commit");
+    check(state.control_d2h_bytes == 64,
+          "control_d2h_bytes must be 64, not double-counted to 128");
+    check(state.control_host_sync_count == 1,
+          "control_host_sync_count must be 1, not double-counted to 2");
+}
+
+void pgbb_plan_resolution_and_attempt_commit_lifecycle() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t pgbb_ops =
+        FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS |
+        FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_RETRACTION |
+        FEM_GPU_OPERATOR_LINE_SEARCH |
+        FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    const uint64_t pgbb_cov =
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE |
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT |
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION |
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY |
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_REDUCTIONS |
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_NORMALIZATION;
+    const uint64_t allowed_transfers =
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+        FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+        FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+        FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT;
+
+    gpu_execution_receipt_resolve_plan_v2(
+        state, pgbb_ops, pgbb_ops, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE, 0,
+        pgbb_cov, allowed_transfers);
+
+    check(state.plan_resolved, "pgbb plan must be resolved");
+    check(state.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+          "pgbb execution_kind must be direct_minimizer");
+    check(state.relaxation_algorithm == FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB,
+          "pgbb relaxation_algorithm must be projected_gradient_bb");
+
+    fullmag_fem_transfer_audit audit{};
+    gpu_execution_receipt_begin_attempt(state, audit);
+    check(gpu_execution_receipt_attempt_active(state), "attempt must be active");
+
+    gpu_execution_receipt_note_device(state, pgbb_ops);
+    gpu_execution_receipt_note_coverage(state, pgbb_cov);
+    gpu_execution_receipt_note_candidate_begin(state);
+    gpu_execution_receipt_note_candidate_accepted(state);
+
+    audit.hot_loop_control_scalar_d2h_bytes = 16;
+    audit.hot_loop_control_scalar_host_sync_count = 1;
+    check(gpu_execution_receipt_update_attempt_transfer(state, audit),
+          "update_attempt_transfer must succeed for pgbb");
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(state.accounting_valid, "accounting must remain valid after pgbb commit");
+    check(state.accepted_step_count == 1, "accepted_step_count must be 1 after commit");
+    check(state.executed_device_operator_mask == pgbb_ops, "executed_device_operator_mask matches pgbb");
+    check(!gpu_execution_receipt_attempt_active(state), "attempt must be inactive after commit");
+}
+
 } // namespace
 
 int main() {
@@ -1478,5 +1599,8 @@ int main() {
     direct_minimizer_v1_rejection_and_v2_lifecycle();
     repeated_begin_v2_resets_plan_and_active_close_preserves_accounting();
     direct_minimizer_ncg_pgbb_llg_transitions_and_outcomes();
+    rk_v1_plan_allows_control_scalar_and_prevents_false_violation();
+    transfer_recording_during_active_attempt_avoids_double_counting();
+    pgbb_plan_resolution_and_attempt_commit_lifecycle();
     return 0;
 }

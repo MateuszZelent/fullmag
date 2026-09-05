@@ -137,10 +137,7 @@ bool gpu_rk_run_accepted_attempt_loop(
         ctx.adaptive_dt.current_dt = active_dt;
         const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
         const uint32_t rhs_before_attempt = total_stage_rhs_evaluations;
-        std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
-        if (adaptive) {
-            attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
-        }
+        RkAttemptCacheSnapshot attempt_cache(ctx, adaptive);
         const auto setup_wall_time_ns = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - setup_start)
@@ -224,19 +221,29 @@ bool gpu_rk_run_accepted_attempt_loop(
             const auto adaptive_result = adaptive_decision.adaptive_result;
             suggested_dt = adaptive_result.dt_next;
             if (gpu.rk.candidate.d_slots != nullptr) {
+                // Per A08: publish canonical host decision directly to d_slots,
+                // superseding redundant rk_launch_device_decision_kernel to ensure bitwise consistency.
                 const int slot_idx = gpu.rk.candidate.active_slot;
-                rk_launch_device_decision_kernel(
-                    tableau.order_est,
-                    ctx.adaptive_dt.dt_min,
-                    ctx.adaptive_dt.dt_max,
-                    ctx.adaptive_dt.safety_factor,
-                    ctx.adaptive_dt.dt_grow_max,
-                    ctx.adaptive_dt.dt_shrink_min,
-                    active_dt,
-                    error_estimate,
-                    ctx.adaptive_dt.prev_error_norm,
-                    ctx.adaptive_dt.has_prev_error_norm,
+                RkDecisionSlot &canonical_slot = gpu.rk.candidate.slots[slot_idx];
+                canonical_slot.decision = (adaptive_result.kind == adaptive::AdaptiveDecisionKind::accepted)
+                    ? 1u
+                    : (adaptive_result.kind == adaptive::AdaptiveDecisionKind::retry)
+                        ? 2u
+                        : 3u;
+                canonical_slot.reason = static_cast<uint32_t>(adaptive_result.reason);
+                canonical_slot.error_norm = error_estimate;
+                canonical_slot.max_norm_defect = adaptive_decision.max_norm_defect;
+                canonical_slot.max_spin_rotation = adaptive_decision.max_spin_rotation;
+                canonical_slot.dt_attempt = active_dt;
+                canonical_slot.next_dt = suggested_dt;
+                canonical_slot.ratio = active_dt > 0.0 ? (suggested_dt / active_dt) : 1.0;
+                canonical_slot.decision_version = ctx.state.step_count + 1u;
+                canonical_slot.valid = 1u;
+                cudaMemcpyAsync(
                     gpu.rk.candidate.d_slots + slot_idx,
+                    &canonical_slot,
+                    sizeof(RkDecisionSlot),
+                    cudaMemcpyHostToDevice,
                     stream);
                 gpu.rk.candidate.active_slot = 1 - slot_idx;
             }
@@ -280,7 +287,7 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                     return false;
                 }
-                attempt_cache->restore_preserving_attempt_counters();
+                attempt_cache.restore_preserving_attempt_counters();
                 if (!rk_restore_active_step_device_checkpoint(ctx, reason)) {
                     return false;
                 }
@@ -342,18 +349,39 @@ bool gpu_rk_run_accepted_attempt_loop(
             // consumes k6.  The copy makes the authoritative state bitwise
             // identical to the normalized endpoint used for that RHS.
         }
-        gpu.rk.candidate.dt = active_dt;
-        gpu.rk.candidate.time = ctx.state.current_time + active_dt;
-        gpu.rk.candidate.candidate_valid = true;
-        if (gpu.rk.candidate.m_candidate.x != nullptr && gpu.magnetization.m.x != nullptr) {
+        auto &candidate = gpu.rk.candidate;
+        candidate.candidate_valid = false;
+        candidate.base_accepted_version = ctx.state.step_count;
+        const uint64_t old_version = candidate.candidate_version;
+        if (candidate.m_candidate.x != nullptr && gpu.magnetization.m.x != nullptr) {
             std::string cap_err;
-            rk_candidate_capture_device(
-                gpu.rk.candidate,
-                gpu.magnetization.m,
-                gpu.lifecycle.node_count,
-                stream,
-                cap_err);
+            if (!rk_candidate_capture_device(
+                    candidate,
+                    gpu.magnetization.m,
+                    gpu.lifecycle.node_count,
+                    stream,
+                    cap_err)) {
+                gpu.rk.fsal_valid = false;
+                reason = "GPU RK candidate capture failed: " + cap_err;
+                return false;
+            }
+            if (!candidate.candidate_valid ||
+                candidate.candidate_version != old_version + 1u) {
+                gpu.rk.fsal_valid = false;
+                reason = "RK capture did not publish a fresh candidate";
+                return false;
+            }
+        } else {
+            candidate.candidate_valid = true;
+            if (candidate.candidate_version == UINT64_MAX) {
+                candidate.candidate_version = 1;
+                candidate.accepted_version = 0;
+            } else {
+                candidate.candidate_version += 1u;
+            }
         }
+        candidate.dt = active_dt;
+        candidate.time = ctx.state.current_time + active_dt;
         performance_attempt.release();
         receipt_attempt.release();
         break;

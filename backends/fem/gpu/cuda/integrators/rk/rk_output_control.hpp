@@ -61,6 +61,7 @@ struct RkCandidateState {
     uint64_t node_count = 0;
     uint64_t candidate_version = 0;
     uint64_t accepted_version = 0;
+    uint64_t base_accepted_version = 0;
     bool candidate_valid = false;
     bool fsal_valid = false;
     double time = 0.0;
