@@ -5,12 +5,14 @@ import {
   type PlanarRenderEvidence,
 } from "../model/fieldMapEvidence";
 import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
+import { viewportToRasterSpace } from "../model/planarViewTransform";
 import type { ContourSegment } from "./marchingSquares";
 import { decodePlanarMeshOverlayForDescriptor } from "./meshOverlay";
 import { createPlanarColorizer } from "./planarColorizer";
 import {
   createPlanarRenderer,
   drawPlanarOverlays,
+  extractFdmOccupancyBoundaries,
   partitionPlanarMeshSegments,
   type PlanarRenderer,
 } from "./planarRenderer";
@@ -35,7 +37,8 @@ export function usePlanarSurfaceRenderer(
     contours: readonly ContourSegment[];
     glyphs: ReturnType<typeof buildVectorGlyphs>;
     mesh: ReturnType<typeof decodePlanarMeshOverlayForDescriptor> | null;
-  }>({ axisPointer: null, contours: [], glyphs: [], mesh: null });
+    partitionedMesh: ReturnType<typeof partitionPlanarMeshSegments> | null;
+  }>({ axisPointer: null, contours: [], glyphs: [], mesh: null, partitionedMesh: null });
   const [plotSize, setPlotSize] = useState({ height: 0, width: 0 });
   const rangeMin = model.range?.min;
   const rangeMax = model.range?.max;
@@ -102,27 +105,53 @@ export function usePlanarSurfaceRenderer(
     const mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
       ? decodePlanarMeshOverlayForDescriptor(model.meshOverlay, model.meshOverlayDescriptor ?? {})
       : null;
+    let partitionedMesh = mesh ? partitionPlanarMeshSegments(mesh) : null;
+    if (
+      model.layers.boundaries &&
+      (!partitionedMesh || partitionedMesh.boundarySegments.length === 0) &&
+      model.mask &&
+      model.bounds &&
+      model.resolution
+    ) {
+      const fdmBoundaries = extractFdmOccupancyBoundaries(model.mask, model.bounds, model.resolution);
+      if (fdmBoundaries.length > 0) {
+        if (!partitionedMesh) {
+          partitionedMesh = {
+            boundarySegments: fdmBoundaries,
+            interiorSegments: new Float32Array(),
+            meshSegments: new Float32Array(),
+          };
+        } else {
+          partitionedMesh = {
+            ...partitionedMesh,
+            boundarySegments: fdmBoundaries,
+          };
+        }
+      }
+    }
     renderStateRef.current = {
       axisPointer: model.layers.probes ? renderStateRef.current.axisPointer : null,
       contours: [],
       glyphs,
       mesh,
+      partitionedMesh,
     };
     drawOverlayRef.current = (contours) => {
       if (contours) renderStateRef.current.contours = contours;
       const current = modelRef.current;
       const state = renderStateRef.current;
-      const currentMeshSegments = state.mesh ? partitionPlanarMeshSegments(state.mesh) : null;
+      const currentMeshSegments = state.partitionedMesh;
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
         axisPointer: state.axisPointer,
         boundsOutline: current.boundsOutline,
         contours: state.contours,
         boundarySegments: currentMeshSegments?.boundarySegments,
+        interiorSegments: currentMeshSegments?.interiorSegments,
         glyphs: state.glyphs,
         gridHeight: current.resolution[1],
         gridWidth: current.resolution[0],
         layers: current.layers,
-        meshBounds: state.mesh?.bounds as [number, number, number, number] | undefined,
+        meshBounds: (state.mesh?.bounds ?? current.bounds) as [number, number, number, number] | undefined,
         meshSegments: currentMeshSegments?.meshSegments,
         meshViewport: current.viewport,
         samplePoints: current.samplePoints,
@@ -130,12 +159,7 @@ export function usePlanarSurfaceRenderer(
         vectorColorMode: current.vectorStyle.colorMode,
         vectorStyle: current.vectorStyle,
         wireframeStyle: current.wireframeStyle,
-        viewport: [
-          ((current.viewport[0] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
-          ((current.viewport[1] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
-          ((current.viewport[2] - current.bounds[2]) / (current.bounds[3] - current.bounds[2])) * (current.resolution[1] - 1),
-          ((current.viewport[3] - current.bounds[2]) / (current.bounds[3] - current.bounds[2])) * (current.resolution[1] - 1),
-        ],
+        viewport: viewportToRasterSpace(current.viewport, current.bounds, current.resolution),
       });
     };
     const range = rangeMin === undefined || rangeMax === undefined
@@ -144,6 +168,22 @@ export function usePlanarSurfaceRenderer(
     const needsColorizer = range !== null && (model.layers.raster || model.layers.contours);
     if (!model.layers.raster || !needsColorizer) renderer.clearBase();
     if (needsColorizer) {
+      if (renderer.getRendererKind() === "gpu" && model.layers.raster) {
+        const isFdm = model.meshOverlayDescriptor?.codec === "fmfg.v1" ||
+          model.meshOverlayDescriptor?.geometrySource === "fdm_structured_grid";
+        if (isFdm && renderer.drawFdmCells) {
+          renderer.drawFdmCells({
+            bounds: model.bounds,
+            colormap: model.colormap,
+            mask: model.mask,
+            opacity: model.rasterOpacity ?? 1,
+            range,
+            resolution: model.resolution,
+            scalar: model.scalar,
+          });
+        }
+      }
+
       colorizerRef.current ??= createPlanarColorizer(
         new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
         ({ contours, pixels }) => {

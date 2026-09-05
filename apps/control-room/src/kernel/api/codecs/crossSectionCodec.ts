@@ -160,6 +160,10 @@ export interface PlanarMeshOverlay {
   segmentKinds: Uint8Array;
   segments: Float32Array;
   truncated: boolean;
+  parentElementIds?: Uint32Array;
+  polygonCount?: number;
+  polygonOffsets?: Uint32Array;
+  polygonVertices?: Float32Array;
 }
 
 export function decodePlanarMeshOverlay(
@@ -178,11 +182,13 @@ export function decodePlanarMeshOverlay(
   const polygonCount = view.getUint32(8, true);
   const vertexCount = view.getUint32(12, true);
   const segmentCount = view.getUint32(16, true);
+  const polygonVerticesOffset = FMCS_V3_HEADER_LEN;
+  const polygonOffsetsOffset =
+    polygonVerticesOffset + vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT;
+  const parentElementIdsOffset =
+    polygonOffsetsOffset + (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT;
   const segmentsOffset =
-    FMCS_V3_HEADER_LEN +
-    vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT +
-    (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT +
-    polygonCount * Uint32Array.BYTES_PER_ELEMENT;
+    parentElementIdsOffset + polygonCount * Uint32Array.BYTES_PER_ELEMENT;
   const kindsOffset =
     segmentsOffset + segmentCount * 4 * Float32Array.BYTES_PER_ELEMENT;
   const expectedByteLength = kindsOffset + (version === 4 ? segmentCount : 0);
@@ -209,6 +215,10 @@ export function decodePlanarMeshOverlay(
       uAxis: readFloat64Vector(view, 88, 3),
       vAxis: readFloat64Vector(view, 112, 3),
     },
+    parentElementIds: new Uint32Array(buffer, parentElementIdsOffset, polygonCount),
+    polygonCount,
+    polygonOffsets: new Uint32Array(buffer, polygonOffsetsOffset, polygonCount + 1),
+    polygonVertices: new Float32Array(buffer, polygonVerticesOffset, vertexCount * 2),
     segmentCount,
     segmentKinds: segmentKinds.slice(0, retained),
     segments: new Float32Array(buffer, segmentsOffset, retained * 4),

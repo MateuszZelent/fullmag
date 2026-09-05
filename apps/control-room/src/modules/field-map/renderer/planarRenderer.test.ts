@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPlanarRenderer, drawPlanarOverlays, partitionPlanarMeshSegments } from "./planarRenderer";
+import {
+  createPlanarRenderer,
+  drawPlanarOverlays,
+  extractFdmOccupancyBoundaries,
+  partitionPlanarMeshSegments,
+} from "./planarRenderer";
 
 describe("planar renderer lifecycle", () => {
   it("resizes with a bounded DPR and releases its canvas", () => {
@@ -345,4 +350,65 @@ describe("planar renderer lifecycle", () => {
       if (imageData) Object.defineProperty(globalThis, "ImageData", imageData); else Reflect.deleteProperty(globalThis, "ImageData");
     }
   });
+
+  it("partitions segments into boundaries, interior, and full mesh", () => {
+    const partition = partitionPlanarMeshSegments({
+      boundaryClassification: "exact",
+      segmentKinds: new Uint8Array([0, 1, 0]),
+      segments: new Float32Array([0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1]),
+    });
+    expect(partition.boundarySegments).toEqual(new Float32Array([1, 0, 1, 1]));
+    expect(partition.interiorSegments).toEqual(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]));
+    expect(partition.meshSegments).toHaveLength(12);
+  });
+
+  it("extracts verified boundary subset even in degraded classification", () => {
+    const partition = partitionPlanarMeshSegments({
+      boundaryClassification: "degraded",
+      segmentKinds: new Uint8Array([1, 0]),
+      segments: new Float32Array([0, 0, 1, 0, 1, 0, 1, 1]),
+    });
+    expect(partition.boundarySegments).toEqual(new Float32Array([0, 0, 1, 0]));
+    expect(partition.interiorSegments).toEqual(new Float32Array([1, 0, 1, 1]));
+  });
+
+  it("extracts FDM occupancy boundary segments around occupied cells", () => {
+    // 2x2 grid: (0,0) occupied, (1,0) empty, (0,1) occupied, (1,1) empty
+    // 0 = occupied, 1 = empty
+    const mask = new Uint8Array([0, 1, 0, 1]);
+    const bounds = [0, 2, 0, 2] as const;
+    const resolution = [2, 2] as const;
+    const boundaries = extractFdmOccupancyBoundaries(mask, bounds, resolution);
+    // Occupied cells are at x=0, y=0 and x=0, y=1
+    // Column 0 is fully occupied, column 1 is empty.
+    // So boundaries should be around [0, 1] x [0, 2]:
+    // bottom edge (0,0)-(1,0), top edge (0,2)-(1,2), left edge (0,0)-(0,2), right edge (1,0)-(1,2)
+    expect(boundaries.length).toBeGreaterThan(0);
+    expect(boundaries.length % 4).toBe(0);
+  });
+
+  it("avoids double-drawing boundaries when both mesh and boundary layers are active", () => {
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), lineTo: vi.fn(), lineWidth: 0,
+      moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+
+    const interiorSegments = new Float32Array([0, 0, 1, 0]);
+    const boundarySegments = new Float32Array([1, 0, 1, 1]);
+    const meshSegments = new Float32Array([0, 0, 1, 0, 1, 0, 1, 1]);
+
+    drawPlanarOverlays(context, 100, 100, {
+      boundarySegments,
+      interiorSegments,
+      gridWidth: 1,
+      layers: { boundaries: true, contours: false, mesh: true, vectors: false },
+      meshSegments,
+      meshViewport: [0, 1, 0, 1],
+    });
+
+    // Mesh pass stroked interiorSegments (1 segment), boundary pass stroked boundarySegments (1 segment)
+    // Exactly 2 strokes, no doubling!
+    expect(context.stroke).toHaveBeenCalledTimes(2);
+  });
 });
+

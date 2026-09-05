@@ -12,7 +12,7 @@ pub(crate) struct ApiDiagnostic {
     pub message: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ApiError {
     pub status: StatusCode,
     pub code: Option<String>,

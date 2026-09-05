@@ -377,4 +377,42 @@ describe("field-map render model", () => {
       "Planar frame origin is non-finite; axes and probes use local primed coordinates.",
     );
   });
+
+  it("c08 / u02: disables all layers including raster and probes when visible is false", () => {
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1],
+      canonicalUnit: "A/m",
+      component: "normal",
+      frame: {
+        normal: [0, 0, 1],
+        origin: [0, 0, 0],
+        uAxis: [1, 0, 0],
+        vAxis: [0, 1, 0],
+      },
+      layers: {
+        boundaries: true,
+        bounds: true,
+        contours: true,
+        mesh: true,
+        points: true,
+        probes: true,
+        raster: true,
+        vectors: true,
+      },
+      range: { mode: "auto" },
+      resolution: [2, 2],
+      sampleIdentity: "test-visible-false",
+      scalar: new Float64Array([1, 2, 3, 4]),
+      visible: false,
+    });
+
+    expect(model.layers.raster).toBe(false);
+    expect(model.layers.probes).toBe(false);
+    expect(model.layers.mesh).toBe(false);
+    expect(model.layers.boundaries).toBe(false);
+    expect(model.layers.bounds).toBe(false);
+    expect(model.layers.contours).toBe(false);
+    expect(model.layers.points).toBe(false);
+    expect(model.layers.vectors).toBe(false);
+  });
 });

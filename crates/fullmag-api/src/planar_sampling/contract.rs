@@ -1,8 +1,40 @@
+use std::sync::Arc;
 use crate::error::ApiError;
 use fullmag_ir::{PlanarFrameIR, PlanarOperatorIR};
+use super::{ResolvedPlanarSourceIdentity, ResolvedSpatialTarget};
 
 pub(crate) const PLANAR_SAMPLER_VERSION: &str = "planar_sampling_v1";
 pub(crate) const MAX_PLANAR_SAMPLE_POINTS: u32 = 1_048_576;
+
+#[derive(Clone)]
+pub(crate) struct BuiltPlanarField {
+    pub result: Arc<PlanarSampleResult>,
+    pub target: Arc<ResolvedSpatialTarget>,
+    pub request: ResolvedPlanarSampleRequest,
+    pub source: ResolvedPlanarSourceIdentity,
+    pub frame: PlanarFrameIR,
+    pub operator: PlanarOperatorIR,
+    pub scene_revision: u64,
+    pub quantity_id: String,
+    pub component: String,
+    pub field_revision: u64,
+    pub mesh_revision: u64,
+    pub carrier_revision: u64,
+    pub generation_id: String,
+    pub field_source: String,
+    pub field_backend: Option<String>,
+    pub field_device: Option<String>,
+    pub field_precision: Option<String>,
+    pub quality: String,
+    pub stage_id: Option<String>,
+    pub snapshot_id: Option<String>,
+    pub include_mesh: bool,
+    pub source_entity_kind: &'static str,
+    pub scope_kind: String,
+    pub scope_id: Option<String>,
+    pub etag: String,
+    pub sample_token: String,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPlanarSampleRequest {
@@ -457,50 +489,53 @@ fn apply_component(
     let vectors = result.vector_values.as_ref().ok_or_else(|| {
         ApiError::bad_request("invalid_planar_component: vector component requires a vector field")
     })?;
-    let orientation_epsilon = vectors
-        .iter()
-        .map(|vector| dot(*vector, *vector).sqrt())
-        .fold(0.0_f64, f64::max)
-        * 1.0e-12;
-    result.scalar_values = vectors
-        .iter()
-        .zip(&mut result.occupancy)
-        .map(|(vector, occupancy)| {
-            if *occupancy == Occupancy::Empty {
-                return f64::NAN;
-            }
-            match request.component {
-                PlanarComponent::Scalar => unreachable!(),
-                PlanarComponent::Magnitude => dot(*vector, *vector).sqrt(),
-                PlanarComponent::MagnitudeSquared => dot(*vector, *vector),
-                PlanarComponent::WorldX => vector[0],
-                PlanarComponent::WorldY => vector[1],
-                PlanarComponent::WorldZ => vector[2],
-                PlanarComponent::AbsWorldX => vector[0].abs(),
-                PlanarComponent::AbsWorldY => vector[1].abs(),
-                PlanarComponent::AbsWorldZ => vector[2].abs(),
-                PlanarComponent::MonitorU => dot(*vector, request.frame.u_axis),
-                PlanarComponent::MonitorV => dot(*vector, request.frame.v_axis),
-                PlanarComponent::MonitorNormal => dot(*vector, request.frame.normal),
-                PlanarComponent::InPlaneMagnitude => {
-                    let u = dot(*vector, request.frame.u_axis);
-                    let v = dot(*vector, request.frame.v_axis);
-                    (u * u + v * v).sqrt()
+    if request.operator == PlanarOperatorIR::PlaneSample {
+        let orientation_epsilon = vectors
+            .iter()
+            .map(|vector| dot(*vector, *vector).sqrt())
+            .fold(0.0_f64, f64::max)
+            * 1.0e-12;
+        let orientation_epsilon = orientation_epsilon.max(1.0e-12);
+        result.scalar_values = vectors
+            .iter()
+            .zip(&mut result.occupancy)
+            .map(|(vector, occupancy)| {
+                if *occupancy == Occupancy::Empty {
+                    return f64::NAN;
                 }
-                PlanarComponent::Orientation => {
-                    let norm = dot(*vector, *vector).sqrt();
-                    if norm <= orientation_epsilon {
-                        *occupancy = Occupancy::UndefinedOrientation;
-                        f64::NAN
-                    } else {
+                match request.component {
+                    PlanarComponent::Scalar => unreachable!(),
+                    PlanarComponent::Magnitude => dot(*vector, *vector).sqrt(),
+                    PlanarComponent::MagnitudeSquared => dot(*vector, *vector),
+                    PlanarComponent::WorldX => vector[0],
+                    PlanarComponent::WorldY => vector[1],
+                    PlanarComponent::WorldZ => vector[2],
+                    PlanarComponent::AbsWorldX => vector[0].abs(),
+                    PlanarComponent::AbsWorldY => vector[1].abs(),
+                    PlanarComponent::AbsWorldZ => vector[2].abs(),
+                    PlanarComponent::MonitorU => dot(*vector, request.frame.u_axis),
+                    PlanarComponent::MonitorV => dot(*vector, request.frame.v_axis),
+                    PlanarComponent::MonitorNormal => dot(*vector, request.frame.normal),
+                    PlanarComponent::InPlaneMagnitude => {
                         let u = dot(*vector, request.frame.u_axis);
                         let v = dot(*vector, request.frame.v_axis);
-                        v.atan2(u).rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU
+                        (u * u + v * v).sqrt()
+                    }
+                    PlanarComponent::Orientation => {
+                        let u = dot(*vector, request.frame.u_axis);
+                        let v = dot(*vector, request.frame.v_axis);
+                        let in_plane_norm = (u * u + v * v).sqrt();
+                        if in_plane_norm <= orientation_epsilon {
+                            *occupancy = Occupancy::UndefinedOrientation;
+                            f64::NAN
+                        } else {
+                            v.atan2(u).rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU
+                        }
                     }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect();
+    }
     Ok(())
 }
 

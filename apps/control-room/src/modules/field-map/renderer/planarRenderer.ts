@@ -1,7 +1,15 @@
+import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";
+import type { FdmCellLayerInput } from "./fdmCellLayer";
+import type { FemCutSurfaceInput } from "./femCutSurfaceLayer";
+import { createPlanarGpuRenderer } from "./planarGpuRenderer";
+
 export interface PlanarRenderer {
   clearBase(): void;
   dispose(): void;
   draw(pixels: Uint8ClampedArray, width: number, height: number): void;
+  drawFemCutSurface?(input: FemCutSurfaceInput): void;
+  drawFdmCells?(input: FdmCellLayerInput): void;
+  getRendererKind(): "gpu" | "canvas2d";
   resolveViewport(
     bounds: readonly [number, number, number, number],
     interaction: { panU: number; panV: number; zoom: number },
@@ -26,6 +34,7 @@ export interface PlanarOverlayLayers {
   gridHeight?: number;
   boundarySegments?: Float32Array;
   boundsOutline?: readonly [number, number, number, number] | null;
+  interiorSegments?: Float32Array;
   layers?: { boundaries?: boolean; bounds?: boolean; contours: boolean; mesh: boolean; points?: boolean; vectors: boolean };
   meshBounds?: readonly [number, number, number, number];
   meshSegments?: Float32Array;
@@ -68,7 +77,11 @@ export function drawPlanarOverlays(
 
   if (layers.layers?.mesh !== false && layers.meshSegments) {
     context.globalAlpha = layers.wireframeStyle?.opacity ?? 1;
-    drawMeshSegments(layers.meshSegments, layers.wireframeStyle?.color ?? "currentColor");
+    const meshToDraw =
+      layers.layers?.boundaries && layers.boundarySegments && layers.boundarySegments.length > 0 && layers.interiorSegments
+        ? layers.interiorSegments
+        : layers.meshSegments;
+    drawMeshSegments(meshToDraw, layers.wireframeStyle?.color ?? "currentColor");
     context.globalAlpha = 1;
   }
   if (layers.layers?.boundaries && layers.boundarySegments) {
@@ -209,21 +222,95 @@ export function partitionPlanarMeshSegments(overlay: {
   boundaryClassification: "degraded" | "exact" | "unavailable";
   segmentKinds: Uint8Array;
   segments: Float32Array;
-}): { boundarySegments: Float32Array; meshSegments: Float32Array } {
-  if (overlay.boundaryClassification !== "exact") {
-    return { boundarySegments: new Float32Array(), meshSegments: overlay.segments };
+}): { boundarySegments: Float32Array; interiorSegments: Float32Array; meshSegments: Float32Array } {
+  if (overlay.boundaryClassification === "unavailable") {
+    return {
+      boundarySegments: new Float32Array(),
+      interiorSegments: overlay.segments,
+      meshSegments: overlay.segments,
+    };
   }
-  const boundary = new Float32Array(overlay.segmentKinds.reduce(
-    (count, kind) => count + (kind === 1 ? 4 : 0),
-    0,
-  ));
-  let offset = 0;
+
+  let boundaryCount = 0;
+  let interiorCount = 0;
   for (let index = 0; index < overlay.segmentKinds.length; index += 1) {
-    if (overlay.segmentKinds[index] !== 1) continue;
-    boundary.set(overlay.segments.subarray(index * 4, index * 4 + 4), offset);
-    offset += 4;
+    if (overlay.segmentKinds[index] === 1) {
+      boundaryCount += 1;
+    } else {
+      interiorCount += 1;
+    }
   }
-  return { boundarySegments: boundary, meshSegments: overlay.segments };
+
+  const boundary = new Float32Array(boundaryCount * 4);
+  const interior = new Float32Array(interiorCount * 4);
+  let bOffset = 0;
+  let iOffset = 0;
+
+  for (let index = 0; index < overlay.segmentKinds.length; index += 1) {
+    const chunk = overlay.segments.subarray(index * 4, index * 4 + 4);
+    if (overlay.segmentKinds[index] === 1) {
+      boundary.set(chunk, bOffset);
+      bOffset += 4;
+    } else {
+      interior.set(chunk, iOffset);
+      iOffset += 4;
+    }
+  }
+
+  return {
+    boundarySegments: boundary,
+    interiorSegments: interior,
+    meshSegments: overlay.segments,
+  };
+}
+
+export function extractFdmOccupancyBoundaries(
+  mask: Uint8Array | ArrayLike<number>,
+  bounds: readonly [number, number, number, number],
+  resolution: readonly [number, number],
+): Float32Array {
+  const [width, height] = resolution;
+  const [uMin, uMax, vMin, vMax] = bounds;
+  const du = (uMax - uMin) / Math.max(1, width);
+  const dv = (vMax - vMin) / Math.max(1, height);
+
+  const isOcc = (x: number, y: number): boolean => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return false;
+    const val = mask[y * width + x];
+    return isRenderablePlanarOccupancy(val);
+  };
+
+  const segments: number[] = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!isOcc(x, y)) continue;
+
+      const x0 = uMin + x * du;
+      const x1 = uMin + (x + 1) * du;
+      const y0 = vMin + y * dv;
+      const y1 = vMin + (y + 1) * dv;
+
+      // Bottom edge
+      if (!isOcc(x, y - 1)) {
+        segments.push(x0, y0, x1, y0);
+      }
+      // Top edge
+      if (!isOcc(x, y + 1)) {
+        segments.push(x0, y1, x1, y1);
+      }
+      // Left edge
+      if (!isOcc(x - 1, y)) {
+        segments.push(x0, y0, x0, y1);
+      }
+      // Right edge
+      if (!isOcc(x + 1, y)) {
+        segments.push(x1, y0, x1, y1);
+      }
+    }
+  }
+
+  return new Float32Array(segments);
 }
 
 function vectorGlyphStrokeStyle(
@@ -238,7 +325,7 @@ function vectorGlyphStrokeStyle(
   return "currentColor";
 }
 
-export function createPlanarRenderer(
+export function createPlanar2dRenderer(
   canvas: HTMLCanvasElement,
 ): PlanarRenderer {
   const context = canvas.getContext("2d");
@@ -305,6 +392,7 @@ export function createPlanarRenderer(
       lastImage = { height, width };
       paint();
     },
+    getRendererKind: () => "canvas2d",
     resolveViewport(bounds, interaction) {
       const zoom = Math.max(1e-12, interaction.zoom);
       const centerU = (bounds[0] + bounds[1]) / 2 + interaction.panU;
@@ -324,4 +412,19 @@ export function createPlanarRenderer(
       paint();
     },
   };
+}
+
+export function createPlanarRenderer(
+  canvas: HTMLCanvasElement,
+  options?: { preferGpu?: boolean },
+): PlanarRenderer {
+  if (options?.preferGpu !== false) {
+    try {
+      const gpuRenderer = createPlanarGpuRenderer(canvas);
+      if (gpuRenderer) return gpuRenderer;
+    } catch {
+      // Fallback to 2D canvas renderer
+    }
+  }
+  return createPlanar2dRenderer(canvas);
 }

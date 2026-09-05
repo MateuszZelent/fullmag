@@ -1,9 +1,9 @@
 use crate::error::ApiError;
 use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
 
-use super::fdm::finish_reduction;
+use super::fdm::finish_reduction_dual;
 use super::frame::{cross, dot, ResolvedFrame};
-use super::geometry::{integrate_clipped_convex_element, projected_pixel_bounds, LinearVertex};
+use super::geometry::{decompose_clipped_convex_element, projected_pixel_bounds, LinearVertex};
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::surface;
@@ -338,57 +338,6 @@ fn sample_plane(
             }
         }
     }
-    let overlay = build_overlay(field, &frame);
-    for polygon in &overlay.polygons {
-        if polygon.vertices_uv_m.is_empty() {
-            continue;
-        }
-        let centroid = [
-            polygon
-                .vertices_uv_m
-                .iter()
-                .map(|point| point[0])
-                .sum::<f64>()
-                / polygon.vertices_uv_m.len() as f64,
-            polygon
-                .vertices_uv_m
-                .iter()
-                .map(|point| point[1])
-                .sum::<f64>()
-                / polygon.vertices_uv_m.len() as f64,
-        ];
-        let x = (((centroid[0] - frame.bounds[0]) / (frame.bounds[1] - frame.bounds[0])
-            * request.resolution[0] as f64)
-            .floor() as i64)
-            .clamp(0, request.resolution[0] as i64 - 1) as u32;
-        let y = (((centroid[1] - frame.bounds[2]) / (frame.bounds[3] - frame.bounds[2])
-            * request.resolution[1] as f64)
-            .floor() as i64)
-            .clamp(0, request.resolution[1] as i64 - 1) as u32;
-        let index = (y * request.resolution[0] + x) as usize;
-        if occupancy[index] != Occupancy::Empty {
-            continue;
-        }
-        let Some((element_id, value)) =
-            interpolate_at(field, frame.point(centroid[0], centroid[1], 0.0))
-        else {
-            continue;
-        };
-        occupancy[index] = Occupancy::Occupied;
-        source_entity_ids[index] = Some(element_id);
-        scalar_values[index] = if field.n_comp() == 1 {
-            value[0]
-        } else {
-            value
-                .iter()
-                .map(|component| component * component)
-                .sum::<f64>()
-                .sqrt()
-        };
-        if field.n_comp() >= 3 {
-            vector_values[index] = [value[0], value[1], value[2]];
-        }
-    }
     Ok(PlanarSampleResult {
         meta: provenance::meta(
             request,
@@ -431,14 +380,31 @@ fn sample_volume(
     include_air_as_zero: bool,
 ) -> Result<PlanarSampleResult, ApiError> {
     let count = request.resolution[0] as usize * request.resolution[1] as usize;
-    let mut accumulators = (0..count)
-        .map(|_| WeightedAccumulator::new(field.n_comp()))
+    let mut scalar_accumulators = (0..count)
+        .map(|_| WeightedAccumulator::new(1))
         .collect::<Vec<_>>();
+    let mut vector_accumulators = (field.n_comp() >= 3).then(|| {
+        (0..count)
+            .map(|_| WeightedAccumulator::new(3))
+            .collect::<Vec<_>>()
+    });
     let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
     let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
     let s_bounds = thickness
         .map(|value| [-value * 0.5, value * 0.5])
         .unwrap_or([f64::NEG_INFINITY, f64::INFINITY]);
+
+    let quantity = if field.n_comp() == 1 {
+        crate::planar_sampling::element_evaluator::EvaluationQuantity::Component(0)
+    } else {
+        crate::planar_sampling::element_evaluator::EvaluationQuantity::VectorComponent {
+            component: request.component,
+            u_axis: frame.u,
+            v_axis: frame.v,
+            normal: frame.normal,
+        }
+    };
+
     for (element_index, element) in field.elements().iter().enumerate() {
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
@@ -448,19 +414,19 @@ fn sample_volume(
             .iter()
             .map(|index| field.nodes()[*index as usize])
             .collect::<Vec<_>>();
-        let projected = element
-            .nodes()
+        let projected = nodes
             .iter()
-            .enumerate()
-            .map(|(local, node)| LinearVertex {
-                position: frame.project(nodes[local]),
-                value: (0..field.n_comp())
-                    .map(|component| field.values()[*node as usize * field.n_comp() + component])
-                    .collect(),
+            .map(|point| frame.project(*point))
+            .collect::<Vec<_>>();
+        let linear_vertices = projected
+            .iter()
+            .map(|&position| LinearVertex {
+                position,
+                value: Vec::new(),
             })
             .collect::<Vec<_>>();
         let Some((x_bounds, y_bounds)) =
-            projected_pixel_bounds(&projected, frame.bounds, request.resolution, s_bounds)
+            projected_pixel_bounds(&linear_vertices, frame.bounds, request.resolution, s_bounds)
         else {
             continue;
         };
@@ -469,7 +435,7 @@ fn sample_volume(
                 let pixel = (y * request.resolution[0] + x) as usize;
                 let u_min = frame.bounds[0] + x as f64 * du;
                 let v_min = frame.bounds[2] + y as f64 * dv;
-                let contribution = integrate_clipped_convex_element(
+                let sub_tets = decompose_clipped_convex_element(
                     &projected,
                     element.faces(),
                     [
@@ -481,29 +447,56 @@ fn sample_volume(
                         s_bounds[1],
                     ],
                 );
-                if contribution.measure <= 0.0 {
-                    continue;
+                for sub_tet in sub_tets {
+                    let world_verts = sub_tet.map(|p| frame.point(p[0], p[1], p[2]));
+                    let scalar_moment =
+                        crate::planar_sampling::element_evaluator::evaluate_sub_tetrahedron_moments_quantity(
+                            field,
+                            element,
+                            world_verts,
+                            quantity,
+                        );
+                    if scalar_moment.measure > 0.0 {
+                        scalar_accumulators[pixel].merge_moments(&[scalar_moment]);
+                    }
+                    if let Some(v_accs) = vector_accumulators.as_mut() {
+                        let v_moments = [
+                            crate::planar_sampling::element_evaluator::evaluate_sub_tetrahedron_moments(
+                                field,
+                                element,
+                                world_verts,
+                                0,
+                            ),
+                            crate::planar_sampling::element_evaluator::evaluate_sub_tetrahedron_moments(
+                                field,
+                                element,
+                                world_verts,
+                                1,
+                            ),
+                            crate::planar_sampling::element_evaluator::evaluate_sub_tetrahedron_moments(
+                                field,
+                                element,
+                                world_verts,
+                                2,
+                            ),
+                        ];
+                        v_accs[pixel].merge_moments(&v_moments);
+                    }
                 }
-                let mean = contribution
-                    .integral
-                    .iter()
-                    .map(|integral| integral / contribution.measure)
-                    .collect::<Vec<_>>();
-                accumulators[pixel].add(&mean, contribution.measure);
             }
         }
     }
     let pixel_area = ((frame.bounds[1] - frame.bounds[0]) * (frame.bounds[3] - frame.bounds[2]))
         .abs()
         / count as f64;
-    finish_reduction(
-        field.n_comp(),
+    finish_reduction_dual(
         request,
-        accumulators,
+        scalar_accumulators,
+        vector_accumulators,
         reduction,
         pixel_area,
         include_air_as_zero,
-        "fem_p1_tetra_volume_weighted",
+        "fem_moment_volume_quadrature",
         thickness.map(|value| pixel_area * value),
     )
 }

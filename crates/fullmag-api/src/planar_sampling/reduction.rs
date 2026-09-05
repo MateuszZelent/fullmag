@@ -46,7 +46,7 @@ impl WeightedAccumulator {
         }
     }
 
-    pub fn add(&mut self, values: &[f64], weight: f64) {
+    pub fn add_constant(&mut self, values: &[f64], weight: f64) {
         if !weight.is_finite() || weight <= 0.0 {
             return;
         }
@@ -56,6 +56,25 @@ impl WeightedAccumulator {
             self.weighted_square[component] += value * value * weight;
             self.min[component] = self.min[component].min(*value);
             self.max[component] = self.max[component].max(*value);
+        }
+    }
+
+    pub fn add(&mut self, values: &[f64], weight: f64) {
+        self.add_constant(values, weight);
+    }
+
+    pub fn merge_moments(&mut self, moments: &[crate::planar_sampling::moments::ScalarMoments]) {
+        if moments.is_empty() || moments[0].measure <= 0.0 || !moments[0].measure.is_finite() {
+            return;
+        }
+        self.weight += moments[0].measure;
+        for (component, moment) in moments.iter().enumerate() {
+            if component < self.weighted.len() {
+                self.weighted[component] += moment.first;
+                self.weighted_square[component] += moment.second;
+                self.min[component] = f64::min(self.min[component], moment.min);
+                self.max[component] = f64::max(self.max[component], moment.max);
+            }
         }
     }
 

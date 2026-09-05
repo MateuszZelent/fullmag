@@ -257,13 +257,14 @@ export function buildFieldMapRenderModel(
     frame: input.frame,
     interaction,
     layers: {
-      ...input.layers,
-      ...(!input.visible && input.visible !== undefined
-        ? { boundaries: false, bounds: false, contours: false, mesh: false, points: false, probes: false, raster: false, vectors: false }
-        : {}),
+      raster: Boolean(input.visible !== false && input.layers.raster && rasterOpacityValid && range !== null),
+      probes: Boolean(input.visible !== false && (input.layers.probes ?? true)),
+      mesh: Boolean(input.visible !== false && input.layers.mesh),
       boundaries: Boolean(input.visible !== false && input.layers.boundaries && boundariesExact),
-      probes: input.layers.probes ?? true,
-      raster: Boolean(input.layers.raster && rasterOpacityValid && range !== null),
+      bounds: Boolean(input.visible !== false && input.layers.bounds),
+      contours: Boolean(input.visible !== false && input.layers.contours),
+      points: Boolean(input.visible !== false && input.layers.points),
+      vectors: Boolean(input.visible !== false && input.layers.vectors),
     },
     mask: input.mask ?? null,
     meshOverlayDescriptor: input.meshOverlayDescriptor,

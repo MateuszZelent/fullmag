@@ -307,9 +307,14 @@ fn sample_volume(
     include_air_as_zero: bool,
 ) -> Result<PlanarSampleResult, ApiError> {
     let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
-    let mut accumulators = (0..pixel_count)
-        .map(|_| WeightedAccumulator::new(field.n_comp()))
+    let mut scalar_accumulators = (0..pixel_count)
+        .map(|_| WeightedAccumulator::new(1))
         .collect::<Vec<_>>();
+    let mut vector_accumulators = (field.n_comp() >= 3).then(|| {
+        (0..pixel_count)
+            .map(|_| WeightedAccumulator::new(3))
+            .collect::<Vec<_>>()
+    });
     let grid = field.grid();
     let origin = field.origin();
     let spacing = field.spacing();
@@ -337,6 +342,17 @@ fn sample_volume(
                 }
                 let start = cell * field.n_comp();
                 let value = field.values()[start..start + field.n_comp()].to_vec();
+                let scalar_val = if field.n_comp() == 1 {
+                    value[0]
+                } else {
+                    crate::planar_sampling::element_evaluator::evaluate_vector_quantity(
+                        [value[0], value[1], value[2]],
+                        request.component,
+                        frame.u,
+                        frame.v,
+                        frame.normal,
+                    )
+                };
                 let low = [
                     origin[0] + x as f64 * spacing[0],
                     origin[1] + y as f64 * spacing[1],
@@ -387,7 +403,12 @@ fn sample_volume(
                                 ],
                             );
                             if contribution.measure > 0.0 {
-                                accumulators[pixel].add(&value, contribution.measure);
+                                scalar_accumulators[pixel]
+                                    .add_constant(&[scalar_val], contribution.measure);
+                                if let Some(v_accs) = vector_accumulators.as_mut() {
+                                    v_accs[pixel]
+                                        .add_constant(&value[0..3], contribution.measure);
+                                }
                             }
                         }
                     }
@@ -399,16 +420,73 @@ fn sample_volume(
     let pixel_area = ((frame.bounds[1] - frame.bounds[0]) * (frame.bounds[3] - frame.bounds[2]))
         .abs()
         / pixel_count as f64;
-    finish_reduction(
-        field.n_comp(),
+    finish_reduction_dual(
         request,
-        accumulators,
-        reduction.into(),
+        scalar_accumulators,
+        vector_accumulators,
+        reduction,
         pixel_area,
         include_air_as_zero,
         "fdm_cell_volume_weighted",
         thickness.map(|value| pixel_area * value),
     )
+}
+
+pub(super) fn finish_reduction_dual(
+    request: &ResolvedPlanarSampleRequest,
+    scalar_accumulators: Vec<WeightedAccumulator>,
+    vector_accumulators: Option<Vec<WeightedAccumulator>>,
+    reduction: AccumulatorReduction,
+    pixel_area: f64,
+    include_air_as_zero: bool,
+    method: &'static str,
+    full_measure: Option<f64>,
+) -> Result<PlanarSampleResult, ApiError> {
+    let count = scalar_accumulators.len();
+    let mut occupancy = Vec::with_capacity(count);
+    let mut scalar_values = Vec::with_capacity(count);
+    let mut occupied_measure = 0.0;
+
+    for accumulator in &scalar_accumulators {
+        occupied_measure += accumulator.weight();
+        match accumulator.finish(reduction, pixel_area) {
+            Some(value) => {
+                occupancy.push(
+                    if full_measure
+                        .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
+                    {
+                        Occupancy::Partial
+                    } else {
+                        Occupancy::Occupied
+                    },
+                );
+                scalar_values.push(value[0]);
+            }
+            None => {
+                occupancy.push(Occupancy::Empty);
+                scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
+            }
+        }
+    }
+
+    let vector_values = vector_accumulators.map(|v_accs| {
+        v_accs
+            .into_iter()
+            .map(|acc| match acc.finish(AccumulatorReduction::MeanOccupied, pixel_area) {
+                Some(v) => [v[0], v[1], v[2]],
+                None => [f64::NAN; 3],
+            })
+            .collect::<Vec<[f64; 3]>>()
+    });
+
+    Ok(PlanarSampleResult {
+        meta: provenance::meta(request, method, &occupancy, occupied_measure, 0, 0, 0, 1),
+        scalar_values,
+        vector_values,
+        source_entity_ids: vec![None; count],
+        occupancy,
+        overlay: None,
+    })
 }
 
 pub(super) fn finish_reduction(

@@ -22,7 +22,7 @@
 //! the total cached byte count exceeds `max_bytes` or entry count exceeds `max_entries`.
 
 use crate::fem_spatial_index::FemNormalAxisIndex;
-use crate::planar_sampling::PlanarSampleResult;
+use crate::planar_sampling::{BuiltPlanarField, PlanarExecutionService, PlanarSampleResult};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -162,6 +162,7 @@ pub(crate) struct JsonResourceCache {
 #[derive(Clone)]
 struct CachedPlanarSample {
     result: Arc<PlanarSampleResult>,
+    built: Option<Arc<BuiltPlanarField>>,
     estimated_bytes: usize,
     generation: u64,
 }
@@ -192,6 +193,13 @@ impl PlanarSampleCache {
         Some(Arc::clone(&entry.result))
     }
 
+    pub fn get_built(&mut self, key: &str) -> Option<Arc<BuiltPlanarField>> {
+        let entry = self.entries.get_mut(key)?;
+        self.generation += 1;
+        entry.generation = self.generation;
+        entry.built.as_ref().map(Arc::clone)
+    }
+
     pub fn insert(&mut self, key: String, result: Arc<PlanarSampleResult>) {
         let estimated_bytes = estimate_planar_sample_bytes(&result);
         if estimated_bytes > self.max_bytes || self.max_entries == 0 {
@@ -220,6 +228,44 @@ impl PlanarSampleCache {
             key,
             CachedPlanarSample {
                 result,
+                built: None,
+                estimated_bytes,
+                generation: self.generation,
+            },
+        );
+        self.total_bytes += estimated_bytes;
+    }
+
+    pub fn insert_built(&mut self, key: String, built: Arc<BuiltPlanarField>) {
+        let result = Arc::clone(&built.result);
+        let estimated_bytes = estimate_planar_sample_bytes(&result) + 1024;
+        if estimated_bytes > self.max_bytes || self.max_entries == 0 {
+            return;
+        }
+        if let Some(previous) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
+        }
+        while self.entries.len() >= self.max_entries
+            || self.total_bytes + estimated_bytes > self.max_bytes
+        {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&oldest_key) {
+                self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
+            }
+        }
+        self.generation += 1;
+        self.entries.insert(
+            key,
+            CachedPlanarSample {
+                result,
+                built: Some(built),
                 estimated_bytes,
                 generation: self.generation,
             },
@@ -535,6 +581,17 @@ pub(crate) struct QuantityDataPlaneStore {
     pub topological_charge_cache: Mutex<JsonResourceCache>,
     /// Bounded revision-keyed results shared by planar meta/binary resources.
     pub planar_sample_cache: Mutex<PlanarSampleCache>,
+    /// Single-flight inflight map per immutable cache key.
+    pub planar_sample_inflight: StdMutex<
+        HashMap<
+            String,
+            tokio::sync::watch::Sender<
+                Option<Result<Arc<PlanarSampleResult>, crate::error::ApiError>>,
+            >,
+        >,
+    >,
+    /// Bounded CPU/memory execution service.
+    pub planar_execution: PlanarExecutionService,
 }
 
 impl std::fmt::Debug for QuantityDataPlaneStore {
@@ -577,6 +634,8 @@ impl QuantityDataPlaneStore {
                 DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES,
                 DEFAULT_MAX_BYTES,
             )),
+            planar_sample_inflight: StdMutex::new(HashMap::new()),
+            planar_execution: PlanarExecutionService::default(),
         }
     }
 
@@ -592,13 +651,90 @@ impl QuantityDataPlaneStore {
         if let Some(cached) = self.planar_sample_cache.lock().await.get(key) {
             return Ok(cached);
         }
-        let sampled = sample().await?;
-        let mut cache = self.planar_sample_cache.lock().await;
-        if let Some(cached) = cache.get(key) {
-            return Ok(cached);
+
+        let rx = {
+            let mut inflight = self.planar_sample_inflight.lock().unwrap();
+            if let Some(tx) = inflight.get(key) {
+                Some(tx.subscribe())
+            } else {
+                let (tx, _) = tokio::sync::watch::channel(None);
+                inflight.insert(key.to_string(), tx);
+                None
+            }
+        };
+
+        if let Some(mut rx) = rx {
+            if let Ok(ref_val) = rx.wait_for(|val| val.is_some()).await {
+                if let Some(res) = ref_val.as_ref() {
+                    return res.clone();
+                }
+            }
+            if let Some(cached) = self.planar_sample_cache.lock().await.get(key) {
+                return Ok(cached);
+            }
+            return Err(crate::error::ApiError::internal(
+                "single_flight_cancelled: leader cancelled computation",
+            ));
         }
-        cache.insert(key.to_string(), Arc::clone(&sampled));
-        Ok(sampled)
+
+        struct InflightGuard<'a> {
+            inflight: &'a StdMutex<
+                HashMap<
+                    String,
+                    tokio::sync::watch::Sender<
+                        Option<Result<Arc<PlanarSampleResult>, crate::error::ApiError>>,
+                    >,
+                >,
+            >,
+            key: &'a str,
+            completed: bool,
+        }
+        impl<'a> Drop for InflightGuard<'a> {
+            fn drop(&mut self) {
+                if !self.completed {
+                    if let Ok(mut map) = self.inflight.lock() {
+                        if let Some(tx) = map.remove(self.key) {
+                            let _ = tx.send(Some(Err(crate::error::ApiError::internal(
+                                "single_flight_cancelled: leader cancelled computation",
+                            ))));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut guard = InflightGuard {
+            inflight: &self.planar_sample_inflight,
+            key,
+            completed: false,
+        };
+
+        let sample_result = sample().await;
+        guard.completed = true;
+
+        if let Ok(sampled) = &sample_result {
+            let mut cache = self.planar_sample_cache.lock().await;
+            cache.insert(key.to_string(), Arc::clone(sampled));
+        }
+
+        let tx = {
+            let mut inflight = self.planar_sample_inflight.lock().unwrap();
+            inflight.remove(key)
+        };
+
+        if let Some(tx) = tx {
+            let _ = tx.send(Some(sample_result.clone()));
+        }
+
+        sample_result
+    }
+
+    pub(crate) async fn get_cached_built_field(&self, key: &str) -> Option<Arc<BuiltPlanarField>> {
+        self.planar_sample_cache.lock().await.get_built(key)
+    }
+
+    pub(crate) async fn insert_cached_built_field(&self, key: String, built: Arc<BuiltPlanarField>) {
+        self.planar_sample_cache.lock().await.insert_built(key, built);
     }
 }
 
@@ -877,6 +1013,116 @@ mod tests {
             common(
                 "resolution=auto:support=layer_profile:profile=Some(33):snapshot=None:stage=None"
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn single_flight_concurrent_cold_clients_execute_computation_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let store = Arc::new(QuantityDataPlaneStore::new());
+        let compute_count = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(5));
+
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let store = Arc::clone(&store);
+            let counter = Arc::clone(&compute_count);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .get_or_sample_planar("cold-shared-key", || async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        Ok::<_, crate::error::ApiError>(planar_sample(8))
+                    })
+                    .await
+            }));
+        }
+
+        let mut results = Vec::new();
+        for handle in handles {
+            let res = handle.await.unwrap().expect("sample succeeds");
+            results.push(res);
+        }
+
+        assert_eq!(
+            compute_count.load(Ordering::SeqCst),
+            1,
+            "single-flight must run exactly once for all 5 concurrent cold callers"
+        );
+        for res in &results[1..] {
+            assert!(
+                Arc::ptr_eq(&results[0], res),
+                "all concurrent callers must receive identical Arc result"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn single_flight_different_keys_execute_concurrently() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let store = Arc::new(QuantityDataPlaneStore::new());
+        let compute_count = Arc::new(AtomicUsize::new(0));
+
+        let store1 = Arc::clone(&store);
+        let count1 = Arc::clone(&compute_count);
+        let h1 = tokio::spawn(async move {
+            store1
+                .get_or_sample_planar("key-1", || async move {
+                    count1.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, crate::error::ApiError>(planar_sample(4))
+                })
+                .await
+        });
+
+        let store2 = Arc::clone(&store);
+        let count2 = Arc::clone(&compute_count);
+        let h2 = tokio::spawn(async move {
+            store2
+                .get_or_sample_planar("key-2", || async move {
+                    count2.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, crate::error::ApiError>(planar_sample(4))
+                })
+                .await
+        });
+
+        let r1 = h1.await.unwrap().expect("r1 succeeds");
+        let r2 = h2.await.unwrap().expect("r2 succeeds");
+        assert_eq!(compute_count.load(Ordering::SeqCst), 2);
+        assert!(!Arc::ptr_eq(&r1, &r2));
+    }
+
+    #[tokio::test]
+    async fn single_flight_error_fanout_cleans_inflight_and_propagates_error() {
+        let store = Arc::new(QuantityDataPlaneStore::new());
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .get_or_sample_planar("failing-key", || async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        Err::<Arc<PlanarSampleResult>, _>(crate::error::ApiError::bad_request("oracle error"))
+                    })
+                    .await
+            }));
+        }
+
+        for handle in handles {
+            let err = handle.await.unwrap().expect_err("must propagate error");
+            assert_eq!(err.message, "oracle error");
+        }
+
+        assert!(
+            store.planar_sample_inflight.lock().unwrap().is_empty(),
+            "inflight map must be empty after error fanout"
         );
     }
 }

@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use fullmag_ir::{PlanarFrameIR, PlanarOperatorIR};
+use fullmag_ir::PlanarOperatorIR;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -16,9 +16,9 @@ use crate::{
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
         resolve_authored_planar_source, resolve_default_planar_source, resolve_spatial_target,
-        sample_resolved_target, Occupancy, PlanarComponent, PlanarSampleIdentity,
-        PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSourceIdentity,
-        ResolvedSpatialScope, ResolvedSpatialTarget, MAX_PLANAR_SAMPLE_POINTS,
+        BuiltPlanarField, Occupancy, PlanarComponent, PlanarSampleIdentity,
+        ResolvedPlanarSampleRequest, ResolvedPlanarSourceIdentity, ResolvedSpatialScope,
+        MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
     router_v2::handlers::{
@@ -48,35 +48,6 @@ const MAX_RESOLUTION: u32 = 2048;
 enum PlanarDataSource {
     Default,
     Monitor(String),
-}
-
-struct BuiltPlanarField {
-    result: Arc<PlanarSampleResult>,
-    target: Arc<ResolvedSpatialTarget>,
-    request: ResolvedPlanarSampleRequest,
-    source: ResolvedPlanarSourceIdentity,
-    frame: PlanarFrameIR,
-    operator: PlanarOperatorIR,
-    scene_revision: u64,
-    quantity_id: String,
-    component: String,
-    field_revision: u64,
-    mesh_revision: u64,
-    carrier_revision: u64,
-    generation_id: String,
-    field_source: String,
-    field_backend: Option<String>,
-    field_device: Option<String>,
-    field_precision: Option<String>,
-    quality: String,
-    stage_id: Option<String>,
-    snapshot_id: Option<String>,
-    include_mesh: bool,
-    source_entity_kind: &'static str,
-    scope_kind: String,
-    scope_id: Option<String>,
-    etag: String,
-    sample_token: String,
 }
 
 #[utoipa::path(
@@ -484,6 +455,18 @@ async fn build_planar_field_from_source(
 ) -> Result<BuiltPlanarField, ApiError> {
     let resolution = resolve_resolution(query)?;
     validate_auxiliary_query(query)?;
+
+    // 05.5: Cheap cache hit before acquiring snapshot or rebuilding target
+    if let Some(token) = query.sample_token.as_deref() {
+        if let Some(cached) = state.quantity_data_plane.get_cached_built_field(token).await {
+            let mut field = (*cached).clone();
+            if let Some(im) = query.include_mesh {
+                field.include_mesh = im;
+            }
+            return Ok(field);
+        }
+    }
+
     let guard = state.current_live_state.read().await;
     let snapshot = guard
         .as_ref()
@@ -704,20 +687,21 @@ async fn build_planar_field_from_source(
     let target = Arc::new(target);
     let sampling_target = Arc::clone(&target);
     let sampling_request = request.clone();
+    let is_export = query.quality.as_deref() == Some("export");
+    let execution = state.quantity_data_plane.planar_execution.clone();
     let result = state
         .quantity_data_plane
         .get_or_sample_planar(&sample_token, || async move {
-            Ok(Arc::new(sample_resolved_target(
-                &sampling_target,
-                &sampling_request,
-            )?))
+            execution
+                .execute_sample(sampling_target, sampling_request, is_export)
+                .await
         })
         .await?;
     let etag = format!(
         "\"fm-planar-sha256:{:x}\"",
         Sha256::digest(sample_token.as_bytes())
     );
-    Ok(BuiltPlanarField {
+    let built = BuiltPlanarField {
         result,
         target,
         request,
@@ -746,8 +730,15 @@ async fn build_planar_field_from_source(
         scope_kind,
         scope_id: query.scope_id.clone(),
         etag,
-        sample_token,
-    })
+        sample_token: sample_token.clone(),
+    };
+
+    state
+        .quantity_data_plane
+        .insert_cached_built_field(sample_token, Arc::new(built.clone()))
+        .await;
+
+    Ok(built)
 }
 
 async fn planar_meta_response(
@@ -880,17 +871,44 @@ async fn planar_probe_response(
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
     let bounds = built.result.meta.bounds_uv_m;
-    let x = (((probe.u_m - bounds[0]) / (bounds[1] - bounds[0])
-        * built.result.meta.resolution[0] as f64)
-        .floor() as i64)
-        .clamp(0, built.result.meta.resolution[0] as i64 - 1) as u32;
-    let y = (((probe.v_m - bounds[2]) / (bounds[3] - bounds[2])
-        * built.result.meta.resolution[1] as f64)
-        .floor() as i64)
-        .clamp(0, built.result.meta.resolution[1] as i64 - 1) as u32;
-    let index = (y * built.result.meta.resolution[0] + x) as usize;
-    let occupancy = built.result.occupancy[index];
-    let source_entity_id = built.result.source_entity_ids[index];
+    let is_inside = probe.u_m >= bounds[0]
+        && probe.u_m <= bounds[1]
+        && probe.v_m >= bounds[2]
+        && probe.v_m <= bounds[3];
+
+    let (scalar, vector, cell_id, element_id, occupancy) = if is_inside {
+        let x = (((probe.u_m - bounds[0]) / (bounds[1] - bounds[0])
+            * built.result.meta.resolution[0] as f64)
+            .floor() as i64)
+            .clamp(0, built.result.meta.resolution[0] as i64 - 1) as u32;
+        let y = (((probe.v_m - bounds[2]) / (bounds[3] - bounds[2])
+            * built.result.meta.resolution[1] as f64)
+            .floor() as i64)
+            .clamp(0, built.result.meta.resolution[1] as i64 - 1) as u32;
+        let index = (y * built.result.meta.resolution[0] + x) as usize;
+        let occ = built.result.occupancy[index];
+        let source_entity_id = built.result.source_entity_ids[index];
+        (
+            built.result.scalar_values[index]
+                .is_finite()
+                .then_some(built.result.scalar_values[index]),
+            built
+                .result
+                .vector_values
+                .as_ref()
+                .map(|vectors| vectors[index])
+                .filter(|vector| vector.iter().all(|value| value.is_finite())),
+            (built.source_entity_kind == "cell")
+                .then_some(source_entity_id)
+                .flatten(),
+            (built.source_entity_kind == "element")
+                .then_some(source_entity_id)
+                .flatten(),
+            occupancy_label(occ).to_string(),
+        )
+    } else {
+        (None, None, None, None, "outside_extent".to_string())
+    };
     let frame = &built.frame;
     let world_m = [
         frame.origin_m[0] + probe.u_m * frame.u_axis[0] + probe.v_m * frame.v_axis[0],
@@ -903,22 +921,11 @@ async fn planar_probe_response(
         u_m: probe.u_m,
         v_m: probe.v_m,
         world_m,
-        scalar: built.result.scalar_values[index]
-            .is_finite()
-            .then_some(built.result.scalar_values[index]),
-        vector: built
-            .result
-            .vector_values
-            .as_ref()
-            .map(|vectors| vectors[index])
-            .filter(|vector| vector.iter().all(|value| value.is_finite())),
-        cell_id: (built.source_entity_kind == "cell")
-            .then_some(source_entity_id)
-            .flatten(),
-        element_id: (built.source_entity_kind == "element")
-            .then_some(source_entity_id)
-            .flatten(),
-        occupancy: occupancy_label(occupancy).to_string(),
+        scalar,
+        vector,
+        cell_id,
+        element_id,
+        occupancy,
         sampling_method: built.result.meta.sampling_method.to_string(),
     }))
 }

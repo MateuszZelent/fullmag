@@ -74,21 +74,12 @@ fn default_slice_coordinate(
         }
     }
 
-    let count = grid.shape[axis];
-    let scaled = position_fraction * f64::from(count);
-    let index = if scaled <= 0.0 {
-        0
-    } else {
-        scaled.ceil() as u32 - 1
-    }
-    .min(count - 1);
-    let coordinate = grid.origin[axis] + (f64::from(index) + 0.5) * grid.spacing[axis];
-    if !coordinate.is_finite() {
+    if !continuous.is_finite() {
         return Err(ApiError::unprocessable(
-            "planar_default_grid_invalid: structured FDM cell center must be finite",
+            "planar_default_grid_invalid: continuous slice coordinate must be finite",
         ));
     }
-    Ok(coordinate)
+    Ok(continuous)
 }
 pub(crate) fn resolve_default_planar_source(
     domain: &DomainMeta,
@@ -332,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn default_fdm_even_midplane_snaps_to_lower_cell_center() {
+    fn default_fdm_even_midplane_preserves_continuous_coordinate() {
         let mut d = domain([-1.0; 3], [1.0; 3], "generation-a");
         d.grid = Some(StructuredGridDescriptor {
             shape: [2, 2, 2],
@@ -350,7 +341,7 @@ mod tests {
         )
         .expect("valid structured FDM domain should resolve");
 
-        assert_eq!(resolved.frame.origin_m[2], -0.5);
+        assert_eq!(resolved.frame.origin_m[2], 0.0);
     }
 
     #[test]
@@ -600,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn default_fdm_slice_snaps_all_planes_and_boundary_fractions() {
+    fn default_fdm_slice_preserves_continuous_coordinates_for_all_planes_and_boundary_fractions() {
         let mut d = domain([10.0, 20.0, 30.0], [14.0, 32.0, 54.0], "generation-a");
         d.grid = Some(StructuredGridDescriptor {
             shape: [2, 3, 4],
@@ -608,15 +599,15 @@ mod tests {
             spacing: [2.0, 4.0, 6.0],
         });
         let cases = [
-            (PlanarAxisPlane::Xy, 0.0, 2, 33.0),
-            (PlanarAxisPlane::Xy, 0.5, 2, 39.0),
-            (PlanarAxisPlane::Xy, 1.0, 2, 51.0),
-            (PlanarAxisPlane::Xz, 0.0, 1, 22.0),
+            (PlanarAxisPlane::Xy, 0.0, 2, 30.0),
+            (PlanarAxisPlane::Xy, 0.5, 2, 42.0),
+            (PlanarAxisPlane::Xy, 1.0, 2, 54.0),
+            (PlanarAxisPlane::Xz, 0.0, 1, 20.0),
             (PlanarAxisPlane::Xz, 0.5, 1, 26.0),
-            (PlanarAxisPlane::Xz, 1.0, 1, 30.0),
-            (PlanarAxisPlane::Yz, 0.0, 0, 11.0),
-            (PlanarAxisPlane::Yz, 0.5, 0, 11.0),
-            (PlanarAxisPlane::Yz, 1.0, 0, 13.0),
+            (PlanarAxisPlane::Xz, 1.0, 1, 32.0),
+            (PlanarAxisPlane::Yz, 0.0, 0, 10.0),
+            (PlanarAxisPlane::Yz, 0.5, 0, 12.0),
+            (PlanarAxisPlane::Yz, 1.0, 0, 14.0),
         ];
 
         for (plane, position, axis, expected) in cases {

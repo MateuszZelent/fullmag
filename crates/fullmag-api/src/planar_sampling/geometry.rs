@@ -134,6 +134,70 @@ pub(super) fn integrate_clipped_convex_element(
     integrate_polyhedron(&polyhedron)
 }
 
+pub(super) fn decompose_clipped_convex_element(
+    positions: &[[f64; 3]],
+    faces: &[&[usize]],
+    bounds: [f64; 6],
+) -> Vec<[[f64; 3]; 4]> {
+    let vertices = positions
+        .iter()
+        .map(|&position| LinearVertex {
+            position,
+            value: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let mut polyhedron = ConvexPolyhedron {
+        faces: faces
+            .iter()
+            .map(|face| face.iter().map(|index| vertices[*index].clone()).collect())
+            .collect(),
+    };
+    for (axis, limit, keep_greater) in [
+        (0, bounds[0], true),
+        (0, bounds[1], false),
+        (1, bounds[2], true),
+        (1, bounds[3], false),
+        (2, bounds[4], true),
+        (2, bounds[5], false),
+    ] {
+        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater);
+        if polyhedron.faces.is_empty() {
+            return Vec::new();
+        }
+    }
+    decompose_polyhedron(&polyhedron)
+}
+
+fn decompose_polyhedron(polyhedron: &ConvexPolyhedron) -> Vec<[[f64; 3]; 4]> {
+    let mut unique = Vec::new();
+    for vertex in polyhedron.faces.iter().flatten() {
+        push_unique(&mut unique, vertex.clone());
+    }
+    if unique.len() < 4 {
+        return Vec::new();
+    }
+    let center = [0, 1, 2].map(|axis| {
+        unique
+            .iter()
+            .map(|vertex| vertex.position[axis])
+            .sum::<f64>()
+            / unique.len() as f64
+    });
+    let mut tetrahedra = Vec::new();
+    for face in &polyhedron.faces {
+        for index in 1..face.len() - 1 {
+            let a = face[0].position;
+            let b = face[index].position;
+            let c = face[index + 1].position;
+            let volume = tetra_volume(center, a, b, c);
+            if volume > 1e-28 {
+                tetrahedra.push([center, a, b, c]);
+            }
+        }
+    }
+    tetrahedra
+}
+
 fn clip_polyhedron(
     polyhedron: ConvexPolyhedron,
     axis: usize,
