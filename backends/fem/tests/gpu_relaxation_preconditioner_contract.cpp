@@ -1731,6 +1731,151 @@ void check_ncg_entry_direction_snapshot_separated_from_working_history_contract(
     gpu_relaxation_state_free(relaxation);
 }
 
+void check_ncg_fallback_direction_and_metrics_consistency_contract()
+{
+    using namespace fullmag::fem;
+
+    constexpr size_t n = 16;
+    constexpr int blocks = 1;
+    const double mu0 = 4.0e-7 * std::acos(-1.0);
+
+    std::vector<double> host_gx(n, 1.0), host_gy(n, 2.0), host_gz(n, 3.0);
+    // z has norm 10x larger per component -> 100x larger squared norm
+    std::vector<double> host_zx(n, 10.0), host_zy(n, 20.0), host_zz(n, 30.0);
+    std::vector<double> host_px(n, std::numeric_limits<double>::quiet_NaN());
+    std::vector<double> host_py(n, std::numeric_limits<double>::quiet_NaN());
+    std::vector<double> host_pz(n, std::numeric_limits<double>::quiet_NaN());
+
+    std::vector<double> host_ms(n, 8.0e5);
+    std::vector<double> host_mass(n, 2.0);
+    std::vector<uint8_t> host_mask(n, 1u);
+    host_mask[0] = 0u; // Node 0 is frozen
+
+    DeviceBuffer<double> d_gx(n), d_gy(n), d_gz(n);
+    DeviceBuffer<double> d_zx(n), d_zy(n), d_zz(n);
+    DeviceBuffer<double> d_px(n), d_py(n), d_pz(n);
+    DeviceBuffer<double> d_ms(n), d_mass(n);
+    DeviceBuffer<uint8_t> d_mask(n);
+
+    d_gx.copy_from(host_gx);
+    d_gy.copy_from(host_gy);
+    d_gz.copy_from(host_gz);
+    d_zx.copy_from(host_zx);
+    d_zy.copy_from(host_zy);
+    d_zz.copy_from(host_zz);
+    d_px.copy_from(host_px);
+    d_py.copy_from(host_py);
+    d_pz.copy_from(host_pz);
+    d_ms.copy_from(host_ms);
+    d_mass.copy_from(host_mass);
+    d_mask.copy_from(host_mask);
+
+    DeviceBuffer<double> d_p_dot_g(1), d_z_dot_g(1);
+    DeviceBuffer<double> d_workspace(blocks);
+    DeviceBuffer<double> d_scalar_result(2);
+
+    size_t temp_bytes = 0;
+    check(fullmag_cuda_device_sum(d_workspace.get(), blocks, d_scalar_result.get(), nullptr, temp_bytes, nullptr) == cudaSuccess,
+          "query temp_bytes must succeed");
+    DeviceBuffer<uint8_t> temp_storage(temp_bytes);
+
+    double expected_g_norm_sq = 15.0 * 2.0 * (1.0 + 4.0 + 9.0); // 420.0
+    double expected_z_norm_sq = 15.0 * 2.0 * (100.0 + 400.0 + 900.0); // 42000.0
+    double expected_z_dot_g_energy = 15.0 * (mu0 * 8.0e5 * 2.0) * (10.0 + 40.0 + 90.0);
+    double expected_g_dot_g_energy = 15.0 * (mu0 * 8.0e5 * 2.0) * (1.0 + 4.0 + 9.0);
+
+    // --- Scenario 1: Initial p has NaN, z_dot_g > 0 -> fallback selects -z ---
+    {
+        double nan_val = std::numeric_limits<double>::quiet_NaN();
+        d_p_dot_g.copy_from({nan_val});
+        d_z_dot_g.copy_from({50.0});
+
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            d_gx.get(), d_gy.get(), d_gz.get(),
+            d_zx.get(), d_zy.get(), d_zz.get(),
+            d_p_dot_g.get(), d_z_dot_g.get(), d_mask.get(),
+            d_px.get(), d_py.get(), d_pz.get(),
+            static_cast<int>(n), nullptr);
+        check(cudaDeviceSynchronize() == cudaSuccess, "ncg fallback synchronize must succeed");
+
+        std::vector<double> px = d_px.copy_to_host();
+        check(px[0] == 0.0, "frozen node px must remain 0");
+        for (size_t i = 1; i < n; ++i) {
+            check(close(px[i], -10.0, 1.0e-12), "px must be -zx for active nodes");
+        }
+
+        fullmag_cuda_relax_energy_weighted_dot_blocks(
+            d_px.get(), d_py.get(), d_pz.get(),
+            d_gx.get(), d_gy.get(), d_gz.get(),
+            d_ms.get(), d_mass.get(), d_mask.get(),
+            d_workspace.get(), static_cast<int>(n), nullptr);
+        check(fullmag_cuda_device_sum(d_workspace.get(), blocks, d_scalar_result.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+              "sum p_dot_g must succeed");
+
+        fullmag_cuda_relax_metric_dot_blocks(
+            d_px.get(), d_py.get(), d_pz.get(),
+            d_px.get(), d_py.get(), d_pz.get(),
+            d_mass.get(), d_mask.get(),
+            d_workspace.get(), static_cast<int>(n), nullptr);
+        check(fullmag_cuda_device_sum(d_workspace.get(), blocks, d_scalar_result.get() + 1, temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+              "sum direction norm must succeed");
+
+        std::vector<double> recomputed = d_scalar_result.copy_to_host();
+        check(std::isfinite(recomputed[0]), "recomputed p_dot_g must be finite (not NaN)");
+        check(recomputed[0] < 0.0, "recomputed p_dot_g must be negative (descent)");
+        check(close(recomputed[0], -expected_z_dot_g_energy, 1.0e-9),
+              "recomputed p_dot_g must match -z_dot_g_energy");
+
+        check(std::isfinite(recomputed[1]), "recomputed direction norm must be finite");
+        check(close(recomputed[1], expected_z_norm_sq, 1.0e-9),
+              "recomputed direction norm must match ||z||^2, NOT ||g||^2");
+        check(recomputed[1] > 50.0 * expected_g_norm_sq,
+              "direction norm must be ~100x larger than gradient norm, proving no g-norm substitution");
+    }
+
+    // --- Scenario 2: Non-descent p (p_dot_g >= 0) and non-descent z (z_dot_g <= 0) -> fallback selects -g ---
+    {
+        d_p_dot_g.copy_from({100.0});
+        d_z_dot_g.copy_from({-50.0});
+
+        fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
+            d_gx.get(), d_gy.get(), d_gz.get(),
+            d_zx.get(), d_zy.get(), d_zz.get(),
+            d_p_dot_g.get(), d_z_dot_g.get(), d_mask.get(),
+            d_px.get(), d_py.get(), d_pz.get(),
+            static_cast<int>(n), nullptr);
+        check(cudaDeviceSynchronize() == cudaSuccess, "ncg fallback Tier 3 synchronize must succeed");
+
+        std::vector<double> px = d_px.copy_to_host();
+        check(px[0] == 0.0, "frozen node px must remain 0");
+        for (size_t i = 1; i < n; ++i) {
+            check(close(px[i], -1.0, 1.0e-12), "px must be -gx for Tier 3 active nodes");
+        }
+
+        fullmag_cuda_relax_energy_weighted_dot_blocks(
+            d_px.get(), d_py.get(), d_pz.get(),
+            d_gx.get(), d_gy.get(), d_gz.get(),
+            d_ms.get(), d_mass.get(), d_mask.get(),
+            d_workspace.get(), static_cast<int>(n), nullptr);
+        check(fullmag_cuda_device_sum(d_workspace.get(), blocks, d_scalar_result.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+              "sum p_dot_g Tier 3 must succeed");
+
+        fullmag_cuda_relax_metric_dot_blocks(
+            d_px.get(), d_py.get(), d_pz.get(),
+            d_px.get(), d_py.get(), d_pz.get(),
+            d_mass.get(), d_mask.get(),
+            d_workspace.get(), static_cast<int>(n), nullptr);
+        check(fullmag_cuda_device_sum(d_workspace.get(), blocks, d_scalar_result.get() + 1, temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+              "sum direction norm Tier 3 must succeed");
+
+        std::vector<double> recomputed = d_scalar_result.copy_to_host();
+        check(close(recomputed[0], -expected_g_dot_g_energy, 1.0e-9),
+              "recomputed p_dot_g for -g fallback must match -gradient_energy_norm");
+        check(close(recomputed[1], expected_g_norm_sq, 1.0e-9),
+              "recomputed direction norm for -g fallback must match gradient_norm");
+    }
+}
+
 } // namespace
 
 int main()
@@ -1746,6 +1891,7 @@ int main()
     check_direct_minimizer_all_preconditioner_profiles_and_latch_recovery_contract();
     check_cub_reduction_status_propagation_contract();
     check_ncg_entry_direction_snapshot_separated_from_working_history_contract();
+    check_ncg_fallback_direction_and_metrics_consistency_contract();
 
     auto strip_cr = [](std::string &s) {
         s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
@@ -1894,6 +2040,11 @@ int main()
           "nonlinear_cg.cpp must back up entry direction into nonlinear_cg_direction_entry_backup");
     check(ncg_src.find("gpu.relaxation.nonlinear_cg_direction_entry_backup,\n            gpu.relaxation.nonlinear_cg_direction") != std::string::npos,
           "gpu_relax_restore_previous_direction must restore from entry backup");
+
+    check(ncg_src.find("gpu_relax_ncg_recompute_direction_metrics") != std::string::npos,
+          "nonlinear_cg.cpp must define and call gpu_relax_ncg_recompute_direction_metrics upon fallback");
+    check(ncg_src.find("direction_norm_sq = gradient_norm_sq;") == std::string::npos,
+          "nonlinear_cg.cpp must not blindly substitute gradient_norm_sq for direction_norm_sq after -z fallback");
 
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;

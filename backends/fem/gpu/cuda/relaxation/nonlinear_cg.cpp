@@ -711,6 +711,131 @@ bool gpu_relax_compute_tangent_gradient_norm(
     return true;
 }
 
+bool gpu_relax_metric_dot(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    const FemGpuComponentField &a,
+    const FemGpuComponentField &b,
+    const char *label,
+    double &value,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    fullmag_cuda_relax_metric_dot_blocks(
+        a.x,
+        a.y,
+        a.z,
+        b.x,
+        b.y,
+        b.z,
+        gpu.mesh_metrics.lumped_mass,
+        gpu_relax_ncg_node_mask(ctx),
+        gpu.reductions.scalar_workspace,
+        n,
+        stream);
+    if (!cuda_launch_ok(label, reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.reductions.scalar_workspace,
+            blocks,
+            gpu.reductions.scalar_result,
+            label,
+            reason) ||
+        !gpu_rk_read_control_scalar_result(ctx, stream, label, value, reason)) {
+        return false;
+    }
+    if (!std::isfinite(value)) {
+        reason = std::string(label) + " produced a non-finite metric dot";
+        return false;
+    }
+    return true;
+}
+
+bool gpu_relax_energy_weighted_dot(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    const FemGpuComponentField &a,
+    const FemGpuComponentField &b,
+    const char *label,
+    double &value,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    fullmag_cuda_relax_energy_weighted_dot_blocks(
+        a.x,
+        a.y,
+        a.z,
+        b.x,
+        b.y,
+        b.z,
+        gpu.materials.ms,
+        gpu.mesh_metrics.lumped_mass,
+        gpu_relax_ncg_node_mask(ctx),
+        gpu.reductions.scalar_workspace,
+        n,
+        stream);
+    if (!cuda_launch_ok(label, reason) ||
+        !gpu_relax_reduce_scalar_sum(
+            ctx,
+            stream,
+            gpu.reductions.scalar_workspace,
+            blocks,
+            gpu.reductions.scalar_result,
+            label,
+            reason) ||
+        !gpu_rk_read_control_scalar_result(ctx, stream, label, value, reason)) {
+        return false;
+    }
+    if (!std::isfinite(value)) {
+        reason = std::string(label) + " produced a non-finite energy-weighted dot";
+        return false;
+    }
+    return true;
+}
+
+bool gpu_relax_ncg_recompute_direction_metrics(
+    Context &ctx,
+    cudaStream_t stream,
+    int n,
+    int blocks,
+    const FemGpuComponentField &direction,
+    const FemGpuComponentField &gradient,
+    double &p_dot_g,
+    double &direction_norm_sq,
+    std::string &reason)
+{
+    if (!gpu_relax_energy_weighted_dot(
+            ctx,
+            stream,
+            n,
+            blocks,
+            direction,
+            gradient,
+            "GPU nonlinear-CG fallback direction-dot-gradient reduction",
+            p_dot_g,
+            reason)) {
+        return false;
+    }
+    if (!gpu_relax_metric_dot(
+            ctx,
+            stream,
+            n,
+            blocks,
+            direction,
+            direction,
+            "GPU nonlinear-CG fallback direction norm reduction",
+            direction_norm_sq,
+            reason)) {
+        return false;
+    }
+    return true;
+}
+
 bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
     Context &ctx,
     cudaStream_t stream,
@@ -984,6 +1109,49 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
         reason = "GPU nonlinear-CG produced a non-finite or negative energy-metric tangent-gradient norm";
         return false;
     }
+    if (gradient_norm_sq > 0.0 &&
+        (!std::isfinite(p_dot_g) || p_dot_g >= 0.0 ||
+         !std::isfinite(direction_norm_sq) || direction_norm_sq <= 0.0)) {
+        if (use_preconditioner) {
+            if (!gpu_relax_ncg_recompute_direction_metrics(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    gpu.relaxation.nonlinear_cg_direction,
+                    gradient,
+                    p_dot_g,
+                    direction_norm_sq,
+                    reason)) {
+                return false;
+            }
+        } else {
+            fullmag_cuda_relax_ncg_reset_direction_if_not_descent(
+                gradient.x,
+                gradient.y,
+                gradient.z,
+                current_scalar_results + kNcgCurrentDirectionDotGradientTailSlot,
+                gpu_relax_ncg_node_mask(ctx),
+                gpu.relaxation.nonlinear_cg_direction.x,
+                gpu.relaxation.nonlinear_cg_direction.y,
+                gpu.relaxation.nonlinear_cg_direction.z,
+                n,
+                stream);
+            if (!cuda_launch_ok("launch GPU nonlinear-CG current descent reset", reason) ||
+                !gpu_relax_ncg_recompute_direction_metrics(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    gpu.relaxation.nonlinear_cg_direction,
+                    gradient,
+                    p_dot_g,
+                    direction_norm_sq,
+                    reason)) {
+                return false;
+            }
+        }
+    }
     if (!std::isfinite(p_dot_g) || !std::isfinite(direction_norm_sq) ||
         direction_norm_sq < 0.0) {
         reason = "GPU nonlinear-CG produced invalid current direction scalars";
@@ -991,49 +1159,6 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
     }
     note_ncg_effective_field_operators(ctx);
     note_ncg_gradient_operators(ctx, use_preconditioner);
-    return true;
-}
-
-bool gpu_relax_metric_dot(
-    Context &ctx,
-    cudaStream_t stream,
-    int n,
-    int blocks,
-    const FemGpuComponentField &a,
-    const FemGpuComponentField &b,
-    const char *label,
-    double &value,
-    std::string &reason)
-{
-    auto &gpu = ctx.gpu_state.device;
-    fullmag_cuda_relax_metric_dot_blocks(
-        a.x,
-        a.y,
-        a.z,
-        b.x,
-        b.y,
-        b.z,
-        gpu.mesh_metrics.lumped_mass,
-        gpu_relax_ncg_node_mask(ctx),
-        gpu.reductions.scalar_workspace,
-        n,
-        stream);
-    if (!cuda_launch_ok(label, reason) ||
-        !gpu_relax_reduce_scalar_sum(
-            ctx,
-            stream,
-            gpu.reductions.scalar_workspace,
-            blocks,
-            gpu.reductions.scalar_result,
-            label,
-            reason) ||
-        !gpu_rk_read_control_scalar_result(ctx, stream, label, value, reason)) {
-        return false;
-    }
-    if (!std::isfinite(value)) {
-        reason = std::string(label) + " produced a non-finite metric dot";
-        return false;
-    }
     return true;
 }
 
@@ -1422,12 +1547,18 @@ bool gpu_relax_prepare_descent_direction(
         direction_norm_sq = direction_scalars[1];
         const double z_dot_g = direction_scalars[2];
         if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
-            if (std::isfinite(z_dot_g) && z_dot_g > 0.0) {
-                p_dot_g = -z_dot_g;
-            } else {
-                p_dot_g = -gradient_energy_norm_sq;
+            if (!gpu_relax_ncg_recompute_direction_metrics(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    direction,
+                    gpu.rk.k[0],
+                    p_dot_g,
+                    direction_norm_sq,
+                    reason)) {
+                return false;
             }
-            direction_norm_sq = gradient_norm_sq;
         }
     } else {
         fullmag_cuda_relax_ncg_prepare_direction_blocks(
@@ -1472,7 +1603,8 @@ bool gpu_relax_prepare_descent_direction(
         }
         if (reuse_gradient_scalars) {
             p_dot_g = -gradient_energy_norm_sq;
-            direction_norm_sq = gradient_norm_sq;
+            const double initial_steepest_descent_norm_sq = gradient_norm_sq;
+            direction_norm_sq = initial_steepest_descent_norm_sq;
         } else {
             double direction_scalars[2] = {0.0, 0.0};
             if (!gpu_rk_read_control_scalar_results(
@@ -1499,11 +1631,19 @@ bool gpu_relax_prepare_descent_direction(
                 direction.z,
                 n,
                 stream);
-            if (!cuda_launch_ok("launch GPU nonlinear-CG descent reset", reason)) {
+            if (!cuda_launch_ok("launch GPU nonlinear-CG descent reset", reason) ||
+                !gpu_relax_ncg_recompute_direction_metrics(
+                    ctx,
+                    stream,
+                    n,
+                    blocks,
+                    direction,
+                    gpu.rk.k[0],
+                    p_dot_g,
+                    direction_norm_sq,
+                    reason)) {
                 return false;
             }
-            p_dot_g = -gradient_energy_norm_sq;
-            direction_norm_sq = gradient_norm_sq;
         }
     }
     if (!std::isfinite(p_dot_g) || p_dot_g >= 0.0) {
