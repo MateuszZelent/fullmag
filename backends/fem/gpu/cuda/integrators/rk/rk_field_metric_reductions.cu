@@ -65,14 +65,15 @@ bool gpu_rk_reduce_final_field_metric_terms(
     }
 
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_max(
+    const cudaError_t max_h_rc = fullmag_cuda_device_max(
         gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxHEff),
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    if (!cuda_launch_ok("launch GPU RK max H_eff reduction", reason)) {
+    if (!cuda_ok(max_h_rc, "launch GPU RK max H_eff reduction", reason) ||
+        !cuda_launch_ok("launch GPU RK max H_eff reduction", reason)) {
         return false;
     }
 
@@ -95,26 +96,30 @@ bool gpu_rk_reduce_final_field_metric_terms(
             return false;
         }
         reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-        fullmag_cuda_device_max(
+        const cudaError_t demag_rc = fullmag_cuda_device_max(
             gpu.reductions.scalar_workspace,
             blocks,
             gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxHDemag),
             gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
-        if (!cuda_launch_ok("launch GPU RK max H_demag reduction", reason)) {
+        if (!cuda_ok(demag_rc, "launch GPU RK max H_demag reduction", reason) ||
+            !cuda_launch_ok("launch GPU RK max H_demag reduction", reason)) {
             return false;
         }
     }
 
     reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_max(
+    const cudaError_t torque_rc = fullmag_cuda_device_max(
         gpu.rk.error.x,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxTorque),
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
+    if (!cuda_ok(torque_rc, "launch GPU RK max torque reduction", reason)) {
+        return false;
+    }
     return cuda_launch_ok("launch GPU RK max torque reduction", reason);
 }
 

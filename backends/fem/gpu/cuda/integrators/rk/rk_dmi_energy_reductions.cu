@@ -180,13 +180,20 @@ bool gpu_rk_reduce_final_dmi_energy_terms(
             }
         } else {
             size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-            fullmag_cuda_device_sum(
+            const cudaError_t rc = fullmag_cuda_device_sum(
                 gpu.reductions.scalar_workspace,
                 dmi_energy_partial_count,
                 gpu_rk_final_scalar_result(gpu, slot),
                 gpu.reductions.temp_storage,
                 reduce_bytes,
                 stream);
+            if (!cuda_ok(
+                    rc,
+                    bulk_mode ? "launch GPU RK bulk DMI energy reduction" :
+                                "launch GPU RK interfacial DMI energy reduction",
+                    reason)) {
+                return false;
+            }
         }
         if (!cuda_launch_ok(
                 bulk_mode ? "launch GPU RK bulk DMI energy reduction" :

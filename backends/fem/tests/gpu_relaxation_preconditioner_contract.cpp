@@ -30,6 +30,20 @@ static_assert(
         decltype(&fullmag::fem::fullmag_cuda_device_sum), DeviceSumFunction>,
     "device sum wrapper must return the immediate CUB CUDA status");
 
+using DeviceMaxFunction = cudaError_t (*)(
+    const double *, int, double *, void *, size_t &, cudaStream_t);
+static_assert(
+    std::is_same_v<
+        decltype(&fullmag::fem::fullmag_cuda_device_max), DeviceMaxFunction>,
+    "device max wrapper must return the immediate CUB CUDA status");
+
+using DeviceMinFunction = cudaError_t (*)(
+    const double *, int, double *, void *, size_t &, cudaStream_t);
+static_assert(
+    std::is_same_v<
+        decltype(&fullmag::fem::fullmag_cuda_device_min), DeviceMinFunction>,
+    "device min wrapper must return the immediate CUB CUDA status");
+
 void check(bool condition, const char *message)
 {
     if (!condition) {
@@ -1314,12 +1328,17 @@ void check_ncg_preconditioned_pr_plus_parity_contract()
         static_cast<int>(n), nullptr);
 
     size_t temp_bytes = 0;
-    fullmag_cuda_device_sum(block_num.get(), blocks, d_scalar_num.get(), nullptr, temp_bytes, nullptr);
+    check(fullmag_cuda_device_sum(block_num.get(), blocks, d_scalar_num.get(), nullptr, temp_bytes, nullptr) == cudaSuccess,
+          "device sum query must succeed");
     DeviceBuffer<uint8_t> temp_storage(temp_bytes);
-    fullmag_cuda_device_sum(block_num.get(), blocks, d_scalar_num.get(), temp_storage.get(), temp_bytes, nullptr);
-    fullmag_cuda_device_sum(block_den.get(), blocks, d_scalar_den.get(), temp_storage.get(), temp_bytes, nullptr);
-    fullmag_cuda_device_sum(block_abs_den.get(), blocks, d_scalar_abs_den.get(), temp_storage.get(), temp_bytes, nullptr);
-    fullmag_cuda_device_sum(block_z_dot_g.get(), blocks, d_scalar_z_dot_g.get(), temp_storage.get(), temp_bytes, nullptr);
+    check(fullmag_cuda_device_sum(block_num.get(), blocks, d_scalar_num.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+          "device sum block_num must succeed");
+    check(fullmag_cuda_device_sum(block_den.get(), blocks, d_scalar_den.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+          "device sum block_den must succeed");
+    check(fullmag_cuda_device_sum(block_abs_den.get(), blocks, d_scalar_abs_den.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+          "device sum block_abs_den must succeed");
+    check(fullmag_cuda_device_sum(block_z_dot_g.get(), blocks, d_scalar_z_dot_g.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+          "device sum block_z_dot_g must succeed");
 
     fullmag_cuda_relax_ncg_update_direction_preconditioned_pr_plus(
         d_mx.get(), d_my.get(), d_mz.get(),
@@ -1332,7 +1351,8 @@ void check_ncg_preconditioned_pr_plus_parity_contract()
         d_next_px.get(), d_next_py.get(), d_next_pz.get(),
         block_p_dot_g.get(), static_cast<int>(n), nullptr);
 
-    fullmag_cuda_device_sum(block_p_dot_g.get(), blocks, d_scalar_p_dot_g.get(), temp_storage.get(), temp_bytes, nullptr);
+    check(fullmag_cuda_device_sum(block_p_dot_g.get(), blocks, d_scalar_p_dot_g.get(), temp_storage.get(), temp_bytes, nullptr) == cudaSuccess,
+          "device sum block_p_dot_g must succeed");
 
     fullmag_cuda_relax_ncg_preconditioned_descent_fallback(
         d_trial_gx.get(), d_trial_gy.get(), d_trial_gz.get(),
@@ -1509,6 +1529,120 @@ void check_direct_minimizer_all_preconditioner_profiles_and_latch_recovery_contr
                        "recovered attempt must produce identical valid results");
 }
 
+void check_cub_reduction_status_propagation_contract()
+{
+    const int count = 10000;
+    std::vector<double> host_values(count, 0.0);
+    double expected_sum = 0.0;
+    for (int i = 0; i < count; ++i) {
+        host_values[i] = std::sin(static_cast<double>(i));
+        expected_sum += host_values[i];
+    }
+    // Place known extremal sentinels
+    host_values[42] = 84.5;
+    host_values[1337] = -123.4;
+    expected_sum += (84.5 - std::sin(42.0)) + (-123.4 - std::sin(1337.0));
+
+    DeviceBuffer<double> d_input(count);
+    d_input.copy_from(host_values);
+    DeviceBuffer<double> d_result(1);
+
+    size_t temp_bytes_max = 0;
+    const cudaError_t max_query_rc = fullmag::fem::fullmag_cuda_device_max(
+        d_input.get(), count, d_result.get(), nullptr, temp_bytes_max, nullptr);
+    check(max_query_rc == cudaSuccess,
+          "fullmag_cuda_device_max query mode must return cudaSuccess");
+    check(temp_bytes_max > 0, "max query temp_storage_bytes must be > 0");
+
+    size_t temp_bytes_min = 0;
+    const cudaError_t min_query_rc = fullmag::fem::fullmag_cuda_device_min(
+        d_input.get(), count, d_result.get(), nullptr, temp_bytes_min, nullptr);
+    check(min_query_rc == cudaSuccess,
+          "fullmag_cuda_device_min query mode must return cudaSuccess");
+    check(temp_bytes_min > 0, "min query temp_storage_bytes must be > 0");
+
+    size_t temp_bytes_sum = 0;
+    const cudaError_t sum_query_rc = fullmag::fem::fullmag_cuda_device_sum(
+        d_input.get(), count, d_result.get(), nullptr, temp_bytes_sum, nullptr);
+    check(sum_query_rc == cudaSuccess,
+          "fullmag_cuda_device_sum query mode must return cudaSuccess");
+    check(temp_bytes_sum > 0, "sum query temp_storage_bytes must be > 0");
+
+    const size_t alloc_temp_bytes =
+        std::max({temp_bytes_max, temp_bytes_min, temp_bytes_sum});
+    DeviceBuffer<char> d_temp(alloc_temp_bytes);
+
+    // Normal execution
+    size_t cur_bytes = alloc_temp_bytes;
+    const cudaError_t max_exec_rc = fullmag::fem::fullmag_cuda_device_max(
+        d_input.get(), count, d_result.get(), d_temp.get(), cur_bytes, nullptr);
+    check(max_exec_rc == cudaSuccess, "valid max reduction must return cudaSuccess");
+    std::vector<double> out = d_result.copy_to_host();
+    check(close(out[0], 84.5), "valid max reduction output must match 84.5");
+
+    cur_bytes = alloc_temp_bytes;
+    const cudaError_t min_exec_rc = fullmag::fem::fullmag_cuda_device_min(
+        d_input.get(), count, d_result.get(), d_temp.get(), cur_bytes, nullptr);
+    check(min_exec_rc == cudaSuccess, "valid min reduction must return cudaSuccess");
+    out = d_result.copy_to_host();
+    check(close(out[0], -123.4), "valid min reduction output must match -123.4");
+
+    cur_bytes = alloc_temp_bytes;
+    const cudaError_t sum_exec_rc = fullmag::fem::fullmag_cuda_device_sum(
+        d_input.get(), count, d_result.get(), d_temp.get(), cur_bytes, nullptr);
+    check(sum_exec_rc == cudaSuccess, "valid sum reduction must return cudaSuccess");
+    out = d_result.copy_to_host();
+    check(close(out[0], expected_sum, 1.0e-9), "valid sum reduction output must match expected sum");
+
+    // Task A04 RED verification: CUB API error with clean cudaPeekAtLastError and stale finite scalar
+    const double stale_sentinel = 42.123456789;
+    out[0] = stale_sentinel;
+
+    // Test max:
+    d_result.copy_from(out);
+    cudaGetLastError(); // Clear any existing CUDA errors
+    size_t bad_temp_bytes = 0; // CUB returns cudaErrorInvalidValue when temp_storage != nullptr but temp_bytes is insufficient
+    const cudaError_t bad_max_rc = fullmag::fem::fullmag_cuda_device_max(
+        d_input.get(), count, d_result.get(), d_temp.get(), bad_temp_bytes, nullptr);
+    check(bad_max_rc != cudaSuccess,
+          "fullmag_cuda_device_max with 0 temp_storage_bytes must return an immediate error");
+    check(cudaPeekAtLastError() == cudaSuccess,
+          "cudaPeekAtLastError must remain cudaSuccess when CUB returns host API validation error");
+    out = d_result.copy_to_host();
+    check(close(out[0], stale_sentinel),
+          "destination scalar must retain stale sentinel value when CUB API call fails");
+
+    // Test min:
+    out[0] = stale_sentinel;
+    d_result.copy_from(out);
+    cudaGetLastError();
+    bad_temp_bytes = 0;
+    const cudaError_t bad_min_rc = fullmag::fem::fullmag_cuda_device_min(
+        d_input.get(), count, d_result.get(), d_temp.get(), bad_temp_bytes, nullptr);
+    check(bad_min_rc != cudaSuccess,
+          "fullmag_cuda_device_min with 0 temp_storage_bytes must return an immediate error");
+    check(cudaPeekAtLastError() == cudaSuccess,
+          "cudaPeekAtLastError must remain cudaSuccess for fullmag_cuda_device_min host API error");
+    out = d_result.copy_to_host();
+    check(close(out[0], stale_sentinel),
+          "destination scalar must retain stale sentinel value for failed min reduction");
+
+    // Test sum:
+    out[0] = stale_sentinel;
+    d_result.copy_from(out);
+    cudaGetLastError();
+    bad_temp_bytes = 0;
+    const cudaError_t bad_sum_rc = fullmag::fem::fullmag_cuda_device_sum(
+        d_input.get(), count, d_result.get(), d_temp.get(), bad_temp_bytes, nullptr);
+    check(bad_sum_rc != cudaSuccess,
+          "fullmag_cuda_device_sum with 0 temp_storage_bytes must return an immediate error");
+    check(cudaPeekAtLastError() == cudaSuccess,
+          "cudaPeekAtLastError must remain cudaSuccess for fullmag_cuda_device_sum host API error");
+    out = d_result.copy_to_host();
+    check(close(out[0], stale_sentinel),
+          "destination scalar must retain stale sentinel value for failed sum reduction");
+}
+
 } // namespace
 
 int main()
@@ -1522,6 +1656,11 @@ int main()
     check_pgbb_raw_gradient_fallback_contract();
     check_ncg_preconditioned_pr_plus_parity_contract();
     check_direct_minimizer_all_preconditioner_profiles_and_latch_recovery_contract();
+    check_cub_reduction_status_propagation_contract();
+
+    auto strip_cr = [](std::string &s) {
+        s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+    };
 
     // Preserve the integrated full-potential source wiring checks while the
     // focused device tests above own the numerical preconditioner contract.
@@ -1530,6 +1669,7 @@ int main()
     if (!ncg_file.is_open()) ncg_file.open("../backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp");
     check(ncg_file.is_open(), "unable to open nonlinear_cg.cpp");
     std::string ncg_src((std::istreambuf_iterator<char>(ncg_file)), std::istreambuf_iterator<char>());
+    strip_cr(ncg_src);
     check(ncg_src.find("gpu_relaxation_apply_preconditioner") != std::string::npos,
           "nonlinear_cg.cpp must wire gpu_relaxation_apply_preconditioner");
     check(ncg_src.find("gpu_relaxation_is_preconditioned(gpu.relaxation)") != std::string::npos,
@@ -1548,6 +1688,7 @@ int main()
     if (!pgbb_file.is_open()) pgbb_file.open("../backends/fem/gpu/cuda/relaxation/pgbb.cpp");
     check(pgbb_file.is_open(), "unable to open pgbb.cpp");
     std::string pgbb_src((std::istreambuf_iterator<char>(pgbb_file)), std::istreambuf_iterator<char>());
+    strip_cr(pgbb_src);
     check(pgbb_src.find("gpu_relaxation_apply_preconditioner") != std::string::npos,
           "pgbb.cpp must dispatch preconditioning through the relaxation lifecycle");
 
@@ -1583,6 +1724,7 @@ int main()
     std::string metrics_src(
         (std::istreambuf_iterator<char>(metrics_file)),
         std::istreambuf_iterator<char>());
+    strip_cr(metrics_src);
     check(metrics_src.find("metrics.preconditioner_failure") !=
               std::string::npos,
           "PG-BB metrics unpack must fail closed on the preconditioner failure latch");
@@ -1608,6 +1750,7 @@ int main()
     std::string exchange_upload_src(
         (std::istreambuf_iterator<char>(exchange_upload_file)),
         std::istreambuf_iterator<char>());
+    strip_cr(exchange_upload_src);
     check(exchange_upload_src.find("canonical_values, true, error") !=
               std::string::npos,
           "legacy GPU exchange upload must materialize the Laplacian diagonal for M+wK");
@@ -1624,6 +1767,7 @@ int main()
     std::string context_src(
         (std::istreambuf_iterator<char>(context_file)),
         std::istreambuf_iterator<char>());
+    strip_cr(context_src);
     check(context_src.find("canonical_values, true, error") != std::string::npos,
           "PG-BB preconditioner inputs must retain the full exchange diagonal");
     check(context_src.find("GPU relaxation preconditioner setup masks do not match MFEM dimensions") !=
@@ -1635,6 +1779,7 @@ int main()
     if (!state_file.is_open()) state_file.open("../backends/fem/gpu/cuda/relaxation/relaxation_state.hpp");
     check(state_file.is_open(), "unable to open relaxation_state.hpp");
     std::string state_src((std::istreambuf_iterator<char>(state_file)), std::istreambuf_iterator<char>());
+    strip_cr(state_src);
     check(state_src.find("preconditioned_gradient") != std::string::npos,
           "relaxation state must own the persistent z field");
     check(state_src.find("exchange_mass_cg4") != std::string::npos &&

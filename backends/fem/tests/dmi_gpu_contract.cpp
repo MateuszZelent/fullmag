@@ -168,7 +168,7 @@ void regular_case(bool bulk, FemGpuReductionWorkspaceDeviceState &workspace)
         mass.get(),node_mask.get(),rx.get(),ry.get(),rz.get(),hx.get(),hy.get(),hz.get(),workspace.scalar_workspace,
         diagnostics,DmiApplyRequest{false,true},8.0e5,2.5e-3,0,0,1,false,bulk,1,4), "DMI energy-only");
     size_t bytes=static_cast<size_t>(workspace.temp_storage_bytes);
-    fullmag::fem::fullmag_cuda_device_sum(workspace.scalar_workspace,1,workspace.scalar_result,workspace.temp_storage,bytes);
+    cuda_require(fullmag::fem::fullmag_cuda_device_sum(workspace.scalar_workspace,1,workspace.scalar_result,workspace.temp_storage,bytes), "DMI scalar sum");
     cuda_require(cudaDeviceSynchronize(), "energy synchronize");
     double energy=0.0; cuda_require(cudaMemcpy(&energy,workspace.scalar_result,sizeof(double),cudaMemcpyDeviceToHost),"energy download");
     require(close(energy,expected.energy),"energy oracle mismatch");
@@ -256,9 +256,11 @@ void colored_energy_repeated_case()
                 cache.accumulation_mode()),
             "colored DMI field and energy");
         size_t reduce_bytes = static_cast<std::size_t>(workspace.temp_storage_bytes);
-        fullmag::fem::fullmag_cuda_device_sum(
-            workspace.scalar_workspace, partial_count, workspace.scalar_result,
-            workspace.temp_storage, reduce_bytes);
+        cuda_require(
+            fullmag::fem::fullmag_cuda_device_sum(
+                workspace.scalar_workspace, partial_count, workspace.scalar_result,
+                workspace.temp_storage, reduce_bytes),
+            "colored DMI energy sum");
         cuda_require(cudaDeviceSynchronize(), "colored DMI energy synchronize");
         double energy = 0.0;
         cuda_require(

@@ -168,14 +168,15 @@ bool gpu_rk_finalize_accepted_step(
         return false;
     }
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_max(
+    const cudaError_t max_rc = fullmag_cuda_device_max(
         gpu.reductions.scalar_workspace,
         std::max(1, blocks),
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    if (!cuda_launch_ok("launch GPU RK device max query", reason)) {
+    if (!cuda_ok(max_rc, "launch GPU RK device max query", reason) ||
+        !cuda_launch_ok("launch GPU RK device max query", reason)) {
         gpu.rk.fsal_valid = false;
         return false;
     }

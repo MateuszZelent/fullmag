@@ -89,14 +89,15 @@ bool gpu_rk_reduce_final_anisotropy_energy_terms(
             return false;
         }
         reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-        fullmag_cuda_device_sum(
+        const cudaError_t rc = fullmag_cuda_device_sum(
             gpu.reductions.scalar_workspace,
             blocks,
             gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::AnisotropyEnergy),
             gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
-        if (!cuda_launch_ok("launch GPU RK uniaxial anisotropy energy reduction", reason)) {
+        if (!cuda_ok(rc, "launch GPU RK uniaxial anisotropy energy reduction", reason) ||
+            !cuda_launch_ok("launch GPU RK uniaxial anisotropy energy reduction", reason)) {
             return false;
         }
     }
@@ -141,14 +142,15 @@ bool gpu_rk_reduce_final_anisotropy_energy_terms(
             return false;
         }
         reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-        fullmag_cuda_device_sum(
+        const cudaError_t cubic_rc = fullmag_cuda_device_sum(
             gpu.reductions.scalar_workspace,
             blocks,
             gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::CubicAnisotropyEnergy),
             gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
-        if (!cuda_launch_ok("launch GPU RK cubic anisotropy energy reduction", reason)) {
+        if (!cuda_ok(cubic_rc, "launch GPU RK cubic anisotropy energy reduction", reason) ||
+            !cuda_launch_ok("launch GPU RK cubic anisotropy energy reduction", reason)) {
             return false;
         }
     }

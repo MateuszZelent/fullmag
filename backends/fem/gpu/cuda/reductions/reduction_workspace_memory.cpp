@@ -104,23 +104,40 @@ bool gpu_reduction_workspace_allocate(
     }
 
     size_t reduce_temp_storage_bytes = 0;
-    fullmag_cuda_device_max(
+    const cudaError_t max_query_status = fullmag_cuda_device_max(
         reductions.scalar_workspace,
         static_cast<int>(reduce_blocks),
         reductions.scalar_result,
         nullptr,
         reduce_temp_storage_bytes,
         nullptr);
+    if (!cuda_ok(max_query_status, "fullmag_cuda_device_max temporary storage query", error)) {
+        return false;
+    }
+    size_t reduce_min_temp_storage_bytes = 0;
+    const cudaError_t min_query_status = fullmag_cuda_device_min(
+        reductions.scalar_workspace,
+        static_cast<int>(reduce_blocks),
+        reductions.scalar_result,
+        nullptr,
+        reduce_min_temp_storage_bytes,
+        nullptr);
+    if (!cuda_ok(min_query_status, "fullmag_cuda_device_min temporary storage query", error)) {
+        return false;
+    }
     size_t reduce_sum_temp_storage_bytes = 0;
-    fullmag_cuda_device_sum(
+    const cudaError_t sum_query_status = fullmag_cuda_device_sum(
         reductions.scalar_workspace,
         static_cast<int>(reduce_blocks),
         reductions.scalar_result,
         nullptr,
         reduce_sum_temp_storage_bytes,
         nullptr);
+    if (!cuda_ok(sum_query_status, "fullmag_cuda_device_sum temporary storage query", error)) {
+        return false;
+    }
     reduce_temp_storage_bytes =
-        std::max(reduce_temp_storage_bytes, reduce_sum_temp_storage_bytes);
+        std::max({reduce_temp_storage_bytes, reduce_min_temp_storage_bytes, reduce_sum_temp_storage_bytes});
     if (reduce_temp_storage_bytes > 0 &&
         !gpu_device_allocate_bytes(
             &reductions.temp_storage,

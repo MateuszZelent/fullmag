@@ -497,14 +497,15 @@ bool compute_device_demag_for_device_stage_impl(
             return false;
         }
         size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-        fullmag_cuda_device_sum(
+        const cudaError_t reduce_rc = fullmag_cuda_device_sum(
             gpu.reductions.scalar_workspace,
             std::max(1, blocks),
             gpu.reductions.scalar_result,
             gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
-        if (!cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy reduction", reason)) {
+        if (!cuda_ok(reduce_rc, "launch GPU Poisson demag energy reduction", reason) ||
+            !cuda_ok(cudaGetLastError(), "launch GPU Poisson demag energy reduction", reason)) {
             return false;
         }
         if (!energy_timer.finish(reason)) {
@@ -793,13 +794,16 @@ bool reduce_device_demag_robin_boundary_energy(
         return false;
     }
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_sum(
+    const cudaError_t robin_rc = fullmag_cuda_device_sum(
         gpu.reductions.scalar_workspace,
         std::max(1, (rows + kDemagCudaBlockSize - 1) / kDemagCudaBlockSize),
         result,
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
+    if (!cuda_ok(robin_rc, "launch GPU Poisson-Robin demag boundary energy reduction", reason)) {
+        return false;
+    }
     return cuda_ok(
         cudaGetLastError(),
         "launch GPU Poisson-Robin demag boundary energy reduction",
@@ -855,20 +859,26 @@ bool reduce_device_demag_robin_boundary_difference(
     }
     const int blocks = std::max(1, (rows + kDemagCudaBlockSize - 1) / kDemagCudaBlockSize);
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_sum(
+    const cudaError_t delta_rc = fullmag_cuda_device_sum(
         gpu.reductions.scalar_workspace,
         blocks,
         delta_result,
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    fullmag_cuda_device_sum(
+    if (!cuda_ok(delta_rc, "launch GPU Poisson-Robin demag boundary delta reduction", reason)) {
+        return false;
+    }
+    const cudaError_t abs_rc = fullmag_cuda_device_sum(
         gpu.rk.k[1].x,
         blocks,
         absolute_result,
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
+    if (!cuda_ok(abs_rc, "launch GPU Poisson-Robin demag boundary absolute reduction", reason)) {
+        return false;
+    }
     return cuda_ok(cudaGetLastError(), "launch GPU Poisson-Robin demag boundary difference reductions", reason);
 #else
     (void)ctx;

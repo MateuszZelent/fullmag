@@ -68,10 +68,11 @@ bool gpu_rk_reduce_final_external_energy_terms(
             gpu.reductions.scalar_workspace, n, stream);
         if (!cuda_launch_ok(blocks_label, reason)) return false;
         size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-        fullmag_cuda_device_sum(
+        const cudaError_t rc = fullmag_cuda_device_sum(
             gpu.reductions.scalar_workspace, blocks,
             gpu_rk_final_scalar_result(gpu, slot), gpu.reductions.temp_storage,
             reduce_bytes, stream);
+        if (!cuda_ok(rc, reduce_label, reason)) return false;
         return cuda_launch_ok(reduce_label, reason);
     };
     if (ctx.zeeman.has_external_field) {

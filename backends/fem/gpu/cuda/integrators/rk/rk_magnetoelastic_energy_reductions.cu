@@ -102,14 +102,15 @@ bool gpu_rk_reduce_final_magnetoelastic_energy_terms(
         return false;
     }
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_sum(
+    const cudaError_t rc = fullmag_cuda_device_sum(
         gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MagnetoelasticEnergy),
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    if (!cuda_launch_ok("launch GPU RK magnetoelastic energy reduction", reason)) {
+    if (!cuda_ok(rc, "launch GPU RK magnetoelastic energy reduction", reason) ||
+        !cuda_launch_ok("launch GPU RK magnetoelastic energy reduction", reason)) {
         return false;
     }
 

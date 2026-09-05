@@ -74,14 +74,21 @@ bool reduce_scalar_sum(
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
+    if (gpu.reductions.temp_storage == nullptr && block_count > 0) {
+        reason = std::string(operation) + " failed: scalar reduction temporary storage is not allocated";
+        return false;
+    }
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_sum(
+    const cudaError_t rc = fullmag_cuda_device_sum(
         block_values,
         block_count,
         result_slot,
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
+    if (!cuda_ok(rc, operation, reason)) {
+        return false;
+    }
     return cuda_launch_ok(operation, reason);
 }
 

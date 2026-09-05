@@ -1165,14 +1165,15 @@ bool compute_device_demag_fem_bem_for_device_stage(
             return false;
         }
         size_t reduction_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-        fullmag_cuda_device_sum(
+        const cudaError_t reduce_rc = fullmag_cuda_device_sum(
             gpu.reductions.scalar_workspace,
             std::max(1, blocks),
             gpu.reductions.scalar_result,
             gpu.reductions.temp_storage,
             reduction_bytes,
             stream);
-        if (!cuda_ok(cudaGetLastError(), "launch Fredkin-Koehler energy reduction", reason)) {
+        if (!cuda_ok(reduce_rc, "launch Fredkin-Koehler energy reduction", reason) ||
+            !cuda_ok(cudaGetLastError(), "launch Fredkin-Koehler energy reduction", reason)) {
             return false;
         }
     } else if (gpu.reductions.scalar_result != nullptr &&

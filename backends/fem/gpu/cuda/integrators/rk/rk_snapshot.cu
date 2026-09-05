@@ -87,14 +87,15 @@ bool gpu_rk_snapshot_current_state(
     }
 
     size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_max(
+    const cudaError_t max_rc = fullmag_cuda_device_max(
         gpu.reductions.scalar_workspace,
         blocks,
         gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MaxRhs),
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    if (!cuda_launch_ok("launch GPU snapshot max RHS reduction", reason)) {
+    if (!cuda_ok(max_rc, "launch GPU snapshot max RHS reduction", reason) ||
+        !cuda_launch_ok("launch GPU snapshot max RHS reduction", reason)) {
         return false;
     }
 

@@ -84,14 +84,15 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
     }
 
     std::size_t reduce_bytes = static_cast<std::size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_max(
+    const cudaError_t err_rc = fullmag_cuda_device_max(
         gpu.reductions.scalar_workspace,
         std::max(1, blocks),
         gpu.reductions.scalar_result,
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    if (!cuda_launch_ok("launch GPU RK adaptive error norm reduction", reason)) {
+    if (!cuda_ok(err_rc, "launch GPU RK adaptive error norm reduction", reason) ||
+        !cuda_launch_ok("launch GPU RK adaptive error norm reduction", reason)) {
         return false;
     }
 
@@ -102,14 +103,15 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         mode == AdaptiveErrorEvaluationMode::ErrorAndNorm ||
         mode == AdaptiveErrorEvaluationMode::ErrorNormAndRotation;
     if (evaluate_norm) {
-        fullmag_cuda_device_max(
+        const cudaError_t norm_rc = fullmag_cuda_device_max(
             gpu.reductions.scalar_workspace + blocks,
             std::max(1, blocks),
             gpu.reductions.scalar_result + 1,
             gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
-        if (!cuda_launch_ok("launch GPU RK norm-defect reduction", reason)) {
+        if (!cuda_ok(norm_rc, "launch GPU RK norm-defect reduction", reason) ||
+            !cuda_launch_ok("launch GPU RK norm-defect reduction", reason)) {
             return false;
         }
     } else if (!cuda_ok(
@@ -119,14 +121,15 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         return false;
     }
     if (ctx.adaptive_dt.has_max_spin_rotation) {
-        fullmag_cuda_device_min(
+        const cudaError_t rot_rc = fullmag_cuda_device_min(
             gpu.reductions.scalar_workspace + 2 * blocks,
             std::max(1, blocks),
             gpu.reductions.scalar_result + 2,
             gpu.reductions.temp_storage,
             reduce_bytes,
             stream);
-        if (!cuda_launch_ok("launch GPU RK spin-rotation cosine reduction", reason)) {
+        if (!cuda_ok(rot_rc, "launch GPU RK spin-rotation cosine reduction", reason) ||
+            !cuda_launch_ok("launch GPU RK spin-rotation cosine reduction", reason)) {
             return false;
         }
         fullmag_cuda_finalize_spin_rotation(gpu.reductions.scalar_result + 2, stream);
