@@ -605,7 +605,10 @@ bool gpu_relax_ncg_preflight(
         gpu.relaxation.nonlinear_cg_direction.z == nullptr ||
         gpu.relaxation.nonlinear_cg_direction_backup.x == nullptr ||
         gpu.relaxation.nonlinear_cg_direction_backup.y == nullptr ||
-        gpu.relaxation.nonlinear_cg_direction_backup.z == nullptr) {
+        gpu.relaxation.nonlinear_cg_direction_backup.z == nullptr ||
+        gpu.relaxation.nonlinear_cg_direction_entry_backup.x == nullptr ||
+        gpu.relaxation.nonlinear_cg_direction_entry_backup.y == nullptr ||
+        gpu.relaxation.nonlinear_cg_direction_entry_backup.z == nullptr) {
         reason = "GPU nonlinear-CG requires persistent device search-direction state";
         return false;
     }
@@ -1253,7 +1256,7 @@ bool gpu_relax_restore_previous_direction(
     auto &gpu = ctx.gpu_state.device;
     if (rollback.direction_valid &&
         !gpu_rk_copy_component_device(
-            gpu.relaxation.nonlinear_cg_direction_backup,
+            gpu.relaxation.nonlinear_cg_direction_entry_backup,
             gpu.relaxation.nonlinear_cg_direction,
             gpu.lifecycle.node_count,
             stream,
@@ -1933,10 +1936,10 @@ int gpu_relax_nonlinear_cg_step(
         (rollback.direction_valid &&
          !gpu_rk_copy_component_device(
              gpu.relaxation.nonlinear_cg_direction,
-             gpu.relaxation.nonlinear_cg_direction_backup,
+             gpu.relaxation.nonlinear_cg_direction_entry_backup,
              gpu.lifecycle.node_count,
              stream,
-             "cudaMemcpyAsync GPU nonlinear-CG backup current direction",
+             "cudaMemcpyAsync GPU nonlinear-CG backup entry direction",
              reason))) {
         error = reason;
         return FULLMAG_FEM_ERR_INTERNAL;

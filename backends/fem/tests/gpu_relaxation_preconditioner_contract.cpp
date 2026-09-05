@@ -1,5 +1,6 @@
 #include "gpu/cuda/relaxation/gpu_relaxation_preconditioner.hpp"
 #include "gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.hpp"
+#include "gpu/cuda/relaxation/relaxation_memory.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/sparse/sparse_apply_plan.hpp"
@@ -1643,6 +1644,93 @@ void check_cub_reduction_status_propagation_contract()
           "destination scalar must retain stale sentinel value for failed sum reduction");
 }
 
+void check_ncg_entry_direction_snapshot_separated_from_working_history_contract()
+{
+    using namespace fullmag::fem;
+
+    constexpr uint64_t n = 16;
+    FemGpuRelaxationDeviceState relaxation{};
+    uint64_t device_bytes = 0;
+    std::string error;
+    check(gpu_relaxation_state_allocate(relaxation, n, device_bytes, error),
+          "relaxation state allocation must succeed for A03 test");
+
+    check(relaxation.nonlinear_cg_direction_entry_backup.x != nullptr &&
+          relaxation.nonlinear_cg_direction_entry_backup.y != nullptr &&
+          relaxation.nonlinear_cg_direction_entry_backup.z != nullptr,
+          "relaxation state must allocate nonlinear_cg_direction_entry_backup");
+    check(relaxation.nonlinear_cg_direction_entry_backup.x != relaxation.nonlinear_cg_direction_backup.x,
+          "entry backup x pointer must be distinct from working backup x");
+    check(relaxation.nonlinear_cg_direction_entry_backup.y != relaxation.nonlinear_cg_direction_backup.y,
+          "entry backup y pointer must be distinct from working backup y");
+    check(relaxation.nonlinear_cg_direction_entry_backup.z != relaxation.nonlinear_cg_direction_backup.z,
+          "entry backup z pointer must be distinct from working backup z");
+
+    std::vector<double> entry_px(n), entry_py(n), entry_pz(n);
+    for (size_t i = 0; i < n; ++i) {
+        entry_px[i] = 1.25 + 0.1 * static_cast<double>(i);
+        entry_py[i] = -0.75 - 0.05 * static_cast<double>(i);
+        entry_pz[i] = 0.5 + 0.02 * static_cast<double>(i);
+    }
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction.x, entry_px.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy entry_px to direction.x must succeed");
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction.y, entry_py.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy entry_py to direction.y must succeed");
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction.z, entry_pz.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy entry_pz to direction.z must succeed");
+
+    std::string copy_error;
+    check(gpu_rk_copy_component_device(
+              relaxation.nonlinear_cg_direction,
+              relaxation.nonlinear_cg_direction_entry_backup,
+              n,
+              nullptr,
+              "copy entry direction to entry backup",
+              copy_error),
+          "step entry backup must succeed");
+
+    std::vector<double> restart_px(n, -0.42), restart_py(n, 0.88), restart_pz(n, -0.19);
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction_backup.x, restart_px.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy restart_px to direction_backup.x must succeed");
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction_backup.y, restart_py.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy restart_py to direction_backup.y must succeed");
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction_backup.z, restart_pz.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy restart_pz to direction_backup.z must succeed");
+
+    std::vector<double> corrupted(n, 9999.99);
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction.x, corrupted.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy corrupted to direction.x must succeed");
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction.y, corrupted.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy corrupted to direction.y must succeed");
+    check(cudaMemcpy(relaxation.nonlinear_cg_direction.z, corrupted.data(), n * sizeof(double), cudaMemcpyHostToDevice) == cudaSuccess,
+          "cudaMemcpy corrupted to direction.z must succeed");
+
+    check(gpu_rk_copy_component_device(
+              relaxation.nonlinear_cg_direction_entry_backup,
+              relaxation.nonlinear_cg_direction,
+              n,
+              nullptr,
+              "rollback direction from entry backup",
+              copy_error),
+          "rollback restore from entry backup must succeed");
+
+    std::vector<double> restored_px(n), restored_py(n), restored_pz(n);
+    check(cudaMemcpy(restored_px.data(), relaxation.nonlinear_cg_direction.x, n * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess,
+          "cudaMemcpy restored_px must succeed");
+    check(cudaMemcpy(restored_py.data(), relaxation.nonlinear_cg_direction.y, n * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess,
+          "cudaMemcpy restored_py must succeed");
+    check(cudaMemcpy(restored_pz.data(), relaxation.nonlinear_cg_direction.z, n * sizeof(double), cudaMemcpyDeviceToHost) == cudaSuccess,
+          "cudaMemcpy restored_pz must succeed");
+
+    for (size_t i = 0; i < n; ++i) {
+        check(restored_px[i] == entry_px[i], "rollback restored px must bitwise match entry px");
+        check(restored_py[i] == entry_py[i], "rollback restored py must bitwise match entry py");
+        check(restored_pz[i] == entry_pz[i], "rollback restored pz must bitwise match entry pz");
+    }
+
+    gpu_relaxation_state_free(relaxation);
+}
+
 } // namespace
 
 int main()
@@ -1657,6 +1745,7 @@ int main()
     check_ncg_preconditioned_pr_plus_parity_contract();
     check_direct_minimizer_all_preconditioner_profiles_and_latch_recovery_contract();
     check_cub_reduction_status_propagation_contract();
+    check_ncg_entry_direction_snapshot_separated_from_working_history_contract();
 
     auto strip_cr = [](std::string &s) {
         s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
@@ -1787,6 +1876,25 @@ int main()
           "relaxation state must own concrete CG4 and CG8 dispatch objects");
     check(state_src.find("GpuRelaxationPreconditionerSetupIdentity") != std::string::npos,
           "relaxation state must retain setup identity for invalidation");
+    check(state_src.find("FemGpuComponentField nonlinear_cg_direction_entry_backup;") != std::string::npos,
+          "relaxation_state.hpp must declare persistent nonlinear_cg_direction_entry_backup");
+
+    std::ifstream mem_file("/workspace/backends/fem/gpu/cuda/relaxation/relaxation_memory.cpp");
+    if (!mem_file.is_open()) mem_file.open("backends/fem/gpu/cuda/relaxation/relaxation_memory.cpp");
+    if (!mem_file.is_open()) mem_file.open("../backends/fem/gpu/cuda/relaxation/relaxation_memory.cpp");
+    check(mem_file.is_open(), "unable to open relaxation_memory.cpp");
+    std::string mem_src((std::istreambuf_iterator<char>(mem_file)), std::istreambuf_iterator<char>());
+    strip_cr(mem_src);
+    check(mem_src.find("relaxation.nonlinear_cg_direction_entry_backup") != std::string::npos,
+          "relaxation_memory.cpp must allocate and free nonlinear_cg_direction_entry_backup");
+
+    check(ncg_src.find("gpu.relaxation.nonlinear_cg_direction_entry_backup.x == nullptr") != std::string::npos,
+          "nonlinear_cg.cpp must check nonlinear_cg_direction_entry_backup in ensure_state");
+    check(ncg_src.find("cudaMemcpyAsync GPU nonlinear-CG backup entry direction") != std::string::npos,
+          "nonlinear_cg.cpp must back up entry direction into nonlinear_cg_direction_entry_backup");
+    check(ncg_src.find("gpu.relaxation.nonlinear_cg_direction_entry_backup,\n            gpu.relaxation.nonlinear_cg_direction") != std::string::npos,
+          "gpu_relax_restore_previous_direction must restore from entry backup");
+
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;
 }

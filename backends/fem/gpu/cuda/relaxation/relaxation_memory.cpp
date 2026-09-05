@@ -75,6 +75,11 @@ bool gpu_relaxation_state_allocate(
             node_count,
             device_bytes,
             error) ||
+        !gpu_device_allocate_component(
+            relaxation.nonlinear_cg_direction_entry_backup,
+            node_count,
+            device_bytes,
+            error) ||
         !gpu_device_allocate_double(
             relaxation.preconditioner_mass_ms_device,
             node_count,
@@ -93,6 +98,7 @@ void gpu_relaxation_state_free(FemGpuRelaxationDeviceState &relaxation)
     gpu_device_free_component(relaxation.previous_preconditioned_gradient);
     gpu_device_free_component(relaxation.nonlinear_cg_direction);
     gpu_device_free_component(relaxation.nonlinear_cg_direction_backup);
+    gpu_device_free_component(relaxation.nonlinear_cg_direction_entry_backup);
     gpu_device_free_double(relaxation.preconditioner_mass_ms_device);
     relaxation.preconditioner.reset();
     relaxation.exchange_mass_cg4.reset();

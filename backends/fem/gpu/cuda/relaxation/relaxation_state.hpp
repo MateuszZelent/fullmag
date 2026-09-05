@@ -103,6 +103,7 @@ struct FemGpuRelaxationDeviceState {
     FemGpuComponentField previous_preconditioned_gradient;
     FemGpuComponentField nonlinear_cg_direction;
     FemGpuComponentField nonlinear_cg_direction_backup;
+    FemGpuComponentField nonlinear_cg_direction_entry_backup;
     uint64_t node_count = 0;
     uint64_t state_generation = 0;
     bool nonlinear_cg_direction_valid = false;
