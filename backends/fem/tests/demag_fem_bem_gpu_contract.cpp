@@ -394,6 +394,8 @@ void initialize_and_apply_uses_uploaded_boundary_tdofs_without_host_fences() {
         "failed validation after HYPRE A*x must still close the outbound dependency");
     check(error.find("max_iterations=0") != std::string::npos,
           "failed FEM/BEM validation must report the deterministic iteration limit");
+    check(error.find("norm_kind=L2") != std::string::npos,
+          "failed FEM/BEM validation must report norm_kind=L2");
     ctx.demag.solver.max_iterations = 500;
 
     check(ctx.gpu_state.device.lifecycle.device_bytes > baseline_device_bytes,

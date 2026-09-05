@@ -351,6 +351,13 @@ bool initialize_linear_system(
         }
         pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        const HYPRE_Int two_norm_status = HYPRE_PCGSetTwoNorm(
+            static_cast<HYPRE_Solver>(*pcg), 1);
+        if (two_norm_status != 0) {
+            error = "strict FEM GPU Fredkin-Koehler failed to select L2 residual norm for PCG (status " +
+                std::to_string(two_norm_status) + ")";
+            return false;
+        }
         pcg->SetOperator(*system.A_par);
         pcg->SetPreconditioner(*system.preconditioner);
         system.solver = std::move(pcg);
@@ -479,10 +486,11 @@ bool solve_linear_system(
             error)) {
         return close_hypre_dependency(false);
     }
+    const bool zero_rhs = (rhs_norm_required && rhs_norm == 0.0);
     double absolute_residual =
         rhs_norm_required ? relative_residual * rhs_norm : 0.0;
     bool residual_independently_certified = false;
-    if (validate_independent_residual) {
+    if (validate_independent_residual || zero_rhs) {
         system.A_par->Mult(*system.x_par, *system.residual);
         if (!hypre_vector_axpy(
                 -1.0,
@@ -497,9 +505,13 @@ bool solve_linear_system(
                 error)) {
             return close_hypre_dependency(false);
         }
-        relative_residual = rhs_norm > 0.0
-            ? absolute_residual / rhs_norm
-            : absolute_residual;
+        if (rhs_norm > 0.0) {
+            relative_residual = absolute_residual / rhs_norm;
+        } else {
+            relative_residual = (absolute_residual == 0.0)
+                ? 0.0
+                : std::numeric_limits<double>::infinity();
+        }
         residual_independently_certified = std::isfinite(absolute_residual);
         system.independent_residual_validation_count += 1u;
     }
@@ -507,6 +519,12 @@ bool solve_linear_system(
     result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
         ? "gpu_fem_bem/gmres"
         : "gpu_fem_bem/cg";
+    result.norm_kind = DemagResidualNormKind::L2;
+    result.certification_kind = residual_independently_certified
+        ? DemagResidualCertificationKind::TrueResidual
+        : (reported_converged
+               ? DemagResidualCertificationKind::ReportedRecursive
+               : DemagResidualCertificationKind::Unavailable);
     result.solver_reported_converged = reported_converged;
     result.residual_independently_certified = residual_independently_certified;
     result.iterations = iterations;
