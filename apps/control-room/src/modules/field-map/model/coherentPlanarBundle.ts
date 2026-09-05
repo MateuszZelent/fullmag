@@ -40,11 +40,11 @@ export function validateCoherentPlanarBundle(
   maskBuffer: ArrayBuffer | null,
   vectorsBuffer?: ArrayBuffer | null,
 ): CoherentBundleValidationResult {
-  if (!meta || !meta.meta) {
+  if (!meta) {
     return { ok: false, reason: "missing_meta" };
   }
 
-  const resolution = meta.meta.resolution;
+  const resolution = meta.resolution;
   if (!resolution || resolution.length < 2) {
     return { ok: false, reason: "invalid_resolution" };
   }
@@ -113,7 +113,14 @@ export function validateCoherentPlanarBundle(
       carrierRevision: meta.carrier_revision,
       sceneRevision: meta.scene_revision,
       resolution: [w, h],
-      bounds: meta.meta.bounds_uv_m,
+      bounds: (meta.frame?.bounds_uv_m && meta.frame.bounds_uv_m.length >= 4
+        ? [
+            meta.frame.bounds_uv_m[0],
+            meta.frame.bounds_uv_m[1],
+            meta.frame.bounds_uv_m[2],
+            meta.frame.bounds_uv_m[3],
+          ]
+        : [0, w, 0, h]) as [number, number, number, number],
       meta,
       scalarData,
       maskData,

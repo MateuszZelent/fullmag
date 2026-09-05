@@ -52,6 +52,7 @@ const mockModel: FieldMapRenderModel = {
   sampleIdentity: '"fm-planar-sha256:test"',
   samplePoints: [],
   scalar: new Float32Array([100, 200, 300, 400]),
+  vectors: null,
   vectorBudget: 100,
   vectorScale: 1,
   vectorStyle: { color: "currentColor", colorMode: "orientation", lengthMode: "uniform", opacity: 1, thickness: 1 },

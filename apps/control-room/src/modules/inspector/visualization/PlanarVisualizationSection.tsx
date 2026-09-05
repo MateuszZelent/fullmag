@@ -7,6 +7,8 @@ import type {
   PlanarFieldSource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   planarFieldQueryFromMeta,
@@ -102,7 +104,8 @@ function capabilityReason(capability: FieldMapCapability): string | undefined {
 }
 
 export function PlanarVisualizationSection({ selection }: { selection: Selection }) {
-  const { visualizationSync } = useKernel();
+  const kernel = useKernel();
+  const { commands, visualizationSync } = kernel;
   const visualization = useVisualizationStateResource();
   const planar = projectPlanarPresentationState(
     visualization.data,
@@ -281,9 +284,18 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
             domain={domain.data}
             patch={patch}
             onSaveAsMonitor={() =>
-              kernel.commands.run("planar-monitor.create", {
-                intent: { source: "inspector", preset: planar.default_slice.plane },
-              })
+              void commands.execute(
+                "planar-monitor.create",
+                createCommandContext("inspector", kernel, {
+                  resourceData: {
+                    [VISUALIZATION_STATE_PATH]: visualization.data,
+                  },
+                  sourceDetail: "planar-visualization",
+                }),
+                {
+                  intent: { source: "inspector", preset: planar.default_slice.plane },
+                },
+              )
             }
           />
         ) : null}

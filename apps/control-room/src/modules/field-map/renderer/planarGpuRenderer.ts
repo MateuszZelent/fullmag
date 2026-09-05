@@ -287,7 +287,7 @@ export function createPlanarGpuRenderer(
 
     const pixelData = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
 
-    if (rasterMesh && rasterTexture && rasterTexture.image.width === width && rasterTexture.image.height === height) {
+    if (rasterMesh && rasterTexture && rasterTexture.image?.data && rasterTexture.image.width === width && rasterTexture.image.height === height) {
       rasterTexture.image.data.set(pixelData);
       rasterTexture.needsUpdate = true;
       updateFdmCellQuadGeometry(rasterMesh.geometry, bounds, originOffset);
