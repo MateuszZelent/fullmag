@@ -176,4 +176,12 @@ inline void gpu_relax_mark_preconditioner_invalid(
     state.preconditioner_setup_invalidations += 1u;
 }
 
+inline bool gpu_relaxation_is_preconditioned(
+    const FemGpuRelaxationDeviceState &relaxation) noexcept
+{
+    return relaxation.preconditioner_setup_complete &&
+           relaxation.resolved_preconditioner.kind !=
+               GpuRelaxationPreconditionerKind::None;
+}
+
 } // namespace fullmag::fem

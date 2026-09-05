@@ -2296,7 +2296,7 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find("current gradient/direction scalars device->host") !=
                 std::string::npos &&
-            ncg_source.find("double scalars[4]") != std::string::npos &&
+            ncg_source.find("double scalars[kNcgCurrentScalarTailCount]") != std::string::npos &&
             ncg_source.find("total_energy = energy_snapshot.total_energy_j") !=
                 std::string::npos &&
             ncg_source.find("gradient_energy_norm_sq = scalars[1]") !=
@@ -2310,7 +2310,7 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos,
         "native FEM GPU nonlinear-CG must batch current gradient and descent-direction scalars while reusing the exact accepted energy snapshot and keeping reset fallback device-side");
     check(
-        ncg_source.find("kNcgScalarTailCount = 3") != std::string::npos &&
+        ncg_source.find("kNcgScalarTailCount = 6") != std::string::npos &&
             ncg_source.find("kNcgPreviousGradientEnergyNormTailSlot") !=
                 std::string::npos &&
             ncg_source.find("fullmag_cuda_relax_ncg_update_direction_from_reduced_pr_plus(") !=
@@ -2324,6 +2324,8 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("accepted-step PR+ denominator validation failure") !=
                 std::string::npos &&
             ncg_source.find("accepted-step PR+ validation failure") !=
+                std::string::npos &&
+            ncg_source.find("accepted-step preconditioner failure") !=
                 std::string::npos,
         "native FEM GPU nonlinear-CG must fold accepted PR+ validation into the final control readback instead of adding a separate host sync");
     check(

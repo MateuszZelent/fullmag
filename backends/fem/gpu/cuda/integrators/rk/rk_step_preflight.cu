@@ -84,10 +84,17 @@ bool gpu_rk_prepare_step_preflight(
             return false;
         }
     }
+    bool execution_kind_is_rk = false;
+    {
+        std::lock_guard<std::mutex> lock(ctx.gpu_state.execution_receipt.mutex);
+        execution_kind_is_rk = (ctx.gpu_state.execution_receipt.execution_kind ==
+                                FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR);
+    }
     const auto current_receipt = gpu_execution_receipt_snapshot(
         ctx.gpu_state.execution_receipt);
     const bool same_plan =
         current_receipt.plan_resolved &&
+        execution_kind_is_rk &&
         current_receipt.execution_class == plan.execution_class &&
         current_receipt.device_ordinal == ctx.mfem_context.selected_device_index &&
         current_receipt.precision == static_cast<uint32_t>(ctx.base_plan.precision) &&

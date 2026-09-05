@@ -1108,3 +1108,32 @@ def test_direct_minimizer_capture_is_repeat_one_and_never_replaces_five_repeats(
     mismatched["identity"] = {**identity, "gpu_uuid": "GPU-other"}
     invalid = capture.direct_minimizer_capture_summary(mismatched, benchmark_case)
     assert any("gpu_uuid" in blocker for blocker in invalid["blockers"])
+
+
+def test_write_direct_minimizer_capture_summary(tmp_path: Path) -> None:
+    capture = load_capture_module()
+    output_json = tmp_path / "dm_summary.json"
+    identity = {
+        "source_commit": "a" * 40,
+        "source_snapshot_sha256": "f" * 64,
+        "workload_sha256": "b" * 64,
+        "mesh_sha256": "c" * 64,
+        "gpu_uuid": "GPU-01234567-89ab-cdef-0123-456789abcdef",
+        "runtime_manifest_sha256": "d" * 64,
+        "final_artifact_sha256": "e" * 64,
+    }
+    benchmark_case = {"measured_repetitions": 5, "identity": identity}
+    capture_case = {
+        "repeat_count": 1,
+        "relaxation_algorithm": "nonlinear_cg",
+        "relaxation_preconditioner_strategy": "exchange_mass_cg4",
+        "identity": identity,
+    }
+    summary = capture.write_direct_minimizer_capture_summary(
+        output_json, capture_case, benchmark_case
+    )
+    assert output_json.is_file()
+    assert summary["repeat_count"] == 1
+    assert not summary["blockers"]
+    loaded = json.loads(output_json.read_text(encoding="utf-8"))
+    assert loaded["schema"] == "fullmag.fem_gpu.direct_minimizer_nsight_capture.v1"

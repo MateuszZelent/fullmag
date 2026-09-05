@@ -1328,6 +1328,133 @@ void repeated_begin_v2_resets_plan_and_active_close_preserves_accounting() {
     check(state.control_d2h_bytes == 0, "repeated begin_v2 MUST reset control_d2h_bytes");
 }
 
+void direct_minimizer_ncg_pgbb_llg_transitions_and_outcomes() {
+    fullmag_fem_backend handle{};
+    auto &state = handle.context.gpu_state.execution_receipt;
+
+    // 1. Generation 1: NCG Direct Minimizer with Completed-Accepted
+    uint64_t gen1 = 0;
+    check(fullmag_fem_backend_gpu_execution_begin_v2(&handle, &gen1) == FULLMAG_FEM_OK,
+          "gen1 begin_v2 must succeed");
+    const uint64_t ncg_ops = FEM_GPU_OPERATOR_EXCHANGE |
+                             FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+                             FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE |
+                             FEM_GPU_OPERATOR_RETRACTION |
+                             FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    const uint64_t ncg_cov = FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE |
+                             FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT |
+                             FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION |
+                             FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY;
+    const uint64_t ncg_transfers = FULLMAG_FEM_GPU_TRANSFER_SETUP |
+                                   FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+                                   FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT;
+    gpu_execution_receipt_resolve_plan_v2(
+        state, ncg_ops, ncg_ops, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE, 0, ncg_cov, ncg_transfers);
+
+    fullmag_fem_transfer_audit audit{};
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, ncg_ops);
+    gpu_execution_receipt_note_coverage(state, ncg_cov);
+    gpu_execution_receipt_note_candidate_begin(state);
+    gpu_execution_receipt_note_candidate_accepted(state);
+    audit.hot_loop_control_scalar_d2h_bytes = 32;
+    audit.hot_loop_control_scalar_host_sync_count = 1;
+    check(gpu_execution_receipt_update_attempt_transfer(state, audit), "ncg transfer update must succeed");
+    gpu_execution_receipt_commit_attempt(state);
+    check(fullmag_fem_backend_gpu_execution_close_compute_v2(
+              &handle, FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED) == FULLMAG_FEM_OK,
+          "ncg close_compute_v2 must succeed");
+    check(fullmag_fem_backend_gpu_execution_close_observation_v2(&handle) == FULLMAG_FEM_OK,
+          "ncg close_observation_v2 must succeed");
+
+    fullmag_fem_gpu_execution_receipt_v2 receipt_ncg{};
+    receipt_ncg.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2;
+    receipt_ncg.struct_size = sizeof(receipt_ncg);
+    check(fullmag_fem_backend_gpu_execution_receipt_v2(&handle, &receipt_ncg) == FULLMAG_FEM_OK,
+          "ncg receipt_v2 query must succeed");
+    check(receipt_ncg.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+          "ncg execution_kind must be direct_minimizer");
+    check(receipt_ncg.relaxation_algorithm == FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG,
+          "ncg relaxation_algorithm must be nonlinear_cg");
+    check(receipt_ncg.terminal_outcome == FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_ACCEPTED,
+          "ncg terminal_outcome must be completed_accepted");
+
+    // 2. Generation 2: PG-BB Direct Minimizer with Cancelled Outcome
+    uint64_t gen2 = 0;
+    check(fullmag_fem_backend_gpu_execution_begin_v2(&handle, &gen2) == FULLMAG_FEM_OK,
+          "gen2 begin_v2 must succeed");
+    check(gen2 > gen1, "gen2 must advance monotonically");
+    const uint64_t pgbb_ops = FEM_GPU_OPERATOR_EXCHANGE |
+                              FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+                              FEM_GPU_OPERATOR_LINE_SEARCH |
+                              FEM_GPU_OPERATOR_RETRACTION |
+                              FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    gpu_execution_receipt_resolve_plan_v2(
+        state, pgbb_ops, pgbb_ops, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE, 0, ncg_cov, ncg_transfers);
+
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, pgbb_ops);
+    gpu_execution_receipt_note_candidate_begin(state);
+    gpu_execution_receipt_note_candidate_accepted(state);
+    gpu_execution_receipt_commit_attempt(state);
+    check(fullmag_fem_backend_gpu_execution_close_compute_v2(
+              &handle, FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED) == FULLMAG_FEM_OK,
+          "pgbb close_compute_v2 must accept cancel");
+    check(fullmag_fem_backend_gpu_execution_close_observation_v2(&handle) == FULLMAG_FEM_OK,
+          "pgbb close_observation_v2 must succeed");
+
+    fullmag_fem_gpu_execution_receipt_v2 receipt_pgbb{};
+    receipt_pgbb.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2;
+    receipt_pgbb.struct_size = sizeof(receipt_pgbb);
+    check(fullmag_fem_backend_gpu_execution_receipt_v2(&handle, &receipt_pgbb) == FULLMAG_FEM_OK,
+          "pgbb receipt_v2 query must succeed");
+    check(receipt_pgbb.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+          "pgbb execution_kind must be direct_minimizer");
+    check(receipt_pgbb.relaxation_algorithm == FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB,
+          "pgbb relaxation_algorithm must be projected_gradient_bb");
+    check(receipt_pgbb.terminal_outcome == FULLMAG_FEM_GPU_TERMINAL_OUTCOME_CANCELLED,
+          "pgbb terminal_outcome must be cancelled");
+
+    // 3. Generation 3: Transition to LLG (RK_TIME_INTEGRATOR) restores execution_kind
+    uint64_t gen3 = 0;
+    check(fullmag_fem_backend_gpu_execution_begin_v2(&handle, &gen3) == FULLMAG_FEM_OK,
+          "gen3 begin_v2 must succeed");
+    check(gen3 > gen2, "gen3 must advance monotonically");
+    const uint64_t rk_ops = FEM_GPU_OPERATOR_EXCHANGE |
+                            FEM_GPU_OPERATOR_LLG_RHS |
+                            FEM_GPU_OPERATOR_RK_STEPPER;
+    gpu_execution_receipt_resolve_plan(
+        state, rk_ops, rk_ops, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE,
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+
+    check(state.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR,
+          "LLG resolve_plan must restore execution_kind = RK_TIME_INTEGRATOR");
+    check(state.relaxation_algorithm == FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE,
+          "LLG resolve_plan must restore relaxation_algorithm = NONE");
+
+    gpu_execution_receipt_begin_attempt(state, audit);
+    gpu_execution_receipt_note_device(state, rk_ops);
+    gpu_execution_receipt_commit_attempt(state);
+    check(fullmag_fem_backend_gpu_execution_close_compute_v2(
+              &handle, FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION) == FULLMAG_FEM_OK,
+          "llg close_compute_v2 must accept completed_observation");
+    check(fullmag_fem_backend_gpu_execution_close_observation_v2(&handle) == FULLMAG_FEM_OK,
+          "llg close_observation_v2 must succeed");
+
+    fullmag_fem_gpu_execution_receipt_v2 receipt_llg{};
+    receipt_llg.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2;
+    receipt_llg.struct_size = sizeof(receipt_llg);
+    check(fullmag_fem_backend_gpu_execution_receipt_v2(&handle, &receipt_llg) == FULLMAG_FEM_OK,
+          "llg receipt_v2 query must succeed");
+    check(receipt_llg.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR,
+          "llg receipt_v2 execution_kind must be rk_time_integrator");
+    check(receipt_llg.terminal_outcome == FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION,
+          "llg terminal_outcome must be completed_observation");
+}
+
 } // namespace
 
 int main() {
@@ -1350,5 +1477,6 @@ int main() {
     public_abi_v3_performance_snapshot_layout_and_contract();
     direct_minimizer_v1_rejection_and_v2_lifecycle();
     repeated_begin_v2_resets_plan_and_active_close_preserves_accounting();
+    direct_minimizer_ncg_pgbb_llg_transitions_and_outcomes();
     return 0;
 }

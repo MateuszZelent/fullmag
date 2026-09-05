@@ -167,6 +167,12 @@ void gpu_execution_receipt_resolve_plan(
     state.device_ordinal = device_ordinal;
     state.precision = precision;
     state.integrator = integrator;
+    state.execution_kind = FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR;
+    state.relaxation_algorithm = FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE;
+    state.attempt_model = FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE;
+    state.control_policy = FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL;
+    state.terminal_outcome = FULLMAG_FEM_GPU_TERMINAL_OUTCOME_NONE;
+    state.identity_valid = true;
     state.required_operator_mask = required_operator_mask;
     state.resolved_device_operator_mask = resolved_device_operator_mask;
     state.resolved_host_operator_mask = resolved_host_operator_mask;
@@ -598,6 +604,21 @@ void gpu_execution_receipt_resolve_plan_v2(
     state.device_ordinal = device_ordinal;
     state.precision = precision;
     state.integrator = integrator;
+    state.execution_kind = FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER;
+    if (required_operator_mask & FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE) {
+        state.relaxation_algorithm = FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG;
+    } else if (required_operator_mask & FEM_GPU_OPERATOR_DIRECT_MINIMIZER) {
+        state.relaxation_algorithm = FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB;
+    }
+    if (state.attempt_model == FULLMAG_FEM_GPU_ATTEMPT_MODEL_UNKNOWN ||
+        state.attempt_model == FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE) {
+        state.attempt_model = FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES;
+    }
+    if (state.control_policy == FULLMAG_FEM_GPU_CONTROL_POLICY_UNKNOWN ||
+        state.control_policy == FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL) {
+        state.control_policy = FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL;
+    }
+    state.identity_valid = true;
     state.required_operator_mask = required_operator_mask;
     state.resolved_device_operator_mask = resolved_device_operator_mask;
     state.resolved_host_operator_mask = resolved_host_operator_mask;

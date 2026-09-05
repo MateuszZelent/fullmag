@@ -462,6 +462,8 @@ class BenchmarkV2ContractTests(unittest.TestCase):
             {
                 "none": "none",
                 "diagonal": "diagonal",
+                "exchange_mass_cg4": "exchange_mass_cg4",
+                "exchange_mass_cg8": "exchange_mass_cg8",
                 "exchange_mass": None,
             },
         )
@@ -663,6 +665,28 @@ class DirectMinimizerBenchmarkContractTests(unittest.TestCase):
         summary = benchmark.direct_minimizer_benchmark_matrix_summary(rows)
         self.assertFalse(summary["matrix_complete"])
         self.assertTrue(any("matrix key" in failure for failure in summary["failures"]))
+
+    def test_write_direct_minimizer_benchmark_matrix_summary(self) -> None:
+        import tempfile
+        import csv
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "matrix.csv"
+            json_path = Path(tmpdir) / "summary.json"
+            rows = self.direct_minimizer_rows()
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+            summary = benchmark.write_direct_minimizer_benchmark_matrix_summary(
+                csv_path, json_path
+            )
+            self.assertTrue(json_path.is_file())
+            self.assertTrue(summary["matrix_complete"])
+            loaded = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                loaded["schema"],
+                "fullmag.fem_gpu.direct_minimizer_benchmark_matrix.v1",
+            )
 
 
 class NsightPhaseContractTests(unittest.TestCase):

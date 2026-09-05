@@ -2089,7 +2089,7 @@ def test_task11_preconditioner_qualification_recipe_is_literal_and_fail_closed()
         "--backends gpu",
         "--scenarios box500_airbox_exchange_demag",
         "--relax-algorithms nonlinear_cg",
-        "--relaxation-preconditioner-strategies none,diagonal_mass,lumped_exchange_mass_cg4,lumped_exchange_mass_cg8,stagnation_triggered_cg8",
+        "--relaxation-preconditioner-strategies none,diagonal",
         "--demag-rtols 1e-12",
         "--demag-amg-relax-types 6",
         "--steps 64",
@@ -2764,7 +2764,7 @@ def run_validator(
         log_path = Path(tmp) / "runtime.log"
         log_path.write_text(log_text, encoding="utf-8")
         command = [
-                "python3",
+                sys.executable,
                 str(VALIDATOR),
                 "--engine",
                 engine,

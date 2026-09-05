@@ -932,6 +932,24 @@ def direct_minimizer_capture_summary(
     }
 
 
+def write_direct_minimizer_capture_summary(
+    output_path: Path,
+    capture_case: Mapping[str, object],
+    benchmark_case: Mapping[str, object],
+) -> dict[str, object]:
+    summary = direct_minimizer_capture_summary(capture_case, benchmark_case)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        "FEM_DIRECT_MINIMIZER_CAPTURE_SUMMARY="
+        + json.dumps(summary, sort_keys=True)
+    )
+    return summary
+
+
 def write_summary_artifacts(output_dir: Path, payload: Mapping[str, object]) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "summary.json"
@@ -1629,11 +1647,57 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Write an explicit NOT VERIFIED capture summary without profiling",
     )
+    parser.add_argument(
+        "--direct-minimizer-capture-input",
+        type=Path,
+        default=None,
+        help="JSON file containing the Nsight direct-minimizer capture case payload",
+    )
+    parser.add_argument(
+        "--direct-minimizer-benchmark-input",
+        type=Path,
+        default=None,
+        help="JSON file containing the five-repeat direct-minimizer benchmark matrix case payload",
+    )
+    parser.add_argument(
+        "--direct-minimizer-summary-output",
+        type=Path,
+        default=None,
+        help="Output path for the direct-minimizer capture summary JSON",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.direct_minimizer_capture_input is not None:
+        if (
+            args.direct_minimizer_benchmark_input is None
+            or args.direct_minimizer_summary_output is None
+        ):
+            raise SystemExit(
+                "--direct-minimizer-capture-input requires "
+                "--direct-minimizer-benchmark-input and --direct-minimizer-summary-output"
+            )
+        capture_case = json.loads(
+            args.direct_minimizer_capture_input.read_text(encoding="utf-8")
+        )
+        benchmark_case = json.loads(
+            args.direct_minimizer_benchmark_input.read_text(encoding="utf-8")
+        )
+        summary = write_direct_minimizer_capture_summary(
+            args.direct_minimizer_summary_output,
+            capture_case,
+            benchmark_case,
+        )
+        if summary.get("blockers"):
+            print(
+                "FEM_DIRECT_MINIMIZER_CAPTURE_BLOCKERS="
+                + "; ".join(summary["blockers"]),
+                file=sys.stderr,
+            )
+            return 2
+        return 0
     if args.record_not_verified is not None:
         write_summary_artifacts(
             args.output_dir / args.run_id,

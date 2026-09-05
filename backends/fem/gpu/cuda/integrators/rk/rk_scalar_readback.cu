@@ -6,6 +6,7 @@
 #include "gpu/cuda/integrators/rk/rk_scalar_readback.hpp"
 
 #include "context.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
@@ -54,8 +55,20 @@ bool read_scalar_result_impl(
     value = gpu.reductions.host_scalar_result[0];
     if (control_scalar_readback) {
         record_device_control_scalar_to_host(ctx.transfer_audit.audit, sizeof(double));
+        gpu_execution_receipt_record_transfer(
+            ctx.gpu_state.execution_receipt,
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR,
+            0,
+            sizeof(double),
+            1);
     } else {
         record_device_to_host(ctx.transfer_audit.audit, sizeof(double));
+        gpu_execution_receipt_record_transfer(
+            ctx.gpu_state.execution_receipt,
+            FULLMAG_FEM_GPU_TRANSFER_COMPUTE,
+            0,
+            sizeof(double),
+            1);
     }
     GpuPerformanceCounterDelta performance_delta{};
     performance_delta.control_fences = 1;
@@ -108,8 +121,20 @@ bool read_scalar_results_impl(
         record_device_control_scalar_to_host(
             ctx.transfer_audit.audit,
             count * sizeof(double));
+        gpu_execution_receipt_record_transfer(
+            ctx.gpu_state.execution_receipt,
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR,
+            0,
+            count * sizeof(double),
+            1);
     } else {
         record_device_to_host(ctx.transfer_audit.audit, count * sizeof(double));
+        gpu_execution_receipt_record_transfer(
+            ctx.gpu_state.execution_receipt,
+            FULLMAG_FEM_GPU_TRANSFER_COMPUTE,
+            0,
+            count * sizeof(double),
+            1);
     }
     GpuPerformanceCounterDelta performance_delta{};
     performance_delta.control_fences = 1;

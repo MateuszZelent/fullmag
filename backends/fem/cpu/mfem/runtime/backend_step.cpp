@@ -515,7 +515,17 @@ int run_backend_relaxation_step(
         ctx.poisson_demag.step_energy_wall_time_ns = 0;
 
         if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
-            if (!gpu_execution_receipt_snapshot(ctx.gpu_state.execution_receipt).plan_resolved) {
+            bool plan_needs_resolution = false;
+            {
+                std::lock_guard<std::mutex> lock(ctx.gpu_state.execution_receipt.mutex);
+                plan_needs_resolution =
+                    !ctx.gpu_state.execution_receipt.plan_resolved ||
+                    ctx.gpu_state.execution_receipt.execution_kind !=
+                        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER ||
+                    ctx.gpu_state.execution_receipt.relaxation_algorithm !=
+                        FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG;
+            }
+            if (plan_needs_resolution) {
                 uint64_t required_mask =
                     FEM_GPU_OPERATOR_EXCHANGE |
                     FEM_GPU_OPERATOR_REDUCTIONS |
@@ -587,6 +597,11 @@ int run_backend_relaxation_step(
                     static_cast<uint32_t>(ctx.base_plan.precision),
                     0,
                     ctx.mfem_context.selected_device_index);
+                gpu_execution_receipt_record_residency(
+                    ctx.gpu_state.execution_receipt,
+                    static_cast<uint32_t>(FemGpuExecutionClass::DeviceResident),
+                    false,
+                    false);
             }
             gpu_performance_begin_attempt(
                 ctx.gpu_state.performance_counters,
@@ -610,7 +625,11 @@ int run_backend_relaxation_step(
             }
         }
         if (ctx.transfer_audit.audit.hot_loop_violation) {
-            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG &&
+                gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+                gpu_execution_receipt_update_attempt_transfer(
+                    ctx.gpu_state.execution_receipt,
+                    ctx.transfer_audit.audit.counters);
                 gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
                 gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
             }
@@ -624,7 +643,11 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         if (ctx.interrupt.step_interrupted) {
-            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG &&
+                gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+                gpu_execution_receipt_update_attempt_transfer(
+                    ctx.gpu_state.execution_receipt,
+                    ctx.transfer_audit.audit.counters);
                 gpu_execution_receipt_cancel_attempt(ctx.gpu_state.execution_receipt);
                 gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
             }
@@ -638,7 +661,11 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERRUPTED;
         }
         if (gpu_status != FULLMAG_FEM_OK) {
-            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG) {
+            if (algorithm == FULLMAG_FEM_RELAX_NONLINEAR_CG &&
+                gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
+                gpu_execution_receipt_update_attempt_transfer(
+                    ctx.gpu_state.execution_receipt,
+                    ctx.transfer_audit.audit.counters);
                 gpu_execution_receipt_fail_attempt(ctx.gpu_state.execution_receipt);
                 gpu_performance_fail_attempt(ctx.gpu_state.performance_counters);
             }

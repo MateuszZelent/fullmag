@@ -220,6 +220,8 @@ SUPPORTED_RELAXATION_ALGORITHMS = (
 RELAXATION_PRECONDITIONER_RUNTIME_NAMES = {
     "none": "none",
     "diagonal": "diagonal",
+    "exchange_mass_cg4": "exchange_mass_cg4",
+    "exchange_mass_cg8": "exchange_mass_cg8",
     # Task 10 enables the matching C++ runtime kind. Until then the public
     # vocabulary is reserved but deliberately unavailable to the CLI.
     "exchange_mass": None,
@@ -815,6 +817,25 @@ def direct_minimizer_benchmark_matrix_summary(
     }
 
 
+def write_direct_minimizer_benchmark_matrix_summary(
+    input_path: Path,
+    output_path: Path,
+) -> dict[str, object]:
+    summary = direct_minimizer_benchmark_matrix_summary(
+        load_csv_results(input_path),
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        "FEM_DIRECT_MINIMIZER_BENCHMARK_MATRIX="
+        + json.dumps(summary, sort_keys=True)
+    )
+    return summary
+
+
 def _benchmark_v2_oracle(cpu_oracle: object) -> tuple[object, Sequence[object]]:
     if isinstance(cpu_oracle, Mapping):
         failures = cpu_oracle.get("failures", [])
@@ -1278,11 +1299,21 @@ def relaxation_preconditioner_row_failures(
     allowed_iterations = {
         "none": {0},
         "diagonal": {0},
-    }[expected_strategy]
+        "diagonal_mass": {0},
+        "lumped_exchange_mass_cg4": {4},
+        "lumped_exchange_mass_cg8": {8},
+        "stagnation_triggered_cg8": {0, 8},
+        "exchange_mass_cg4": {4},
+        "exchange_mass_cg8": {8},
+    }.get(expected_strategy, {0})
     if iterations not in allowed_iterations:
         failures.append(
             f"resolved iteration count {iterations!r} is not one of {sorted(allowed_iterations)}"
         )
+    if expected_strategy == "stagnation_triggered_cg8":
+        apply_count = as_int(row.get("relaxation_preconditioner_apply_count"))
+        if apply_count is None or apply_count <= 0:
+            failures.append("stagnation-triggered strategy never applied CG8")
     lambda_m_per_a = as_float(row.get("relaxation_preconditioner_lambda_m_per_a"))
     if (
         lambda_m_per_a is None
@@ -2486,10 +2517,26 @@ def relaxation_preconditioner_qualification_summary(
     *,
     cpu_gpu_parity_rows: Sequence[Mapping[str, object]] | None = None,
     qualification_identity: Mapping[str, object] | None = None,
+    strategies: Sequence[str] | None = None,
 ) -> dict[str, object]:
+    if strategies is None:
+        observed_strategies = tuple(
+            dict.fromkeys(
+                str(row.get("requested_relaxation_preconditioner_strategy"))
+                for row in rows
+                if row.get("requested_relaxation_preconditioner_strategy") is not None
+            )
+        )
+        resolved_strategies = (
+            observed_strategies
+            if observed_strategies
+            else RELAXATION_PRECONDITIONER_STRATEGIES
+        )
+    else:
+        resolved_strategies = tuple(strategies)
     expected_keys = {
         (strategy, mesh_size, repeat_index)
-        for strategy in RELAXATION_PRECONDITIONER_STRATEGIES
+        for strategy in resolved_strategies
         for mesh_size in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
         for repeat_index in range(RELAXATION_PRECONDITIONER_REQUIRED_REPEATS)
     }
@@ -2501,7 +2548,7 @@ def relaxation_preconditioner_qualification_summary(
         mesh_size = row.get("mesh_size")
         repeat_index = as_int(row.get("repeat_index"))
         if (
-            strategy not in RELAXATION_PRECONDITIONER_STRATEGIES
+            strategy not in resolved_strategies
             or mesh_size not in RELAXATION_PRECONDITIONER_QUALIFICATION_MESHES
             or repeat_index is None
         ):
@@ -2645,7 +2692,7 @@ def relaxation_preconditioner_qualification_summary(
             baseline_distributions[mesh_size] = summarize_distribution(finite_values)
 
     strategy_summaries: list[dict[str, object]] = []
-    for strategy in RELAXATION_PRECONDITIONER_STRATEGIES:
+    for strategy in resolved_strategies:
         failures: list[str] = []
         rows_for_strategy: list[Mapping[str, object]] = []
         size_summaries: list[dict[str, object]] = []
@@ -2730,7 +2777,11 @@ def relaxation_preconditioner_qualification_summary(
             ):
                 baseline_values = [as_float(row.get(field)) for row in baseline_rows]
                 candidate_values = [as_float(row.get(field)) for row in candidate_rows]
-                if any(value is None for value in baseline_values + candidate_values):
+                if (
+                    not baseline_values
+                    or not candidate_values
+                    or any(value is None for value in baseline_values + candidate_values)
+                ):
                     failures.append(f"mesh={mesh_size}: missing {field} parity evidence")
                     continue
                 baseline_median = statistics.median(
@@ -5435,6 +5486,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Separate six-row CPU/GPU none-baseline CSV with final magnetization, "
             "energy, stop-state, runtime, and mesh identity evidence"
         ),
+    )
+    parser.add_argument(
+        "--direct-minimizer-benchmark-matrix-input",
+        type=Path,
+        default=None,
+        help="Benchmark CSV containing the exact direct-minimizer evidence matrix",
+    )
+    parser.add_argument(
+        "--direct-minimizer-benchmark-matrix-output",
+        type=Path,
+        default=None,
+        help="Output JSON for --direct-minimizer-benchmark-matrix-input",
     )
     parser.add_argument(
         "--capture-final-magnetization",
@@ -12717,6 +12780,19 @@ def main() -> None:
         )
         if summary["status"] != "pass":
             raise SystemExit(20)
+        return
+    if args.direct_minimizer_benchmark_matrix_input is not None:
+        if args.direct_minimizer_benchmark_matrix_output is None:
+            raise SystemExit(
+                "--direct-minimizer-benchmark-matrix-input needs "
+                "--direct-minimizer-benchmark-matrix-output"
+            )
+        summary = write_direct_minimizer_benchmark_matrix_summary(
+            args.direct_minimizer_benchmark_matrix_input,
+            args.direct_minimizer_benchmark_matrix_output,
+        )
+        if summary.get("failures"):
+            raise SystemExit(21)
         return
     if args.write_task8_qualification_identity is not None:
         write_task8_qualification_identity(

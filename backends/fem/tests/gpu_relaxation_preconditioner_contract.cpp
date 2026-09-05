@@ -1399,6 +1399,116 @@ void check_ncg_preconditioned_pr_plus_parity_contract()
     }
 }
 
+void check_direct_minimizer_all_preconditioner_profiles_and_latch_recovery_contract()
+{
+    using namespace fullmag::fem;
+
+    constexpr size_t n = 12;
+    const DenseMatrix exchange = chain_exchange(n);
+    const std::vector<double> mass = {
+        0.8, 1.7, 0.6, 2.1, 1.2, 0.9, 1.9, 0.7, 1.4, 2.3, 1.0, 1.6};
+    const std::vector<uint8_t> free_mask(n, 1u);
+    DeviceSparseOperator device_exchange(exchange);
+    DeviceBuffer<double> d_mass(n);
+    DeviceBuffer<uint8_t> d_mask(n);
+    d_mass.copy_from(mass);
+    d_mask.copy_from(free_mask);
+    const double weight = 0.35;
+    std::string error;
+    const GpuExchangeMassSetupIdentity identity{401u, 502u, 603u};
+
+    const std::vector<double> gradient_x = {
+        0.5, -0.4, 0.3, -0.2, 0.1, -0.6, 0.7, -0.8, 0.9, -0.3, 0.4, -0.5};
+    const std::vector<double> gradient_y = {
+        -0.2, 0.8, -0.1, 0.4, -0.5, 0.3, -0.7, 0.6, -0.2, 0.5, -0.4, 0.1};
+    const std::vector<double> gradient_z = {
+        0.3, 0.1, -0.5, 0.6, -0.2, 0.4, -0.1, 0.3, -0.6, 0.2, -0.5, 0.7};
+
+    // 1. Profile 'none': z = g exactly
+    std::vector<double> z_none_x = gradient_x;
+    check_vector_close(z_none_x, gradient_x, "none profile must preserve raw gradient");
+
+    // 2. Profile 'diagonal': z = g / (M + w*diag(K))
+    GpuDiagonalRelaxationPreconditioner diag_precond;
+    std::vector<double> exchange_diagonal(n, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        exchange_diagonal[i] = exchange[i][i];
+    }
+    check(diag_precond.setup(mass, exchange_diagonal, weight, nullptr, error),
+          "diagonal preconditioner setup must succeed");
+    std::vector<double> z_diag_x;
+    check(diag_precond.apply_host(gradient_x, z_diag_x, error),
+          "diagonal host apply must succeed");
+    check(l2_error(z_diag_x, gradient_x) > 1.0e-3,
+          "diagonal preconditioner must differ from raw gradient");
+
+    // 3. Profile 'exchange_mass_cg4'
+    GpuExchangeMassPreconditioner cg4(GpuExchangeMassCgVariant::Cg4);
+    check(cg4.setup(device_exchange.plan, d_mass.get(), d_mask.get(), n, identity, nullptr, error),
+          "cg4 setup must succeed");
+    const ExchangeMassResult result_cg4 =
+        apply_exchange_mass(cg4, gradient_x, gradient_y, gradient_z, weight);
+    check(result_cg4.failure_latch == 0u, "cg4 latch must be clear");
+    check(result_cg4.iterations == 4u, "cg4 must execute 4 iterations");
+    check(l2_error(result_cg4.x, gradient_x) > 1.0e-3,
+          "cg4 must differ from raw gradient");
+    check(l2_error(result_cg4.x, z_diag_x) > 1.0e-3,
+          "cg4 must differ from diagonal preconditioner");
+
+    // 4. Profile 'exchange_mass_cg8'
+    GpuExchangeMassPreconditioner cg8(GpuExchangeMassCgVariant::Cg8);
+    check(cg8.setup(device_exchange.plan, d_mass.get(), d_mask.get(), n, identity, nullptr, error),
+          "cg8 setup must succeed");
+    const ExchangeMassResult result_cg8 =
+        apply_exchange_mass(cg8, gradient_x, gradient_y, gradient_z, weight);
+    check(result_cg8.failure_latch == 0u, "cg8 latch must be clear");
+    check(result_cg8.iterations == 8u, "cg8 must execute 8 iterations");
+    check(l2_error(result_cg8.x, result_cg4.x) > 1.0e-4,
+          "cg8 must produce distinct refined output compared to cg4");
+    check(l2_error(result_cg8.x, z_diag_x) > 1.0e-3,
+          "cg8 must differ from diagonal preconditioner");
+
+    // 5. Preconditioner failure latch and recovery contract:
+    // Artificially corrupt the failure latch on device to simulate breakdown
+    const uint32_t simulated_failure = 1u;
+    check(cudaMemcpy(
+              const_cast<uint32_t *>(cg4.device_failure_latch()),
+              &simulated_failure,
+              sizeof(simulated_failure),
+              cudaMemcpyHostToDevice) == cudaSuccess,
+          "simulating failure latch on device must succeed");
+
+    // Verify latch is non-zero
+    uint32_t readback_latch = 0u;
+    check(cudaMemcpy(
+              &readback_latch,
+              cg4.device_failure_latch(),
+              sizeof(readback_latch),
+              cudaMemcpyDeviceToHost) == cudaSuccess,
+          "readback of simulated failure latch must succeed");
+    check(readback_latch == 1u, "simulated latch must be 1");
+
+    // Subsequent apply under the same setup identity must remain failed (monotonicity)
+    const ExchangeMassResult still_failed =
+        apply_exchange_mass(cg4, gradient_x, gradient_y, gradient_z, weight);
+    check(still_failed.failure_latch != 0u,
+          "device failure latch must remain monotonic across applies for one setup identity");
+
+    // Re-setup resets device failure latch and enables clean recovery
+    check(cg4.setup(
+              device_exchange.plan, d_mass.get(), d_mask.get(), n,
+              {100u, 101u, 102u}, nullptr, error),
+          "re-setup after simulated failure latch must succeed");
+    const ExchangeMassResult recovered_result =
+        apply_exchange_mass(cg4, gradient_x, gradient_y, gradient_z, weight);
+    check(recovered_result.failure_latch == 0u,
+          "subsequent attempt after re-setup must recover with clean failure latch == 0");
+    check(recovered_result.iterations == 4u,
+          "recovered attempt must execute full schedule");
+    check_vector_close(recovered_result.x, result_cg4.x,
+                       "recovered attempt must produce identical valid results");
+}
+
 } // namespace
 
 int main()
@@ -1411,6 +1521,7 @@ int main()
     check_sparse_exchange_mass_mask_and_failure_contract();
     check_pgbb_raw_gradient_fallback_contract();
     check_ncg_preconditioned_pr_plus_parity_contract();
+    check_direct_minimizer_all_preconditioner_profiles_and_latch_recovery_contract();
 
     // Preserve the integrated full-potential source wiring checks while the
     // focused device tests above own the numerical preconditioner contract.
@@ -1421,6 +1532,16 @@ int main()
     std::string ncg_src((std::istreambuf_iterator<char>(ncg_file)), std::istreambuf_iterator<char>());
     check(ncg_src.find("gpu_relaxation_apply_preconditioner") != std::string::npos,
           "nonlinear_cg.cpp must wire gpu_relaxation_apply_preconditioner");
+    check(ncg_src.find("gpu_relaxation_is_preconditioned(gpu.relaxation)") != std::string::npos,
+          "nonlinear_cg.cpp must check gpu_relaxation_is_preconditioned");
+    check(ncg_src.find("gpu.relaxation.preconditioner.is_active()") == std::string::npos,
+          "nonlinear_cg.cpp must not check only diagonal preconditioner.is_active()");
+    check(ncg_src.find("kNcgCurrentPreconditionerFailureTailSlot") != std::string::npos,
+          "nonlinear_cg.cpp must define kNcgCurrentPreconditionerFailureTailSlot");
+    check(ncg_src.find("kNcgAcceptedPreconditionerFailureTailSlot") != std::string::npos,
+          "nonlinear_cg.cpp must define kNcgAcceptedPreconditionerFailureTailSlot");
+    check(ncg_src.find("gpu_relaxation_enqueue_preconditioner_failure") != std::string::npos,
+          "nonlinear_cg.cpp must enqueue preconditioner failure latch");
 
     std::ifstream pgbb_file("/workspace/backends/fem/gpu/cuda/relaxation/pgbb.cpp");
     if (!pgbb_file.is_open()) pgbb_file.open("backends/fem/gpu/cuda/relaxation/pgbb.cpp");

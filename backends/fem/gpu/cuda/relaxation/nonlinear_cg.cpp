@@ -137,12 +137,17 @@ constexpr uint64_t kRestartInterval = 50;
 constexpr size_t kNcgAcceptedGradientNormTailSlot = 0;
 constexpr size_t kNcgPreviousGradientEnergyNormTailSlot = 1;
 constexpr size_t kNcgPrPlusNumeratorTailSlot = 2;
-constexpr size_t kNcgScalarTailCount = 3;
+constexpr size_t kNcgAcceptedPrPlusAbsDenominatorTailSlot = 3;
+constexpr size_t kNcgAcceptedZDotGradientTailSlot = 4;
+constexpr size_t kNcgAcceptedPreconditionerFailureTailSlot = 5;
+constexpr size_t kNcgScalarTailCount = 6;
 constexpr size_t kNcgCurrentGradientNormTailSlot = 0;
 constexpr size_t kNcgCurrentGradientEnergyNormTailSlot = 1;
 constexpr size_t kNcgCurrentDirectionDotGradientTailSlot = 2;
 constexpr size_t kNcgCurrentDirectionNormTailSlot = 3;
-constexpr size_t kNcgCurrentScalarTailCount = 4;
+constexpr size_t kNcgCurrentPreconditionerFailureTailSlot = 4;
+constexpr size_t kNcgCurrentZDotGradientTailSlot = 5;
+constexpr size_t kNcgCurrentScalarTailCount = 5;
 
 const uint8_t *gpu_relax_ncg_node_mask(const Context &ctx)
 {
@@ -728,7 +733,8 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
     double *const current_scalar_results = evaluate_fields
         ? gpu.reductions.scalar_result + kGpuFinalScalarSlots
         : gpu.reductions.scalar_result;
-    const bool use_preconditioner = gpu.relaxation.preconditioner.is_active();
+    const bool use_preconditioner =
+        gpu_relaxation_is_preconditioned(gpu.relaxation);
     if (use_preconditioner) {
         fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
             gpu.magnetization.m.x,
@@ -810,7 +816,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
                 stream,
                 gpu.rk.m_stage.x,
                 blocks,
-                gpu.reductions.scalar_result + 4,
+                current_scalar_results + kNcgCurrentZDotGradientTailSlot,
                 "launch GPU nonlinear-CG z-dot-gradient reduction",
                 reason)) {
             return false;
@@ -886,6 +892,11 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             blocks,
             current_scalar_results + kNcgCurrentDirectionNormTailSlot,
             "launch GPU nonlinear-CG direction norm reduction",
+            reason) ||
+        !gpu_relaxation_enqueue_preconditioner_failure(
+            gpu.relaxation,
+            current_scalar_results + kNcgCurrentPreconditionerFailureTailSlot,
+            stream,
             reason)) {
         return false;
     }
@@ -898,7 +909,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             gpu.relaxation.preconditioned_gradient.y,
             gpu.relaxation.preconditioned_gradient.z,
             current_scalar_results + kNcgCurrentDirectionDotGradientTailSlot,
-            gpu.reductions.scalar_result + 4,
+            current_scalar_results + kNcgCurrentZDotGradientTailSlot,
             gpu_relax_ncg_node_mask(ctx),
             gpu.relaxation.nonlinear_cg_direction.x,
             gpu.relaxation.nonlinear_cg_direction.y,
@@ -910,7 +921,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
         }
     }
 
-    double scalars[4] = {0.0, 0.0, 0.0, 0.0};
+    double scalars[kNcgCurrentScalarTailCount] = {0.0, 0.0, 0.0, 0.0, 0.0};
     if (evaluate_fields) {
         std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> packed_scalars{};
         if (!gpu_rk_read_control_scalar_results(
@@ -942,6 +953,14 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
     gradient_energy_norm_sq = scalars[1];
     p_dot_g = scalars[2];
     direction_norm_sq = scalars[3];
+    const double current_prec_failure =
+        scalars[kNcgCurrentPreconditionerFailureTailSlot];
+    if (current_prec_failure != 0.0) {
+        reason =
+            "GPU nonlinear-CG detected preconditioner breakdown or convergence "
+            "failure in current step metrics";
+        return false;
+    }
     if (!std::isfinite(total_energy)) {
         reason = "GPU nonlinear-CG produced non-finite total energy";
         return false;
@@ -1026,7 +1045,7 @@ bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
         gpu.reductions.scalar_result + kGpuFinalScalarSlots +
         kNcgPrPlusNumeratorTailSlot;
 
-    if (gpu.relaxation.preconditioner.is_active()) {
+    if (gpu_relaxation_is_preconditioned(gpu.relaxation)) {
         fullmag_cuda_relax_tangent_gradient_and_norm_blocks(
             gpu.magnetization.m.x,
             gpu.magnetization.m.y,
@@ -1130,7 +1149,8 @@ bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
                 stream,
                 gpu.rk.error.z,
                 blocks,
-                gpu.reductions.scalar_result + kGpuFinalScalarSlots + 3,
+                gpu.reductions.scalar_result + kGpuFinalScalarSlots +
+                    kNcgAcceptedPrPlusAbsDenominatorTailSlot,
                 "launch GPU nonlinear-CG PR+ abs denominator reduction",
                 reason) ||
             !gpu_relax_reduce_scalar_sum(
@@ -1138,7 +1158,8 @@ bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
                 stream,
                 gpu.rk.m_stage.x,
                 blocks,
-                gpu.reductions.scalar_result + kGpuFinalScalarSlots + 4,
+                gpu.reductions.scalar_result + kGpuFinalScalarSlots +
+                    kNcgAcceptedZDotGradientTailSlot,
                 "launch GPU nonlinear-CG accepted z-dot-g reduction",
                 reason)) {
             return false;
@@ -1204,6 +1225,14 @@ bool gpu_relax_compute_accepted_gradient_norm_and_pr_plus_numerator(
             reason = "GPU nonlinear-CG accepted preconditioner apply failed: " + prec_err;
             return false;
         }
+    }
+    if (!gpu_relaxation_enqueue_preconditioner_failure(
+            gpu.relaxation,
+            gpu.reductions.scalar_result + kGpuFinalScalarSlots +
+                kNcgAcceptedPreconditionerFailureTailSlot,
+            stream,
+            reason)) {
+        return false;
     }
     return true;
 }
@@ -1300,7 +1329,7 @@ bool gpu_relax_prepare_descent_direction(
     auto &direction = gpu.relaxation.nonlinear_cg_direction;
     const bool reuse_gradient_scalars =
         !gpu.relaxation.nonlinear_cg_direction_valid;
-    if (gpu.relaxation.preconditioner.is_active()) {
+    if (gpu_relaxation_is_preconditioned(gpu.relaxation)) {
         fullmag_cuda_relax_ncg_prepare_preconditioned_direction_blocks(
             gpu.rk.m_backup.x,
             gpu.rk.m_backup.y,
@@ -1708,11 +1737,13 @@ bool gpu_relax_update_next_direction(
         kNcgPrPlusNumeratorTailSlot;
 
     auto &direction = gpu.relaxation.nonlinear_cg_direction;
-    if (gpu.relaxation.preconditioner.is_active()) {
+    if (gpu_relaxation_is_preconditioned(gpu.relaxation)) {
         const double *pr_plus_denominator_abs =
-            gpu.reductions.scalar_result + kGpuFinalScalarSlots + 3;
+            gpu.reductions.scalar_result + kGpuFinalScalarSlots +
+            kNcgAcceptedPrPlusAbsDenominatorTailSlot;
         const double *trial_z_dot_g =
-            gpu.reductions.scalar_result + kGpuFinalScalarSlots + 4;
+            gpu.reductions.scalar_result + kGpuFinalScalarSlots +
+            kNcgAcceptedZDotGradientTailSlot;
         fullmag_cuda_relax_ncg_update_direction_preconditioned_pr_plus(
             gpu.magnetization.m.x,
             gpu.magnetization.m.y,
@@ -2446,7 +2477,8 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
         logical_rhs_evaluations + refinement_rhs_evaluations;
-    double ncg_tail_scalars[kNcgScalarTailCount] = {0.0, 0.0, 0.0};
+    double ncg_tail_scalars[kNcgScalarTailCount] = {
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     if (inject_nonlinear_cg_failure(
             ctx,
             GpuRelaxNcgFailurePoint::DuringAcceptedStatistics,
@@ -2479,6 +2511,17 @@ int gpu_relax_nonlinear_cg_step(
         ncg_tail_scalars[kNcgPreviousGradientEnergyNormTailSlot];
     const double pr_plus_numerator =
         ncg_tail_scalars[kNcgPrPlusNumeratorTailSlot];
+    const double accepted_prec_failure =
+        ncg_tail_scalars[kNcgAcceptedPreconditionerFailureTailSlot];
+    if (accepted_prec_failure != 0.0) {
+        return gpu_relax_restore_previous_state_after_failure(
+            ctx,
+            stream,
+            rollback,
+            "accepted-step preconditioner failure",
+            "GPU nonlinear-CG detected preconditioner breakdown or convergence failure in accepted step metrics",
+            error);
+    }
     if (!std::isfinite(accepted_gradient_norm_sq) ||
         accepted_gradient_norm_sq < 0.0) {
         return gpu_relax_restore_previous_state_after_failure(
