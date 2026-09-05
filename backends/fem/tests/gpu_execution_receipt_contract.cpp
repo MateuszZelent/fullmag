@@ -20,6 +20,78 @@ void check(bool condition, const char *message) {
 
 using namespace fullmag::fem;
 
+constexpr uint64_t kClosureTrialOperators =
+    FEM_GPU_OPERATOR_DIRECT_MINIMIZER | FEM_GPU_OPERATOR_RETRACTION |
+    FEM_GPU_OPERATOR_LINE_SEARCH | FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+constexpr uint64_t kClosureBaseOperators =
+    FEM_GPU_OPERATOR_EXCHANGE | FEM_GPU_OPERATOR_REDUCTIONS |
+    FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE;
+constexpr uint64_t kClosureRequiredOperators =
+    kClosureBaseOperators | kClosureTrialOperators;
+
+void start_closure_ncg_generation(FemGpuExecutionReceiptRuntimeState &state)
+{
+    gpu_execution_receipt_begin_v2(
+        state,
+        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+        FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG,
+        FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES,
+        FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL);
+    gpu_execution_receipt_resolve_plan_v2(
+        state, kClosureRequiredOperators, kClosureRequiredOperators, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0,
+        FULLMAG_FEM_PRECISION_DOUBLE, FULLMAG_FEM_INTEGRATOR_HEUN,
+        0, 0); // Pure receipt state-machine test: no transfers or kernel coverage.
+}
+
+void closure_ncg_generation_does_not_reuse_old_operator_evidence()
+{
+    FemGpuExecutionReceiptRuntimeState state{};
+    start_closure_ncg_generation(state);
+    const uint64_t old_generation = state.execution_generation_id;
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(
+        state, kClosureRequiredOperators | FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT);
+    gpu_execution_receipt_commit_attempt(state);
+    check(gpu_execution_receipt_snapshot(state).accounting_valid,
+          "first generation must contain valid complete evidence");
+
+    start_closure_ncg_generation(state);
+    check(state.execution_generation_id != old_generation,
+          "new generation must receive a distinct identity");
+    check(gpu_execution_receipt_snapshot(state).executed_device_operator_mask == 0,
+          "new generation must begin without old operator evidence");
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, kClosureBaseOperators);
+    gpu_execution_receipt_note_stationary_observation(state);
+    gpu_execution_receipt_commit_attempt(state);
+    const auto receipt = gpu_execution_receipt_snapshot(state);
+    check(receipt.accounting_valid && receipt.accepted_step_count == 0 &&
+              receipt.executed_device_operator_mask == kClosureBaseOperators &&
+              state.stationary_observation_count == 1,
+          "stationary second generation must not inherit trials or refinement");
+}
+
+void closure_invalid_attempt_does_not_expand_committed_operator_evidence()
+{
+    FemGpuExecutionReceiptRuntimeState state{};
+    start_closure_ncg_generation(state);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, kClosureBaseOperators);
+    gpu_execution_receipt_note_stationary_observation(state);
+    gpu_execution_receipt_commit_attempt(state);
+
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(
+        state, kClosureRequiredOperators | (UINT64_C(1) << 63));
+    gpu_execution_receipt_commit_attempt(state);
+    const auto receipt = gpu_execution_receipt_snapshot(state);
+    check(!receipt.accounting_valid && receipt.failed_attempt_count == 1 &&
+              receipt.accepted_step_count == 0 &&
+              receipt.executed_device_operator_mask == kClosureBaseOperators,
+          "invalid attempt must not add trial bits to previously committed evidence");
+}
+
 void accepted_device_attempt_publishes_complete_receipt() {
     FemGpuExecutionReceiptRuntimeState state{};
     const uint64_t required =
@@ -1863,5 +1935,7 @@ int main() {
     pgbb_stationary_observation_accepts_non_trial_operator_subset();
     accepted_ncg_allows_optional_direct_energy_refinement();
     accepted_ncg_rejects_unplanned_non_refinement_operator();
+    closure_ncg_generation_does_not_reuse_old_operator_evidence();
+    closure_invalid_attempt_does_not_expand_committed_operator_evidence();
     return 0;
 }

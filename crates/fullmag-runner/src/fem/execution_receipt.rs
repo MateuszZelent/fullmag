@@ -213,6 +213,19 @@ pub(crate) fn validate_strict_fem_gpu_execution_receipt_v2_runtime(
     if receipt.executed_unknown_operator_mask != 0 {
         return Err(FemGpuExecutionReceiptValidationError::UnknownOperatorExecuted);
     }
+    // Native ABI v2: named operator bits occupy positions 0 through 15.
+    // Keep in sync with FEM_GPU_OPERATOR_KNOWN_MASK in execution_receipt.hpp.
+    const KNOWN_OPERATOR_MASK_V2: u64 = (1u64 << 16) - 1;
+    let all_operator_masks = receipt.required_operator_mask
+        | receipt.resolved_device_operator_mask
+        | receipt.resolved_host_operator_mask
+        | receipt.resolved_unknown_operator_mask
+        | receipt.executed_device_operator_mask
+        | receipt.executed_host_operator_mask
+        | receipt.executed_unknown_operator_mask;
+    if all_operator_masks & !KNOWN_OPERATOR_MASK_V2 != 0 {
+        return Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing);
+    }
     const DIRECT_MINIMIZER_OPERATOR: u64 = 1 << 10;
     const RETRACTION_OPERATOR: u64 = 1 << 12;
     const LINE_SEARCH_OPERATOR: u64 = 1 << 13;
@@ -758,6 +771,55 @@ mod tests {
         receipt.stationary_observation_count = 1;
         receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedAccepted;
 
+        assert_eq!(
+            validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt),
+            Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing)
+        );
+    }
+
+    #[test]
+    fn strict_v2_runtime_accepts_stationary_ncg_without_accepted_steps() {
+        let mut receipt = strict_receipt_v2_fixture();
+        const TRIAL: u64 = (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14);
+        receipt.executed_device_operator_mask = receipt.required_operator_mask & !TRIAL;
+        receipt.accepted_step_count = 0;
+        receipt.outer_attempt_count = 1;
+        receipt.rejected_attempt_count = 0;
+        receipt.failed_attempt_count = 0;
+        receipt.rejected_candidate_count = 0;
+        receipt.failed_candidate_count = 0;
+        receipt.cancelled_outer_attempt_count = 0;
+        receipt.paused_outer_attempt_count = 0;
+        receipt.stationary_observation_count = 1;
+        receipt.refinement_evaluation_count = 0;
+        receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedObservation;
+        assert_ne!(receipt.executed_device_operator_mask, 0);
+        assert!(validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt).is_ok());
+        assert!(validate_strict_fem_gpu_execution_receipt_v2(&receipt).is_ok());
+    }
+
+    #[test]
+    fn strict_v2_runtime_rejects_unknown_bits_even_when_masks_agree() {
+        let mut receipt = strict_receipt_v2_fixture();
+        let unknown = 1u64 << 63;
+        receipt.required_operator_mask |= unknown;
+        receipt.resolved_device_operator_mask |= unknown;
+        receipt.executed_device_operator_mask |= unknown;
+        assert_eq!(
+            validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt),
+            Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing)
+        );
+    }
+
+    #[test]
+    fn strict_v2_runtime_rejects_optional_refinement_for_pgbb() {
+        let mut receipt = strict_receipt_v2_fixture();
+        const NCG_UPDATE: u64 = 1 << 11;
+        const REFINEMENT: u64 = 1 << 15;
+        receipt.relaxation_algorithm = crate::types::FemGpuRelaxationAlgorithm::ProjectedGradientBb;
+        receipt.required_operator_mask &= !(NCG_UPDATE | REFINEMENT);
+        receipt.resolved_device_operator_mask = receipt.required_operator_mask;
+        receipt.executed_device_operator_mask = receipt.required_operator_mask | REFINEMENT;
         assert_eq!(
             validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt),
             Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing)
