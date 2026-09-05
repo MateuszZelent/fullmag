@@ -213,9 +213,39 @@ pub(crate) fn validate_strict_fem_gpu_execution_receipt_v2_runtime(
     if receipt.executed_unknown_operator_mask != 0 {
         return Err(FemGpuExecutionReceiptValidationError::UnknownOperatorExecuted);
     }
+    const DIRECT_MINIMIZER_OPERATOR: u64 = 1 << 10;
+    const RETRACTION_OPERATOR: u64 = 1 << 12;
+    const LINE_SEARCH_OPERATOR: u64 = 1 << 13;
+    const ARMIJO_ENERGY_OPERATOR: u64 = 1 << 14;
+    const DIRECT_ENERGY_REFINEMENT_OPERATOR: u64 = 1 << 15;
+    let direct_ncg = receipt.execution_kind == crate::types::FemGpuExecutionKind::DirectMinimizer
+        && receipt.relaxation_algorithm == crate::types::FemGpuRelaxationAlgorithm::NonlinearCg;
+    let optional_device_operators = if direct_ncg {
+        DIRECT_ENERGY_REFINEMENT_OPERATOR
+    } else {
+        0
+    };
+    let stationary_omittable_operators = if receipt.execution_kind
+        == crate::types::FemGpuExecutionKind::DirectMinimizer
+        && receipt.terminal_outcome == FemGpuTerminalOutcome::CompletedObservation
+        && receipt.stationary_observation_count > 0
+    {
+        DIRECT_MINIMIZER_OPERATOR
+            | RETRACTION_OPERATOR
+            | LINE_SEARCH_OPERATOR
+            | ARMIJO_ENERGY_OPERATOR
+    } else {
+        0
+    };
+    let missing_required_operators = receipt.required_operator_mask
+        & !receipt.executed_device_operator_mask;
+    let executed_operators_valid = receipt.executed_device_operator_mask
+        & !(receipt.required_operator_mask | optional_device_operators)
+        == 0;
     if receipt.required_operator_mask == 0
         || receipt.resolved_device_operator_mask != receipt.required_operator_mask
-        || receipt.executed_device_operator_mask != receipt.required_operator_mask
+        || missing_required_operators & !stationary_omittable_operators != 0
+        || !executed_operators_valid
     {
         return Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing);
     }
@@ -658,6 +688,79 @@ mod tests {
         assert_eq!(
             validate_strict_fem_gpu_performance_snapshot_v3(&bad_snapshot, &receipt),
             Err(FemGpuPerformanceSnapshotValidationError::GenerationMismatch)
+        );
+    }
+
+    #[test]
+    fn strict_v2_runtime_accepts_stationary_subset_and_optional_ncg_refinement() {
+        let mut receipt = strict_receipt_v2_fixture();
+        const TRIAL_OPERATORS: u64 = (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14);
+        const DIRECT_ENERGY_REFINEMENT: u64 = 1 << 15;
+        receipt.executed_device_operator_mask =
+            (receipt.required_operator_mask & !TRIAL_OPERATORS) | DIRECT_ENERGY_REFINEMENT;
+        receipt.stationary_observation_count = 1;
+        receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedObservation;
+
+        assert!(validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt).is_ok());
+        assert!(validate_strict_fem_gpu_execution_receipt_v2(&receipt).is_ok());
+        assert_eq!(receipt.accepted_step_count, 5);
+    }
+
+    #[test]
+    fn strict_v2_runtime_rejects_stationary_subset_missing_non_trial_operator() {
+        let mut receipt = strict_receipt_v2_fixture();
+        const TRIAL_OPERATORS: u64 = (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14);
+        receipt.executed_device_operator_mask =
+            (receipt.required_operator_mask & !TRIAL_OPERATORS) & !(1 << 0);
+        receipt.accepted_step_count = 0;
+        receipt.stationary_observation_count = 1;
+        receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedObservation;
+
+        assert_eq!(
+            validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt),
+            Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing)
+        );
+    }
+
+    #[test]
+    fn strict_v2_runtime_accepts_pgbb_stationary_subset() {
+        let mut receipt = strict_receipt_v2_fixture();
+        const NCG_UPDATE_OPERATOR: u64 = 1 << 11;
+        const TRIAL_OPERATORS: u64 = (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14);
+        let pgbb_required = receipt.required_operator_mask & !NCG_UPDATE_OPERATOR;
+        receipt.required_operator_mask = pgbb_required;
+        receipt.resolved_device_operator_mask = pgbb_required;
+        receipt.executed_device_operator_mask = pgbb_required & !TRIAL_OPERATORS;
+        receipt.relaxation_algorithm = crate::types::FemGpuRelaxationAlgorithm::ProjectedGradientBb;
+        receipt.accepted_step_count = 0;
+        receipt.stationary_observation_count = 1;
+        receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedObservation;
+
+        assert!(validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt).is_ok());
+        assert_eq!(receipt.accepted_step_count, 0);
+    }
+
+    #[test]
+    fn strict_v2_runtime_accepts_accumulated_mask_for_completed_accepted_after_stationary() {
+        let mut receipt = strict_receipt_v2_fixture();
+        receipt.stationary_observation_count = 1;
+        receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedAccepted;
+
+        assert!(validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt).is_ok());
+        assert_eq!(receipt.executed_device_operator_mask, receipt.required_operator_mask);
+    }
+
+    #[test]
+    fn strict_v2_runtime_rejects_incomplete_completed_accepted_after_stationary() {
+        let mut receipt = strict_receipt_v2_fixture();
+        const TRIAL_OPERATORS: u64 = (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14);
+        receipt.executed_device_operator_mask = receipt.required_operator_mask & !TRIAL_OPERATORS;
+        receipt.stationary_observation_count = 1;
+        receipt.terminal_outcome = FemGpuTerminalOutcome::CompletedAccepted;
+
+        assert_eq!(
+            validate_strict_fem_gpu_execution_receipt_v2_runtime(&receipt),
+            Err(FemGpuExecutionReceiptValidationError::RequiredOperatorMissing)
         );
     }
 }

@@ -1599,6 +1599,240 @@ void stationary_without_candidate_cannot_fabricate_accepted_step() {
     check(!state.accounting_valid, "incomplete operator evidence must remain unqualified");
 }
 
+void stationary_observation_accepts_non_trial_operator_subset() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE | FEM_GPU_OPERATOR_RETRACTION |
+        FEM_GPU_OPERATOR_LINE_SEARCH | FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    const uint64_t stationary_operators = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE;
+
+    gpu_execution_receipt_begin_v2(
+        state,
+        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+        FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG,
+        FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES,
+        FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL);
+    gpu_execution_receipt_resolve_plan_v2(
+        state,
+        required,
+        required,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        0,
+        0,
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+            FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+            FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, stationary_operators);
+    gpu_execution_receipt_note_stationary_observation(state);
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(state.accounting_valid,
+          "stationary current-state evaluation must accept its non-trial operator subset");
+    check(state.accepted_step_count == 0,
+          "stationary observation must not fabricate an accepted step");
+    check(state.stationary_observation_count == 1,
+          "stationary observation count must increment exactly once");
+    check(state.executed_device_operator_mask == stationary_operators,
+          "stationary receipt must preserve the actual operator subset");
+    check(gpu_execution_receipt_close_compute_v2(
+              state, FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION),
+          "stationary observation must close compute");
+    check(gpu_execution_receipt_close_observation_v2(state),
+          "stationary observation must close observation");
+}
+
+void stationary_observation_accumulates_validated_masks_after_acceptance() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE | FEM_GPU_OPERATOR_RETRACTION |
+        FEM_GPU_OPERATOR_LINE_SEARCH | FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    const uint64_t stationary_operators = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE;
+
+    gpu_execution_receipt_begin_v2(
+        state,
+        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+        FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG,
+        FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES,
+        FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL);
+    gpu_execution_receipt_resolve_plan_v2(
+        state,
+        required,
+        required,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        0,
+        0,
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+            FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+            FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, required);
+    gpu_execution_receipt_note_candidate_begin(state);
+    gpu_execution_receipt_note_candidate_accepted(state);
+    gpu_execution_receipt_commit_attempt(state);
+    check(state.accepted_step_count == 1,
+          "accepted outer attempt must be counted before stationary observation");
+    check(state.executed_device_operator_mask == required,
+          "accepted outer attempt must publish its complete operator mask");
+
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, stationary_operators);
+    gpu_execution_receipt_note_stationary_observation(state);
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(state.accounting_valid,
+          "stationary observation after acceptance must remain valid");
+    check(state.accepted_step_count == 1,
+          "stationary observation must not increment accepted steps");
+    check(state.stationary_observation_count == 1,
+          "stationary observation count must increment after acceptance");
+    check(state.executed_device_operator_mask == required,
+          "v2 executed mask must preserve the union of validated attempts");
+}
+
+void pgbb_stationary_observation_accepts_non_trial_operator_subset() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_RETRACTION | FEM_GPU_OPERATOR_LINE_SEARCH |
+        FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    const uint64_t stationary_operators = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS;
+
+    gpu_execution_receipt_begin_v2(
+        state,
+        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+        FULLMAG_FEM_GPU_RELAX_ALGORITHM_PROJECTED_GRADIENT_BB,
+        FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES,
+        FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL);
+    gpu_execution_receipt_resolve_plan_v2(
+        state,
+        required,
+        required,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        0,
+        0,
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+            FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+            FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, stationary_operators);
+    gpu_execution_receipt_note_stationary_observation(state);
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(state.accounting_valid,
+          "PG-BB stationary observation must accept its non-trial operator subset");
+    check(state.accepted_step_count == 0,
+          "PG-BB stationary observation must not fabricate an accepted step");
+    check(state.stationary_observation_count == 1,
+          "PG-BB stationary observation count must increment exactly once");
+    check(state.executed_device_operator_mask == stationary_operators,
+          "PG-BB stationary receipt must preserve the actual operator subset");
+}
+
+void accepted_ncg_allows_optional_direct_energy_refinement() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE | FEM_GPU_OPERATOR_RETRACTION |
+        FEM_GPU_OPERATOR_LINE_SEARCH | FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    const uint64_t optional_refinement = FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT;
+
+    gpu_execution_receipt_begin_v2(
+        state,
+        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+        FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG,
+        FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES,
+        FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL);
+    gpu_execution_receipt_resolve_plan_v2(
+        state,
+        required,
+        required,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        0,
+        0,
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+            FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+            FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, required | optional_refinement);
+    gpu_execution_receipt_note_candidate_begin(state);
+    gpu_execution_receipt_note_candidate_refined(state);
+    gpu_execution_receipt_note_candidate_accepted(state);
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(state.accounting_valid,
+          "NCG direct-energy refinement must be accepted when it is not a required plan bit");
+    check(state.accepted_step_count == 1,
+          "optional refinement must remain part of an accepted outer attempt");
+    check(state.executed_device_operator_mask == (required | optional_refinement),
+          "receipt must preserve the optional refinement operator evidence");
+    check(state.refinement_evaluation_count == 1,
+          "optional refinement count must be preserved");
+}
+
+void accepted_ncg_rejects_unplanned_non_refinement_operator() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_NONLINEAR_CG_UPDATE | FEM_GPU_OPERATOR_RETRACTION |
+        FEM_GPU_OPERATOR_LINE_SEARCH | FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+
+    gpu_execution_receipt_begin_v2(
+        state,
+        FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER,
+        FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG,
+        FULLMAG_FEM_GPU_ATTEMPT_MODEL_OUTER_STEP_WITH_ARMIJO_CANDIDATES,
+        FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL);
+    gpu_execution_receipt_resolve_plan_v2(
+        state,
+        required,
+        required,
+        0,
+        0,
+        FemGpuExecutionClass::DeviceResident,
+        0,
+        FULLMAG_FEM_PRECISION_DOUBLE,
+        0,
+        0,
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+            FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+            FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+            FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(state, required | FEM_GPU_OPERATOR_LLG_RHS);
+    gpu_execution_receipt_note_candidate_begin(state);
+    gpu_execution_receipt_note_candidate_accepted(state);
+    gpu_execution_receipt_commit_attempt(state);
+
+    check(!state.accounting_valid,
+          "an unplanned non-refinement operator must remain fail-closed");
+}
+
 int main() {
     stationary_without_candidate_cannot_fabricate_accepted_step();
     accepted_device_attempt_publishes_complete_receipt();
@@ -1624,5 +1858,10 @@ int main() {
     rk_v1_plan_allows_control_scalar_and_prevents_false_violation();
     transfer_recording_during_active_attempt_avoids_double_counting();
     pgbb_plan_resolution_and_attempt_commit_lifecycle();
+    stationary_observation_accepts_non_trial_operator_subset();
+    stationary_observation_accumulates_validated_masks_after_acceptance();
+    pgbb_stationary_observation_accepts_non_trial_operator_subset();
+    accepted_ncg_allows_optional_direct_energy_refinement();
+    accepted_ncg_rejects_unplanned_non_refinement_operator();
     return 0;
 }

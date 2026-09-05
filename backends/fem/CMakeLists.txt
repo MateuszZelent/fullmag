@@ -1337,6 +1337,24 @@ add_test(
     COMMAND fem_gpu_execution_receipt_contract
 )
 
+add_executable(fem_gpu_ncg_runtime_contract tests/gpu_ncg_runtime_contract.cpp)
+target_link_libraries(fem_gpu_ncg_runtime_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_gpu_ncg_runtime_contract PRIVATE CUDA::cudart)
+endif()
+target_include_directories(fem_gpu_ncg_runtime_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_gpu_ncg_runtime_contract COMMAND fem_gpu_ncg_runtime_contract)
+
+add_custom_target(fem_gpu_execution_receipt_contract_suite DEPENDS
+    fem_gpu_execution_receipt_contract
+    fem_demag_poisson_contract
+    fem_gpu_rk_device_controller_contract
+    fem_gpu_relaxation_preconditioner_contract
+    fem_gpu_ncg_runtime_contract
+)
+
 add_executable(
     fem_gpu_performance_snapshot_contract
     tests/gpu_performance_snapshot_contract.cpp

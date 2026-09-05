@@ -1220,12 +1220,14 @@ bool upload_demag_poisson_operators(
         return false;
     }
     workspace.operator_upload_count += 1u;
+    // RHS maps P1 state to potential; recovery maps potential back to P1 state.
+    // The potential row count already includes any periodic node-class reduction.
     SparseApplyCsrDeviceView rhs_csr{
         workspace.rhs.d_row_offsets,
         workspace.rhs.d_col_indices,
         workspace.rhs.d_values_x,
         static_cast<uint32_t>(workspace.rhs.rows),
-        static_cast<uint32_t>(workspace.rhs.rows),
+        static_cast<uint32_t>(workspace.recovery_x.rows),
     };
     std::string plan_err;
     if (!workspace.rhs_plan.setup(rhs_csr, nullptr, plan_err, /*allow_cusparse=*/false)) {
@@ -1237,7 +1239,7 @@ bool upload_demag_poisson_operators(
         workspace.recovery_x.d_col_indices,
         workspace.recovery_x.d_values,
         static_cast<uint32_t>(workspace.recovery_x.rows),
-        static_cast<uint32_t>(workspace.recovery_x.rows),
+        static_cast<uint32_t>(workspace.rhs.rows),
     };
     if (!workspace.recovery_plan.setup(rec_csr, nullptr, plan_err, /*allow_cusparse=*/false)) {
         error = "failed to setup demag recovery sparse apply plan: " + plan_err;

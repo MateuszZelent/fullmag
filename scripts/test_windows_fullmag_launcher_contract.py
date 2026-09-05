@@ -17,13 +17,22 @@ SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
 
 def test_receipt_launcher_exact_runner_tests_exist() -> None:
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
-    tests = re.findall(r"cargo \+nightly test -p fullmag-runner(?: --features fem-gpu)? ([\w:]+) -- --exact", launcher)
+    tests = re.findall(r"cargo \+nightly test -p fullmag-runner(?: --lib)?(?: --features fem-gpu)? ([\w:]+) -- --exact", launcher)
     assert tests
     for qualified_name in tests:
         parts = qualified_name.split("::")
         module_parts = parts[:parts.index("tests")] if "tests" in parts else parts[:1]
         source = ROOT / "crates/fullmag-runner/src" / Path(*module_parts).with_suffix(".rs")
         assert re.search(r"\bfn\s+" + re.escape(parts[-1]) + r"\s*\(", source.read_text(encoding="utf-8")), qualified_name
+
+
+def test_receipt_runner_unit_tests_do_not_build_unrelated_integration_targets() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
+    start = launcher.index('  if ($Contract -eq "gpu-execution-receipt") {')
+    end = launcher.index('  if ($Contract -in @("gpu-benchmark-baseline", "gpu-nsight"))', start)
+    commands = re.findall(r"cargo \+nightly test -p fullmag-runner[^\n]+", launcher[start:end])
+    assert commands
+    assert all(" --lib " in command for command in commands)
 
 
 def test_justfile_exposes_native_windows_fullmag_route() -> None:
@@ -263,8 +272,24 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
         "tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol",
         "types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field",
         "artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2",
+        'cmake --build "`$build_dir" --target fem_gpu_execution_receipt_contract_suite',
+        "FULLMAG_NCG_RUNTIME_DEVICE=cuda ctest",
+        "tests::relaxation_rejects_zhang_li_slonczewski_sot_and_thermal",
+        "strict_v2_runtime_accepts_stationary_subset_and_optional_ncg_refinement",
+        "execution_receipt_v2_maps_stationary_device_evidence_as_cuda_execution",
     ):
         assert required in launcher
+
+    cmake = (ROOT / "backends/fem/CMakeLists.txt").read_text(encoding="utf-8")
+    suite = cmake.split("add_custom_target(fem_gpu_execution_receipt_contract_suite DEPENDS", 1)[1].split(")", 1)[0]
+    for target in (
+        "fem_gpu_execution_receipt_contract",
+        "fem_demag_poisson_contract",
+        "fem_gpu_rk_device_controller_contract",
+        "fem_gpu_relaxation_preconditioner_contract",
+        "fem_gpu_ncg_runtime_contract",
+    ):
+        assert target in suite
 
 
 def test_fem_dmi_gpu_contract_recipe_uses_canonical_windows_launcher() -> None:

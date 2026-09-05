@@ -62,7 +62,7 @@ Własność:
 Zadania:
 - [ ] Prześledź FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY od harnessu do runtime. W audytowanym SHA harness ją przekazuje, ale brak odbiorcy w backendzie/runnerze; request zwykle pozostaje pusty.
 - [ ] Zaproponuj minimalne podłączenie przez istniejący wewnętrzny kontrakt kwalifikowanych profili. Nie dodawaj publicznego parametru Python/ProblemIR i nie traktuj dowolnej zmiennej środowiskowej jako dowodu kwalifikacji.
-- [ ] Test end-to-end wymusza none/diagonal/cg4/cg8 i sprawdza requested, resolved oraz rzeczywisty apply. Nieznany, niekwalifikowany lub niezgodny profil musi failować, nie wykonywać po cichu none.
+- [ ] Test end-to-end wymusza none/diagonal/cg4/cg8 i sprawdza requested, resolved oraz rzeczywisty apply. Nieznany lub niezgodny profil musi failować, nie wykonywać po cichu none. Strict qualification odrzuca profil bez dowodu kwalifikacji; jawnie dopuszczony tryb eksperymentalny może go badać wyłącznie z profile_qualified=false i wynikiem niekwalifikującym. Nie utożsamiaj zgody na eksperyment z kwalifikacją operatora.
 - [ ] Zachowaj produkcyjny default none. Ścieżka eksperymentalna nie może oznaczać automatycznej promocji profilu.
 - [ ] A05: zachowaj capacity i niezmienne diagonale przy samej zmianie lambda; aktualizuj potrzebne wartości bez resetu całego obiektu. Testuj zmianę masy, maski, operatora i rozmiaru.
 - [ ] A06: ogranicz storage/kopie w none tylko po analizie aliasów i lifetime. Nie usuwaj bufora entry snapshot utworzonego przez agenta 3. Zmierzone oszczędności raportuj oddzielnie od teoretycznych 56N bajtów.

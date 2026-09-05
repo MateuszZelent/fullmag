@@ -7375,9 +7375,9 @@ fn direct_minimizer_final_plan_has_no_integrator() {
 
 #[test]
 fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
-    let relaxation = |ir: &mut ProblemIR| {
+    let relaxation = |ir: &mut ProblemIR, algorithm| {
         ir.study = fullmag_ir::StudyIR::Relaxation {
-            algorithm: fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+            algorithm,
             dynamics: Some(ir.study.dynamics().clone()),
             stop: fullmag_ir::RelaxStopIR {
                 torque_tolerance_apm: Some(1e-3),
@@ -7446,28 +7446,35 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
             "prescribed_sot",
         ),
     ];
-    for (module, expected) in cases {
-        let mut ir = ProblemIR::bootstrap_example();
-        relaxation(&mut ir);
-        ir.spin_torque_modules = vec![module];
-        let err = plan(&ir).expect_err("direct torque must be rejected during relaxation");
-        assert!(
-            err.reasons
-                .iter()
-                .any(|reason| reason.contains(expected)
-                    && reason.contains("conservative equilibrium")),
-            "missing {expected} relaxation diagnostic: {:?}",
-            err.reasons
-        );
-    }
+    for algorithm in [
+        fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped,
+        fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+        fullmag_ir::RelaxationAlgorithmIR::NonlinearCg,
+        fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit,
+    ] {
+        for (module, expected) in &cases {
+            let mut ir = ProblemIR::bootstrap_example();
+            relaxation(&mut ir, algorithm);
+            ir.spin_torque_modules = vec![module.clone()];
+            let err = plan(&ir).expect_err("direct torque must be rejected during relaxation");
+            assert!(
+                err.reasons
+                    .iter()
+                    .any(|reason| reason.contains(*expected)
+                        && reason.contains("conservative equilibrium")),
+                "missing {expected} relaxation diagnostic for {algorithm:?}: {:?}",
+                err.reasons
+            );
+        }
 
-    let mut thermal = ProblemIR::bootstrap_example();
-    relaxation(&mut thermal);
-    thermal.temperature = Some(300.0);
-    let err = plan(&thermal).expect_err("thermal relaxation must be rejected");
-    assert!(err.reasons.iter().any(|reason| {
-        reason.contains("thermal noise") && reason.contains("conservative equilibrium")
-    }));
+        let mut thermal = ProblemIR::bootstrap_example();
+        relaxation(&mut thermal, algorithm);
+        thermal.temperature = Some(300.0);
+        let err = plan(&thermal).expect_err("thermal relaxation must be rejected");
+        assert!(err.reasons.iter().any(|reason| {
+            reason.contains("thermal noise") && reason.contains("conservative equilibrium")
+        }));
+    }
 }
 
 #[test]

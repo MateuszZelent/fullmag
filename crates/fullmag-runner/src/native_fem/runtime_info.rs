@@ -688,7 +688,10 @@ impl NativeFemGpuExecutionReceiptV2 {
             return Err(receipt_error("unknown_operator_bits"));
         }
         let resolved = execution_class_name(execution_class);
-        let executed = if receipt.accepted_step_count == 0 {
+        let has_execution_evidence = receipt.executed_device_operator_mask != 0
+            || receipt.executed_host_operator_mask != 0
+            || receipt.executed_unknown_operator_mask != 0;
+        let executed = if !has_execution_evidence {
             "none"
         } else {
             match execution_class {
@@ -1451,6 +1454,24 @@ mod tests {
         assert!(parsed.receipt.accounting_valid);
         assert!(parsed.receipt.lifecycle_valid);
         assert!(parsed.receipt.identity_valid);
+    }
+
+    #[test]
+    fn execution_receipt_v2_maps_stationary_device_evidence_as_cuda_execution() {
+        let mut raw = execution_receipt_v2_fixture();
+        const TRIAL_OPERATORS: u64 = (1 << 10) | (1 << 12) | (1 << 13) | (1 << 14);
+        const DIRECT_ENERGY_REFINEMENT: u64 = 1 << 15;
+        raw.executed_device_operator_mask =
+            (raw.required_operator_mask & !TRIAL_OPERATORS) | DIRECT_ENERGY_REFINEMENT;
+        raw.accepted_step_count = 0;
+        raw.stationary_observation_count = 1;
+        raw.terminal_outcome =
+            ffi::fullmag_fem_gpu_terminal_outcome_v2::FULLMAG_FEM_GPU_TERMINAL_OUTCOME_COMPLETED_OBSERVATION as u32;
+
+        let parsed = NativeFemGpuExecutionReceiptV2::from_ffi(raw, "strict_device").unwrap();
+        assert_eq!(parsed.receipt.executed, "cuda_fem");
+        assert_eq!(parsed.receipt.accepted_step_count, 0);
+        assert_eq!(parsed.receipt.stationary_observation_count, 1);
     }
 
     #[test]

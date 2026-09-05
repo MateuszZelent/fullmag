@@ -6,6 +6,7 @@
 #include "context.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
+#include "gpu/cuda/demag_poisson/operators.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -57,6 +58,43 @@ std::filesystem::path fem_source_root()
 }
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && FULLMAG_HAS_CUDA_RUNTIME
+void gpu_demag_upload_preserves_rectangular_dimensions(
+    uint32_t state_rows,
+    uint32_t potential_rows)
+{
+    fullmag::fem::GpuDemagPoissonWorkspace workspace;
+    workspace.rhs.rows = potential_rows;
+    workspace.rhs.nnz = 1u;
+    workspace.rhs.row_offsets.assign(potential_rows + 1u, 1u);
+    workspace.rhs.row_offsets.front() = 0u;
+    // Leave the last input column empty: max(column) cannot recover the shape.
+    workspace.rhs.col_indices = {state_rows - 2u};
+    workspace.rhs.values_x = {1.0};
+    workspace.rhs.values_y = {2.0};
+    workspace.rhs.values_z = {3.0};
+    workspace.recovery_x.rows = state_rows;
+    workspace.recovery_x.nnz = 1u;
+    workspace.recovery_x.row_offsets.assign(state_rows + 1u, 1u);
+    workspace.recovery_x.row_offsets.front() = 0u;
+    workspace.recovery_x.col_indices = {potential_rows - 2u};
+    workspace.recovery_x.values = {1.0};
+    workspace.recovery_y = workspace.recovery_x;
+    workspace.recovery_z = workspace.recovery_x;
+
+    uint64_t device_bytes = 0u;
+    std::string error;
+    const bool uploaded = fullmag::fem::upload_demag_poisson_operators(
+        workspace, device_bytes, error);
+    check(uploaded, error.c_str());
+    check(workspace.rhs_plan.configured_rows() == potential_rows &&
+              workspace.rhs_plan.configured_cols() == state_rows,
+          "demag RHS upload preserves potential-by-state dimensions and empty trailing columns");
+    check(workspace.recovery_plan.configured_rows() == state_rows &&
+              workspace.recovery_plan.configured_cols() == potential_rows,
+          "demag recovery upload preserves state-by-potential dimensions and empty trailing columns");
+    fullmag::fem::destroy_demag_poisson_operators(workspace);
+}
+
 struct BlockingHostCallbackState {
     std::atomic<bool> started{false};
     std::atomic<bool> release{false};
@@ -257,6 +295,8 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
 int main()
 {
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && FULLMAG_HAS_CUDA_RUNTIME
+    gpu_demag_upload_preserves_rectangular_dimensions(3u, 5u); // P1 state / P2 potential.
+    gpu_demag_upload_preserves_rectangular_dimensions(5u, 3u); // PBC node-class reduction.
     gpu_hypre_demag_rejects_one_iteration_candidate();
 #endif
     const std::filesystem::path root = fem_source_root();

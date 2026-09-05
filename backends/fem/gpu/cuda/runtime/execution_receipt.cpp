@@ -129,12 +129,40 @@ bool attempt_is_valid(const FemGpuExecutionReceiptRuntimeState &state) {
     const uint64_t host = state.attempt_host_operator_mask;
     const uint64_t unknown = state.attempt_unknown_operator_mask;
     const uint64_t executed = device | host | unknown;
+    const bool direct_ncg =
+        state.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER &&
+        state.relaxation_algorithm == FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONLINEAR_CG;
+    const uint64_t optional_device_operators = direct_ncg
+        ? FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT
+        : 0;
+    const uint64_t stationary_omittable_operators =
+        state.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER &&
+        state.attempt_is_stationary_observation
+        ? FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+            FEM_GPU_OPERATOR_RETRACTION |
+            FEM_GPU_OPERATOR_LINE_SEARCH |
+            FEM_GPU_OPERATOR_ARMIJO_ENERGY
+        : 0;
+    const bool required_operators_valid =
+        (state.required_operator_mask &
+            ~executed &
+            ~stationary_omittable_operators) == 0;
+    const bool executed_operators_valid =
+        (executed &
+            ~(state.required_operator_mask | optional_device_operators)) == 0;
+    const bool resolved_device_operators_valid = stationary_omittable_operators != 0
+        ? (state.resolved_device_operator_mask &
+            ~(device | stationary_omittable_operators)) == 0
+        : direct_ncg
+            ? (state.resolved_device_operator_mask & ~device) == 0
+            : device == state.resolved_device_operator_mask;
     return state.accounting_valid &&
         ((executed | state.required_operator_mask) & ~FEM_GPU_OPERATOR_KNOWN_MASK) == 0 &&
         !masks_overlap(device, host, unknown) &&
         unknown == 0 &&
-        executed == state.required_operator_mask &&
-        device == state.resolved_device_operator_mask &&
+        required_operators_valid &&
+        executed_operators_valid &&
+        resolved_device_operators_valid &&
         host == state.resolved_host_operator_mask &&
         state.resolved_unknown_operator_mask == 0 &&
         state.attempt_fallback_count == 0 &&
@@ -411,9 +439,15 @@ void gpu_execution_receipt_commit_attempt(FemGpuExecutionReceiptRuntimeState &st
         clear_attempt(state);
         return;
     }
-    state.executed_device_operator_mask = state.attempt_device_operator_mask;
-    state.executed_host_operator_mask = state.attempt_host_operator_mask;
-    state.executed_unknown_operator_mask = 0;
+    if (state.execution_kind == FULLMAG_FEM_GPU_EXECUTION_KIND_DIRECT_MINIMIZER) {
+        state.executed_device_operator_mask |= state.attempt_device_operator_mask;
+        state.executed_host_operator_mask |= state.attempt_host_operator_mask;
+        state.executed_unknown_operator_mask |= state.attempt_unknown_operator_mask;
+    } else {
+        state.executed_device_operator_mask = state.attempt_device_operator_mask;
+        state.executed_host_operator_mask = state.attempt_host_operator_mask;
+        state.executed_unknown_operator_mask = 0;
+    }
     state.hot_loop_compute_h2d_bytes = state.attempt_transfer_h2d_bytes;
     state.hot_loop_compute_d2h_bytes = state.attempt_transfer_d2h_bytes;
     state.hot_loop_compute_host_sync_count = state.attempt_transfer_host_sync_count;
