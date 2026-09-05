@@ -410,5 +410,33 @@ describe("planar renderer lifecycle", () => {
     // Exactly 2 strokes, no doubling!
     expect(context.stroke).toHaveBeenCalledTimes(2);
   });
+
+  it("draws arrowheads for in-plane vectors and out-of-plane markers for normal components", () => {
+    const context = {
+      arc: vi.fn(), beginPath: vi.fn(), clearRect: vi.fn(), fillStyle: "",
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(),
+      stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+
+    // 1 in-plane vector, 1 positive normal vector (odot), 1 negative normal vector (otimes)
+    drawPlanarOverlays(context, 100, 100, {
+      glyphs: [
+        { index: 0, normal: 0, u: 0.5, v: 0 },
+        { index: 1, normal: 1, u: 0, v: 0 },
+        { index: 2, normal: -1, u: 0, v: 0 },
+      ],
+      gridWidth: 3,
+      gridHeight: 1,
+      layers: { boundaries: false, contours: false, mesh: false, vectors: true },
+      vectorColorMode: "magnitude",
+    });
+
+    // In-plane vector drew main line + 2 arrowhead barbs (3 lineTo calls)
+    // Positive normal drew circle and center dot (2 arc calls)
+    // Negative normal drew circle (1 arc call) and cross (2 lineTo calls)
+    expect(context.stroke).toHaveBeenCalledTimes(3);
+    expect(context.arc).toHaveBeenCalledTimes(3);
+    expect(context.lineTo).toHaveBeenCalled();
+  });
 });
 

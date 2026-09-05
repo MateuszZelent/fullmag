@@ -1,6 +1,6 @@
 export interface PlanarColorizeRequest {
   colormap?: string;
-  contours?: { enabled: boolean; level: number };
+  contours?: { enabled: boolean; level?: number; levels?: readonly number[] };
   height: number;
   id: number;
   kind: "colorize";

@@ -98,8 +98,13 @@ export function usePlanarSurfaceRenderer(
     maskRef.current = model.layers.probes ? model.mask : null;
     const glyphs = model.layers.vectors && model.vectors
       ? buildVectorGlyphs(model.vectors, model.vectorBudget, 1e-15, {
+          bounds: model.bounds,
+          gridHeight: model.resolution[1],
+          gridWidth: model.resolution[0],
           lengthMode: model.vectorStyle.lengthMode,
+          mask: model.mask ?? undefined,
           maxLengthCells: 0.4 * model.vectorScale,
+          vectorScale: model.vectorScale,
         })
       : [];
     const mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
@@ -212,11 +217,22 @@ export function usePlanarSurfaceRenderer(
           });
         },
       );
+      const contourLevels: number[] = [];
+      if (model.layers.contours && range.max > range.min) {
+        const n = 5;
+        const step = (range.max - range.min) / (n + 1);
+        for (let i = 1; i <= n; i++) {
+          contourLevels.push(range.min + i * step);
+        }
+      } else {
+        contourLevels.push((range.min + range.max) / 2);
+      }
       colorizerRef.current.colorize(model.scalar, range, model.mask ?? undefined, {
         colormap: model.colormap,
         contours: model.layers.contours,
         height: model.resolution[1],
         level: (range.min + range.max) / 2,
+        levels: contourLevels,
         opacity: model.rasterOpacity ?? 1,
         width: model.resolution[0],
       });

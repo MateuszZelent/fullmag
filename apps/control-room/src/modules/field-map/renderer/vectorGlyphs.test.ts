@@ -46,4 +46,38 @@ describe("vector glyph selection", () => {
     expect(buildVectorGlyphs(vectors, 2, 1e-15, { lengthMode: "magnitude", maxLengthCells: 0.3 }))
       .toMatchObject([{ u: 0.1 }, { u: 0.3 }]);
   });
+
+  it("samples vectors deterministically in 2D tiles and provides physical coordinates", () => {
+    // 4x4 grid, total 16 cells.
+    const vectors = new Float64Array(16 * 3);
+    for (let i = 0; i < 16; i++) {
+      vectors[i * 3] = 1; // u
+      vectors[i * 3 + 1] = 2; // v
+      vectors[i * 3 + 2] = 0.5; // normal
+    }
+    // Mask out top row (y=3, indices 12..15)
+    const mask = new Uint8Array(16);
+    for (let i = 12; i < 16; i++) mask[i] = 1; // empty
+
+    const glyphs = buildVectorGlyphs(vectors, 4, 1e-15, {
+      bounds: [0, 4, 0, 4],
+      gridHeight: 4,
+      gridWidth: 4,
+      lengthMode: "uniform",
+      mask,
+      maxLengthCells: 0.4,
+    });
+
+    expect(glyphs.length).toBeGreaterThan(0);
+    expect(glyphs.length).toBeLessThanOrEqual(4);
+    for (const g of glyphs) {
+      expect(g.worldU).toBeDefined();
+      expect(g.worldV).toBeDefined();
+      expect(g.origU).toBe(1);
+      expect(g.origV).toBe(2);
+      expect(g.origNormal).toBe(0.5);
+      // Ensure no sample from the masked top row was chosen
+      expect(g.index).toBeLessThan(12);
+    }
+  });
 });

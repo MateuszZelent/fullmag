@@ -1,5 +1,5 @@
 import { colorizeScalarRaster } from "./colorRaster";
-import { marchingSquares } from "./marchingSquares";
+import { marchingSquares, marchingSquaresLevels } from "./marchingSquares";
 import type {
   PlanarColorizeRequest,
   PlanarColorizeResponse,
@@ -18,13 +18,21 @@ export function colorizePlanarRendererRequest(
       { colormap: request.colormap, opacity: request.opacity },
     ),
     contours: request.contours?.enabled
-      ? marchingSquares(
-          request.values,
-          request.width,
-          request.height,
-          request.contours.level,
-          request.mask,
-        )
+      ? request.contours.levels && request.contours.levels.length > 0
+        ? marchingSquaresLevels(
+            request.values,
+            request.width,
+            request.height,
+            request.contours.levels,
+            request.mask,
+          )
+        : marchingSquares(
+            request.values,
+            request.width,
+            request.height,
+            request.contours.level ?? (request.range.min + request.range.max) / 2,
+            request.mask,
+          )
       : [],
   };
 }

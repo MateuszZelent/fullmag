@@ -164,15 +164,42 @@ export function drawPlanarOverlays(
       const scaleY = canvasHeight / Math.max(1e-12, viewport[3] - viewport[2]);
       const originX = (x + 0.5 - viewport[0]) * scaleX;
       const originY = canvasHeight - (y + 0.5 - viewport[2]) * scaleY;
-      context.moveTo(originX, originY);
-      context.lineTo(
-        (x + 0.5 + glyph.u - viewport[0]) * scaleX,
-        canvasHeight - (y + 0.5 + glyph.v - viewport[2]) * scaleY,
-      );
-      if (Math.abs(glyph.normal) > 1e-15) {
-        const normalDirection = glyph.normal < 0 ? -1 : 1;
+      const endX = (x + 0.5 + glyph.u - viewport[0]) * scaleX;
+      const endY = canvasHeight - (y + 0.5 + glyph.v - viewport[2]) * scaleY;
+      const dx = endX - originX;
+      const dy = endY - originY;
+      const inPlaneLengthPx = Math.hypot(dx, dy);
+
+      if (inPlaneLengthPx > 2) {
         context.moveTo(originX, originY);
-        context.lineTo(originX + normalDirection * 0.25 * scaleX, originY);
+        context.lineTo(endX, endY);
+
+        const headLength = Math.min(8, Math.max(3, inPlaneLengthPx * 0.3));
+        const angle = Math.atan2(dy, dx);
+        const barbAngle = Math.PI / 6;
+        context.moveTo(endX, endY);
+        context.lineTo(
+          endX - headLength * Math.cos(angle - barbAngle),
+          endY - headLength * Math.sin(angle - barbAngle),
+        );
+        context.moveTo(endX, endY);
+        context.lineTo(
+          endX - headLength * Math.cos(angle + barbAngle),
+          endY - headLength * Math.sin(angle + barbAngle),
+        );
+      } else if (Math.abs(glyph.normal) > 1e-15) {
+        const radius = Math.max(2.5, Math.min(5, 3 * (layers.vectorStyle?.thickness ?? 1)));
+        context.arc(originX, originY, radius, 0, Math.PI * 2);
+        if (glyph.normal > 0) {
+          context.moveTo(originX + radius * 0.3, originY);
+          context.arc(originX, originY, radius * 0.3, 0, Math.PI * 2);
+        } else {
+          const d = radius * 0.707;
+          context.moveTo(originX - d, originY - d);
+          context.lineTo(originX + d, originY + d);
+          context.moveTo(originX - d, originY + d);
+          context.lineTo(originX + d, originY - d);
+        }
       }
       context.stroke();
     }
@@ -314,14 +341,27 @@ export function extractFdmOccupancyBoundaries(
 }
 
 function vectorGlyphStrokeStyle(
-  glyph: { normal: number; u: number; v: number },
+  glyph: { normal: number; u: number; v: number; origNormal?: number; origU?: number; origV?: number },
   colorMode: string | undefined,
 ): string {
   if (colorMode === "orientation") {
-    const hue = Math.round(((Math.atan2(glyph.v, glyph.u) * 180) / Math.PI + 360) % 360);
+    const u = glyph.origU ?? glyph.u;
+    const v = glyph.origV ?? glyph.v;
+    const hue = Math.round(((Math.atan2(v, u) * 180) / Math.PI + 360) % 360);
     return `hsl(${hue} 80% 60%)`;
   }
-  if (colorMode === "normal") return glyph.normal < 0 ? "var(--fm-danger)" : "var(--fm-info)";
+  if (colorMode === "normal") {
+    const normal = glyph.origNormal ?? glyph.normal;
+    return normal < 0 ? "var(--fm-danger)" : "var(--fm-info)";
+  }
+  if (colorMode === "magnitude") {
+    const u = glyph.origU ?? glyph.u;
+    const v = glyph.origV ?? glyph.v;
+    const normal = glyph.origNormal ?? glyph.normal;
+    const mag = Math.hypot(u, v, normal);
+    const hue = Math.round(Math.min(280, Math.max(0, 240 - Math.min(1, mag) * 200)));
+    return `hsl(${hue} 85% 55%)`;
+  }
   return "currentColor";
 }
 

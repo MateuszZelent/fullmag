@@ -1,3 +1,5 @@
+import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";
+
 export type ContourSegment = readonly [number, number, number, number];
 
 const CASE_EDGES: Readonly<Record<number, readonly [number, number][]>> = {
@@ -41,12 +43,48 @@ export function marchingSquares(
           result | (value >= level ? 1 << index : 0),
         0,
       );
-      for (const [a, b] of CASE_EDGES[code] ?? []) {
+      if (code === 0 || code === 15) continue;
+
+      let edgesToConnect: readonly [number, number][];
+      if (code === 5) {
+        // Saddle case 5: corners 0 and 2 are >= level; corners 1 and 3 are < level
+        const denom = (cell[0]! + cell[2]!) - (cell[1]! + cell[3]!);
+        const saddle = Math.abs(denom) > 1e-12
+          ? (cell[0]! * cell[2]! - cell[1]! * cell[3]!) / denom
+          : (cell[0]! + cell[1]! + cell[2]! + cell[3]!) / 4;
+        edgesToConnect = saddle >= level ? [[0, 1], [2, 3]] : [[3, 0], [1, 2]];
+      } else if (code === 10) {
+        // Saddle case 10: corners 1 and 3 are >= level; corners 0 and 2 are < level
+        const denom = (cell[1]! + cell[3]!) - (cell[0]! + cell[2]!);
+        const saddle = Math.abs(denom) > 1e-12
+          ? (cell[1]! * cell[3]! - cell[0]! * cell[2]!) / denom
+          : (cell[0]! + cell[1]! + cell[2]! + cell[3]!) / 4;
+        edgesToConnect = saddle >= level ? [[3, 0], [1, 2]] : [[0, 1], [2, 3]];
+      } else {
+        edgesToConnect = CASE_EDGES[code] ?? [];
+      }
+
+      for (const [a, b] of edgesToConnect) {
         const start = edgePoint(a, x, y, cell, level);
         const end = edgePoint(b, x, y, cell, level);
         segments.push([start[0], start[1], end[0], end[1]]);
       }
     }
+  }
+  return segments;
+}
+
+export function marchingSquaresLevels(
+  values: ArrayLike<number>,
+  width: number,
+  height: number,
+  levels: readonly number[],
+  mask?: ArrayLike<number>,
+): ContourSegment[] {
+  const segments: ContourSegment[] = [];
+  for (const level of levels) {
+    if (!Number.isFinite(level)) continue;
+    segments.push(...marchingSquares(values, width, height, level, mask));
   }
   return segments;
 }
@@ -73,4 +111,3 @@ function edgePoint(
     corners[a]![1]! + t * (corners[b]![1]! - corners[a]![1]!),
   ];
 }
-import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";

@@ -41,7 +41,8 @@ export function createPlanarColorizer(
         colormap: string;
         contours: boolean;
         height: number;
-        level: number;
+        level?: number;
+        levels?: readonly number[];
         opacity: number;
         width: number;
       },
@@ -51,7 +52,7 @@ export function createPlanarColorizer(
       const workerValues = clonePlanarValuesForWorker(values);
       const request: PlanarColorizeRequest = {
         colormap: options.colormap,
-        contours: { enabled: options.contours, level: options.level },
+        contours: { enabled: options.contours, level: options.level, levels: options.levels },
         height: options.height,
         id: latestId,
         kind: "colorize",
