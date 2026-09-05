@@ -70,3 +70,68 @@ Obowiązuje [README promptów](../../superpowers/plans/2026-09-05-fem-gpu-agent-
 4. Pozostają A07/A08, A12, produkcyjne testy A10/A14 i A16. Nie utożsamiać ukończenia agentów 1–3 z ukończeniem wszystkich punktów A01–A16.
 
 Z WIP można odzyskiwać wyłącznie wybrane, ponownie przejrzane i przetestowane zmiany. Rozpoznanie none/diagonal/cg4/cg8 nie jest dowodem kwalifikacji operatora.
+
+
+## Aktualizacja odbioru i stan domknięcia (2026-09-05, godz. 17:55)
+
+### Status i tożsamość kodu
+
+```yaml
+inspection_code_sha: 99a94ad174de5c290bffda54ca9eec26aaf86744
+candidate_code_sha: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a
+verified_code_sha: NOT_VERIFIED
+source_branch: codex/fem-gpu-tasks1-5-remediation
+source_worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation
+source_snapshot_sha256: NOT_RECORDED
+code_commit_available_on_remote: LOCAL_ONLY
+managed_native_contracts: PARTIALLY_VERIFIED
+managed_rust_contracts: NOT_RUN
+windows_launcher_contracts: VERIFIED
+ncg_cache_miss_hit: VERIFIED
+ncg_natural_refinement: NOT_VERIFIED
+ncg_refinement_witness: NOT_RECORDED
+ncg_post_refinement_fresh_work: NOT_VERIFIED
+full_physics_qualification: NOT_VERIFIED
+performance_ab: NOT_VERIFIED
+agents_4_5_implementation_gate: BLOCKED
+```
+
+### Zakres wdrożonych poprawek i regresji
+
+1. **Strict managed gate (commit C1: `0694cd661c76efc42e9cba7852bf460082a7d172`):**
+   - Dodano `fem_cuda_periodic_demag_contract` do zestawu aggregate target `fem_gpu_execution_receipt_contract_suite` w `backends/fem/CMakeLists.txt`.
+   - Zastąpiono blok receiptu w launcherze `scripts/windows/run_fullmag_fem.ps1` literalnym blokiem wymuszającym `-Device gpu`, `FULLMAG_REQUIRE_CUDA_CONTRACTS=1`, `FULLMAG_NCG_RUNTIME_DEVICE=cuda`, serializację CTest (`--parallel 1 --no-tests=error`) oraz walidację raportów JUnit XML pod kątem `skipped`, `failure`, `error` i obecności `SKIP:` w logach.
+   - Wdrożono skrypt `scripts/validate_exact_rust_test_log.py` i jego regresje `scripts/test_validate_exact_rust_test_log.py` (9/9 pytest PASS).
+   - Rozszerzono `scripts/test_windows_fullmag_launcher_contract.py` o testy obecności periodic demag, wymogu CUDA, serializacji CTest, walidacji JUnit i odnajdywania 24 dokładnych filtrów Rust runnera (41/41 pytest PASS).
+
+2. **Receipt v1/v2 i domknięcie stanów (commit C2: `7ba57890e0acd83ffbef0dff6078bdf39678c8bc`):**
+   - Zachowano niezmienione publiczne ABI v1.
+   - Dodano niezależną ochronę `KNOWN_OPERATOR_MASK_V2` ((1 << 16) - 1) w `validate_strict_fem_gpu_execution_receipt_v2_runtime` w `crates/fullmag-runner/src/fem/execution_receipt.rs`.
+   - Wdrożono 3 unit testy w Rust: akceptacja stationary NCG bez accepted steps, odrzucenie nieznanych bitów operatorów oraz odrzucenie bitu refinementu dla PG-BB.
+   - Dodano regresje maszyny stanów w `backends/fem/tests/gpu_execution_receipt_contract.cpp`: izolacja generacji (brak przenoszenia dowodów operatorów ze starej generacji) oraz ochrona przed rozszerzaniem zatwierdzonej maski przez nieważną próbę.
+
+3. **NCG proof closure i poszukiwanie refinementu (commit C3: `596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a`):**
+   - W `backends/fem/tests/gpu_ncg_runtime_contract.cpp` dodano asercje `std::isfinite` na energii snapshotu i torqu.
+   - Rozszerzono `check_device_execution` o pełną walidację receiptu: `execution_class == DeviceResident`, `fallback_count == 0`, brak transferów compute/exchange na hosta, zgodność masek `required == resolved == executed & required`.
+   - Zaimplementowano funkcję `try_ncg_refinement_trajectory_case` przeszukującą do 128 kolejnych kroków relaksacji NCG pod kątem naturalnego świadka doprecyzowania Armijo z badaniem świeżej pracy (cache miss, świeże pola/energie/demag) na kolejnym kroku.
+   - Wprowadzono fail-closed `main()` wymagający realnego urządzenia CUDA w trybie managed.
+
+### Wyniki uruchomienia w kontenerze i stan bramki
+
+W managed runie w kontenerze (`fullmag-fem-runtime-dev`):
+- `fem_gpu_execution_receipt_contract`: PASSED
+- `fem_demag_poisson_contract`: PASSED (potwierdzone prostokątne wymiary RHS i recovery)
+- `fem_gpu_rk_device_controller_contract`: PASSED
+- `fem_gpu_relaxation_preconditioner_contract`: PASSED
+- `fem_cuda_periodic_demag_contract`: PASSED (obie orientacje siatki demag)
+- `fem_gpu_ncg_runtime_contract`:
+  - `check_ncg_endpoint_cache_miss_then_hit()`: PASSED (miss na kroku 1, hit na kroku 2, oszczędność ewaluacji energii i brak zbędnego apply pola).
+  - `check_ncg_refined_energy_reuse()`: FAILED CLOSED na asercji `no legitimate CUDA demag NCG fixture entered production Armijo refinement`.
+    Wszystkie 5 badanych fizycznych trajektorii NCG (129 wykonanych kroków) w każdym kroku natychmiast spełniało warunek akceptacji Armijo (`upper <= rhs`, z krokiem energetycznym `delta ~ -8.3e-31 J` znacznie bardziej ujemnym niż `rhs ~ -8.8e-35 J`). W żadnym kroku kandydat nie znalazł się w wąskim przedziale niepewności numerycznej demag `[delta - bound, delta + bound]` wymaganym do wyzwolenia decyzji `Refine`.
+
+Zgodnie z sekcją 5.6 i 11 planu naprawy:
+- Nie wprowadzono sztucznego przełącznika "force refinement" ani nie rozluźniono warunków testu.
+- Końcowy błąd został zachowany zgodnie z zasadą fail-closed.
+- Status punktu N02 pozostaje **NOT VERIFIED**.
+- Faza Rust nie została uruchomiona z powodu fail-closed przerwania CTest; jej status to **NOT RUN**.
+- Bramka implementacyjna agentów 4–5 pozostaje **BLOCKED**.

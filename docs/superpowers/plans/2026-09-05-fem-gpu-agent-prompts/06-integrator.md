@@ -41,16 +41,39 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 
 ## Twoje zadanie
 
-Pełny SHA startowy po poprawkach review: `4ddd9bb6209042c99b75bde35b1d6d92c12df22b`. Natywne kontrakty 4/4 PASS, ABI 3/3 PASS; pełny run just zatrzymany podczas części Rust, więc nie ma pełnego PASS recepty. Odtwórz brakującą bramkę i rozwiąż poniższe blokady przed zwolnieniem optymalizacji. Patrz docs/reports/05.09.2026/agent-1-3-integration-review.md.
+ZADANIE INTEGRATORA
 
-Zakres: integracja pięciu agentów, A16, dokumentacja statusu i końcowy raport.
-Najpierw przeczytaj README z harmonogramem. Nie uruchamiaj od razu wszystkich implementacji. Ten prompt nie upoważnia do tworzenia nowych zadań w aplikacji ani do push/master; koordynuj dostarczone branche.
+Utrzymuj jeden zatwierdzony punkt startowy agentów 4 i 5:
+596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (kandydat C3; stan bramki: BLOCKED) na branchu codex/fem-gpu-tasks1-5-remediation,
+ze źródłowego worktree
+C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Podaj prawdziwą informację o lokalnej/zdalnej dostępności SHA.
 
-Aktualizacja po integracji: nie twórz kolejnego konkurencyjnego głównego brancha. Używaj istniejącego kanonicznego worktree po potwierdzeniu wyłącznej własności. WIP jest zabezpieczony na codex/fem-gpu-pre-integration-wip-20260905 (672bf44188052fe1a0ad1f42cd7188a196162906), nie został scalony. Nie przywracaj go automatycznie. Agent 3 miał wcześniejszy wariant agenta 2; finalny wariant został scalony przez 27f7feede57d3669f5d93d03b92443bf24ac5483, a agent 1 przez 307ef39994df4c6ca14dbe564afc33154af1942a. Nie powtarzaj tych operacji.
+Przed startem kolejnej fali przeczytaj aktualny plan domknięcia, integration review,
+README i prompty 4–5, AGENTS.md/skills oraz właściwe kontrakty fizyki i benchmarku.
 
-Pierwsza bramka: sprawdź poprawki review normy CPU PCG, czasu i publikacji decyzji RK, polityki hostowej kontroli oraz rzeczywistych producerów PG-BB. Sprawdź stationary observation bez fikcyjnego line-search/accepted candidate. Wymagaj regresji NCG cache miss→hit i refined Armijo przez produkcyjny caller; source assertions i ręczne liczniki nie wystarczają. Bez pełnego dowodu pozostaw właściwe lane NOT VERIFIED.
+Nie powtarzaj merge'ów 1–3 ani odebranej implementacji A14.
+Nie nadaj profile_qualified=true na podstawie środowiska lub liczników testowych.
+Zachowaj WIP 672bf44188052fe1a0ad1f42cd7188a196162906 i cudze zmiany.
 
-Blokady przed zwolnieniem agenta 4 do implementacji: przetestuj stationary-only observation (pełna maska w native/Rust oraz mapper v2 ukrywający executed przy zerowym accepted), opcjonalny bit DIRECT_ENERGY_REFINEMENT w NCG przy dokładnej równości required/executed i produkcyjne regresje NCG. Runtime validator v2 już ogranicza wymaganie accepted_step_count > 0 do CompletedAccepted; nie przenoś tego wymagania na CompletedObservation. Nie rozluźniaj globalnie walidatora. STT/SOT nie są legalnym wariantem PG-BB: crates/fullmag-plan/src/validate.rs::validate_conservative_relaxation odrzuca je zgodnie z docs/physics/0580 sekcja 2.4. Sprawdź regresję odrzucenia wszystkich algorytmów, nie dopisuj LLG direct-torque do executed mask. Szczegóły: docs/reports/05.09.2026/agent-1-3-integration-review.md. Do zamknięcia bramki agent 4 może prowadzić analizę; agent 5 może przygotować izolowane testy DG0 bez przejmowania sparse.
+Integruj wyłącznie zamrożone commity przekazane przez właścicieli zakresów.
+Nie edytuj tych samych plików, gdy agent 4/5 jeszcze je modyfikuje.
+Wspólne ABI, CMake, justfile, launcher i receipty zmieniaj szeregowo.
+Po każdej integracji wykonaj nowy managed build/test; wynik z brancha agenta
+nie jest automatycznie wynikiem zmergowanego drzewa.
+
+Wymagane komendy:
+python -B -m pytest scripts/test_windows_fullmag_launcher_contract.py -q -p no:cacheprovider
+python -B -m pytest scripts/test_validate_exact_rust_test_log.py -q -p no:cacheprovider
+just verify-fem-gpu-execution-receipt-contract
+
+Zwolnij DG0/A13 i loader/preconditioner tylko po domknięciu bieżącej bramki.
+Zwolnij A11 dopiero po integracji i przekazaniu pracy agenta 4.
+Nie uruchamiaj agentów automatycznie bez osobnego polecenia.
+
+Raport końcowy: pełne SHA, rzeczywiste komendy i wyniki, source/binary/image identity,
+świadek refinement, pozostałe NOT VERIFIED oraz decyzja o zwolnieniu każdej fazy.
+Testy kontraktowe nie są dowodem przyspieszenia ani pełnej kwalifikacji fizyki.
 
 Twoja odpowiedzialność:
 - Potwierdź repo/worktree i baseline, zapisz jawne SHA wejściowe każdej fali.

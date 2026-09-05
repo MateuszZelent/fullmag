@@ -32,6 +32,26 @@ To instrukcje zlecenia, nie gotowe patche ani deklaracja kwalifikacji. Wykonawca
 | 5 | DG0; później backend exchange | [Prompt 5](05-exchange-dg0.md) |
 | 6 | integracja, kwalifikacja A16, dokumentacja | [Prompt 6](06-integrator.md) |
 
+## BRAMKA STARTOWA AGENTÓW 4–5
+
+Stan: BLOCKED do czasu pełnej weryfikacji.
+Pełny sprawdzony SHA kodu: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (kandydat C3; bramka BLOCKED z powodu N02).
+Branch źródłowy: codex/fem-gpu-tasks1-5-remediation.
+Kanoniczny worktree źródłowy:
+C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
+Dowody: native 5/6 PASS (receipt, Poisson demag, RK controller, preconditioner, periodic demag PASS; NCG cache miss->hit PASS, refinement NOT VERIFIED), host launcher i log validator 50/50 PASS.
+
+Po zwolnieniu bramki:
+- Agent 4: loader/preconditioner; osobny worktree ze wspólnego SHA.
+- Agent 5: wyłącznie DG0/A13; osobny worktree z tego samego SHA.
+- Agent 5 / A11 sparse: zablokowane do integracji i przekazania przez agenta 4.
+- Agent 6: integruje zamrożone commity i weryfikuje wynik po scaleniu.
+
+Nie uruchamiać nowej fali automatycznie.
+Wspólne ABI, CMake, justfile, launcher, receipts i dokumenty zbiorcze
+mają jednego właściciela w danym momencie: integratora albo jawnie wskazanego agenta.
+
 ## Harmonogram i blokady
 
 1. Agent 6/integrator kończy odbiór 1–3: rzeczywista norma CPU PCG, transakcje RK, prawdziwe zdarzenia PG-BB oraz regresje NCG. Nie powtarza wykonanych merge. Zapisuje SHA po poprawkach i zakres świeżych testów.

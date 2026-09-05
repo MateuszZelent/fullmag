@@ -41,17 +41,26 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 
 ## Twoje zadanie
 
-Pełny SHA poprawek review: `4ddd9bb6209042c99b75bde35b1d6d92c12df22b`. Analizę i przygotowanie testów DG0 możesz oprzeć na nim; implementację i późniejsze przejęcie sparse uzgodnij z agentem 6 zgodnie z blokadami README.
+PUNKT WEJŚCIA
+Start implementacji A13 dopiero z: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (ten sam kandydat C3 co agent 4; stan bramki: BLOCKED).
+Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
+Źródłowy worktree:
+C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
+Pracuj w osobnym worktree/branchu, nie w checkoutcie integratora.
 
-Zakres: A13 i A11.
-A13 możesz rozpocząć równolegle z agentem 4 po przekazaniu wspólnego SHA przez integratora. Agenci 1–3 zakończyli swoje serie; nie powtarzaj ich implementacji. A11 rozpocznij dopiero po correctness baseline, integracji agenta 4 i formalnym przekazaniu sparse. Zmiany mfem_context.cpp z WIP 672bf44188052fe1a0ad1f42cd7188a196162906 nie są zatwierdzonym wejściem — nie scalaj całego WIP.
+ZAKRES
+- Wyłącznie A13: stałoczasowy DG0 membership powiązany z wersją/lifetime.
+- A11 (cuSPARSE / sparse) pozostaje zablokowane do integracji i przekazania przez agenta 4.
+- Dozwolony plik DG0: backends/fem/cpu/mfem/runtime/mfem_context.cpp (wyłącznie AdapterBackedElementwiseCoefficient/DG0 membership).
+- Nie modyfikuj Context ani wspólnych plików ABI/receipts.
 
-Własność:
-- backends/fem/cpu/mfem/runtime/mfem_context.cpp — wyłącznie AdapterBackedElementwiseCoefficient/DG0 membership.
-- backends/fem/gpu/cuda/exchange/exchange_upload.cpp
-- backends/fem/gpu/cuda/sparse/
-- backends/fem/gpu/cuda/integrators/rk/rk_exchange_dispatch.cu — dopiero po zwolnieniu przez agenta 2.
-Nie traktuj całego mfem_context.cpp jako zgody na refaktor Context.
+WERYFIKACJA
+Właściwe istniejące managed testy DG0/materiałów +
+just verify-fem-gpu-execution-receipt-contract po integracji.
+Nie uruchamiać konkurencyjnych buildów/benchmarków na tej samej karcie.
+Nie włączać globalnie cuSPARSE ani nie zmieniać stosu bibliotek.
+Przekazać zamrożone SHA i dowody; brak pomiaru oznacza NOT VERIFIED.
 
 Zadania:
 - [ ] A13: zastąp powtarzany liniowy std::find stałoczasowym membership związanym z poprawną tożsamością/wersją listy elementów. Najpierw sprawdź, czy odpowiednia mapa już istnieje.

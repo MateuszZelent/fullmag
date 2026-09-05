@@ -41,23 +41,47 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 
 ## Twoje zadanie
 
-Pełny SHA poprawek review: `4ddd9bb6209042c99b75bde35b1d6d92c12df22b`. To wejście analizy, nie automatyczna zgoda na optymalizacje. Najpierw agent 6 zamyka blokady wskazane w README; jego kolejne pełne SHA będzie wejściem implementacji.
+PUNKT WEJŚCIA I ZALEŻNOŚCI
 
-Zakres: brak produkcyjnego loadera profilu, A05, A06, A09.
-Start implementacji: dopiero po integracji poprawności agentów 2 i 3. Agent 3 kończy najpierw statusy redukcji i własność historii NCG.
+Implementacja jest zablokowana, dopóki README nie zawiera pełnego sprawdzonego SHA
+oraz dowodów native, Rust, launchera i naturalnego refinement NCG.
+Startuj wyłącznie z: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (kandydat C3, stan: BLOCKED).
+Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
+Źródłowy worktree:
+C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Commit: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
+Nie zakładaj dostępności lokalnego commita przez zdalny GitHub.
 
-Aktualizacja po review: nie powtarzaj A03/A04/A10/A14/A15. Nie dodawaj backupu previous_preconditioned_gradient bez wykazania stale-read; przegląd ścieżki zapisu przed odczytem nie potwierdził takiego błędu. A10/A14 nadal wymagają testu produkcyjnego cache miss→hit/refined Armijo, którego ręcznie zbudowane liczniki nie zastępują.
+Przeczytaj AGENTS.md i wymagane skills, kontrakty 0580/0581,
+plan domknięcia, agent-1-3-integration-review.md, README promptów,
+odpowiednie instrukcje A05/A06/A09 i macierz walidacji fizyki pierwotnego audytu.
 
-WIP 672bf44188052fe1a0ad1f42cd7188a196162906 jest wyłącznie materiałem do przeglądu. Nie scalaj go: rozpoznany token środowiskowy nie upoważnia do ustawienia profile_qualified=true. Rozdziel jawne dopuszczenie eksperymentalnego uruchomienia od naukowej/produkcyjnej kwalifikacji. Nie rozszerzaj publicznego API bez decyzji projektowej.
-
-Możesz działać równolegle z agentem 5 tylko w jego fazie DG0/A13. Sparse pozostaje twoją własnością do przekazania agentowi 5; wspólne receipty/backend_step wymagają uzgodnienia z integratorem.
-
-Własność:
+DOZWOLONY ZAKRES
 - backends/fem/gpu/cuda/relaxation/gpu_relaxation_preconditioner.cpp
 - backends/fem/gpu/cuda/relaxation/gpu_exchange_mass_preconditioner.cpp
-- backends/fem/gpu/cuda/relaxation/relaxation_memory.cpp i powiązany stan.
-- scripts/analysis/fem_gpu_benchmark.py i istniejące testy jego kontraktu.
-- Minimalny istniejący native resolver/ABI potrzebny do kwalifikowanego profilu — po zatwierdzeniu granicy przez integratora.
+- backends/fem/gpu/cuda/relaxation/relaxation_memory.cpp i związany stan,
+  wyłącznie po analizie lifetime i własności
+- scripts/analysis/fem_gpu_benchmark.py i istniejące testy kontraktu
+- istniejący resolver/ABI: wyłącznie minimalny zakres uzgodniony z integratorem
+
+Zachowaj default none, double baseline, frozen/PBC, kontrakt energii i operatora.
+Rozpoznany token środowiskowy nie jest profile_qualified=true.
+Tryb eksperymentalny musi pozostać jawnie niekwalifikowany.
+Nie scalać całego WIP 672bf44188052fe1a0ad1f42cd7188a196162906.
+Nie powtarzać implementacji A10/A14, jeżeli została odebrana; brak benchmarku
+nie oznacza braku implementacji.
+
+WERYFIKACJA I ODBIÓR
+Managed: just verify-fem-gpu-execution-receipt-contract.
+Dodatkowe testy preconditionera i A/B zgodnie z istniejącą dokumentacją 0581.
+Wymagany produkcyjny dowód requested -> resolved -> rzeczywisty apply
+none/diagonal/cg4/cg8, poprawność operatora i brak ukrytego fallbacku.
+Każda optymalizacja ma osobny correctness baseline i porównywalne A/B.
+
+WSPÓŁPRACA
+Równolegle może działać wyłącznie agent 5 w zakresie DG0/A13.
+Sparse pozostaje zablokowane dla agenta 5 do formalnego przekazania.
+Nie edytuj równolegle wspólnych plików; przekaż zamrożone SHA integratorowi.
 
 Zadania:
 - [ ] Prześledź FULLMAG_FEM_GPU_RELAXATION_PRECONDITIONER_STRATEGY od harnessu do runtime. W audytowanym SHA harness ją przekazuje, ale brak odbiorcy w backendzie/runnerze; request zwykle pozostaje pusty.
