@@ -1,9 +1,9 @@
 # FEM GPU Direct-Minimizer Exchange-Mass Preconditioning
 
-- Status: approved phase-1 remediation design; implementation and qualification
-  remain `NOT VERIFIED`
+- Status: phase-1 remediation implemented and contract-verified; production
+  qualification and performance promotion remain `NOT VERIFIED / NOT PROMOTED`
 - Owners: Fullmag FEM backend
-- Last updated: 2026-09-04
+- Last updated: 2026-09-05
 - Related physics notes:
   - `docs/physics/0510-fem-relaxation-algorithms-mfem-gpu.md`
   - `docs/physics/0560-all-in-gpu-fem-runtime.md`
@@ -20,22 +20,25 @@ default. On refined or exchange-dominated meshes, a qualified approximation to
 the exchange-plus-mass inverse could reduce accepted steps, Armijo trials, and
 demagnetizing solves without changing the physical energy or stopping rule.
 
-### Current source status (2026-09-04)
+### Current source status (2026-09-05)
 
-The `GpuDiagonalRelaxationPreconditioner` class is a diagonal/Jacobi
-approximation. Its setup receives only mass and exchange
-diagonals and uploads the pointwise factor $M_i/(M_i+wK_{ii})$, where the
-physical direct-minimizer contract requires
-$w=\lambda(2/\mu_0)$ for $K_A$ stored in joules; it
-does not apply the off-diagonal entries of the sparse exchange matrix. Its `setup()` is
-called by the focused contract test, not by the production NCG or PG-BB setup.
-The two production call sites conditionally invoke the pointwise apply only
-when the object is active and currently ignore the returned status.
+The phase-1 remediation implementation provides two distinct preconditioner
+realizations for direct minimizers on GPU:
+1. `GpuDiagonalRelaxationPreconditioner`: pointwise diagonal/Jacobi approximation
+   factoring active nodal mass and exchange stiffness diagonals ($M_i/(M_i+wK_{ii})$).
+2. `GpuExchangeMassPreconditioner`: device-resident fixed-iteration conjugate gradient
+   solver (`exchange_mass_cg4` and `exchange_mass_cg8`) solving the full operator
+   $(M+wK)\mathbf{z}=M\mathbf{g}$ across active magnetic nodes using device CSR matrices.
 
-The benchmark makes this boundary explicit: `exchange_mass` maps to `None` and
-is rejected as having no C++ runtime realization. Therefore the current source
-does not implement the full operator $(M+wK)^{-1}M$, does not provide a
-fail-closed active runtime path, and does not prove fewer NCG or PG-BB steps.
+NCG selects preconditioning via `gpu_relaxation_is_preconditioned(gpu.relaxation)`,
+ensuring both diagonal and sparse fixed-CG profiles execute the preconditioned
+PR+ direction recursion, $z \cdot g$ line search derivative, and restart logic.
+Device breakdown in fixed-CG sets a monotonic failure latch that stops the attempt,
+triggers rollback to the accepted state, and enables subsequent attempts to recover cleanly.
+
+The benchmark harness maps `exchange_mass_cg4` and `exchange_mass_cg8` to their
+underlying C++ runtime realizations (`RELAXATION_PRECONDITIONER_RUNTIME_NAMES`) and
+generates structured direct-minimizer matrix and Nsight summaries.
 
 ### Historical no-go (2026-07-26)
 
@@ -52,25 +55,19 @@ The immutable historical record remains in
 `docs/audits/evidence/task-11/task-11-relaxation-preconditioner-qualification.json`,
 and `.superpowers/sdd/task-11-report.md`.
 
-### Phase 1 remediation (approved, not qualified)
+### Phase 1 remediation qualification status
 
-The approved phase-1 design replaces the misleading diagonal realization with
-two explicit families: `diagonal` for the pointwise approximation and
-`exchange_mass_cg4|cg8` for a future fixed-iteration solve using the complete
-device CSR. At this documentation checkpoint that full sparse implementation,
-its algorithm integration, receipt, parity, and benchmark campaign do not yet
-exist. Approval of the design is not runtime evidence.
+While the source, unit, and container contract tests are verified, production
+qualification is separated from contract verification:
 
-Evidence status for the new phase-1 candidate is intentionally fail-closed:
+- Source & Unit Contracts: `VERIFIED` (`fem_gpu_relaxation_preconditioner_contract`, `relaxation_source_contract`, `gpu-execution-receipt`, Python suites pass)
+- Runtime Integration: `VERIFIED` (NCG/PG-BB wiring, failure latch, receipt v2/snapshot v3)
+- CPU/GPU Parity Campaign: `NOT VERIFIED` (requires full baseline parity sweep)
+- Physics Qualification: `NOT VERIFIED` (no public promotion without 5-repetition convergence)
+- Performance Promotion: `NOT PROMOTED` (production default remains strictly `none`)
 
-- Capability: `NOT VERIFIED`
-- Runtime: `NOT VERIFIED`
-- CPU/GPU parity: `NOT VERIFIED`
-- Physics validation: `NOT VERIFIED`
-- Performance: `NOT VERIFIED`
-
-The production default remains `none`. No public selector, automatic promotion,
-or Python/ProblemIR field is introduced by this note.
+The production default remains `none`. No public parameter, automatic promotion,
+or uncoordinated Python/ProblemIR field is introduced.
 
 (fem-gpu-preconditioner-governing-equations)=
 ## 2. Governing equations

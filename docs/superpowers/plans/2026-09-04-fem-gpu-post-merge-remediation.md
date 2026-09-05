@@ -22,13 +22,13 @@
 
 Zadanie 0 zamyka blokady poprawności istniejącego kodu; zadania 1–6 tworzą konieczny łańcuch integracji i pomiarów. Następne zadania są odrębnymi podprojektami: ich wykonanie zależy od wyniku profilu, nie od atrakcyjności technologii. Nie prowadzić jednocześnie zmian NCG i receipt w tych samych plikach przez różne modele.
 
-### 0. Zabezpieczyć RK i wymuszoną walidację Poisson
+### 0. Zabezpieczyć RK i wymuszoną walidację Poisson (ZAKOŃCZONE — commit 532f090f6)
 
 Pliki: `backends/fem/gpu/cuda/integrators/rk/rk_step.cu`, `rk_graph.cpp`, `rk_final_refresh.cu`, `backends/fem/gpu/cuda/demag_poisson/hypre_device_solver.cpp`; testy graph/transaction/Poisson. Uzasadnienie: R1/R2/H1 w [aneksie](../../audits/2026-09-04-fem-gpu-post-merge/SUBSYSTEMS.md).
 
-- [ ] Dodać test wymuszonego Captured na niezerowym RHS: porównuje m, czas i rzeczywiste wywołania RHS z graph-off. Obecnego testu copy/memset nie uznawać za ten test. Najpierw ma ujawnić brak pełnego kroku.
-- [ ] Do czasu pełnej implementacji usuwać wybór niepełnego grafu z produkcyjnego dispatchu przez jednoznaczny fail-closed albo uzgodniony fallback do istniejącej pełnej pętli. Nie ustawiać liczników RHS na podstawie liczby etapów bez wykonania tych etapów.
-- [ ] Dodać fault injection commit_candidate=false: oczekiwany brak zaakceptowanego kroku i błąd finalizacji. Minimalna propagacja w finalizerze:
+- [x] Dodać test wymuszonego Captured na niezerowym RHS: porównuje m, czas i rzeczywiste wywołania RHS z graph-off. Obecnego testu copy/memset nie uznawać za ten test. Najpierw ma ujawnić brak pełnego kroku.
+- [x] Do czasu pełnej implementacji usuwać wybór niepełnego grafu z produkcyjnego dispatchu przez jednoznaczny fail-closed albo uzgodniony fallback do istniejącej pełnej pętli. Nie ustawiać liczników RHS na podstawie liczby etapów bez wykonania tych etapów.
+- [x] Dodać fault injection commit_candidate=false: oczekiwany brak zaakceptowanego kroku i błąd finalizacji. Minimalna propagacja w finalizerze:
 
   ```cpp
   if (!commit_candidate(ctx, gpu.rk.candidate, stream, reason)) {
@@ -39,62 +39,62 @@ Pliki: `backends/fem/gpu/cuda/integrators/rk/rk_step.cu`, `rk_graph.cpp`, `rk_fi
 
   Przed zatwierdzeniem sprawdzić również, czy przed tym punktem nie zmieniono stanu wymagającego rollbacku; caller ma zakończyć attempt jako failed, nie accepted.
 
-- [ ] W Poisson zastąpić stałe false odczytem tej samej, rozstrzyganej poza gorącą pętlą polityki wymuszonej walidacji, której używa FK. Test przy zgłoszonym solver success i force=true musi wykazać niezależne residuum; force=false zachowuje dotychczasową warunkowość.
-- [ ] Wykonać `just verify-fem-gpu-rk-transaction-contract`, `just verify-fem-time-domain-native-contract`, `just verify-fem-demag-poisson-contract-focused`. Bramka: testy negatywne i pełny rzeczywisty krok działają, niepełny graf nie może być promowany.
+- [x] W Poisson zastąpić stałe false odczytem tej samej, rozstrzyganej poza gorącą pętlą polityki wymuszonej walidacji, której używa FK. Test przy zgłoszonym solver success i force=true musi wykazać niezależne residuum; force=false zachowuje dotychczasową warunkowość.
+- [x] Wykonać `just verify-fem-gpu-rk-transaction-contract`, `just verify-fem-time-domain-native-contract`, `just verify-fem-demag-poisson-contract-focused`. Bramka: testy negatywne i pełny rzeczywisty krok działają, niepełny graf nie może być promowany.
 
-### 1. Ustalić jedną bazę i rozliczyć WIP
+### 1. Ustalić jedną bazę i rozliczyć WIP (ZAKOŃCZONE — commit 261b87aea)
 
 Pliki: 19 plików starego worktree wymienionych w audycie; aktywne `relaxation/*`, `state/gpu_state.cpp`, `runtime/mfem_context.cpp`, harness i testy Python.
 
-- [ ] Zapisać osobno status/diff obu katalogów oraz dokładne HEAD; potwierdzić `git merge-base --is-ancestor a1ba0369e2d8a9cd9e62eb9c0cde5b3873fd5401 HEAD` (oczekiwany exit 0).
-- [ ] Przypisać każdy hunk do PG-BB, NCG, receipt albo harness. Porównać kolizje ABI i lifecycle przed przeniesieniem; nie wykonywać zbiorczego checkout plików ze starego katalogu.
-- [ ] Przenosić zaakceptowane fragmenty w odpowiednich zadaniach poniżej. Pozostawić oryginały do potwierdzenia kompletności.
-- [ ] Bramka: żadna zmiana nie znika; HEAD/origin oraz lista WIP są jednoznaczne; nie twierdzić, że przeniesienie WIP oznacza już poprawność.
+- [x] Zapisać osobno status/diff obu katalogów oraz dokładne HEAD; potwierdzić `git merge-base --is-ancestor a1ba0369e2d8a9cd9e62eb9c0cde5b3873fd5401 HEAD` (oczekiwany exit 0).
+- [x] Przypisać każdy hunk do PG-BB, NCG, receipt albo harness. Porównać kolizje ABI i lifecycle przed przeniesieniem; nie wykonywać zbiorczego checkout plików ze starego katalogu.
+- [x] Przenosić zaakceptowane fragmenty w odpowiednich zadaniach poniżej. Pozostawić oryginały do potwierdzenia kompletności.
+- [x] Bramka: żadna zmiana nie znika; HEAD/origin oraz lista WIP są jednoznaczne; nie twierdzić, że przeniesienie WIP oznacza już poprawność.
 
-### 2. Naprawić fallback i ukończyć PG-BB
+### 2. Naprawić fallback i ukończyć PG-BB (ZAKOŃCZONE — commit 1a03fa18c, 1423bba69)
 
 Pliki: `backends/fem/gpu/cuda/relaxation/pgbb.cpp`, `relaxation_memory.cpp/.hpp`, `relaxation_state.hpp`, `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp`. Kontrakt wejściowy: odrębne g i z, stały plan sparse, wybrany profil; wyjściowy: poprawny kierunek/pochodna i transakcyjne przyjęcie próby.
 
-- [ ] Dodać przypadek wymuszający niezstępujące z i zapamiętujący oryginalne g; oczekiwać po fallbacku z=g oraz g bez zmian. Uruchomić istniejącą recepturę `just verify-fem-demag-fem-bem-native-contract`; nowy przypadek musi wykazać błędny kierunek kopiowania przed poprawką.
-- [ ] W istniejącym wywołaniu `gpu_rk_copy_component_device` dla `raw-gradient descent fallback` ustawić pierwsze argumenty dokładnie w kolejności:
+- [x] Dodać przypadek wymuszający niezstępujące z i zapamiętujący oryginalne g; oczekiwać po fallbacku z=g oraz g bez zmian. Uruchomić istniejącą recepturę `just verify-fem-demag-fem-bem-native-contract`; nowy przypadek musi wykazać błędny kierunek kopiowania przed poprawką.
+- [x] W istniejącym wywołaniu `gpu_rk_copy_component_device` dla `raw-gradient descent fallback` ustawić pierwsze argumenty dokładnie w kolejności:
 
   ```cpp
   gpu.rk.k[0],
   gpu.relaxation.preconditioned_gradient,
   ```
 
-- [ ] Podłączyć kwalifikowany profil raz przed startem minimizera; rozróżnić request, resolved kind, fixed_iterations i powód odmowy. Testować none/diagonal/CG4/CG8, nieprawidłową tożsamość profilu i nieobsługiwaną kombinację.
-- [ ] Oddzielić utworzenie buforów od aktualizacji lambda. Dla diagonali sprawdzać zmienne lambda bez ponownych cudaMalloc/cudaFree/H2D w iteracjach; dla none nie alokować dodatkowych preconditioner-only danych.
-- [ ] Przetestować przyjęcie, odrzucenie, nie-finite, błąd CUDA, inactive/frozen nodes i odtworzenie stanu. Potwierdzić oryginalny raw-gradient stopping metric.
-- [ ] Bramka: managed kontrakty przechodzą, test wymuszonego fallbacku ma RED/GREEN, trace nie ujawnia alokacji w hot loop; porównanie PG-BB CPU/GPU dopiero po zgodnych parametrach.
+- [x] Podłączyć kwalifikowany profil raz przed startem minimizera; rozróżnić request, resolved kind, fixed_iterations i powód odmowy. Testować none/diagonal/CG4/CG8, nieprawidłową tożsamość profilu i nieobsługiwaną kombinację.
+- [x] Oddzielić utworzenie buforów od aktualizacji lambda. Dla diagonali sprawdzać zmienne lambda bez ponownych cudaMalloc/cudaFree/H2D w iteracjach; dla none nie alokować dodatkowych preconditioner-only danych.
+- [x] Przetestować przyjęcie, odrzucenie, nie-finite, błąd CUDA, inactive/frozen nodes i odtworzenie stanu. Potwierdzić oryginalny raw-gradient stopping metric.
+- [x] Bramka: managed kontrakty przechodzą, test wymuszonego fallbacku ma RED/GREEN, trace nie ujawnia alokacji w hot loop; porównanie PG-BB CPU/GPU dopiero po zgodnych parametrach.
 
-### 3. Wdrożyć prawdziwy preconditioned PR+ NCG
+### 3. Wdrożyć prawdziwy preconditioned PR+ NCG (ZAKOŃCZONE — commit 18775773f, 1423bba69)
 
 Pliki: `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp`, `pgbb_kernels.cu/.hpp`, `relaxation_state.hpp`; referencja `backends/fem/cpu/mfem/relaxation/nonlinear_cg.cpp::next_direction_pr_plus`; test preconditionera i kontrakty relaksacji.
 
-- [ ] Najpierw test porównujący beta i kierunek CPU/GPU na tej samej małej siatce z nietrywialnym g != z, z transportem poprzedniego z. Obecna rekurencja oparta wyłącznie na g nie może zaliczać tego testu jako preconditioned PR+.
-- [ ] Zachować osobno aktualne/poprzednie g, z i kierunek. Użyć tych samych wag i transportu co CPU, bez redefiniowania normy stopu.
-- [ ] Przenieść obliczenie kierunku i pochodnej za poprawnie zakończone apply; propagować jego bool/error. Testować awarię apply bez publikacji częściowego kroku.
-- [ ] Przetestować beta ujemne/restart, prawie zerowy mianownik, nieskończony wynik, utratę kierunku zstępującego i backtracking. Porównać niezależnie resztę układu preconditionera oraz trajektorię minimizacji.
-- [ ] Wykonać `just verify-fem-demag-fem-bem-native-contract` oraz `just verify-fem-relaxation-runtime` właściwą trasą kontenerową. Bramka: zgodność kontraktu CPU/GPU, brak cichego fallbacku CPU, brak dowodu performance zastępowanego samą liczbą iteracji.
+- [x] Najpierw test porównujący beta i kierunek CPU/GPU na tej samej małej siatce z nietrywialnym g != z, z transportem poprzedniego z. Obecna rekurencja oparta wyłącznie na g nie może zaliczać tego testu jako preconditioned PR+.
+- [x] Zachować osobno aktualne/poprzednie g, z i kierunek. Użyć tych samych wag i transportu co CPU, bez redefiniowania normy stopu.
+- [x] Przenieść obliczenie kierunku i pochodnej za poprawnie zakończone apply; propagować jego bool/error. Testować awarię apply bez publikacji częściowego kroku.
+- [x] Przetestować beta ujemne/restart, prawie zerowy mianownik, nieskończony wynik, utratę kierunku zstępującego i backtracking. Porównać niezależnie resztę układu preconditionera oraz trajektorię minimizacji.
+- [x] Wykonać `just verify-fem-demag-fem-bem-native-contract` oraz `just verify-fem-relaxation-runtime` właściwą trasą kontenerową. Bramka: zgodność kontraktu CPU/GPU, brak cichego fallbacku CPU, brak dowodu performance zastępowanego samą liczbą iteracji.
 
-### 4. Zintegrować receipt v2/snapshot v3 end-to-end
+### 4. Zintegrować receipt v2/snapshot v3 end-to-end (ZAKOŃCZONE — commit a86e219a2, 1423bba69)
 
 Pliki: `backends/fem/gpu/cuda/runtime/execution_receipt.cpp/.hpp`, `performance_counters.cpp/.hpp`, `backends/fem/src/api.cpp`, `native/include/fullmag_fem.h`, `crates/fullmag-fem-sys/src/lib.rs`, `crates/fullmag-runner/src/fem/execution_receipt.rs`, `crates/fullmag-runner/src/fem/relax/finalize.rs` i odpowiednie pliki runnera ze starego WIP. Podstawą jest istniejący design `docs/superpowers/specs/2026-09-04-fem-gpu-ncg-receipt-v2-snapshot-v3-design.md`.
 
-- [ ] Porównać rozmiary/layout ABI, numery wersji i walidację długości C/Rust; test odrzuca niezgodny payload zamiast czytać poza buforem.
-- [ ] Sprawdzić reset liczników pomiędzy run/stage, monotoniczne liczniki prób, odrzuceń, RHS, preconditionera i rzeczywisty resolved backend.
-- [ ] Przetestować publikację końcową success/failure/cancel: receipt musi odpowiadać tej samej sesji, źródłom i zaakceptowanemu stanowi. Nie zastępować błędu pozytywnym pustym receipt.
-- [ ] Wykonać `just verify-fem-gpu-execution-receipt-contract` i testy Rust ABI/runnera przez zarządzaną trasę FEM. Bramka: spójne C → Rust → artefakt; profile request nie jest mylony z executed strategy.
+- [x] Porównać rozmiary/layout ABI, numery wersji i walidację długości C/Rust; test odrzuca niezgodny payload zamiast czytać poza buforem.
+- [x] Sprawdzić reset liczników pomiędzy run/stage, monotoniczne liczniki prób, odrzuceń, RHS, preconditionera i rzeczywisty resolved backend.
+- [x] Przetestować publikację końcową success/failure/cancel: receipt musi odpowiadać tej samej sesji, źródłom i zaakceptowanemu stanowi. Nie zastępować błędu pozytywnym pustym receipt.
+- [x] Wykonać `just verify-fem-gpu-execution-receipt-contract` i testy Rust ABI/runnera przez zarządzaną trasę FEM. Bramka: spójne C → Rust → artefakt; profile request nie jest mylony z executed strategy.
 
-### 5. Domknąć harness i porównywalność
+### 5. Domknąć harness i porównywalność (ZAKOŃCZONE — commit ce015952d, 1423bba69)
 
 Pliki: `scripts/analysis/fem_gpu_benchmark.py`, `scripts/analysis/capture_fem_gpu_nsight.py`, `scripts/test_fem_gpu_benchmark_contract.py`, `scripts/test_capture_fem_gpu_nsight.py`.
 
-- [ ] Dokończyć mapowanie rzeczywistych trybów runtime dopiero po zadaniach 2–4; test musi odrzucać nazwę strategii, której receipt nie potwierdza.
-- [ ] Zapewnić pytest w zarządzanym środowisku testowym i wykonać oba moduły; obecny wynik 20 unittestów nie zastępuje brakującego zestawu Nsight.
-- [ ] Negatywne przypadki: różne mesh/material/source/runtime/GPU, brak terminalnego receipt, zero kernel activity, brak surowych wyników, wyjście runnera !=0, przekroczona tolerancja, różne stopping criteria. Każdy ma odrzucać promotion.
-- [ ] Bramka: `python scripts/test_fem_gpu_benchmark_contract.py` oraz `python -m pytest scripts/test_capture_fem_gpu_nsight.py -q -p no:cacheprovider` kończą się exit 0 w deklarowanym środowisku, a testy negatywne nie akceptują nieporównywalnych par.
+- [x] Dokończyć mapowanie rzeczywistych trybów runtime dopiero po zadaniach 2–4; test musi odrzucać nazwę strategii, której receipt nie potwierdza.
+- [x] Zapewnić pytest w zarządzanym środowisku testowym i wykonać oba moduły; obecny wynik 20 unittestów nie zastępuje brakującego zestawu Nsight.
+- [x] Negatywne przypadki: różne mesh/material/source/runtime/GPU, brak terminalnego receipt, zero kernel activity, brak surowych wyników, wyjście runnera !=0, przekroczona tolerancja, różne stopping criteria. Każdy ma odrzucać promotion.
+- [x] Bramka: `python scripts/test_fem_gpu_benchmark_contract.py` oraz `python -m pytest scripts/test_capture_fem_gpu_nsight.py -q -p no:cacheprovider` kończą się exit 0 w deklarowanym środowisku, a testy negatywne nie akceptują nieporównywalnych par.
 
 ### 6. Wykonać pierwszy kwalifikowany baseline A/B i profil
 

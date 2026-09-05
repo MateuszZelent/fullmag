@@ -100,3 +100,24 @@ Wcześniejsze w tej sesji 13/13 managed native contract oraz sanitizer rdzenia C
 To wewnętrzny raport źródłowo-operacyjny, nie nowa publikacja fizyczna ani nowy publiczny API. Nie wprowadza równań, jednostek, parametrów Python ani zmian ProblemIR. FDM CPU/GPU pozostaje poza zakresem zmian; FEM CPU jest referencją porównawczą, FEM GPU przedmiotem audytu. Aktualizacje publikacji naukowej przy implementacji muszą przejść jej source-map i walidator scientific-documentation-contract.
 
 Szczegóły podsystemów: [aneks](SUBSYSTEMS.md). Dalsze zadania i bramki: [plan](../../superpowers/plans/2026-09-04-fem-gpu-post-merge-remediation.md).
+
+## Addendum remediacji (5 września 2026)
+
+W ramach gałęzi `codex/fem-gpu-tasks1-5-remediation` wykonano remediację i weryfikację kontraktową zadań 1–5 (commity `18775773f`, `ce015952d`, `1423bba69`):
+
+1. **Wybór preconditioned NCG:** Warunek w `nonlinear_cg.cpp` korzysta z `gpu_relaxation_is_preconditioned(gpu.relaxation)`, poprawnie obsługując strategie `diagonal`, `exchange_mass_cg4` oraz `exchange_mass_cg8`.
+2. **Failure latch fixed-CG w NCG:** Urządzeniowy wskaźnik awarii jest enkawowany w metrykach kroku bieżącego i zaakceptowanego (`kNcgCurrentPreconditionerFailureTailSlot`, `kNcgAcceptedPreconditionerFailureTailSlot`). Readback na hoście sprawdza latch, wycofuje stan do zaakceptowanego (rollback) i umożliwia powrót do poprawnego stanu przy ponownej próbie po re-setupie. Latch pozostaje monotoniczny (fail-closed) podczas kolejnych wywołań `apply` pod tą samą tożsamością setupu.
+3. **Receipt v2 / Snapshot v3 end-to-end:** Plan v2 ogranicza `execution_kind` ściśle do `DIRECT_MINIMIZER` i dynamicznie ustala `relaxation_algorithm` (`NONLINEAR_CG` vs `PROJECTED_GRADIENT_BB`) na podstawie masek operatorów, nie naruszając kanonicznego `RK_TIME_INTEGRATOR` dla LLG. Liczniki transferów i rezydencji zostały podłączone do odczytów skalarów oraz obsługi awarii/anulowania prób.
+4. **Harness benchmarku i Nsight CLI:** Dodano mapowanie `exchange_mass_cg4` i `exchange_mass_cg8` w `RELAXATION_PRECONDITIONER_RUNTIME_NAMES` oraz generatory podsumowań `write_direct_minimizer_benchmark_matrix_summary` i `write_direct_minimizer_capture_summary`. Zachowano ścisły produkcyjny default `none`.
+5. **Dowody testowe:**
+   - Kontenerowy kontrakt wykonania receipt v2 (`scripts/windows/run_fullmag_fem.ps1 -Contract gpu-execution-receipt`): **PASS** (exit 0)
+   - CTest kontenera (`fem_gpu_relaxation_preconditioner_contract`, `fem_relaxation_source_contract`): **PASS** (100% tests passed, 2/2)
+   - Zestaw testów Pythona (`scripts/test_fem_gpu_benchmark_contract.py`, `scripts/test_capture_fem_gpu_nsight.py`): **PASS** (53 passed, 22 subtests passed)
+   - Kwalifikacja logów runtime (`scripts/test_validate_fem_relaxation_runtime_log.py -k task11`): **PASS** (38 passed)
+
+### Podział statusów
+- **Source & Contracts:** `VERIFIED`
+- **Runtime:** `VERIFIED`
+- **Physics Qualification:** `NOT VERIFIED` (wymaga pełnego benchmarku z zadania 6)
+- **Performance:** `NOT PROMOTED` (produkcyjny domyślny profil pozostaje `none`)
+- **Następny krok:** Zadanie 6 — realizacja kampanii 5 powtórzeń baseline A/B oraz profilowanie Nsight przed jakąkolwiek promocją produkcyjną.
