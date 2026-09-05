@@ -1,42 +1,39 @@
 ---
 name: frontend-v2-module-architecture
-description: Use when modifying apps/control-room modules, module manifests, module registry, layout slots, command/menu/ribbon contributions, or cross-module interactions.
+description: "Use when modifying apps/control-room modules, module manifests, module registry, layout slots, command/menu/ribbon contributions, or cross-module interactions."
 ---
 
 # Frontend v2 Module Architecture
 
-Use this to protect the `apps/control-room` module-kernel boundary.
+Use this skill for module-kernel boundaries in `apps/control-room`. The user instruction and root `AGENTS.md` take precedence. Reuse any already loaded frontend/API skill.
 
-## Required Checks
+## Required checks
 
 1. Read `docs/specs/frontend-v2/01-module-kernel-architecture.md` and `02-module-catalog.md`.
-2. Identify the affected module id and slot.
-3. Verify every module has `manifest.ts` and a root component accepting `ModuleProps`.
-4. Reject imports from `src/modules/A` to `src/modules/B`.
-5. Use kernel events, command registry, resource hooks, or `src/shared` instead of cross-module imports.
-6. Keep module stores private to their module.
-7. Keep manifest contributions declarative and side-effect free.
-8. Render menu, ribbon, toolbar, tabs, context menus, command palette, dialogs, switches, and tooltips through shared shadcn/ui-style primitives, not module-local widget systems.
-9. Keep module root files small; split before the hard review thresholds in the spec.
+2. Identify the affected module id, manifest, slot, and root component.
+3. Verify the module has `manifest.ts` and a root component accepting `ModuleProps`.
+4. Reject imports from one module's internal path into another module's internal path. Relative imports inside the same module are valid.
+5. Use kernel events, command registry, resource hooks, or `src/shared` instead of cross-module imports or shell callback plumbing.
+6. Keep module stores private and manifest contributions declarative and side-effect free.
+7. Use shared shadcn/ui-style primitives for menus, ribbons, tabs, dialogs, context menus, switches, segmented controls, tooltips, and command palettes.
+8. Consume `--fm-*` Catppuccin tokens; do not add raw component colors or a second widget system.
 
-## Banned Patterns
+## Banned patterns
 
 - importing another module's store, component, hook, renderer, or internal type;
-- passing callback props through the shell to connect modules;
-- commented-out module registrations as a feature toggle;
-- module-local command systems that bypass the kernel command registry;
-- module code importing from `apps/web`.
-- bespoke module-local menu/ribbon/tab/dropdown/dialog/tooltip primitives when a shared shadcn/ui-style primitive exists.
-- raw colors in module CSS; modules must consume `--fm-*` Catppuccin tokens.
+- callback props through the shell to connect modules;
+- commented-out registrations as feature toggles;
+- module-local command systems bypassing the kernel registry;
+- imports from the legacy tree;
+- bespoke menu/ribbon/tab/dropdown/dialog/tooltip primitives when a shared primitive exists.
 
 ## Verification
 
-Run or emulate the narrow checks:
+Prefer the repository architecture gate and then the narrow checks:
 
-```bash
-rg "from ['\"]\\.\\./" apps/control-room/src/modules
-rg "apps/web|ControlRoomContext|normalizeSession|mergeSession" apps/control-room/src
+```powershell
+pnpm --dir apps/control-room check:architecture-hygiene
 pnpm --dir apps/control-room typecheck
 ```
 
-If the v2 app does not exist yet, document which check will be added with the module.
+Use a boundary-aware search or the architecture script to find imports crossing `apps/control-room/src/modules/<module-id>` boundaries. Do not use a blanket `from ../` grep because it rejects valid local imports. If the v2 module is not present, record the intended gate for the implementation.

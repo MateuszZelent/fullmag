@@ -1,76 +1,28 @@
 ---
 name: full-output-enforcement
-description: Overrides default LLM truncation behavior. Enforces complete, unabridged output and complete cross-layer Fullmag refactors when the user asks for exhaustive work, avoiding placeholders, partial migrations, and stale architecture leftovers.
+description: "Use when the user explicitly requests an exhaustive set of files, comments, components, or a complete cross-layer implementation."
 ---
 
 # Full Output Enforcement
 
-## Baseline
+A requested exhaustive deliverable must be complete in the workspace. Do not replace requested code or documentation with a skeleton, placeholder, or description. Work in the files and keep the final response concise unless the user explicitly asks to see the full content.
 
-Treat exhaustive requests as production-critical. A partial output is a broken output. If the user asks for all files, all components, all skills, all comments, or a full implementation, deliver the full requested set or clearly pause at a clean boundary.
+The user instruction and root `AGENTS.md` take precedence. Reuse already loaded skills and do not reload the same skill merely because the output is long.
 
-For Fullmag architecture work, "complete" means cross-layer complete where applicable: docs, Python DSL, `ProblemIR`, planner/capabilities, runtime/provenance, OpenAPI/generated types, API client/resource hooks, unified viewport/ribbon UI, and tests. Do not leave old and new architecture mixed without naming the transition and removal criteria.
+## Scope discipline
 
-For native FEM/MFEM/CUDA/hypre/libCEED work, "complete" also means the build
-and runtime proof used the container-backed repository `justfile` path. Inspect
-the `justfile` first and use the matching managed/container `just` recipe
-(`just rebuild-fem-runtime`, `just ensure-managed-fem-runtime`,
-`just fem-gpu-headless ...`, `just verify-fem-relaxation-runtime`, or the
-matching managed run recipe). Host `cargo`, `cmake`, Docker, or direct native
-binaries are diagnostics only and must not be reported as final FEM proof.
-Do not start native FEM build work with host commands when a container-backed
-`just` recipe exists. The managed/container recipe is the build route, not just
-the last verification step.
+1. Count the requested deliverables and keep a checklist.
+2. Map every affected Fullmag layer before editing: docs, Python DSL, `ProblemIR`, planner/capabilities, runtime/provenance, OpenAPI/generated types, API/resource hooks, unified viewport/ribbon UI, and tests where applicable.
+3. Implement every requested deliverable fully, including generated artifacts when the repository owns them.
+4. Remove placeholders introduced by the change.
+5. Before finalizing, compare the completed files with the original deliverable list.
 
-## Banned Output Patterns
+Cross-layer completeness is conditional on the semantics changed. A local bug fix does not require unrelated API/UI migration.
 
-The following patterns are hard failures. Never produce them:
+## FEM build boundary
 
-**In code blocks:** `// ...`, `// rest of code`, `// implement here`, `// TODO`, `/* ... */`, `// similar to above`, `// continue pattern`, `// add more as needed`, bare `...` standing in for omitted code
+For native FEM/MFEM/CUDA/hypre/libCEED work, inspect the `justfile` and use the matching managed/container recipe first. Host `cargo`, `cmake`, Docker, or direct binaries are diagnostics only unless a host-only check is explicitly requested. Do not report a host build as final FEM proof when a managed recipe exists. If no matching recipe exists, state that before using a host diagnostic.
 
-**In prose:** "Let me know if you want me to continue", "I can provide more details if needed", "for brevity", "the rest follows the same pattern", "similarly for the remaining", "and so on" (when replacing actual content), "I'll leave that as an exercise"
+## Output and continuation
 
-**Structural shortcuts:** Outputting a skeleton when the request was for a full implementation. Showing the first and last section while skipping the middle. Replacing repeated logic with one example and a description. Describing what code should do instead of writing it.
-
-**Fullmag shortcuts:** Updating only UI while bypassing Python/IR/runtime semantics. Updating only backend while leaving OpenAPI/resource hooks stale. Reintroducing bootstrap/poll/preview or direct `fetch()` paths because they are faster to write. Leaving FDM/FEM duplicate trees when the task is about unified workspace behavior.
-
-**FEM build shortcut:** Treating host-side `cargo`, `cmake`, Docker, or direct
-native binary runs as final FEM/MFEM/CUDA/hypre/libCEED build proof when a
-managed/container `justfile` recipe exists.
-
-**FEM build bypass:** Starting native FEM build work from host `cargo`, `cmake`,
-raw `docker`, or direct binary commands before checking and using the
-container-backed `justfile` recipe that owns the task.
-
-## Execution Process
-
-1. **Scope** — Read the full request. Count how many distinct deliverables are expected (files, functions, sections, answers). Lock that number.
-2. **Map** — For Fullmag work, identify every affected layer before editing.
-3. **Build** — Generate or edit every deliverable completely. No partial drafts, no "you can extend this later."
-4. **Cross-check** — Before output, re-read the original request. Compare your deliverable count against the scope count. If anything is missing, add it before responding.
-
-## Handling Long Outputs
-
-When a response approaches the token limit:
-
-- Do not compress remaining sections to squeeze them in.
-- Do not skip ahead to a conclusion.
-- Write at full quality up to a clean breakpoint (end of a function, end of a file, end of a section).
-- End with:
-
-```
-[PAUSED — X of Y complete. Send "continue" to resume from: next section name]
-```
-
-On "continue", pick up exactly where you stopped. No recap, no repetition.
-
-## Quick Check
-
-Before finalizing any response, verify:
-- No banned patterns from the list above appear anywhere in the output
-- Every item the user requested is present and finished
-- Code blocks contain actual runnable code, not descriptions of what code would do
-- Nothing was shortened to save space
-- Fullmag architecture invariants were preserved or any remaining migration debt is explicit
-- Native FEM/MFEM/CUDA/hypre/libCEED proof came from the managed/container
-  `justfile` path, or the absence of a matching recipe was stated explicitly
+Do not print full files merely because the workspace change is exhaustive. Summarize paths, behavior, and validation. Use compaction or a file checkpoint when context is constrained. State a pause only when an actual output limit prevents completing the authorized deliverable; otherwise continue to the next file.

@@ -5,112 +5,44 @@ description: "Use when modifying or reviewing Fullmag backend solver architectur
 
 # Backend Golden Masterplan
 
-Use this skill before backend architecture, solver layout, runtime selection,
-interaction, workflow, validation, or backend documentation changes.
+Use this skill for backend architecture, solver layout, runtime selection, interactions, workflows, production validation, or backend documentation.
 
-Hard build rule: for FEM/MFEM/CUDA/hypre/libCEED work, inspect the repository
-`justfile` first and use the matching managed/container `just` recipe as the
-default build/runtime path. Host `cargo`, `cmake`, Docker, or direct native
-binary commands are diagnostics only unless the user explicitly asks for a
-host-only check.
-If you are about to assemble a host-side FEM build command by hand, stop and
-look up the `justfile` recipe first.
-Do not treat the container as a final add-on after a host build. For native FEM
-build work, the container-backed `just` recipe is the starting point.
+The user instruction and root `AGENTS.md` take precedence. If `../../instructions/backend.md` exists, use it as the shared routing source. Reuse any skill already loaded in the current turn; do not read it again unless it changed or a referenced source is missing.
 
-## Read First
+## Build and runtime boundary
 
-1. `docs/architecture/backend-golden-masterplan.md`
-2. Relevant `docs/physics/` note for the interaction, workflow, or validation
-   target.
-3. Relevant `docs/specs/capability-matrix-v0.md` entry when legality,
-   execution status, fallback, or validation status changes.
-4. Relevant API/resource docs when backend behavior is visible in sessions,
-   generated OpenAPI, `ControlRoomApi`, resources, or control-room views.
+For FEM/MFEM/CUDA/hypre/libCEED work, inspect the repository `justfile` first and use the matching managed/container recipe as the default build and runtime path. Host `cargo`, `cmake`, Docker, or direct native binaries are diagnostics only unless the user explicitly requests a host-only check. If no matching managed recipe exists, record that fact before using a host diagnostic. Do not start with a hand-built host FEM command when a managed recipe owns the task.
 
-## Required Checks
+## Read the smallest relevant set
 
-1. Identify the solver lane before editing:
-   - FDM CPU
-   - FDM GPU
-   - FEM CPU
-   - FEM GPU
-2. Keep FDM and FEM implementations separate. Cross-discretization movement is
-   state transfer with provenance and validation, not a hidden solver call.
-3. Keep CPU and GPU as separate realizations of the same backend-neutral
-   physics contract. Do not duplicate signs, units, energy conventions, field
-   semantics, or observable IDs per device.
-4. Do not add solver logic to `crates/fullmag-runner/src/dispatch.rs`.
-   Compatibility routing there must name its target owner.
-5. Do not add new physics or workflow algorithms to `Context`,
-   `mfem_bridge.cpp`, generic `execute.rs`, or generic `mod.rs` files.
-6. Every interaction must own parameters, field or weak form, energy,
-   energy-density/observables, validation fixtures, and CPU/GPU realization
-   adapters where implemented.
-7. Every workflow must have a discoverable owner. Production native numerical
-   workflow behavior belongs under current top-level `backends/*`; Rust runner
-   workflow code is orchestration, ABI, artifacts, preview, and provenance only.
-8. FEM production means MFEM/hypre/libCEED CPU/GPU integration. Do not grow a
-   standalone in-house FEM numerical stack beside it, and do not move
-   production FEM ownership into `crates`. `backends/fem` is the current tree
-   after the controlled relocation from `native/backends/fem`.
-9. FEM demag is a strategy family. Keep `poisson_airbox`,
-   `pbc_reduced_poisson`, `fem_bem`, `fmm`, and `mapped_exterior_shell`
-   separated by mesh requirements, boundary semantics, runtime realization,
-   provenance, and validation.
-10. Forced GPU requests must fail clearly when prerequisites are missing.
-    Silent CPU fallback is allowed only for documented non-forced modes and
-    must be visible in provenance.
-11. Runtime proof is separate from local contract proof. Do not claim CUDA,
-    MFEM, hypre, or libCEED runtime behavior from unit tests alone.
-12. For FEM/MFEM/CUDA/hypre/libCEED work, runtime proof must use the
-    container-backed `just` recipes (`just rebuild-fem-runtime`,
-    `just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`, or managed
-    run recipes such as `just verify-fem-relaxation-runtime`). Treat those
-    recipes as the default build path for native FEM
-    work, not just as a final proof step. Host `cargo`, `cmake`, and direct
-    native binaries are smoke checks only.
-    Always inspect/use the repo `justfile` before inventing host-side build
-    commands for managed FEM runtime work.
-    Do not substitute host-side builds for the final FEM runtime proof.
-    For any build task covered by a `justfile` recipe, use the managed/container
-    recipe first; host-side command sequences are diagnostics, not the default
-    build path.
-    Do not start with host `cargo`, `cmake`, raw `docker`, or direct binary
-    commands when the `justfile` already owns the build path.
-    If no matching managed/container recipe exists, record that explicitly
-    before falling back to a host-side diagnostic command.
-13. Production physics claims require automated validation: NIST/µMAG where
-    applicable, analytical benchmarks, per-interaction energies, total energy,
-    CPU/GPU parity inside a discretization, and meaningful FDM/FEM convergence
-    comparisons.
+Read:
 
-## Documentation Outputs
+1. `docs/architecture/backend-golden-masterplan.md`;
+2. the relevant `docs/physics/` note;
+3. the relevant capability entry in `docs/specs/capability-matrix-v0.md` when legality, fallback, execution status, or validation status changes;
+4. affected API/resource documentation only when backend behavior is browser-visible.
 
-Update `docs/architecture/backend-golden-masterplan.md` when changing:
+## Required checks
 
-- solver lane ownership;
-- source layout;
-- runtime selection or fallback policy;
-- interaction/workflow ownership;
-- FEM demag strategy ownership;
-- production physics validation policy.
+Apply checks that match the affected lane and layer:
 
-Update lower-level docs only after checking they do not contradict the
-masterplan. Historical `native-fem-*` docs are context only when they conflict;
-accepted target docs and agent instructions should say that `backends/fem` is
-the current MFEM/hypre/libCEED implementation tree, and `native/backends/fem`
-is only the previous path from the controlled relocation.
+- identify FDM CPU, FDM GPU, FEM CPU, or FEM GPU;
+- keep FDM/FEM and CPU/GPU as realizations of one backend-neutral physics contract;
+- keep cross-discretization movement explicit state transfer with provenance and validation;
+- keep runner dispatch, `Context`, `mfem_bridge.cpp`, generic `execute.rs`, and generic `mod.rs` files out of new solver ownership;
+- give each interaction an owner for parameters, field or weak form, energy, observables, validation fixtures, and implemented CPU/GPU adapters;
+- give each workflow a discoverable owner; runner code orchestrates ABI, artifacts, preview, and provenance;
+- keep production FEM under `backends/fem` with MFEM/hypre/libCEED, not a parallel in-house FEM stack;
+- keep FEM demag strategies separate by mesh requirements, boundaries, realization, provenance, and validation;
+- make forced GPU failure explicit and visible; permit fallback only for documented non-forced modes;
+- distinguish executable availability, source/contract checks, runtime evidence, and validated physics.
 
-## Blocker Policy
+For a production physics or runtime claim, require the applicable analytical/NIST/µMAG checks, per-interaction and total energies, within-lane CPU/GPU parity, and meaningful convergence evidence. Do not require unrelated lanes for a docs-only or isolated orchestration change.
 
-Block or revise the change if it:
+## Documentation outputs
 
-- adds a new monolith or grows an existing one;
-- hides fallback or device migration;
-- makes FDM/FEM or CPU/GPU behavior diverge without a backend-neutral contract;
-- treats executable status as validated physics;
-- adds public backend semantics without API/resource/OpenAPI/client impact
-  review;
-- adds or changes physics without units, observables, tolerances, and
-  validation targets.
+Update `docs/architecture/backend-golden-masterplan.md` only when ownership, source layout, runtime selection, fallback policy, interaction/workflow ownership, FEM demag strategy, or validation policy changes. Update lower-level docs only when the affected contract changes. Historical `native/backends/fem` material is context; the current production tree is `backends/fem`.
+
+## Blockers
+
+Stop a production claim when the change hides fallback or device migration, diverges from the backend-neutral contract, treats executable status as physics validation, adds public semantics without API/resource review, or omits units, observables, tolerances, and validation targets for changed physics.

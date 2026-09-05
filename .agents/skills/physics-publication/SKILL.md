@@ -1,77 +1,54 @@
 ---
 name: physics-publication
-description: "Use when adding or modifying any Fullmag physics or numerics feature. Create or update a publication-style docs/physics note before code, then propagate semantics through Python DSL, ProblemIR, planner, runtime, OpenAPI, and unified workspace surfaces."
+description: "Use when adding or modifying Fullmag physics, numerics, solver semantics, interactions, boundary conditions, observables, or physics-facing authoring."
 ---
 
 # Fullmag Physics Publication
 
-## Goal
+Use this skill before implementing or publishing a semantic physics/numerics change. The user instruction and root `AGENTS.md` take precedence. Reuse skills already loaded in the current turn.
 
-Enforce Fullmag's rule: physics first, implementation second. A solver patch without a canonical physical model, units, validation plan, and provenance impact is not implementation-ready.
+**REQUIRED SUB-SKILL: use `scientific-documentation-contract`** for the publication note and for public physics, solver, backend, interaction, Python API, or `ProblemIR` documentation. This is a one-way dependency: `scientific-documentation-contract` does not require this skill back.
 
-**REQUIRED SUB-SKILL: use `scientific-documentation-contract`** for the note and
-for every public physics, solver, backend, interaction, Python API, or
-`ProblemIR` documentation page. The publication contract owns hierarchy,
-MathJax/LaTeX, source mapping, API completeness, rendered-output checks, and the
-terminal publication gate.
+## Trigger scope
 
-## When to trigger
+Use for changes to energy terms, dynamics, boundary conditions, couplings, mesh interpretation, solver stages, observables, numerical methods, equations, units, tolerances, stop criteria, backend interpretation, execution selection, capability coverage, provenance, physics-facing UI authoring, script export, runtime quantities, or scientific artifacts.
 
-- adding or changing an energy term, dynamics model, boundary condition, coupling, mesh interpretation, solver stage, observable, or numerical method,
-- changing equations, units, assumptions, tolerances, stop criteria, or validation scope,
-- changing backend interpretation, execution-selection semantics, capability coverage, or provenance,
-- changing physics-facing UI authoring, script export, runtime resources, live quantities, or artifacts.
+Do not require a new publication note for a typo or an implementation-only change that preserves an already documented semantic contract; cite the existing note and update it only when the contract changes.
 
 ## Required outputs
 
-1. A `docs/physics/<topic>.md` note based on `docs/physics/TEMPLATE.md`.
-2. Physical problem statement, governing equations, symbols, SI units, assumptions, validity limits, and observables.
-3. Explicit FDM and FEM interpretation, including CPU/GPU and precision implications where relevant.
-4. Public Python DSL impact and UI script-export/round-trip impact.
-5. `ProblemIR` lowering, validation, normalization, and migration impact.
-6. Planner, capability matrix, execution selection, runtime stage lifecycle, and provenance impact.
-7. OpenAPI/resource impact when domain, mesh, fields, quantities, scalars, commands, stages, artifacts, realtime events, or diagnostics change.
-8. Unified workspace impact: ribbon commands, resource hooks, domain adapters, viewport layers, docks, and inspector panels.
-9. Validation strategy, reference oracle, tolerances, artifacts, and regression tests.
-10. Completeness checklist and deferred work.
+When semantics change, update the relevant `docs/physics/<topic>.md` page from `docs/physics/TEMPLATE.md` with:
 
-Public simulation examples must follow the repository-owned stage-scenario pattern: `fm.study(...)`,
-explicit engine/device/mode, universe/geometry/material/magnetization, interaction registration,
-ordered `study.stages.add_*`, and relevant outputs/autosave. Use
-`tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` as the style
-reference. Do not put `fm.Problem(...)` in any `public_docs/site` code block. Use individual
-object-level `to_ir()` fragments when stage registration is not yet exposed; never replace the
-stage workflow with a top-level constructor.
+1. physical problem, equations, symbols, SI units, assumptions, validity limits, and observables;
+2. explicit FDM/FEM and CPU/GPU interpretation where relevant;
+3. Python DSL and UI script-export/round-trip impact;
+4. `ProblemIR` lowering, validation, normalization, and migration;
+5. planner, capability, execution-selection, runtime-stage, and provenance impact;
+6. OpenAPI/resource impact when browser-visible;
+7. unified workspace impact when commands, docks, inspectors, or viewport layers change;
+8. validation oracle, tolerances, artifacts, regression tests, and completeness/deferred-work status.
 
-For FEM/MFEM solver changes, also state the operator/subsystem boundary:
-exchange, demag strategy, local interaction, direct torque, stepper,
-runtime/residency, or observable. Production FEM means MFEM/hypre/libCEED for
-CPU and GPU; do not describe new FEM physics as an implementation detail inside
-`Context` or `mfem_bridge.cpp`.
+Public examples use the repository stage-scenario shape: `fm.study(...)`, explicit engine/device/mode, universe/geometry/material/magnetization, interaction registration, ordered `study.stages.add_*`, and outputs/autosave where relevant. Use `tests/standard_problems/mumag/sp4/fem/scenarios/relax_projected_gradient_bb.py` as the style reference. Do not put `fm.Problem(...)` in any `public_docs/site` code block; use object-level `to_ir()` fragments only when stage registration is not exposed.
 
-For FEM/MFEM/CUDA/hypre/libCEED changes, runtime/build claims must be proven
-through the container-backed repo `just` recipes (`just rebuild-fem-runtime`,
-`just ensure-managed-fem-runtime`, `just fem-gpu-headless ...`,
-`just verify-fem-relaxation-runtime`, or the matching managed run recipe).
-Host `cargo`, `cmake`, or direct native binary checks are auxiliary smoke tests,
-not publication-quality runtime evidence.
-Do not start FEM build/debug work from host `cargo`, `cmake`, raw Docker, or a
-direct binary when a managed/container `justfile` recipe covers the task. The
-container-backed `just` route is the first build path, not just the final proof.
+For FEM/MFEM work, state the operator boundary: exchange, demag strategy, local interaction, direct torque, stepper, runtime/residency, or observable. Production FEM means MFEM/hypre/libCEED for CPU and GPU. Do not place new physics in `Context` or `mfem_bridge.cpp`.
+
+For FEM/MFEM/CUDA/hypre/libCEED claims, inspect the `justfile` and use the matching managed/container build/runtime recipe first. Host checks are auxiliary diagnostics, not publication-quality runtime evidence.
+
+## Conditional cascade
+
+After the publication note, apply only the relevant skills:
+
+1. `scientific-documentation-contract` for the page and source-map contract;
+2. `problem-ir-design` for `ProblemIR` semantics;
+3. `python-api-class` for a public DSL construct;
+4. `capability-matrix-check` for legality/planner/capability changes;
+5. `backend-golden-masterplan` for backend ownership, lanes, runtime, workflows, demag families, or production validation;
+6. `fem-native-backend-architecture` for MFEM/operator/Context/bridge/CPU-GPU/performance changes;
+7. `resource-first-api-check` for browser resources, OpenAPI, events, commands, codecs, or viewport data;
+8. `adr-check` for a durable architecture or migration decision.
+
+If a required skill is already loaded in the current turn, reuse it and do not read it again unless the file changed or a referenced requirement is missing.
 
 ## Blocker policy
 
-If the physics note is missing, incomplete, or vague about units/validity/backend interpretation, implementation is blocked. Do not hide this as "follow-up docs."
-
-## Cascade
-
-After the physics note is complete, apply the relevant skills in this order:
-
-1. `scientific-documentation-contract`
-2. `problem-ir-design`
-3. `python-api-class`
-4. `capability-matrix-check`
-5. `backend-golden-masterplan` when backend ownership, solver lane, source layout, runtime selection, workflow ownership, FEM demag model family, or production validation is affected
-6. `fem-native-backend-architecture` as the FEM/MFEM compatibility skill when `Context`, `mfem_bridge.cpp`, operator extraction, exchange, local terms, demag strategy implementations, stepper, CPU/GPU separation, or solver performance is affected
-7. `resource-first-api-check` when browser/API/runtime resources, OpenAPI, generated types, realtime events, commands, codecs, or viewport data are affected
-8. `adr-check` when the decision changes architecture or long-lived migration policy
+Block implementation or publication claims when the note lacks units, validity, backend interpretation, source evidence, or validation support. For read-only audits or planning, report the gap and continue; do not turn a missing future artifact into an unnecessary approval pause.
