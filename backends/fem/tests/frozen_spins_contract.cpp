@@ -346,6 +346,16 @@ void test_frozen_spins_solver_step_contract(const char *device) {
     check(disp > 1.0e-4, "free node 1 must evolve under exchange and Zeeman field");
 
     if (gpu) {
+        fullmag_fem_gpu_execution_receipt_v1 rk_receipt = {};
+        rk_receipt.abi_version = FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+        rk_receipt.struct_size = sizeof(rk_receipt);
+        check(fullmag_fem_backend_gpu_execution_receipt_v1(handle, &rk_receipt) == FULLMAG_FEM_OK,
+              "FEM GPU Frozen Spins RK execution receipt must be queryable");
+        check(rk_receipt.fallback_count == 0u &&
+              rk_receipt.executed_host_operator_mask == 0u &&
+              rk_receipt.executed_unknown_operator_mask == 0u,
+              "FEM GPU Frozen Spins RK execution receipt must prove zero fallback");
+
         fullmag_fem_step_stats relax_stats = {};
         const std::vector<double> before_relax = m_out;
 
@@ -404,9 +414,9 @@ void test_frozen_spins_solver_step_contract(const char *device) {
         runtime_build_info.abi_version =
             FULLMAG_FEM_RUNTIME_BUILD_INFO_V2_ABI_VERSION;
         runtime_build_info.struct_size = sizeof(runtime_build_info);
-        fullmag_fem_gpu_execution_receipt_v1 execution_receipt = {};
+        fullmag_fem_gpu_execution_receipt_v2 execution_receipt = {};
         execution_receipt.abi_version =
-            FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V1;
+            FULLMAG_FEM_GPU_EXECUTION_RECEIPT_ABI_V2;
         execution_receipt.struct_size = sizeof(execution_receipt);
         check(fullmag_fem_backend_get_device_info(handle, &device_info) ==
                   FULLMAG_FEM_OK &&
@@ -422,7 +432,7 @@ void test_frozen_spins_solver_step_contract(const char *device) {
                   gpu_state.source_of_truth ==
                       FULLMAG_FEM_RESIDENCY_DEVICE_SOURCE_OF_TRUTH,
               "FEM GPU Frozen Spins state must remain device-resident");
-        const int receipt_rc = fullmag_fem_backend_gpu_execution_receipt_v1(
+        const int receipt_rc = fullmag_fem_backend_gpu_execution_receipt_v2(
             handle, &execution_receipt);
         if (receipt_rc != FULLMAG_FEM_OK ||
             execution_receipt.fallback_count != 0u ||
