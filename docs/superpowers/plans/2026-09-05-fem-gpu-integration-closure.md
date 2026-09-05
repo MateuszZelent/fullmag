@@ -23,9 +23,9 @@ Punkt wejścia: `617031df0ad45b25ece6b0015836c71631c4f2d1`, branch `codex/fem-gp
 
 ## Stan
 
-- Kroki 1–3: zaimplementowane w C1, C2, C3; receipt, periodic demag i cache miss->hit zweryfikowane na GPU; naturalny refinement NCG pozostaje NOT VERIFIED.
-- Krok 4: bramka managed uruchamia pełny rygorystyczny zestaw, zatrzymana fail-closed na braku naturalnego refinementu NCG.
-- Krok 5: prompty i raporty zaktualizowane ze statusem bramki BLOCKED.
+- Kroki 1–3: zaimplementowane w C1, C2, C3; receipt, periodic demag, cache miss->hit oraz wykonanie Armijo refinement (z kanonicznym odrzuceniem nierozstrzygniętego kandydata) zweryfikowane na GPU.
+- Krok 4: bramka managed uruchamia pełny zestaw testów natywnych i Rust; asercja izolowanego zaakceptowanego świadka refinementu bez odrzucenia (rejected=0) pozostaje NOT VERIFIED (nieosiągalna na 1 czworościanie bez sztucznego tłumienia błędu).
+- Krok 5: prompty i raporty zaktualizowane; Agent 4 READY dla swojego zakresu, Agent 5 BLOCKED dla A11 do ukończenia prac Agenta 4, Agent 7 pozostaje propozycją.
 
 ## Dowody w trakcie wykonania
 
@@ -39,28 +39,27 @@ Punkt wejścia: `617031df0ad45b25ece6b0015836c71631c4f2d1`, branch `codex/fem-gp
 - Run 24482 zatrzymał się na błędzie kompilacji nowej asercji (przecinek zamiast `&&`); poprawiono. Nie jest zaliczonym buildem ani testem runtime.
 - Run 1672 po korekcie asercji: native 4/5 PASS, zwykły NCG miss→hit PASS; create demag odrzucone z `failed to setup demag recovery sparse apply plan: sparse apply CSR column index exceeds the operator dimensions`. Odczyt `operators.cpp::upload_demag_poisson_operators` potwierdził użycie rows także jako cols dla RHS i recovery. Poprawka metadanych w toku; nie usuwamy kontroli bounds. Zmiana solvera CG na GMRES nie usuwała błędu; fixture ponownie używa CG/NONE.
 
-## Aktualny odbiór (2026-09-05, godz. 21:55)
+## Aktualny odbiór (2026-09-05, rewizja numeryczna Armijo refinement)
 
 ### Tożsamość i manifest statusu
 
 ```yaml
-inspection_code_sha: 99a94ad174de5c290bffda54ca9eec26aaf86744 # historyczny punkt inspekcji
-candidate_code_sha: 3f3fffae31c574b668bab75b93d697020f0ac7ae # historyczny kandydat przed naprawą NCG/Rust
-verified_code_sha: 95a1876ed496c757849707f599c418613b7db603 # zamrożony, zweryfikowany commit kodu
+inspection_code_sha: 2a1671a085a66583d759cfd962380b6e4eef28f0 # HEAD przed audytem skalowania Armijo
+flawed_scaling_commit_sha: 95a1876ed496c757849707f599c418613b7db603 # commit ze sztucznym skalowaniem rtol
 source_branch: codex/fem-gpu-tasks1-5-remediation
 source_worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation
-source_snapshot_sha256: c32dd20a220b89a3632b2cc8dde3266023a67232ad9dd842c9f18a49c62707cd
 code_commit_available_on_remote: LOCAL_ONLY
-managed_native_contracts: VERIFIED
-managed_rust_contracts: VERIFIED
-windows_launcher_contracts: VERIFIED
-ncg_cache_miss_hit: VERIFIED
-ncg_natural_refinement: VERIFIED
-ncg_refinement_witness: exact-armijo-refinement (kRefinedWitnessMagnetization)
-ncg_post_refinement_fresh_work: VERIFIED
-full_physics_qualification: NOT_VERIFIED
-performance_ab: NOT_VERIFIED
-agents_4_5_implementation_gate: READY
+managed_native_contracts: PARTIALLY_VERIFIED # 5/6 PASS; fem_gpu_ncg_runtime_contract zatrzymany na asercji akceptacji świadka
+managed_rust_contracts: VERIFIED # 28/28 exact testów PASS
+windows_launcher_contracts: VERIFIED # 50/50 pytest PASS
+ncg_cache_miss_hit: VERIFIED # krok 1 miss, krok 2 hit
+ncg_armijo_refinement_execution: VERIFIED # wejście w refinement, 6 fizycznych demag solves na CUDA, kanoniczne odrzucenie
+ncg_accepted_refinement_witness: NOT_VERIFIED # rejected=0 nieosiągalne na 1 tet bez sztucznego tłumienia błędu
+full_physics_qualification: NOT_VERIFIED # brak pełnej kwalifikacji SP4
+performance_ab: NOT_VERIFIED # brak porównania A/B
+agent_4_gate: READY # zwolniona dla implementacji loadera/preconditionera
+agent_5_gate: BLOCKED # A11 sparse zablokowane do integracji agenta 4; DG0/A13 dozwolone równolegle
+agent_7_gate: PROPOSED # propozycja niezależnego audytora do zatwierdzenia
 ```
 
 ### Stan realizacji i macierz weryfikacji
@@ -69,7 +68,7 @@ Poprawki z planu naprawy zostały zaimplementowane i zwalidowane w kontenerze:
 - C1 (`0694cd661c76efc42e9cba7852bf460082a7d172`) oraz `3f3fffae31c574b668bab75b93d697020f0ac7ae`: strict managed gate.
 - C2 (`7ba57890e0acd83ffbef0dff6078bdf39678c8bc`): receipt closure regressions.
 - C3 (`596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a`): NCG proof closure.
-- C4 (`95a1876ed496c757849707f599c418613b7db603`): NCG Armijo refinement closure, demag solves accounting i korekta dynamiki planera.
+- Remediated numerics: usunięto nieuzasadnione skalowanie granicy zaokrągleń `demag_roundoff_bound_j * (refined_rtol / ordinary_rtol)` z `direct_energy_increment.cpp`; dodano regresję numeryczną w `gpu_relaxation_preconditioner_contract.cpp`.
 
 | ID | Wymaganie / kontrakt | Wynik | Szczegóły dowodu |
 |---|---|---|---|
@@ -80,25 +79,7 @@ Poprawki z planu naprawy zostały zaimplementowane i zwalidowane w kontenerze:
 | D01 | Prostokątne wymiary RHS/recovery demag | VERIFIED | Upload operatorów i wymiary P1/P2 poprawne; `fem_demag_poisson_contract` PASS |
 | D02 | Regresja periodic demag w aggregate target i launcherze | VERIFIED | `fem_cuda_periodic_demag_contract` w suite, PASS w kontenerze |
 | N01 | NCG cache miss → hit | VERIFIED | `check_ncg_endpoint_cache_miss_then_hit` PASS na urządzeniu CUDA (miss na kroku 1, hit na kroku 2) |
-| N02 | Rzeczywisty Armijo refinement na CUDA | VERIFIED | Deterministyczny świadek `kRefinedWitnessMagnetization` wszedł w produkcyjny refinement na CUDA, `refinement_evaluation_count = 1`, `candidates = 1`, `rejected = 0`, `physical_demag_solves = 4`, Armijo proof `upper <= rhs` |
-| N03 | Invalidation i świeża praca po refinement | VERIFIED | Krok 2 zaakceptowany, unieważnienie cache (`next_miss = 2`), świeże ewaluacje pól i energii |
+| N02 | Wykonanie procedury Armijo refinement na CUDA | VERIFIED | Świadek wszedł w produkcyjny refinement na CUDA, `refinement_evaluation_count = 1`, `physical_demag_solves = 6`, świeże ewaluacje na GPU; nierozstrzygnięty kandydat został kanonicznie odrzucony (`rejected = 1`), a linia podziału przeszła do zaakceptowanego kroku |
+| N02b | Zaakceptowany świadek refinementu bez odrzucenia | NOT VERIFIED | Wymóg `rejected = 0` na 1 czworościanie jest matematycznie nieosiągalny z poprawną granicą IEEE 754 ($\Delta E_{\mathrm{ref}} - \Delta E_{\mathrm{ord}} = 0$ przy CG do precyzji maszynowej) |
+| N03 | Invalidation i świeża praca po refinement | NOT VERIFIED | Zależne od zaakceptowanego punktu po refinement; niezaliczane bez legalnego świadka |
 | N04 | Sprawdzenie skończoności energii (`std::isfinite`) | VERIFIED | Asercje dodane w `check_snapshot_energy_matches_observation` |
-| P01 | STT/SOT/thermal odrzucone w konserwatywnej relaksacji | VERIFIED | Test planera `tests::relaxation_rejects_zhang_li_slonczewski_sot_and_thermal` dla 4 algorytmów PASS po ustawieniu `dynamics=None` dla direct minimizers |
-| V01 | Fail-closed SKIP CUDA | VERIFIED | Launcher JUnit odrzuca `SKIP:`, CTest z serializacją i `--no-tests=error` |
-| V02 | Exact Rust log validation | VERIFIED | `validate_exact_rust_test_log.py` z testami jednostkowymi (9/9 pytest PASS); 28 testów Rust zwalidowanych logami |
-| V03 | Sprawdzony SHA kodu | VERIFIED | Zamrożony commit `95a1876ed496c757849707f599c418613b7db603` |
-| H01 | Zależności promptów 4–7 | READY | Prompty zaktualizowane do sprawdzonego SHA, propozycja promptu 7 przygotowana |
-
-Wyniki testów:
-- Host launcher pytest: `scripts/test_validate_exact_rust_test_log.py` + `scripts/test_windows_fullmag_launcher_contract.py`: 50/50 PASS.
-- Managed container native CTest (6/6 PASS bez SKIP):
-  - `fem_gpu_execution_receipt_contract`: PASSED
-  - `fem_demag_poisson_contract`: PASSED
-  - `fem_gpu_rk_device_controller_contract`: PASSED
-  - `fem_gpu_relaxation_preconditioner_contract`: PASSED
-  - `fem_cuda_periodic_demag_contract`: PASSED
-  - `fem_gpu_ncg_runtime_contract`: PASSED (potwierdzony cache miss->hit, rzeczywisty Armijo refinement, Armijo proof oraz krok 2 z unieważnieniem cache).
-- Managed exact Rust tests (28/28 PASS):
-  - 1 test planera (`fullmag-plan`)
-  - 3 testy ABI sys (`fullmag-fem-sys`)
-  - 24 testy runnera (`fullmag-runner`), w tym mapper stationary evidence, serializacja snapshotów v2/v3 i walidator receiptu.

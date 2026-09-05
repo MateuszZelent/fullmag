@@ -265,11 +265,15 @@ linear Poisson demag operator,
 with the Robin boundary condition already represented by both endpoint fields;
 no separate boundary-form increment is added. This keeps
 the Armijo condition in joules while avoiding cancellation against a large
-constant energy offset. If the resulting numerical interval overlaps the
-threshold, a bounded internal fresh-solve refinement may resolve the decision;
+constant energy offset. The certified forward error bound on this direct reduction,
+$B = \gamma_N \sum |x_i|$ with $\gamma_N = \frac{N \varepsilon_{\mathrm{mach}}}{1 - N \varepsilon_{\mathrm{mach}}}$,
+quantifies IEEE 754 floating-point summation error over $N$ operands. It is an invariant
+of the floating-point reduction and must never be scaled by iterative solver tolerances
+($\mathrm{rtol}$) or heuristic factors. If the resulting numerical interval $[\Delta E - B, \Delta E + B]$
+overlaps the Armijo threshold, a bounded internal fresh-solve refinement may resolve the decision;
 both ordinary and refined values must satisfy strict Armijo. An unresolved
-interval is a rejected trial, never an accepted energy increase or convergence
-claim.
+interval (${\Delta E_{\mathrm{refined}} + B_{\mathrm{refined}} > c_1 \lambda \langle g, p \rangle_E}$)
+is a rejected trial, never an accepted energy increase or convergence claim.
 
 #### 2.3.3 Nonlinear conjugate gradient
 
@@ -475,6 +479,13 @@ realizations.
   qualification: that status is granted only by a fresh managed receipt in
   the capability matrix, including runtime, parity, refinement, and
   repeatability gates.
+- Direct-difference reduction roundoff certificates bound IEEE 754 floating-point
+  reduction error, not iterative Poisson solver error. The certificate depends solely
+  on reduction operand count and machine precision; scaling it by solver tolerance ratios
+  (such as $\mathrm{refined\_rtol} / \mathrm{ordinary\_rtol}$) is numerically invalid.
+  Poisson algebraic error is controlled by the iterative solver residual and operator conditioning.
+- Refinement rejection must preserve the ordinary candidate state, ordinary energy difference,
+  and ordinary demag roundoff bound, preventing state contamination from failed refinement attempts.
 - PG-BB/NCG preconditioners and TPI operators use dimensionally compatible mass,
   stiffness, and local-curvature blocks.
 - Native nonfinite torque, energy, gradient, error estimate, or solver residual

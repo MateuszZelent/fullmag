@@ -947,6 +947,8 @@ bool gpu_direct_armijo_refine(
     result.refinement_rhs_evaluations += 2u;
 
     const relaxation::EnergyDifference ordinary_difference = result.difference;
+    const GpuDirectEnergySnapshot ordinary_trial = result.trial_snapshot;
+    const double ordinary_demag_bound = result.demag_roundoff_bound_j;
     if (!direct_difference(
             ctx,
             stream,
@@ -961,14 +963,6 @@ bool gpu_direct_armijo_refine(
             reason)) {
         return false;
     }
-    const double ordinary_demag_bound = result.demag_roundoff_bound_j;
-    const double refined_demag_bound =
-        ordinary_demag_bound * (refined_rtol / ordinary_rtol);
-    result.demag_roundoff_bound_j = refined_demag_bound;
-    result.difference.roundoff_bound_joules = std::max(
-        0.0,
-        result.difference.roundoff_bound_joules -
-            (ordinary_demag_bound - refined_demag_bound));
     const GpuDirectEnergySnapshot refined_trial = result.trial_snapshot;
     const relaxation::EnergyDifference refined_difference = result.difference;
     result.refinement_accepted =
@@ -1003,6 +997,9 @@ bool gpu_direct_armijo_refine(
                 reason)) {
             return false;
         }
+        result.difference = ordinary_difference;
+        result.trial_snapshot = ordinary_trial;
+        result.demag_roundoff_bound_j = ordinary_demag_bound;
         result.refinement_rhs_evaluations += 1u;
     }
     return true;

@@ -33,19 +33,21 @@ To instrukcje zlecenia, nie gotowe patche ani deklaracja kwalifikacji. Wykonawca
 | 6 | integracja, kwalifikacja A16, dokumentacja | [Prompt 6](06-integrator.md) |
 | 7 | niezależna weryfikacja i audyt (propozycja) | [Prompt 7](07-independent-verifier.md) |
 
-## BRAMKA STARTOWA AGENTÓW 4–5
+## BRAMKA STARTOWA AGENTÓW 4–5 (RENUMERACJA I REWIZJA NUMERYCZNA)
 
-Stan bramki: READY dla Agenta 4 (loader/preconditioner) oraz Agenta 5 (wyłącznie DG0/A13).
-Stan bramki A11 (sparse): nadal BLOCKED do czasu zakończenia, weryfikacji i integracji prac Agenta 4.
-Pełny sprawdzony SHA kodu: 95a1876ed496c757849707f599c418613b7db603 (snapshot `c32dd20a220b89a3632b2cc8dde3266023a67232ad9dd842c9f18a49c62707cd`).
-Branch źródłowy: codex/fem-gpu-tasks1-5-remediation.
-Kanoniczny worktree źródłowy: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
-Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
-Weryfikacja:
-- Kanoniczna recepta kontenerowa `just verify-fem-gpu-execution-receipt-contract` zakończona sukcesem (exit code 0).
-- Native 6/6 PASS bez SKIP: `fem_gpu_execution_receipt_contract` (0.54s), `fem_demag_poisson_contract` (0.58s), `fem_gpu_rk_device_controller_contract` (0.52s), `fem_gpu_relaxation_preconditioner_contract` (0.61s), `fem_cuda_periodic_demag_contract` (2.21s), `fem_gpu_ncg_runtime_contract` (3.04s, `refined=1`, `candidates=1`, `physical_demag_solves=4`, Armijo `upper <= rhs`, krok 2 invalidacja `miss=2`).
-- Rust 28/28 exact tests PASS przez `validate_exact_rust_test_log.py` (1 plan, 3 sys ABI, 24 runner).
-- Host Python 50/50 PASS (`test_validate_exact_rust_test_log.py` + `test_windows_fullmag_launcher_contract.py`).
+Stan bramki:
+- **Agent 4 (loader / preconditioner A05, A06, A09):** **READY** do prac optymalizacyjnych na osobnym worktree (bez przypisywania produkcyjnej kwalifikacji fizyki).
+- **Agent 5 (sparse A11):** nadal **BLOCKED** do czasu zakończenia, weryfikacji i integracji prac Agenta 4 ze sparse operatorami. Wybiórczo i równolegle dozwolone wyłącznie niezależne zadania DG0/A13.
+- **Agent 7:** rola niezależnego audytora i weryfikatora pozostaje propozycją do zatwierdzenia przez użytkownika.
+
+Status tożsamości kodu i weryfikacji numerycznej:
+- Commit `95a1876ed496c757849707f599c418613b7db603` zawierał nieuzasadnione tłumienie granicy błędu zaokrągleń `demag_roundoff_bound_j * (refined_rtol / ordinary_rtol)`, sztucznie wymuszające akceptację kroku Armijo.
+- Nieuzasadniona redukcja została usunięta z `backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp`; certyfikat błędu zaokrągleń IEEE 754 jest niezmienniczy względem tolerancji solvera (zgodnie z uaktualnioną notą `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`).
+- Dodano rygorystyczną regresję numeryczną w `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` potwierdzającą niezmienniczość certyfikatu i odrzucanie nierozstrzygniętych przedziałów (PASS, 0.64s).
+- Native 5/6 PASS: `fem_gpu_execution_receipt_contract`, `fem_demag_poisson_contract`, `fem_gpu_rk_device_controller_contract`, `fem_gpu_relaxation_preconditioner_contract`, `fem_cuda_periodic_demag_contract`.
+- NCG Armijo refinement: wejście w procedurę i wykonanie 6 fizycznych rozwiązań Poissona na CUDA zweryfikowane; na siatce 1-czworościennej CG zbiega do precyzji maszynowej, więc doprecyzowanie nie przesuwa energii, a nierozstrzygnięty przedział jest kanonicznie odrzucany (`rejected = 1`), po czym linia backtrackingu akceptuje krok (`cand = 2`, `stats.step = 1`). Asercja izolowanego zaakceptowanego świadka z `rejected = 0` pozostaje **NOT VERIFIED**.
+- Rust 28/28 exact tests PASS przez `validate_exact_rust_test_log.py`.
+- Host Python 50/50 PASS.
 
 Zasady realizacji dla fali:
 - Agent 4: loader/preconditioner; osobny worktree ze sprawdzonego SHA `95a1876ed496c757849707f599c418613b7db603`.
