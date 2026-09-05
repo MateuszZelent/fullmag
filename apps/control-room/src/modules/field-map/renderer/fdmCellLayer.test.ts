@@ -1,4 +1,4 @@
-import { LinearFilter, NearestFilter } from "three";
+import { LinearFilter, type Mesh, NearestFilter } from "three";
 import { describe, expect, it } from "vitest";
 
 import { PLANAR_OCCUPANCY } from "../model/planarOccupancy";
@@ -111,7 +111,7 @@ describe("fdmCellLayer", () => {
     const geometry = createFdmCellQuadGeometry([0, 1, 0, 1]);
     const texture = createFdmDataTexture(new Float32Array([1]), [1, 1]);
     const material = createFdmCellMaterial(texture, { range: { max: 1, min: 0 } });
-    const mesh = { geometry, material } as any;
+    const mesh = { geometry, material } as unknown as Mesh;
 
     expect(() => disposeFdmCellMesh(mesh)).not.toThrow();
   });

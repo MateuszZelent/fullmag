@@ -3,7 +3,6 @@
 import { useState } from "react";
 
 import type {
-  ModeCompositionController,
   ModeCompositionLayer,
   ModeCompositionResource,
   ModeFieldComponent,
@@ -27,7 +26,6 @@ import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type {
   ModeCompositionCompatibleObject,
   ModeCompositionInspectorDependencies,
-  ModeCompositionInspectorSpectrum,
   ModeCompositionSpectrumMode,
   ModeCompositionSpectrumSample,
 } from "./modeCompositionInspectorTypes";

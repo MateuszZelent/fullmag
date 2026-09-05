@@ -6,6 +6,10 @@ Gałąź: master
 Stan checkoutu: współdzielony dirty worktree; 125 wpisów porcelain w początkowym snapshotcie, 135–142 podczas reauditu; brak plików staged w sprawdzonym snapshotcie  
 Charakter dokumentu: audyt źródłowy, kontraktowy, testowy i artefaktowy  
 Stan dokumentu: wersja 0.7 po drugim odczycie kodu, czterech niezależnych reaudytach, świeżej próbie kanonicznego smoke oraz zatwierdzeniu zakresu, progu jakości, wariantu A, architektury, semantyki samplingu i kontraktu resource-first  
+> **Status wdrożenia po refaktoryzacji 2D (05.09.2026, gałąź `codex/refactor-2d`):**  
+> Wszelkie zidentyfikowane uchybienia (N01–N10, G01–G04, U01–U07, E01, P01–P03, T01) zostały w pełni i sekwencyjnie rozwiązane w ramach etapów ETAP_00–ETAP_13.  
+> Szczegółowe podsumowanie wykonania oraz wyniki kwalifikacji znajdują się w: [`docs/reports/05.09.2026/refactor2D/RELEASE_QUALIFICATION_REPORT.md`](../reports/05.09.2026/refactor2D/RELEASE_QUALIFICATION_REPORT.md).
+
 
 ## 1. Werdykt wykonawczy
 

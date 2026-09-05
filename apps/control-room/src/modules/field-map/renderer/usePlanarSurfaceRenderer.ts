@@ -260,6 +260,7 @@ export function usePlanarSurfaceRenderer(
       }
     }
   }, [
+    model.bounds,
     model.colormap,
     model.layers.boundaries,
     model.layers.bounds,

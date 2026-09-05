@@ -1,12 +1,13 @@
+import type { WebGLRenderer } from "three";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPlanarGpuRenderer } from "./planarGpuRenderer";
 
 function createMockWebGLCanvas(): {
   canvas: HTMLCanvasElement;
-  listeners: Map<string, (event: any) => void>;
+  listeners: Map<string, (event?: unknown) => void>;
 } {
-  const listeners = new Map<string, (event: any) => void>();
+  const listeners = new Map<string, (event?: unknown) => void>();
   const gl = {
     COLOR_BUFFER_BIT: 16384,
     DEPTH_BUFFER_BIT: 256,
@@ -16,7 +17,7 @@ function createMockWebGLCanvas(): {
     TEXTURE_2D: 3553,
     UNSIGNED_BYTE: 5121,
     bindTexture: vi.fn(),
-    canvas: null as any,
+    canvas: null as HTMLCanvasElement | null,
     clear: vi.fn(),
     clearColor: vi.fn(),
     createBuffer: vi.fn(() => ({})),
@@ -53,7 +54,7 @@ function createMockWebGLCanvas(): {
   };
 
   const canvas = {
-    addEventListener: vi.fn((name: string, fn: (event: any) => void) => {
+    addEventListener: vi.fn((name: string, fn: (event?: unknown) => void) => {
       listeners.set(name, fn);
     }),
     getContext: vi.fn((type: string) => {
@@ -72,17 +73,17 @@ function createMockWebGLCanvas(): {
   return { canvas, listeners };
 }
 
-function createMockRenderer(canvas: HTMLCanvasElement): any {
+function createMockRenderer(canvas?: unknown): WebGLRenderer {
   return {
     autoClear: false,
     clear: vi.fn(),
     dispose: vi.fn(),
-    domElement: canvas,
+    domElement: (canvas ?? null) as HTMLCanvasElement,
     outputColorSpace: "",
     render: vi.fn(),
     setSize: vi.fn(),
     toneMapping: 0,
-  };
+  } as unknown as WebGLRenderer;
 }
 
 describe("planarGpuRenderer", () => {

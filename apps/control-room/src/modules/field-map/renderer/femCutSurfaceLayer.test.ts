@@ -1,3 +1,4 @@
+import type { Mesh } from "three";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,7 +6,6 @@ import {
   createFemCutSurfaceMaterial,
   disposeFemCutSurfaceMesh,
   FEM_SCALAR_VALUE_ATTRIBUTE,
-  FEM_VECTOR_VALUE_ATTRIBUTE,
   paletteIdFromName,
   triangulateCutPolygons,
   updateFemCutSurfaceGeometry,
@@ -190,7 +190,7 @@ describe("femCutSurfaceLayer", () => {
     const mesh = {
       geometry,
       material,
-    } as any;
+    } as unknown as Mesh;
 
     expect(() => disposeFemCutSurfaceMesh(mesh)).not.toThrow();
   });

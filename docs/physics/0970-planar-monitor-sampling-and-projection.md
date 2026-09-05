@@ -1,9 +1,8 @@
 # Planar monitor sampling and projection
 
-- Status: accepted scientific contract; implemented surfaces remain
-  end-to-end unqualified
+- Status: accepted scientific contract; qualified on branch `codex/refactor-2d` (2026-09-05, Etapy 00–13)
 - Owners: Fullmag physics, runtime, API, and control-room maintainers
-- Last updated: 2026-08-13
+- Last updated: 2026-09-05
 - Audited Task 7A implementation delta: `9c3a779571c2815dec8279dbd56d5604b09ab784`
 - Historical Task 0 evidence source: `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`
 - Related ADRs:

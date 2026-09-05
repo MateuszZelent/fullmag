@@ -1,5 +1,4 @@
 import {
-  BufferAttribute,
   BufferGeometry,
   ClampToEdgeWrapping,
   DataTexture,
@@ -10,9 +9,11 @@ import {
   OrthographicCamera,
   RGBAFormat,
   Scene,
+  ShaderMaterial,
   SRGBColorSpace,
   UnsignedByteType,
   WebGLRenderer,
+  type WebGLRendererParameters,
 } from "three";
 
 import {
@@ -44,7 +45,7 @@ export interface PlanarGpuRenderer extends PlanarRenderer {
 
 export function createPlanarGpuRenderer(
   canvas: HTMLCanvasElement,
-  createRenderer: (params: any) => WebGLRenderer = (params) => new WebGLRenderer(params),
+  createRenderer: (params: WebGLRendererParameters) => WebGLRenderer = (params) => new WebGLRenderer(params),
 ): PlanarGpuRenderer | null {
   const gl =
     canvas.getContext("webgl2", {
@@ -185,7 +186,7 @@ export function createPlanarGpuRenderer(
         vectorValues: input.vectorValues,
         verticesUv: input.verticesUv,
       });
-      updateFemCutSurfaceMaterial(femMesh.material as any, {
+      updateFemCutSurfaceMaterial(femMesh.material as ShaderMaterial, {
         colormap: input.colormap,
         opacity: input.opacity,
         range: input.range,
@@ -233,7 +234,7 @@ export function createPlanarGpuRenderer(
         input.bounds,
         originOffset,
       );
-      const mat = fdmMesh.material as any;
+      const mat = fdmMesh.material as ShaderMaterial;
       const texture = mat.uniforms.fmFieldTexture.value as DataTexture;
       updateFdmDataTexture(
         texture,
