@@ -10,7 +10,6 @@
 
 #include <cmath>
 #include <cstring>
-#include <algorithm>
 
 namespace fullmag::fem {
 
@@ -265,8 +264,8 @@ bool commit_candidate(
         return false;
     }
     const double expected_time = ctx.state.current_time + candidate.dt;
-    if (!std::isfinite(candidate.time) ||
-        std::abs(candidate.time - expected_time) > 1e-11 * std::max(1.0, std::abs(expected_time))) {
+    if (!std::isfinite(expected_time) || !std::isfinite(candidate.time) ||
+        candidate.time != expected_time) {
         error = "commit_candidate candidate time mismatch with current_time + dt";
         return false;
     }

@@ -151,6 +151,16 @@ void demag_linear_solve_validation_rejects_invalid_results() {
     result.relative_tolerance = 1.0e-6;
     result.max_iterations = 100;
     std::string error;
+    check(
+        result.norm_kind == fullmag::fem::DemagResidualNormKind::Unknown &&
+            result.certification_kind ==
+                fullmag::fem::DemagResidualCertificationKind::Unavailable,
+        "demag solve results must default to unknown norm and unavailable certification");
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "missing demag norm/certification metadata must be rejected");
+    result.norm_kind = fullmag::fem::DemagResidualNormKind::L2;
+    result.certification_kind =
+        fullmag::fem::DemagResidualCertificationKind::ReportedRecursive;
     check(fullmag::fem::validate_demag_linear_solve_result(result, error),
           "valid converged demag solve result is accepted");
 
@@ -371,6 +381,7 @@ void nonperiodic_hypre_rejected_candidate_preserves_published_warm_start() {
     ctx.poisson_demag.poisson_bc_op = nullptr;
 }
 
+#if defined(MFEM_USE_MPI)
 void spd_jacobi_counterexample_cannot_certify_l2_success() {
     mfem::SparseMatrix op(2, 2);
     op.Add(0, 0, 1.0);
@@ -542,6 +553,7 @@ void spd_jacobi_counterexample_cannot_certify_l2_success() {
         ctx.poisson_demag.poisson_bc_op = nullptr;
     }
 }
+#endif
 
 void periodic_demag_rejects_one_iteration_candidate() {
     fullmag::fem::Context ctx;
@@ -692,6 +704,38 @@ std::filesystem::path fem_source_root() {
         return this_file.parent_path().parent_path();
     }
     return std::filesystem::current_path() / this_file.parent_path().parent_path();
+}
+
+void cpu_demag_hypre_sets_explicit_l2_contract() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string poisson_hypre = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_hypre.cpp");
+    const std::string fem_bem = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_fem_bem_linear_solve.cpp");
+    const std::string periodic = read_text_file(
+        root / "cpu" / "mfem" / "interactions" / "demag_poisson_periodic.cpp");
+
+    check(
+        poisson_hypre.find("HYPRE_PCGSetTwoNorm(") != std::string::npos &&
+            poisson_hypre.find("result.norm_kind = DemagResidualNormKind::L2;") !=
+                std::string::npos &&
+            poisson_hypre.find("result.certification_kind = residual_independently_certified") !=
+                std::string::npos,
+        "CPU Poisson Hypre demag must select L2 and publish certification metadata");
+    check(
+        fem_bem.find("HYPRE_PCGSetTwoNorm(") != std::string::npos &&
+            fem_bem.find("result.norm_kind = DemagResidualNormKind::L2;") !=
+                std::string::npos &&
+            fem_bem.find("result.certification_kind = result.residual_independently_certified") !=
+                std::string::npos,
+        "CPU FEM/BEM Hypre demag must select L2 and publish certification metadata");
+    check(
+        periodic.find("result.norm_kind = DemagResidualNormKind::L2;") !=
+                std::string::npos &&
+            periodic.find("result.residual_independently_certified =") !=
+                std::string::npos &&
+            periodic.find("result.certification_kind =") != std::string::npos,
+        "CPU periodic demag must publish explicit L2 and true-residual metadata");
 }
 
 void poisson_runtime_wrappers_are_owned_by_separate_modules() {
@@ -4073,6 +4117,7 @@ int main() {
     poisson_force_independent_residual_validation_honors_qualification_env();
     demag_amg_policy_resolves_defaults_overrides_and_invalid_values();
     demag_linear_solve_validation_rejects_invalid_results();
+    cpu_demag_hypre_sets_explicit_l2_contract();
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();
     poisson_source_files_document_module_boundaries();
@@ -4112,7 +4157,9 @@ int main() {
     mixed_poisson_matches_independently_refined_all_tet_reference();
     nonperiodic_hypre_demag_rejects_one_iteration_candidate();
     nonperiodic_hypre_rejected_candidate_preserves_published_warm_start();
+#if defined(MFEM_USE_MPI)
     spd_jacobi_counterexample_cannot_certify_l2_success();
+#endif
     periodic_demag_rejects_one_iteration_candidate();
     periodic_demag_reuses_warm_start_and_resets_after_failure();
 #endif

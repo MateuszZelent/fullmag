@@ -1469,6 +1469,8 @@ void rk_v1_plan_allows_control_scalar_and_prevents_false_violation() {
 
     check(state.plan_resolved, "RK plan must be resolved");
     check(state.accounting_valid, "accounting must be valid after resolve_plan");
+    check(state.control_policy == FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL,
+          "RK plan must publish bounded host scalar control policy");
     check((state.allowed_transfer_mask & FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR) != 0,
           "device-resident RK plan must include FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR in allowed_transfer_mask");
 
@@ -1578,7 +1580,27 @@ void pgbb_plan_resolution_and_attempt_commit_lifecycle() {
 
 } // namespace
 
+void stationary_without_candidate_cannot_fabricate_accepted_step() {
+    FemGpuExecutionReceiptRuntimeState state{};
+    const uint64_t required = FEM_GPU_OPERATOR_EXCHANGE |
+        FEM_GPU_OPERATOR_REDUCTIONS | FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+        FEM_GPU_OPERATOR_LINE_SEARCH | FEM_GPU_OPERATOR_RETRACTION |
+        FEM_GPU_OPERATOR_ARMIJO_ENERGY;
+    gpu_execution_receipt_resolve_plan(
+        state, required, required, 0, 0,
+        FemGpuExecutionClass::DeviceResident, 0, FULLMAG_FEM_PRECISION_DOUBLE, 0);
+    gpu_execution_receipt_begin_attempt(state);
+    gpu_execution_receipt_note_device(
+        state, FEM_GPU_OPERATOR_EXCHANGE | FEM_GPU_OPERATOR_REDUCTIONS);
+    gpu_execution_receipt_note_stationary_observation(state);
+    check(!state.candidate_active, "stationary observation must not invent a candidate");
+    gpu_execution_receipt_commit_attempt(state);
+    check(state.accepted_step_count == 0, "stationary observation must not invent an accepted step");
+    check(!state.accounting_valid, "incomplete operator evidence must remain unqualified");
+}
+
 int main() {
+    stationary_without_candidate_cannot_fabricate_accepted_step();
     accepted_device_attempt_publishes_complete_receipt();
     committed_transfer_snapshot_is_scoped_to_the_current_attempt();
     late_outer_attempt_transfer_is_rejected_before_commit();

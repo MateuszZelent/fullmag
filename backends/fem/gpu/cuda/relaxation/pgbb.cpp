@@ -28,6 +28,8 @@
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #include "gpu/cuda/relaxation/relaxation_memory.hpp"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
+#include "gpu/cuda/runtime/execution_receipt.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "src/relaxation_numerics.hpp"
 #include "src/relaxation_operator_units.hpp"
 
@@ -45,6 +47,75 @@ namespace fullmag::fem {
 
 #if FULLMAG_HAS_CUDA_RUNTIME
 namespace {
+
+bool pgbb_has_local_fields(const Context &ctx)
+{
+    return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
+        ctx.zeeman.has_external_field ||
+        ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
+        ctx.magnetoelastic.enabled ||
+        ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
+        ctx.thermal_brown.temperature > 0.0;
+}
+
+void note_pgbb_effective_field_operators(Context &ctx)
+{
+    // The PG-BB effective-field path does not execute the LLG direct-torque
+    // RHS.  Keep this producer mask limited to the operators actually reached
+    // by gpu_rk_compute_effective_field_for_magnetization_*.
+    uint64_t mask = FEM_GPU_OPERATOR_EXCHANGE | FEM_GPU_OPERATOR_REDUCTIONS;
+    if (pgbb_has_local_fields(ctx)) {
+        mask |= FEM_GPU_OPERATOR_LOCAL_FIELDS;
+    }
+    if (ctx.demag.enabled) {
+        mask |=
+            FEM_GPU_OPERATOR_DEMAG_RHS |
+            FEM_GPU_OPERATOR_DEMAG_SOLVE |
+            FEM_GPU_OPERATOR_DEMAG_RECOVERY |
+            FEM_GPU_OPERATOR_PRECONDITIONER;
+    }
+    gpu_execution_receipt_note_device(ctx.gpu_state.execution_receipt, mask);
+
+    uint64_t coverage =
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE |
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_REDUCTIONS;
+    if (ctx.demag.enabled) {
+        coverage |=
+            FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RHS |
+            FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RECOVERY;
+    }
+    if (pgbb_has_local_fields(ctx)) {
+        coverage |= FULLMAG_FEM_GPU_KERNEL_COVERAGE_LOCAL_FIELDS;
+    }
+    gpu_execution_receipt_note_coverage(ctx.gpu_state.execution_receipt, coverage);
+}
+
+void note_pgbb_gradient_operators(Context &ctx, bool used_preconditioner)
+{
+    if (used_preconditioner) {
+        gpu_execution_receipt_note_device(
+            ctx.gpu_state.execution_receipt, FEM_GPU_OPERATOR_PRECONDITIONER);
+    }
+    gpu_execution_receipt_note_coverage(
+        ctx.gpu_state.execution_receipt,
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT);
+}
+
+void note_pgbb_line_search_trial_operators(Context &ctx)
+{
+    note_pgbb_effective_field_operators(ctx);
+    gpu_execution_receipt_note_device(
+        ctx.gpu_state.execution_receipt,
+        FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
+            FEM_GPU_OPERATOR_LINE_SEARCH |
+            FEM_GPU_OPERATOR_RETRACTION |
+            FEM_GPU_OPERATOR_ARMIJO_ENERGY);
+    gpu_execution_receipt_note_coverage(
+        ctx.gpu_state.execution_receipt,
+        FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION |
+            FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY |
+            FULLMAG_FEM_GPU_KERNEL_COVERAGE_NORMALIZATION);
+}
 
 constexpr int kBlockSize = 256;
 constexpr double kDefaultStepSize = 1.0e-6;
@@ -500,7 +571,18 @@ bool gpu_relax_compute_current_metrics(
             reason)) {
         return false;
     }
-    return gpu_unpack_pgbb_current_metrics(ctx, packed_scalars, metrics, reason);
+    if (!gpu_unpack_pgbb_current_metrics(ctx, packed_scalars, metrics, reason)) {
+        return false;
+    }
+    note_pgbb_effective_field_operators(ctx);
+    note_pgbb_gradient_operators(
+        ctx,
+        gpu_relaxation_is_preconditioned(gpu.relaxation));
+    GpuPerformanceCounterDelta current_performance{};
+    current_performance.effective_field_applies = 1;
+    current_performance.energy_evaluations = 1;
+    gpu_performance_note(ctx.gpu_state.performance_counters, current_performance);
+    return true;
 }
 
 bool gpu_relax_restore_previous_magnetization(
@@ -758,6 +840,8 @@ int gpu_relax_projected_gradient_bb_step(
     const double energy_gradient_norm_sq =
         current_metrics.projected_gradient_norm_sq;
     if (relaxation_torque_confirmation_pending(ctx, current_torque_apm)) {
+        gpu_execution_receipt_note_stationary_observation(
+            ctx.gpu_state.execution_receipt);
         mark_gpu_relax_pgbb_device_source_of_truth(ctx);
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
@@ -786,6 +870,8 @@ int gpu_relax_projected_gradient_bb_step(
             ctx, stream, "current accepted H_eff snapshot failure", reason, error);
     }
     if (gradient_norm_sq == 0.0) {
+        gpu_execution_receipt_note_stationary_observation(
+            ctx.gpu_state.execution_receipt);
         out_stats.step = ctx.state.step_count;
         out_stats.time_seconds = 0.0;
         out_stats.dt_seconds = 0.0;
@@ -860,6 +946,8 @@ int gpu_relax_projected_gradient_bb_step(
     {
         FULLMAG_NVTX_RANGE("fem.relax.armijo");
         while (true) {
+            gpu_execution_receipt_note_candidate_begin(
+                ctx.gpu_state.execution_receipt);
             fullmag_cuda_relax_retract_field(
                 gpu.rk.m_backup.x,
                 gpu.rk.m_backup.y,
@@ -886,6 +974,8 @@ int gpu_relax_projected_gradient_bb_step(
             gpu_relax_pgbb_project_frozen_reference(
                 ctx, gpu.rk.m_stage, stream);
             if (!cuda_launch_ok("launch GPU projected-gradient BB trial retraction", reason)) {
+                gpu_execution_receipt_note_candidate_failed(
+                    ctx.gpu_state.execution_receipt);
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
@@ -902,6 +992,8 @@ int gpu_relax_projected_gradient_bb_step(
                     gpu.rk.m_stage,
                     gpu.relaxation.projected_gradient_accepted_h_eff,
                     reason)) {
+                gpu_execution_receipt_note_candidate_failed(
+                    ctx.gpu_state.execution_receipt);
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
@@ -923,12 +1015,22 @@ int gpu_relax_projected_gradient_bb_step(
                     n,
                     blocks,
                     reason)) {
+                gpu_execution_receipt_note_candidate_failed(
+                    ctx.gpu_state.execution_receipt);
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
                     "trial effective-field/energy evaluation failure",
                     reason,
                     error);
+            }
+            note_pgbb_effective_field_operators(ctx);
+            {
+                GpuPerformanceCounterDelta candidate_performance{};
+                candidate_performance.effective_field_applies = 1;
+                gpu_performance_note(
+                    ctx.gpu_state.performance_counters,
+                    candidate_performance);
             }
             logical_rhs_evaluations += 1u;
 
@@ -937,9 +1039,16 @@ int gpu_relax_projected_gradient_bb_step(
                     ctx, stream, n, blocks, gpu.rk.m_backup, gpu.rk.error,
                     current_snapshot, kArmijoCoefficient, true, armijo_result,
                     reason)) {
+                gpu_execution_receipt_note_candidate_failed(
+                    ctx.gpu_state.execution_receipt);
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx, stream, "trial direct-energy evaluation failure", reason, error);
             }
+            note_pgbb_line_search_trial_operators(ctx);
+            GpuPerformanceCounterDelta energy_performance{};
+            energy_performance.energy_evaluations = 1;
+            energy_performance.armijo_candidates = 1;
+            gpu_performance_note(ctx.gpu_state.performance_counters, energy_performance);
             last_direct_difference = armijo_result.difference;
             const double armijo_rhs = armijo_result.armijo_rhs_j;
             last_armijo_increment_rhs_j = armijo_rhs;
@@ -968,14 +1077,28 @@ int gpu_relax_projected_gradient_bb_step(
                     armijo_rhs,
                     armijo_result,
                     reason)) {
+                gpu_execution_receipt_note_candidate_failed(
+                    ctx.gpu_state.execution_receipt);
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx, stream, "trial direct-energy refinement failure", reason, error);
+            }
+            if (last_refinement_attempted) {
+                gpu_execution_receipt_note_candidate_refined(
+                    ctx.gpu_state.execution_receipt);
+                GpuPerformanceCounterDelta refinement_performance{};
+                refinement_performance.energy_evaluations =
+                    armijo_result.refinement_rhs_evaluations;
+                gpu_performance_note(
+                    ctx.gpu_state.performance_counters,
+                    refinement_performance);
             }
             last_refinement_accepted = armijo_result.refinement_accepted;
             refinement_rhs_evaluations +=
                 armijo_result.refinement_rhs_evaluations;
             last_trial_energy_j = armijo_result.trial_snapshot.total_energy_j;
             if (!std::isfinite(last_trial_energy_j)) {
+                gpu_execution_receipt_note_candidate_failed(
+                    ctx.gpu_state.execution_receipt);
                 return gpu_relax_restore_previous_magnetization_after_failure(
                     ctx,
                     stream,
@@ -991,6 +1114,8 @@ int gpu_relax_projected_gradient_bb_step(
                 (armijo_result.decision == relaxation::ArmijoDifferenceDecision::Accept ||
                  last_refinement_accepted);
             if (armijo) {
+                gpu_execution_receipt_note_candidate_accepted(
+                    ctx.gpu_state.execution_receipt);
                 last_direct_difference = armijo_result.difference;
                 accepted_armijo_increment_rhs_j = armijo_rhs;
             }
@@ -998,6 +1123,8 @@ int gpu_relax_projected_gradient_bb_step(
                 line_search_accepted = true;
                 break;
             }
+            gpu_execution_receipt_note_candidate_rejected(
+                ctx.gpu_state.execution_receipt);
             if (backtracks >= kMaxBacktracks) {
                 break;
             }
@@ -1007,6 +1134,8 @@ int gpu_relax_projected_gradient_bb_step(
     }
     if (!line_search_accepted) {
         if (every_permitted_trial_unchanged) {
+            gpu_execution_receipt_note_stationary_observation(
+                ctx.gpu_state.execution_receipt);
             mark_gpu_relax_pgbb_device_source_of_truth(ctx);
             out_stats.step = ctx.state.step_count;
             out_stats.time_seconds = 0.0;

@@ -15,6 +15,17 @@ FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
 SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
 
 
+def test_receipt_launcher_exact_runner_tests_exist() -> None:
+    launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
+    tests = re.findall(r"cargo \+nightly test -p fullmag-runner(?: --features fem-gpu)? ([\w:]+) -- --exact", launcher)
+    assert tests
+    for qualified_name in tests:
+        parts = qualified_name.split("::")
+        module_parts = parts[:parts.index("tests")] if "tests" in parts else parts[:1]
+        source = ROOT / "crates/fullmag-runner/src" / Path(*module_parts).with_suffix(".rs")
+        assert re.search(r"\bfn\s+" + re.escape(parts[-1]) + r"\s*\(", source.read_text(encoding="utf-8")), qualified_name
+
+
 def test_justfile_exposes_native_windows_fullmag_route() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 

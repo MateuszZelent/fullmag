@@ -494,13 +494,14 @@ cargo_target=/workspace/.fullmag-build/cargo-targets/fem-gpu-execution-receipt
 mkdir -p "`$build_dir" "`$cargo_target"
 rustup toolchain install nightly --profile minimal --no-self-update
 cmake -S native -B "`$build_dir" -DCMAKE_CUDA_ARCHITECTURES="`$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF
-cmake --build "`$build_dir" --target fem_gpu_execution_receipt_contract
-ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error -R '^fem_gpu_execution_receipt_contract$'
+cmake --build "`$build_dir" --target fem_gpu_execution_receipt_contract fem_demag_poisson_contract fem_gpu_rk_device_controller_contract fem_gpu_relaxation_preconditioner_contract
+ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error -R '^fem_(gpu_execution_receipt|demag_poisson|gpu_rk_device_controller|gpu_relaxation_preconditioner)_contract$'
 FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol -- --exact --nocapture
 FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_execution_receipt_v2_has_stable_layout_and_symbol -- --exact --nocapture
 FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_performance_snapshot_v3_has_stable_layout_and_symbol -- --exact --nocapture
 CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner types::fem_gpu_execution_receipt_contract_tests::receipt_v2_and_snapshot_v3_serialize_every_native_field -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner types::fem_gpu_execution_receipt_contract_tests::receipt_v2_serializes_every_native_field -- --exact --nocapture
+CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v3_serializes_every_native_field -- --exact --nocapture
 CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2 -- --exact --nocapture
 CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner artifacts::tests::artifact_serializes_complete_fem_gpu_receipt_v2_and_snapshot_v3 -- --exact --nocapture
 CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --features fem-gpu native_fem::runtime_info::tests::performance_snapshot_v2_maps_every_native_field_without_v1_derivation -- --exact --nocapture

@@ -22,8 +22,8 @@ const char *to_string(DemagResidualCertificationKind kind) noexcept;
 
 struct DemagLinearSolveResult {
     const char *solver_kind = "unknown";
-    DemagResidualNormKind norm_kind = DemagResidualNormKind::L2;
-    DemagResidualCertificationKind certification_kind = DemagResidualCertificationKind::ReportedRecursive;
+    DemagResidualNormKind norm_kind = DemagResidualNormKind::Unknown;
+    DemagResidualCertificationKind certification_kind = DemagResidualCertificationKind::Unavailable;
     bool solver_reported_converged = false;
     bool residual_independently_certified = false;
     int iterations = 0;

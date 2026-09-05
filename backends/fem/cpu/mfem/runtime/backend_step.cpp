@@ -558,7 +558,9 @@ int run_backend_relaxation_step(
                     FEM_GPU_OPERATOR_PRECONDITIONER;
             }
 #if FULLMAG_HAS_CUDA_RUNTIME
-            if (!ctx.gpu_state.device.relaxation.preconditioner_request.requested_kind.empty()) {
+            const auto &requested_preconditioner =
+                ctx.gpu_state.device.relaxation.preconditioner_request.requested_kind;
+            if (!requested_preconditioner.empty() && requested_preconditioner != "none") {
                 required_mask |= FEM_GPU_OPERATOR_PRECONDITIONER;
             }
 #endif
@@ -679,58 +681,6 @@ int run_backend_relaxation_step(
                 0.0,
                 0.0);
             return gpu_status;
-        }
-        if (algorithm == FULLMAG_FEM_RELAX_PROJECTED_GRADIENT_BB &&
-            gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
-            uint64_t pgbb_ops =
-                FEM_GPU_OPERATOR_EXCHANGE |
-                FEM_GPU_OPERATOR_REDUCTIONS |
-                FEM_GPU_OPERATOR_DIRECT_MINIMIZER |
-                FEM_GPU_OPERATOR_RETRACTION |
-                FEM_GPU_OPERATOR_LINE_SEARCH |
-                FEM_GPU_OPERATOR_ARMIJO_ENERGY;
-            if (ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||
-                ctx.zeeman.has_external_field ||
-                ctx.anisotropy.uniaxial_enabled || ctx.anisotropy.cubic_enabled ||
-                ctx.magnetoelastic.enabled ||
-                ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
-                ctx.thermal_brown.temperature > 0.0) {
-                pgbb_ops |= FEM_GPU_OPERATOR_LOCAL_FIELDS;
-            }
-            if (ctx.stt.slonczewski_enabled || ctx.stt.zhang_li_enabled || ctx.sot.enabled) {
-                pgbb_ops |= FEM_GPU_OPERATOR_DIRECT_TORQUES;
-            }
-            if (ctx.demag.enabled) {
-                pgbb_ops |=
-                    FEM_GPU_OPERATOR_DEMAG_RHS |
-                    FEM_GPU_OPERATOR_DEMAG_SOLVE |
-                    FEM_GPU_OPERATOR_DEMAG_RECOVERY |
-                    FEM_GPU_OPERATOR_PRECONDITIONER;
-            }
-#if FULLMAG_HAS_CUDA_RUNTIME
-            if (!ctx.gpu_state.device.relaxation.preconditioner_request.requested_kind.empty()) {
-                pgbb_ops |= FEM_GPU_OPERATOR_PRECONDITIONER;
-            }
-#endif
-            uint64_t pgbb_cov =
-                FULLMAG_FEM_GPU_KERNEL_COVERAGE_EXCHANGE |
-                FULLMAG_FEM_GPU_KERNEL_COVERAGE_GRADIENT |
-                FULLMAG_FEM_GPU_KERNEL_COVERAGE_RETRACTION |
-                FULLMAG_FEM_GPU_KERNEL_COVERAGE_DIRECT_ENERGY |
-                FULLMAG_FEM_GPU_KERNEL_COVERAGE_REDUCTIONS |
-                FULLMAG_FEM_GPU_KERNEL_COVERAGE_NORMALIZATION;
-            if (ctx.demag.enabled) {
-                pgbb_cov |=
-                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RHS |
-                    FULLMAG_FEM_GPU_KERNEL_COVERAGE_DEMAG_RECOVERY;
-            }
-            if (pgbb_ops & FEM_GPU_OPERATOR_LOCAL_FIELDS) {
-                pgbb_cov |= FULLMAG_FEM_GPU_KERNEL_COVERAGE_LOCAL_FIELDS;
-            }
-            gpu_execution_receipt_note_device(ctx.gpu_state.execution_receipt, pgbb_ops);
-            gpu_execution_receipt_note_coverage(ctx.gpu_state.execution_receipt, pgbb_cov);
-            gpu_execution_receipt_note_candidate_begin(ctx.gpu_state.execution_receipt);
-            gpu_execution_receipt_note_candidate_accepted(ctx.gpu_state.execution_receipt);
         }
         if (gpu_execution_receipt_attempt_active(ctx.gpu_state.execution_receipt)) {
             if (!gpu_execution_receipt_update_attempt_transfer(

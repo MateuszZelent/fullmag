@@ -291,6 +291,56 @@ void test_candidate_capture_failure_and_dimension_mismatch() {
     rk_candidate_state_destroy(candidate);
 }
 
+void test_commit_candidate_requires_exact_endpoint_time() {
+    using namespace fullmag::fem;
+    Context ctx{};
+    ctx.mesh.n_nodes = 3;
+    ctx.state.current_time = 0.0;
+    ctx.state.step_count = 0;
+
+    RkCandidateState candidate{};
+    std::string error;
+    check(rk_candidate_state_allocate(candidate, 3, error), "allocate candidate 3");
+
+    candidate.candidate_valid = true;
+    candidate.candidate_version = 1;
+    candidate.accepted_version = 0;
+    candidate.base_accepted_version = 0;
+    candidate.dt = 1e-15;
+    // This mismatch is below the legacy 1e-11 absolute tolerance but is not
+    // the endpoint represented by current_time + dt.
+    candidate.time = 1e-12;
+
+    check(!commit_candidate(ctx, candidate, nullptr, error),
+          "commit_candidate must reject a non-endpoint candidate time");
+    check(ctx.state.step_count == 0, "rejected endpoint mismatch must not advance step_count");
+    check(ctx.state.current_time == 0.0, "rejected endpoint mismatch must not advance time");
+
+    rk_candidate_state_destroy(candidate);
+}
+
+void test_adaptive_decision_publication_checks_cuda_status() {
+    std::ifstream loop_file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu");
+    if (!loop_file.is_open()) loop_file.open("backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu");
+    if (!loop_file.is_open()) loop_file.open("../backends/fem/gpu/cuda/integrators/rk/rk_attempt_loop.cu");
+    check(loop_file.is_open(), "unable to open rk_attempt_loop.cu");
+    const std::string loop_src((std::istreambuf_iterator<char>(loop_file)),
+                               std::istreambuf_iterator<char>());
+    const size_t copy_begin = loop_src.find(
+        "const cudaError_t decision_copy_rc = cudaMemcpyAsync(");
+    const size_t slot_publish = loop_src.find("gpu.rk.candidate.active_slot =", copy_begin);
+    check(copy_begin != std::string::npos && slot_publish != std::string::npos &&
+              slot_publish > copy_begin,
+          "adaptive decision publication must contain a bounded copy block");
+    const std::string copy_block = loop_src.substr(copy_begin, slot_publish - copy_begin);
+    check(copy_block.find("cudaError_t") != std::string::npos,
+          "adaptive decision publication must retain cudaMemcpyAsync status");
+    check(copy_block.find("cudaSuccess") != std::string::npos,
+          "adaptive decision publication must check cudaMemcpyAsync status");
+    check(copy_block.find("return false") != std::string::npos,
+          "adaptive decision publication must fail closed on copy failure");
+}
+
 void test_commit_candidate_requires_fresh_valid_candidate() {
     using namespace fullmag::fem;
     Context ctx{};
@@ -380,6 +430,8 @@ int main() {
     test_device_controller_golden_vectors();
     test_device_candidate_capture_and_fail_closed_allocation();
     test_candidate_capture_failure_and_dimension_mismatch();
+    test_commit_candidate_requires_exact_endpoint_time();
+    test_adaptive_decision_publication_checks_cuda_status();
     test_commit_candidate_requires_fresh_valid_candidate();
     std::printf("PASS: gpu_rk_device_controller_contract\n");
     return 0;

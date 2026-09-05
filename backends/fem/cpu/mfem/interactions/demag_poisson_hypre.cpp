@@ -256,6 +256,9 @@ bool solve_demag_poisson_hypre(
     }
 
     if (!ctx.poisson_demag.solver_setup) {
+        // hypre setters return a sticky process-global error flag. Start a new
+        // setup transaction without carrying a previous rejected solve's error.
+        HYPRE_ClearAllErrors();
         const auto setup_wall_start = FemSteadyClock::now();
         mfem::HypreParMatrix *staged_A = nullptr;
         mfem::HypreSolver *staged_preconditioner = nullptr;
@@ -307,6 +310,13 @@ bool solve_demag_poisson_hypre(
                 }
                 pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
                 pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+                const HYPRE_Int two_norm_status = HYPRE_PCGSetTwoNorm(
+                    static_cast<HYPRE_Solver>(*pcg), 1);
+                if (two_norm_status != 0) {
+                    error = "CPU Poisson demag Hypre PCG failed to select L2 residual norm (status " +
+                        std::to_string(two_norm_status) + ")";
+                    throw std::runtime_error(error);
+                }
                 pcg->SetOperator(*staged_A);
                 pcg->SetPreconditioner(*staged_preconditioner);
                 break;
@@ -502,6 +512,12 @@ bool solve_demag_poisson_hypre(
 
     DemagLinearSolveResult result;
     result.solver_kind = solver_kind;
+    result.norm_kind = DemagResidualNormKind::L2;
+    result.certification_kind = residual_independently_certified
+        ? DemagResidualCertificationKind::TrueResidual
+        : (solver_reported_converged
+               ? DemagResidualCertificationKind::ReportedRecursive
+               : DemagResidualCertificationKind::Unavailable);
     result.solver_reported_converged = solver_reported_converged;
     result.residual_independently_certified = residual_independently_certified;
     result.iterations = iterations;

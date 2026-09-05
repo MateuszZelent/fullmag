@@ -12,6 +12,7 @@
 #include "fem_common.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -277,6 +278,11 @@ bool solve_demag_periodic_poisson_reduced(
 
     DemagLinearSolveResult result;
     result.solver_kind = "cpu_poisson_periodic/cg";
+    result.norm_kind = DemagResidualNormKind::L2;
+    result.residual_independently_certified = std::isfinite(absolute_residual);
+    result.certification_kind = result.residual_independently_certified
+        ? DemagResidualCertificationKind::TrueResidual
+        : DemagResidualCertificationKind::Unavailable;
     result.solver_reported_converged = periodic_workspace->solver.GetConverged();
     result.iterations = iterations;
     result.relative_residual = relative_residual;

@@ -239,12 +239,22 @@ bool gpu_rk_run_accepted_attempt_loop(
                 canonical_slot.ratio = active_dt > 0.0 ? (suggested_dt / active_dt) : 1.0;
                 canonical_slot.decision_version = ctx.state.step_count + 1u;
                 canonical_slot.valid = 1u;
-                cudaMemcpyAsync(
+                const cudaError_t decision_copy_rc = cudaMemcpyAsync(
                     gpu.rk.candidate.d_slots + slot_idx,
                     &canonical_slot,
                     sizeof(RkDecisionSlot),
                     cudaMemcpyHostToDevice,
                     stream);
+                if (decision_copy_rc != cudaSuccess) {
+                    const std::string failure_reason =
+                        std::string("GPU RK adaptive decision slot publication failed: ") +
+                        cudaGetErrorString(decision_copy_rc);
+                    if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
+                        return false;
+                    }
+                    reason = failure_reason;
+                    return false;
+                }
                 gpu.rk.candidate.active_slot = 1 - slot_idx;
             }
             if (ctx.stepper.attempt_trace.records.size() >= RkAttemptTraceState::max_records) {

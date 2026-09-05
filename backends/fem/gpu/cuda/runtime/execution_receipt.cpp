@@ -170,7 +170,7 @@ void gpu_execution_receipt_resolve_plan(
     state.execution_kind = FULLMAG_FEM_GPU_EXECUTION_KIND_RK_TIME_INTEGRATOR;
     state.relaxation_algorithm = FULLMAG_FEM_GPU_RELAX_ALGORITHM_NONE;
     state.attempt_model = FULLMAG_FEM_GPU_ATTEMPT_MODEL_RK_CANDIDATE;
-    state.control_policy = FULLMAG_FEM_GPU_CONTROL_POLICY_DEVICE_CONTROL;
+    state.control_policy = FULLMAG_FEM_GPU_CONTROL_POLICY_BOUNDED_HOST_SCALAR_CONTROL;
     state.terminal_outcome = FULLMAG_FEM_GPU_TERMINAL_OUTCOME_NONE;
     state.identity_valid = true;
     state.required_operator_mask = required_operator_mask;

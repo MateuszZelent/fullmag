@@ -133,6 +133,9 @@ bool solve_demag_fem_bem_serial_system(
     if (!std::isfinite(candidate.Norml2())) {
         DemagLinearSolveResult nonfinite_result;
         nonfinite_result.solver_kind = solver_kind;
+        nonfinite_result.norm_kind = DemagResidualNormKind::L2;
+        nonfinite_result.certification_kind =
+            DemagResidualCertificationKind::Unavailable;
         nonfinite_result.solver_reported_converged = false;
         nonfinite_result.iterations = iterations;
         nonfinite_result.relative_residual = relative_residual;
@@ -148,8 +151,14 @@ bool solve_demag_fem_bem_serial_system(
 
     DemagLinearSolveResult result;
     result.solver_kind = solver_kind;
+    result.norm_kind = DemagResidualNormKind::L2;
     result.solver_reported_converged = solver_reported_converged;
     result.residual_independently_certified = std::isfinite(absolute_residual);
+    result.certification_kind = result.residual_independently_certified
+        ? DemagResidualCertificationKind::TrueResidual
+        : (solver_reported_converged
+               ? DemagResidualCertificationKind::ReportedRecursive
+               : DemagResidualCertificationKind::Unavailable);
     result.iterations = iterations;
     result.relative_residual = relative_residual;
     result.has_absolute_residual = true;
@@ -209,6 +218,8 @@ bool solve_demag_fem_bem_sparse_system(
         cache = new FemBemHypreCache();
     }
     if (!cache->setup_done) {
+        // Clear only at the setup boundary; preserve errors raised by this setup.
+        HYPRE_ClearAllErrors();
         cache->A_par = std::make_unique<mfem::HypreParMatrix>(
             fullmag_serial_comm(), glob_size, row_starts, &op);
         cache->b_par = std::make_unique<mfem::HypreParVector>(
@@ -261,6 +272,14 @@ bool solve_demag_fem_bem_sparse_system(
             }
             pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
             pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+            const HYPRE_Int two_norm_status = HYPRE_PCGSetTwoNorm(
+                static_cast<HYPRE_Solver>(*pcg), 1);
+            if (two_norm_status != 0) {
+                error = "CPU FEM/BEM demag Hypre PCG failed to select L2 residual norm (status " +
+                    std::to_string(two_norm_status) + ")";
+                destroy_fem_bem_hypre_cache(cache);
+                return false;
+            }
             pcg->SetOperator(*cache->A_par);
             pcg->SetPreconditioner(*cache->preconditioner);
             cache->solver = std::move(pcg);
@@ -320,8 +339,14 @@ bool solve_demag_fem_bem_sparse_system(
 
     DemagLinearSolveResult result;
     result.solver_kind = solver_kind;
+    result.norm_kind = DemagResidualNormKind::L2;
     result.solver_reported_converged = solver_reported_converged;
     result.residual_independently_certified = std::isfinite(absolute_residual);
+    result.certification_kind = result.residual_independently_certified
+        ? DemagResidualCertificationKind::TrueResidual
+        : (solver_reported_converged
+               ? DemagResidualCertificationKind::ReportedRecursive
+               : DemagResidualCertificationKind::Unavailable);
     result.iterations = iterations;
     result.relative_residual = relative_residual;
     result.has_absolute_residual = true;
