@@ -19,6 +19,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -294,10 +295,22 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
 
 int main()
 {
+    const char *require_env = std::getenv("FULLMAG_REQUIRE_CUDA_CONTRACTS");
+    const bool require_cuda =
+        require_env != nullptr && std::strcmp(require_env, "1") == 0;
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && FULLMAG_HAS_CUDA_RUNTIME
-    gpu_demag_upload_preserves_rectangular_dimensions(3u, 5u); // P1 state / P2 potential.
-    gpu_demag_upload_preserves_rectangular_dimensions(5u, 3u); // PBC node-class reduction.
+    if (require_cuda) {
+        int device_count = 0;
+        check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
+              "managed periodic demag contract requires a real CUDA device");
+    }
+    gpu_demag_upload_preserves_rectangular_dimensions(3u, 5u);
+    gpu_demag_upload_preserves_rectangular_dimensions(5u, 3u);
+    std::printf("PASS: CUDA rectangular demag dimensions 3x5 and 5x3\n");
     gpu_hypre_demag_rejects_one_iteration_candidate();
+#else
+    check(!require_cuda,
+          "managed periodic demag contract requires CUDA, MFEM and MPI compilation");
 #endif
     const std::filesystem::path root = fem_source_root();
     const std::string gpu_operators =
