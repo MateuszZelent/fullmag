@@ -78,7 +78,7 @@ Z WIP można odzyskiwać wyłącznie wybrane, ponownie przejrzane i przetestowan
 
 ```yaml
 inspection_code_sha: 99a94ad174de5c290bffda54ca9eec26aaf86744
-candidate_code_sha: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a
+candidate_code_sha: 3f3fffae31c574b668bab75b93d697020f0ac7ae
 verified_code_sha: NOT_VERIFIED
 source_branch: codex/fem-gpu-tasks1-5-remediation
 source_worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation

@@ -45,7 +45,7 @@ Punkt wejścia: `617031df0ad45b25ece6b0015836c71631c4f2d1`, branch `codex/fem-gp
 
 ```yaml
 inspection_code_sha: 99a94ad174de5c290bffda54ca9eec26aaf86744
-candidate_code_sha: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a
+candidate_code_sha: 3f3fffae31c574b668bab75b93d697020f0ac7ae
 verified_code_sha: NOT_VERIFIED
 source_branch: codex/fem-gpu-tasks1-5-remediation
 source_worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation
@@ -66,7 +66,7 @@ agents_4_5_implementation_gate: BLOCKED
 ### Stan realizacji i macierz weryfikacji
 
 Poprawki z planu naprawy zostały zaimplementowane i podzielone na trzy lokalne commity:
-- C1: `0694cd661c76efc42e9cba7852bf460082a7d172`: strict managed gate (`CMakeLists.txt`, `run_fullmag_fem.ps1`, `validate_exact_rust_test_log.py`, testy launchera i walidatora logów).
+- C1: `0694cd661c76efc42e9cba7852bf460082a7d172` oraz `3f3fffae31c574b668bab75b93d697020f0ac7ae`: strict managed gate (`CMakeLists.txt`, `run_fullmag_fem.ps1`, `validate_exact_rust_test_log.py`, `cuda_periodic_demag_contract.cpp`, testy launchera i walidatora logów).
 - C2: `7ba57890e0acd83ffbef0dff6078bdf39678c8bc`: receipt closure regressions (`execution_receipt.rs`, `gpu_execution_receipt_contract.cpp`).
 - C3: `596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a`: NCG proof closure (`gpu_ncg_runtime_contract.cpp`).
 

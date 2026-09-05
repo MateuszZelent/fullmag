@@ -35,7 +35,7 @@ To instrukcje zlecenia, nie gotowe patche ani deklaracja kwalifikacji. Wykonawca
 ## BRAMKA STARTOWA AGENTÓW 4–5
 
 Stan: BLOCKED do czasu pełnej weryfikacji.
-Pełny sprawdzony SHA kodu: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (kandydat C3; bramka BLOCKED z powodu N02).
+Pełny sprawdzony SHA kodu: 3f3fffae31c574b668bab75b93d697020f0ac7ae (kandydat C3; bramka BLOCKED z powodu N02).
 Branch źródłowy: codex/fem-gpu-tasks1-5-remediation.
 Kanoniczny worktree źródłowy:
 C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.

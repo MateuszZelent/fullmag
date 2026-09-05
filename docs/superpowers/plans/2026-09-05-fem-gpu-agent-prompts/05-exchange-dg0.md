@@ -42,7 +42,7 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 ## Twoje zadanie
 
 PUNKT WEJŚCIA
-Start implementacji A13 dopiero z: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (ten sam kandydat C3 co agent 4; stan bramki: BLOCKED).
+Start implementacji A13 dopiero z: 3f3fffae31c574b668bab75b93d697020f0ac7ae (ten sam kandydat C3 co agent 4; stan bramki: BLOCKED).
 Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
 Źródłowy worktree:
 C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.

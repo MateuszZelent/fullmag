@@ -44,7 +44,7 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 ZADANIE INTEGRATORA
 
 Utrzymuj jeden zatwierdzony punkt startowy agentów 4 i 5:
-596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (kandydat C3; stan bramki: BLOCKED) na branchu codex/fem-gpu-tasks1-5-remediation,
+3f3fffae31c574b668bab75b93d697020f0ac7ae (kandydat C3; stan bramki: BLOCKED) na branchu codex/fem-gpu-tasks1-5-remediation,
 ze źródłowego worktree
 C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
 Podaj prawdziwą informację o lokalnej/zdalnej dostępności SHA.

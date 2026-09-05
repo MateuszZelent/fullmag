@@ -45,7 +45,7 @@ PUNKT WEJŚCIA I ZALEŻNOŚCI
 
 Implementacja jest zablokowana, dopóki README nie zawiera pełnego sprawdzonego SHA
 oraz dowodów native, Rust, launchera i naturalnego refinement NCG.
-Startuj wyłącznie z: 596dc3f32b3b4ab1ba57a48c68bde9f115e4f85a (kandydat C3, stan: BLOCKED).
+Startuj wyłącznie z: 3f3fffae31c574b668bab75b93d697020f0ac7ae (kandydat C3, stan: BLOCKED).
 Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
 Źródłowy worktree:
 C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
