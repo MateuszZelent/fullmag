@@ -17,7 +17,7 @@ SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
 
 def test_receipt_launcher_exact_runner_tests_exist() -> None:
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
-    tests = re.findall(r"cargo \+nightly test -p fullmag-runner(?: --lib)?(?: --features fem-gpu)? ([\w:]+) -- --exact", launcher)
+    tests = re.findall(r"cargo \+nightly test(?: --locked)? -p fullmag-runner(?: --lib)?(?: --features fem-gpu)? ([\w:]+) -- --exact", launcher)
     assert tests
     for qualified_name in tests:
         parts = qualified_name.split("::")
@@ -30,7 +30,7 @@ def test_receipt_runner_unit_tests_do_not_build_unrelated_integration_targets() 
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
     start = launcher.index('  if ($Contract -eq "gpu-execution-receipt") {')
     end = launcher.index('  if ($Contract -in @("gpu-benchmark-baseline", "gpu-nsight"))', start)
-    commands = re.findall(r"cargo \+nightly test -p fullmag-runner[^\n]+", launcher[start:end])
+    commands = re.findall(r"(?:run_exact_rust_test )?cargo \+nightly test[^\n]+-p fullmag-runner[^\n]+", launcher[start:end])
     assert commands
     assert all(" --lib " in command for command in commands)
 
@@ -272,8 +272,8 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
         "tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol",
         "types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field",
         "artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2",
-        'cmake --build "`$build_dir" --target fem_gpu_execution_receipt_contract_suite',
-        "FULLMAG_NCG_RUNTIME_DEVICE=cuda ctest",
+        'cmake --build "$build_dir" --target fem_gpu_execution_receipt_contract_suite',
+        "export FULLMAG_NCG_RUNTIME_DEVICE=cuda",
         "tests::relaxation_rejects_zhang_li_slonczewski_sot_and_thermal",
         "strict_v2_runtime_accepts_stationary_subset_and_optional_ncg_refinement",
         "execution_receipt_v2_maps_stationary_device_evidence_as_cuda_execution",
@@ -287,6 +287,7 @@ def test_fem_gpu_execution_receipt_recipe_uses_canonical_windows_launcher() -> N
         "fem_demag_poisson_contract",
         "fem_gpu_rk_device_controller_contract",
         "fem_gpu_relaxation_preconditioner_contract",
+        "fem_cuda_periodic_demag_contract",
         "fem_gpu_ncg_runtime_contract",
     ):
         assert target in suite
@@ -553,3 +554,47 @@ def test_makefile_can_build_container_local_fem_cpu() -> None:
     assert "FULLMAG_FORCE_LOCAL_FEM_CPU" in makefile
     assert 'build_mode="fem-cpu"' in makefile
     assert '"fem-gpu"' in makefile
+
+
+def _closure_receipt_block() -> str:
+    text = FEM_LAUNCHER.read_text(encoding="utf-8")
+    start = text.index('if ($Contract -eq "gpu-execution-receipt")')
+    stop = text.index('Write-Host "Windows FEM GPU execution receipt contract passed"', start)
+    return text[start:stop]
+
+
+def test_closure_gate_requires_rectangular_demag_and_real_cuda() -> None:
+    block = _closure_receipt_block()
+    assert "fem_cuda_periodic_demag_contract" in block
+    assert "export FULLMAG_REQUIRE_CUDA_CONTRACTS=1" in block
+    assert "export FULLMAG_NCG_RUNTIME_DEVICE=cuda" in block
+    assert "--no-tests=error --parallel 1" in block
+    assert "--output-junit" in block
+    assert '"skipped", "failure", "error"' in block
+
+
+def test_closure_rust_commands_cannot_bypass_the_exact_execution_guard() -> None:
+    block = _closure_receipt_block()
+    lines = [line.strip() for line in block.splitlines()
+             if "cargo +nightly test " in line]
+    assert lines
+    for line in lines:
+        assert line.startswith("run_exact_rust_test cargo +nightly test ")
+        assert " --lib " in line
+        assert " -- --exact " in line
+        assert " --test-threads=1 " in line
+    assert "python3 scripts/validate_exact_rust_test_log.py" in block
+    assert "strict_v2_runtime_accepts_stationary_ncg_without_accepted_steps" in block
+    assert "strict_v2_runtime_rejects_unknown_bits_even_when_masks_agree" in block
+    assert "strict_v2_runtime_rejects_optional_refinement_for_pgbb" in block
+
+
+def test_closure_runner_filters_remain_discoverable() -> None:
+    block = _closure_receipt_block()
+    names = re.findall(
+        r"^run_exact_rust_test cargo \+nightly test(?: --locked)? "
+        r"-p fullmag-runner --lib(?: --features fem-gpu)? "
+        r"([A-Za-z_][A-Za-z0-9_:]*) -- --exact(?: |$)",
+        block, flags=re.MULTILINE)
+    assert len(names) == len(set(names))
+    assert len(names) == 24  # 5 common + 16 existing GPU + 3 new GPU tests.

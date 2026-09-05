@@ -1352,6 +1352,7 @@ add_custom_target(fem_gpu_execution_receipt_contract_suite DEPENDS
     fem_demag_poisson_contract
     fem_gpu_rk_device_controller_contract
     fem_gpu_relaxation_preconditioner_contract
+    fem_cuda_periodic_demag_contract
     fem_gpu_ncg_runtime_contract
 )
 

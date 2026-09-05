@@ -481,47 +481,106 @@ ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error
   }
 
   if ($Contract -eq "gpu-execution-receipt") {
+    if ($Device -ne "gpu") {
+      throw "Windows FEM GPU receipt contract requires -Device gpu; CPU fallback is forbidden"
+    }
     if ($BuildMode -eq "true") {
       Invoke-DockerImageBuild
     } else {
       $null = Get-DockerImageId $RuntimeImage
     }
-    $contractCommand = @"
+    $contractCommand = @'
 set -euo pipefail
 cd /workspace
 build_dir=/workspace/.fullmag-build/contracts/fem-gpu-execution-receipt
 cargo_target=/workspace/.fullmag-build/cargo-targets/fem-gpu-execution-receipt
-mkdir -p "`$build_dir" "`$cargo_target"
+mkdir -p "$build_dir" "$cargo_target"
 rustup toolchain install nightly --profile minimal --no-self-update
-cmake -S native -B "`$build_dir" -DCMAKE_CUDA_ARCHITECTURES="`$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF
-cmake --build "`$build_dir" --target fem_gpu_execution_receipt_contract_suite
-FULLMAG_NCG_RUNTIME_DEVICE=cuda ctest --test-dir "`$build_dir/backends/fem" --output-on-failure --no-tests=error -R '^fem_(gpu_execution_receipt|demag_poisson|gpu_rk_device_controller|gpu_relaxation_preconditioner|gpu_ncg_runtime)_contract$'
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-plan --lib tests::relaxation_rejects_zhang_li_slonczewski_sot_and_thermal -- --exact --nocapture
-FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol -- --exact --nocapture
-FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_execution_receipt_v2_has_stable_layout_and_symbol -- --exact --nocapture
-FULLMAG_FEM_LIB_DIR="`$build_dir/backends/fem" LD_LIBRARY_PATH="`$build_dir/backends/fem:/opt/fullmag-deps/lib:`${LD_LIBRARY_PATH:-}" CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-fem-sys tests::gpu_performance_snapshot_v3_has_stable_layout_and_symbol -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib types::fem_gpu_execution_receipt_contract_tests::receipt_v2_serializes_every_native_field -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v3_serializes_every_native_field -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2 -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib artifacts::tests::artifact_serializes_complete_fem_gpu_receipt_v2_and_snapshot_v3 -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::performance_snapshot_v2_maps_every_native_field_without_v1_derivation -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::execution_receipt_v2_maps_every_native_field -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::performance_snapshot_v3_maps_every_native_field -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_validation_v2_and_v3 -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_stationary_subset_and_optional_ncg_refinement -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_rejects_stationary_subset_missing_non_trial_operator -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_pgbb_stationary_subset -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_accumulated_mask_for_completed_accepted_after_stationary -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_rejects_incomplete_completed_accepted_after_stationary -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::execution_receipt_v2_maps_stationary_device_evidence_as_cuda_execution -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::completed_strict_finalization_publishes_complete_v2_performance_artifact -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::noncompleted_or_nonstrict_finalization_never_publishes_performance_evidence -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::completed_strict_finalization_publishes_complete_v2_and_v3_artifacts -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::noncompleted_or_nonstrict_v2_and_v3_never_publishes_performance_evidence -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::invalid_strict_receipt_v2_executes_zero_terminal_success_side_effects -- --exact --nocapture
-CARGO_TARGET_DIR="`$cargo_target" CARGO_INCREMENTAL=0 cargo +nightly test -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::valid_strict_receipt_v2_executes_terminal_success_side_effects -- --exact --nocapture
-"@
+cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF
+cmake --build "$build_dir" --target fem_gpu_execution_receipt_contract_suite
+export FULLMAG_NCG_RUNTIME_DEVICE=cuda
+export FULLMAG_REQUIRE_CUDA_CONTRACTS=1
+native_tests=(
+    fem_gpu_execution_receipt_contract
+    fem_demag_poisson_contract
+    fem_gpu_rk_device_controller_contract
+    fem_gpu_relaxation_preconditioner_contract
+    fem_cuda_periodic_demag_contract
+    fem_gpu_ncg_runtime_contract
+)
+for native_test in "${native_tests[@]}"; do
+    junit="$(mktemp "$build_dir/${native_test}.XXXXXX.xml")"
+    native_log="$(mktemp "$build_dir/${native_test}.XXXXXX.log")"
+    ctest --test-dir "$build_dir/backends/fem" \
+        --output-on-failure --no-tests=error --parallel 1 --verbose \
+        --output-junit "$junit" -R "^${native_test}$" 2>&1 | tee "$native_log"
+    if grep -Eq '(^|[[:space:]])SKIP:' "$native_log"; then
+        printf 'FAIL: required native contract printed SKIP: %s\n' "$native_test" >&2
+        exit 1
+    fi
+    python3 - "$junit" "$native_test" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+path, expected = sys.argv[1:]
+root = ET.parse(path).getroot()
+cases = list(root.iter("testcase"))
+if len(cases) != 1 or cases[0].get("name") != expected:
+    raise SystemExit(f"FAIL: expected one executed native test named {expected}")
+case = cases[0]
+if any(case.find(tag) is not None for tag in ("skipped", "failure", "error")):
+    raise SystemExit(f"FAIL: {expected} was skipped or failed")
+if case.get("status", "run") not in ("run", "passed"):
+    raise SystemExit(f"FAIL: unexpected native test status: {case.attrib}")
+print(f"VERIFIED-TEST-EXECUTION: {expected}")
+PY
+done
+
+export FULLMAG_FEM_LIB_DIR="$build_dir/backends/fem"
+export LD_LIBRARY_PATH="$FULLMAG_FEM_LIB_DIR:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-}"
+export CARGO_TARGET_DIR="$cargo_target"
+export CARGO_INCREMENTAL=0
+run_exact_rust_test() {
+    local log rc
+    log="$(mktemp "$build_dir/exact-rust.XXXXXX.log")"
+    # The caller's shell must use `set -euo pipefail`.
+    if "$@" 2>&1 | tee "$log"; then
+        python3 scripts/validate_exact_rust_test_log.py "$log"
+    else
+        rc=$?
+        printf 'FAIL: Rust command exited %s; log=%s\n' "$rc" "$log" >&2
+        return "$rc"
+    fi
+}
+
+run_exact_rust_test cargo +nightly test --locked -p fullmag-plan --lib tests::relaxation_rejects_zhang_li_slonczewski_sot_and_thermal -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-fem-sys --lib tests::gpu_performance_snapshot_v2_has_stable_layout_and_symbol -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-fem-sys --lib tests::gpu_execution_receipt_v2_has_stable_layout_and_symbol -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-fem-sys --lib tests::gpu_performance_snapshot_v3_has_stable_layout_and_symbol -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v2_serializes_every_native_field -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib types::fem_gpu_execution_receipt_contract_tests::receipt_v2_serializes_every_native_field -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib types::fem_gpu_execution_receipt_contract_tests::performance_snapshot_v3_serializes_every_native_field -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib artifacts::tests::artifact_serializes_complete_fem_gpu_performance_snapshot_v2 -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib artifacts::tests::artifact_serializes_complete_fem_gpu_receipt_v2_and_snapshot_v3 -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::performance_snapshot_v2_maps_every_native_field_without_v1_derivation -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::execution_receipt_v2_maps_every_native_field -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::performance_snapshot_v3_maps_every_native_field -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_validation_v2_and_v3 -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_stationary_subset_and_optional_ncg_refinement -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_rejects_stationary_subset_missing_non_trial_operator -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_pgbb_stationary_subset -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_accumulated_mask_for_completed_accepted_after_stationary -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_rejects_incomplete_completed_accepted_after_stationary -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu native_fem::runtime_info::tests::execution_receipt_v2_maps_stationary_device_evidence_as_cuda_execution -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::completed_strict_finalization_publishes_complete_v2_performance_artifact -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::noncompleted_or_nonstrict_finalization_never_publishes_performance_evidence -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::completed_strict_finalization_publishes_complete_v2_and_v3_artifacts -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::noncompleted_or_nonstrict_v2_and_v3_never_publishes_performance_evidence -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::invalid_strict_receipt_v2_executes_zero_terminal_success_side_effects -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::relax::finalize::tests::valid_strict_receipt_v2_executes_terminal_success_side_effects -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_accepts_stationary_ncg_without_accepted_steps -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_rejects_unknown_bits_even_when_masks_agree -- --exact --nocapture --test-threads=1 --color never
+run_exact_rust_test cargo +nightly test --locked -p fullmag-runner --lib --features fem-gpu fem::execution_receipt::tests::strict_v2_runtime_rejects_optional_refinement_for_pgbb -- --exact --nocapture --test-threads=1 --color never
+'@
     $contractCommand = $contractCommand.Replace("`r`n", "`n").Replace("`r", "`n")
     $contractCommandBytes = [System.Text.Encoding]::UTF8.GetBytes($contractCommand)
     $contractCommandBase64 = [Convert]::ToBase64String($contractCommandBytes)
