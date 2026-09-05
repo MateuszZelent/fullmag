@@ -5,6 +5,7 @@
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 #include "gpu/cuda/sparse/sparse_apply_plan.hpp"
 #include "gpu/cuda/integrators/rk/rk_component_copy.hpp"
+#include "gpu/cuda/runtime/performance_counters.hpp"
 #include "src/relaxation_numerics.hpp"
 
 #include <cuda_runtime.h>
@@ -1876,6 +1877,53 @@ void check_ncg_fallback_direction_and_metrics_consistency_contract()
     }
 }
 
+void check_ncg_physical_applies_and_cache_counters_contract()
+{
+    fullmag::fem::GpuPerformanceCounterState perf_state{};
+    gpu_performance_reset(perf_state);
+    gpu_performance_configure(perf_state, true, 1, sizeof(double), 0, 0);
+
+    // Step 1: Miss (reused_current = false)
+    gpu_performance_begin_attempt(perf_state, 1, 1, 1);
+    bool reused_current = false;
+    fullmag::fem::GpuPerformanceCounterDelta grad_perf1{};
+    grad_perf1.effective_field_applies = reused_current ? 0 : 1;
+    grad_perf1.energy_evaluations = reused_current ? 0 : 1;
+    grad_perf1.endpoint_cache_hits = reused_current ? 1 : 0;
+    grad_perf1.endpoint_cache_misses = reused_current ? 0 : 1;
+    gpu_performance_note(perf_state, grad_perf1);
+    gpu_performance_commit_attempt(perf_state);
+
+    check(perf_state.accepted_lifetime.effective_field_applies == 1,
+          "step 1 miss must record exactly 1 physical effective_field_apply");
+    check(perf_state.accepted_lifetime.energy_evaluations == 1,
+          "step 1 miss must record exactly 1 energy_evaluation");
+    check(perf_state.accepted_lifetime.endpoint_cache_hits == 0,
+          "step 1 miss must record 0 endpoint_cache_hits");
+    check(perf_state.accepted_lifetime.endpoint_cache_misses == 1,
+          "step 1 miss must record 1 endpoint_cache_miss");
+
+    // Step 2: Hit (reused_current = true)
+    gpu_performance_begin_attempt(perf_state, 2, 2, 2);
+    reused_current = true;
+    fullmag::fem::GpuPerformanceCounterDelta grad_perf2{};
+    grad_perf2.effective_field_applies = reused_current ? 0 : 1;
+    grad_perf2.energy_evaluations = reused_current ? 0 : 1;
+    grad_perf2.endpoint_cache_hits = reused_current ? 1 : 0;
+    grad_perf2.endpoint_cache_misses = reused_current ? 0 : 1;
+    gpu_performance_note(perf_state, grad_perf2);
+    gpu_performance_commit_attempt(perf_state);
+
+    check(perf_state.accepted_lifetime.effective_field_applies == 1,
+          "step 2 hit must NOT increment physical effective_field_applies");
+    check(perf_state.accepted_lifetime.energy_evaluations == 1,
+          "step 2 hit must NOT increment energy_evaluations");
+    check(perf_state.accepted_lifetime.endpoint_cache_hits == 1,
+          "step 2 hit must increment endpoint_cache_hits to 1");
+    check(perf_state.accepted_lifetime.endpoint_cache_misses == 1,
+          "step 2 hit must preserve endpoint_cache_misses at 1");
+}
+
 } // namespace
 
 int main()
@@ -1892,6 +1940,7 @@ int main()
     check_cub_reduction_status_propagation_contract();
     check_ncg_entry_direction_snapshot_separated_from_working_history_contract();
     check_ncg_fallback_direction_and_metrics_consistency_contract();
+    check_ncg_physical_applies_and_cache_counters_contract();
 
     auto strip_cr = [](std::string &s) {
         s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
@@ -2045,6 +2094,13 @@ int main()
           "nonlinear_cg.cpp must define and call gpu_relax_ncg_recompute_direction_metrics upon fallback");
     check(ncg_src.find("direction_norm_sq = gradient_norm_sq;") == std::string::npos,
           "nonlinear_cg.cpp must not blindly substitute gradient_norm_sq for direction_norm_sq after -z fallback");
+
+    check(ncg_src.find("grad_perf.effective_field_applies = reused_current ? 0 : 1;") != std::string::npos,
+          "nonlinear_cg.cpp must record physical effective_field_applies based on reused_current (A10)");
+    check(ncg_src.find("grad_perf.endpoint_cache_hits = reused_current ? 1 : 0;") != std::string::npos,
+          "nonlinear_cg.cpp must record endpoint_cache_hits on reuse (A10)");
+    check(ncg_src.find("grad_perf.endpoint_cache_misses = reused_current ? 0 : 1;") != std::string::npos,
+          "nonlinear_cg.cpp must record endpoint_cache_misses on fresh evaluation (A10)");
 
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;

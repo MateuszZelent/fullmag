@@ -2123,8 +2123,10 @@ int gpu_relax_nonlinear_cg_step(
     gpu.fields.accepted_observables_step = ctx.state.step_count;
     {
         GpuPerformanceCounterDelta grad_perf{};
-        grad_perf.effective_field_applies = 1;
+        grad_perf.effective_field_applies = reused_current ? 0 : 1;
         grad_perf.energy_evaluations = reused_current ? 0 : 1;
+        grad_perf.endpoint_cache_hits = reused_current ? 1 : 0;
+        grad_perf.endpoint_cache_misses = reused_current ? 0 : 1;
         gpu_performance_note(ctx.gpu_state.performance_counters, grad_perf);
     }
     const double current_torque_apm = current_snapshot.terms_j[
