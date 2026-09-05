@@ -267,6 +267,109 @@ void test_device_candidate_capture_and_fail_closed_allocation() {
     rk_candidate_state_destroy(candidate);
 }
 
+void test_candidate_capture_failure_and_dimension_mismatch() {
+    using namespace fullmag::fem;
+    RkCandidateState candidate{};
+    std::string error;
+    check(rk_candidate_state_allocate(candidate, 3, error), "allocate candidate 3");
+
+    FemGpuComponentField dev_m{};
+    check(cudaMalloc(&dev_m.x, 4 * sizeof(double)) == cudaSuccess, "alloc dev_m.x");
+    check(cudaMalloc(&dev_m.y, 4 * sizeof(double)) == cudaSuccess, "alloc dev_m.y");
+    check(cudaMalloc(&dev_m.z, 4 * sizeof(double)) == cudaSuccess, "alloc dev_m.z");
+
+    // Attempt capture with node_count mismatch (source has 4, candidate has 3)
+    const bool capture_ok = rk_candidate_capture_device(candidate, dev_m, 4, nullptr, error);
+    check(!capture_ok, "capture with node_count mismatch must return false");
+    check(!candidate.candidate_valid, "candidate must remain invalid after failed capture");
+    check(candidate.candidate_version == 0, "candidate_version must not increment on failed capture");
+    check(!error.empty(), "error string must be set on failed capture");
+
+    cudaFree(dev_m.x);
+    cudaFree(dev_m.y);
+    cudaFree(dev_m.z);
+    rk_candidate_state_destroy(candidate);
+}
+
+void test_commit_candidate_requires_fresh_valid_candidate() {
+    using namespace fullmag::fem;
+    Context ctx{};
+    ctx.mesh.n_nodes = 3;
+    ctx.gpu_state.device.lifecycle.node_count = 3;
+    ctx.gpu_state.device.lifecycle.allocated = true;
+    ctx.state.current_time = 0.0;
+    ctx.state.step_count = 0;
+    ctx.state.m_xyz = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
+
+    RkCandidateState candidate{};
+    std::string error;
+    check(rk_candidate_state_allocate(candidate, 3, error), "allocate candidate 3");
+
+    // Case 1: candidate_valid is false -> commit must fail
+    candidate.candidate_valid = false;
+    candidate.candidate_version = 1;
+    candidate.accepted_version = 0;
+    candidate.base_accepted_version = 0;
+    candidate.dt = 1e-12;
+    candidate.time = 1e-12;
+    check(!commit_candidate(ctx, candidate, nullptr, error),
+          "commit_candidate with candidate_valid = false must fail");
+
+    // Case 2: candidate_version <= accepted_version (stale candidate) -> commit must fail
+    candidate.candidate_valid = true;
+    candidate.candidate_version = 1;
+    candidate.accepted_version = 1;
+    candidate.base_accepted_version = 0;
+    candidate.dt = 1e-12;
+    candidate.time = 1e-12;
+    check(!commit_candidate(ctx, candidate, nullptr, error),
+          "commit_candidate with stale version <= accepted_version must fail");
+
+    // Case 3: base_accepted_version != ctx.state.step_count -> commit must fail
+    candidate.candidate_valid = true;
+    candidate.candidate_version = 2;
+    candidate.accepted_version = 1;
+    candidate.base_accepted_version = 99; // wrong base step
+    candidate.dt = 1e-12;
+    candidate.time = 1e-12;
+    check(!commit_candidate(ctx, candidate, nullptr, error),
+          "commit_candidate with base_accepted_version mismatch must fail");
+
+    // Case 4: non-positive or non-finite dt -> commit must fail
+    candidate.base_accepted_version = 0;
+    candidate.dt = -1e-12;
+    candidate.time = -1e-12;
+    check(!commit_candidate(ctx, candidate, nullptr, error),
+          "commit_candidate with negative dt must fail");
+
+    candidate.dt = 0.0;
+    candidate.time = 0.0;
+    check(!commit_candidate(ctx, candidate, nullptr, error),
+          "commit_candidate with zero dt must fail");
+
+    // Case 5: Valid candidate commit succeeds and CONSUMES token
+    std::vector<double> new_m = {0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0};
+    check(rk_candidate_upload_m(candidate, new_m.data(), 3, nullptr, error), "upload candidate m");
+    candidate.candidate_valid = true;
+    candidate.candidate_version = 2;
+    candidate.accepted_version = 1;
+    candidate.base_accepted_version = 0;
+    candidate.dt = 1e-12;
+    candidate.time = 1e-12;
+
+    check(commit_candidate(ctx, candidate, nullptr, error), "first valid commit must succeed");
+    check(ctx.state.step_count == 1, "step_count incremented to 1");
+    check(!candidate.candidate_valid, "commit_candidate must consume candidate token (candidate_valid = false)");
+    check(candidate.accepted_version == 2, "accepted_version updated to 2");
+
+    // Case 6: Repeated commit of the same candidate MUST FAIL without advancing step or time
+    check(!commit_candidate(ctx, candidate, nullptr, error), "repeated commit must fail");
+    check(ctx.state.step_count == 1, "step_count must remain 1 after failed repeated commit");
+    check(ctx.state.current_time == 1e-12, "current_time must remain unchanged after failed repeated commit");
+
+    rk_candidate_state_destroy(candidate);
+}
+
 } // namespace
 
 int main() {
@@ -276,6 +379,8 @@ int main() {
     test_output_control_mask();
     test_device_controller_golden_vectors();
     test_device_candidate_capture_and_fail_closed_allocation();
+    test_candidate_capture_failure_and_dimension_mismatch();
+    test_commit_candidate_requires_fresh_valid_candidate();
     std::printf("PASS: gpu_rk_device_controller_contract\n");
     return 0;
 }

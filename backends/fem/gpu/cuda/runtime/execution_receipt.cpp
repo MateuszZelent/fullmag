@@ -188,6 +188,18 @@ void gpu_execution_receipt_resolve_plan(
     state.hot_loop_compute_d2h_bytes = 0;
     state.hot_loop_compute_host_sync_count = 0;
     state.accepted_performance = {};
+    state.allowed_transfer_mask =
+        FULLMAG_FEM_GPU_TRANSFER_SETUP |
+        FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR |
+        FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT |
+        FULLMAG_FEM_GPU_TRANSFER_NATIVE_EXPORT;
+    if (execution_class != FemGpuExecutionClass::DeviceResident) {
+        state.allowed_transfer_mask |=
+            FULLMAG_FEM_GPU_TRANSFER_COMPUTE |
+            FULLMAG_FEM_GPU_TRANSFER_EXCHANGE_INTEROP;
+    }
+    state.observed_transfer_mask = 0;
+    state.transfer_violation_mask = 0;
     clear_attempt(state);
     state.plan_resolved = plan_masks_are_valid(
             required_operator_mask,
@@ -697,19 +709,25 @@ void gpu_execution_receipt_record_transfer(
         state.setup_host_sync_count += host_sync_count;
         break;
     case FULLMAG_FEM_GPU_TRANSFER_COMPUTE:
-        state.compute_h2d_bytes += h2d_bytes;
-        state.compute_d2h_bytes += d2h_bytes;
-        state.compute_host_sync_count += host_sync_count;
+        if (!state.attempt_active) {
+            state.compute_h2d_bytes += h2d_bytes;
+            state.compute_d2h_bytes += d2h_bytes;
+            state.compute_host_sync_count += host_sync_count;
+        }
         break;
     case FULLMAG_FEM_GPU_TRANSFER_CONTROL_SCALAR:
-        state.control_h2d_bytes += h2d_bytes;
-        state.control_d2h_bytes += d2h_bytes;
-        state.control_host_sync_count += host_sync_count;
+        if (!state.attempt_active) {
+            state.control_h2d_bytes += h2d_bytes;
+            state.control_d2h_bytes += d2h_bytes;
+            state.control_host_sync_count += host_sync_count;
+        }
         break;
     case FULLMAG_FEM_GPU_TRANSFER_EXCHANGE_INTEROP:
-        state.exchange_h2d_bytes += h2d_bytes;
-        state.exchange_d2h_bytes += d2h_bytes;
-        state.exchange_host_sync_count += host_sync_count;
+        if (!state.attempt_active) {
+            state.exchange_h2d_bytes += h2d_bytes;
+            state.exchange_d2h_bytes += d2h_bytes;
+            state.exchange_host_sync_count += host_sync_count;
+        }
         break;
     case FULLMAG_FEM_GPU_TRANSFER_SNAPSHOT:
         state.snapshot_h2d_bytes += h2d_bytes;
