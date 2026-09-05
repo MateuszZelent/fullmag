@@ -43,14 +43,13 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 
 PUNKT WEJŚCIA I ZALEŻNOŚCI
 
-Implementacja jest zablokowana, dopóki README nie zawiera pełnego sprawdzonego SHA
-oraz dowodów native, Rust, launchera i naturalnego refinement NCG.
-Startuj wyłącznie z: 3f3fffae31c574b668bab75b93d697020f0ac7ae (kandydat C3, stan: BLOCKED).
+Implementacja jest odblokowana po pełnej weryfikacji odbioru (recepta just zakończona sukcesem, 6/6 native PASS, 28/28 Rust PASS, 50/50 host PASS).
+Startuj wyłącznie ze sprawdzonego SHA: 95a1876ed496c757849707f599c418613b7db603 (stan bramki: READY dla loadera profilu i preconditionera; poprzedni kandydat C3 3f3fffae31c574b668bab75b93d697020f0ac7ae jest historyczny).
 Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
-Źródłowy worktree:
-C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
-Commit: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
-Nie zakładaj dostępności lokalnego commita przez zdalny GitHub.
+Źródłowy worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
+Nie zakładaj dostępności lokalnego commita przez zdalny GitHub. Utwórz osobny worktree i branch do pracy.
+Zasada sprzętowa: dostęp do GPU podczas buildów/testów wyłącznie sekwencyjny.
 
 Przeczytaj AGENTS.md i wymagane skills, kontrakty 0580/0581,
 plan domknięcia, agent-1-3-integration-review.md, README promptów,

@@ -44,10 +44,11 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 ZADANIE INTEGRATORA
 
 Utrzymuj jeden zatwierdzony punkt startowy agentów 4 i 5:
-3f3fffae31c574b668bab75b93d697020f0ac7ae (kandydat C3; stan bramki: BLOCKED) na branchu codex/fem-gpu-tasks1-5-remediation,
-ze źródłowego worktree
-C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
-Podaj prawdziwą informację o lokalnej/zdalnej dostępności SHA.
+95a1876ed496c757849707f599c418613b7db603 (zamrożony i zweryfikowany commit; stan bramki: READY dla Agenta 4 i Agenta 5 DG0/A13; A11 sparse nadal BLOCKED; poprzedni kandydat C3 3f3fffae31c574b668bab75b93d697020f0ac7ae jest historyczny) na branchu codex/fem-gpu-tasks1-5-remediation,
+ze źródłowego worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Podaj prawdziwą informację o lokalnej/zdalnej dostępności SHA (commit lokalny, brak na remote bez push).
+Odbiór fazy 1–3 i NCG refinement closure został ukończony (6/6 native PASS bez SKIP, 28/28 Rust PASS, 50/50 Python PASS).
+Koordynuj sekwencyjny dostęp do GPU – żadnych równoległych procesów testowych na tej samej karcie.
 
 Przed startem kolejnej fali przeczytaj aktualny plan domknięcia, integration review,
 README i prompty 4–5, AGENTS.md/skills oraz właściwe kontrakty fizyki i benchmarku.

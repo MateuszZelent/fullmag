@@ -6,7 +6,7 @@ Pakiet delegacyjny po audycie z 2026-09-05. Każdy plik zawiera samodzielny prom
 **Architektura:** jeden integrator, izolowane branche/worktrees i sekwencyjne przekazywanie plików współdzielonych.
 **Stos:** istniejący FEM/MFEM/hypre/libCEED/CUDA; bez upgrade’u i mixed precision w tym pakiecie.
 **Historyczny baseline audytu:** 4be277e47440a947a30954adb3bbdeef15c9b06f. Nie zaczynaj kolejnych implementacji od niego.
-**Status:** branche agentów 1–3 scalone lokalnie; poprawki review zapisane w `4ddd9bb6209042c99b75bde35b1d6d92c12df22b`. Natywne kontrakty 4/4 PASS, ABI 3/3 PASS, launcher 37 PASS. Pełna kwalifikacja pozostaje otwarta. A14 jest zaimplementowane, lecz niezakwalifikowane wydajnościowo. Prompty 1–3 są historyczne.
+**Status:** Odbiór agentów 1–3 oraz domknięcie NCG refinement ukończone i zweryfikowane. Zweryfikowany SHA kodu: `95a1876ed496c757849707f599c418613b7db603` (snapshot `c32dd20a220b89a3632b2cc8dde3266023a67232ad9dd842c9f18a49c62707cd`). Wyniki: container-backed `just verify-fem-gpu-execution-receipt-contract` PASS (exit 0), 6/6 native PASS bez SKIP, 28/28 Rust PASS, 50/50 Python PASS. Stan bramki: READY dla Agenta 4 i Agenta 5 (DG0/A13); A11 sparse nadal BLOCKED. Poprzednie SHA (4be277..., 307ef3..., 4ddd9b..., 3f3fff..., fc4410...) są historyczne. Prompty 1–3 są historyczne.
 
 ## Obowiązujący punkt wejścia
 
@@ -31,22 +31,29 @@ To instrukcje zlecenia, nie gotowe patche ani deklaracja kwalifikacji. Wykonawca
 | 4 | wybór profilu, cache/pamięć i redukcje preconditionera | [Prompt 4](04-preconditioner.md) |
 | 5 | DG0; później backend exchange | [Prompt 5](05-exchange-dg0.md) |
 | 6 | integracja, kwalifikacja A16, dokumentacja | [Prompt 6](06-integrator.md) |
+| 7 | niezależna weryfikacja i audyt (propozycja) | [Prompt 7](07-independent-verifier.md) |
 
 ## BRAMKA STARTOWA AGENTÓW 4–5
 
-Stan: BLOCKED do czasu pełnej weryfikacji.
-Pełny sprawdzony SHA kodu: 3f3fffae31c574b668bab75b93d697020f0ac7ae (kandydat C3; bramka BLOCKED z powodu N02).
+Stan bramki: READY dla Agenta 4 (loader/preconditioner) oraz Agenta 5 (wyłącznie DG0/A13).
+Stan bramki A11 (sparse): nadal BLOCKED do czasu zakończenia, weryfikacji i integracji prac Agenta 4.
+Pełny sprawdzony SHA kodu: 95a1876ed496c757849707f599c418613b7db603 (snapshot `c32dd20a220b89a3632b2cc8dde3266023a67232ad9dd842c9f18a49c62707cd`).
 Branch źródłowy: codex/fem-gpu-tasks1-5-remediation.
-Kanoniczny worktree źródłowy:
-C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Kanoniczny worktree źródłowy: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
 Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
-Dowody: native 5/6 PASS (receipt, Poisson demag, RK controller, preconditioner, periodic demag PASS; NCG cache miss->hit PASS, refinement NOT VERIFIED), host launcher i log validator 50/50 PASS.
+Weryfikacja:
+- Kanoniczna recepta kontenerowa `just verify-fem-gpu-execution-receipt-contract` zakończona sukcesem (exit code 0).
+- Native 6/6 PASS bez SKIP: `fem_gpu_execution_receipt_contract` (0.54s), `fem_demag_poisson_contract` (0.58s), `fem_gpu_rk_device_controller_contract` (0.52s), `fem_gpu_relaxation_preconditioner_contract` (0.61s), `fem_cuda_periodic_demag_contract` (2.21s), `fem_gpu_ncg_runtime_contract` (3.04s, `refined=1`, `candidates=1`, `physical_demag_solves=4`, Armijo `upper <= rhs`, krok 2 invalidacja `miss=2`).
+- Rust 28/28 exact tests PASS przez `validate_exact_rust_test_log.py` (1 plan, 3 sys ABI, 24 runner).
+- Host Python 50/50 PASS (`test_validate_exact_rust_test_log.py` + `test_windows_fullmag_launcher_contract.py`).
 
-Po zwolnieniu bramki:
-- Agent 4: loader/preconditioner; osobny worktree ze wspólnego SHA.
-- Agent 5: wyłącznie DG0/A13; osobny worktree z tego samego SHA.
+Zasady realizacji dla fali:
+- Agent 4: loader/preconditioner; osobny worktree ze sprawdzonego SHA `95a1876ed496c757849707f599c418613b7db603`.
+- Agent 5: wyłącznie DG0/A13; osobny worktree z tego samego SHA `95a1876ed496c757849707f599c418613b7db603`.
 - Agent 5 / A11 sparse: zablokowane do integracji i przekazania przez agenta 4.
 - Agent 6: integruje zamrożone commity i weryfikuje wynik po scaleniu.
+- Agent 7 (propozycja): niezależny audyt i weryfikacja przed scaleniem do gałęzi głównej.
+- Ograniczenie GPU: buildy i testy z dostępem do GPU oraz benchmarki muszą być wykonywane sekwencyjnie (żadnych równoległych procesów na karcie).
 
 Nie uruchamiać nowej fali automatycznie.
 Wspólne ABI, CMake, justfile, launcher, receipts i dokumenty zbiorcze

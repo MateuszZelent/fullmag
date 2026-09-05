@@ -42,12 +42,13 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 ## Twoje zadanie
 
 PUNKT WEJŚCIA
-Start implementacji A13 dopiero z: 3f3fffae31c574b668bab75b93d697020f0ac7ae (ten sam kandydat C3 co agent 4; stan bramki: BLOCKED).
+Start implementacji A13 ze sprawdzonego SHA: 95a1876ed496c757849707f599c418613b7db603 (stan bramki: READY dla A13/DG0; poprzedni kandydat C3 3f3fffae31c574b668bab75b93d697020f0ac7ae jest historyczny).
+A11 (cuSPARSE / sparse) pozostaje zablokowane (BLOCKED) do czasu zakończenia, weryfikacji i integracji prac Agenta 4.
 Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
-Źródłowy worktree:
-C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
+Źródłowy worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
 Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
 Pracuj w osobnym worktree/branchu, nie w checkoutcie integratora.
+Zasada sprzętowa: dostęp do GPU podczas buildów/testów wyłącznie sekwencyjny.
 
 ZAKRES
 - Wyłącznie A13: stałoczasowy DG0 membership powiązany z wersją/lifetime.
