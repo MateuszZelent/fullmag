@@ -5,8 +5,25 @@
 
 namespace fullmag::fem {
 
+enum class DemagResidualNormKind : uint8_t {
+    Unknown = 0,
+    L2 = 1,
+    Preconditioned = 2,
+};
+
+enum class DemagResidualCertificationKind : uint8_t {
+    Unavailable = 0,
+    ReportedRecursive = 1,
+    TrueResidual = 2,
+};
+
+const char *to_string(DemagResidualNormKind kind) noexcept;
+const char *to_string(DemagResidualCertificationKind kind) noexcept;
+
 struct DemagLinearSolveResult {
     const char *solver_kind = "unknown";
+    DemagResidualNormKind norm_kind = DemagResidualNormKind::L2;
+    DemagResidualCertificationKind certification_kind = DemagResidualCertificationKind::ReportedRecursive;
     bool solver_reported_converged = false;
     bool residual_independently_certified = false;
     int iterations = 0;

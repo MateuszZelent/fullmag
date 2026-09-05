@@ -140,6 +140,13 @@ bool configure_demag_poisson_hypre_solver(
         }
         pcg->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         pcg->SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
+        const HYPRE_Int two_norm_status = HYPRE_PCGSetTwoNorm(
+            static_cast<HYPRE_Solver>(*pcg), 1);
+        if (two_norm_status != 0) {
+            error = "GPU Poisson demag Hypre PCG failed to select L2 residual norm (status " +
+                std::to_string(two_norm_status) + ")";
+            return false;
+        }
         pcg->SetOperator(*workspace.A_par);
         pcg->SetPreconditioner(*workspace.preconditioner);
         workspace.solver = std::move(pcg);
@@ -402,7 +409,8 @@ bool validate_demag_poisson_hypre_device_solve(
         performance_delta.demag_rhs_norm_sum = rhs_norm;
         gpu_performance_note(ctx.gpu_state.performance_counters, performance_delta);
     }
-    if (validation_needs.independent_residual &&
+    const bool zero_rhs = (validation_needs.rhs_norm && rhs_norm == 0.0);
+    if ((validation_needs.independent_residual || zero_rhs) &&
         workspace.A_par != nullptr &&
         workspace.x_par != nullptr &&
         workspace.b_par != nullptr &&
@@ -421,7 +429,13 @@ bool validate_demag_poisson_hypre_device_solve(
                 error)) {
             return false;
         }
-        residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
+        if (rhs_norm > 0.0) {
+            residual = absolute_residual / rhs_norm;
+        } else {
+            residual = (absolute_residual == 0.0)
+                ? 0.0
+                : std::numeric_limits<double>::infinity();
+        }
         residual_independently_certified = std::isfinite(absolute_residual);
     }
 
@@ -429,6 +443,12 @@ bool validate_demag_poisson_hypre_device_solve(
     result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
         ? "gpu_poisson_hypre/gmres"
         : "gpu_poisson_hypre/cg";
+    result.norm_kind = DemagResidualNormKind::L2;
+    result.certification_kind = residual_independently_certified
+        ? DemagResidualCertificationKind::TrueResidual
+        : (solver_reported_converged
+               ? DemagResidualCertificationKind::ReportedRecursive
+               : DemagResidualCertificationKind::Unavailable);
     result.solver_reported_converged = solver_reported_converged;
     result.residual_independently_certified = residual_independently_certified;
     result.iterations = iterations;

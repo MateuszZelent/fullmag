@@ -21,6 +21,8 @@
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 #include "gpu/cuda/demag_poisson/hypre_validation_policy.hpp"
+#include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
+#include "cpu/mfem/runtime/mpi_init.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -156,9 +158,11 @@ void demag_linear_solve_validation_rejects_invalid_results() {
     check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
           "false convergence is rejected even with a small residual");
     result.residual_independently_certified = true;
+    result.certification_kind = fullmag::fem::DemagResidualCertificationKind::TrueResidual;
     check(fullmag::fem::validate_demag_linear_solve_result(result, error),
           "independently certified residual accepts a Hypre zero-iteration solution");
     result.residual_independently_certified = false;
+    result.certification_kind = fullmag::fem::DemagResidualCertificationKind::ReportedRecursive;
     result.solver_reported_converged = true;
     result.relative_residual = 1.0e-3;
     check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
@@ -166,6 +170,46 @@ void demag_linear_solve_validation_rejects_invalid_results() {
     result.relative_residual = std::nan("");
     check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
           "non-finite residual is rejected");
+
+    // A01 strict contract checks:
+    // 1. Non-L2 norm kinds must be rejected
+    result.relative_residual = 1.0e-8;
+    result.norm_kind = fullmag::fem::DemagResidualNormKind::Preconditioned;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "preconditioned residual norm must be rejected for demag");
+    check(error.find("norm_kind=preconditioned") != std::string::npos,
+          "rejection error includes preconditioned norm kind");
+
+    result.norm_kind = fullmag::fem::DemagResidualNormKind::Unknown;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "unknown residual norm kind must be rejected for demag");
+    check(error.find("norm_kind=unknown") != std::string::npos,
+          "rejection error includes unknown norm kind");
+
+    result.norm_kind = fullmag::fem::DemagResidualNormKind::L2;
+
+    // 2. Unavailable certification kind must be rejected
+    result.certification_kind = fullmag::fem::DemagResidualCertificationKind::Unavailable;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "unavailable certification kind must be rejected");
+    check(error.find("certification_kind=unavailable") != std::string::npos,
+          "rejection error includes unavailable certification kind");
+
+    result.certification_kind = fullmag::fem::DemagResidualCertificationKind::ReportedRecursive;
+
+    // 3. Absolute tolerance path
+    result.relative_tolerance = 1.0e-12;
+    result.relative_residual = 1.0e-4; // fails relative
+    result.has_absolute_tolerance = true;
+    result.absolute_tolerance = 1.0e-5;
+    result.has_absolute_residual = true;
+    result.absolute_residual = 5.0e-6; // passes absolute
+    check(fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "solve satisfying absolute tolerance is accepted when relative tolerance fails");
+
+    result.absolute_residual = 2.0e-5; // fails both
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "solve failing both relative and absolute tolerance is rejected");
 }
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -325,6 +369,178 @@ void nonperiodic_hypre_rejected_candidate_preserves_published_warm_start() {
 
     fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
     ctx.poisson_demag.poisson_bc_op = nullptr;
+}
+
+void spd_jacobi_counterexample_cannot_certify_l2_success() {
+    mfem::SparseMatrix op(2, 2);
+    op.Add(0, 0, 1.0);
+    op.Add(0, 1, 1.0);
+    op.Add(1, 0, 1.0);
+    op.Add(1, 1, 1.0e12);
+    op.Finalize();
+
+    // 1. Direct mathematical verification of the counterexample with HyprePCG + Jacobi
+    {
+        const HYPRE_BigInt glob_size = 2;
+        HYPRE_BigInt row_starts[2] = {0, 2};
+        mfem::HypreParMatrix A_par(fullmag::fem::fullmag_serial_comm(), glob_size, row_starts, &op);
+        mfem::HypreParVector b_par(fullmag::fem::fullmag_serial_comm(), glob_size, row_starts);
+        mfem::HypreParVector x_par(fullmag::fem::fullmag_serial_comm(), glob_size, row_starts);
+        b_par = 0.0;
+        b_par(0) = 1.0;
+        x_par = 0.0;
+
+        mfem::HypreDiagScale jacobi(A_par);
+        mfem::HyprePCG pcg_check(fullmag::fem::fullmag_serial_comm());
+        pcg_check.SetTol(1.0e-5);
+        pcg_check.SetMaxIter(1);
+        pcg_check.SetPrintLevel(0);
+        pcg_check.SetOperator(A_par);
+        pcg_check.SetPreconditioner(jacobi);
+        pcg_check.Mult(b_par, x_par);
+
+        mfem::Vector x_host(2), res(2), rhs(2);
+        rhs(0) = 1.0;
+        rhs(1) = 0.0;
+        x_host(0) = x_par(0);
+        x_host(1) = x_par(1);
+        op.Mult(x_host, res);
+        res.Neg();
+        res += rhs;
+        const double true_l2 = res.Norml2();
+        const double rel_l2 = true_l2 / rhs.Norml2();
+        check_near(true_l2, 1.0, 1.0e-12, "true residual L2 norm after 1 iteration must be 1.0");
+        check_near(rel_l2, 1.0, 1.0e-12, "true relative L2 residual after 1 iteration must be 1.0");
+    }
+
+    // 2. Behavioral test on GPU Poisson demag device solve:
+    // With rtol=1e-5 and max_iterations=1, the solve MUST NOT certify L2 success!
+    {
+        fullmag::fem::Context ctx;
+        ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+        ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_JACOBI;
+        ctx.demag.solver.relative_tolerance = 1.0e-5;
+        ctx.demag.solver.has_absolute_tolerance = 0;
+        ctx.demag.solver.absolute_tolerance = 0.0;
+        ctx.demag.solver.max_iterations = 1;
+        ctx.demag.solver.print_level = 0;
+        ctx.poisson_demag.poisson_bc_op = &op;
+        ctx.gpu_state.device.demag_poisson.scalar_dof_count = 2;
+        ctx.gpu_state.device.demag_poisson.full_scalar_dof_count = 2;
+
+#if FULLMAG_HAS_CUDA_RUNTIME
+        check(cudaMalloc(
+                  reinterpret_cast<void **>(&ctx.gpu_state.device.demag_poisson.poisson_rhs),
+                  2 * sizeof(double)) == cudaSuccess,
+              "allocate device RHS");
+        check(cudaMalloc(
+                  reinterpret_cast<void **>(&ctx.gpu_state.device.demag_poisson.poisson_solution),
+                  2 * sizeof(double)) == cudaSuccess,
+              "allocate device solution");
+
+        fullmag::fem::GpuDemagPoissonWorkspace workspace;
+        std::string error;
+        check(fullmag::fem::initialize_demag_poisson_hypre_device_solver(ctx, workspace, error),
+              "init GPU Poisson device solver");
+        *workspace.b_par = 0.0;
+        (*workspace.b_par)(0) = 1.0;
+        *workspace.x_par = 0.0;
+        workspace.b_par->HypreRead();
+        workspace.x_par->HypreRead();
+
+        workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
+
+        int iters = 0;
+        double residual = 0.0;
+        error.clear();
+        const bool certified = fullmag::fem::validate_demag_poisson_hypre_device_solve(
+            ctx, workspace, iters, residual, error);
+
+        check(!certified,
+              "GPU Poisson demag device solve MUST NOT certify L2 success after 1 iteration when relative L2 is 1.0!");
+
+        // 3. With max_iterations = 2, the 2x2 SPD problem reaches true L2 convergence
+        ctx.demag.solver.max_iterations = 2;
+        check(fullmag::fem::set_demag_poisson_hypre_solver_iterative_mode(ctx, workspace, false, error),
+              "reset iterative mode for 2-iteration solve");
+        *workspace.b_par = 0.0;
+        (*workspace.b_par)(0) = 1.0;
+        *workspace.x_par = 0.0;
+        workspace.b_par->HypreRead();
+        workspace.x_par->HypreRead();
+
+        workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
+        iters = 0;
+        residual = 0.0;
+        error.clear();
+        const bool certified_iter2 = fullmag::fem::validate_demag_poisson_hypre_device_solve(
+            ctx, workspace, iters, residual, error);
+        check(certified_iter2, "GPU Poisson demag solve converges and certifies L2 success after 2 iterations");
+        check(iters == 2, "2x2 SPD system converged in 2 iterations");
+        check(residual <= 1.0e-5, "relative L2 residual is within tolerance");
+
+        // 4. Zero RHS with zero initial guess (b = 0, x0 = 0)
+        *workspace.b_par = 0.0;
+        *workspace.x_par = 0.0;
+        workspace.b_par->HypreRead();
+        workspace.x_par->HypreRead();
+        check(fullmag::fem::set_demag_poisson_hypre_solver_iterative_mode(ctx, workspace, false, error),
+              "set zero iterate for zero RHS");
+        workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
+        iters = 0;
+        residual = 0.0;
+        error.clear();
+        const bool certified_zero_rhs = fullmag::fem::validate_demag_poisson_hypre_device_solve(
+            ctx, workspace, iters, residual, error);
+        check(certified_zero_rhs, "zero RHS with zero initial guess must certify convergence");
+        check(residual == 0.0, "zero RHS produces zero relative residual");
+        check(!std::isnan(residual), "zero RHS residual must not be NaN");
+
+        // 5. Zero RHS with non-zero initial guess (b = 0, x0 = [1.0, 0.0]) and max_iterations = 1
+        ctx.demag.solver.max_iterations = 1;
+        check(fullmag::fem::set_demag_poisson_hypre_solver_iterative_mode(ctx, workspace, true, error),
+              "set iterative mode for non-zero initial guess");
+        *workspace.b_par = 0.0;
+        *workspace.x_par = 0.0;
+        (*workspace.x_par)(0) = 1.0;
+        workspace.b_par->HypreRead();
+        workspace.x_par->HypreRead();
+        workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
+        iters = 0;
+        residual = 0.0;
+        error.clear();
+        const bool certified_nonzero_x0 = fullmag::fem::validate_demag_poisson_hypre_device_solve(
+            ctx, workspace, iters, residual, error);
+        check(!certified_nonzero_x0,
+              "zero RHS with non-zero residual must NOT certify relative convergence");
+        check(!std::isnan(residual), "zero RHS residual must not be NaN");
+
+        // 6. Forced independent validation via environment
+        setenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL", "1", 1);
+        ctx.demag.solver.max_iterations = 2;
+        check(fullmag::fem::set_demag_poisson_hypre_solver_iterative_mode(ctx, workspace, false, error),
+              "reset iterative mode for forced independent validation");
+        *workspace.b_par = 0.0;
+        (*workspace.b_par)(0) = 1.0;
+        *workspace.x_par = 0.0;
+        workspace.b_par->HypreRead();
+        workspace.x_par->HypreRead();
+        workspace.solver->Mult(*workspace.b_par, *workspace.x_par);
+        iters = 0;
+        residual = 0.0;
+        error.clear();
+        const bool certified_forced = fullmag::fem::validate_demag_poisson_hypre_device_solve(
+            ctx, workspace, iters, residual, error);
+        check(certified_forced, "forced independent validation certifies converged solve");
+        unsetenv("FULLMAG_FEM_FORCE_INDEPENDENT_RESIDUAL");
+
+        cudaFree(ctx.gpu_state.device.demag_poisson.poisson_rhs);
+        cudaFree(ctx.gpu_state.device.demag_poisson.poisson_solution);
+        ctx.gpu_state.device.demag_poisson.poisson_rhs = nullptr;
+        ctx.gpu_state.device.demag_poisson.poisson_solution = nullptr;
+#endif
+        ctx.poisson_demag.poisson_bc_op = nullptr;
+    }
 }
 
 void periodic_demag_rejects_one_iteration_candidate() {
@@ -3896,6 +4112,7 @@ int main() {
     mixed_poisson_matches_independently_refined_all_tet_reference();
     nonperiodic_hypre_demag_rejects_one_iteration_candidate();
     nonperiodic_hypre_rejected_candidate_preserves_published_warm_start();
+    spd_jacobi_counterexample_cannot_certify_l2_success();
     periodic_demag_rejects_one_iteration_candidate();
     periodic_demag_reuses_warm_start_and_resets_after_failure();
 #endif
