@@ -17,6 +17,7 @@
 #include "gpu/cuda/integrators/rk/rk_step_stats_publication.hpp"
 #include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/runtime/performance_counters.hpp"
+#include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 
 #include <cuda_runtime.h>
 
@@ -436,6 +437,7 @@ bool finalize_step_stats_impl(
     bool control_scalar_readback,
     double *tail_scalars,
     size_t tail_count,
+    const GpuDirectEnergySnapshot *accepted_energy,
     std::string &reason)
 {
     if (tail_count > 0 &&
@@ -461,8 +463,17 @@ bool finalize_step_stats_impl(
         return true;
     }
 
-    if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
-        return false;
+    if (accepted_energy != nullptr) {
+        // Reuse accepted energy snapshot without re-running energy reductions.
+        for (size_t slot = static_cast<size_t>(GpuFinalScalarSlot::ExchangeEnergy);
+             slot <= static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy);
+             ++slot) {
+            scalar_storage[slot] = accepted_energy->terms_j[slot];
+        }
+    } else {
+        if (!gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {
+            return false;
+        }
     }
 
     if (!gpu_rk_reduce_final_observable_terms(ctx, stream, n, blocks, reason)) {
@@ -515,6 +526,13 @@ bool finalize_step_stats_impl(
 
     std::array<double, kGpuFinalScalarSlots> scalars{};
     std::copy_n(scalar_storage.begin(), kGpuFinalScalarSlots, scalars.begin());
+    if (accepted_energy != nullptr) {
+        for (size_t slot = static_cast<size_t>(GpuFinalScalarSlot::ExchangeEnergy);
+             slot <= static_cast<size_t>(GpuFinalScalarSlot::MagnetoelasticEnergy);
+             ++slot) {
+            scalars[slot] = accepted_energy->terms_j[slot];
+        }
+    }
     for (size_t i = 0; i < tail_count; ++i) {
         tail_scalars[i] = scalar_storage[kGpuFinalScalarSlots + i];
     }
@@ -527,7 +545,7 @@ bool gpu_rk_finalize_step_stats(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    if (!finalize_step_stats_impl(ctx, stats, false, nullptr, 0, reason)) {
+    if (!finalize_step_stats_impl(ctx, stats, false, nullptr, 0, nullptr, reason)) {
         return false;
     }
     gpu_rk_note_completed_final_reductions(ctx);
@@ -539,7 +557,7 @@ bool gpu_rk_finalize_step_stats_control_readback(
     fullmag_fem_step_stats &stats,
     std::string &reason)
 {
-    return finalize_step_stats_impl(ctx, stats, true, nullptr, 0, reason);
+    return finalize_step_stats_impl(ctx, stats, true, nullptr, 0, nullptr, reason);
 }
 
 bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
@@ -547,9 +565,11 @@ bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
     fullmag_fem_step_stats &stats,
     double *tail_scalars,
     size_t tail_count,
-    std::string &reason)
+    std::string &reason,
+    const GpuDirectEnergySnapshot *accepted_energy)
 {
-    return finalize_step_stats_impl(ctx, stats, true, tail_scalars, tail_count, reason);
+    return finalize_step_stats_impl(
+        ctx, stats, true, tail_scalars, tail_count, accepted_energy, reason);
 }
 
 } // namespace fullmag::fem

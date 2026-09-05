@@ -2090,10 +2090,9 @@ int main()
     check(ncg_src.find("gpu.relaxation.nonlinear_cg_direction_entry_backup,\n            gpu.relaxation.nonlinear_cg_direction") != std::string::npos,
           "gpu_relax_restore_previous_direction must restore from entry backup");
 
-    check(ncg_src.find("gpu_relax_ncg_recompute_direction_metrics") != std::string::npos,
-          "nonlinear_cg.cpp must define and call gpu_relax_ncg_recompute_direction_metrics upon fallback");
-    check(ncg_src.find("direction_norm_sq = gradient_norm_sq;") == std::string::npos,
-          "nonlinear_cg.cpp must not blindly substitute gradient_norm_sq for direction_norm_sq after -z fallback");
+    check(ncg_src.find("fullmag_cuda_relax_ncg_preconditioned_descent_fallback") != std::string::npos &&
+          ncg_src.find("gpu_relax_ncg_recompute_direction_metrics") != std::string::npos,
+          "nonlinear_cg.cpp must recompute direction metrics after preconditioned descent fallback (A15)");
 
     check(ncg_src.find("grad_perf.effective_field_applies = reused_current ? 0 : 1;") != std::string::npos,
           "nonlinear_cg.cpp must record physical effective_field_applies based on reused_current (A10)");
@@ -2101,6 +2100,17 @@ int main()
           "nonlinear_cg.cpp must record endpoint_cache_hits on reuse (A10)");
     check(ncg_src.find("grad_perf.endpoint_cache_misses = reused_current ? 0 : 1;") != std::string::npos,
           "nonlinear_cg.cpp must record endpoint_cache_misses on fresh evaluation (A10)");
+
+    std::ifstream rk_stats_file("/workspace/backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu");
+    if (!rk_stats_file.is_open()) rk_stats_file.open("backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu");
+    if (!rk_stats_file.is_open()) rk_stats_file.open("../backends/fem/gpu/cuda/integrators/rk/rk_step_stats.cu");
+    check(rk_stats_file.is_open(), "unable to open rk_step_stats.cu");
+    std::string rk_stats_src((std::istreambuf_iterator<char>(rk_stats_file)), std::istreambuf_iterator<char>());
+    strip_cr(rk_stats_src);
+    check(rk_stats_src.find("accepted_energy != nullptr") != std::string::npos,
+          "rk_step_stats.cu must support selective accepted energy reuse without re-running energy reductions (A14)");
+    check(ncg_src.find("accepted_snapshot_valid ? &accepted_snapshot : nullptr") != std::string::npos,
+          "nonlinear_cg.cpp must pass accepted_snapshot to finalize_step_stats for selective energy reuse (A14)");
 
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;

@@ -16,6 +16,7 @@
 namespace fullmag::fem {
 
 struct Context;
+struct GpuDirectEnergySnapshot;
 
 enum class GpuFinalScalarSlot : int {
     MaxRhs = 0,
@@ -78,6 +79,7 @@ bool gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
     fullmag_fem_step_stats &stats,
     double *tail_scalars,
     size_t tail_count,
-    std::string &reason);
+    std::string &reason,
+    const GpuDirectEnergySnapshot *accepted_energy = nullptr);
 
 } // namespace fullmag::fem
