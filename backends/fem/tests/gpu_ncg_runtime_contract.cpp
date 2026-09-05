@@ -153,6 +153,11 @@ fullmag_fem_backend *create_cuda_backend(
             handle,
             FULLMAG_FEM_GPU_EXECUTION_REQUEST_STRICT_DEVICE) == FULLMAG_FEM_OK,
         "strict CUDA NCG fixture must request device execution");
+    uint64_t generation_id = 0u;
+    check(
+        fullmag_fem_backend_gpu_execution_begin_v2(handle, &generation_id) == FULLMAG_FEM_OK &&
+            generation_id != 0u,
+        "strict CUDA NCG fixture must begin an execution generation");
     return handle;
 }
 
@@ -180,6 +185,34 @@ void check_device_execution(fullmag_fem_backend *handle)
             receipt.executed_host_operator_mask == 0u &&
             receipt.executed_unknown_operator_mask == 0u,
         "NCG runtime fixture must prove device-only execution without fallback");
+    check(receipt.accounting_valid != 0u &&
+              receipt.lifecycle_valid != 0u &&
+              receipt.identity_valid != 0u &&
+              receipt.execution_generation_id != 0u &&
+              receipt.accepted_step_count > 0u,
+          "accepted NCG step must publish valid accounting, lifecycle and identity");
+    check(receipt.required_operator_mask != 0u &&
+              receipt.resolved_device_operator_mask == receipt.required_operator_mask &&
+              receipt.resolved_host_operator_mask == 0u &&
+              receipt.resolved_unknown_operator_mask == 0u &&
+              (receipt.executed_device_operator_mask & receipt.required_operator_mask) ==
+                  receipt.required_operator_mask &&
+              (receipt.executed_device_operator_mask &
+                  ~(receipt.required_operator_mask |
+                    FULLMAG_FEM_GPU_OPERATOR_DIRECT_ENERGY_REFINEMENT)) == 0u,
+          "accepted NCG step must prove all required and only allowed device operators");
+    check(receipt.hot_loop_compute_h2d_bytes == 0u &&
+              receipt.hot_loop_compute_d2h_bytes == 0u &&
+              receipt.hot_loop_compute_host_sync_count == 0u &&
+              receipt.compute_h2d_bytes == 0u &&
+              receipt.compute_d2h_bytes == 0u &&
+              receipt.compute_host_sync_count == 0u &&
+              receipt.exchange_h2d_bytes == 0u &&
+              receipt.exchange_d2h_bytes == 0u &&
+              receipt.exchange_host_sync_count == 0u &&
+              receipt.transfer_violation_mask == 0u &&
+              receipt.residency_violation_count == 0u,
+          "accepted NCG step must not hide compute or exchange host traffic");
 }
 
 fullmag_fem_gpu_performance_snapshot_v3 query_performance(
@@ -241,6 +274,9 @@ void check_snapshot_energy_matches_observation(
     check(
         fullmag_fem_backend_snapshot_stats(handle, &observed) == FULLMAG_FEM_OK,
         "NCG runtime fixture must support an independent GPU energy observation");
+    check(std::isfinite(accepted.total_energy_joules) &&
+              std::isfinite(observed.total_energy_joules),
+          "accepted and independently observed energies must both be finite");
     const double scale = std::max(
         std::numeric_limits<double>::denorm_min(),
         std::max(std::abs(accepted.total_energy_joules),
@@ -437,6 +473,201 @@ bool try_ncg_refinement_case(
     return true;
 }
 
+uint64_t ncg_counter_delta(uint64_t after, uint64_t before, const char *label)
+{
+    check(after >= before, label);
+    return after - before;
+}
+
+void check_fresh_step_after_refined_endpoint(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_step_stats &refined_stats,
+    const fullmag_fem_gpu_performance_snapshot_v3 &before)
+{
+    fullmag_fem_step_stats next_stats{};
+    check(
+        fullmag_fem_backend_relax_step(
+            handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &next_stats) == FULLMAG_FEM_OK,
+        "step after refined endpoint must succeed");
+    check(next_stats.step == refined_stats.step + 1u &&
+              std::isfinite(next_stats.total_energy_joules),
+          "step after refined endpoint must be a real accepted step");
+    take_energy_proof(handle);
+    check_device_execution(handle);
+    const auto after = query_performance(handle);
+    check(after.execution_generation_id == before.execution_generation_id,
+          "next-step counters must belong to the same generation");
+    check(ncg_counter_delta(after.accepted_step_count, before.accepted_step_count,
+                            "accepted step counter decreased") == 1u,
+          "next step must add exactly one accepted step");
+    check(ncg_counter_delta(after.accepted_endpoint_cache_hits,
+                            before.accepted_endpoint_cache_hits,
+                            "accepted cache hit counter decreased") == 0u &&
+              ncg_counter_delta(after.accepted_endpoint_cache_misses,
+                                before.accepted_endpoint_cache_misses,
+                                "accepted cache miss counter decreased") == 1u &&
+              ncg_counter_delta(after.physical_endpoint_cache_hits,
+                                before.physical_endpoint_cache_hits,
+                                "physical cache hit counter decreased") == 0u &&
+              ncg_counter_delta(after.physical_endpoint_cache_misses,
+                                before.physical_endpoint_cache_misses,
+                                "physical cache miss counter decreased") == 1u,
+          "refined endpoint must not be reused with the ordinary solver signature");
+
+    const uint64_t candidates = ncg_counter_delta(
+        after.accepted_armijo_candidates, before.accepted_armijo_candidates,
+        "Armijo candidate counter decreased");
+    const uint64_t fields = ncg_counter_delta(
+        after.accepted_effective_field_applies,
+        before.accepted_effective_field_applies,
+        "accepted field counter decreased");
+    const uint64_t energies = ncg_counter_delta(
+        after.accepted_energy_evaluations, before.accepted_energy_evaluations,
+        "accepted energy counter decreased");
+    const uint64_t solves = ncg_counter_delta(
+        after.physical_demag_solves, before.physical_demag_solves,
+        "physical demag solve counter decreased");
+    // These equations retain the existing NCG counter semantics. Refinement
+    // field work is additionally evidenced by physical_demag_solves.
+    check(candidates > 0u && fields == candidates + 1u &&
+              energies >= candidates + 1u && solves >= candidates + 1u,
+          "next step must perform fresh current field/energy/demag work before trials");
+    check_snapshot_energy_matches_observation(
+        handle, next_stats, "step after a trajectory-refined endpoint");
+}
+
+bool try_ncg_refinement_trajectory_case(
+    const double *initial_magnetization,
+    double external_field_y,
+    double demag_relative_tolerance,
+    const char *case_name)
+{
+    // A finite search for a real witness, not a production stopping criterion.
+    constexpr uint32_t kMaximumFollowupSteps = 128u;
+    fullmag_fem_backend *const handle = create_cuda_backend(
+        initial_magnetization, external_field_y, true, demag_relative_tolerance);
+
+    // Prime using an actual step. Do not construct a synthetic zero snapshot
+    // and subtract it from counters that may include eager setup work.
+    fullmag_fem_step_stats previous_stats{};
+    check(fullmag_fem_backend_relax_step(
+              handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &previous_stats) == FULLMAG_FEM_OK,
+          "trajectory priming step must succeed");
+    if (previous_stats.step == 0u) {
+        fullmag_fem_backend_destroy(handle);
+        return false;
+    }
+    check(previous_stats.step == 1u &&
+              std::isfinite(previous_stats.total_energy_joules) &&
+              std::isfinite(previous_stats.max_torque_Apm),
+          "trajectory priming step must be finite and accepted");
+    take_energy_proof(handle);
+    check_device_execution(handle);
+    auto before = query_performance(handle);
+    check(before.execution_generation_id != 0u,
+          "trajectory must have a real execution generation");
+
+    for (uint32_t i = 0; i < kMaximumFollowupSteps; ++i) {
+        fullmag_fem_step_stats stats{};
+        const int rc = fullmag_fem_backend_relax_step(
+            handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &stats);
+        if (rc != FULLMAG_FEM_OK) {
+            const char *error = fullmag_fem_backend_last_error(handle);
+            std::fprintf(stderr, "FAIL: trajectory %s returned %d: %s\n",
+                         case_name, rc, error == nullptr ? "unknown" : error);
+            std::exit(1);
+        }
+        check(std::isfinite(stats.total_energy_joules) &&
+                  std::isfinite(stats.max_torque_Apm),
+              "trajectory observation must be finite");
+        if (stats.step == previous_stats.step) {
+            std::printf("NOT VERIFIED: %s became stationary before an isolated refinement witness\n",
+                        case_name);
+            fullmag_fem_backend_destroy(handle);
+            return false;
+        }
+        check(stats.step == previous_stats.step + 1u,
+              "trajectory must advance by exactly one accepted step");
+        const auto proof = take_energy_proof(handle);
+        check_device_execution(handle);
+        const auto after = query_performance(handle);
+        check(after.execution_generation_id == before.execution_generation_id,
+              "cannot subtract counters from different generations");
+        check(ncg_counter_delta(after.accepted_step_count, before.accepted_step_count,
+                                "accepted step counter decreased") == 1u &&
+                  ncg_counter_delta(after.physical_outer_attempt_count, before.physical_outer_attempt_count,
+                                    "outer attempt counter decreased") == 1u,
+              "one ABI call must identify one accepted outer attempt");
+
+        const uint64_t candidates = ncg_counter_delta(
+            after.accepted_armijo_candidates, before.accepted_armijo_candidates,
+            "candidate counter decreased");
+        const uint64_t rejected = ncg_counter_delta(
+            after.rejected_candidate_count, before.rejected_candidate_count,
+            "rejected candidate counter decreased");
+        const uint64_t failed = ncg_counter_delta(
+            after.failed_candidate_count, before.failed_candidate_count,
+            "failed candidate counter decreased");
+        const uint64_t refinements = ncg_counter_delta(
+            after.refinement_evaluation_count, before.refinement_evaluation_count,
+            "refinement counter decreased");
+        std::printf(
+            "NCG-TRACE case=%s generation=%llu outer=%llu step=%llu candidates=%llu rejected=%llu failed=%llu refinements=%llu\n",
+            case_name,
+            static_cast<unsigned long long>(after.execution_generation_id),
+            static_cast<unsigned long long>(after.physical_outer_attempt_count),
+            static_cast<unsigned long long>(stats.step),
+            static_cast<unsigned long long>(candidates),
+            static_cast<unsigned long long>(rejected),
+            static_cast<unsigned long long>(failed),
+            static_cast<unsigned long long>(refinements));
+
+        // This is a witness-selection predicate, not a relaxed Armijo test.
+        // A step with several candidates may be legal, but cumulative counters
+        // alone do not identify which of them refined and was accepted.
+        if (candidates == 1u && rejected == 0u && failed == 0u && refinements == 1u) {
+            const uint64_t misses = ncg_counter_delta(
+                after.accepted_endpoint_cache_misses, before.accepted_endpoint_cache_misses,
+                "cache miss counter decreased");
+            const uint64_t hits = ncg_counter_delta(
+                after.accepted_endpoint_cache_hits, before.accepted_endpoint_cache_hits,
+                "cache hit counter decreased");
+            check(misses <= 1u && hits <= 1u && misses + hits == 1u,
+                  "one outer attempt must classify the current endpoint exactly once");
+            const uint64_t energies = ncg_counter_delta(
+                after.accepted_energy_evaluations, before.accepted_energy_evaluations,
+                "energy counter decreased");
+            const uint64_t solves = ncg_counter_delta(
+                after.physical_demag_solves, before.physical_demag_solves,
+                "demag solve counter decreased");
+            check(energies == candidates + misses + 2u &&
+                      solves >= candidates + misses + 2u,
+                  "isolated refinement must perform refined base and trial evaluations");
+            // take_energy_proof already checked finite delta/bound/upper/rhs,
+            // upper == delta + bound within roundoff, and upper <= rhs.
+            std::printf(
+                "NCG-REFINEMENT-WITNESS case=%s generation=%llu outer=%llu candidate=1 delta=%.17g bound=%.17g upper=%.17g rhs=%.17g energy_work=%llu demag_work=%llu\n",
+                case_name,
+                static_cast<unsigned long long>(after.execution_generation_id),
+                static_cast<unsigned long long>(after.physical_outer_attempt_count),
+                proof.accepted_energy_delta_j,
+                proof.accepted_energy_roundoff_bound_j,
+                proof.accepted_energy_delta_upper_j,
+                proof.armijo_increment_rhs_j,
+                static_cast<unsigned long long>(energies),
+                static_cast<unsigned long long>(solves));
+            check_fresh_step_after_refined_endpoint(handle, stats, after);
+            fullmag_fem_backend_destroy(handle);
+            return true;
+        }
+        previous_stats = stats;
+        before = after;
+    }
+    std::printf("NOT VERIFIED: %s exhausted the bounded refinement trajectory\n", case_name);
+    fullmag_fem_backend_destroy(handle);
+    return false;
+}
+
 void check_ncg_refined_energy_reuse()
 {
     // These are ordinary physical parameter variants, not instrumentation
@@ -475,6 +706,16 @@ void check_ncg_refined_energy_reuse()
             return;
         }
     }
+    for (const auto &item : cases) {
+        if (try_ncg_refinement_trajectory_case(
+                item.initial_magnetization,
+                item.external_field_y,
+                item.demag_relative_tolerance,
+                item.name)) {
+            std::printf("PASS: CUDA NCG refined accepted-energy production contract\n");
+            return;
+        }
+    }
     check(
         false,
         "no legitimate CUDA demag NCG fixture entered production Armijo refinement");
@@ -484,21 +725,27 @@ void check_ncg_refined_energy_reuse()
 
 int main()
 {
+    const char *requested_device = std::getenv("FULLMAG_NCG_RUNTIME_DEVICE");
+    const char *require_env = std::getenv("FULLMAG_REQUIRE_CUDA_CONTRACTS");
+    const bool require_cuda =
+        require_env != nullptr && std::strcmp(require_env, "1") == 0;
+    const bool requested_cuda =
+        requested_device != nullptr && std::strcmp(requested_device, "cuda") == 0;
 #if !FULLMAG_HAS_CUDA_RUNTIME
-    std::printf("SKIP: CUDA runtime is not compiled into the FEM NCG runtime contract\n");
+    check(!(require_cuda || requested_cuda),
+          "required NCG CUDA runtime was not compiled; SKIP cannot satisfy this contract");
+    std::printf("SKIP: optional CUDA NCG contract is not compiled\n");
     return 0;
 #else
-    const char *requested_device = std::getenv("FULLMAG_NCG_RUNTIME_DEVICE");
-    if (requested_device == nullptr || std::strcmp(requested_device, "cuda") != 0) {
-        std::printf(
-            "SKIP: set FULLMAG_NCG_RUNTIME_DEVICE=cuda for the managed production contract\n");
+    check(!require_cuda || requested_cuda,
+          "managed NCG contract requires FULLMAG_NCG_RUNTIME_DEVICE=cuda");
+    if (!requested_cuda) {
+        std::printf("SKIP: optional CUDA NCG contract was not requested\n");
         return 0;
     }
     int device_count = 0;
-    check(
-        cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
-        "managed CUDA NCG runtime contract requires a CUDA device");
-
+    check(cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0,
+          "managed CUDA NCG runtime contract requires a real CUDA device");
     std::printf("Running native CUDA FEM nonlinear-CG runtime contracts...\n");
     check_ncg_endpoint_cache_miss_then_hit();
     check_ncg_refined_energy_reuse();
