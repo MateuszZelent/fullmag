@@ -51,6 +51,27 @@ export function downloadPlanarPng(
   }
 }
 
+export function downloadPlanarJson(
+  data: object | string,
+  filename: string,
+  objectUrlApi: ObjectUrlApi = URL,
+  createAnchor: () => DownloadAnchor = () =>
+    document.createElement("a") as DownloadAnchor,
+): void {
+  const content = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  const url = objectUrlApi.createObjectURL(
+    new Blob([content], { type: "application/json" }),
+  );
+  try {
+    const anchor = createAnchor();
+    anchor.href = url;
+    anchor.download = filename.endsWith(".json") ? filename : `${filename}.json`;
+    anchor.click();
+  } finally {
+    objectUrlApi.revokeObjectURL(url);
+  }
+}
+
 function safeSlug(value: string): string {
   return (
     value

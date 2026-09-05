@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import {
+  downloadPlanarJson,
+  downloadPlanarPng,
+  planarExportFilename,
+} from "./fieldMapExport";
 
 describe("field-map PNG export", () => {
   it("builds a unit-safe provenance filename", () => {
@@ -47,5 +51,27 @@ describe("field-map PNG export", () => {
     expect(objectUrlApi.revokeObjectURL).toHaveBeenCalledWith(
       "blob:planar-png",
     );
+  });
+
+  it("downloads JSON manifest and appends extension if needed", () => {
+    const anchor = { click: vi.fn(), download: "", href: "" };
+    const objectUrlApi = {
+      createObjectURL: vi.fn(() => "blob:manifest-json"),
+      revokeObjectURL: vi.fn(),
+    };
+
+    downloadPlanarJson(
+      { version: 1 },
+      "manifest",
+      objectUrlApi,
+      () => anchor,
+    );
+
+    expect(anchor).toMatchObject({
+      download: "manifest.json",
+      href: "blob:manifest-json",
+    });
+    expect(anchor.click).toHaveBeenCalledTimes(1);
+    expect(objectUrlApi.revokeObjectURL).toHaveBeenCalledWith("blob:manifest-json");
   });
 });
