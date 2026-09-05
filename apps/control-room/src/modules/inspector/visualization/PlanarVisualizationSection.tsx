@@ -275,7 +275,18 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           <option value="default">Default</option>
           <optgroup label="Monitors">{(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}</optgroup>
         </FormField>
-        {source.kind === "default" ? <DefaultPlanarSourceSection defaultSlice={planar.default_slice} domain={domain.data} patch={patch} /> : null}
+        {source.kind === "default" ? (
+          <DefaultPlanarSourceSection
+            defaultSlice={planar.default_slice}
+            domain={domain.data}
+            patch={patch}
+            onSaveAsMonitor={() =>
+              kernel.commands.run("planar-monitor.create", {
+                intent: { source: "inspector", preset: planar.default_slice.plane },
+              })
+            }
+          />
+        ) : null}
       </div>
     </InspectorGroup>
   );

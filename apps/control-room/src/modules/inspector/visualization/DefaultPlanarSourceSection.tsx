@@ -45,10 +45,12 @@ export function DefaultPlanarSourceSection({
   defaultSlice,
   domain,
   patch,
+  onSaveAsMonitor,
 }: {
   defaultSlice: DefaultSlice;
   domain: DomainMetaResource | null | undefined;
   patch: (next: PlanarPatch) => void;
+  onSaveAsMonitor?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const bounds = useMemo(() => asBounds(domain), [domain]);
@@ -129,6 +131,27 @@ export function DefaultPlanarSourceSection({
         value={coordinate ?? ""}
         onChange={(event) => updateCoordinate(event.currentTarget.value)}
       />
+      <div className="fm-inspector-quick-actions" style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
+        <button
+          type="button"
+          className="fm-button fm-button--ghost fm-button--sm"
+          onClick={() => {
+            setError(null);
+            patchSlice({ position_fraction: 0.5 });
+          }}
+        >
+          Center of domain
+        </button>
+        {onSaveAsMonitor ? (
+          <button
+            type="button"
+            className="fm-button fm-button--ghost fm-button--sm"
+            onClick={onSaveAsMonitor}
+          >
+            Save as monitor
+          </button>
+        ) : null}
+      </div>
       <FormField
         label="Sampling"
         type="select"
@@ -140,7 +163,10 @@ export function DefaultPlanarSourceSection({
             patchSlice({ operator: { kind: "plane_sample" } });
           } else if (value === "slab_average") {
             setError(null);
-            patchSlice({ operator: { kind: "slab_average", thickness_m: 1e-9 } });
+            const defaultThickness = bounds
+              ? Math.max(1e-9, (bounds.max[axis === "x" ? 0 : axis === "y" ? 1 : 2] - bounds.min[axis === "x" ? 0 : axis === "y" ? 1 : 2]) * 0.05)
+              : 1e-9;
+            patchSlice({ operator: { kind: "slab_average", thickness_m: defaultThickness } });
           }
         }}
       >
