@@ -66,6 +66,8 @@ export function buildFieldMapDataPlan(
     : enabled
       ? "ready"
       : "inactive";
+  const isFem = input.discretization?.trim().toLowerCase() === "fem";
+  const needsMesh = input.includeMesh || isFem;
   return {
     availability,
     enabled,
@@ -73,7 +75,7 @@ export function buildFieldMapDataPlan(
     quantityId: input.quantityId,
     query: {
       component: input.component,
-      include_mesh: input.includeMesh,
+      include_mesh: needsMesh,
       quality: input.quality,
       resolution_x: input.resolution[0],
       resolution_y: input.resolution[1],
@@ -87,7 +89,7 @@ export function buildFieldMapDataPlan(
       vector_budget: input.showVectors ? input.vectorBudget : 0,
     },
     requestMask: enabled,
-    requestMesh: enabled && input.includeMesh,
+    requestMesh: enabled && needsMesh,
     requestScalar: enabled,
     requestVectors: enabled && input.showVectors,
     unavailableReason,

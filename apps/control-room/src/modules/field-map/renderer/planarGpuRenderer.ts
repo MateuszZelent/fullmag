@@ -49,6 +49,13 @@ export interface PlanarGpuRenderer extends PlanarRenderer {
   isContextLost(): boolean;
 }
 
+export class WebGLContextTaintedError extends Error {
+  constructor(message?: string) {
+    super(message ?? "Canvas is tainted with WebGL context and cannot acquire 2D context; remount required");
+    this.name = "WebGLContextTaintedError";
+  }
+}
+
 export function createPlanarGpuRenderer(
   canvas: HTMLCanvasElement,
   createRenderer: (params: WebGLRendererParameters) => WebGLRenderer = (params) => new WebGLRenderer(params),
@@ -71,9 +78,14 @@ export function createPlanarGpuRenderer(
       stencil: false,
     });
 
-  if (!gl) return null;
+  if (
+    !gl ||
+    typeof (gl as WebGLRenderingContext).createShader !== "function"
+  ) {
+    return null;
+  }
 
-  let renderer: WebGLRenderer | null = null;
+  let renderer: WebGLRenderer | null;
   try {
     renderer = createRenderer({
       alpha: true,
@@ -83,8 +95,10 @@ export function createPlanarGpuRenderer(
       powerPreference: "high-performance",
       premultipliedAlpha: true,
     });
-  } catch {
-    return null;
+  } catch (err) {
+    throw new WebGLContextTaintedError(
+      `WebGL context was acquired on canvas, but renderer initialization failed: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
 
   renderer.toneMapping = NoToneMapping;

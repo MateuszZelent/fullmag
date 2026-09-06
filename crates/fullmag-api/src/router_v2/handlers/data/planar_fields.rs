@@ -992,6 +992,12 @@ async fn planar_probe_response(
         expected_mesh_revision: probe.expected_mesh_revision,
         expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
+        colormap: None,
+        auto_scale: None,
+        range_min: None,
+        range_max: None,
+        vmin: None,
+        vmax: None,
     };
     let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
     let bounds = built.result.meta.bounds_uv_m;
@@ -1051,6 +1057,15 @@ async fn planar_probe_response(
         element_id,
         occupancy,
         sampling_method: built.result.meta.sampling_method.to_string(),
+        probe_kind: Some("raster_cell".to_string()),
+        sample_support: Some(
+            match built.operator {
+                PlanarOperatorIR::PlaneSample => "surface",
+                PlanarOperatorIR::SlabAverage { .. } | PlanarOperatorIR::DepthProjection { .. } => "volume",
+                PlanarOperatorIR::SurfaceProjection { .. } => "surface",
+            }
+            .to_string(),
+        ),
     }))
 }
 
@@ -1067,15 +1082,27 @@ async fn planar_render_png_response(
         .iter()
         .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
         .collect::<Vec<_>>();
+    let auto_scale_mode = match (
+        query.auto_scale.as_deref(),
+        query.range_min.or(query.vmin),
+        query.range_max.or(query.vmax),
+    ) {
+        (Some(mode), _, _) => AutoScaleMode::parse(Some(mode))?,
+        (None, Some(_), Some(_)) => AutoScaleMode::Manual,
+        _ => AutoScaleMode::Slice,
+    };
+    let min_val = query.range_min.or(query.vmin);
+    let max_val = query.range_max.or(query.vmax);
+    let colormap = query.colormap.as_deref().unwrap_or("viridis");
     let png = encode_scalar_png(
         built.result.meta.resolution[0],
         built.result.meta.resolution[1],
         &built.result.scalar_values,
         &mask,
-        "viridis",
-        AutoScaleMode::Slice,
-        None,
-        None,
+        colormap,
+        auto_scale_mode,
+        min_val,
+        max_val,
         true,
     )?;
     binary_response(png, "image/png", &built.etag)

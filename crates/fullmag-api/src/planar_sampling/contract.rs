@@ -453,8 +453,10 @@ impl PlanarSamplingEngine {
     ) -> Result<PlanarSampleResult, ApiError> {
         request.validate()?;
         let mut result = crate::planar_sampling::fem::sample(field, request)?;
-        let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&request.frame)?;
-        result.overlay = Some(crate::planar_sampling::fem::build_overlay(field, &frame));
+        if request.operator == fullmag_ir::PlanarOperatorIR::PlaneSample {
+            let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&request.frame)?;
+            result.overlay = Some(crate::planar_sampling::fem::build_overlay(field, &frame));
+        }
         apply_component(&mut result, request)?;
         Ok(result)
     }

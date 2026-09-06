@@ -454,17 +454,15 @@ export function createPlanar2dRenderer(
   };
 }
 
+export { WebGLContextTaintedError } from "./planarGpuRenderer";
+
 export function createPlanarRenderer(
   canvas: HTMLCanvasElement,
   options?: { preferGpu?: boolean },
 ): PlanarRenderer {
   if (options?.preferGpu !== false) {
-    try {
-      const gpuRenderer = createPlanarGpuRenderer(canvas);
-      if (gpuRenderer) return gpuRenderer;
-    } catch {
-      // Fallback to 2D canvas renderer
-    }
+    const gpuRenderer = createPlanarGpuRenderer(canvas);
+    if (gpuRenderer) return gpuRenderer;
   }
   return createPlanar2dRenderer(canvas);
 }

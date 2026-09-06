@@ -53,6 +53,7 @@ export function PlanarSurface({
     value: number | null;
   } | null>(null);
   const {
+    canvasKey,
     canvasRef,
     drawOverlayRef,
     maskRef,
@@ -118,6 +119,7 @@ export function PlanarSurface({
         viewport={model.viewport}
       />
       <canvas
+        key={canvasKey}
         ref={canvasRef}
         aria-label="Planar scalar field"
         className="fm-field-map__canvas"
@@ -279,6 +281,7 @@ export function PlanarSurface({
               current.resolution,
               latestValues,
               maskRef.current ?? undefined,
+              { continuous: true, probeKind: "interpolated_raster_preview" },
             );
             renderStateRef.current.axisPointer = { u: point[0], v: point[1] };
             drawOverlayRef.current();

@@ -600,3 +600,143 @@ fn test_d04_py11_prism6_quad_face_exact_quadrature() {
     );
 }
 
+#[test]
+fn test_d04_py02_py03_non_dyadic_shifted_abs_exact() {
+    for a in [0.3, 0.37] {
+        let nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let values = vec![
+            -a, 0.0, 0.0,     // node 0 (0,0,0)
+            1.0 - a, 0.0, 0.0, // node 1 (1,0,0)
+            -a, 0.0, 0.0,     // node 2 (0,1,0)
+            -a, 0.0, 0.0,     // node 3 (0,0,-1)
+        ];
+        let field = FemPlanarField::new(3, nodes, vec![[0, 1, 2, 3]], vec![1], values).unwrap();
+        let frame = explicit_frame(
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+        );
+        let req = request(
+            frame,
+            PlanarOperatorIR::SurfaceProjection {
+                boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+                visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+            },
+            [1, 1],
+            PlanarComponent::Magnitude,
+        );
+        let result = PlanarSamplingEngine::sample_fem(&field, &req).unwrap();
+        let val = result.scalar_values[0];
+        let expected = 1.0 / 3.0 - a + 2.0 * a * a - (2.0 / 3.0) * a * a * a;
+        assert!(
+            (val - expected).abs() < 1e-4,
+            "D04 PY02/PY03: Exact split quadrature for a={a} must be {expected}, got {val}"
+        );
+    }
+}
+
+#[test]
+fn test_d04_py05_prism6_quad_face_magnitude() {
+    let nodes = vec![
+        [0.0, 0.0, 0.0], // 0
+        [1.0, 0.0, 0.0], // 1
+        [0.0, 0.0, 1.0], // 2
+        [0.0, 1.0, 0.0], // 3
+        [1.0, 1.0, 0.0], // 4
+        [0.0, 1.0, 1.0], // 5
+    ];
+    let values = vec![
+        -0.5, 0.0, 0.0, // 0
+         0.5, 0.0, 0.0, // 1
+        -0.5, 0.0, 0.0, // 2
+        -0.5, 0.0, 0.0, // 3
+         0.5, 0.0, 0.0, // 4
+        -0.5, 0.0, 0.0, // 5
+    ];
+    let field = FemPlanarField::new_mixed(
+        3,
+        nodes,
+        vec![FemPlanarElement::Prism6([0, 1, 2, 3, 4, 5])],
+        vec![1],
+        values,
+    )
+    .unwrap();
+
+    let frame = explicit_frame(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0, 1.0],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::SurfaceProjection {
+            boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+            visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+        },
+        [1, 1],
+        PlanarComponent::Magnitude,
+    );
+    let result = PlanarSamplingEngine::sample_fem(&field, &req).unwrap();
+    let val = result.scalar_values[0];
+    assert!(
+        (val - 0.25).abs() < 1e-4,
+        "D04/PY05: Quad magnitude quadrature must be 0.25, got {val}"
+    );
+}
+
+#[test]
+fn test_d04_py06_clipped_prism6_quad_face_bilinear() {
+    let nodes = vec![
+        [0.0, 0.0, 0.0], // 0
+        [1.0, 0.0, 0.0], // 1
+        [0.0, 0.0, 1.0], // 2
+        [0.0, 1.0, 0.0], // 3
+        [1.0, 1.0, 0.0], // 4
+        [0.0, 1.0, 1.0], // 5
+    ];
+    let mut values = vec![0.0; 6];
+    values[4] = 1.0;
+    let field = FemPlanarField::new_mixed(
+        1,
+        nodes,
+        vec![FemPlanarElement::Prism6([0, 1, 2, 3, 4, 5])],
+        vec![1],
+        values,
+    )
+    .unwrap();
+
+    let inv_sqrt2 = 1.0 / std::f64::consts::SQRT_2;
+    let frame = explicit_frame(
+        [0.0, 0.0, 0.0],
+        [inv_sqrt2, inv_sqrt2, 0.0],
+        [-inv_sqrt2, inv_sqrt2, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 0.9 * inv_sqrt2, -1.0, 1.0],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::SurfaceProjection {
+            boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+            visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+        },
+        [1, 1],
+        PlanarComponent::Scalar,
+    );
+    let result = PlanarSamplingEngine::sample_fem(&field, &req).unwrap();
+    let val = result.scalar_values[0];
+    assert!(
+        (val - 0.0675).abs() < 1e-4,
+        "D04/PY06: Clipped Prism6 bilinear scalar mean must be 0.0675, got {val}"
+    );
+}
+
+

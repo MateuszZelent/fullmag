@@ -17,6 +17,7 @@ import {
   extractFdmOccupancyBoundaries,
   partitionPlanarMeshSegments,
   type PlanarRenderer,
+  WebGLContextTaintedError,
 } from "./planarRenderer";
 import { buildVectorGlyphs } from "./vectorGlyphs";
 
@@ -36,8 +37,11 @@ export function usePlanarSurfaceRenderer(
   const modelRef = useRef(model);
   const gpuLayerDrawnRef = useRef(false);
   const cutSurfaceCacheRef = useRef<{
+    bounds: readonly [number, number, number, number];
     geometry: ReturnType<typeof triangulateCutPolygons>;
+    mask: Uint8Array | null;
     meshOverlay: unknown;
+    resolution: readonly [number, number];
     scalar: Float32Array | Float64Array;
   } | null>(null);
   const renderStateRef = useRef<{
@@ -48,6 +52,8 @@ export function usePlanarSurfaceRenderer(
     partitionedMesh: ReturnType<typeof partitionPlanarMeshSegments> | null;
   }>({ axisPointer: null, contours: [], glyphs: [], mesh: null, partitionedMesh: null });
   const [plotSize, setPlotSize] = useState({ height: 0, width: 0 });
+  const [canvasKey, setCanvasKey] = useState(0);
+  const [preferGpu, setPreferGpu] = useState(true);
   const rangeMin = model.range?.min;
   const rangeMax = model.range?.max;
 
@@ -59,7 +65,22 @@ export function usePlanarSurfaceRenderer(
     const canvas = canvasRef.current;
     const overlayCanvas = overlayRef.current;
     if (!canvas || !overlayCanvas) return;
-    const renderer = createPlanarRenderer(canvas);
+    let renderer: PlanarRenderer;
+    try {
+      renderer = createPlanarRenderer(canvas, { preferGpu });
+    } catch (err) {
+      if (
+        err instanceof WebGLContextTaintedError ||
+        (err as { name?: string })?.name === "WebGLContextTaintedError"
+      ) {
+        queueMicrotask(() => {
+          setPreferGpu(false);
+          setCanvasKey((k) => k + 1);
+        });
+        return;
+      }
+      throw err;
+    }
     rendererRef.current = renderer;
     const overlayContext = overlayCanvas.getContext("2d");
     if (!overlayContext) {
@@ -95,7 +116,7 @@ export function usePlanarSurfaceRenderer(
       valuesRef.current = null;
       maskRef.current = null;
     };
-  }, []);
+  }, [canvasKey, preferGpu]);
 
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -202,6 +223,7 @@ export function usePlanarSurfaceRenderer(
         } else if (
           renderer.drawFemCutSurface &&
           model.meshOverlay &&
+          (!model.operator || model.operator.kind === "plane_sample") &&
           (model.meshOverlayDescriptor?.codec === "fmcs.v4" ||
            model.meshOverlayDescriptor?.codec === "fmcs.v3" ||
            model.meshOverlayDescriptor?.geometrySource === "fem_volume_mesh")
@@ -233,8 +255,8 @@ export function usePlanarSurfaceRenderer(
                 const r0 = Math.max(0, Math.min(height - 2, Math.floor(yCell)));
                 const r1 = r0 + 1;
 
-                const fx = Math.max(0, Math.min(1, xCell - c0));
-                const fy = Math.max(0, Math.min(1, yCell - r0));
+                const fx = xCell - c0;
+                const fy = yCell - r0;
 
                 const idx00 = r0 * width + c0;
                 const idx10 = r0 * width + c1;
@@ -246,10 +268,31 @@ export function usePlanarSurfaceRenderer(
                 const occ01 = isRenderablePlanarOccupancy(model.mask?.[idx01]);
                 const occ11 = isRenderablePlanarOccupancy(model.mask?.[idx11]);
 
+                if (occ00 && occ10 && occ01 && occ11) {
+                  const v00 = model.scalar[idx00] ?? 0;
+                  const v10 = model.scalar[idx10] ?? 0;
+                  const v01 = model.scalar[idx01] ?? 0;
+                  const v11 = model.scalar[idx11] ?? 0;
+                  if (
+                    Number.isFinite(v00) &&
+                    Number.isFinite(v10) &&
+                    Number.isFinite(v01) &&
+                    Number.isFinite(v11)
+                  ) {
+                    const w00 = (1 - fx) * (1 - fy);
+                    const w10 = fx * (1 - fy);
+                    const w01 = (1 - fx) * fy;
+                    const w11 = fx * fy;
+                    return w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+                  }
+                }
+
+                const cfx = Math.max(0, Math.min(1, fx));
+                const cfy = Math.max(0, Math.min(1, fy));
                 let weightSum = 0;
                 let valSum = 0;
 
-                const w00 = (1 - fx) * (1 - fy);
+                const w00 = (1 - cfx) * (1 - cfy);
                 if (occ00) {
                   const val = model.scalar[idx00] ?? 0;
                   if (Number.isFinite(val)) {
@@ -258,7 +301,7 @@ export function usePlanarSurfaceRenderer(
                   }
                 }
 
-                const w10 = fx * (1 - fy);
+                const w10 = cfx * (1 - cfy);
                 if (occ10) {
                   const val = model.scalar[idx10] ?? 0;
                   if (Number.isFinite(val)) {
@@ -267,7 +310,7 @@ export function usePlanarSurfaceRenderer(
                   }
                 }
 
-                const w01 = (1 - fx) * fy;
+                const w01 = (1 - cfx) * cfy;
                 if (occ01) {
                   const val = model.scalar[idx01] ?? 0;
                   if (Number.isFinite(val)) {
@@ -276,7 +319,7 @@ export function usePlanarSurfaceRenderer(
                   }
                 }
 
-                const w11 = fx * fy;
+                const w11 = cfx * cfy;
                 if (occ11) {
                   const val = model.scalar[idx11] ?? 0;
                   if (Number.isFinite(val)) {
@@ -296,7 +339,10 @@ export function usePlanarSurfaceRenderer(
 
               let cutGeometry =
                 cutSurfaceCacheRef.current?.meshOverlay === model.meshOverlay &&
-                cutSurfaceCacheRef.current?.scalar === model.scalar
+                cutSurfaceCacheRef.current?.scalar === model.scalar &&
+                cutSurfaceCacheRef.current?.mask === model.mask &&
+                cutSurfaceCacheRef.current?.bounds === model.bounds &&
+                cutSurfaceCacheRef.current?.resolution === model.resolution
                   ? cutSurfaceCacheRef.current.geometry
                   : null;
               if (!cutGeometry) {
@@ -307,8 +353,11 @@ export function usePlanarSurfaceRenderer(
                   sampleScalar,
                 );
                 cutSurfaceCacheRef.current = {
+                  bounds: model.bounds,
                   geometry: cutGeometry,
+                  mask: model.mask,
                   meshOverlay: model.meshOverlay,
+                  resolution: model.resolution,
                   scalar: model.scalar,
                 };
               }
@@ -442,6 +491,7 @@ export function usePlanarSurfaceRenderer(
     model.mask,
     model.meshOverlay,
     model.meshOverlayDescriptor,
+    model.operator,
     rangeMax,
     rangeMin,
     model.rasterOpacity,
@@ -466,6 +516,7 @@ export function usePlanarSurfaceRenderer(
   }, [model.bounds, model.viewport]);
 
   return {
+    canvasKey,
     canvasRef,
     drawOverlayRef,
     maskRef,

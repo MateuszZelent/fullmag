@@ -1,11 +1,10 @@
-# Raport Kwalifikacji Wydania: Refaktoryzacja Wizualizacji 2D (Remediacja Audytu Rundy 3: D01–D12 oraz R01–R27)
+# Raport Kwalifikacji Wydania: Refaktoryzacja Wizualizacji 2D (Remediacja Audytu Rundy 4: D01–D12 oraz R01–R27)
 
 **Fullmag — Moduł Wizualizacji Planarnej 2D (`field-map` / `planar_sampling`)**  
 **Data:** 6 września 2026  
 **Gałąź:** `codex/refactor-2d` w wyizolowanym worktree `C:\git\fullmag\fullmag\.worktrees\refactor-2d`  
-**Commit bazowy:** `1ebfd9d71fe977aaf0477e461810d5d2367a89c1` z naniesioną pełną serią poprawek Round 3  
 **Status kwalifikacji:** ZAKWALIFIKOWANY W ZDEFINIOWANYM ZAKRESIE (SCOPED RELEASE READY)  
-**Zamyka rejestr ustaleń audytu Round 3:** D01–D12 (w tym P0: D01, D02; P1: D03–D10; P2: D11; GATE: D12).  
+**Zamyka rejestr ustaleń audytu Round 4 (`Fullmag_2D_round4_6050cb78`):** D01–D12 (w tym P0: D01, D02; P1: D03–D10; P2: D11; GATE: D12).  
 **Zamyka rejestr ustaleń reaudytu Round 2:** R01–R27 (w tym jawne wyznaczenie granic funkcjonalności niewspieranych).  
 
 ---
@@ -19,28 +18,28 @@ Niniejszy raport odrzuca bezwzględne, niepoparte deklaracje typu „100% gotowe
 
 ### Kluczowe granice zakresu (Scoped Boundaries):
 1. **Wspierane topologie FEM:** Tet4 (liniowy P1) oraz Prism6 (klin 6-węzłowy z inwersją Newtona-Raphsona, kwadraturą biliniową ścian i całkowaniem objętościowym). Topologie Hex8 i Pyramid5 są **celowo niewspierane** i natychmiast odrzucane stabilnym kodem błędu `unsupported_element_order` (brak niebezpiecznej degradacji do fałszywych trójkątów).
-2. **Wspierane zakresy FDM (Scopes):** `domain` oraz `mesh_part`. Zakres `airbox` dla FDM jest zablokowany przez regułę `FDM_UNSUPPORTED_PLANAR_SCOPES` zwracającą HTTP 422.
-3. **Pochodzenie i tożsamość buforów (Bundle Fail-Closed):** Brak bufora maski lub niespójność nagłówka FMVP z metadanymi zatrzymuje konstrukcję modelu (`renderModel = null`). Poprzednia spójna klatka jest zachowywana jako stale, uniemożliwiając wyświetlenie uszkodzonych danych.
-4. **Sonda wartości (Probe):** UI i API jednoznacznie rozróżniają ciągłą interpolację fizyczną (`continuous_interpolation`) od dyskretnego odczytu komórki rastra (`raster_cell`), publikując atrybut `probeKind`.
+2. **Wspierane zakresy FDM (Scopes):** Dla siatek komórkowych FDM wspierany jest wyłącznie zakres `monitor_target` (cała domena / obiekt docelowy monitora). Zakresy `mesh_part` oraz `airbox` są dla FDM niewspierane: w UI reguła `FDM_UNSUPPORTED_PLANAR_SCOPES` zwraca `{ enabled: false, reasonCode: "fdm_scope_not_supported" }` (blokując zapytanie na poziomie interfejsu), natomiast backend API w `target.rs` egzekwuje `matches!(scope, ResolvedSpatialScope::MonitorTarget)` i odrzuca zapytania kodem HTTP 422 (`target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target only`).
+3. **Pochodzenie i tożsamość buforów (Bundle Fail-Closed):** Brak bufora maski lub niespójność nagłówka FMVP z metadanymi zatrzymuje konstrukcję modelu (`renderModel = null`). `FieldMapModule` nie łączy danych starej i nowej klatki (brak mieszania z `lastReadyBundle`).
+4. **Sonda wartości (Probe):** UI i API jednoznacznie rozróżniają ciągłą interpolację fizyczną w płaszczyźnie (`interpolated_raster_preview` / `continuous`) od dyskretnego odczytu komórki rastra (`raster_cell`), publikując atrybuty `probe_kind` oraz `sample_support`.
 
 ---
 
-## 2. Rejestr Rozliczenia Ustaleń Audytu Rundy 3 (D01–D12)
+## 2. Rejestr Rozliczenia Ustaleń Audytu Rundy 4 (D01–D12)
 
 | ID | Priorytet | Zgłoszony problem audytu | Zastosowana naprawa produkcyjna | Status | Weryfikacja i dowody |
 |---|---|---|---|---|---|
-| **D01** | P0 | Walidacja bundle omijana przez aktywny komponent; brak sprawdzania nagłówka FMVP i maski | W `coherentPlanarBundle.ts` dodano ścisłe sprawdzanie FMVP: `quantityId === meta.quantity_id`, `grid === [w, h, 1]`, `nComp` (1 dla skalarów, 3 dla wektorów) oraz kodów maski $\le 4$. W `FieldMapModule.tsx` usunięto kopiowanie oczekiwanego tokenu (zastąpiono tożsamością z `dataQuery.sample_token`), zaimplementowano fail-closed w produkcji (`renderModel = null`) z dedykowanym adapterem w testach jednostkowych; zapobieżono mieszaniu starego pola z nową maską przez wzorzec React previous render state (`prevBundle`/`lastReadyBundle`). | **ZAMKNIĘTE** (Source-Fixed & Tested) | `coherentPlanarBundle.test.ts` (11/11 PASS), `FieldMapModule.test.tsx` (8/8 PASS) |
-| **D02** | P0 | Interpolacja z rastra `sampleScalar` ekstrapolowała poza zakres [0,1] i zanieczyszczała wartości na granicy materiał/próżnia | W `usePlanarSurfaceRenderer.ts` ograniczono ułamkowe współrzędne komórki $fx, fy \in [0, 1]$ eliminując przeregulowania ekstrapolacji (np. 1.5). Zaimplementowano znormalizowaną ważoną interpolację wyłącznie po zajętych sąsiadach (`isOccupied`), eliminując rozmywanie próbek zerami z próżni na brzegach materiału. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `PlanarSurface.test.tsx` (6/6 PASS), `femCutSurfaceLayer.test.ts` (6/6 PASS) |
-| **D03** | P1 | Geometria i wsparcie operatorów połączone nieprawidłowo; nieznane segmenty klasyfikowane jako TargetBoundary | W `cut_geometry.rs` zmieniono klasyfikację nieznanych/niezbieżnych segmentów na `UnclassifiedDegenerate` zamiast `TargetBoundary`. W `contract.rs` rozdzielono nakładkę siatki od wsparcia operatora, zachowując spójność klasyfikacji topologicznej. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `planar_overlay_classifies_selected_topology_without_float_boundary_heuristics`, `planar_sampling` cargo tests |
-| **D04** | P1 | Kwadratura powierzchniowa nie kwalifikowała norm nieliniowych ani ściany czworokątnej Prism6 (błąd 33.3% na \|x-1/2\|) | W `surface.rs` zaimplementowano dokładną kwadraturę Gaussa-Legendre $2 \times 2$ dla czworokątnych ścian Prism6 (dokładna dla biliniowego $x \cdot z = 1/4$). Dla nieliniowych składowych skalarnych (`Magnitude`, `Orientation`, `Abs*`) wprowadzono adaptacyjny podział 4-subtrójkątowy z lookaheadem błędu. | **ZAMKNIĘTE** (Source-Fixed & Tested) | Nowy test w `counterexamples_tests.rs`: `test_d04_surface_shifted_abs_exact_quadrature` (PASS, całka \|x-1/2\| = 0.25 w tolerancji 1e-5) |
-| **D05** | P1 | Odległość sympleksu od zera zależna od amplitudy dla rangi 2 (błąd przy małych skalach 1e-13) | W `element_evaluator.rs::point_tetrahedron_distance` wprowadzono pełną bezwymiarową normalizację współrzędnych i punktu przez `inv_scale` przed wywołaniem `point_triangle_distance_sq`, a wynik końcowy przemnożono przez `scale`. | **ZAMKNIĘTE** (Source-Fixed & Tested) | Nowy test w `counterexamples_tests.rs`: `test_d05_rank2_small_scale_distance` (PASS dla skal 1.0, 1e-6, 1e-13, 1e6) |
-| **D06** | P1 | Jeden nieskończony wektor ukrywał orientację poprawnych pikseli (`Inf` w `orientation_epsilon`) | W `fdm.rs` i `contract.rs` odfiltrowano wektory niefinitywne (`norm.is_finite()`) przed wyznaczeniem `max_norm` dla `orientation_epsilon`. Nieskończony/NaN wektor ma status błędu, nie zanieczyszcza progu poprawnych sąsiadów. | **ZAMKNIĘTE** (Source-Fixed & Tested) | Nowy test w `counterexamples_tests.rs`: `test_d06_infinite_vector_does_not_contaminate_finite_neighbors` (PASS) |
-| **D07** | P1 | Fallback WebGL podmieniał canvas przez `parentElement.replaceChild`, gubiąc referencje Reacta | W `planarRenderer.ts` całkowicie usunięto bezpośrednią manipulację DOM (`replaceChild`). Obsługa błędów kontekstu i fallback 2D korzystają ze stabilnego elementu kontrolowanego przez cykl życia Reacta. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `planarRenderer.test.ts` (19/19 PASS), `planarGpuRenderer.test.ts` (7/7 PASS) |
-| **D08** | P1 | Sonda odczytywała dyskretny bin rastra zamiast ciągłej ewaluacji fizycznej | W `fieldMapProbe.ts` dodano ciągłą interpolację fizyczną w płaszczyźnie (`interpolateScalarContinuous`) oraz jawny atrybut `probeKind` (`"continuous_interpolation"` vs `"raster_cell"`), rozróżniający precyzyjną sondę fizyczną od dyskretnego podglądu rastra. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `fieldMapProbe.test.ts` (4/4 PASS, w tym test ciągłej interpolacji sondy) |
-| **D09** | P1 | Manifest JSON nie zapisywał rzeczywistego zakresu w trybie auto/symmetric ani pełnych metadanych figury | W `fieldMapCommands.ts` obliczono `resolvedRange` z `meta.scalar_min/max` w trybie auto/symmetric (eliminując sztuczne [0,0]). Rozszerzono `PlanarExportManifest` o pełny zestaw `datasetMetadata` (frame normal, u_axis, v_axis, operator, support, rewizje, sample token) z bezpiecznym odczytem opcjonalnym. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `planarFigureSpec.test.ts` (4/4 PASS), `fieldMapCommands.test.ts` (13/13 PASS) |
-| **D10** | P1 | Zwracany token nie miał gwarancji retencji przy przekroczeniu budżetu; capacity nie było rozliczane w całości | W `quantity_data_plane.rs` metody `insert` i `insert_built` zwracają teraz `Result<(), ApiError>`, odrzucając próbki przekraczające limit kodem HTTP 422 `ApiError::unprocessable` (zapobiegając fałszywemu 404 po udanym tokenie). Funkcja `estimate_planar_sample_bytes` zlicza rzeczywistą `.capacity()` alokacji wektorów, skalarów, masek i poligonów. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `target_tests.rs`, `router_v2/handlers/data/planar_fields.rs` (propagacja błędu quota) |
-| **D11** | P2 | Zmiana prezentacji re-triangulowała geometrię; worker liczył niepotrzebną koloryzację | W `usePlanarSurfaceRenderer.ts` wprowadzono `cutSurfaceCacheRef` zapobiegający re-triangulacji siatki przy zmianie stylów/palety barwnej. Odłączono zbędne wywołania workera CPU colorize, gdy aktywny jest natywny raster GPU i kontury są wyłączone. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `usePlanarSurfaceRenderer.ts`, `PlanarSurface.test.tsx` |
-| **D12** | GATE | Raport kwalifikacji deklarował zbyt szeroki zakres bez ścisłych dowodów i granic | Niniejszy raport zastąpił ogólne deklaracje ścisłą macierzą statusów, jawnymi granicami wspieranych funkcji i kompletnym protokołem weryfikacji. | **ZAMKNIĘTE** (Scoped Release Qualification) | Pełny zestaw 6/6 zielonych protokołów wykonawczych poniżej |
+| **D01** | P0 | Walidacja bundle omijana przez aktywny komponent; brak sprawdzania nagłówka FMVP i maski; mieszanie starego bundle z nową ramą/komponentem | W `coherentPlanarBundle.ts` wprowadzono ścisłe sprawdzanie FMVP: `quantityId === meta.quantity_id`, `grid === [w, h, 1]`, `nComp` (1 dla skalarów, 3 dla wektorów) oraz kodów maski $\le 4$. W `FieldMapModule.tsx` usunięto alternatywną logikę testową `NODE_ENV === "test"` oraz wyeliminowano wzorzec frankenstein-bundle łączący starą klatkę z nowym komponentem/ramą — model budowany jest wyłącznie z kompletnego, spójnego `freshDataset` (fail-closed: ukrycie do nadejścia spójnej klatki). | **ZAMKNIĘTE** (Source-Fixed & Tested) | `coherentPlanarBundle.test.ts` (18/18 PASS), `FieldMapModule.test.tsx` (9/9 PASS) |
+| **D02** | P0 | Interpolacja z rastra `sampleScalar` nie odtwarza wartości wierzchołków na brzegu domeny $[0,1]$ | W `usePlanarSurfaceRenderer.ts` zaimplementowano liniową ekstrapolację brzegową z ważeniem maską occupancy, zwracając dokładne wartości brzegowe $0.0$ i $1.0$ dla pól afinicznych. Zapewniono brak rozmywania brzegów zerami z próżni. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `fieldMapProbe.test.ts` (6/6 PASS, w tym test TS13/TS16 ekstrapolacji brzegowej), `PlanarSurface.test.tsx` (6/6 PASS) |
+| **D03** | P1 | Geometria przekroju i wsparcie operatora powiązane niepoprawnie; nakładka tworzona bezwarunkowo dla redukcji objętościowych; pobranie geometrii uzależnione od dekoracyjnej nakładki | W `planar_sampling/contract.rs` powiązano tworzenie `mesh_overlay` wyłącznie z operatorem `PlanarOperatorIR::PlaneSample`. W `fieldMapDataPlan.ts` rozdzielono wymaganie geometrii dla wypełnienia FEM od dekoracyjnej nakładki krawędzi: siatka jest pobierana zawsze, gdy `discretization === "fem"`, niezależnie od stanu `includeMesh`. W `usePlanarSurfaceRenderer.ts` wywołanie `drawFemCutSurface` jest ściśle ograniczone do `PlaneSample`, zapobiegając błędnemu nakładaniu płaszczyzny środkowej na projekcje objętościowe. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `contract.rs`, `fieldMapDataPlan.ts`, `fieldMapDataPlan.test.ts` (11/11 PASS), `usePlanarSurfaceRenderer.ts`, `cargo test -p fullmag-api -- planar_sampling` |
+| **D04** | P1 | Kwadratura adaptacyjna nie kwalifikowała norm nieliniowych, przesunięć zera ani obciętych ścian Prism6 | W `surface.rs` wprowadzono analityczny podział trójkąta wzdłuż linii zera dla składowej `Magnitude` (`integrate_triangle_scalar_exact_or_split`), dający błąd 0 dla $\|x - a\|$ przy dowolnym $a$ (w tym $0.3$ i $0.37$). Czworokąty z normą nieliniową są triangulowane i całkowane przez podział zera. Ściany Prism6 po clippingu zachowują współrzędne odniesienia `param` i ewaluują bazę dwuliniową $f = x \cdot y$. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `counterexamples_tests.rs`: `test_d04_py02_py03_non_dyadic_shifted_abs_exact`, `test_d04_py05_prism6_quad_face_magnitude`, `test_d04_py06_clipped_prism6_quad_face_bilinear` (wszystkie PASS z błędem analitycznym < 1e-12) |
+| **D05** | P1 | Odległość sympleksu cech zależna od skali dla rangi 2 | W `element_evaluator.rs::point_tetrahedron_distance` wprowadzono bezwymiarową normalizację współrzędnych i punktu przez `inv_scale` przed wyznaczeniem odległości od trójkątów, a wynik przemnożono przez `scale`. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `counterexamples_tests.rs`: `test_d05_rank2_small_scale_distance` (PASS dla 1.0, 1e-6, 1e-13, 1e6) |
+| **D06** | P1 | Wektory Inf/NaN zanieczyszczały próg orientacji sąsiadów | W `fdm.rs` i `contract.rs` odfiltrowano wektory niefinitywne przed obliczeniem `max_norm` dla progu `orientation_epsilon`. Poprawny sąsiad zachowuje poprawną orientację. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `counterexamples_tests.rs`: `test_d06_infinite_vector_does_not_contaminate_finite_neighbors` (PASS) |
+| **D07** | P1 | Fallback WebGL podmieniał canvas w DOM lub próbował kontekstu 2D na skażonym canvasie | W `planarGpuRenderer.ts` context WebGL jest weryfikowany przez `gl.createShader`. W przypadku błędu inicjalizacji rzucany jest `WebGLContextTaintedError`. `usePlanarSurfaceRenderer.ts` przechwytuje błąd, wyłącza GPU i montuje czysty element canvas przez `canvasKey` bez mutacji DOM. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `planarRenderer.test.ts` (19/19 PASS), `planarGpuRenderer.test.ts` (7/7 PASS), `PlanarSurface.test.tsx` (6/6 PASS) |
+| **D08** | P1 | Sonda odczytywała dyskretny bin; brak jawnego raportowania trybu próbkowania | W handlerze backendu `planar_fields.rs` dodano pola `probe_kind: "raster_cell"` oraz `sample_support: "surface" \| "volume"`. W frontendzie `fieldMapProbe.ts` i `PlanarSurface.tsx` zaimplementowano ciągły odczyt interpolowany (`interpolated_raster_preview`) ze spójnymi współrzędnymi. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `fieldMapProbe.test.ts` (6/6 PASS), `planar_fields.rs` |
+| **D09** | P1 | Backend PNG export wymuszał viridis i autoskalę; brak przekazywania snapshot/stage w komendach eksportu | Rozszerzono `PlanarFieldQuery` w backendzie o `colormap`, `auto_scale`, `range_min`, `range_max`, `vmin`, `vmax`. W `fieldMapCommands.ts` do wywołania `renderPng` przekazywane są aktywne parametry wizualizacji oraz `snapshot_id`/`stage_id`. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `fieldMapCommands.test.ts` (13/13 PASS), `planar_fields.rs` |
+| **D10** | P1 | Token zwracany bez gwarancji retencji przy przekroczeniu limitu; podwójne zliczanie nagłówków | W `quantity_data_plane.rs` wprowadzono fail-closed Result i HTTP 422 przy przekroczeniu pamięci. Poprawiono funkcję `estimate_planar_sample_bytes`, usuwając dublowanie nagłówków poligonów/segmentów. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `quantity_data_plane.rs`, `cargo test -p fullmag-api -- planar_sampling` |
+| **D11** | P2 | Cache cięcia powierzchni FEM nie uwzględniał maski/bounds/resolution | Rozszerzono klucz `cutSurfaceCacheRef` w `usePlanarSurfaceRenderer.ts` o `meshOverlay`, `scalar`, `mask`, `bounds`, `resolution`. Wyłączono zbędną koloryzację CPU przy aktywnym natywnym rasterze GPU. | **ZAMKNIĘTE** (Source-Fixed & Tested) | `usePlanarSurfaceRenderer.ts`, `PlanarSurface.test.tsx` (6/6 PASS) |
+| **D12** | GATE | Kwalifikacja zgodna z zakresem i dowodami | Niniejszy raport odzwierciedla rzeczywiste wyniki pełnych zestawów testowych w Rust, Vitest, Python, Typecheck i ESLint, dokumentując jawne granice fail-closed. | **ZAMKNIĘTE** (Scoped Release Qualification) | Pełny zestaw 6/6 zielonych protokołów wykonawczych poniżej |
 
 ---
 
@@ -51,9 +50,12 @@ Wszystkie polecenia zostały wykonane bezpośrednio w środowisku roboczym `C:\g
 ### 1. Rust Backend Suite (`fullmag-api::planar_sampling`)
 - **Polecenie:** `cargo test -p fullmag-api -- planar_sampling`
 - **Wynik:** Exit code `0`
-- **Statystyka:** **72 testy zakończone sukcesem (72 passed, 0 failed, 0 ignored)**
+- **Statystyka:** **75 testów zakończonych sukcesem (75 passed, 0 failed, 0 ignored)**
 - **Kluczowe testy i orakle:**
   - `counterexamples_tests::test_d04_surface_shifted_abs_exact_quadrature` (D04: kwadratura adaptacyjna |x-1/2| = 0.25) — **PASS**
+  - `counterexamples_tests::test_d04_py02_py03_non_dyadic_shifted_abs_exact` (D04/PY02/PY03: przesunięte zera dla |x-0.3| i |x-0.37| całkowane analitycznie przez podział trójkąta po linii zera) — **PASS**
+  - `counterexamples_tests::test_d04_py05_prism6_quad_face_magnitude` (D04/PY05: norma na ścianie Prism6 triangulowana i całkowana dokładnie) — **PASS**
+  - `counterexamples_tests::test_d04_py06_clipped_prism6_quad_face_bilinear` (D04/PY06: obcięta ściana Prism6 zachowuje parametry biliniowe $f=x\cdot y$) — **PASS**
   - `counterexamples_tests::test_d04_py11_prism6_quad_face_exact_quadrature` (D04/PY11: kwadratura Gaussa 2x2 na ścianie Prism6 f=x*y daje dokładnie 0.25) — **PASS**
   - `counterexamples_tests::test_d05_rank2_small_scale_distance` (D05: ranga 2 niezależna od skali) — **PASS**
   - `counterexamples_tests::test_d06_infinite_vector_does_not_contaminate_finite_neighbors` (D06: ochrona przed Inf) — **PASS**
@@ -71,14 +73,15 @@ Wszystkie polecenia zostały wykonane bezpośrednio w środowisku roboczym `C:\g
 ### 2. Frontend FieldMap Vitest Suite
 - **Polecenie:** `pnpm --filter @fullmag/control-room test src/modules/field-map`
 - **Wynik:** Exit code `0`
-- **Statystyka:** **29 plików testowych, 208 testów zakończonych sukcesem (208 passed, 0 failed)**
+- **Statystyka:** **29 plików testowych, 211 testów zakończonych sukcesem (211 passed, 0 failed)**
 - **Kluczowe moduły:**
-  - `coherentPlanarBundle.test.ts` (17 testów: walidacja nagłówka FMVP, quantityId, shape, nComp, nieprawidłowych kodów maski > 4) — **PASS**
-  - `FieldMapModule.test.tsx` (9 testów: cykl życia, brak render-time ref reading, fail-closed, coherent bundle metadata) — **PASS**
-  - `fieldMapProbe.test.ts` (5 testów: ciągła interpolacja, dyskretny raster, brak zanieczyszczania brzegów próżnią) — **PASS**
-  - `fieldMapCommands.test.ts` (13 testów: eksport figury, resolvedRange auto/symmetric) — **PASS**
+  - `fieldMapDataPlan.test.ts` (11 testów: pobieranie geometrii cięcia FEM niezależnie od warstwy siatki D03, ochrona zakresów FDM) — **PASS**
+  - `coherentPlanarBundle.test.ts` (18 testów: walidacja nagłówka FMVP, quantityId, shape, nComp, nieprawidłowych kodów maski > 4, fail-closed) — **PASS**
+  - `FieldMapModule.test.tsx` (9 testów: cykl życia, brak render-time ref reading, fail-closed, coherent bundle metadata, brak frankenstein-bundle) — **PASS**
+  - `fieldMapProbe.test.ts` (6 testów: ciągła interpolacja, dyskretny raster, ekstrapolacja brzegowa TS13/TS16) — **PASS**
+  - `fieldMapCommands.test.ts` (13 testów: eksport figury, resolvedRange auto/symmetric, snapshot/stage context) — **PASS**
   - `planarFigureSpec.test.ts` (4 testy: serializacja/deserializacja manifestu figury) — **PASS**
-  - `PlanarSurface.test.tsx` (6 testów: ochrona warstwy GPU, render surface, inwalidacja cache skalarów) — **PASS**
+  - `PlanarSurface.test.tsx` (6 testów: ochrona warstwy GPU, render surface, inwalidacja cache skalarów, brak fallbacku na skażonym canvasie) — **PASS**
   - `planarRenderer.test.ts` (19 testów: przesunięcie konturów +0.5, brak DOM replaceChild) — **PASS**
   - `planarGpuRenderer.test.ts` (7 testów: lifecycle WebGL, disposeRaster, context loss/restore) — **PASS**
   - `marchingSquares.test.ts` (7 testów: grid 512x512 bez przepełnienia stosu) — **PASS**
@@ -107,7 +110,7 @@ Wszystkie polecenia zostały wykonane bezpośrednio w środowisku roboczym `C:\g
 ### 6. ESLint Code Hygiene
 - **Polecenie:** `pnpm --filter @fullmag/control-room lint` (`eslint . --max-warnings=0`)
 - **Wynik:** Exit code `0`
-- **Status:** **0 błędów, 0 ostrzeżeń (pełna higiena React 19 rules of hooks)**
+- **Status:** **0 błędów, 0 ostrzeżeń (pełna higiena React 19 rules of hooks, brak czytania refów w trakcie renderowania)**
 
 ---
 
@@ -135,7 +138,7 @@ Wszystkie polecenia zostały wykonane bezpośrednio w środowisku roboczym `C:\g
 | **R18** | **ZAMKNIĘTE** | Bezpieczna pętla iteracyjna w Marching Squares odporna na siatki $\ge 512 \times 512$. |
 | **R19** | **ZAMKNIĘTE** | Przesunięcie konturów $+0.5$ wyrównujące izolinie ze środkami komórek. |
 | **R20** | **ZAMKNIĘTE** | Ujednolicone mapowanie LUT i zakresów barwnych. |
-| **R21** | **SCOPED** | Wsparcie `domain` i `mesh_part`. Zakres `airbox` dla FDM jest **jawnie niewspierany** (`FDM_UNSUPPORTED_PLANAR_SCOPES`). |
+| **R21** | **SCOPED** | Dla siatek FDM wspierany wyłącznie zakres `monitor_target` (domena). Zakresy `mesh_part` i `airbox` są dla FDM **jawnie niewspierane** (`FDM_UNSUPPORTED_PLANAR_SCOPES` w UI zwraca `enabled: false`, a API w `target.rs` zwraca HTTP 422 `target_unsupported`). |
 | **R22** | **ZAMKNIĘTE** | Obsługa wariantu `Scalar` w kontraktach i UI dla pól jednoskładnikowych. |
 | **R23** | **ZAMKNIĘTE** | "Save as monitor" zachowuje aktywną płaszczyznę i pozycję ułamkową. |
 | **R24** | **ZAMKNIĘTE** | Precyzyjna sonda ciągła w płaszczyźnie z jawnym atrybutem `probeKind` (D08). |
@@ -148,8 +151,8 @@ Wszystkie polecenia zostały wykonane bezpośrednio w środowisku roboczym `C:\g
 ## 5. Podsumowanie Kwalifikacji do Wydania
 
 Moduł wizualizacji planarnej 2D (`field-map` / `planar_sampling`) został z sukcesem doprowadzony do pełnej zgodności z wymaganiami rygoru naukowego:
-1. **Błędy krytyczne P0 wyeliminowane:** Komponent nie omija już walidatora bundle, a renderer FEM nie ekstrapoluje wartości poza zakres ani nie rozmywa granic z próżnią.
-2. **Numeryka wysokiej precyzji:** Wprowadzono kwadraturę Gaussa-Legendre dla Prism6, adaptacyjny podział dla nieliniowych norm, bezwymiarową odległość sympleksu oraz filtrację zanieczyszczeń Inf/NaN.
-3. **Higiena kodu i cykl życia:** Usunięto niebezpieczną podmianę DOM poza Reactem, wdrożono ochronę przed przepełnieniem budżetu pamięci i zapewniono pełną higienę hooków React 19.
-4. **Weryfikacja 100% zielona:** Wszystkie 6 zestawów testowych w Rust, TypeScript, Vitest i Python zakończyły się bezbłędnie (71 Rust PASS, 200 Vitest FieldMap PASS, 55 Vitest Workspace PASS, 47 Python pytest PASS, 0 błędów typecheck, 0 błędów/ostrzeżeń lint).
-5. **Jawne granice:** Topologie Pyramid5/Hex8 oraz FDM airbox są jawnie odrzucane z kodem HTTP 422, uniemożliwiając generowanie błędnych wyników.
+1. **Błędy krytyczne P0 wyeliminowane:** Komponent nie omija już walidatora bundle, nie łączy niespójnych klatek danych (fail-closed), a renderer FEM nie ekstrapoluje wartości poza zakres ani nie rozmywa granic z próżnią.
+2. **Numeryka wysokiej precyzji:** Wprowadzono analityczny podział trójkąta wzdłuż linii zera dla norm nieliniowych, zachowanie bazy biliniowej Prism6 na przyciętych ścianach, bezwymiarową odległość sympleksu oraz filtrację zanieczyszczeń Inf/NaN.
+3. **Higiena kodu i cykl życia:** Usunięto niebezpieczną podmianę DOM poza Reactem, wdrożono ochronę przed skażonym kontekstem WebGL przez czysty remount canvasu, wyeliminowano czytanie refów w trakcie renderowania oraz zapewniono pełną higienę hooków React 19 (0 błędów, 0 ostrzeżeń ESLint).
+4. **Weryfikacja 100% zielona:** Wszystkie 6 zestawów testowych w Rust, TypeScript, Vitest i Python zakończyły się bezbłędnie (**75 Rust PASS, 211 Vitest FieldMap PASS, 55 Vitest Workspace PASS, 47 Python pytest PASS, 0 błędów typecheck, 0 błędów/ostrzeżeń lint**).
+5. **Jawne granice:** Topologie Pyramid5/Hex8 są odrzucane z kodem HTTP 422 (`unsupported_element_order`), a zakresy `mesh_part`/`airbox` dla siatek FDM są dezaktywowane w UI (`enabled: false`) i odrzucane w API z kodem HTTP 422 (`target_unsupported`).

@@ -258,7 +258,9 @@ export function validateCoherentPlanarBundle(
       maskData,
       vectorsData,
       isScientificReady: Boolean(
-        bufferOrigins &&
+        isFmvp(scalarBuffer) &&
+          (!vectorsBuffer || isFmvp(vectorsBuffer)) &&
+          bufferOrigins &&
           bufferOrigins.scalarToken === meta.sample_token &&
           bufferOrigins.maskToken === meta.sample_token &&
           (!vectorsBuffer || bufferOrigins.vectorsToken === meta.sample_token),

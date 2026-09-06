@@ -296,18 +296,19 @@ fn estimate_planar_sample_bytes(result: &PlanarSampleResult) -> usize {
         result.occupancy.capacity() * std::mem::size_of::<crate::planar_sampling::Occupancy>();
     let source_ids = result.source_entity_ids.capacity() * std::mem::size_of::<Option<u32>>();
     let overlay = result.overlay.as_ref().map_or(0, |overlay| {
-        overlay
+        let heap_vertices = overlay
             .polygons
             .iter()
-            .map(|polygon| {
-                std::mem::size_of_val(polygon)
-                    + polygon.vertices_uv_m.capacity() * std::mem::size_of::<[f64; 2]>()
-            })
-            .sum::<usize>()
-            + overlay.polygons.capacity()
-                * std::mem::size_of::<crate::planar_sampling::PlanarOverlayPolygon>()
-            + overlay.segments.capacity()
-                * std::mem::size_of::<crate::planar_sampling::PlanarOverlaySegment>()
+            .map(|polygon| polygon.vertices_uv_m.capacity() * std::mem::size_of::<[f64; 2]>())
+            .sum::<usize>();
+        let polygons_capacity = overlay.polygons.capacity()
+            * std::mem::size_of::<crate::planar_sampling::PlanarOverlayPolygon>();
+        let segments_capacity = overlay.segments.capacity()
+            * std::mem::size_of::<crate::planar_sampling::PlanarOverlaySegment>();
+        std::mem::size_of::<crate::planar_sampling::PlanarMeshOverlay>()
+            + polygons_capacity
+            + heap_vertices
+            + segments_capacity
     });
     std::mem::size_of::<PlanarSampleResult>() + scalar + vectors + occupancy + source_ids + overlay
 }

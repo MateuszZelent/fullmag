@@ -312,6 +312,33 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           {
             ...query,
             sample_token: meta.sample_token,
+            colormap: planar.colormap,
+            auto_scale:
+              planar.range?.mode === "manual"
+                ? "manual"
+                : planar.range?.mode === "symmetric"
+                  ? "symmetric_zero"
+                  : "slice",
+            range_min:
+              planar.range?.mode === "manual" && typeof planar.range.min === "number"
+                ? planar.range.min
+                : undefined,
+            range_max:
+              planar.range?.mode === "manual" && typeof planar.range.max === "number"
+                ? planar.range.max
+                : undefined,
+            snapshot_id:
+              typeof (input as Record<string, unknown> | undefined)?.snapshotId === "string"
+                ? ((input as Record<string, unknown>).snapshotId as string)
+                : typeof (input as Record<string, unknown> | undefined)?.snapshot_id === "string"
+                  ? ((input as Record<string, unknown>).snapshot_id as string)
+                  : undefined,
+            stage_id:
+              typeof (input as Record<string, unknown> | undefined)?.stageId === "string"
+                ? ((input as Record<string, unknown>).stageId as string)
+                : typeof (input as Record<string, unknown> | undefined)?.stage_id === "string"
+                  ? ((input as Record<string, unknown>).stage_id as string)
+                  : undefined,
           },
         ),
       ]);

@@ -64,12 +64,58 @@ describe("coherentPlanarBundle", () => {
     },
   };
 
-  it("validates successfully when mandatory scalar and mask match resolution and origins match", () => {
+  function makeTestFmvp({
+    grid = [2, 2, 1] as [number, number, number],
+    nComp = 1,
+    quantityId = "m",
+    values = [1, 2, 3, 4],
+  }: {
+    grid?: [number, number, number];
+    nComp?: number;
+    quantityId?: string;
+    values?: number[];
+  } = {}): ArrayBuffer {
+    const buffer = new ArrayBuffer(48 + values.length * 8);
+    const view = new DataView(buffer);
+    for (const [index, code] of [..."FMVP"].entries()) {
+      view.setUint8(index, code.charCodeAt(0));
+    }
+    view.setUint8(4, 2);
+    view.setUint8(5, 1);
+    view.setUint8(6, nComp);
+    view.setUint32(12, values.length, true);
+    view.setUint32(16, grid[0], true);
+    view.setUint32(20, grid[1], true);
+    view.setUint32(24, grid[2], true);
+    new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+    new Float64Array(buffer, 48).set(values);
+    return buffer;
+  }
+
+  it("validates successfully when mandatory scalar and mask match resolution, but headerless scalar is NOT scientific ready (TS10)", () => {
     // 2x2 = 4 elements
     const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
     const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
 
     const res = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer, null, {
+      scalarToken: mockMeta.sample_token,
+      maskToken: mockMeta.sample_token,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.bundle.isScientificReady).toBe(false); // TS10: headerless is not scientific ready
+      expect(res.bundle.sampleToken).toBe("planar-sample-v3:test-token");
+      expect(res.bundle.resolution).toEqual([2, 2]);
+      expect(res.bundle.scalarData.length).toBe(4);
+      expect(res.bundle.maskData.length).toBe(4);
+    }
+  });
+
+  it("marks isScientificReady as true when scalar is FMVP and origins match (TS10)", () => {
+    const fmvpBuffer = makeTestFmvp();
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+
+    const res = validateCoherentPlanarBundle(mockMeta, fmvpBuffer, maskBuffer, null, {
       scalarToken: mockMeta.sample_token,
       maskToken: mockMeta.sample_token,
     });
@@ -213,34 +259,6 @@ describe("coherentPlanarBundle", () => {
       expect(res.reason).toContain("identity_mismatch");
     }
   });
-
-  function makeTestFmvp({
-    grid = [2, 2, 1] as [number, number, number],
-    nComp = 1,
-    quantityId = "m",
-    values = [1, 2, 3, 4],
-  }: {
-    grid?: [number, number, number];
-    nComp?: number;
-    quantityId?: string;
-    values?: number[];
-  } = {}): ArrayBuffer {
-    const buffer = new ArrayBuffer(48 + values.length * 8);
-    const view = new DataView(buffer);
-    for (const [index, code] of [..."FMVP"].entries()) {
-      view.setUint8(index, code.charCodeAt(0));
-    }
-    view.setUint8(4, 2);
-    view.setUint8(5, 1);
-    view.setUint8(6, nComp);
-    view.setUint32(12, values.length, true);
-    view.setUint32(16, grid[0], true);
-    view.setUint32(20, grid[1], true);
-    view.setUint32(24, grid[2], true);
-    new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
-    new Float64Array(buffer, 48).set(values);
-    return buffer;
-  }
 
   it("rejects FMVP scalar payload with mismatched quantityId (TS07)", () => {
     const fmvpBuffer = makeTestFmvp({ quantityId: "H_eff" }); // meta expects "m"

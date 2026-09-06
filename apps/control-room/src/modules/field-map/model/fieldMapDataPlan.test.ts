@@ -209,4 +209,21 @@ describe("field-map data plan", () => {
       v_m: -0.5,
     });
   });
+
+  it("requests mesh overlay for FEM discretization even when includeMesh is false", () => {
+    const plan = buildFieldMapDataPlan({
+      active: true,
+      component: "magnitude",
+      discretization: "fem",
+      includeMesh: false,
+      source: { kind: "default" },
+      quality: "interactive",
+      quantityId: "m",
+      resolution: [32, 32],
+      showVectors: false,
+      vectorBudget: 0,
+    });
+    expect(plan.requestMesh).toBe(true);
+    expect(plan.query.include_mesh).toBe(true);
+  });
 });

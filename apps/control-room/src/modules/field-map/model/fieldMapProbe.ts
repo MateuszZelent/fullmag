@@ -4,15 +4,21 @@ export interface ProbeFrame {
   vAxis: readonly [number, number, number];
 }
 
+export type PlanarProbeKind =
+  | "raster_cell"
+  | "raster_preview"
+  | "interpolated_raster_preview"
+  | "continuous_evaluation";
+
 export interface LocalProbeOptions {
   continuous?: boolean;
-  probeKind?: "raster_preview" | "continuous_evaluation";
+  probeKind?: PlanarProbeKind;
 }
 
 export interface LocalProbeResult {
   index: number;
   occupancy: string;
-  probeKind?: "raster_preview" | "continuous_evaluation";
+  probeKind?: PlanarProbeKind;
   requestedPoint?: [number, number];
   sampledPoint?: [number, number];
   value: number | null;
@@ -40,8 +46,8 @@ export function localProbe(
       occupancy: "outside_extent",
       value: null,
     };
-    if (options?.probeKind) {
-      res.probeKind = options.probeKind;
+    if (options?.probeKind || options?.continuous) {
+      res.probeKind = options?.probeKind ?? (options?.continuous ? "interpolated_raster_preview" : "raster_cell");
       res.requestedPoint = [u, v];
     }
     return res;
@@ -74,8 +80,8 @@ export function localProbe(
     const r0 = Math.max(0, Math.min(resolution[1] - 2, Math.floor(yCell)));
     const r1 = r0 + 1;
 
-    const fx = Math.max(0, Math.min(1, xCell - c0));
-    const fy = Math.max(0, Math.min(1, yCell - r0));
+    const fx = xCell - c0;
+    const fy = yCell - r0;
 
     const idx00 = r0 * resolution[0] + c0;
     const idx10 = r0 * resolution[0] + c1;
@@ -87,44 +93,65 @@ export function localProbe(
     const occ01 = isRenderablePlanarOccupancy(mask?.[idx01]);
     const occ11 = isRenderablePlanarOccupancy(mask?.[idx11]);
 
-    let weightSum = 0;
-    let valSum = 0;
+    if (occ00 && occ10 && occ01 && occ11) {
+      const v00 = values[idx00] ?? 0;
+      const v10 = values[idx10] ?? 0;
+      const v01 = values[idx01] ?? 0;
+      const v11 = values[idx11] ?? 0;
+      if (
+        Number.isFinite(v00) &&
+        Number.isFinite(v10) &&
+        Number.isFinite(v01) &&
+        Number.isFinite(v11)
+      ) {
+        const w00 = (1 - fx) * (1 - fy);
+        const w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy;
+        const w11 = fx * fy;
+        sampledValue = w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11;
+      }
+    } else {
+      const cfx = Math.max(0, Math.min(1, fx));
+      const cfy = Math.max(0, Math.min(1, fy));
+      let weightSum = 0;
+      let valSum = 0;
 
-    const w00 = (1 - fx) * (1 - fy);
-    if (occ00) {
-      const vVal = values[idx00] ?? 0;
-      if (Number.isFinite(vVal)) {
-        valSum += w00 * vVal;
-        weightSum += w00;
+      const w00 = (1 - cfx) * (1 - cfy);
+      if (occ00) {
+        const vVal = values[idx00] ?? 0;
+        if (Number.isFinite(vVal)) {
+          valSum += w00 * vVal;
+          weightSum += w00;
+        }
       }
-    }
-    const w10 = fx * (1 - fy);
-    if (occ10) {
-      const vVal = values[idx10] ?? 0;
-      if (Number.isFinite(vVal)) {
-        valSum += w10 * vVal;
-        weightSum += w10;
+      const w10 = cfx * (1 - cfy);
+      if (occ10) {
+        const vVal = values[idx10] ?? 0;
+        if (Number.isFinite(vVal)) {
+          valSum += w10 * vVal;
+          weightSum += w10;
+        }
       }
-    }
-    const w01 = (1 - fx) * fy;
-    if (occ01) {
-      const vVal = values[idx01] ?? 0;
-      if (Number.isFinite(vVal)) {
-        valSum += w01 * vVal;
-        weightSum += w01;
+      const w01 = (1 - cfx) * cfy;
+      if (occ01) {
+        const vVal = values[idx01] ?? 0;
+        if (Number.isFinite(vVal)) {
+          valSum += w01 * vVal;
+          weightSum += w01;
+        }
       }
-    }
-    const w11 = fx * fy;
-    if (occ11) {
-      const vVal = values[idx11] ?? 0;
-      if (Number.isFinite(vVal)) {
-        valSum += w11 * vVal;
-        weightSum += w11;
+      const w11 = cfx * cfy;
+      if (occ11) {
+        const vVal = values[idx11] ?? 0;
+        if (Number.isFinite(vVal)) {
+          valSum += w11 * vVal;
+          weightSum += w11;
+        }
       }
-    }
 
-    if (weightSum > 1e-6) {
-      sampledValue = valSum / weightSum;
+      if (weightSum > 1e-6) {
+        sampledValue = valSum / weightSum;
+      }
     }
   }
 
@@ -134,12 +161,11 @@ export function localProbe(
     value: sampledValue,
   };
   if (options) {
-    if (options.probeKind) res.probeKind = options.probeKind;
+    res.probeKind = options.probeKind ?? (options.continuous ? "interpolated_raster_preview" : "raster_cell");
     res.requestedPoint = [u, v];
-    res.sampledPoint = [
-      bounds[0] + (x + 0.5) * du,
-      bounds[2] + (y + 0.5) * dv,
-    ];
+    res.sampledPoint = options.continuous
+      ? [u, v]
+      : [bounds[0] + (x + 0.5) * du, bounds[2] + (y + 0.5) * dv];
   }
   return res;
 }
@@ -154,7 +180,7 @@ export function continuousPlanarProbe(
 ): LocalProbeResult {
   return localProbe(u, v, bounds, resolution, values, mask, {
     continuous: true,
-    probeKind: "continuous_evaluation",
+    probeKind: "interpolated_raster_preview",
   });
 }
 

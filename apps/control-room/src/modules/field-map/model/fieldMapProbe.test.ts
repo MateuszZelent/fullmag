@@ -86,4 +86,27 @@ describe("field-map probes", () => {
     // Must remain 10.0, not contaminated by 0.0 in col 1
     expect(probe.value).toBeCloseTo(10.0, 5);
   });
+
+  it("extrapolates linearly to domain boundaries without clamping to cell centers (TS13, TS16)", () => {
+    const n = 16;
+    const values = new Float64Array(n * n);
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        values[r * n + c] = (c + 0.5) / n;
+      }
+    }
+    const probeMin = localProbe(0.0, 0.5, [0, 1, 0, 1], [n, n], values, undefined, {
+      continuous: true,
+    });
+    expect(probeMin.probeKind).toBe("interpolated_raster_preview");
+    expect(probeMin.value).toBeCloseTo(0.0, 5);
+    expect(probeMin.sampledPoint).toEqual([0.0, 0.5]);
+
+    const probeMax = localProbe(1.0, 0.5, [0, 1, 0, 1], [n, n], values, undefined, {
+      continuous: true,
+    });
+    expect(probeMax.probeKind).toBe("interpolated_raster_preview");
+    expect(probeMax.value).toBeCloseTo(1.0, 5);
+    expect(probeMax.sampledPoint).toEqual([1.0, 0.5]);
+  });
 });

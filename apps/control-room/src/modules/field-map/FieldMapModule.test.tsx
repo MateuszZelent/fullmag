@@ -31,18 +31,48 @@ vi.mock("@/kernel/KernelContext", () => ({
   }),
 }));
 
-vi.mock("@/kernel/api/codecs", () => ({
-  decodeFieldVector: () => ({ values: new Float64Array([1]) }),
-}));
+function makeTestFmvp({
+  grid = [256, 128, 1] as [number, number, number],
+  nComp = 1,
+  quantityId = "m",
+  values = new Array(256 * 128).fill(1),
+}: {
+  grid?: [number, number, number];
+  nComp?: number;
+  quantityId?: string;
+  values?: number[];
+} = {}): ArrayBuffer {
+  const buffer = new ArrayBuffer(48 + values.length * 8);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, nComp);
+  view.setUint32(12, values.length, true);
+  view.setUint32(16, grid[0], true);
+  view.setUint32(20, grid[1], true);
+  view.setUint32(24, grid[2], true);
+  new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+  new Float64Array(buffer, 48).set(values);
+  return buffer;
+}
+
+const testFmvpBuffer = makeTestFmvp();
+const testMaskBuffer = new Uint8Array(256 * 128).fill(1).buffer;
 
 vi.mock("./model/fieldMapRenderModel", () => ({
   buildFieldMapRenderModel: (input: unknown) => {
     const override = mocks.renderModel(input);
     return override ?? {
+      bounds: (input as { bounds: unknown }).bounds,
       diagnostics: [],
       display: { axisUnit: "m", legendUnit: "A/m", probeScale: 1 },
+      frame: (input as { frame: unknown }).frame,
       layers: (input as { layers: unknown }).layers,
       range: null,
+      viewport: [0, 1, 0, 1],
     };
   },
   normalizePlanarColorRange: () => null,
@@ -77,6 +107,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       quality: "interactive",
       resolution_x: 256,
       resolution_y: 128,
+      sample_token: "planar-sample-v3:current",
       scope_kind: "monitor_target",
       vector_budget: 512,
     },
@@ -89,12 +120,17 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       ? {
           data: {
             canonical_unit: "A/m",
+            carrier_revision: "1",
+            component: "magnitude",
             etag: "meta-authoritative",
             field_backend: "fdm",
             field_device: "cpu",
             field_precision: "double",
             field_source: "live",
             field_revision: "4",
+            mesh_revision: "1",
+            quantity_id: "m",
+            scene_revision: "1",
             fold_count: 0,
             frame: {
               bounds_uv_m: [0, 1, 0, 1],
@@ -132,11 +168,13 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
         }
       : { data: null, error: null, status: "idle" };
   },
-  usePlanarMaskResource: () => ({ data: null, error: null, status: "idle" }),
+  usePlanarMaskResource: () => mocks.renderReady
+    ? { data: testMaskBuffer, error: null, status: "ready" }
+    : { data: null, error: null, status: "idle" },
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarProbeResource: () => ({ data: mocks.probeData, error: null, status: mocks.probeData ? "ready" : "idle" }),
   usePlanarScalarResource: () => mocks.renderReady
-    ? { data: { data: new ArrayBuffer(8), etag: "scalar-authoritative" }, error: null, status: "ready" }
+    ? { data: { data: testFmvpBuffer, etag: "scalar-authoritative" }, error: null, status: "ready" }
     : { data: null, error: null, status: "idle" },
   usePlanarVectorResource: () => ({ data: null, error: null, status: "idle" }),
 }));

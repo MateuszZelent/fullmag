@@ -72,6 +72,7 @@ export interface FieldMapRenderModelInput {
   vectorScale?: number;
   vectorStyle?: { color: string; colorMode: string; lengthMode: string; opacity: number; thickness: number };
   wireframeStyle?: { color: string; opacity: number };
+  operator?: { kind: string } | null;
   pointStyle?: { color: string; opacity: number; size: number };
   quantityId?: string;
   visible?: boolean;
@@ -96,6 +97,7 @@ export interface FieldMapRenderModel {
   mask: Uint8Array | null;
   meshOverlayDescriptor: FieldMapRenderModelInput["meshOverlayDescriptor"];
   meshOverlay: ArrayBuffer | null;
+  operator?: { kind: string } | null;
   rasterOpacity: number | null;
   range: { max: number; min: number } | null;
   resolution: readonly [number, number];
@@ -271,6 +273,7 @@ export function buildFieldMapRenderModel(
     mask: input.mask ?? null,
     meshOverlayDescriptor: input.meshOverlayDescriptor,
     meshOverlay: input.meshOverlay ?? null,
+    operator: input.operator ?? null,
     rasterOpacity: rasterOpacityValid ? rasterOpacity : null,
     range,
     resolution: input.resolution,

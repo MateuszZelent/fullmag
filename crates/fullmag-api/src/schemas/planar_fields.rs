@@ -42,6 +42,12 @@ pub struct PlanarFieldQuery {
     #[serde(default, with = "crate::schemas::decimal_u64::optional")]
     #[param(value_type = String)]
     pub expected_field_revision: Option<u64>,
+    pub colormap: Option<String>,
+    pub auto_scale: Option<String>,
+    pub range_min: Option<f64>,
+    pub range_max: Option<f64>,
+    pub vmin: Option<f64>,
+    pub vmax: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
@@ -199,6 +205,10 @@ pub struct PlanarFieldProbeResource {
     pub element_id: Option<u32>,
     pub occupancy: String,
     pub sampling_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_support: Option<String>,
 }
 
 impl From<&PlanarOperatorIR> for PlanarOperatorSchema {
