@@ -2780,11 +2780,23 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 bounds_by_name=bounds_by_name,
                 component_aware=component_aware_mesh_options,
             )
-            if recipe_fields:
-                existing = _strip_overridden_geometry_fields(
-                    list(mesh_options.size_fields), per_object_recipes
-                )
-                mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
+            existing = _strip_overridden_geometry_fields(
+                list(mesh_options.size_fields), per_object_recipes
+            )
+            mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
+        if (
+            surface_mesh_options.mesh_strategy is not None
+            and surface_mesh_options.mesh_strategy != mesh_options.mesh_strategy
+        ):
+            mesh_options = _dc_replace(
+                mesh_options,
+                mesh_strategy=surface_mesh_options.mesh_strategy,
+                through_thickness_elements=surface_mesh_options.through_thickness_elements,
+                sweep_direction=surface_mesh_options.sweep_direction,
+                through_thickness_distribution=surface_mesh_options.through_thickness_distribution,
+                through_thickness_element_ratio=surface_mesh_options.through_thickness_element_ratio,
+                through_thickness_symmetric=surface_mesh_options.through_thickness_symmetric,
+            )
         effective_airbox_target, effective_per_object_targets = _resolve_effective_shared_domain_targets(
             geometries,
             hints,
@@ -2897,6 +2909,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
                     if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
                         effective_hmax = float(vin)
+                if effective_per_object_targets:
+                    for obj_target in effective_per_object_targets.values():
+                        t_hmax = obj_target.get("hmax")
+                        if isinstance(t_hmax, (int, float)) and float(t_hmax) > effective_hmax:
+                            effective_hmax = float(t_hmax)
+                if per_object_recipes:
+                    for recipe in per_object_recipes.values():
+                        if recipe.hmax is not None and float(recipe.hmax) > effective_hmax:
+                            effective_hmax = float(recipe.hmax)
 
             latest_mesh_phase = "meshing"
             if single_geometry_occ_direct:
@@ -3160,13 +3181,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 bounds_by_name=bounds_by_name,
                                 component_aware=False,
                             )
-                            if recipe_fields:
-                                existing = _strip_overridden_geometry_fields(
-                                    list(mesh_options.size_fields), per_object_recipes
-                                )
-                                mesh_options = _dc_replace(
-                                    mesh_options, size_fields=recipe_fields + existing
-                                )
+                            existing = _strip_overridden_geometry_fields(
+                                list(mesh_options.size_fields), per_object_recipes
+                            )
+                            mesh_options = _dc_replace(
+                                mesh_options, size_fields=recipe_fields + existing
+                            )
                         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
                         if mesh_options.size_fields:
                             emit_progress(

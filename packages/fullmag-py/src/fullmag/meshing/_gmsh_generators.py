@@ -62,6 +62,7 @@ from ._gmsh_occ import (
     _scale_quality_report_volume,
     _scale_per_domain_quality_volume,
 )
+from ._gmsh_waveguides import add_arch_waveguide_to_occ
 
 _NO_OP_FIELD_SIZE = 1.0e22
 
@@ -557,8 +558,8 @@ def generate_difference_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=mesh.periodic_node_pairs,
-            quality=_scale_quality_report_volume(quality, volume_scale=SCALE**3),
-            per_domain_quality=_scale_per_domain_quality_volume(_pdq, volume_scale=SCALE**3),
+            quality=_scale_quality_report_volume(mesh.quality, volume_scale=SCALE**3),
+            per_domain_quality=_scale_per_domain_quality_volume(mesh.per_domain_quality, volume_scale=SCALE**3),
         )
     finally:  # pragma: no branch
         gmsh.finalize()
@@ -660,8 +661,8 @@ def _generate_csg_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=mesh.periodic_node_pairs,
-            quality=_scale_quality_report_volume(quality, volume_scale=SCALE**3),
-            per_domain_quality=_scale_per_domain_quality_volume(_pdq, volume_scale=SCALE**3),
+            quality=_scale_quality_report_volume(mesh.quality, volume_scale=SCALE**3),
+            per_domain_quality=_scale_per_domain_quality_volume(mesh.per_domain_quality, volume_scale=SCALE**3),
         )
     finally:  # pragma: no branch
         gmsh.finalize()

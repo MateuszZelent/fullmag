@@ -62,6 +62,7 @@ def _expected_metric_unit(metric_id: str) -> str | None:
             f"scaled_jacobian.{family}.v1",
             f"edge_aspect.{family}.v1",
             f"skewness.{family}.v1",
+            f"edge_length_uniformity.{family}.v1",
         }:
             return "1"
     return None
@@ -711,7 +712,7 @@ def verify_fmmq_v2(
             )
         family_name = entry.get("family")
         is_family_metric = metric_id.startswith(
-            ("signed_jacobian.", "scaled_jacobian.", "edge_aspect.", "skewness.")
+            ("signed_jacobian.", "scaled_jacobian.", "edge_aspect.", "skewness.", "edge_length_uniformity.")
         )
         if is_family_metric and family_name is None:
             raise FmmqFormatError(
@@ -956,6 +957,7 @@ def build_fmmq_v2_spec(
         metrics[f"scaled_jacobian.{family}.v1"] = {"values": np.asarray(raw["_scaled"][family], dtype="<f8"), "ordinals": ordinals, "unit": "1", "family": family}
         metrics[f"edge_aspect.{family}.v1"] = {"values": np.asarray(raw["_aspect"][family], dtype="<f8"), "ordinals": ordinals, "unit": "1", "family": family}
         metrics[f"skewness.{family}.v1"] = {"values": np.asarray(raw["_skew"][family], dtype="<f8"), "ordinals": ordinals, "unit": "1", "family": family}
+        metrics[f"edge_length_uniformity.{family}.v1"] = {"values": np.asarray(raw["_skew"][family], dtype="<f8"), "ordinals": ordinals, "unit": "1", "family": family}
     if adjacent_growth_report is not None and getattr(adjacent_growth_report, "evaluated_pair_count", 0):
         pair_ordinals = tuple(getattr(adjacent_growth_report, "pair_ordinals", ()))
         pair_ratios = tuple(getattr(adjacent_growth_report, "pair_ratios", ()))

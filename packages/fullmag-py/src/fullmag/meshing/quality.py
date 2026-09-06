@@ -737,14 +737,26 @@ def measure_adjacent_size_growth(
             scope_growth_rates.get(f"{l_fam}|marker:{l_mark}|role:{l_rol}")
             or scope_growth_rates.get(l_rol)
             or scope_growth_rates.get(str(l_mark))
-            or growth
         )
+        if r_l is None:
+            if resolved_growth_rate is not None:
+                r_l = growth
+            else:
+                raise ValueError(
+                    f"no growth rate defined for scope {l_fam}|marker:{l_mark}|role:{l_rol}"
+                )
         r_r = (
             scope_growth_rates.get(f"{r_fam}|marker:{r_mark}|role:{r_rol}")
             or scope_growth_rates.get(r_rol)
             or scope_growth_rates.get(str(r_mark))
-            or growth
         )
+        if r_r is None:
+            if resolved_growth_rate is not None:
+                r_r = growth
+            else:
+                raise ValueError(
+                    f"no growth rate defined for scope {r_fam}|marker:{r_mark}|role:{r_rol}"
+                )
         pair_rate = r_l if (l_mark == r_mark and l_rol == r_rol) else max(r_l, r_r)
         return pair_rate * (1.0 + tolerance_value)
 
@@ -829,8 +841,12 @@ def measure_adjacent_size_growth(
                 scope_growth_rates.get(scope)
                 or scope_growth_rates.get(s_role)
                 or scope_growth_rates.get(s_marker)
-                or growth
             )
+            if s_rate is None:
+                if resolved_growth_rate is not None:
+                    s_rate = growth
+                else:
+                    raise ValueError(f"no growth rate defined for scope {scope}")
         s_allowed = s_rate * (1.0 + tolerance_value)
         scopes.append(
             AdjacentSizeGrowthScope(

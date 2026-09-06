@@ -1637,9 +1637,17 @@ def _compute_layer_heights(
             return [1.0 / n_layers] * n_layers
         d_values = [min(i, n_layers - 1 - i) for i in range(n_layers)]
         if distribution == DISTRIBUTION_LINEAR:
-            raw = [1.0 + (ratio - 1.0) * (d / d_max) for d in d_values]
-            total = sum(raw)
-            res = [h / total for h in raw]
+            u_values = [d / d_max for d in d_values]
+            if ratio > 1.0:
+                scaled = [(1.0 - u) / ratio + u for u in u_values]
+            else:
+                scaled = [(1.0 - u) + ratio * u for u in u_values]
+            total = sum(scaled)
+            if not math.isfinite(total) or total <= 0.0:
+                raise ValueError(
+                    f"unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+                )
+            res = [s / total for s in scaled]
         elif distribution == DISTRIBUTION_EXPONENTIAL:
             log_r = math.log(ratio)
             ell = [d * log_r for d in d_values]
@@ -1651,22 +1659,23 @@ def _compute_layer_heights(
                     f"unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
                 )
             res = [s / total for s in scaled]
-            if any(h <= 0.0 or not math.isfinite(h) for h in res):
-                raise ValueError(
-                    f"layer height underflow: unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
-                )
         else:
             res = [1.0 / n_layers] * n_layers
-        return res
-
-    if distribution == DISTRIBUTION_LINEAR:
+    elif distribution == DISTRIBUTION_LINEAR:
         if n_layers == 1:
             return [1.0]
-        raw = [1.0 + (ratio - 1.0) * i / (n_layers - 1) for i in range(n_layers)]
-        total = sum(raw)
-        return [h / total for h in raw]
-
-    if distribution == DISTRIBUTION_EXPONENTIAL:
+        u_values = [i / (n_layers - 1) for i in range(n_layers)]
+        if ratio > 1.0:
+            scaled = [(1.0 - u) / ratio + u for u in u_values]
+        else:
+            scaled = [(1.0 - u) + ratio * u for u in u_values]
+        total = sum(scaled)
+        if not math.isfinite(total) or total <= 0.0:
+            raise ValueError(
+                f"unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+            )
+        res = [s / total for s in scaled]
+    elif distribution == DISTRIBUTION_EXPONENTIAL:
         log_r = math.log(ratio)
         ell = [i * log_r for i in range(n_layers)]
         max_ell = max(ell)
@@ -1677,14 +1686,23 @@ def _compute_layer_heights(
                 f"unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
             )
         res = [s / total for s in scaled]
-        if any(h <= 0.0 or not math.isfinite(h) for h in res):
-            raise ValueError(
-                f"layer height underflow: unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
-            )
-        return res
+    else:
+        res = [1.0 / n_layers] * n_layers
 
-    # Fallback: uniform
-    return [1.0 / n_layers] * n_layers
+    if any(h <= 0.0 or not math.isfinite(h) for h in res):
+        raise ValueError(
+            f"layer height underflow: unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+        )
+    cum = np.cumsum(np.r_[0.0, res])
+    if not math.isclose(float(cum[-1]), 1.0, rel_tol=1e-11, abs_tol=1e-14):
+        raise ValueError(
+            f"unrepresentable layer height distribution: cumulative sum mismatch for N={n_layers}, ratio={ratio}"
+        )
+    if np.any(np.diff(cum) <= 0.0):
+        raise ValueError(
+            f"unrepresentable layer height distribution: non-strictly-monotonic cumulative levels for N={n_layers}, ratio={ratio}"
+        )
+    return res
 
 
 # ---------------------------------------------------------------------------

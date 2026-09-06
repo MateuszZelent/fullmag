@@ -400,7 +400,7 @@ class MeshOptions:
         object.__setattr__(
             self,
             "optimize_iters",
-            int(parse_integer(self.optimize_iters, "/mesh_options/optimize_iters", minimum=1)),
+            int(parse_integer(self.optimize_iters, "/mesh_options/optimize_iters", minimum=0)),
         )
         for name in (
             "boundary_layer_count",
@@ -720,10 +720,10 @@ class SizeFieldData:
         h.flags.writeable = False
         object.__setattr__(self, "node_coords", coords)
         object.__setattr__(self, "h_values", h)
-        if coords.shape[0] == 0:
-            raise ValueError("node_coords and h_values must not be empty")
         if coords.ndim != 2 or coords.shape[1] != 3:
             raise ValueError("node_coords must have shape (N, 3)")
+        if coords.shape[0] == 0:
+            raise ValueError("node_coords and h_values must not be empty")
         if h.ndim != 1 or h.shape[0] != coords.shape[0]:
             raise ValueError("h_values must have shape (N,)")
         if not np.all(np.isfinite(coords)):
@@ -759,6 +759,7 @@ class MeshFacetBlockView:
 QUALIFIED_REALIZATION_FALLBACKS: frozenset[str] = frozenset({
     "swept_cylinder_to_hex8",
     "swept_cylinder_to_tet4",
+    "swept_cylinder_recombined_to_tet4",
     "swept_order_to_linear",
     "swept_layer_count_mismatch",
     "swept_to_free_tet",

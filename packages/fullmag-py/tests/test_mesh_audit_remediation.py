@@ -59,12 +59,15 @@ def test_a01_occ_retry_stl_concat_cell_markers() -> None:
     universe = {"mode": "manual", "size": [4e-6, 4e-6, 2e-6], "center": [0, 0, 0]}
 
     fallback_mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 0.2e-6]]),
-        cell_types=["tet4"],
-        cell_offsets=[0, 4],
-        cell_nodes=[0, 1, 2, 3],
-        cell_global_ordinals=[0],
-        element_markers=[1],
+        nodes=np.asarray([
+            [0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 0.2e-6],
+            [2e-6, 0.0, 0.0], [2e-6, 1e-6, 0.0], [2e-6, 0.0, 0.2e-6],
+        ]),
+        cell_types=["tet4", "tet4"],
+        cell_offsets=[0, 4, 8],
+        cell_nodes=[0, 1, 2, 3, 1, 4, 5, 6],
+        cell_global_ordinals=[0, 1],
+        element_markers=[1, 2],
         facet_types=[],
         facet_roles=[],
         facet_offsets=[0],
@@ -91,15 +94,16 @@ def test_a01_occ_retry_stl_concat_cell_markers() -> None:
                         with patch("fullmag.meshing.asset_pipeline._sanitize_surface_mesh_for_stl_export", side_effect=lambda m: m):
                             with patch("fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components", side_effect=RuntimeError("STL fail")):
                                 with patch("fullmag.meshing.gmsh_bridge.generate_mesh_from_file", return_value=fallback_mesh):
-                                    with patch("fullmag.meshing.asset_pipeline._match_geometry_bounds_to_source_markers", return_value={"A": 1, "B": 1}):
+                                    with patch("fullmag.meshing.asset_pipeline._match_geometry_bounds_to_source_markers", return_value={"A": 1, "B": 2}):
                                         mesh, region_markers, report = _realize_fem_domain_mesh_asset_from_components_impl(
                                             [boxA, boxB], hints, study_universe=universe
                                         )
                                         assert "conformal_occ_failed" in report.fallbacks_triggered
                                         assert "component_aware_import_failed" in report.fallbacks_triggered
                                         assert report.build_mode == "concatenated_stl_fallback"
-                                        assert len(mesh.element_markers) == 1
-                                        assert mesh.element_markers[0] in {1, 2}
+                                        assert len(mesh.element_markers) == 2
+                                        assert list(mesh.element_markers) == [1, 2]
+                                        assert {rm["geometry_name"]: rm["marker"] for rm in region_markers} == {"A": 1, "B": 2}
 
 
 def test_a02_result_mesh_identity_mismatch_raises_mesh_validation_error() -> None:
@@ -629,27 +633,32 @@ def test_a18_prism_exact_n_declared_and_free_tetra_not_pretending() -> None:
 # ===================================================================
 
 def test_a19_growth_rate_measurement_on_sample_mesh() -> None:
-    """A19: measure_adjacent_size_growth calculates ratio accurately."""
+    """A19: measure_adjacent_size_growth calculates ratio accurately across threshold."""
+    # Two face-neighbor pairs with size ratio sqrt(5/2) ~ 1.581.
+    pair = np.asarray([
+        [0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [0., 0., -2.],
+    ])
     mesh = MeshData(
-        nodes=np.asarray([
-            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
-            [1.0, 1.0, 1.0]
-        ]),
+        nodes=pair,
         cell_types=["tet4", "tet4"],
         cell_offsets=[0, 4, 8],
-        cell_nodes=[0, 1, 2, 3, 1, 2, 3, 4],
+        cell_nodes=[0, 1, 2, 3, 0, 2, 1, 4],
         cell_global_ordinals=[0, 1],
         element_markers=[1, 1],
-        facet_types=[],
-        facet_roles=[],
-        facet_offsets=[0],
-        facet_nodes=[],
-        boundary_markers=[],
-        facet_global_ordinals=[],
+        facet_types=[], facet_roles=[], facet_offsets=[0], facet_nodes=[],
+        boundary_markers=[], facet_global_ordinals=[],
     )
-    report = measure_adjacent_size_growth(mesh, resolved_growth_rate=2.0)
-    assert report.evaluated_pair_count == 1
-    assert report.is_valid
+    # Ratio is ~1.581. Under rate 1.4: violation!
+    report_strict = measure_adjacent_size_growth(mesh, resolved_growth_rate=1.4)
+    assert report_strict.evaluated_pair_count == 1
+    assert not report_strict.is_valid
+    assert report_strict.violation_count == 1
+
+    # Under rate 1.8: valid!
+    report_lenient = measure_adjacent_size_growth(mesh, resolved_growth_rate=1.8)
+    assert report_lenient.evaluated_pair_count == 1
+    assert report_lenient.is_valid
+    assert report_lenient.violation_count == 0
 
 
 def test_a20_growth_rate_separate_ranges_and_anisotropy() -> None:
@@ -725,15 +734,18 @@ def test_a22_consistent_duplicate_growth_allowed_conflicting_rejected() -> None:
         _mesh_result_payload(mesh, mesh_name="m", generation_mode="fem", mesh_provenance={"growth_rate": 1.3, "maximum_element_growth_rate": 2.0})
 
 
-def test_a23_preset_per_geometry_recipes_airbox_resolve_growth_gate() -> None:
-    """A23: Presets resolve growth rate for the gate."""
-    mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0]]),
-        cell_types=["tet4", "tet4"],
-        cell_offsets=[0, 4, 8],
-        cell_nodes=[0, 1, 2, 3, 1, 2, 3, 4],
-        cell_global_ordinals=[0, 1],
-        element_markers=[1, 1],
+def _two_region_pairs_fixture() -> MeshData:
+    pair = np.asarray([
+        [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -2.0],
+    ])
+    nodes = np.vstack([pair, pair + [10.0, 0.0, 0.0]])
+    return MeshData(
+        nodes=nodes,
+        cell_types=["tet4"] * 4,
+        cell_offsets=[0, 4, 8, 12, 16],
+        cell_nodes=[0, 1, 2, 3, 0, 2, 1, 4, 5, 6, 7, 8, 5, 7, 6, 9],
+        cell_global_ordinals=[0, 1, 2, 3],
+        element_markers=[1, 1, 2, 2],
         facet_types=[],
         facet_roles=[],
         facet_offsets=[0],
@@ -741,28 +753,95 @@ def test_a23_preset_per_geometry_recipes_airbox_resolve_growth_gate() -> None:
         boundary_markers=[],
         facet_global_ordinals=[],
     )
-    payload = _mesh_result_payload(mesh, mesh_name="m", generation_mode="fem", mesh_provenance={"size_preset": "fine"})
-    assert "mesh_provenance" in payload
+
+
+def test_a23_preset_per_geometry_recipes_airbox_resolve_growth_gate() -> None:
+    """A23: Presets, per_geometry, and recipes resolve growth rate for the gate."""
+    mesh = _two_region_pairs_fixture()
+    regions = [
+        {"geometry_name": "film_A", "marker": 1},
+        {"geometry_name": "film_B", "marker": 2},
+    ]
+    # 1. Presets resolve growth gate:
+    # "coarse" preset has growth_rate 1.8 >= 1.581 -> accepts
+    payload_coarse = _mesh_result_payload(
+        mesh, mesh_name="m", generation_mode="fem",
+        mesh_provenance={"size_preset": "coarse"},
+    )
+    assert "mesh_provenance" in payload_coarse
+
+    # "fine" preset has growth_rate 1.5 < 1.581 -> rejects
+    with pytest.raises(MeshGrowthValidationError):
+        _mesh_result_payload(
+            mesh, mesh_name="m", generation_mode="fem",
+            mesh_provenance={"size_preset": "fine"},
+        )
+
+    # 2. Named per_geometry with growth_rate 1.4 rejects mesh with ratio ~1.581:
+    with pytest.raises(MeshGrowthValidationError):
+        _mesh_result_payload(
+            mesh, mesh_name="m", generation_mode="fem",
+            mesh_provenance={
+                "per_geometry": [
+                    {"geometry": "film_A", "growth_rate": 1.4},
+                    {"geometry": "film_B", "growth_rate": 2.0},
+                ]
+            },
+            region_markers=regions,
+        )
+
+    # 3. Named per_geometry with growth_rate 1.8 accepts mesh with ratio ~1.581:
+    payload_ok = _mesh_result_payload(
+        mesh, mesh_name="m", generation_mode="fem",
+        mesh_provenance={
+            "per_geometry": [
+                {"geometry": "film_A", "growth_rate": 1.8},
+                {"geometry": "film_B", "growth_rate": 2.0},
+            ]
+        },
+        region_markers=regions,
+    )
+    assert "mesh_provenance" in payload_ok
+
+    # 4. Effective per-object recipe targets resolve growth gate and reject when exceeded:
+    with pytest.raises(MeshGrowthValidationError):
+        _mesh_result_payload(
+            mesh, mesh_name="m", generation_mode="fem",
+            region_markers=regions,
+            mesh_provenance={
+                "effective_per_object_targets": {
+                    "film_A": {"growth_rate": 1.4},
+                    "film_B": {"growth_rate": 2.0},
+                }
+            },
+        )
 
 
 def test_a24_regional_growth_policies_not_collapsed_to_global_minimum() -> None:
     """A24: Two legally different regional policies are not collapsed to one global rate."""
-    mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0]]),
-        cell_types=["tet4", "tet4"],
-        cell_offsets=[0, 4, 8],
-        cell_nodes=[0, 1, 2, 3, 1, 2, 3, 4],
-        cell_global_ordinals=[0, 1],
-        element_markers=[1, 2],
-        facet_types=[],
-        facet_roles=[],
-        facet_offsets=[0],
-        facet_nodes=[],
-        boundary_markers=[],
-        facet_global_ordinals=[],
-    )
-    report = measure_adjacent_size_growth(mesh, scope_growth_rates={"1": 1.4, "2": 2.0})
-    assert report.is_valid
+    mesh = _two_region_pairs_fixture()
+    # Ratio is ~1.581 in both region 1 and region 2.
+    # Case 1: Scope 1 is strict (1.4), Scope 2 is lenient (2.0) -> violation in Scope 1 only
+    report1 = measure_adjacent_size_growth(mesh, scope_growth_rates={"1": 1.4, "2": 2.0})
+    assert not report1.is_valid
+    assert report1.violation_count == 1
+    # Verify exactly scope 1 violated, scope 2 did not
+    scope_viols1 = {s.scope: s.violation_count for s in report1.scopes}
+    assert any("marker:1" in k and v > 0 for k, v in scope_viols1.items())
+    assert any("marker:2" in k and v == 0 for k, v in scope_viols1.items())
+
+    # Case 2: Scope 1 is lenient (2.0), Scope 2 is strict (1.4) -> violation in Scope 2 only
+    report2 = measure_adjacent_size_growth(mesh, scope_growth_rates={"1": 2.0, "2": 1.4})
+    assert not report2.is_valid
+    assert report2.violation_count == 1
+    scope_viols2 = {s.scope: s.violation_count for s in report2.scopes}
+    assert any("marker:1" in k and v == 0 for k, v in scope_viols2.items())
+    assert any("marker:2" in k and v > 0 for k, v in scope_viols2.items())
+
+    # Case 3: Both scopes are lenient (1.8 >= 1.581) -> perfectly valid
+    report3 = measure_adjacent_size_growth(mesh, scope_growth_rates={"1": 1.8, "2": 1.8})
+    assert report3.is_valid
+    assert report3.violation_count == 0
 
 
 def test_a25_rejected_growth_mesh_does_not_publish_topology_or_artifacts() -> None:
@@ -911,16 +990,55 @@ def test_a26_volume_analytical_equals_si_nodes_equals_quality_report() -> None:
 
 
 def test_a27_per_element_alignment_preserved_under_reordering() -> None:
-    """A27: Per-element volume array length matches element count."""
-    rep = _make_quality_report(
-        volume_min=1e18, volume_max=1e18, volume_mean=1e18, volume_std=0.0,
-        element_volume=[1e18, 1e18, 1e18],
-        sicn_min=0.5, gamma_min=0.5,
+    """A27: Quality channels aligned by element tags and preserved under SI conversion."""
+    from fullmag.meshing._gmsh_extraction import (
+        GmshQualityExtractionError,
+        _align_quality_report_to_element_tags,
+    )
+
+    # Raw report comes out of Gmsh in scrambled element order [103, 101, 102]
+    base_rep = _make_quality_report(
+        volume_min=1e18,
+        volume_max=3e18,
+        volume_mean=2e18,
+        volume_std=float(np.std([1e18, 2e18, 3e18])),
+        element_volume=[3e18, 1e18, 2e18],
+        sicn_min=0.5,
+        gamma_min=0.7,
         n_elements=3,
     )
-    scaled = _scale_quality_report_volume(rep, volume_scale=1e18)
+    raw_rep = replace(
+        base_rep,
+        element_tags=[103, 101, 102],
+        element_sicn=[0.7, 0.5, 0.6],
+        element_gamma=[0.9, 0.7, 0.8],
+    )
+    # Extracted MeshData has canonical element order [101, 102, 103]
+    extracted_tags = [101, 102, 103]
+    aligned_rep = _align_quality_report_to_element_tags(raw_rep, extracted_tags)
+    assert aligned_rep is not None
+    assert aligned_rep.element_tags == [101, 102, 103]
+    assert aligned_rep.element_volume == [1e18, 2e18, 3e18]
+    assert aligned_rep.element_sicn == [0.5, 0.6, 0.7]
+    assert aligned_rep.element_gamma == [0.7, 0.8, 0.9]
+
+    # After SI scaling by 1e18:
+    scaled = _scale_quality_report_volume(aligned_rep, volume_scale=1e18)
     assert scaled is not None
-    assert len(scaled.element_volume) == 3
+    assert scaled.element_tags == [101, 102, 103]
+    np.testing.assert_allclose(scaled.element_volume, [1.0, 2.0, 3.0], rtol=1e-12)
+    assert scaled.element_sicn == [0.5, 0.6, 0.7]
+    assert scaled.element_gamma == [0.7, 0.8, 0.9]
+
+    # Negative case 1: duplicate element tags raise GmshQualityExtractionError
+    dup_rep = replace(raw_rep, element_tags=[101, 101, 102])
+    with pytest.raises(GmshQualityExtractionError, match="duplicates"):
+        _align_quality_report_to_element_tags(dup_rep, extracted_tags)
+
+    # Negative case 2: tag set mismatch raises GmshQualityExtractionError
+    mismatch_rep = replace(raw_rep, element_tags=[104, 101, 102])
+    with pytest.raises(GmshQualityExtractionError, match="tag sets differ"):
+        _align_quality_report_to_element_tags(mismatch_rep, extracted_tags)
 
 
 def test_a28_per_domain_and_global_scalar_volume_and_std_scaled_sicn_gamma_unscaled() -> None:
@@ -967,20 +1085,36 @@ def test_a31_symmetric_layer_ratio_exact_definition() -> None:
 
 
 def test_a32_large_n_and_r_log_weights_prevent_overflow_and_detect_underflow() -> None:
-    """A32: Large N and r use log-weights to prevent overflow, and detect float64 underflow."""
-    # 1. N=2049, r=2.0 (exponential): previously failed with OverflowError, now succeeds with log-weights
-    heights = _compute_layer_heights(2049, "exponential", element_ratio=2.0, symmetric=True)
-    assert len(heights) == 2049
+    """A32: Large N and r use log-weights to prevent overflow, and detect unrepresentable distributions."""
+    # 1. Representable large N (e.g. N=51, r=2.0 exponential): succeeds with log-weights
+    heights = _compute_layer_heights(51, "exponential", element_ratio=2.0, symmetric=True)
+    assert len(heights) == 51
     assert all(h > 0.0 and math.isfinite(h) for h in heights)
     assert math.isclose(sum(heights), 1.0, rel_tol=1e-12)
     # Check symmetry
     assert math.isclose(heights[0], heights[-1], rel_tol=1e-12)
-    assert math.isclose(heights[100], heights[2049 - 1 - 100], rel_tol=1e-12)
+    assert math.isclose(heights[10], heights[51 - 1 - 10], rel_tol=1e-12)
+    assert np.all(np.diff(np.r_[0.0, np.cumsum(heights)]) > 0.0)
 
-    # 2. N=2500, r=2.0 (exponential): d_max = 1249 -> exp(-1249*ln(2)) underflows in float64
-    # Must raise typed ValueError detecting underflow instead of producing zeros, NaNs, or silent uniform fallback
-    with pytest.raises(ValueError, match="layer height underflow: unrepresentable layer height distribution"):
+    # 2. Mathematically valid but float64-unrepresentable distributions fail closed with ValueError:
+    # N=2049 has non-increasing cumulative heights due to float64 precision limit:
+    with pytest.raises(ValueError, match="unrepresentable layer height distribution"):
+        _compute_layer_heights(2049, "exponential", element_ratio=2.0, symmetric=True)
+
+    # N=2500 has underflow in raw exponential weights:
+    with pytest.raises(ValueError, match="unrepresentable layer height distribution"):
         _compute_layer_heights(2500, "exponential", element_ratio=2.0, symmetric=True)
+
+    # 3. Extreme linear ratios: ratio=1e308 and ratio=1e-30 must either produce strictly monotonic positive heights or raise ValueError
+    for extreme_r in (1e308, 1e-30):
+        try:
+            h_lin = _compute_layer_heights(4, "linear", element_ratio=extreme_r, symmetric=True)
+            assert len(h_lin) == 4
+            assert all(h > 0.0 and math.isfinite(h) for h in h_lin)
+            assert np.all(np.diff(np.r_[0.0, np.cumsum(h_lin)]) > 0.0)
+            assert math.isclose(sum(h_lin), 1.0, rel_tol=1e-12)
+        except ValueError as exc:
+            assert "unrepresentable" in str(exc)
 
 
 def test_a33_cumulative_heights_strictly_monotonic_final_one() -> None:
@@ -1127,9 +1261,10 @@ def test_a36_geometric_size_profile_limit_g_to_one() -> None:
 # ===================================================================
 
 def test_a37_swept_box_size_factor_affects_in_plane_not_layers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A37: size_factor configures MeshSizeFactor without altering n_layers."""
+    """A37: size_factor configures MeshSizeFactor and refines in-plane without altering n_layers."""
     from fullmag.meshing import _gmsh_swept
 
+    # 1. Verify option setter configuration via mock
     calls: list[tuple[str, object]] = []
 
     class StopExtrude(Exception):
@@ -1170,6 +1305,24 @@ def test_a37_swept_box_size_factor_affects_in_plane_not_layers(monkeypatch: pyte
     with pytest.raises(StopExtrude):
         _gmsh_swept.generate_swept_box_mesh((10e-9, 10e-9, 2e-9), hmax=5e-9, n_layers=2, airbox=None, options=opts)
     assert ("Mesh.MeshSizeFactor", 0.6) in calls
+
+    # 2. Native verification: compare size_factor=1.0 vs size_factor=0.5
+    monkeypatch.undo()
+    mesh1 = _gmsh_swept.generate_swept_box_mesh(
+        (100e-9, 100e-9, 10e-9), hmax=50e-9, n_layers=2, airbox=None,
+        options=MeshOptions(size_factor=1.0),
+    )
+    mesh2 = _gmsh_swept.generate_swept_box_mesh(
+        (100e-9, 100e-9, 10e-9), hmax=50e-9, n_layers=2, airbox=None,
+        options=MeshOptions(size_factor=0.5),
+    )
+    z_planes1 = np.unique(np.round(mesh1.nodes[:, 2], 12))
+    z_planes2 = np.unique(np.round(mesh2.nodes[:, 2], 12))
+    # Exact layer count: 2 layers = 3 z planes for both
+    assert len(z_planes1) == 3
+    assert len(z_planes2) == 3
+    # In-plane mesh size refined: mesh2 has more nodes than mesh1
+    assert len(mesh2.nodes) > len(mesh1.nodes)
 
 
 def test_a38_no_fields_branch_applies_resolved_options_no_reset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1325,8 +1478,8 @@ def test_a40_unsupported_swept_options_rejected_with_reason() -> None:
 # ===================================================================
 
 def test_a41_bulk_override_removes_old_bulk_before_min() -> None:
-    """A41: Overriding bulk field strips old bulk before Min stack."""
-    box = Box(size=(1e-6, 1e-6, 0.2e-6), name="mag")
+    """A41: Overriding bulk field strips old bulk before Min stack (unit and end-to-end)."""
+    # 1. Unit check: _strip_overridden_workflow_fields
     fields = [
         {"kind": "Box", "role": "bulk", "owner": "mag", "params": {"VIn": 5e-9}},
         {"kind": "Box", "role": "hotspot", "owner": "mag", "params": {"VIn": 2e-9}},
@@ -1335,6 +1488,42 @@ def test_a41_bulk_override_removes_old_bulk_before_min() -> None:
     roles = [f["role"] for f in cleaned]
     assert "bulk" not in roles
     assert "hotspot" in roles
+
+    # 2. End-to-end pipeline check: recipe coarsening strips old workflow bulk even when recipe emits no new field
+    from unittest.mock import patch
+    from fullmag.meshing import _gmsh_occ as occ
+    from fullmag.meshing import asset_pipeline as assets
+
+    captured: dict[str, Any] = {}
+
+    class StopAtOcc(BaseException):
+        pass
+
+    def capture_occ(*args: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        raise StopAtOcc()
+
+    with patch.object(occ, "generate_shared_domain_mesh_via_occ", side_effect=capture_occ):
+        with pytest.raises(StopAtOcc):
+            assets._realize_fem_domain_mesh_asset_from_components_impl(
+                [Box(4e-6, 4e-6, 2e-6, name="mag")],
+                fm.FEM(order=1, hmax=1e-6),
+                study_universe={
+                    "mode": "manual", "size": [12e-6, 12e-6, 12e-6],
+                    "center": [0.0, 0.0, 0.0], "airbox_hmax": 1e-6,
+                },
+                mesh_workflow={"per_geometry": [{"geometry": "mag", "hmax": 0.5e-6}]},
+                per_object_recipes={"mag": PerObjectMeshRecipe(hmax=2e-6)},
+            )
+    eff_fields = captured["options"].size_fields
+    obsolete_bulk = [
+        f for f in eff_fields
+        if f.get("role") == "bulk"
+        and f.get("params", {}).get("GeometryName") == "mag"
+        and f.get("params", {}).get("VIn") == 0.5e-6
+    ]
+    assert not obsolete_bulk
+    assert captured["hmax"] >= 2e-6
 
 
 def test_a42_recipe_change_preserves_second_object() -> None:
@@ -1361,10 +1550,71 @@ def test_a43_independent_hotspot_survives_bulk_change() -> None:
 
 
 def test_a44_box_field_metadata_stripped_for_native_gmsh() -> None:
-    """A44: GeometryName, role, owner are in _METADATA_PARAMS to avoid native Gmsh rejection."""
+    """A44: GeometryName, role, owner, etc. are stripped before native Gmsh field setters."""
+    from fullmag.meshing._gmsh_fields import _METADATA_PARAMS, _apply_mesh_options
+
     assert "GeometryName" in _METADATA_PARAMS
     assert "role" in _METADATA_PARAMS
     assert "owner" in _METADATA_PARAMS
+    assert "origin" in _METADATA_PARAMS
+    assert "priority" in _METADATA_PARAMS
+
+    string_calls: list[tuple[int, str, str]] = []
+    number_calls: list[tuple[int, str, float]] = []
+
+    class MockMeshField:
+        @staticmethod
+        def add(kind: str) -> int: return 42
+        @staticmethod
+        def setString(fid: int, key: str, val: str) -> None: string_calls.append((fid, key, val))
+        @staticmethod
+        def setNumber(fid: int, key: str, val: float) -> None: number_calls.append((fid, key, val))
+        @staticmethod
+        def setNumbers(fid: int, key: str, val: list) -> None: pass
+        @staticmethod
+        def setAsBackgroundMesh(fid: int) -> None: pass
+
+    class MockGmsh:
+        model = type("M", (), {
+            "mesh": type("Me", (), {"field": MockMeshField()})(),
+            "occ": type("O", (), {"synchronize": lambda: None})(),
+        })()
+        option = type("Opt", (), {
+            "setNumber": lambda *a: None,
+            "getNumber": lambda *a: 1.0,
+            "setString": lambda *a: None,
+        })()
+
+    opts = MeshOptions(
+        size_fields=[{
+            "kind": "Box",
+            "params": {
+                "VIn": 1e-9,
+                "VOut": 2e-9,
+                "XMin": 0.0,
+                "XMax": 1e-6,
+                "YMin": 0.0,
+                "YMax": 1e-6,
+                "ZMin": 0.0,
+                "ZMax": 1e-6,
+                "GeometryName": "mag",
+                "role": "bulk",
+                "owner": "mag",
+                "origin": "workflow",
+                "priority": 1,
+            },
+        }]
+    )
+    _apply_mesh_options(MockGmsh(), hmax=1.0, order=1, opts=opts, hscale=1.0)
+    passed_string_keys = {key for _, key, _ in string_calls}
+    passed_number_keys = {key for _, key, _ in number_calls}
+    assert "GeometryName" not in passed_string_keys
+    assert "role" not in passed_string_keys
+    assert "owner" not in passed_string_keys
+    assert "origin" not in passed_string_keys
+    assert "priority" not in passed_number_keys
+    assert "VIn" in passed_number_keys
+    assert "VOut" in passed_number_keys
 
 
 # ===================================================================
@@ -1423,7 +1673,7 @@ def test_a46_auto_direction_allows_different_axis_explicit_direction_requires_ex
 
 def test_a47_from_dict_and_constructor_enforce_qualified_fallback() -> None:
     """A47: from_dict and constructor enforce QUALIFIED_REALIZATION_FALLBACKS."""
-    # Arbitrary fallback string rejected
+    # 1. Arbitrary fallback string rejected by constructor
     with pytest.raises(ValueError, match="unknown realization fallback"):
         MeshRealizationReport(
             requested_topology="prism6",
@@ -1437,6 +1687,54 @@ def test_a47_from_dict_and_constructor_enforce_qualified_fallback() -> None:
             requested_direction="auto",
             fallbacks_triggered=("arbitrary_fallback",),
         )
+
+    # 2. Arbitrary fallback string rejected by from_dict
+    payload_invalid = {
+        "schema_version": "mesh_realization_report.v1",
+        "requested_topology": "prism6",
+        "resolved_topology": "tet4",
+        "requested_layers": 3,
+        "resolved_layers": 3,
+        "requested_axis": "z",
+        "resolved_axis": "z",
+        "requested_order": 1,
+        "resolved_order": 1,
+        "requested_direction": "auto",
+        "fallbacks_triggered": ["arbitrary_fallback"],
+    }
+    with pytest.raises(ValueError, match="unknown realization fallback"):
+        MeshRealizationReport.from_dict(payload_invalid)
+
+    # 3. Qualified fallback "swept_cylinder_recombined_to_tet4" accepted by both constructor and from_dict
+    payload_valid = {
+        "schema_version": "mesh_realization_report.v1",
+        "requested_topology": "hex8",
+        "resolved_topology": "tet4",
+        "requested_layers": 2,
+        "resolved_layers": 2,
+        "requested_axis": "z",
+        "resolved_axis": "z",
+        "requested_order": 1,
+        "resolved_order": 1,
+        "requested_direction": "auto",
+        "fallbacks_triggered": ["swept_cylinder_recombined_to_tet4"],
+    }
+    rep_from_dict = MeshRealizationReport.from_dict(payload_valid)
+    assert "swept_cylinder_recombined_to_tet4" in rep_from_dict.fallbacks_triggered
+
+    rep_direct = MeshRealizationReport(
+        requested_topology="hex8",
+        resolved_topology="tet4",
+        requested_layers=2,
+        resolved_layers=2,
+        requested_axis="z",
+        resolved_axis="z",
+        requested_order=1,
+        resolved_order=1,
+        requested_direction="auto",
+        fallbacks_triggered=("swept_cylinder_recombined_to_tet4",),
+    )
+    assert rep_direct.to_dict()["fallbacks_triggered"] == ["swept_cylinder_recombined_to_tet4"]
 
 
 # ===================================================================

@@ -1527,7 +1527,6 @@ def _configure_mesh_size_fields(
         "sizeminnormal", "sizemintangent",
         "sizemaxnormal", "sizemaxtangent",
     }
-    _METADATA_PARAMS = {"Source", "GeometryName", "role", "owner", "origin", "priority"}
 
     field_ids = []
 

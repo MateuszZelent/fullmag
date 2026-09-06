@@ -1768,7 +1768,7 @@ def _mesh_options_from_runtime_metadata(
                         try:
                             v1 = float(first_v)  # type: ignore
                             v2 = float(other_v)  # type: ignore
-                            if not math.isclose(v1, v2, rel_tol=1e-7, abs_tol=1e-9):
+                            if not math.isclose(v1, v2, rel_tol=1e-7, abs_tol=0.0):
                                 raise TypedValidationError(
                                     code="conflicting_aliases",
                                     pointer=f"/mesh_workflow/recipes/{geometry.geometry_name}/{other_k}",
@@ -1814,7 +1814,7 @@ def _mesh_options_from_runtime_metadata(
                     try:
                         v1 = float(first_v)  # type: ignore
                         v2 = float(other_v)  # type: ignore
-                        if not math.isclose(v1, v2, rel_tol=1e-7, abs_tol=1e-9):
+                        if not math.isclose(v1, v2, rel_tol=1e-7, abs_tol=0.0):
                             raise TypedValidationError(
                                 code="conflicting_aliases",
                                 pointer=f"/mesh_workflow/mesh_options/{other_k}",
@@ -1830,10 +1830,6 @@ def _mesh_options_from_runtime_metadata(
         value = _recipe_value(*keys, reducer=reducer)
         if value is not None:
             return value
-        for key in keys:
-            value = raw_mesh_options.get(key)
-            if value is not None:
-                return value
         if reducer == "min":
             values: list[object] = []
             for key in keys:
@@ -1843,9 +1839,15 @@ def _mesh_options_from_runtime_metadata(
                 for value in values
                 if (parsed := _coerce_positive_float(value)) is not None
             ]
-            return min(numeric_values) if numeric_values else None
+            if numeric_values:
+                return min(numeric_values)
+        else:
+            for key in keys:
+                value = _single_geometry_value(key)
+                if value is not None:
+                    return value
         for key in keys:
-            value = _single_geometry_value(key)
+            value = raw_mesh_options.get(key)
             if value is not None:
                 return value
         return None
@@ -2087,7 +2089,7 @@ def _mesh_options_from_runtime_metadata(
         ),
         smoothing_steps=int(_legacy_int(raw_smoothing_steps, "smoothing_steps", minimum=0, default=1)),
         optimize=str(optimize) if isinstance(optimize, str) and optimize.strip() else None,
-        optimize_iters=int(_legacy_int(raw_optimize_iters, "optimize_iters", minimum=1, default=1)),
+        optimize_iters=int(_legacy_int(raw_optimize_iters, "optimize_iters", minimum=0, default=1)),
         size_fields=size_fields,
         compute_quality=_legacy_bool(raw_compute_quality, "compute_quality", default=True),
         per_element_quality=_legacy_bool(

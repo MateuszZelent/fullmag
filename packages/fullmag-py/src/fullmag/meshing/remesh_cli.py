@@ -714,28 +714,71 @@ def _mesh_result_payload(
 
     resolved_growth = options_growth if options_growth is not None else root_growth
 
+    name_to_marker: dict[str, int] = {}
+    for rm_list in (region_markers, object_region_markers):
+        if isinstance(rm_list, (list, tuple)):
+            for entry in rm_list:
+                if isinstance(entry, dict):
+                    name = entry.get("geometry_name") or entry.get("geometry") or entry.get("name")
+                    marker = entry.get("marker") or entry.get("material_marker")
+                    if name is not None and marker is not None:
+                        try:
+                            name_to_marker[str(name)] = int(marker)
+                        except (ValueError, TypeError):
+                            pass
+
     scope_growth_rates: dict[str, float] = {}
+
+    def _record_scope(name: str, rate: float) -> None:
+        key = str(name)
+        scope_growth_rates[key] = rate
+        if key in name_to_marker:
+            scope_growth_rates[str(name_to_marker[key])] = rate
+        if key == "air":
+            scope_growth_rates["0"] = rate
+
     per_geom = mesh_provenance.get("per_geometry")
+    if not per_geom and isinstance(raw_mesh_options, dict):
+        per_geom = raw_mesh_options.get("per_geometry")
+    if not per_geom and isinstance(mesh_provenance.get("shared_domain_build_report"), dict):
+        per_geom = mesh_provenance["shared_domain_build_report"].get("per_geometry")
     if isinstance(per_geom, list):
         for idx, entry in enumerate(per_geom):
             if isinstance(entry, dict):
                 r_val, _ = _extract_growth_rate_from_dict(entry, f"/mesh_provenance/per_geometry/{idx}")
                 name = entry.get("geometry") or entry.get("geometry_name")
                 if r_val is not None and name:
-                    scope_growth_rates[str(name)] = r_val
+                    _record_scope(str(name), r_val)
+
     recipes = mesh_provenance.get("per_object_recipes") or mesh_provenance.get("recipes")
     if isinstance(recipes, dict):
         for r_name, r_entry in recipes.items():
             if isinstance(r_entry, dict):
                 r_val, _ = _extract_growth_rate_from_dict(r_entry, f"/mesh_provenance/recipes/{r_name}")
                 if r_val is not None:
-                    scope_growth_rates[str(r_name)] = r_val
+                    _record_scope(str(r_name), r_val)
+
+    eff_targets = mesh_provenance.get("effective_per_object_targets")
+    if not eff_targets and isinstance(mesh_provenance.get("shared_domain_build_report"), dict):
+        eff_targets = mesh_provenance["shared_domain_build_report"].get("effective_per_object_targets")
+    if isinstance(eff_targets, dict):
+        for t_name, t_entry in eff_targets.items():
+            if isinstance(t_entry, dict):
+                r_val, _ = _extract_growth_rate_from_dict(t_entry, f"/mesh_provenance/effective_per_object_targets/{t_name}")
+                if r_val is not None:
+                    _record_scope(str(t_name), r_val)
+
     airbox_entry = mesh_provenance.get("airbox")
+    if airbox_entry is None and isinstance(raw_mesh_options, dict):
+        airbox_entry = raw_mesh_options.get("airbox")
+    if airbox_entry is None:
+        airbox_entry = mesh_provenance.get("effective_airbox_target")
+    if airbox_entry is None and isinstance(mesh_provenance.get("shared_domain_build_report"), dict):
+        airbox_entry = mesh_provenance["shared_domain_build_report"].get("effective_airbox_target")
     if isinstance(airbox_entry, dict):
         a_val, _ = _extract_growth_rate_from_dict(airbox_entry, "/mesh_provenance/airbox")
         if a_val is not None:
-            scope_growth_rates["air"] = a_val
-            scope_growth_rates["0"] = a_val
+            _record_scope("air", a_val)
 
     if resolved_growth is None and scope_growth_rates:
         unique_rates = set(scope_growth_rates.values())
@@ -749,7 +792,7 @@ def _mesh_result_payload(
             resolved_growth_rate=resolved_growth,
             scope_growth_rates=scope_growth_rates or None,
             tolerance=0.0,
-            require_pairs=True,
+            require_pairs=len(mesh.cell_types) > 1,
         )
     # Do not publish topology or quality artifacts until every declared
     # post-mesh gate has passed.  In particular, an invalid growth report must

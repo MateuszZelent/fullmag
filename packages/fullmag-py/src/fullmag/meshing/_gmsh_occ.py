@@ -1022,8 +1022,8 @@ def generate_shared_domain_mesh_via_occ(
             periodic_pair_specs=periodic_pair_specs,
         )
 
-        scaled_quality = _scale_quality_report_volume(quality, volume_scale=SCALE**3)
-        scaled_pdq = _scale_per_domain_quality_volume(_pdq, volume_scale=SCALE**3)
+        scaled_quality = _scale_quality_report_volume(mesh.quality, volume_scale=SCALE**3)
+        scaled_pdq = _scale_per_domain_quality_volume(mesh.per_domain_quality, volume_scale=SCALE**3)
         scaled_mesh = _dc_replace(
             mesh,
             nodes=mesh.nodes / SCALE,
