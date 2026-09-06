@@ -24,7 +24,7 @@ Punkt wejścia: `617031df0ad45b25ece6b0015836c71631c4f2d1`, branch `codex/fem-gp
 ## Stan
 
 - Kroki 1–3: zaimplementowane w C1, C2, C3; receipt, periodic demag, cache miss->hit oraz wykonanie Armijo refinement (z kanonicznym odrzuceniem nierozstrzygniętego kandydata) zweryfikowane na GPU.
-- Krok 4: bramka managed uruchamia pełny zestaw testów natywnych i Rust; asercja izolowanego zaakceptowanego świadka refinementu bez odrzucenia (rejected=0) pozostaje NOT VERIFIED (nieosiągalna na 1 czworościanie bez sztucznego tłumienia błędu).
+- Krok 4: bramka managed uruchamia pełny zestaw testów natywnych i Rust; kontrakt odrzuconego refinementu z backtrackingiem (Kontrakt A) jest zweryfikowany (PASS); zaakceptowany świadek refinementu (Kontrakt B) pozostaje NOT VERIFIED (brak zweryfikowanego świadka).
 - Krok 5: prompty i raporty zaktualizowane; Agent 4 READY dla swojego zakresu, Agent 5 BLOCKED dla A11 do ukończenia prac Agenta 4, Agent 7 pozostaje propozycją.
 
 ## Dowody w trakcie wykonania
@@ -80,6 +80,6 @@ Poprawki z planu naprawy zostały zaimplementowane i zwalidowane w kontenerze:
 | D02 | Regresja periodic demag w aggregate target i launcherze | VERIFIED | `fem_cuda_periodic_demag_contract` w suite, PASS w kontenerze |
 | N01 | NCG cache miss → hit | VERIFIED | `check_ncg_endpoint_cache_miss_then_hit` PASS na urządzeniu CUDA (miss na kroku 1, hit na kroku 2) |
 | N02 | Wykonanie procedury Armijo refinement na CUDA | VERIFIED | Świadek wszedł w produkcyjny refinement na CUDA, `refinement_evaluation_count = 1`, `physical_demag_solves = 6`, świeże ewaluacje na GPU; nierozstrzygnięty kandydat został kanonicznie odrzucony (`rejected = 1`), a linia podziału przeszła do zaakceptowanego kroku |
-| N02b | Zaakceptowany świadek refinementu bez odrzucenia | NOT VERIFIED | Wymóg `rejected = 0` na 1 czworościanie jest matematycznie nieosiągalny z poprawną granicą IEEE 754 ($\Delta E_{\mathrm{ref}} - \Delta E_{\mathrm{ord}} = 0$ przy CG do precyzji maszynowej) |
+| N02b | Zaakceptowany świadek refinementu bez odrzucenia | NOT VERIFIED | Brak wykazanego legalnego świadka akceptacji na badanych konfiguracjach; status pozostaje jawnie niezaliczony zgodnie z AGENTS.md |
 | N03 | Invalidation i świeża praca po refinement | NOT VERIFIED | Zależne od zaakceptowanego punktu po refinement; niezaliczane bez legalnego świadka |
 | N04 | Sprawdzenie skończoności energii (`std::isfinite`) | VERIFIED | Asercje dodane w `check_snapshot_energy_matches_observation` |

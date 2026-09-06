@@ -480,12 +480,16 @@ realizations.
   the capability matrix, including runtime, parity, refinement, and
   repeatability gates.
 - Direct-difference reduction roundoff certificates bound IEEE 754 floating-point
-  reduction error, not iterative Poisson solver error. The certificate depends solely
-  on reduction operand count and machine precision; scaling it by solver tolerance ratios
-  (such as $\mathrm{refined\_rtol} / \mathrm{ordinary\_rtol}$) is numerically invalid.
-  Poisson algebraic error is controlled by the iterative solver residual and operator conditioning.
-- Refinement rejection must preserve the ordinary candidate state, ordinary energy difference,
-  and ordinary demag roundoff bound, preventing state contamination from failed refinement attempts.
+  reduction error $B = \gamma_N \sum_{i} |x_i|$, not iterative Poisson solver algebraic error.
+  The certificate depends on reduction operand count $N$, machine precision $\epsilon$,
+  and the absolute sum of the reduction operands $\sum |x_i|$; invariance of $B$ under changes
+  to solver relative tolerance ($\mathrm{rtol}$) holds for unchanged trial/base operands and
+  reduction trees. Scaling $B$ by solver tolerance ratios (such as
+  $\mathrm{refined\_rtol} / \mathrm{ordinary\_rtol}$) is numerically invalid and creates false
+  acceptance of unresolved Armijo intervals.
+  Poisson algebraic error is governed separately by the iterative solver residual and operator conditioning.
+- Refinement rejection must preserve the full ordinary candidate state, ordinary energy difference,
+  and ordinary demag roundoff bound, preventing state and device contamination from failed refinement attempts.
 - PG-BB/NCG preconditioners and TPI operators use dimensionally compatible mass,
   stiffness, and local-curvature blocks.
 - Native nonfinite torque, energy, gradient, error estimate, or solver residual

@@ -129,11 +129,11 @@ agent_7_gate: PROPOSED # rola niezależnego weryfikatora/audytora pozostaje prop
      - `ref_bound = 1.4551576162941577e-33 J`
      - `rhs = -2.5856236265648023e-24 J`
      - Liczniki NCG: `ref_count = 1`, `misses = 1`, `cand = 2`, `rej = 1`, `demag_solves = 6`.
-   - **Faktyczny przebieg:** Kandydat 1 wszedł w procedurę refinementu (`ref_count = 1`). GPU wykonało świeże obliczenia pól i energii z zaostrzoną tolerancją (`demag_solves = 6`). Na pojedynczym czworościanie (układ $4 \times 4$) solver CG zbiega do precyzji maszynowej w $\le 4$ iteracjach, więc $\Delta E_{\mathrm{refined}} \equiv \Delta E_{\mathrm{ordinary}}$ co do bitu.
-   - Przedział po doprecyzowaniu nadal nakłada się na próg Armijo ($\Delta E_{\mathrm{refined}} + B > \mathrm{rhs}$). Zgodnie z kanonicznym kontraktem nierozstrzygnięty kandydat został bezpiecznie i prawidłowo odrzucony (`rej = 1`).
-   - NCG wykonał backtracking do kandydata 2 (`cand = 2`), który spełnił warunek Armijo i krok zakończył się sukcesem (`stats.step = 1`).
-   - Asercja w teście wymagała jednak `accepted_armijo_candidates == 1u && rejected_candidate_count == 0u` (wymóg, aby to kandydat 1 został zaakceptowany przez refinement bez odrzucenia).
-   - Wymóg ten na jednoelementowej siatce bez sztucznego tłumienia błędu jest matematycznie nieosiągalny. Zgodnie z AGENTS.md status zaakceptowanego świadka refinementu został rzetelnie oznaczony jako **NOT VERIFIED**.
+   - **Faktyczny przebieg:** Kandydat 1 wszedł w procedurę refinementu (`ref_count = 1`). GPU wykonało świeże obliczenia pól i energii z zaostrzoną tolerancją (`demag_solves = 6`).
+   - **Faktyczna dyskretyzacja Poissona:** `demag_poisson_lifecycle.cpp` dla nieperiodycznej siatki tet bez pyramid wybiera przestrzeń kwadratową H1 (P2, `demag_potential_order = 2`). Na pojedynczym czworościanie przestrzeń ta ma `potential_true_dof_count = 10` (4 wierzchołki + 6 krawędzi), rozwiązywaną przez Hypre PCG z warunkiem brzegowym Robina.
+   - **Rzeczywisty wynik świadka:** Po zaostrzeniu tolerancji do `refined_rtol = 1e-13` (względem `ordinary_rtol = 1e-12`), przedział numeryczny kandydata 1 nadal nakładał się na próg Armijo ($\Delta E_{\mathrm{refined}} + B > \mathrm{rhs}$, przedział nierozstrzygnięty). Zgodnie z kanonicznym kontraktem fizyki nierozstrzygnięty kandydat został poprawnie odrzucony (`rejected_candidate_count = 1`).
+   - **Prawidłowy backtracking:** NCG wykonał backtracking do kandydata 2 (`accepted_armijo_candidates = 1`), który spełnił warunek Armijo; krok 1 zakończył się sukcesem (`stats.step = 1`) z certyfikowanym unscaled energy proof, a krok 2 wykonał się bezbłędnie.
+   - **Rozdzielenie kontraktów:** Identyczny wynik jednego świadka nie jest dowodem niemożliwości gałęzi accepted-refinement w ogólności, ale dopóki nie zostanie wykazany prawidłowy świadek akceptacji (na odpowiedniej konfiguracji/siatce), kontrakt zaakceptowanego refinementu pozostaje ściśle **NOT VERIFIED**. Kontrakt odrzuconego refinementu z pełnym rollbackiem urządzenia i backtrackingiem (Kontrakt A) jest w pełni **PASS / VERIFIED**.
 
 5. **Ograniczenia powtarzalności świadka między środowiskami:**
    - Świadek `kRefinedWitnessMagnetization` celuje w przedział numeryczny o szerokości $B \approx 10^{-33}\text{ J}$, co stanowi ułamek $10^{-9}$ energii kroku.

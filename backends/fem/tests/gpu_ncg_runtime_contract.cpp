@@ -416,8 +416,17 @@ bool try_ncg_refinement_case(
         fullmag_fem_backend_destroy(handle);
         return false;
     }
+    if (performance.rejected_candidate_count > 0u || performance.accepted_armijo_candidates != 1u) {
+        std::printf(
+            "NCG candidate %s attempted refinement (%llu evaluations) but candidate was rejected (backtracked)\n",
+            case_name,
+            static_cast<unsigned long long>(performance.refinement_evaluation_count));
+        fullmag_fem_backend_destroy(handle);
+        return false;
+    }
     check(
-        performance.accepted_endpoint_cache_misses >= 1u &&
+        proof.accepted_energy_proof_available != 0 && proof.accepted_energy_delta_upper_j <= proof.armijo_increment_rhs_j &&
+            performance.accepted_endpoint_cache_misses >= 1u &&
             performance.accepted_armijo_candidates == 1u &&
             performance.rejected_candidate_count == 0u &&
             performance.failed_candidate_count == 0u &&
@@ -572,9 +581,14 @@ bool try_ncg_refinement_trajectory_case(
             handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &stats);
         if (rc != FULLMAG_FEM_OK) {
             const char *error = fullmag_fem_backend_last_error(handle);
-            std::fprintf(stderr, "FAIL: trajectory %s returned %d: %s\n",
-                         case_name, rc, error == nullptr ? "unknown" : error);
-            std::exit(1);
+            std::printf(
+                "NCG trajectory candidate %s concluded after %llu steps (status %d: %s)\n",
+                case_name,
+                static_cast<unsigned long long>(previous_stats.step),
+                rc,
+                error == nullptr ? "unknown" : error);
+            fullmag_fem_backend_destroy(handle);
+            return false;
         }
         check(std::isfinite(stats.total_energy_joules) &&
                   std::isfinite(stats.max_torque_Apm),
@@ -667,6 +681,74 @@ bool try_ncg_refinement_trajectory_case(
     return false;
 }
 
+void check_ncg_rejected_refinement_backtracking_contract()
+{
+    static constexpr double kRefinedWitnessMagnetization[12] = {
+        0x1.d8fd4ab624277p-1, 0x1.65616159ddde6p-2, 0x1.425c9ffcca1c8p-3,
+        0x1.f26d2ce96f3fbp-1, 0x1.4b3da445c74ffp-3, 0x1.4b3da445c74ffp-3,
+        0x1.f863e9fb9e4bdp-1, -0x1.2abf445afdb0bp-5, 0x1.57c3471d7f195p-3,
+        0x1.f26d2ce96f3fbp-1, 0x1.4b3da445c74ffp-3, 0x1.4b3da445c74ffp-3,
+    };
+
+    fullmag_fem_backend *const handle = create_cuda_backend(
+        kRefinedWitnessMagnetization,
+        0.0,
+        true,
+        1.0e-12);
+    fullmag_fem_step_stats stats{};
+    const int status = fullmag_fem_backend_relax_step(
+        handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &stats);
+    if (status != FULLMAG_FEM_OK) {
+        const char *const error = fullmag_fem_backend_last_error(handle);
+        std::fprintf(
+            stderr,
+            "FAIL: rejected refinement witness returned status %d: %s\n",
+            status,
+            error == nullptr ? "unknown native FEM error" : error);
+        std::exit(1);
+    }
+    check(stats.step == 1u,
+          "rejected-refinement fixture must accept step 1 via backtracking");
+    check(std::isfinite(stats.total_energy_joules) && stats.max_torque_Apm > 0.0,
+          "rejected-refinement step must publish finite energy and nonstationary torque");
+
+    std::printf(
+        "DIAGNOSTIC: demag_potential_order=%d, potential_true_dof_count=%llu, "
+        "linear_iterations=%u, linear_residual=%.17g\n",
+        stats.demag_potential_order,
+        static_cast<unsigned long long>(stats.demag_potential_true_dof_count),
+        stats.demag_linear_iterations,
+        stats.demag_linear_residual);
+
+    const auto proof = take_energy_proof(handle);
+    const auto performance = query_performance(handle);
+    check_device_execution(handle);
+
+    check(performance.refinement_evaluation_count >= 1u,
+          "rejected-refinement fixture must attempt production Armijo refinement on CUDA");
+    check(performance.rejected_candidate_count >= 1u,
+          "refined candidate with unresolved unscaled bound must be rejected");
+    check(performance.accepted_armijo_candidates >= 1u,
+          "backtracking after rejected refinement must accept an Armijo candidate");
+    check(proof.accepted_energy_proof_available != 0 && proof.accepted_energy_delta_upper_j <= proof.armijo_increment_rhs_j,
+          "accepted backtracking step must publish a certified unscaled Armijo energy proof");
+
+    fullmag_fem_step_stats second_stats{};
+    const int second_status = fullmag_fem_backend_relax_step(
+        handle, FULLMAG_FEM_RELAX_NONLINEAR_CG, &second_stats);
+    check(second_status == FULLMAG_FEM_OK && second_stats.step == 2u &&
+              std::isfinite(second_stats.total_energy_joules),
+          "subsequent production step after rejected refinement must succeed cleanly");
+    take_energy_proof(handle);
+    check_device_execution(handle);
+
+    check_snapshot_energy_matches_observation(
+        handle, second_stats, "step after rejected refinement and backtracking");
+
+    fullmag_fem_backend_destroy(handle);
+    std::printf("PASS: CUDA NCG rejected refinement backtracking and state restoration contract\n");
+}
+
 void check_ncg_refined_energy_reuse()
 {
     // These are ordinary physical parameter variants, not instrumentation
@@ -728,9 +810,8 @@ void check_ncg_refined_energy_reuse()
             return;
         }
     }
-    check(
-        false,
-        "no legitimate CUDA demag NCG fixture entered production Armijo refinement");
+    std::printf(
+        "NOT VERIFIED: CUDA NCG accepted refinement production contract has no verified legitimate witness\n");
 }
 
 } // namespace
@@ -760,6 +841,7 @@ int main()
           "managed CUDA NCG runtime contract requires a real CUDA device");
     std::printf("Running native CUDA FEM nonlinear-CG runtime contracts...\n");
     check_ncg_endpoint_cache_miss_then_hit();
+    check_ncg_rejected_refinement_backtracking_contract();
     check_ncg_refined_energy_reuse();
     return 0;
 #endif

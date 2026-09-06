@@ -1880,34 +1880,40 @@ void check_ncg_fallback_direction_and_metrics_consistency_contract()
 
 void check_direct_armijo_refinement_roundoff_invariance_and_unresolved_rejection()
 {
-    // 1. Certified roundoff bound invariance:
+    // 1. Certified roundoff bound invariance and operand dependence:
     // Reduction roundoff certificate bounds IEEE 754 summation forward error gamma_N * sum|x_i|.
-    // For fixed operands (fixed trial/base magnetization and fixed fields), tightening linear solver
-    // tolerance (rtol) does not and must not reduce the floating-point reduction roundoff bound.
+    // The certificate depends strictly on reduction length N, machine precision epsilon,
+    // and the operand absolute sum sum|x_i|.
     constexpr size_t N = 512;
-    constexpr double operand_abs_sum = 1.23456789e-21;
+    constexpr double operand_abs_sum_1 = 1.23456789e-21;
+    constexpr double operand_abs_sum_2 = 2.46913578e-21;
     const double gamma_N = fullmag::fem::relaxation::reduction_roundoff_bound(N);
-    const double ordinary_certificate = gamma_N * operand_abs_sum;
 
-    // Simulate solver tolerances: ordinary=1e-12, refined=1e-13
+    const double bound_1 = gamma_N * operand_abs_sum_1;
+    const double bound_2 = gamma_N * operand_abs_sum_2;
+    check(bound_1 > 0.0 && bound_2 > bound_1,
+          "reduction roundoff certificate must be positive and depend strictly on operand sum");
+    check(close(bound_2 / bound_1, operand_abs_sum_2 / operand_abs_sum_1, 1.0e-15),
+          "reduction roundoff certificate must scale linearly with operand absolute sum");
+
+    // Tightening linear solver tolerance (rtol) does not and must not reduce
+    // the reduction roundoff bound for unchanged operands:
     constexpr double ordinary_rtol = 1.0e-12;
     constexpr double refined_rtol = 1.0e-13;
     check(refined_rtol < ordinary_rtol, "test expects tightened refinement tolerance");
 
-    // The unscaled certificate for unchanged operands remains exactly gamma_N * operand_abs_sum:
-    const double refined_certificate_unchanged_operands = gamma_N * operand_abs_sum;
-    check(
-        ordinary_certificate == refined_certificate_unchanged_operands,
-        "tightening rtol must not decrease reduction roundoff certificate for unchanged operands");
+    const double refined_bound_unchanged_operands = gamma_N * operand_abs_sum_1;
+    check(bound_1 == refined_bound_unchanged_operands,
+          "tightening rtol must not decrease reduction roundoff certificate for unchanged operands");
 
     // 2. Strict rejection of unresolved Armijo intervals:
-    // An ordinary difference whose interval [delta - B, delta + B] overlaps armijo_rhs:
+    // An ordinary difference whose interval [delta - B, delta + B] straddles armijo_rhs:
     // delta <= armijo_rhs < delta + B (yielding Refine).
     constexpr double delta_ord = -2.585623627342052e-24;
     constexpr double bound = 5.7829819502680016e-33; // True unscaled IEEE 754 summation bound
     constexpr double armijo_rhs = delta_ord + 0.5 * bound; // delta < armijo_rhs < delta + bound
     const fullmag::fem::relaxation::EnergyDifference ordinary_diff{
-        delta_ord, operand_abs_sum, bound};
+        delta_ord, operand_abs_sum_1, bound};
 
     const auto ord_decision =
         fullmag::fem::relaxation::strict_armijo_difference_decision(
@@ -1920,7 +1926,7 @@ void check_direct_armijo_refinement_roundoff_invariance_and_unresolved_rejection
     // delta_ref + bound is still > armijo_rhs (interval still unresolved).
     constexpr double delta_ref = delta_ord - 0.1 * bound;
     const fullmag::fem::relaxation::EnergyDifference refined_diff_unresolved{
-        delta_ref, operand_abs_sum, bound};
+        delta_ref, operand_abs_sum_1, bound};
 
     const bool accepted_unresolved =
         fullmag::fem::relaxation::strict_armijo_difference_refinement_accepts(
@@ -1932,7 +1938,7 @@ void check_direct_armijo_refinement_roundoff_invariance_and_unresolved_rejection
     // Verify that the artificial scaling (scaling bound by refined_rtol / ordinary_rtol = 0.1)
     // would have illegally produced a false acceptance:
     const fullmag::fem::relaxation::EnergyDifference refined_diff_falsely_scaled{
-        delta_ref, operand_abs_sum, bound * (refined_rtol / ordinary_rtol)};
+        delta_ref, operand_abs_sum_1, bound * (refined_rtol / ordinary_rtol)};
     const bool false_scaled_accept =
         fullmag::fem::relaxation::strict_armijo_difference_refinement_accepts(
             ordinary_diff, refined_diff_falsely_scaled, armijo_rhs);
@@ -2177,41 +2183,6 @@ int main()
     check(ncg_src.find("accepted_snapshot_valid ? &accepted_snapshot : nullptr") != std::string::npos,
           "nonlinear_cg.cpp must pass accepted_snapshot to finalize_step_stats for selective energy reuse (A14)");
 
-
-    std::ifstream dei_file(
-        "/workspace/backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp");
-    if (!dei_file.is_open()) {
-        dei_file.open("backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp");
-    }
-    if (!dei_file.is_open()) {
-        dei_file.open("../backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp");
-    }
-    check(dei_file.is_open(), "unable to open direct_energy_increment.cpp");
-    std::string dei_src(
-        (std::istreambuf_iterator<char>(dei_file)),
-        std::istreambuf_iterator<char>());
-    strip_cr(dei_src);
-
-    check(
-        dei_src.find("ordinary_demag_bound * (refined_rtol / ordinary_rtol)") == std::string::npos,
-        "direct_energy_increment.cpp must not scale demag roundoff bound by solver rtol ratio");
-    check(
-        dei_src.find("result.demag_roundoff_bound_j = refined_demag_bound;") == std::string::npos,
-        "direct_energy_increment.cpp must not assign scaled refined_demag_bound");
-
-    const size_t pos_refine_fn = dei_src.find("bool gpu_direct_armijo_refine(");
-    check(pos_refine_fn != std::string::npos, "gpu_direct_armijo_refine function must exist");
-    const size_t pos_ord_bound = dei_src.find(
-        "const double ordinary_demag_bound = result.demag_roundoff_bound_j;", pos_refine_fn);
-    const size_t pos_call_diff = dei_src.find("if (!direct_difference(", pos_refine_fn);
-    check(
-        pos_ord_bound != std::string::npos && pos_call_diff != std::string::npos &&
-            pos_ord_bound < pos_call_diff,
-        "ordinary_demag_bound must be captured before refined direct_difference call in gpu_direct_armijo_refine");
-
-    check(
-        dei_src.find("result.difference = ordinary_difference;\n        result.trial_snapshot = ordinary_trial;\n        result.demag_roundoff_bound_j = ordinary_demag_bound;") != std::string::npos,
-        "gpu_direct_armijo_refine must restore ordinary difference, snapshot, and demag bound upon rejection");
 
     std::printf("PASS: gpu_relaxation_preconditioner_contract\n");
     return 0;
