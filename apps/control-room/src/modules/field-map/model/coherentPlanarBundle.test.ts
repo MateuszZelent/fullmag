@@ -213,4 +213,112 @@ describe("coherentPlanarBundle", () => {
       expect(res.reason).toContain("identity_mismatch");
     }
   });
+
+  function makeTestFmvp({
+    grid = [2, 2, 1] as [number, number, number],
+    nComp = 1,
+    quantityId = "m",
+    values = [1, 2, 3, 4],
+  }: {
+    grid?: [number, number, number];
+    nComp?: number;
+    quantityId?: string;
+    values?: number[];
+  } = {}): ArrayBuffer {
+    const buffer = new ArrayBuffer(48 + values.length * 8);
+    const view = new DataView(buffer);
+    for (const [index, code] of [..."FMVP"].entries()) {
+      view.setUint8(index, code.charCodeAt(0));
+    }
+    view.setUint8(4, 2);
+    view.setUint8(5, 1);
+    view.setUint8(6, nComp);
+    view.setUint32(12, values.length, true);
+    view.setUint32(16, grid[0], true);
+    view.setUint32(20, grid[1], true);
+    view.setUint32(24, grid[2], true);
+    new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+    new Float64Array(buffer, 48).set(values);
+    return buffer;
+  }
+
+  it("rejects FMVP scalar payload with mismatched quantityId (TS07)", () => {
+    const fmvpBuffer = makeTestFmvp({ quantityId: "H_eff" }); // meta expects "m"
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(mockMeta, fmvpBuffer, maskBuffer);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("quantity_mismatch");
+    }
+  });
+
+  it("rejects FMVP scalar payload with mismatched grid shape (TS08)", () => {
+    const fmvpBuffer = makeTestFmvp({ grid: [4, 1, 1] }); // meta expects [2, 2, 1]
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(mockMeta, fmvpBuffer, maskBuffer);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("grid_shape_mismatch");
+    }
+  });
+
+  it("rejects FMVP scalar payload with mismatched component count", () => {
+    // 2x2 grid, but nComp = 3 (vector payload of 12 numbers instead of 4 scalars)
+    const fmvpBuffer = makeTestFmvp({ grid: [2, 2, 1], nComp: 3, values: new Array(12).fill(1) });
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(mockMeta, fmvpBuffer, maskBuffer);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("component_count_mismatch");
+    }
+  });
+
+  it("rejects TS09 payload (1 point with 4 components instead of 2x2 scalars)", () => {
+    const fmvpBuffer = makeTestFmvp({ grid: [1, 1, 1], nComp: 4, values: [1, 2, 3, 4] });
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(mockMeta, fmvpBuffer, maskBuffer);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("grid_shape_mismatch");
+    }
+  });
+
+  it("rejects occupancy mask with invalid code > 4 (TS09)", () => {
+    const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
+    const maskBuffer = new Uint8Array([1, 255, 1, 1]).buffer; // code 255 is invalid
+    const res = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("invalid_occupancy_mask_code");
+    }
+  });
+
+  it("rejects vectors FMVP with mismatched quantityId or component count", () => {
+    const scalarBuffer = makeTestFmvp({ quantityId: "m" });
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    // 2x2 grid with 3 components = 12 values
+    const vectorsWrongQty = makeTestFmvp({
+      grid: [2, 2, 1],
+      nComp: 3,
+      quantityId: "B_ext",
+      values: new Array(12).fill(1),
+    });
+    const resWrongQty = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer, vectorsWrongQty);
+    expect(resWrongQty.ok).toBe(false);
+    if (!resWrongQty.ok) {
+      expect(resWrongQty.reason).toContain("quantity_mismatch");
+    }
+
+    const vectorsWrongComp = makeTestFmvp({
+      grid: [2, 2, 1],
+      nComp: 1,
+      quantityId: "m",
+      values: [1, 2, 3, 4],
+    });
+    const resWrongComp = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer, vectorsWrongComp);
+    expect(resWrongComp.ok).toBe(false);
+    if (!resWrongComp.ok) {
+      expect(resWrongComp.reason).toContain("component_count_mismatch");
+    }
+  });
 });

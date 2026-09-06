@@ -49,7 +49,7 @@ fn point_triangle_distance_sq(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]
     let n = cross(ab, ac);
     let n_sq = dot(n, n);
     let edge_scale_sq = dot(ab, ab).max(dot(ac, ac)).max(dot(sub(c, b), sub(c, b)));
-    if n_sq <= edge_scale_sq * 1.0e-24 || edge_scale_sq <= 1.0e-30 {
+    if n_sq <= edge_scale_sq * edge_scale_sq * 1.0e-24 || edge_scale_sq <= 1.0e-30 {
         return point_segment_distance_sq(p, a, b)
             .min(point_segment_distance_sq(p, b, c))
             .min(point_segment_distance_sq(p, c, a));
@@ -133,11 +133,12 @@ pub(crate) fn point_tetrahedron_distance(
         }
     }
 
-    let d0 = point_triangle_distance_sq(p, v0, v1, v2);
-    let d1 = point_triangle_distance_sq(p, v0, v1, v3);
-    let d2 = point_triangle_distance_sq(p, v0, v2, v3);
-    let d3 = point_triangle_distance_sq(p, v1, v2, v3);
-    d0.min(d1).min(d2).min(d3).max(0.0).sqrt()
+    let zero_norm = [0.0, 0.0, 0.0];
+    let d0 = point_triangle_distance_sq(p_norm, a_norm, b_norm, c_norm);
+    let d1 = point_triangle_distance_sq(p_norm, a_norm, b_norm, zero_norm);
+    let d2 = point_triangle_distance_sq(p_norm, a_norm, c_norm, zero_norm);
+    let d3 = point_triangle_distance_sq(p_norm, b_norm, c_norm, zero_norm);
+    d0.min(d1).min(d2).min(d3).max(0.0).sqrt() * scale
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

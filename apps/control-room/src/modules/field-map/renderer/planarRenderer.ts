@@ -466,15 +466,5 @@ export function createPlanarRenderer(
       // Fallback to 2D canvas renderer
     }
   }
-  let target = canvas;
-  if (!target.getContext("2d") && target.parentElement) {
-    const replacement = document.createElement("canvas");
-    replacement.className = target.className;
-    replacement.id = target.id;
-    replacement.width = target.width;
-    replacement.height = target.height;
-    target.parentElement.replaceChild(replacement, target);
-    target = replacement;
-  }
-  return createPlanar2dRenderer(target);
+  return createPlanar2dRenderer(canvas);
 }

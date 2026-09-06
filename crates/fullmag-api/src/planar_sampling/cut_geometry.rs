@@ -497,12 +497,12 @@ fn classify_segment(
     let mut unique = nodes.to_vec();
     unique.dedup();
     if !(2..=4).contains(&unique.len()) {
-        return PlanarOverlaySegmentKind::TargetBoundary;
+        return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
     }
     match target_face_counts.get(&unique).copied() {
         Some(1) => PlanarOverlaySegmentKind::TargetBoundary,
         Some(_) => PlanarOverlaySegmentKind::MeshInterior,
-        None => PlanarOverlaySegmentKind::TargetBoundary,
+        None => PlanarOverlaySegmentKind::UnclassifiedDegenerate,
     }
 }
 

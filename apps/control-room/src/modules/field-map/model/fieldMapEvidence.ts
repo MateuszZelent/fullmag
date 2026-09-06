@@ -161,10 +161,11 @@ export function resolvePlanarEvidenceStatus({
     : "loading";
 }
 
-export function planarRasterChecksum(pixels: Uint8ClampedArray): string {
+export function planarRasterChecksum(pixels: ArrayLike<number>): string {
   let hash = 0x811c9dc5;
-  for (const value of pixels) {
-    hash ^= value;
+  for (let i = 0; i < pixels.length; i++) {
+    const value = pixels[i]!;
+    hash ^= (Number.isFinite(value) ? Math.floor(value) : 0) & 0xff;
     hash = Math.imul(hash, 0x01000193);
   }
   return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;

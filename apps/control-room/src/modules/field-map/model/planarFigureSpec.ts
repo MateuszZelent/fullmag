@@ -46,11 +46,24 @@ export interface PlanarFigureSpec {
 
 export interface PlanarExportManifest {
   datasetSpec: {
+    carrierRevision?: string;
     component: string;
+    frame?: {
+      boundsUvM: readonly [number, number, number, number];
+      normal: readonly [number, number, number];
+      originM: readonly [number, number, number];
+      uAxis: readonly [number, number, number];
+      vAxis: readonly [number, number, number];
+    };
+    operator?: unknown;
     physicalBoundsM: readonly [number, number, number, number];
     quantityId: string;
     resolution: readonly [number, number];
     sampleIdentity: string;
+    sampleSupport?: string;
+    scopeId?: string | null;
+    scopeKind?: string;
+    source?: unknown;
     units: {
       canonical: string;
       display: string | null;
@@ -59,8 +72,11 @@ export interface PlanarExportManifest {
   exportedAt: string;
   figureSpec: PlanarFigureSpec;
   revisions: {
+    carrierRevision?: string;
     fieldRevision?: string;
+    meshRevision?: string;
     sampleIdentity: string;
+    sceneRevision?: string;
   };
   samplerVersion: string;
   schemaVersion: "fullmag.planar-figure-manifest.v1";
@@ -113,18 +129,43 @@ export function createPlanarFigureSpec(
 export function buildPlanarExportManifest(
   spec: PlanarFigureSpec,
   options?: string | {
+    datasetMetadata?: {
+      carrierRevision?: string;
+      frame?: {
+        boundsUvM: readonly [number, number, number, number];
+        normal: readonly [number, number, number];
+        originM: readonly [number, number, number];
+        uAxis: readonly [number, number, number];
+        vAxis: readonly [number, number, number];
+      };
+      meshRevision?: string;
+      operator?: unknown;
+      sampleSupport?: string;
+      sceneRevision?: string;
+      scopeId?: string | null;
+      scopeKind?: string;
+      source?: unknown;
+    };
     exportedAt?: string;
     samplerVersion?: string;
   },
 ): PlanarExportManifest {
   const opts = typeof options === "string" ? { exportedAt: options } : (options ?? {});
+  const dsMeta = typeof options === "object" && options !== null ? options.datasetMetadata : undefined;
   return {
     datasetSpec: {
+      carrierRevision: dsMeta?.carrierRevision,
       component: spec.component,
+      frame: dsMeta?.frame,
+      operator: dsMeta?.operator,
       physicalBoundsM: spec.meshBounds,
       quantityId: spec.quantityId,
       resolution: spec.resolution,
       sampleIdentity: spec.sampleIdentity,
+      sampleSupport: dsMeta?.sampleSupport,
+      scopeId: dsMeta?.scopeId,
+      scopeKind: dsMeta?.scopeKind,
+      source: dsMeta?.source,
       units: {
         canonical: spec.canonicalUnit,
         display: spec.displayUnit,
@@ -133,8 +174,11 @@ export function buildPlanarExportManifest(
     exportedAt: opts.exportedAt ?? new Date().toISOString(),
     figureSpec: spec,
     revisions: {
+      carrierRevision: dsMeta?.carrierRevision,
       fieldRevision: spec.fieldRevision,
+      meshRevision: dsMeta?.meshRevision,
       sampleIdentity: spec.sampleIdentity,
+      sceneRevision: dsMeta?.sceneRevision,
     },
     samplerVersion: opts.samplerVersion ?? "fullmag-planar-sampling.v2",
     schemaVersion: "fullmag.planar-figure-manifest.v1",

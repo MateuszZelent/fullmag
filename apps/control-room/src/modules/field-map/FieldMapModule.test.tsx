@@ -540,6 +540,30 @@ describe("FieldMapModule planar state ownership", () => {
       { enabled: true },
     );
   });
+
+  it("does not construct renderModel or draw surface when planar field is not ready (D01 fail-closed)", () => {
+    const planar = {
+      colormap: "viridis",
+      component: "magnitude",
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+      layers: { boundaries: false, contours: false, mesh: true, probes: false, raster: true, vectors: false },
+      quality: "interactive",
+      quantity_id: "m",
+      resolution: { height: 128, vector_budget: 512, width: 256 },
+      source: { kind: "monitor", monitor_id: "plane-1" },
+      vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+      view_scope: { kind: "monitor_target" },
+    };
+    mocks.visualization.data = { planar };
+    mocks.visualization.optimisticData = null;
+    mocks.visualization.status = "ready";
+    mocks.renderReady = false;
+    mocks.surface.mockClear();
+
+    const html = renderToStaticMarkup(<FieldMapModule />);
+    expect(html).toContain("Loading planar field");
+    expect(mocks.surface).not.toHaveBeenCalled();
+  });
 });
 function emptySelection(): Selection {
   return {

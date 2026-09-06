@@ -860,7 +860,7 @@ async fn build_planar_field_from_source(
     state
         .quantity_data_plane
         .insert_cached_built_field(sample_token, Arc::new(built.clone()))
-        .await;
+        .await?;
 
     Ok(built)
 }

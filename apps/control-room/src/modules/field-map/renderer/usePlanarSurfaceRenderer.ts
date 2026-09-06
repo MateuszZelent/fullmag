@@ -8,6 +8,7 @@ import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
 import { viewportToRasterSpace } from "../model/planarViewTransform";
 import type { ContourSegment } from "./marchingSquares";
 import { decodePlanarMeshOverlayForDescriptor } from "./meshOverlay";
+import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";
 import { triangulateCutPolygons } from "./femCutSurfaceLayer";
 import { createPlanarColorizer } from "./planarColorizer";
 import {
@@ -34,6 +35,11 @@ export function usePlanarSurfaceRenderer(
   const drawOverlayRef = useRef<(contours?: readonly ContourSegment[]) => void>(() => undefined);
   const modelRef = useRef(model);
   const gpuLayerDrawnRef = useRef(false);
+  const cutSurfaceCacheRef = useRef<{
+    geometry: ReturnType<typeof triangulateCutPolygons>;
+    meshOverlay: unknown;
+    scalar: Float32Array | Float64Array;
+  } | null>(null);
   const renderStateRef = useRef<{
     axisPointer: { u: number; v: number } | null;
     contours: readonly ContourSegment[];
@@ -227,34 +233,94 @@ export function usePlanarSurfaceRenderer(
                 const r0 = Math.max(0, Math.min(height - 2, Math.floor(yCell)));
                 const r1 = r0 + 1;
 
-                const fx = xCell - c0;
-                const fy = yCell - r0;
+                const fx = Math.max(0, Math.min(1, xCell - c0));
+                const fy = Math.max(0, Math.min(1, yCell - r0));
 
-                const v00 = model.scalar[r0 * width + c0] ?? 0;
-                const v10 = model.scalar[r0 * width + c1] ?? 0;
-                const v01 = model.scalar[r1 * width + c0] ?? 0;
-                const v11 = model.scalar[r1 * width + c1] ?? 0;
+                const idx00 = r0 * width + c0;
+                const idx10 = r0 * width + c1;
+                const idx01 = r1 * width + c0;
+                const idx11 = r1 * width + c1;
 
-                const v0 = v00 + fx * (v10 - v00);
-                const v1 = v01 + fx * (v11 - v01);
-                return v0 + fy * (v1 - v0);
+                const occ00 = isRenderablePlanarOccupancy(model.mask?.[idx00]);
+                const occ10 = isRenderablePlanarOccupancy(model.mask?.[idx10]);
+                const occ01 = isRenderablePlanarOccupancy(model.mask?.[idx01]);
+                const occ11 = isRenderablePlanarOccupancy(model.mask?.[idx11]);
+
+                let weightSum = 0;
+                let valSum = 0;
+
+                const w00 = (1 - fx) * (1 - fy);
+                if (occ00) {
+                  const val = model.scalar[idx00] ?? 0;
+                  if (Number.isFinite(val)) {
+                    valSum += w00 * val;
+                    weightSum += w00;
+                  }
+                }
+
+                const w10 = fx * (1 - fy);
+                if (occ10) {
+                  const val = model.scalar[idx10] ?? 0;
+                  if (Number.isFinite(val)) {
+                    valSum += w10 * val;
+                    weightSum += w10;
+                  }
+                }
+
+                const w01 = (1 - fx) * fy;
+                if (occ01) {
+                  const val = model.scalar[idx01] ?? 0;
+                  if (Number.isFinite(val)) {
+                    valSum += w01 * val;
+                    weightSum += w01;
+                  }
+                }
+
+                const w11 = fx * fy;
+                if (occ11) {
+                  const val = model.scalar[idx11] ?? 0;
+                  if (Number.isFinite(val)) {
+                    valSum += w11 * val;
+                    weightSum += w11;
+                  }
+                }
+
+                if (weightSum > 1e-6) {
+                  return valSum / weightSum;
+                }
+
+                const nearestC = Math.max(0, Math.min(width - 1, Math.round(xCell)));
+                const nearestR = Math.max(0, Math.min(height - 1, Math.round(yCell)));
+                return model.scalar[nearestR * width + nearestC] ?? 0;
               };
 
-              const { scalarValues, verticesUv } = triangulateCutPolygons(
-                cutMesh.polygonOffsets,
-                cutMesh.polygonVertices,
-                cutMesh.parentElementIds,
-                sampleScalar,
-              );
+              let cutGeometry =
+                cutSurfaceCacheRef.current?.meshOverlay === model.meshOverlay &&
+                cutSurfaceCacheRef.current?.scalar === model.scalar
+                  ? cutSurfaceCacheRef.current.geometry
+                  : null;
+              if (!cutGeometry) {
+                cutGeometry = triangulateCutPolygons(
+                  cutMesh.polygonOffsets,
+                  cutMesh.polygonVertices,
+                  cutMesh.parentElementIds,
+                  sampleScalar,
+                );
+                cutSurfaceCacheRef.current = {
+                  geometry: cutGeometry,
+                  meshOverlay: model.meshOverlay,
+                  scalar: model.scalar,
+                };
+              }
 
-              if (verticesUv.length > 0) {
+              if (cutGeometry.verticesUv.length > 0) {
                 renderer.drawFemCutSurface({
                   bounds: model.bounds,
                   colormap: model.colormap,
                   opacity: model.rasterOpacity ?? 1,
                   range,
-                  scalarValues,
-                  verticesUv,
+                  scalarValues: cutGeometry.scalarValues,
+                  verticesUv: cutGeometry.verticesUv,
                 });
                 gpuRasterDrawn = true;
               }
@@ -266,9 +332,34 @@ export function usePlanarSurfaceRenderer(
       }
       gpuLayerDrawnRef.current = gpuRasterDrawn;
 
-      colorizerRef.current ??= createPlanarColorizer(
-        new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
-        ({ contours, pixels }) => {
+      if (gpuRasterDrawn && !model.layers.contours) {
+        colorizerRef.current?.dispose();
+        colorizerRef.current = null;
+        drawOverlayRef.current([]);
+        const current = modelRef.current;
+        const state = renderStateRef.current;
+        if (current.layers.raster && current.range) {
+          onRenderEvidence?.({
+            glyphCount: state.glyphs.length,
+            overlayCounts: {
+              boundsSegments: current.layers.bounds ? 4 : 0,
+              contours: 0,
+              meshSegments: state.mesh?.segmentCount ?? 0,
+              pointMarkers: current.samplePoints.length,
+            },
+            raster: {
+              checksum: planarRasterChecksum(current.scalar),
+              max: current.range.max,
+              min: current.range.min,
+              sampleCount: current.scalar.length,
+            },
+            sampleIdentity: current.sampleIdentity,
+          });
+        }
+      } else {
+        colorizerRef.current ??= createPlanarColorizer(
+          new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
+          ({ contours, pixels }) => {
           const current = modelRef.current;
           const state = renderStateRef.current;
           if (current.layers.raster && !gpuLayerDrawnRef.current) {
@@ -313,6 +404,7 @@ export function usePlanarSurfaceRenderer(
         opacity: model.rasterOpacity ?? 1,
         width: model.resolution[0],
       });
+      }
     } else {
       colorizerRef.current?.dispose();
       colorizerRef.current = null;

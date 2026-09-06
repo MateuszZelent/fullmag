@@ -324,6 +324,188 @@ fn interpolate_surface(a: &SurfaceVertex, b: &SurfaceVertex, t: f64) -> SurfaceV
     }
 }
 
+fn midpoint_vertex(a: &SurfaceVertex, b: &SurfaceVertex) -> SurfaceVertex {
+    interpolate_surface(a, b, 0.5)
+}
+
+fn evaluate_scalar_at_vertex(
+    vertex: &SurfaceVertex,
+    component: PlanarComponent,
+    frame: &ResolvedFrame,
+) -> f64 {
+    if vertex.value.len() == 1 {
+        vertex.value[0]
+    } else if component == PlanarComponent::Orientation {
+        f64::NAN
+    } else {
+        let v = [
+            vertex.value[0],
+            vertex.value.get(1).copied().unwrap_or(0.0),
+            vertex.value.get(2).copied().unwrap_or(0.0),
+        ];
+        super::element_evaluator::evaluate_vector_quantity(
+            v,
+            component,
+            frame.u,
+            frame.v,
+            frame.normal,
+        )
+    }
+}
+
+fn integrate_triangle_scalar_adaptive(
+    v0: &SurfaceVertex,
+    v1: &SurfaceVertex,
+    v2: &SurfaceVertex,
+    component: PlanarComponent,
+    frame: &ResolvedFrame,
+    depth: usize,
+) -> f64 {
+    let m0 = midpoint_vertex(v0, v1);
+    let m1 = midpoint_vertex(v1, v2);
+    let m2 = midpoint_vertex(v2, v0);
+
+    let s0 = evaluate_scalar_at_vertex(&m0, component, frame);
+    let s1 = evaluate_scalar_at_vertex(&m1, component, frame);
+    let s2 = evaluate_scalar_at_vertex(&m2, component, frame);
+    let coarse = (s0 + s1 + s2) / 3.0;
+
+    if depth >= 2 {
+        return coarse;
+    }
+
+    let mm0_01 = midpoint_vertex(v0, &m0);
+    let mm0_12 = midpoint_vertex(&m0, &m2);
+    let mm0_20 = midpoint_vertex(&m2, v0);
+    let sub0_coarse = (evaluate_scalar_at_vertex(&mm0_01, component, frame)
+        + evaluate_scalar_at_vertex(&mm0_12, component, frame)
+        + evaluate_scalar_at_vertex(&mm0_20, component, frame))
+        / 3.0;
+
+    let mm1_01 = midpoint_vertex(v1, &m1);
+    let mm1_12 = midpoint_vertex(&m1, &m0);
+    let mm1_20 = midpoint_vertex(&m0, v1);
+    let sub1_coarse = (evaluate_scalar_at_vertex(&mm1_01, component, frame)
+        + evaluate_scalar_at_vertex(&mm1_12, component, frame)
+        + evaluate_scalar_at_vertex(&mm1_20, component, frame))
+        / 3.0;
+
+    let mm2_01 = midpoint_vertex(v2, &m2);
+    let mm2_12 = midpoint_vertex(&m2, &m1);
+    let mm2_20 = midpoint_vertex(&m1, v2);
+    let sub2_coarse = (evaluate_scalar_at_vertex(&mm2_01, component, frame)
+        + evaluate_scalar_at_vertex(&mm2_12, component, frame)
+        + evaluate_scalar_at_vertex(&mm2_20, component, frame))
+        / 3.0;
+
+    let mm3_01 = midpoint_vertex(&m0, &m1);
+    let mm3_12 = midpoint_vertex(&m1, &m2);
+    let mm3_20 = midpoint_vertex(&m2, &m0);
+    let sub3_coarse = (evaluate_scalar_at_vertex(&mm3_01, component, frame)
+        + evaluate_scalar_at_vertex(&mm3_12, component, frame)
+        + evaluate_scalar_at_vertex(&mm3_20, component, frame))
+        / 3.0;
+
+    let fine = 0.25 * (sub0_coarse + sub1_coarse + sub2_coarse + sub3_coarse);
+    if (fine - coarse).abs() <= 1.0e-5 * (1.0 + fine.abs()) {
+        return fine;
+    }
+
+    let r0 = integrate_triangle_scalar_adaptive(v0, &m0, &m2, component, frame, depth + 1);
+    let r1 = integrate_triangle_scalar_adaptive(v1, &m1, &m0, component, frame, depth + 1);
+    let r2 = integrate_triangle_scalar_adaptive(v2, &m2, &m1, component, frame, depth + 1);
+    let r3 = integrate_triangle_scalar_adaptive(&m0, &m1, &m2, component, frame, depth + 1);
+    0.25 * (r0 + r1 + r2 + r3)
+}
+
+fn integrate_surface_quad(
+    vertices: &[&SurfaceVertex; 4],
+    component: PlanarComponent,
+    frame: &ResolvedFrame,
+) -> Option<(Vec<f64>, f64, f64, f64)> {
+    const GAUSS_PTS: [f64; 2] = [
+        0.5 - 0.28867513459481288225,
+        0.5 + 0.28867513459481288225,
+    ];
+    let n_comp = vertices[0].value.len();
+    let mut total_area = 0.0;
+    let mut integral = vec![0.0; n_comp];
+    let mut scalar_integral = 0.0;
+    let mut depth_integral = 0.0;
+
+    for &r in &GAUSS_PTS {
+        for &t in &GAUSS_PTS {
+            let n0 = (1.0 - r) * (1.0 - t);
+            let n1 = r * (1.0 - t);
+            let n2 = r * t;
+            let n3 = (1.0 - r) * t;
+
+            let dr_world = [0, 1, 2].map(|ax| {
+                -(1.0 - t) * vertices[0].world[ax]
+                    + (1.0 - t) * vertices[1].world[ax]
+                    + t * vertices[2].world[ax]
+                    - t * vertices[3].world[ax]
+            });
+            let dt_world = [0, 1, 2].map(|ax| {
+                -(1.0 - r) * vertices[0].world[ax]
+                    - r * vertices[1].world[ax]
+                    + r * vertices[2].world[ax]
+                    + (1.0 - r) * vertices[3].world[ax]
+            });
+            let normal = cross(dr_world, dt_world);
+            let da = 0.25 * dot(normal, normal).sqrt();
+            if da <= 1.0e-36 || !da.is_finite() {
+                continue;
+            }
+            total_area += da;
+
+            let val: Vec<f64> = (0..n_comp)
+                .map(|c| {
+                    n0 * vertices[0].value[c]
+                        + n1 * vertices[1].value[c]
+                        + n2 * vertices[2].value[c]
+                        + n3 * vertices[3].value[c]
+                })
+                .collect();
+
+            for c in 0..n_comp {
+                integral[c] += da * val[c];
+            }
+            if n_comp == 1 {
+                scalar_integral += da * val[0];
+            } else if component != PlanarComponent::Orientation {
+                let v = [
+                    val[0],
+                    val.get(1).copied().unwrap_or(0.0),
+                    val.get(2).copied().unwrap_or(0.0),
+                ];
+                let s = super::element_evaluator::evaluate_vector_quantity(
+                    v,
+                    component,
+                    frame.u,
+                    frame.v,
+                    frame.normal,
+                );
+                scalar_integral += da * s;
+            }
+            let depth = n0 * vertices[0].uvn[2]
+                + n1 * vertices[1].uvn[2]
+                + n2 * vertices[2].uvn[2]
+                + n3 * vertices[3].uvn[2];
+            depth_integral += da * depth;
+        }
+    }
+
+    (total_area > 0.0).then(|| {
+        (
+            integral.into_iter().map(|v| v / total_area).collect(),
+            scalar_integral / total_area,
+            total_area,
+            depth_integral / total_area,
+        )
+    })
+}
+
 fn integrate_surface_polygon(
     polygon: &[SurfaceVertex],
     component: PlanarComponent,
@@ -331,6 +513,12 @@ fn integrate_surface_polygon(
 ) -> Option<(Vec<f64>, f64, f64, f64)> {
     if polygon.len() < 3 {
         return None;
+    }
+    if polygon.len() == 4 {
+        let quad = [&polygon[0], &polygon[1], &polygon[2], &polygon[3]];
+        if let Some(res) = integrate_surface_quad(&quad, component, frame) {
+            return Some(res);
+        }
     }
     let mut area = 0.0;
     let n_comp = polygon[0].value.len();
@@ -358,49 +546,15 @@ fn integrate_surface_polygon(
                 * (vertices[0].value[0] + vertices[1].value[0] + vertices[2].value[0])
                 / 3.0;
         } else if component != PlanarComponent::Orientation {
-            let m0 = [
-                0.5 * (vertices[0].value[0] + vertices[1].value[0]),
-                0.5 * (vertices[0].value.get(1).copied().unwrap_or(0.0)
-                    + vertices[1].value.get(1).copied().unwrap_or(0.0)),
-                0.5 * (vertices[0].value.get(2).copied().unwrap_or(0.0)
-                    + vertices[1].value.get(2).copied().unwrap_or(0.0)),
-            ];
-            let m1 = [
-                0.5 * (vertices[1].value[0] + vertices[2].value[0]),
-                0.5 * (vertices[1].value.get(1).copied().unwrap_or(0.0)
-                    + vertices[2].value.get(1).copied().unwrap_or(0.0)),
-                0.5 * (vertices[1].value.get(2).copied().unwrap_or(0.0)
-                    + vertices[2].value.get(2).copied().unwrap_or(0.0)),
-            ];
-            let m2 = [
-                0.5 * (vertices[2].value[0] + vertices[0].value[0]),
-                0.5 * (vertices[2].value.get(1).copied().unwrap_or(0.0)
-                    + vertices[0].value.get(1).copied().unwrap_or(0.0)),
-                0.5 * (vertices[2].value.get(2).copied().unwrap_or(0.0)
-                    + vertices[0].value.get(2).copied().unwrap_or(0.0)),
-            ];
-            let s0 = super::element_evaluator::evaluate_vector_quantity(
-                m0,
+            let sc_mean = integrate_triangle_scalar_adaptive(
+                vertices[0],
+                vertices[1],
+                vertices[2],
                 component,
-                frame.u,
-                frame.v,
-                frame.normal,
+                frame,
+                0,
             );
-            let s1 = super::element_evaluator::evaluate_vector_quantity(
-                m1,
-                component,
-                frame.u,
-                frame.v,
-                frame.normal,
-            );
-            let s2 = super::element_evaluator::evaluate_vector_quantity(
-                m2,
-                component,
-                frame.u,
-                frame.v,
-                frame.normal,
-            );
-            scalar_integral += triangle_area * (s0 + s1 + s2) / 3.0;
+            scalar_integral += triangle_area * sc_mean;
         }
         depth_integral +=
             triangle_area * (vertices[0].uvn[2] + vertices[1].uvn[2] + vertices[2].uvn[2]) / 3.0;

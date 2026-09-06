@@ -465,6 +465,7 @@ pub(super) fn finish_reduction_dual(
         let v_vals = vector_values.as_ref().unwrap();
         let orientation_epsilon = v_vals
             .iter()
+            .filter(|v| v[0].is_finite() && v[1].is_finite() && v[2].is_finite())
             .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
             .fold(0.0_f64, f64::max)
             * 1.0e-12;

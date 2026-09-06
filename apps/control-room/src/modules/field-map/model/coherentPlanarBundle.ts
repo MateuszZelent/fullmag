@@ -133,6 +133,24 @@ export function validateCoherentPlanarBundle(
   if (isFmvp(scalarBuffer)) {
     try {
       const decoded = decodeFieldVector(scalarBuffer);
+      if (decoded.quantityId !== meta.quantity_id) {
+        return {
+          ok: false,
+          reason: `quantity_mismatch: expected ${meta.quantity_id}, got ${decoded.quantityId}`,
+        };
+      }
+      if (decoded.grid[0] !== w || decoded.grid[1] !== h || decoded.grid[2] !== 1) {
+        return {
+          ok: false,
+          reason: `grid_shape_mismatch: expected [${w}, ${h}, 1], got [${decoded.grid.join(", ")}]`,
+        };
+      }
+      if (decoded.nComp !== 1) {
+        return {
+          ok: false,
+          reason: `component_count_mismatch: expected 1 for scalar, got ${decoded.nComp}`,
+        };
+      }
       scalarData = decoded.values;
     } catch (e) {
       return {
@@ -166,6 +184,24 @@ export function validateCoherentPlanarBundle(
     if (isFmvp(vectorsBuffer)) {
       try {
         const decoded = decodeFieldVector(vectorsBuffer);
+        if (decoded.quantityId !== meta.quantity_id) {
+          return {
+            ok: false,
+            reason: `quantity_mismatch: expected ${meta.quantity_id}, got ${decoded.quantityId}`,
+          };
+        }
+        if (decoded.grid[0] !== w || decoded.grid[1] !== h || decoded.grid[2] !== 1) {
+          return {
+            ok: false,
+            reason: `grid_shape_mismatch: expected [${w}, ${h}, 1], got [${decoded.grid.join(", ")}]`,
+          };
+        }
+        if (decoded.nComp !== 3) {
+          return {
+            ok: false,
+            reason: `component_count_mismatch: expected 3 for vectors, got ${decoded.nComp}`,
+          };
+        }
         vectorsData = decoded.values;
       } catch (e) {
         return {
@@ -195,6 +231,15 @@ export function validateCoherentPlanarBundle(
   }
 
   const maskData = new Uint8Array(maskBuffer);
+  for (let i = 0; i < maskData.length; i++) {
+    const code = maskData[i]!;
+    if (code > 4) {
+      return {
+        ok: false,
+        reason: `invalid_occupancy_mask_code: unknown occupancy code ${code} at index ${i}`,
+      };
+    }
+  }
 
   return {
     ok: true,

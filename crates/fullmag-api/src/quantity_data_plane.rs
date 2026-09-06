@@ -21,6 +21,7 @@
 //! Simple LRU by access generation with a configurable memory budget.  Entries are evicted when
 //! the total cached byte count exceeds `max_bytes` or entry count exceeds `max_entries`.
 
+use crate::error::ApiError;
 use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::planar_sampling::{BuiltPlanarField, PlanarExecutionService, PlanarSampleResult};
 use serde_json::Value;
@@ -200,10 +201,13 @@ impl PlanarSampleCache {
         entry.built.as_ref().map(Arc::clone)
     }
 
-    pub fn insert(&mut self, key: String, result: Arc<PlanarSampleResult>) {
+    pub fn insert(&mut self, key: String, result: Arc<PlanarSampleResult>) -> Result<(), ApiError> {
         let estimated_bytes = estimate_planar_sample_bytes(&result);
         if estimated_bytes > self.max_bytes || self.max_entries == 0 {
-            return;
+            return Err(ApiError::unprocessable(format!(
+                "Planar sample exceeds retention cache budget (estimated {} bytes, limit {} bytes)",
+                estimated_bytes, self.max_bytes
+            )));
         }
         if let Some(previous) = self.entries.remove(&key) {
             self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
@@ -234,16 +238,20 @@ impl PlanarSampleCache {
             },
         );
         self.total_bytes += estimated_bytes;
+        Ok(())
     }
 
-    pub fn insert_built(&mut self, key: String, built: Arc<BuiltPlanarField>) {
+    pub fn insert_built(&mut self, key: String, built: Arc<BuiltPlanarField>) -> Result<(), ApiError> {
         let result = Arc::clone(&built.result);
         let sample_bytes = estimate_planar_sample_bytes(&result);
         let target_bytes = built.target.estimated_bytes();
         let estimated_bytes =
             sample_bytes + target_bytes + std::mem::size_of::<BuiltPlanarField>();
         if estimated_bytes > self.max_bytes || self.max_entries == 0 {
-            return;
+            return Err(ApiError::unprocessable(format!(
+                "Planar sample exceeds retention cache budget (estimated {} bytes, limit {} bytes)",
+                estimated_bytes, self.max_bytes
+            )));
         }
         if let Some(previous) = self.entries.remove(&key) {
             self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
@@ -274,31 +282,34 @@ impl PlanarSampleCache {
             },
         );
         self.total_bytes += estimated_bytes;
+        Ok(())
     }
 }
 
 fn estimate_planar_sample_bytes(result: &PlanarSampleResult) -> usize {
-    let scalar = result.scalar_values.len() * std::mem::size_of::<f64>();
+    let scalar = result.scalar_values.capacity() * std::mem::size_of::<f64>();
     let vectors = result
         .vector_values
         .as_ref()
-        .map_or(0, |values| values.len() * std::mem::size_of::<[f64; 3]>());
+        .map_or(0, |values| values.capacity() * std::mem::size_of::<[f64; 3]>());
     let occupancy =
-        result.occupancy.len() * std::mem::size_of::<crate::planar_sampling::Occupancy>();
-    let source_ids = result.source_entity_ids.len() * std::mem::size_of::<Option<u32>>();
+        result.occupancy.capacity() * std::mem::size_of::<crate::planar_sampling::Occupancy>();
+    let source_ids = result.source_entity_ids.capacity() * std::mem::size_of::<Option<u32>>();
     let overlay = result.overlay.as_ref().map_or(0, |overlay| {
         overlay
             .polygons
             .iter()
             .map(|polygon| {
                 std::mem::size_of_val(polygon)
-                    + polygon.vertices_uv_m.len() * std::mem::size_of::<[f64; 2]>()
+                    + polygon.vertices_uv_m.capacity() * std::mem::size_of::<[f64; 2]>()
             })
             .sum::<usize>()
-            + overlay.segments.len()
+            + overlay.polygons.capacity()
+                * std::mem::size_of::<crate::planar_sampling::PlanarOverlayPolygon>()
+            + overlay.segments.capacity()
                 * std::mem::size_of::<crate::planar_sampling::PlanarOverlaySegment>()
     });
-    scalar + vectors + occupancy + source_ids + overlay
+    std::mem::size_of::<PlanarSampleResult>() + scalar + vectors + occupancy + source_ids + overlay
 }
 
 impl JsonResourceCache {
@@ -716,7 +727,7 @@ impl QuantityDataPlaneStore {
 
         if let Ok(sampled) = &sample_result {
             let mut cache = self.planar_sample_cache.lock().await;
-            cache.insert(key.to_string(), Arc::clone(sampled));
+            let _ = cache.insert(key.to_string(), Arc::clone(sampled));
         }
 
         let tx = {
@@ -736,8 +747,12 @@ impl QuantityDataPlaneStore {
         self.planar_sample_cache.lock().await.get_built(key)
     }
 
-    pub(crate) async fn insert_cached_built_field(&self, key: String, built: Arc<BuiltPlanarField>) {
-        self.planar_sample_cache.lock().await.insert_built(key, built);
+    pub(crate) async fn insert_cached_built_field(
+        &self,
+        key: String,
+        built: Arc<BuiltPlanarField>,
+    ) -> Result<(), ApiError> {
+        self.planar_sample_cache.lock().await.insert_built(key, built)
     }
 }
 
@@ -815,14 +830,14 @@ mod tests {
         let small = planar_sample(4);
         let estimated = estimate_planar_sample_bytes(&small);
         let mut cache = PlanarSampleCache::new(2, estimated * 2);
-        cache.insert("first".to_string(), Arc::clone(&small));
+        cache.insert("first".to_string(), Arc::clone(&small)).unwrap();
 
         let hit = cache.get("first").expect("cached planar sample");
         assert!(Arc::ptr_eq(&hit, &small));
 
-        cache.insert("second".to_string(), planar_sample(4));
+        cache.insert("second".to_string(), planar_sample(4)).unwrap();
         let _ = cache.get("second");
-        cache.insert("third".to_string(), planar_sample(4));
+        cache.insert("third".to_string(), planar_sample(4)).unwrap();
         assert!(
             cache.get("first").is_none(),
             "least-recent sample is evicted"

@@ -452,3 +452,151 @@ fn test_py10_point_tetrahedron_distance_feature_rank() {
     );
 }
 
+#[test]
+fn test_d05_rank2_small_scale_distance() {
+    for scale in [1.0, 1e-6, 1e-13, 1e6] {
+        let v0 = [1.0 * scale, 0.0, 0.0];
+        let v1 = [0.0, 1.0 * scale, 0.0];
+        let v2 = [-1.0 * scale, -1.0 * scale, 0.0];
+        let v3 = [1.0 * scale, 0.0, 0.0];
+        let p = [0.0, 0.0, 0.0];
+        let dist = crate::planar_sampling::element_evaluator::point_tetrahedron_distance(p, v0, v1, v2, v3);
+        assert!(
+            dist < 1e-11 * scale,
+            "D05: Rank-2 distance at scale {scale} must be zero, got {dist}"
+        );
+    }
+}
+
+#[test]
+fn test_d06_infinite_vector_does_not_contaminate_finite_neighbors() {
+    let field = FdmPlanarField::new(
+        3,
+        [2, 1, 1],
+        [0.0; 3],
+        [1.0; 3],
+        vec![1.0, 0.0, 0.0, f64::INFINITY, 0.0, 0.0],
+    )
+    .unwrap();
+    let frame = explicit_frame(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 2.0, 0.0, 1.0],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::PlaneSample,
+        [2, 1],
+        PlanarComponent::Orientation,
+    );
+    let result = PlanarSamplingEngine::sample_fdm(&field, &req).unwrap();
+    assert_eq!(
+        result.occupancy[0],
+        Occupancy::Occupied,
+        "D06: Valid vector must remain Occupied, not contaminated by Inf neighbor"
+    );
+    assert!(
+        (result.scalar_values[0] - 0.0).abs() < 1e-6,
+        "D06: In-plane orientation angle must be 0 for [1, 0, 0], got {}",
+        result.scalar_values[0]
+    );
+    assert_eq!(
+        result.occupancy[1],
+        Occupancy::UndefinedOrientation,
+        "D06: Infinite vector must produce UndefinedOrientation"
+    );
+}
+
+#[test]
+fn test_d04_surface_shifted_abs_exact_quadrature() {
+    let nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ];
+    let values = vec![
+        -0.5, 0.0, 0.0, // node 0 (0,0,0)
+        0.5, 0.0, 0.0,  // node 1 (1,0,0)
+        -0.5, 0.0, 0.0, // node 2 (0,1,0)
+        -0.5, 0.0, 0.0, // node 3 (0,0,-1)
+    ];
+    let field = FemPlanarField::new(3, nodes, vec![[0, 1, 2, 3]], vec![1], values).unwrap();
+    let frame = explicit_frame(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::SurfaceProjection {
+            boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+            visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+        },
+        [1, 1],
+        PlanarComponent::Magnitude,
+    );
+    let result = PlanarSamplingEngine::sample_fem(&field, &req).unwrap();
+    let val = result.scalar_values[0];
+    // Analytical integral of |x - 1/2| over unit right triangle is exactly 1/4 = 0.25.
+    assert!(
+        (val - 0.25).abs() < 1e-4,
+        "D04: Surface quadrature on |x - 1/2| must be 0.25, got {val}"
+    );
+}
+
+#[test]
+fn test_d04_py11_prism6_quad_face_exact_quadrature() {
+    // Prism with triangular base in XZ: (0,0,0), (1,0,0), (0,0,1) extruded along Y from 0 to 1
+    let nodes = vec![
+        [0.0, 0.0, 0.0], // 0
+        [1.0, 0.0, 0.0], // 1
+        [0.0, 0.0, 1.0], // 2
+        [0.0, 1.0, 0.0], // 3
+        [1.0, 1.0, 0.0], // 4
+        [0.0, 1.0, 1.0], // 5
+    ];
+    // Quad face [0, 1, 4, 3] lies in Z=0 plane: x in [0, 1], y in [0, 1]
+    // Value at (1, 1, 0) node 4 is 1.0, all other nodes are 0.0 -> f(x, y) = x * y
+    let mut values = vec![0.0; 6];
+    values[4] = 1.0;
+    let field = FemPlanarField::new_mixed(
+        1,
+        nodes,
+        vec![FemPlanarElement::Prism6([0, 1, 2, 3, 4, 5])],
+        vec![1],
+        values,
+    )
+    .unwrap();
+
+    // Frame on Z=0 quad face: origin [0,0,0], U along X, V along Y, normal along -Z
+    let frame = explicit_frame(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0, 1.0],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::SurfaceProjection {
+            boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+            visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+        },
+        [1, 1],
+        PlanarComponent::Scalar,
+    );
+    let result = PlanarSamplingEngine::sample_fem(&field, &req).unwrap();
+    let val = result.scalar_values[0];
+    // Analytical integral of x * y over unit square [0,1]^2 is exactly 1/4 = 0.25.
+    // Piecewise-linear triangle split gave 1/3 ≈ 0.33333. Gauss 2x2 gives exactly 0.25.
+    assert!(
+        (val - 0.25).abs() < 1e-4,
+        "D04/PY11: Prism6 quad face bilinear f=x*y integral must be 0.25, got {val}"
+    );
+}
+

@@ -507,6 +507,7 @@ fn apply_component(
     if request.operator == PlanarOperatorIR::PlaneSample {
         let orientation_epsilon = vectors
             .iter()
+            .filter(|v| v[0].is_finite() && v[1].is_finite() && v[2].is_finite())
             .map(|vector| dot(*vector, *vector).sqrt())
             .fold(0.0_f64, f64::max)
             * 1.0e-12;

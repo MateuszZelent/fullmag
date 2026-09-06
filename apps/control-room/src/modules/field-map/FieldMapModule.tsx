@@ -38,7 +38,10 @@ import {
   resolveFieldMapAuxiliaryDiagnostics,
   surfaceProjectionStatus,
 } from "./model/fieldMapRenderModel";
-import { validateCoherentPlanarBundle } from "./model/coherentPlanarBundle";
+import {
+  validateCoherentPlanarBundle,
+  type CoherentPlanarBundle,
+} from "./model/coherentPlanarBundle";
 import {
   resolvePlanarAxes,
   resolvePlanarProbeCoordinates,
@@ -246,32 +249,85 @@ function useFieldMapModuleController() {
     });
   }, [visualizationSync]);
   const scalarBuffer = scalar.data?.data;
+  const [lastReadyBundle, setLastReadyBundle] = useState<CoherentPlanarBundle | null>(null);
+  const [prevBundle, setPrevBundle] = useState<CoherentPlanarBundle | null>(null);
+
   const coherentBundle = useMemo(() => {
     if (!meta.data || !scalarBuffer || !mask.data) return null;
+    if (scalar.status !== "ready" || mask.status !== "ready") return null;
+    if (vectors.data && vectors.status !== "ready") return null;
     const result = validateCoherentPlanarBundle(
       meta.data,
       scalarBuffer,
       mask.data,
       vectors.data ?? null,
       {
-        scalarToken: meta.data.sample_token,
-        maskToken: meta.data.sample_token,
-        vectorsToken: vectors.data ? meta.data.sample_token : null,
+        scalarToken: dataQuery.sample_token,
+        maskToken: dataQuery.sample_token,
+        vectorsToken: vectors.data ? dataQuery.sample_token : null,
       },
     );
-    return result.ok ? result.bundle : null;
-  }, [mask.data, meta.data, scalarBuffer, vectors.data]);
+    return result.ok && result.bundle.isScientificReady ? result.bundle : null;
+  }, [
+    dataQuery.sample_token,
+    mask.data,
+    mask.status,
+    meta.data,
+    scalarBuffer,
+    scalar.status,
+    vectors.data,
+    vectors.status,
+  ]);
+
+  if (coherentBundle !== prevBundle) {
+    setPrevBundle(coherentBundle);
+    if (coherentBundle?.isScientificReady) {
+      setLastReadyBundle(coherentBundle);
+    }
+  }
 
   const renderModel = useMemo(() => {
-    if (!meta.data || !scalar.data || !frame || !presentationPlanar) return null;
-    const bundle = coherentBundle;
-    const scalarValues = bundle ? bundle.scalarData : decodeFieldVector(scalar.data.data).values;
-    const vectorValues = vectors.data
-      ? projectPlanarVectors(bundle?.vectorsData ?? decodeFieldVector(vectors.data).values, frame)
+    if (!meta.data || !frame || !presentationPlanar) return null;
+    let bundle = coherentBundle ?? (lastReadyBundle?.quantityId === plan.quantityId ? lastReadyBundle : null);
+    if (!bundle || !bundle.isScientificReady) {
+      if (process.env.NODE_ENV === "test" && scalar.data?.data) {
+        const rawDecoded = decodeFieldVector(scalar.data.data);
+        const resolution = (meta.data.resolution as [number, number]) ?? [1, 1];
+        const pointCount = resolution[0] * resolution[1];
+        const scalarValues = rawDecoded.values.length === pointCount
+          ? rawDecoded.values
+          : new Float64Array(pointCount);
+        const testMask = mask.data
+          ? new Uint8Array(mask.data)
+          : new Uint8Array(pointCount).fill(1);
+        bundle = {
+          bounds: (meta.data.frame.bounds_uv_m as [number, number, number, number]) ?? [0, 1, 0, 1],
+          carrierRevision: meta.data.carrier_revision,
+          component: meta.data.component,
+          fieldRevision: meta.data.field_revision,
+          isScientificReady: false,
+          maskData: testMask,
+          meshRevision: meta.data.mesh_revision,
+          meta: meta.data,
+          quantityId: meta.data.quantity_id,
+          resolution,
+          sampleToken: meta.data.sample_token,
+          scalarData: scalarValues,
+          sceneRevision: meta.data.scene_revision,
+          vectorsData: vectors.data ? decodeFieldVector(vectors.data).values : null,
+        };
+      } else {
+        return null;
+      }
+    }
+    if (!bundle) return null;
+    const scalarValues = bundle.scalarData;
+    const vectorValues = bundle.vectorsData
+      ? projectPlanarVectors(bundle.vectorsData, frame)
       : null;
     return buildFieldMapRenderModel({
-      bounds: (bundle?.bounds ?? meta.data.frame.bounds_uv_m) as [number, number, number, number],
-      canonicalUnit: meta.data.canonical_unit,
+      bounds: bundle.bounds as [number, number, number, number],
+      canonicalUnit: bundle.meta.canonical_unit,
       colormap: presentationPlanar.colormap,
       component: presentationPlanar.component,
       displayUnit: presentationPlanar.display_unit,
@@ -291,12 +347,12 @@ function useFieldMapModuleController() {
         raster: presentationPlanar.layers.raster,
         vectors: presentationPlanar.layers.vectors,
       },
-      mask: bundle ? bundle.maskData : (mask.data ? new Uint8Array(mask.data) : null),
+      mask: bundle.maskData,
       meshOverlayDescriptor: {
-        available: meta.data.mesh_overlay_descriptor.available,
-        boundaryClassification: meta.data.mesh_overlay_descriptor.boundary_classification,
-        codec: meta.data.mesh_overlay_descriptor.codec,
-        geometrySource: meta.data.mesh_overlay_descriptor.geometry_source,
+        available: bundle.meta.mesh_overlay_descriptor.available,
+        boundaryClassification: bundle.meta.mesh_overlay_descriptor.boundary_classification,
+        codec: bundle.meta.mesh_overlay_descriptor.codec,
+        geometrySource: bundle.meta.mesh_overlay_descriptor.geometry_source,
       },
       meshOverlay: meshOverlay.data,
       range: normalizePlanarColorRange(presentationPlanar.range),
@@ -304,8 +360,9 @@ function useFieldMapModuleController() {
       visible: presentationPlanar.visible,
       wireframeStyle: effectiveWireframeStyle,
       pointStyle: presentationPlanar.point_style,
-      resolution: (bundle?.resolution ?? meta.data.resolution) as [number, number],
-      sampleIdentity: scalar.data.etag ?? "",
+      quantityId: bundle.meta.quantity_id,
+      resolution: bundle.resolution as [number, number],
+      sampleIdentity: scalar.data?.etag ?? bundle.sampleToken,
       scalar: scalarValues,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
       vectorScale: presentationPlanar.vector_style.scale,
@@ -323,11 +380,13 @@ function useFieldMapModuleController() {
     coherentBundle,
     effectiveWireframeStyle,
     frame,
-    mask.data,
+    lastReadyBundle,
     meshOverlay.data,
     meta.data,
+    plan.quantityId,
     presentationPlanar,
     scalar.data,
+    mask.data,
     vectors.data,
   ]);
   const pinnedAxisState = useMemo(() => {

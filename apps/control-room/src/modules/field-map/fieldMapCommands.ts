@@ -380,6 +380,29 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           ? context.api.model.planarMonitors.get(source.monitorId)
           : Promise.resolve(null),
       ]);
+      let resolvedMin = planar.range?.min ?? 0;
+      let resolvedMax = planar.range?.max ?? 0;
+      if (
+        planar.range?.mode === "auto" ||
+        planar.range?.mode === "symmetric" ||
+        (resolvedMin === 0 && resolvedMax === 0)
+      ) {
+        if (
+          meta.scalar_min !== undefined &&
+          meta.scalar_min !== null &&
+          meta.scalar_max !== undefined &&
+          meta.scalar_max !== null
+        ) {
+          if (planar.range?.mode === "symmetric") {
+            const absMax = Math.max(Math.abs(meta.scalar_min), Math.abs(meta.scalar_max));
+            resolvedMin = -absMax;
+            resolvedMax = absMax;
+          } else {
+            resolvedMin = meta.scalar_min;
+            resolvedMax = meta.scalar_max;
+          }
+        }
+      }
       const spec: PlanarFigureSpec = {
         backgroundPolicy: "solid",
         camera: {
@@ -408,8 +431,8 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         },
         quantityId: planar.quantity_id,
         range: {
-          max: planar.range?.max ?? 0,
-          min: planar.range?.min ?? 0,
+          max: resolvedMax,
+          min: resolvedMin,
           mode: planar.range?.mode ?? "auto",
         },
         rasterOpacity: planar.raster_opacity ?? 1,
@@ -429,6 +452,44 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         },
       };
       const manifest = buildPlanarExportManifest(spec, {
+        datasetMetadata: {
+          carrierRevision: meta.carrier_revision,
+          frame: {
+            boundsUvM: [
+              meta.frame.bounds_uv_m[0] ?? 0,
+              meta.frame.bounds_uv_m[1] ?? 0,
+              meta.frame.bounds_uv_m[2] ?? 0,
+              meta.frame.bounds_uv_m[3] ?? 0,
+            ],
+            normal: [
+              meta.frame.normal?.[0] ?? 0,
+              meta.frame.normal?.[1] ?? 0,
+              meta.frame.normal?.[2] ?? 0,
+            ],
+            originM: [
+              meta.frame.origin_m?.[0] ?? 0,
+              meta.frame.origin_m?.[1] ?? 0,
+              meta.frame.origin_m?.[2] ?? 0,
+            ],
+            uAxis: [
+              meta.frame.u_axis?.[0] ?? 0,
+              meta.frame.u_axis?.[1] ?? 0,
+              meta.frame.u_axis?.[2] ?? 0,
+            ],
+            vAxis: [
+              meta.frame.v_axis?.[0] ?? 0,
+              meta.frame.v_axis?.[1] ?? 0,
+              meta.frame.v_axis?.[2] ?? 0,
+            ],
+          },
+          meshRevision: meta.mesh_revision,
+          operator: meta.operator,
+          sampleSupport: meta.sample_support,
+          sceneRevision: meta.scene_revision,
+          scopeId: meta.scope_id,
+          scopeKind: meta.scope_kind,
+          source: meta.source,
+        },
         samplerVersion: meta.sampler_version ?? "planar_sampling_v1",
       });
       const filenameBase = planarExportFilename({
