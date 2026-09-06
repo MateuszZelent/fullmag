@@ -8,6 +8,7 @@ import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
 import { viewportToRasterSpace } from "../model/planarViewTransform";
 import type { ContourSegment } from "./marchingSquares";
 import { decodePlanarMeshOverlayForDescriptor } from "./meshOverlay";
+import { triangulateCutPolygons } from "./femCutSurfaceLayer";
 import { createPlanarColorizer } from "./planarColorizer";
 import {
   createPlanarRenderer,
@@ -32,6 +33,7 @@ export function usePlanarSurfaceRenderer(
   const colorizerRef = useRef<ReturnType<typeof createPlanarColorizer> | null>(null);
   const drawOverlayRef = useRef<(contours?: readonly ContourSegment[]) => void>(() => undefined);
   const modelRef = useRef(model);
+  const gpuLayerDrawnRef = useRef(false);
   const renderStateRef = useRef<{
     axisPointer: { u: number; v: number } | null;
     contours: readonly ContourSegment[];
@@ -171,7 +173,11 @@ export function usePlanarSurfaceRenderer(
       ? null
       : { min: rangeMin, max: rangeMax };
     const needsColorizer = range !== null && (model.layers.raster || model.layers.contours);
-    if (!model.layers.raster || !needsColorizer) renderer.clearBase();
+    let gpuRasterDrawn = false;
+    if (!model.layers.raster || !needsColorizer) {
+      renderer.clearBase();
+      gpuLayerDrawnRef.current = false;
+    }
     if (needsColorizer) {
       if (renderer.getRendererKind() === "gpu" && model.layers.raster) {
         const isFdm = model.meshOverlayDescriptor?.codec === "fmfg.v1" ||
@@ -186,15 +192,64 @@ export function usePlanarSurfaceRenderer(
             resolution: model.resolution,
             scalar: model.scalar,
           });
+          gpuRasterDrawn = true;
+        } else if (
+          renderer.drawFemCutSurface &&
+          model.meshOverlay &&
+          (model.meshOverlayDescriptor?.codec === "fmcs.v4" ||
+           model.meshOverlayDescriptor?.codec === "fmcs.v3" ||
+           model.meshOverlayDescriptor?.geometrySource === "fem_volume_mesh")
+        ) {
+          try {
+            const cutMesh = decodePlanarMeshOverlayForDescriptor(model.meshOverlay, model.meshOverlayDescriptor ?? {});
+            if (cutMesh.polygonOffsets && cutMesh.polygonVertices && cutMesh.polygonOffsets.length > 1) {
+              const width = model.resolution[0];
+              const height = model.resolution[1];
+              const uMin = model.bounds[0];
+              const uMax = model.bounds[1];
+              const vMin = model.bounds[2];
+              const vMax = model.bounds[3];
+              const uSpan = Math.max(1e-15, uMax - uMin);
+              const vSpan = Math.max(1e-15, vMax - vMin);
+
+              const sampleScalar = (_vertIdx: number, u: number, v: number) => {
+                const col = Math.min(width - 1, Math.max(0, Math.round(((u - uMin) / uSpan) * (width - 1))));
+                const row = Math.min(height - 1, Math.max(0, Math.round(((v - vMin) / vSpan) * (height - 1))));
+                return model.scalar[row * width + col] ?? 0;
+              };
+
+              const { scalarValues, verticesUv } = triangulateCutPolygons(
+                cutMesh.polygonOffsets,
+                cutMesh.polygonVertices,
+                cutMesh.parentElementIds,
+                sampleScalar,
+              );
+
+              if (verticesUv.length > 0) {
+                renderer.drawFemCutSurface({
+                  bounds: model.bounds,
+                  colormap: model.colormap,
+                  opacity: model.rasterOpacity ?? 1,
+                  range,
+                  scalarValues,
+                  verticesUv,
+                });
+                gpuRasterDrawn = true;
+              }
+            }
+          } catch {
+            // Fall back to CPU colorizer raster
+          }
         }
       }
+      gpuLayerDrawnRef.current = gpuRasterDrawn;
 
       colorizerRef.current ??= createPlanarColorizer(
         new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
         ({ contours, pixels }) => {
           const current = modelRef.current;
           const state = renderStateRef.current;
-          if (current.layers.raster) {
+          if (current.layers.raster && !gpuLayerDrawnRef.current) {
             rendererRef.current?.draw(pixels, current.resolution[0], current.resolution[1]);
           }
           drawOverlayRef.current(contours);

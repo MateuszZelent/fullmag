@@ -135,11 +135,11 @@ export function drawPlanarOverlays(
 
   if (layers.layers?.contours !== false && layers.contours?.length) {
     const gridHeight = layers.gridHeight ?? layers.gridWidth;
-    const viewport = layers.viewport ?? [0, layers.gridWidth - 1, 0, gridHeight - 1];
+    const viewport = layers.viewport ?? [0, layers.gridWidth, 0, gridHeight];
     const mapX = (value: number) =>
-      ((value - viewport[0]) / Math.max(1e-12, viewport[1] - viewport[0])) * canvasWidth;
+      ((value + 0.5 - viewport[0]) / Math.max(1e-12, viewport[1] - viewport[0])) * canvasWidth;
     const mapY = (value: number) =>
-      canvasHeight - ((value - viewport[2]) / Math.max(1e-12, viewport[3] - viewport[2])) * canvasHeight;
+      canvasHeight - ((value + 0.5 - viewport[2]) / Math.max(1e-12, viewport[3] - viewport[2])) * canvasHeight;
     context.beginPath();
     for (const [x0, y0, x1, y1] of layers.contours) {
       context.moveTo(mapX(x0), mapY(y0));

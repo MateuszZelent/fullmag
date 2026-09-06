@@ -36,6 +36,12 @@ import {
 } from "./femCutSurfaceLayer";
 import type { PlanarRenderer } from "./planarRenderer";
 
+type PendingDraw =
+  | { kind: "fem"; input: FemCutSurfaceInput }
+  | { kind: "fdm"; input: FdmCellLayerInput }
+  | { kind: "raster"; pixels: Uint8ClampedArray; width: number; height: number }
+  | null;
+
 export interface PlanarGpuRenderer extends PlanarRenderer {
   drawFemCutSurface(input: FemCutSurfaceInput): void;
   drawFdmCells(input: FdmCellLayerInput): void;
@@ -91,6 +97,7 @@ export function createPlanarGpuRenderer(
   camera.lookAt(0, 0, 0);
 
   let contextLost = false;
+  let pendingDraw: PendingDraw = null;
   let view: {
     bounds: readonly [number, number, number, number];
     viewport: readonly [number, number, number, number];
@@ -104,11 +111,34 @@ export function createPlanarGpuRenderer(
   const handleContextLost = (event: Event) => {
     event.preventDefault();
     contextLost = true;
+    if (femMesh) {
+      scene.remove(femMesh);
+      disposeFemCutSurfaceMesh(femMesh);
+      femMesh = null;
+    }
+    if (fdmMesh) {
+      scene.remove(fdmMesh);
+      disposeFdmCellMesh(fdmMesh);
+      fdmMesh = null;
+    }
+    disposeRaster();
   };
 
   const handleContextRestored = () => {
     contextLost = false;
-    paint();
+    if (pendingDraw) {
+      const pending = pendingDraw;
+      pendingDraw = null;
+      if (pending.kind === "fem") {
+        drawFemCutSurface(pending.input);
+      } else if (pending.kind === "fdm") {
+        drawFdmCells(pending.input);
+      } else if (pending.kind === "raster") {
+        draw(pending.pixels, pending.width, pending.height);
+      }
+    } else {
+      paint();
+    }
   };
 
   canvas.addEventListener("webglcontextlost", handleContextLost, false);
@@ -136,17 +166,7 @@ export function createPlanarGpuRenderer(
     renderer.render(scene, camera);
   };
 
-  const clearBase = () => {
-    if (femMesh) {
-      scene.remove(femMesh);
-      disposeFemCutSurfaceMesh(femMesh);
-      femMesh = null;
-    }
-    if (fdmMesh) {
-      scene.remove(fdmMesh);
-      disposeFdmCellMesh(fdmMesh);
-      fdmMesh = null;
-    }
+  const disposeRaster = () => {
     if (rasterMesh) {
       scene.remove(rasterMesh);
       rasterMesh.geometry.dispose();
@@ -157,12 +177,28 @@ export function createPlanarGpuRenderer(
       rasterTexture.dispose();
       rasterTexture = null;
     }
+  };
+
+  const clearBase = () => {
+    pendingDraw = null;
+    if (femMesh) {
+      scene.remove(femMesh);
+      disposeFemCutSurfaceMesh(femMesh);
+      femMesh = null;
+    }
+    if (fdmMesh) {
+      scene.remove(fdmMesh);
+      disposeFdmCellMesh(fdmMesh);
+      fdmMesh = null;
+    }
+    disposeRaster();
     if (renderer && !contextLost) {
       renderer.clear();
     }
   };
 
   const drawFemCutSurface = (input: FemCutSurfaceInput) => {
+    pendingDraw = { kind: "fem", input };
     if (contextLost) return;
     const originOffset: [number, number] = [
       (input.bounds[0] + input.bounds[1]) / 2,
@@ -174,10 +210,7 @@ export function createPlanarGpuRenderer(
       disposeFdmCellMesh(fdmMesh);
       fdmMesh = null;
     }
-    if (rasterMesh) {
-      scene.remove(rasterMesh);
-      rasterMesh = null;
-    }
+    disposeRaster();
 
     if (femMesh) {
       updateFemCutSurfaceGeometry(femMesh.geometry as BufferGeometry, {
@@ -212,6 +245,7 @@ export function createPlanarGpuRenderer(
   };
 
   const drawFdmCells = (input: FdmCellLayerInput) => {
+    pendingDraw = { kind: "fdm", input };
     if (contextLost) return;
     const originOffset: [number, number] = [
       (input.bounds[0] + input.bounds[1]) / 2,
@@ -223,10 +257,7 @@ export function createPlanarGpuRenderer(
       disposeFemCutSurfaceMesh(femMesh);
       femMesh = null;
     }
-    if (rasterMesh) {
-      scene.remove(rasterMesh);
-      rasterMesh = null;
-    }
+    disposeRaster();
 
     if (fdmMesh) {
       updateFdmCellQuadGeometry(
@@ -268,6 +299,7 @@ export function createPlanarGpuRenderer(
   };
 
   const draw = (pixels: Uint8ClampedArray, width: number, height: number) => {
+    pendingDraw = { kind: "raster", pixels, width, height };
     if (contextLost) return;
     if (femMesh) {
       scene.remove(femMesh);

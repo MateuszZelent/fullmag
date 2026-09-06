@@ -34,14 +34,25 @@ export type CoherentBundleValidationResult =
   | { ok: true; bundle: CoherentPlanarBundle }
   | { ok: false; reason: string };
 
+export interface BufferOrigins {
+  scalarToken?: string | null;
+  maskToken?: string | null;
+  vectorsToken?: string | null;
+}
+
 export function validateCoherentPlanarBundle(
   meta: PlanarFieldMetaResource,
   scalarBuffer: ArrayBuffer | null,
   maskBuffer: ArrayBuffer | null,
   vectorsBuffer?: ArrayBuffer | null,
+  bufferOrigins?: BufferOrigins,
 ): CoherentBundleValidationResult {
   if (!meta) {
     return { ok: false, reason: "missing_meta" };
+  }
+
+  if (!meta.sample_token || meta.sample_token.trim() === "") {
+    return { ok: false, reason: "missing_sample_token" };
   }
 
   const resolution = meta.resolution;
@@ -50,7 +61,36 @@ export function validateCoherentPlanarBundle(
   }
 
   const [w, h] = resolution;
+  if (w <= 0 || h <= 0 || !Number.isFinite(w) || !Number.isFinite(h)) {
+    return { ok: false, reason: "invalid_resolution: non-positive dimensions" };
+  }
   const expectedPoints = w * h;
+
+  const bounds = meta.frame?.bounds_uv_m;
+  if (!bounds || bounds.length < 4 || bounds.some((v) => !Number.isFinite(v))) {
+    return { ok: false, reason: "invalid_bounds" };
+  }
+
+  if (bufferOrigins) {
+    if (bufferOrigins.scalarToken && bufferOrigins.scalarToken !== meta.sample_token) {
+      return {
+        ok: false,
+        reason: "identity_mismatch: scalar origin does not match meta token",
+      };
+    }
+    if (bufferOrigins.maskToken && bufferOrigins.maskToken !== meta.sample_token) {
+      return {
+        ok: false,
+        reason: "identity_mismatch: mask origin does not match meta token",
+      };
+    }
+    if (bufferOrigins.vectorsToken && bufferOrigins.vectorsToken !== meta.sample_token) {
+      return {
+        ok: false,
+        reason: "identity_mismatch: vectors origin does not match meta token",
+      };
+    }
+  }
 
   if (!scalarBuffer) {
     return { ok: false, reason: "missing_scalar_data" };
@@ -113,14 +153,7 @@ export function validateCoherentPlanarBundle(
       carrierRevision: meta.carrier_revision,
       sceneRevision: meta.scene_revision,
       resolution: [w, h],
-      bounds: (meta.frame?.bounds_uv_m && meta.frame.bounds_uv_m.length >= 4
-        ? [
-            meta.frame.bounds_uv_m[0],
-            meta.frame.bounds_uv_m[1],
-            meta.frame.bounds_uv_m[2],
-            meta.frame.bounds_uv_m[3],
-          ]
-        : [0, w, 0, h]) as [number, number, number, number],
+      bounds: [bounds[0], bounds[1], bounds[2], bounds[3]],
       meta,
       scalarData,
       maskData,

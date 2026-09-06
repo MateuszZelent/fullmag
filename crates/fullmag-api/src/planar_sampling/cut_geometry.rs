@@ -9,7 +9,7 @@ pub(crate) struct CutVertex {
     pub world_position: [f64; 3],
     pub parent_element_id: u32,
     pub reference_coordinate: [f64; 3],
-    pub barycentric_weights: [f64; 4],
+    pub barycentric_weights: [f64; 6],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +46,7 @@ struct IntersectionVertex {
     uv: [f64; 2],
     world: [f64; 3],
     edge_nodes: [u32; 2],
-    weights: [f64; 4],
+    weights: [f64; 6],
     ref_coord: [f64; 3],
 }
 
@@ -103,8 +103,8 @@ pub(super) fn build_cut_geometry(
         // Check vertex intersections
         for (local_idx, proj) in projected.iter().enumerate() {
             if proj[2].abs() <= plane_eps {
-                let mut weights = [0.0; 4];
-                if local_idx < 4 {
+                let mut weights = [0.0; 6];
+                if local_idx < 6 {
                     weights[local_idx] = 1.0;
                 }
                 push_vertex_point(
@@ -142,8 +142,8 @@ pub(super) fn build_cut_geometry(
                 projected[a][0] + t * (projected[b][0] - projected[a][0]),
                 projected[a][1] + t * (projected[b][1] - projected[a][1]),
             ];
-            let mut weights = [0.0; 4];
-            if a < 4 && b < 4 {
+            let mut weights = [0.0; 6];
+            if a < 6 && b < 6 {
                 weights[a] = 1.0 - t;
                 weights[b] = t;
             }
@@ -175,7 +175,7 @@ pub(super) fn build_cut_geometry(
 
         // Filter out zero-area polygon
         let area = polygon_area(&polygon_points);
-        if area.abs() <= 1e-28 {
+        if area.abs() <= 1e-36 {
             continue;
         }
 
@@ -260,8 +260,8 @@ pub(super) fn build_cut_geometry(
 }
 
 fn segment_canonical_key(a: [f64; 2], b: [f64; 2]) -> (i64, i64, i64, i64) {
-    let ka = ((a[0] * 1e9).round() as i64, (a[1] * 1e9).round() as i64);
-    let kb = ((b[0] * 1e9).round() as i64, (b[1] * 1e9).round() as i64);
+    let ka = ((a[0] * 1e14).round() as i64, (a[1] * 1e14).round() as i64);
+    let kb = ((b[0] * 1e14).round() as i64, (b[1] * 1e14).round() as i64);
     if ka <= kb {
         (ka.0, ka.1, kb.0, kb.1)
     } else {
@@ -304,7 +304,7 @@ fn push_vertex_point(
     uv: [f64; 2],
     world: [f64; 3],
     edge_nodes: [u32; 2],
-    weights: [f64; 4],
+    weights: [f64; 6],
     ref_coord: [f64; 3],
     tol: f64,
 ) {
@@ -371,12 +371,10 @@ fn clip_polygon_to_bounds(
                         a.world[1] + t * (b.world[1] - a.world[1]),
                         a.world[2] + t * (b.world[2] - a.world[2]),
                     ];
-                    let weights = [
-                        a.weights[0] + t * (b.weights[0] - a.weights[0]),
-                        a.weights[1] + t * (b.weights[1] - a.weights[1]),
-                        a.weights[2] + t * (b.weights[2] - a.weights[2]),
-                        a.weights[3] + t * (b.weights[3] - a.weights[3]),
-                    ];
+                    let mut weights = [0.0; 6];
+                    for k in 0..6 {
+                        weights[k] = a.weights[k] + t * (b.weights[k] - a.weights[k]);
+                    }
                     next.push(IntersectionVertex {
                         uv,
                         world,

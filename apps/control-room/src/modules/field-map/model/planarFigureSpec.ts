@@ -95,7 +95,7 @@ export function createPlanarFigureSpec(
     layers: { ...model.layers },
     meshBounds: model.bounds,
     pointStyle: { ...model.pointStyle },
-    quantityId: options.quantityId ?? model.component,
+    quantityId: options.quantityId ?? model.quantityId ?? model.component,
     range: {
       max: model.range?.max ?? 0,
       min: model.range?.min ?? 0,
@@ -142,5 +142,60 @@ export function serializePlanarFigureSpec(spec: PlanarFigureSpec): string {
 }
 
 export function deserializePlanarFigureSpec(json: string): PlanarFigureSpec {
-  return JSON.parse(json) as PlanarFigureSpec;
+  const parsed = JSON.parse(json);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Invalid PlanarFigureSpec: expected an object");
+  }
+  const spec = parsed as Partial<PlanarFigureSpec>;
+  if (typeof spec.quantityId !== "string" || !spec.quantityId) {
+    throw new Error("Invalid PlanarFigureSpec: missing or invalid quantityId");
+  }
+  if (typeof spec.component !== "string" || !spec.component) {
+    throw new Error("Invalid PlanarFigureSpec: missing or invalid component");
+  }
+  if (typeof spec.canonicalUnit !== "string") {
+    throw new Error("Invalid PlanarFigureSpec: missing or invalid canonicalUnit");
+  }
+  if (typeof spec.colormap !== "string" || !spec.colormap) {
+    throw new Error("Invalid PlanarFigureSpec: missing or invalid colormap");
+  }
+  if (
+    !Array.isArray(spec.resolution) ||
+    spec.resolution.length !== 2 ||
+    !Number.isFinite(spec.resolution[0]) ||
+    !Number.isFinite(spec.resolution[1]) ||
+    spec.resolution[0]! <= 0 ||
+    spec.resolution[1]! <= 0
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: resolution must be [width, height] positive numbers");
+  }
+  if (
+    !Array.isArray(spec.meshBounds) ||
+    spec.meshBounds.length !== 4 ||
+    !spec.meshBounds.every(Number.isFinite)
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: meshBounds must be [uMin, uMax, vMin, vMax] numbers");
+  }
+  if (
+    !spec.range ||
+    typeof spec.range !== "object" ||
+    !Number.isFinite(spec.range.min) ||
+    !Number.isFinite(spec.range.max)
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: invalid range object");
+  }
+  if (
+    !spec.camera ||
+    typeof spec.camera !== "object" ||
+    !Number.isFinite(spec.camera.panU) ||
+    !Number.isFinite(spec.camera.panV) ||
+    !Number.isFinite(spec.camera.zoom) ||
+    spec.camera.zoom <= 0
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: invalid camera object");
+  }
+  if (!spec.layers || typeof spec.layers !== "object") {
+    throw new Error("Invalid PlanarFigureSpec: missing or invalid layers object");
+  }
+  return spec as PlanarFigureSpec;
 }

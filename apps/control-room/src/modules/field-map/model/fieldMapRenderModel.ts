@@ -73,6 +73,7 @@ export interface FieldMapRenderModelInput {
   vectorStyle?: { color: string; colorMode: string; lengthMode: string; opacity: number; thickness: number };
   wireframeStyle?: { color: string; opacity: number };
   pointStyle?: { color: string; opacity: number; size: number };
+  quantityId?: string;
   visible?: boolean;
 }
 
@@ -107,6 +108,7 @@ export interface FieldMapRenderModel {
   vectorStyle: { color: string; colorMode: string; lengthMode: string; opacity: number; thickness: number };
   wireframeStyle: { color: string; opacity: number };
   pointStyle: { color: string; opacity: number; size: number };
+  quantityId?: string;
   viewport: readonly [number, number, number, number];
 }
 
@@ -273,6 +275,7 @@ export function buildFieldMapRenderModel(
     range,
     resolution: input.resolution,
     sampleIdentity: input.sampleIdentity,
+    quantityId: input.quantityId,
     samplePoints,
     scalar: input.scalar,
     vectors: input.vectors ?? null,

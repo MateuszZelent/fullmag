@@ -126,12 +126,17 @@ describe("planarGpuRenderer", () => {
     renderer.dispose();
   });
 
-  it("handles webglcontextlost and webglcontextrestored lifecycle events", () => {
+  it("handles webglcontextlost and webglcontextrestored lifecycle events and replays pending draw (TS07)", () => {
     const { canvas, listeners } = createMockWebGLCanvas();
-    const renderer = createPlanarGpuRenderer(canvas, (params) => createMockRenderer(params.canvas));
+    const mockThree = createMockRenderer(canvas);
+    const renderer = createPlanarGpuRenderer(canvas, () => mockThree);
     if (!renderer) throw new Error("Renderer initialization failed");
 
     expect(renderer.isContextLost()).toBe(false);
+
+    // Initial draw
+    renderer.draw(new Uint8ClampedArray(16), 2, 2);
+    expect(mockThree.render).toHaveBeenCalledTimes(1);
 
     // Trigger context lost
     const preventDefault = vi.fn();
@@ -139,12 +144,16 @@ describe("planarGpuRenderer", () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(renderer.isContextLost()).toBe(true);
 
-    // In lost context state, draw operations safely no-op
-    expect(() => renderer.draw(new Uint8ClampedArray(16), 2, 2)).not.toThrow();
+    // In lost context state, draw operations safely no-op immediately and record pendingDraw
+    const newPixels = new Uint8ClampedArray(16).fill(99);
+    expect(() => renderer.draw(newPixels, 2, 2)).not.toThrow();
+    // No new render during lost context
+    expect(mockThree.render).toHaveBeenCalledTimes(1);
 
-    // Trigger context restored
+    // Trigger context restored -> replays pending draw
     listeners.get("webglcontextrestored")?.({});
     expect(renderer.isContextLost()).toBe(false);
+    expect(mockThree.render).toHaveBeenCalledTimes(2);
 
     renderer.dispose();
   });
@@ -175,6 +184,60 @@ describe("planarGpuRenderer", () => {
     // Draw reduction raster
     const pixels = new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]);
     expect(() => renderer.draw(pixels, 2, 1)).not.toThrow();
+
+    // Clear base
+    expect(() => renderer.clearBase()).not.toThrow();
+
+    renderer.dispose();
+  });
+
+  it("draws and updates FEM cut surface without throwing and properly replaces previous layers", () => {
+    const { canvas } = createMockWebGLCanvas();
+    const mockThreeRenderer = createMockRenderer(canvas);
+    const renderer = createPlanarGpuRenderer(canvas, () => mockThreeRenderer);
+    if (!renderer) throw new Error("Renderer initialization failed");
+
+    renderer.setViewport([0, 10, 0, 10], [0, 10, 0, 10]);
+
+    // Draw FEM cut surface
+    const verticesUv = new Float32Array([0, 0, 1, 0, 0, 1]);
+    const scalarValues = new Float32Array([10, 20, 30]);
+    expect(() => {
+      renderer.drawFemCutSurface({
+        bounds: [0, 10, 0, 10],
+        colormap: "viridis",
+        opacity: 0.8,
+        range: { max: 30, min: 10 },
+        scalarValues,
+        verticesUv,
+      });
+    }).not.toThrow();
+
+    expect(mockThreeRenderer.render).toHaveBeenCalled();
+
+    // Update FEM cut surface
+    expect(() => {
+      renderer.drawFemCutSurface({
+        bounds: [0, 10, 0, 10],
+        colormap: "coolwarm",
+        opacity: 1.0,
+        range: { max: 50, min: 0 },
+        scalarValues: new Float32Array([5, 15, 25]),
+        verticesUv,
+      });
+    }).not.toThrow();
+
+    // Now switch to FDM cells: should replace femMesh and not throw
+    expect(() => {
+      renderer.drawFdmCells({
+        bounds: [0, 10, 0, 10],
+        colormap: "viridis",
+        opacity: 1.0,
+        range: { max: 100, min: 0 },
+        resolution: [2, 2],
+        scalar: new Float32Array([10, 20, 30, 40]),
+      });
+    }).not.toThrow();
 
     // Clear base
     expect(() => renderer.clearBase()).not.toThrow();

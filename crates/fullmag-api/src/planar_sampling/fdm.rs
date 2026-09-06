@@ -7,7 +7,7 @@ use super::geometry::{integrate_clipped_tetra, projected_pixel_bounds, LinearVer
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::{
-    FdmPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarMeshOverlay,
+    FdmPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarComponent, PlanarMeshOverlay,
     PlanarOverlaySegment, PlanarOverlaySegmentKind, PlanarSampleResult,
     ResolvedPlanarSampleRequest,
 };
@@ -447,28 +447,6 @@ pub(super) fn finish_reduction_dual(
     let mut scalar_values = Vec::with_capacity(count);
     let mut occupied_measure = 0.0;
 
-    for accumulator in &scalar_accumulators {
-        occupied_measure += accumulator.weight();
-        match accumulator.finish(reduction, pixel_area) {
-            Some(value) => {
-                occupancy.push(
-                    if full_measure
-                        .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
-                    {
-                        Occupancy::Partial
-                    } else {
-                        Occupancy::Occupied
-                    },
-                );
-                scalar_values.push(value[0]);
-            }
-            None => {
-                occupancy.push(Occupancy::Empty);
-                scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
-            }
-        }
-    }
-
     let vector_values = vector_accumulators.map(|v_accs| {
         v_accs
             .into_iter()
@@ -478,6 +456,77 @@ pub(super) fn finish_reduction_dual(
             })
             .collect::<Vec<[f64; 3]>>()
     });
+
+    if request.component == PlanarComponent::Orientation && vector_values.is_some() {
+        let v_vals = vector_values.as_ref().unwrap();
+        let orientation_epsilon = v_vals
+            .iter()
+            .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+            .fold(0.0_f64, f64::max)
+            * 1.0e-12;
+        let orientation_epsilon = orientation_epsilon.max(1.0e-12);
+
+        for (i, accumulator) in scalar_accumulators.iter().enumerate() {
+            occupied_measure += accumulator.weight();
+            let v = v_vals[i];
+            if v[0].is_nan() || accumulator.weight() <= 0.0 {
+                occupancy.push(Occupancy::Empty);
+                scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
+            } else {
+                let u = v[0] * request.frame.u_axis[0]
+                    + v[1] * request.frame.u_axis[1]
+                    + v[2] * request.frame.u_axis[2];
+                let v_proj = v[0] * request.frame.v_axis[0]
+                    + v[1] * request.frame.v_axis[1]
+                    + v[2] * request.frame.v_axis[2];
+                let in_plane_norm = (u * u + v_proj * v_proj).sqrt();
+                if in_plane_norm <= orientation_epsilon {
+                    occupancy.push(Occupancy::UndefinedOrientation);
+                    scalar_values.push(f64::NAN);
+                } else {
+                    let occ = if full_measure
+                        .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
+                    {
+                        Occupancy::Partial
+                    } else {
+                        Occupancy::Occupied
+                    };
+                    occupancy.push(occ);
+                    let angle = v_proj.atan2(u).rem_euclid(std::f64::consts::TAU)
+                        / std::f64::consts::TAU;
+                    scalar_values.push(angle);
+                }
+            }
+        }
+    } else {
+        for accumulator in &scalar_accumulators {
+            occupied_measure += accumulator.weight();
+            match accumulator.finish(reduction, pixel_area) {
+                Some(value) => {
+                    let val = value[0];
+                    if request.component == PlanarComponent::Orientation && val.is_nan() {
+                        occupancy.push(Occupancy::UndefinedOrientation);
+                        scalar_values.push(f64::NAN);
+                    } else {
+                        occupancy.push(
+                            if full_measure
+                                .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
+                            {
+                                Occupancy::Partial
+                            } else {
+                                Occupancy::Occupied
+                            },
+                        );
+                        scalar_values.push(val);
+                    }
+                }
+                None => {
+                    occupancy.push(Occupancy::Empty);
+                    scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
+                }
+            }
+        }
+    }
 
     Ok(PlanarSampleResult {
         meta: provenance::meta(request, method, &occupancy, occupied_measure, 0, 0, 0, 1),
@@ -507,24 +556,32 @@ pub(super) fn finish_reduction(
         occupied_measure += accumulator.weight();
         match accumulator.finish(reduction, pixel_area) {
             Some(value) => {
-                occupancy.push(
-                    if full_measure
-                        .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
-                    {
-                        Occupancy::Partial
-                    } else {
-                        Occupancy::Occupied
-                    },
-                );
-                scalar_values.push(if n_comp == 1 {
+                let val = if n_comp == 1 {
                     value[0]
                 } else {
-                    value
-                        .iter()
-                        .map(|component| component * component)
-                        .sum::<f64>()
-                        .sqrt()
-                });
+                    crate::planar_sampling::element_evaluator::evaluate_vector_quantity(
+                        [value[0], value[1], value[2]],
+                        request.component,
+                        request.frame.u_axis,
+                        request.frame.v_axis,
+                        request.frame.normal,
+                    )
+                };
+                if request.component == PlanarComponent::Orientation && val.is_nan() {
+                    occupancy.push(Occupancy::UndefinedOrientation);
+                    scalar_values.push(f64::NAN);
+                } else {
+                    occupancy.push(
+                        if full_measure
+                            .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
+                        {
+                            Occupancy::Partial
+                        } else {
+                            Occupancy::Occupied
+                        },
+                    );
+                    scalar_values.push(val);
+                }
                 vector_values.push(if n_comp >= 3 {
                     [value[0], value[1], value[2]]
                 } else {

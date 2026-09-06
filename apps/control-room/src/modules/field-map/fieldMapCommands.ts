@@ -296,19 +296,22 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         scope_kind: planar.view_scope.kind,
         vector_budget: planar.resolution.vector_budget,
       };
-      const [meta, monitor, png] = await Promise.all([
-        context.api.data.fields.planar.meta(
-          planar.quantity_id,
-          source,
-          query,
-        ),
+      const meta = await context.api.data.fields.planar.meta(
+        planar.quantity_id,
+        source,
+        query,
+      );
+      const [monitor, png] = await Promise.all([
         source.kind === "monitor"
           ? context.api.model.planarMonitors.get(source.monitorId)
           : Promise.resolve(null),
         context.api.data.fields.planar.renderPng(
           planar.quantity_id,
           source,
-          query,
+          {
+            ...query,
+            sample_token: meta.sample_token,
+          },
         ),
       ]);
       if (png.status !== "ready") {

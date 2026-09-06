@@ -6,7 +6,7 @@ use super::FemPlanarField;
 #[derive(Debug, Clone)]
 pub(crate) struct EvaluationPlan {
     pub cut_geometry: Arc<CutGeometry>,
-    pub vertex_weights: Vec<[f64; 4]>,
+    pub vertex_weights: Vec<[f64; 6]>,
     pub vertex_parents: Vec<u32>,
 }
 
@@ -37,8 +37,10 @@ impl EvaluationPlan {
             let weights = vertex.barycentric_weights;
             for c in 0..n_comp {
                 let mut val = 0.0;
-                for (local, &node) in elem.nodes().iter().take(4).enumerate() {
-                    val += weights[local] * field.values()[node as usize * n_comp + c];
+                for (local, &node) in elem.nodes().iter().enumerate() {
+                    if local < weights.len() {
+                        val += weights[local] * field.values()[node as usize * n_comp + c];
+                    }
                 }
                 result.push(val);
             }

@@ -52,4 +52,16 @@ describe("marching squares", () => {
     const segments = marchingSquaresLevels(values, 2, 2, levels);
     expect(segments.length).toBeGreaterThanOrEqual(3);
   });
+
+  it("handles large 512x512 checkerboard grids without RangeError (stack overflow)", () => {
+    const size = 512;
+    const values = new Float32Array(size * size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        values[y * size + x] = (x + y) % 2 === 0 ? 1 : 0;
+      }
+    }
+    const segments = marchingSquaresLevels(values, size, size, [0.5]);
+    expect(segments.length).toBeGreaterThan(100_000);
+  });
 });

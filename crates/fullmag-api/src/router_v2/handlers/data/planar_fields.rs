@@ -456,15 +456,100 @@ async fn build_planar_field_from_source(
     let resolution = resolve_resolution(query)?;
     validate_auxiliary_query(query)?;
 
-    // 05.5: Cheap cache hit before acquiring snapshot or rebuilding target
+    // 05.5: Validate route binding for pinned sample_token
     if let Some(token) = query.sample_token.as_deref() {
-        if let Some(cached) = state.quantity_data_plane.get_cached_built_field(token).await {
-            let mut field = (*cached).clone();
-            if let Some(im) = query.include_mesh {
-                field.include_mesh = im;
-            }
-            return Ok(field);
+        let cached = state
+            .quantity_data_plane
+            .get_cached_built_field(token)
+            .await
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "stale_sample_token: requested sample token was not found or has expired",
+                )
+            })?;
+
+        if cached.quantity_id != quantity_id {
+            return Err(ApiError::bad_request(
+                "sample_token_binding_mismatch: quantity_id does not match sample token",
+            ));
         }
+
+        match &source {
+            PlanarDataSource::Default => {
+                if cached.source.source_kind != "default_slice" {
+                    return Err(ApiError::bad_request(
+                        "sample_token_binding_mismatch: source is not default_slice",
+                    ));
+                }
+            }
+            PlanarDataSource::Monitor(monitor_id) => {
+                if cached.source.source_kind != "authored_monitor"
+                    || cached.source.source_id.as_deref() != Some(monitor_id.as_str())
+                {
+                    return Err(ApiError::bad_request(
+                        "sample_token_binding_mismatch: monitor_id does not match sample token",
+                    ));
+                }
+            }
+        }
+
+        if let Some(req_comp) = query.component.as_deref() {
+            if cached.component != req_comp {
+                return Err(ApiError::bad_request(
+                    "sample_token_binding_mismatch: component does not match sample token",
+                ));
+            }
+        }
+
+        if cached.request.resolution != resolution {
+            return Err(ApiError::bad_request(
+                "sample_token_binding_mismatch: resolution does not match sample token",
+            ));
+        }
+
+        let req_scope_kind = query.scope_kind.as_deref().unwrap_or("monitor_target");
+        if cached.scope_kind != req_scope_kind
+            || cached.scope_id.as_deref() != query.scope_id.as_deref()
+        {
+            return Err(ApiError::bad_request(
+                "sample_token_binding_mismatch: scope does not match sample token",
+            ));
+        }
+
+        if let Some(exp_field_rev) = query.expected_field_revision {
+            if cached.field_revision != exp_field_rev {
+                return Err(ApiError::conflict(
+                    "stale_field_revision: field revision does not match expected_field_revision",
+                ));
+            }
+        }
+        if let Some(exp_scene_rev) = query.expected_scene_revision {
+            if cached.scene_revision != exp_scene_rev {
+                return Err(ApiError::conflict(
+                    "stale_scene_revision: scene revision does not match expected_scene_revision",
+                ));
+            }
+        }
+        if let Some(exp_mesh_rev) = query.expected_mesh_revision {
+            if cached.mesh_revision != exp_mesh_rev {
+                return Err(ApiError::conflict(
+                    "stale_mesh_revision: mesh revision does not match expected_mesh_revision",
+                ));
+            }
+        }
+        if let Some(exp_carrier_rev) = query.expected_carrier_revision {
+            if cached.carrier_revision != exp_carrier_rev {
+                return Err(ApiError::conflict(
+                    "stale_carrier_revision: carrier revision does not match expected_carrier_revision",
+                ));
+            }
+        }
+
+        let mut field = (*cached).clone();
+        if let Some(im) = query.include_mesh {
+            field.include_mesh = im;
+        }
+        return Ok(field);
     }
 
     let guard = state.current_live_state.read().await;
@@ -1181,20 +1266,40 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         .result
         .scalar_values
         .iter()
-        .filter(|value| value.is_finite())
+        .zip(&built.result.occupancy)
+        .filter(|(value, occ)| {
+            value.is_finite()
+                && **occ != Occupancy::Empty
+                && **occ != Occupancy::UndefinedOrientation
+        })
+        .map(|(value, _)| value)
         .fold((None::<f64>, None::<f64>), |(min, max), value| {
             (
                 Some(min.map_or(*value, |current| current.min(*value))),
                 Some(max.map_or(*value, |current| current.max(*value))),
             )
         });
+    let base_unit = quantity_unit(&built.quantity_id);
+    let canonical_unit = if built.component == "orientation" {
+        "turn".to_string()
+    } else if built.component == "magnitude_squared" {
+        format!("({base_unit})^2")
+    } else {
+        match &built.operator {
+            PlanarOperatorIR::DepthProjection { reduction, .. } => match reduction {
+                fullmag_ir::PlanarReductionIR::ThicknessIntegral => format!("{base_unit}*m"),
+                _ => base_unit.to_string(),
+            },
+            _ => base_unit.to_string(),
+        }
+    };
     PlanarFieldMetaResource {
         schema_version: "planar_sample_meta.v4".to_string(),
         sample_token: built.sample_token.clone(),
         scene_revision: built.scene_revision,
         source: source_resource(&built.source),
         quantity_id: built.quantity_id.clone(),
-        canonical_unit: quantity_unit(&built.quantity_id).to_string(),
+        canonical_unit,
         component: built.component.clone(),
         field_revision: built.field_revision,
         mesh_revision: built.mesh_revision,

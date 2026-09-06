@@ -17,6 +17,7 @@ import type {
   PlanarColorizeResponse,
 } from "./planarRendererProtocol";
 import { colorizePlanarRendererRequest } from "./planarRendererTask";
+import * as planarRendererModule from "./planarRenderer";
 import { PlanarSurface } from "./PlanarSurface";
 
 function makeRenderModel(
@@ -584,6 +585,129 @@ describe("PlanarSurface lifecycle", () => {
       if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
       if (previousRequestAnimationFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousRequestAnimationFrame); else Reflect.deleteProperty(globalThis, "requestAnimationFrame");
       if (previousCancelAnimationFrame) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancelAnimationFrame); else Reflect.deleteProperty(globalThis, "cancelAnimationFrame");
+      dom.restore();
+    }
+  });
+
+  it("does not overwrite native GPU FDM layer with worker bitmap, and renders native GPU FEM cut surface when FEM overlay is present", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), putImageData: vi.fn(), restore: vi.fn(), save: vi.fn(), scale: vi.fn(), setLineDash: vi.fn(), stroke: vi.fn(), strokeStyle: "", translate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const originalCreateElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "canvas") Object.assign(element, { getContext: vi.fn(() => context), height: 0, width: 0 });
+      return element;
+    }) as typeof dom.document.createElement;
+    const mockGpuRenderer = {
+      clearBase: vi.fn(),
+      dispose: vi.fn(),
+      draw: vi.fn(),
+      drawFdmCells: vi.fn(),
+      drawFemCutSurface: vi.fn(),
+      getRendererKind: vi.fn(() => "gpu" as const),
+      isContextLost: vi.fn(() => false),
+      resize: vi.fn(),
+      resolveViewport: vi.fn((bounds: readonly [number, number, number, number]) => bounds),
+      setViewport: vi.fn(),
+    };
+    const spy = vi.spyOn(planarRendererModule, "createPlanarRenderer").mockReturnValue(
+      mockGpuRenderer as unknown as ReturnType<typeof planarRendererModule.createPlanarRenderer>,
+    );
+
+    class ImmediateWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      postMessage(msg: { generation?: number }) {
+        setTimeout(() => {
+          this.onmessage?.({
+            data: {
+              contours: [],
+              generation: msg.generation,
+              pixels: new Uint8ClampedArray(4),
+              type: "colorized",
+            },
+          } as MessageEvent);
+        }, 0);
+      }
+      terminate() {}
+    }
+    const previousWorker = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: ImmediateWorker });
+
+    try {
+      // 1. FDM model
+      const fdmModel = buildFieldMapRenderModel({
+        bounds: [0, 1, 0, 1],
+        canonicalUnit: "A/m",
+        component: "magnitude",
+        frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+        layers: { contours: false, mesh: false, raster: true, vectors: false },
+        meshOverlayDescriptor: { available: true, boundaryClassification: "unavailable", codec: "fmfg.v1", geometrySource: "fdm_structured_grid" },
+        range: { mode: "auto" },
+        resolution: [1, 1],
+        sampleIdentity: "fdm-gpu-test",
+        scalar: new Float64Array([42]),
+      });
+
+      await act(async () => {
+        root.render(<PlanarSurface model={fdmModel} />);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(mockGpuRenderer.drawFdmCells).toHaveBeenCalledTimes(1);
+      expect(mockGpuRenderer.draw).not.toHaveBeenCalled();
+
+      // 2. FEM model with FMCS v4 overlay
+      const overlay = new ArrayBuffer(160 + 3 * 2 * 4 + 2 * 4 + 1 * 4 + 3 * 4 * 4 + 3);
+      const view = new DataView(overlay);
+      [..."FMCS"].forEach((ch, i) => view.setUint8(i, ch.charCodeAt(0)));
+      view.setUint32(4, 4, true); // version 4
+      view.setUint32(8, 1, true); // polygonCount 1
+      view.setUint32(12, 3, true); // vertexCount 3
+      view.setUint32(16, 3, true); // segmentCount 3
+      // bounds: [0, 1, 0, 1]
+      view.setFloat64(32, 0, true);
+      view.setFloat64(40, 1, true);
+      view.setFloat64(48, 0, true);
+      view.setFloat64(56, 1, true);
+      // polygon vertices at offset 160: [0, 0], [1, 0], [0, 1]
+      view.setFloat32(160, 0, true); view.setFloat32(164, 0, true);
+      view.setFloat32(168, 1, true); view.setFloat32(172, 0, true);
+      view.setFloat32(176, 0, true); view.setFloat32(180, 1, true);
+      // polygon offsets: [0, 3] at offset 160 + 24 = 184
+      view.setUint32(184, 0, true);
+      view.setUint32(188, 3, true);
+
+      const femModel = buildFieldMapRenderModel({
+        bounds: [0, 1, 0, 1],
+        canonicalUnit: "A/m",
+        component: "magnitude",
+        frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+        layers: { contours: false, mesh: true, raster: true, vectors: false },
+        meshOverlay: overlay,
+        meshOverlayDescriptor: { available: true, boundaryClassification: "exact", codec: "fmcs.v4", geometrySource: "fem_volume_mesh" },
+        range: { mode: "auto" },
+        resolution: [2, 2],
+        sampleIdentity: "fem-gpu-test",
+        scalar: new Float64Array([10, 20, 30, 40]),
+      });
+
+      await act(async () => {
+        root.render(<PlanarSurface model={femModel} />);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+
+      expect(mockGpuRenderer.drawFemCutSurface).toHaveBeenCalledTimes(1);
+      expect(mockGpuRenderer.draw).not.toHaveBeenCalled();
+
+      await act(async () => root.unmount());
+    } finally {
+      spy.mockRestore();
+      if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
       dom.restore();
     }
   });

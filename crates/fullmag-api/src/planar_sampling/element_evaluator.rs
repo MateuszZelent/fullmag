@@ -3,8 +3,118 @@ use super::fem::sub;
 use super::frame::{cross, dot};
 use super::{FemPlanarElement, FemPlanarField, PlanarComponent};
 
-const QUAD_ALPHA: f64 = 0.5854101966249685; // (5.0 + 3.0 * 5.0_f64.sqrt()) / 20.0;
-const QUAD_BETA: f64 = 0.1381966011250105;  // (5.0 - 5.0_f64.sqrt()) / 20.0;
+const KEAST14_U2: f64 = 0.698419704324386603;
+const KEAST14_V2: f64 = (1.0 - KEAST14_U2) / 3.0;
+const KEAST14_W2: f64 = 6.0 * 0.0147649707904967828;
+
+const KEAST14_U3: f64 = 0.0568813795204234229;
+const KEAST14_V3: f64 = (1.0 - KEAST14_U3) / 3.0;
+const KEAST14_W3: f64 = 6.0 * 0.0221397911142651221;
+
+const KEAST14_W1: f64 = 6.0 * 0.00317460317460317460;
+
+const KEAST14_POINTS: [([f64; 4], f64); 14] = [
+    ([0.5, 0.5, 0.0, 0.0], KEAST14_W1),
+    ([0.5, 0.0, 0.5, 0.0], KEAST14_W1),
+    ([0.5, 0.0, 0.0, 0.5], KEAST14_W1),
+    ([0.0, 0.5, 0.5, 0.0], KEAST14_W1),
+    ([0.0, 0.5, 0.0, 0.5], KEAST14_W1),
+    ([0.0, 0.0, 0.5, 0.5], KEAST14_W1),
+    ([KEAST14_U2, KEAST14_V2, KEAST14_V2, KEAST14_V2], KEAST14_W2),
+    ([KEAST14_V2, KEAST14_U2, KEAST14_V2, KEAST14_V2], KEAST14_W2),
+    ([KEAST14_V2, KEAST14_V2, KEAST14_U2, KEAST14_V2], KEAST14_W2),
+    ([KEAST14_V2, KEAST14_V2, KEAST14_V2, KEAST14_U2], KEAST14_W2),
+    ([KEAST14_U3, KEAST14_V3, KEAST14_V3, KEAST14_V3], KEAST14_W3),
+    ([KEAST14_V3, KEAST14_U3, KEAST14_V3, KEAST14_V3], KEAST14_W3),
+    ([KEAST14_V3, KEAST14_V3, KEAST14_U3, KEAST14_V3], KEAST14_W3),
+    ([KEAST14_V3, KEAST14_V3, KEAST14_V3, KEAST14_U3], KEAST14_W3),
+];
+
+fn point_triangle_distance_sq(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+    let ab = sub(b, a);
+    let ac = sub(c, a);
+    let ap = sub(p, a);
+    let d1 = dot(ab, ap);
+    let d2 = dot(ac, ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        let diff = sub(p, a);
+        return dot(diff, diff);
+    }
+    let bp = sub(p, b);
+    let d3 = dot(ab, bp);
+    let d4 = dot(ac, bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        let diff = sub(p, b);
+        return dot(diff, diff);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        let proj = [a[0] + v * ab[0], a[1] + v * ab[1], a[2] + v * ab[2]];
+        let diff = sub(p, proj);
+        return dot(diff, diff);
+    }
+    let cp = sub(p, c);
+    let d5 = dot(ab, cp);
+    let d6 = dot(ac, cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        let diff = sub(p, c);
+        return dot(diff, diff);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        let proj = [a[0] + w * ac[0], a[1] + w * ac[1], a[2] + w * ac[2]];
+        let diff = sub(p, proj);
+        return dot(diff, diff);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        let bc = sub(c, b);
+        let proj = [b[0] + w * bc[0], b[1] + w * bc[1], b[2] + w * bc[2]];
+        let diff = sub(p, proj);
+        return dot(diff, diff);
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    let proj = [
+        a[0] + ab[0] * v + ac[0] * w,
+        a[1] + ab[1] * v + ac[1] * w,
+        a[2] + ab[2] * v + ac[2] * w,
+    ];
+    let diff = sub(p, proj);
+    dot(diff, diff)
+}
+
+fn point_tetrahedron_distance(
+    p: [f64; 3],
+    v0: [f64; 3],
+    v1: [f64; 3],
+    v2: [f64; 3],
+    v3: [f64; 3],
+) -> f64 {
+    let a = sub(v0, v3);
+    let b = sub(v1, v3);
+    let c = sub(v2, v3);
+    let pv = sub(p, v3);
+    let det = dot(a, cross(b, c));
+    if det.abs() > 1e-30 {
+        let w0 = dot(pv, cross(b, c)) / det;
+        let w1 = dot(a, cross(pv, c)) / det;
+        let w2 = dot(a, cross(b, pv)) / det;
+        let w3 = 1.0 - w0 - w1 - w2;
+        if w0 >= -1e-12 && w1 >= -1e-12 && w2 >= -1e-12 && w3 >= -1e-12 {
+            return 0.0;
+        }
+    }
+    let d0 = point_triangle_distance_sq(p, v0, v1, v2);
+    let d1 = point_triangle_distance_sq(p, v0, v1, v3);
+    let d2 = point_triangle_distance_sq(p, v0, v2, v3);
+    let d3 = point_triangle_distance_sq(p, v1, v2, v3);
+    d0.min(d1).min(d2).min(d3).sqrt()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EvaluationQuantity {
@@ -59,7 +169,7 @@ pub(crate) fn evaluate_sub_tetrahedron_moments_quantity(
     let c = sub(vertices[3], vertices[0]);
     let volume = (dot(a, cross(b, c)).abs()) / 6.0;
 
-    if volume <= 1e-28 || !volume.is_finite() {
+    if volume <= 1e-36 || !volume.is_finite() {
         return ScalarMoments::zero();
     }
 
@@ -82,11 +192,8 @@ pub(crate) fn evaluate_sub_tetrahedron_moments_quantity(
             let mut second = 0.0;
             let mut min = f64::INFINITY;
             let mut max = f64::NEG_INFINITY;
-            let weight = volume * 0.25;
 
-            for i in 0..4 {
-                let mut lambda = [QUAD_BETA; 4];
-                lambda[i] = QUAD_ALPHA;
+            for &(lambda, w) in &KEAST14_POINTS {
                 let mut p = [0.0; 3];
                 for j in 0..4 {
                     for axis in 0..3 {
@@ -94,8 +201,8 @@ pub(crate) fn evaluate_sub_tetrahedron_moments_quantity(
                     }
                 }
                 let val = evaluate_quantity_at(field, element, p, quantity);
-                first += weight * val;
-                second += weight * val * val;
+                first += volume * w * val;
+                second += volume * w * val * val;
                 min = min.min(val);
                 max = max.max(val);
             }
@@ -104,6 +211,61 @@ pub(crate) fn evaluate_sub_tetrahedron_moments_quantity(
                 let val = evaluate_quantity_at(field, element, *v, quantity);
                 min = min.min(val);
                 max = max.max(val);
+            }
+
+            if let FemPlanarElement::Tet4(nodes) = element {
+                if let EvaluationQuantity::VectorComponent {
+                    component,
+                    u_axis,
+                    v_axis,
+                    ..
+                } = quantity
+                {
+                    if component == PlanarComponent::Magnitude {
+                        let tet_nodes = [
+                            field.nodes()[nodes[0] as usize],
+                            field.nodes()[nodes[1] as usize],
+                            field.nodes()[nodes[2] as usize],
+                            field.nodes()[nodes[3] as usize],
+                        ];
+                        let v_vals = vertices.map(|v| [
+                            interpolate_tet4_linear(field, nodes, &tet_nodes, v, 0),
+                            interpolate_tet4_linear(field, nodes, &tet_nodes, v, 1),
+                            interpolate_tet4_linear(field, nodes, &tet_nodes, v, 2),
+                        ]);
+                        let dist = point_tetrahedron_distance(
+                            [0.0; 3],
+                            v_vals[0],
+                            v_vals[1],
+                            v_vals[2],
+                            v_vals[3],
+                        );
+                        min = min.min(dist);
+                    } else if component == PlanarComponent::InPlaneMagnitude {
+                        let tet_nodes = [
+                            field.nodes()[nodes[0] as usize],
+                            field.nodes()[nodes[1] as usize],
+                            field.nodes()[nodes[2] as usize],
+                            field.nodes()[nodes[3] as usize],
+                        ];
+                        let v_vals = vertices.map(|v| {
+                            let vec = [
+                                interpolate_tet4_linear(field, nodes, &tet_nodes, v, 0),
+                                interpolate_tet4_linear(field, nodes, &tet_nodes, v, 1),
+                                interpolate_tet4_linear(field, nodes, &tet_nodes, v, 2),
+                            ];
+                            [dot(vec, u_axis), dot(vec, v_axis), 0.0]
+                        });
+                        let dist = point_tetrahedron_distance(
+                            [0.0; 3],
+                            v_vals[0],
+                            v_vals[1],
+                            v_vals[2],
+                            v_vals[3],
+                        );
+                        min = min.min(dist);
+                    }
+                }
             }
 
             ScalarMoments {
@@ -243,7 +405,7 @@ fn interpolate_tet4_linear(
     let c = sub(tet_nodes[2], tet_nodes[3]);
     let p = sub(point, tet_nodes[3]);
     let det = dot(a, cross(b, c));
-    if det.abs() <= 1e-30 {
+    if det == 0.0 || !det.is_finite() {
         return field.values()[nodes[0] as usize * field.n_comp() + component];
     }
     let w0 = dot(p, cross(b, c)) / det;
@@ -281,9 +443,7 @@ fn interpolate_prism6(
         }
         val
     } else {
-        // Fallback: average
-        let n_comp = field.n_comp();
-        nodes.iter().map(|&n| field.values()[n as usize * n_comp + component]).sum::<f64>() / 6.0
+        f64::NAN
     }
 }
 
@@ -294,7 +454,7 @@ fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
         .flat_map(|a| nodes.iter().map(move |b| dot(sub(*a, *b), sub(*a, *b))))
         .fold(0.0_f64, f64::max)
         .sqrt()
-        .max(1.0);
+        .max(f64::MIN_POSITIVE);
 
     for _ in 0..16 {
         let (weights, derivatives) = prism6_shape(reference);
@@ -306,8 +466,16 @@ fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
                 .sum::<f64>()
         });
         let residual = sub(mapped, point);
-        if dot(residual, residual).sqrt() <= scale * 1e-12 {
-            return Some(weights);
+        if dot(residual, residual).sqrt() <= scale * 1.0e-12 {
+            if reference[0] >= -1.0e-11
+                && reference[1] >= -1.0e-11
+                && reference[0] + reference[1] <= 1.0 + 1.0e-11
+                && reference[2] >= -1.0e-11
+                && reference[2] <= 1.0 + 1.0e-11
+            {
+                return Some(weights);
+            }
+            return None;
         }
         let jacobian = std::array::from_fn::<_, 3, _>(|column| {
             [0, 1, 2].map(|axis| {
@@ -319,8 +487,8 @@ fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
             })
         });
         let determinant = dot(jacobian[0], cross(jacobian[1], jacobian[2]));
-        if determinant.abs() <= scale.powi(3) * 1e-15 {
-            return Some(weights);
+        if determinant.abs() <= scale.powi(3) * 1.0e-15 {
+            return None;
         }
         let delta = [
             dot(residual, cross(jacobian[1], jacobian[2])) / determinant,
@@ -331,8 +499,7 @@ fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
             reference[axis] -= delta[axis];
         }
     }
-    let (weights, _) = prism6_shape(reference);
-    Some(weights)
+    None
 }
 
 fn prism6_shape(reference: [f64; 3]) -> ([f64; 6], [[f64; 3]; 6]) {
@@ -356,4 +523,64 @@ fn prism6_shape(reference: [f64; 3]) -> ([f64; 6], [[f64; 3]; 6]) {
             [0.0, t, s],
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prism6_invert_nanometer_scale() {
+        let nm = 1e-9;
+        let nodes = [
+            [0.0, 0.0, 0.0],
+            [5.0 * nm, 0.0, 0.0],
+            [0.0, 5.0 * nm, 0.0],
+            [0.0, 0.0, 2.0 * nm],
+            [5.0 * nm, 0.0, 2.0 * nm],
+            [0.0, 5.0 * nm, 2.0 * nm],
+        ];
+        let point = [1.0 * nm, 1.0 * nm, 1.0 * nm];
+        let weights = prism6_invert(&nodes, point).expect("invert nanometer prism");
+
+        // Affine field: f(x, y, z) = 2.0 * (x/nm) - 3.0 * (y/nm) + 5.0 * (z/nm) + 7.0
+        let node_vals: [f64; 6] = std::array::from_fn(|i| {
+            let [x, y, z] = nodes[i];
+            2.0 * (x / nm) - 3.0 * (y / nm) + 5.0 * (z / nm) + 7.0
+        });
+        let interpolated: f64 = weights.iter().zip(node_vals.iter()).map(|(w, v)| w * v).sum();
+        let exact = 2.0 * 1.0 - 3.0 * 1.0 + 5.0 * 1.0 + 7.0; // 11.0
+        assert!((interpolated - exact).abs() < 1e-10, "interpolated: {interpolated}, exact: {exact}");
+    }
+
+    #[test]
+    fn test_prism6_invert_outside_returns_none() {
+        let nm = 1e-9;
+        let nodes = [
+            [0.0, 0.0, 0.0],
+            [5.0 * nm, 0.0, 0.0],
+            [0.0, 5.0 * nm, 0.0],
+            [0.0, 0.0, 2.0 * nm],
+            [5.0 * nm, 0.0, 2.0 * nm],
+            [0.0, 5.0 * nm, 2.0 * nm],
+        ];
+        let outside_point = [10.0 * nm, 10.0 * nm, 10.0 * nm];
+        assert!(prism6_invert(&nodes, outside_point).is_none());
+    }
+
+    #[test]
+    fn test_prism6_invert_degenerate_returns_none() {
+        let nm = 1e-9;
+        // Flat degenerate prism (all z coordinates are 0)
+        let nodes = [
+            [0.0, 0.0, 0.0],
+            [5.0 * nm, 0.0, 0.0],
+            [0.0, 5.0 * nm, 0.0],
+            [0.0, 0.0, 0.0],
+            [5.0 * nm, 0.0, 0.0],
+            [0.0, 5.0 * nm, 0.0],
+        ];
+        let point = [1.0 * nm, 1.0 * nm, 0.0];
+        assert!(prism6_invert(&nodes, point).is_none());
+    }
 }

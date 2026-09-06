@@ -113,6 +113,64 @@ describe("crossSectionWorkspace", () => {
     ).toEqual(draft);
   });
 
+  it("adopts active default_slice plane, position_fraction, and slab operator into monitor draft (R23)", () => {
+    resetCrossSectionWorkspaceForTests();
+    const planarState: VisualizationStateResource = {
+      ...visualizationState,
+      planar: {
+        colormap: "viridis",
+        component: "magnitude",
+        default_slice: {
+          operator: { kind: "slab_average", thickness_m: 3e-9 },
+          plane: "xy",
+          position_fraction: 0.75,
+        },
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: {
+          boundaries: false,
+          bounds: false,
+          contours: false,
+          mesh: false,
+          points: false,
+          probes: false,
+          raster: true,
+          vectors: false,
+        },
+        point_style: { color: "#ffffff", opacity: 1, size: 4 },
+        quality: "interactive",
+        quantity_id: "m",
+        resolution: { height: 512, vector_budget: 2000, width: 512 },
+        source: { kind: "default" },
+        vector_style: {
+          color_mode: "orientation",
+          length_mode: "uniform",
+          monochrome_color: "#ffffff",
+          opacity: 1,
+          scale: 1,
+          thickness: 1,
+        },
+        view_scope: { kind: "monitor_target" },
+        viewport_colorbar_visible: true,
+        visible: true,
+        wireframe_style: { color: "#ffffff", opacity: 1 },
+      },
+    };
+
+    const draft = beginPlanarMonitorDraft(
+      planarState,
+      { min: [0, 0, 0], max: [10e-9, 10e-9, 10e-9] },
+      { source: "inspector" },
+    );
+
+    // Position z = 0 + 0.75 * 10e-9 = 7.5e-9 m
+    expect(draft.monitor.frame.origin_m[2]).toBeCloseTo(7.5e-9);
+    expect(draft.monitor.frame.preset).toBe("xy");
+    expect(draft.monitor.operator).toEqual({
+      kind: "slab_average",
+      thickness_m: 3e-9,
+    });
+  });
+
   it("updates and discards the planar monitor draft without touching legacy plots", () => {
     resetCrossSectionWorkspaceForTests();
     beginPlanarMonitorDraft(visualizationState);

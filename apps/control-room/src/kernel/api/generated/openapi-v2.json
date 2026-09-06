@@ -20544,6 +20544,7 @@
       },
       "PlanarFieldComponent": {
         "enum": [
+          "scalar",
           "x",
           "y",
           "z",

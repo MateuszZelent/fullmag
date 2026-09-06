@@ -491,27 +491,35 @@ export function createPlanarMonitorDraft({
   intent,
   visualizationState,
 }: PlanarMonitorDraftCreationOptions = {}): PlanarMonitorDraft {
+  const planarSlice = visualizationState?.planar?.default_slice;
   const slice = visualizationState?.slice;
   const source = visualizationState?.clip.enabled
     ? visualizationState.clip
     : slice;
-  const preset = intent?.preset ?? (source ? PLANE_BY_AXIS[source.axis] : "xy");
+  const preset = intent?.preset ?? (planarSlice ? planarSlice.plane : (source ? PLANE_BY_AXIS[source.axis] : "xy"));
   const axis = crossSectionAxisFromPlane(preset);
   const axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
-  const positionPercent = source?.position_percent ?? 50;
+  const positionFraction = planarSlice?.position_fraction ?? (source?.position_percent !== undefined ? source.position_percent / 100 : 0.5);
   const positionM = bounds
-    ? bounds.min[axisIndex] + positionPercent / 100 * (bounds.max[axisIndex] - bounds.min[axisIndex])
+    ? bounds.min[axisIndex] + positionFraction * (bounds.max[axisIndex] - bounds.min[axisIndex])
     : 0;
   const frame = planarPresetFrame(preset, positionM, DEFAULT_PLANAR_MONITOR.frame.extent);
-  if (visualizationState?.clip.enabled && visualizationState.clip.flipped) {
+  if (visualizationState?.clip.enabled && visualizationState.clip.flipped && !planarSlice) {
     frame.normal = frame.normal.map((value) => value === 0 ? 0 : -value) as typeof frame.normal;
     frame.v_axis = frame.v_axis.map((value) => value === 0 ? 0 : -value) as typeof frame.v_axis;
   }
+  const operator: PlanarMonitorOperator = intent?.operator
+    ? structuredClone(intent.operator)
+    : planarSlice?.operator
+      ? (planarSlice.operator.kind === "slab_average"
+          ? { kind: "slab_average", thickness_m: planarSlice.operator.thickness_m }
+          : { kind: "plane_sample" })
+      : structuredClone(DEFAULT_PLANAR_MONITOR.operator);
   return {
     monitor: {
       ...structuredClone(DEFAULT_PLANAR_MONITOR),
       frame,
-      ...(intent?.operator ? { operator: structuredClone(intent.operator) } : {}),
+      operator,
       ...(intent?.target ? { target: structuredClone(intent.target) } : {}),
     },
     ui: {

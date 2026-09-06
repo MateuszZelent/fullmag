@@ -1593,7 +1593,8 @@ fn project_planar_patch_to_compatibility_slice(
             crate::schemas::visualization_state::PlanarFieldComponent::X => FieldComponent::X,
             crate::schemas::visualization_state::PlanarFieldComponent::Y => FieldComponent::Y,
             crate::schemas::visualization_state::PlanarFieldComponent::Z => FieldComponent::Z,
-            crate::schemas::visualization_state::PlanarFieldComponent::Magnitude
+            crate::schemas::visualization_state::PlanarFieldComponent::Scalar
+            | crate::schemas::visualization_state::PlanarFieldComponent::Magnitude
             | crate::schemas::visualization_state::PlanarFieldComponent::U
             | crate::schemas::visualization_state::PlanarFieldComponent::V
             | crate::schemas::visualization_state::PlanarFieldComponent::Normal

@@ -187,11 +187,18 @@ pub(super) fn sample_boundary(
         scalar_values.push(if field.n_comp() == 1 {
             value[0]
         } else {
-            value
-                .iter()
-                .map(|component| component * component)
-                .sum::<f64>()
-                .sqrt()
+            let vec = [
+                value[0],
+                value.get(1).copied().unwrap_or(0.0),
+                value.get(2).copied().unwrap_or(0.0),
+            ];
+            super::element_evaluator::evaluate_vector_quantity(
+                vec,
+                request.component,
+                frame.u,
+                frame.v,
+                frame.normal,
+            )
         });
         vector_values.push(if field.n_comp() >= 3 {
             [value[0], value[1], value[2]]
@@ -308,7 +315,7 @@ fn integrate_surface_polygon(polygon: &[SurfaceVertex]) -> Option<(Vec<f64>, f64
             sub(vertices[2].world, vertices[0].world),
         );
         let triangle_area = 0.5 * dot(area_vector, area_vector).sqrt();
-        if triangle_area <= 1.0e-24 {
+        if triangle_area <= 1.0e-36 || !triangle_area.is_finite() {
             continue;
         }
         area += triangle_area;

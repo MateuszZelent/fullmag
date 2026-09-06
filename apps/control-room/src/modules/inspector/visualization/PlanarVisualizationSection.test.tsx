@@ -746,7 +746,23 @@ describe("PlanarVisualizationSection", () => {
       await act(async () => clickButton(container, "Use target scope"));
 
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { source: { kind: "monitor", monitor_id: "plane-1" } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { component: "magnitude", quantity_id: "m" } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: {
+          component: "magnitude",
+          display_unit: null,
+          layers: {
+            boundaries: true,
+            bounds: false,
+            contours: false,
+            mesh: true,
+            points: false,
+            probes: true,
+            raster: true,
+            vectors: false,
+          },
+          quantity_id: "m",
+        },
+      });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { component: "normal" } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { colormap: "inferno" } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { display_unit: "kA/m" } });
@@ -860,6 +876,39 @@ describe("PlanarVisualizationSection", () => {
         expect(findControl(container, label).disabled).toBe(true);
       }
       expect(container.textContent).toContain(reason);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("selects scalar component and disables vectors when choosing a scalar quantity (R22)", async () => {
+    mocks.components = 1;
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+      const quantitySelect = findControl(container, "Quantity");
+      await act(async () => change(quantitySelect, "h_eff"));
+
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: {
+          component: "scalar",
+          display_unit: null,
+          layers: {
+            boundaries: true,
+            bounds: false,
+            contours: false,
+            mesh: true,
+            points: false,
+            probes: true,
+            raster: true,
+            vectors: false,
+          },
+          quantity_id: "h_eff",
+        },
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();

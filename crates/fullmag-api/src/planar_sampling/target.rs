@@ -48,6 +48,24 @@ impl ResolvedSpatialTarget {
         &self.selected_entity_ids
     }
 
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let field_bytes = match &self.field {
+            TargetField::Fdm(fdm) => {
+                fdm.values().len() * std::mem::size_of::<f64>()
+                    + fdm.membership_mask().map_or(0, |m| m.len())
+            }
+            TargetField::Fem(fem) => {
+                fem.nodes().len() * std::mem::size_of::<[f64; 3]>()
+                    + fem.elements().len() * 24
+                    + fem.markers().len() * 4
+                    + fem.values().len() * std::mem::size_of::<f64>()
+            }
+        };
+        std::mem::size_of::<Self>()
+            + self.selected_entity_ids.len() * std::mem::size_of::<u32>()
+            + field_bytes
+    }
+
     #[cfg(test)]
     pub(crate) fn bounds_world_m(&self) -> [[f64; 3]; 2] {
         self.target_bounds_world_m

@@ -334,6 +334,7 @@ pub enum PlanarViewScopeState {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanarFieldComponent {
+    Scalar,
     X,
     Y,
     Z,

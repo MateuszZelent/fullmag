@@ -84,7 +84,10 @@ export function marchingSquaresLevels(
   const segments: ContourSegment[] = [];
   for (const level of levels) {
     if (!Number.isFinite(level)) continue;
-    segments.push(...marchingSquares(values, width, height, level, mask));
+    const levelSegments = marchingSquares(values, width, height, level, mask);
+    for (let i = 0; i < levelSegments.length; i++) {
+      segments.push(levelSegments[i]!);
+    }
   }
   return segments;
 }

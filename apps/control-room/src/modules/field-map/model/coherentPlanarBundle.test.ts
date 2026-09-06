@@ -111,4 +111,60 @@ describe("coherentPlanarBundle", () => {
       expect(res.reason).toContain("mask_buffer_size_mismatch");
     }
   });
+
+  it("rejects empty sample token (TS04)", () => {
+    const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(
+      { ...mockMeta, sample_token: "" },
+      scalarBuffer,
+      maskBuffer,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe("missing_sample_token");
+    }
+  });
+
+  it("rejects zero or non-positive resolution", () => {
+    const res = validateCoherentPlanarBundle(
+      { ...mockMeta, resolution: [0, 0] },
+      new ArrayBuffer(0),
+      new ArrayBuffer(0),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("invalid_resolution");
+    }
+  });
+
+  it("rejects invalid or missing bounds", () => {
+    const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(
+      { ...mockMeta, frame: { ...mockMeta.frame, bounds_uv_m: [0, 1] as unknown as [number, number, number, number] } },
+      scalarBuffer,
+      maskBuffer,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe("invalid_bounds");
+    }
+  });
+
+  it("rejects buffer origin token mismatch (TS03)", () => {
+    const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(
+      mockMeta,
+      scalarBuffer,
+      maskBuffer,
+      null,
+      { scalarToken: "other-origin-token" },
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("identity_mismatch");
+    }
+  });
 });

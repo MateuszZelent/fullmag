@@ -300,8 +300,27 @@ describe("planar renderer lifecycle", () => {
       gridWidth: 2,
       layers: { contours: true, mesh: false, vectors: true },
     });
-    expect(context.moveTo).toHaveBeenCalledWith(0, 100);
+    // Contour at cell (0, 0) center and vector glyph at cell (0, 0) center both map to (25, 75)
     expect(context.moveTo).toHaveBeenCalledWith(25, 75);
+  });
+
+  it("aligns contour level between cell centers to exact cell boundary (TS01)", () => {
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+    // In a 2x2 grid, level 0.5 between cell (0, 0) and (1, 0) is at x = 0.5, y in [0, 1]
+    drawPlanarOverlays(context, 100, 100, {
+      contours: [[0.5, 0, 0.5, 1]],
+      gridHeight: 2,
+      gridWidth: 2,
+      layers: { contours: true, mesh: false, vectors: false },
+    });
+    // x = 0.5 + 0.5 = 1.0 -> (1.0 / 2) * 100 = 50 (exact cell boundary at midpoint)
+    // y = 0 + 0.5 = 0.5 -> 100 - (0.5 / 2) * 100 = 75
+    // y = 1 + 0.5 = 1.5 -> 100 - (1.5 / 2) * 100 = 25
+    expect(context.moveTo).toHaveBeenCalledWith(50, 75);
+    expect(context.lineTo).toHaveBeenCalledWith(50, 25);
   });
 
   it("draws exact target boundaries independently from the mesh layer", () => {

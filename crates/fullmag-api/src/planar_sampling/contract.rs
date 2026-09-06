@@ -233,6 +233,9 @@ impl FdmPlanarField {
     pub(super) fn values(&self) -> &[f64] {
         &self.values
     }
+    pub(super) fn membership_mask(&self) -> Option<&[bool]> {
+        self.membership_mask.as_deref()
+    }
     pub(super) fn contains_cell(&self, cell: usize) -> bool {
         self.membership_mask
             .as_ref()

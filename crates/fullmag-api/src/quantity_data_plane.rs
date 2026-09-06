@@ -238,7 +238,10 @@ impl PlanarSampleCache {
 
     pub fn insert_built(&mut self, key: String, built: Arc<BuiltPlanarField>) {
         let result = Arc::clone(&built.result);
-        let estimated_bytes = estimate_planar_sample_bytes(&result) + 1024;
+        let sample_bytes = estimate_planar_sample_bytes(&result);
+        let target_bytes = built.target.estimated_bytes();
+        let estimated_bytes =
+            sample_bytes + target_bytes + std::mem::size_of::<BuiltPlanarField>();
         if estimated_bytes > self.max_bytes || self.max_entries == 0 {
             return;
         }
@@ -710,7 +713,6 @@ impl QuantityDataPlaneStore {
         };
 
         let sample_result = sample().await;
-        guard.completed = true;
 
         if let Ok(sampled) = &sample_result {
             let mut cache = self.planar_sample_cache.lock().await;
@@ -721,6 +723,7 @@ impl QuantityDataPlaneStore {
             let mut inflight = self.planar_sample_inflight.lock().unwrap();
             inflight.remove(key)
         };
+        guard.completed = true;
 
         if let Some(tx) = tx {
             let _ = tx.send(Some(sample_result.clone()));

@@ -190,7 +190,7 @@ fn decompose_polyhedron(polyhedron: &ConvexPolyhedron) -> Vec<[[f64; 3]; 4]> {
             let b = face[index].position;
             let c = face[index + 1].position;
             let volume = tetra_volume(center, a, b, c);
-            if volume > 1e-28 {
+            if volume > 1e-36 {
                 tetrahedra.push([center, a, b, c]);
             }
         }

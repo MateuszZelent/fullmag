@@ -176,7 +176,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   );
   const patch = (next: PlanarPatch) => visualizationSync.queuePatch({ planar: next });
   const selectedDescriptor = fieldCatalog.data?.quantities.find((quantity) => quantity.quantity_id === quantityId);
-  const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"];
+  const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : (["scalar"] as const);
   const canonicalUnit = meta.data?.canonical_unit ?? selectedDescriptor?.unit ?? "";
   const displayUnitItems = scalarColorbarDisplayUnitItems(canonicalUnit);
   const availableQuantities = (fieldCatalog.data?.quantities ?? []).filter(
@@ -328,7 +328,14 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         clipping={<p className="m-0 text-fm-help leading-snug text-fm-muted">The active plane and slice position are controlled in Source &amp; Slice.</p>}
         context={sourceAndSlice}
         dataState={meta.status === "ready" ? "Live" : meta.status}
-        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
+        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => {
+          const nextId = event.currentTarget.value;
+          const nextDesc = availableQuantities.find((q) => q.quantity_id === nextId);
+          const isVector = (nextDesc?.components ?? 3) > 1;
+          const nextComp = isVector ? "magnitude" : "scalar";
+          const nextLayers = isVector ? planar.layers : { ...planar.layers, vectors: false };
+          patch({ component: nextComp, display_unit: null, layers: nextLayers, quantity_id: nextId });
+        }}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
         enabledPassCount={enabledPassCount}
         meshState={capabilities.mesh.enabled ? "Ready" : "Degraded"}
         quantitySource={quantityId || "Not available"}

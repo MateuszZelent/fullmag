@@ -107,4 +107,22 @@ describe("planar figure spec", () => {
     expect(manifest.datasetSpec.units.canonical).toBe("A/m");
     expect(manifest.datasetSpec.units.display).toBe("kA/m");
   });
+
+  it("rejects invalid or corrupted figure spec payloads on deserialization (R25)", () => {
+    expect(() => deserializePlanarFigureSpec("null")).toThrow(/expected an object/);
+    expect(() => deserializePlanarFigureSpec("[]")).toThrow(/expected an object/);
+    expect(() => deserializePlanarFigureSpec(JSON.stringify({ component: "m" }))).toThrow(/quantityId/);
+    expect(() => deserializePlanarFigureSpec(JSON.stringify({ quantityId: "m" }))).toThrow(/component/);
+    expect(() =>
+      deserializePlanarFigureSpec(
+        JSON.stringify({
+          canonicalUnit: "A/m",
+          colormap: "viridis",
+          component: "magnitude",
+          quantityId: "m",
+          resolution: [0, 0],
+        }),
+      ),
+    ).toThrow(/resolution/);
+  });
 });

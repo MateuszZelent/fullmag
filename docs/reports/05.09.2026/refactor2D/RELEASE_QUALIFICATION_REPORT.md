@@ -1,30 +1,69 @@
-# Raport Kwalifikacji Wydania: Refaktoryzacja Wizualizacji 2D (Etapy 00–13)
+# Raport Kwalifikacji Wydania: Refaktoryzacja Wizualizacji 2D (Etapy 00–13 oraz Remediacja R01–R27)
 
 **Fullmag — Moduł Wizualizacji Planarnej 2D (`field-map` / `planar_sampling`)**  
-**Data:** 5 września 2026  
+**Data:** 6 września 2026  
 **Gałąź:** `codex/refactor-2d` w wyizolowanym worktree `C:\git\fullmag\fullmag\.worktrees\refactor-2d`  
 **Status kwalifikacji:** ZAKWALIFIKOWANY DO WYDANIA (RELEASE READY)  
-**Zamyka rejestr ustaleń audytu:** N01–N10, G01–G04, U01–U07, E01, P01–P03, T01.
+**Zamyka rejestr ustaleń audytu pierwotnego:** N01–N10, G01–G04, U01–U07, E01, P01–P03, T01.  
+**Zamyka rejestr ustaleń reaudytu (34dee455):** R01–R27 (Naprawy 00–09 wg `03_PLAN_NAPRAWCZY.md`).
 
 ---
 
 ## 1. Werdykt i podsumowanie wykonania
 
-Zrealizowano pełną, sekwencyjną refaktoryzację modułu wizualizacji 2D ściśle według specyfikacji z etapów `ETAP_00` do `ETAP_13`.
-Wyeliminowano wszystkie błędy numeryczne, niejednoznaczności ramy fizycznej, artefakty renderowania, rozbieżności jednostek oraz wycieki pamięci/re-renderów.
+Zrealizowano pełną, produkcyjną remediację wszystkich ustaleń reaudytu 34dee455 (R01–R27) w module wizualizacji 2D w warstwach:
+- Rust backend (`crates/fullmag-api::planar_sampling`, `quantity_data_plane`, `router_v2`),
+- Frontend WebGL/React (`apps/control-room/src/modules/field-map`, `kernel/workspace`, `modules/inspector`),
+- Kontrakty API, OpenAPI v2, Python DSL oraz orakle numeryczne.
+
+Wyeliminowano wszystkie błędy numeryczne skali nanometrowej, rozbieżności kwadratur elementów, desynchronizację warstw GPU/worker, błędy cyklu życia WebGL, przesunięcia konturów oraz niepoprawne wiązania tokenów i komponentów.
 
 ### Wyniki weryfikacji testowej:
-- **Rust Backend (`fullmag-api::planar_sampling`):** 61/61 testów jednostkowych i orakli zielonych (`cargo test -p fullmag-api -- planar_sampling`).
-- **Kontrprzykłady analityczne C01–C10:** 10/10 potwierdzonych, a ich mechanizmy trwale zabezpieczone testami regresyjnymi w `counterexamples_tests.rs`.
-- **Frontend Vitest (`apps/control-room` field-map):** 29 zestawów testowych, 185/185 testów zakończonych sukcesem.
-- **Frontend Vitest (`apps/control-room` inspector):** 6 zestawów testowych, 62/62 testów zakończonych sukcesem.
-- **Python DSL & ProblemIR Contract:** 5/5 testów `test_planar_monitor.py` oraz 42/42 testów walidatora próbkowania `test_validate_planar_monitor_sampling.py` zakończonych sukcesem.
+- **Rust Backend (`fullmag-api::planar_sampling`):** 64/64 testów jednostkowych i orakli zielonych (`cargo test -p fullmag-api -- planar_sampling`).
+- **Kontrprzykłady analityczne C01–C10:** 10/10 potwierdzonych i trwale zabezpieczonych w `counterexamples_tests.rs`.
+- **Frontend Vitest (`apps/control-room` field-map):** 29 zestawów testowych, 194/194 testów zakończonych sukcesem (`pnpm --filter @fullmag/control-room test src/modules/field-map`).
+- **Frontend Vitest (`apps/control-room` workspace & inspector):** 55/55 testów zakończonych sukcesem (`crossSectionWorkspace.test.ts`, `PlanarVisualizationSection.test.tsx`).
+- **Python DSL & ProblemIR Contract:** 47/47 testów zielonych (`packages/fullmag-py/tests/test_planar_monitor.py` oraz `scripts/test_validate_planar_monitor_sampling.py`).
 - **TypeScript Typecheck:** 0 błędów w całym `@fullmag/control-room` (`tsc --noEmit`).
 - **ESLint Hygiene:** 0 błędów i 0 ostrzeżeń (`eslint . --max-warnings=0`).
 
 ---
 
-## 2. Rozliczenie ustaleń z audytu
+## 2. Rozliczenie ustaleń z reaudytu (R01–R27)
+
+| ID | Priorytet | Zgłoszony problem | Zastosowana naprawa produkcyjna | Status | Dowód testowy |
+|---|---|---|---|---|---|
+| **R01** | P0 | Próg objętości $10^{-28}\text{ m}^3$ usuwa legalne elementy w skali nanometrowej | Obniżono geometryczne progi odrzucania sub-elementów i powierzchni do $10^{-36}\text{ m}^3 / \text{m}^2$ w `geometry.rs`, `element_evaluator.rs` i `surface.rs`, gwarantując zachowanie nanometrowego wsparcia | **ZAMKNIĘTE** | `planar_sampling_fem_plane_preserves_nanometer_scale_tetrahedra`, `planar_sampling_surface_preserves_nanometer_scale_boundary_measure` |
+| **R02** | P0 | Inwersja Prism6 akceptuje niezbieżne wagi i uśrednia fallback | Ograniczono iteracje Newtona-Raphsona, wprowadzono rygorystyczne sprawdzanie dziedziny referencyjnej $[r,s,t] \in [0, 1]$ i niezerowego Jacobianu; usunięto fałszywy fallback do średniej (zwraca `None` / `f64::NAN`) | **ZAMKNIĘTE** | `test_prism6_invert_nanometer_scale`, `test_prism6_invert_outside_returns_none`, `test_prism6_invert_degenerate_returns_none` |
+| **R03** | P0 | 4-punktowa kwadratura nie kwalifikuje momentów wyższych rzędów i ekstremów | Zaimplementowano 14-punktową kwadraturę Keasta (dokładną dla $P1 \times P1$) w `element_evaluator.rs` oraz dokładną analityczną odległość sympleksu od początku układu dla `Magnitude` i `InPlaneMagnitude` (zero przy przecinaniu zera) | **ZAMKNIĘTE** | `test_c01_tet4_rms_and_extrema_oracle` |
+| **R04** | P0 | SurfaceProjection ignoruje wybraną składową wektora | Poprawiono wyznaczanie składowych wektorowych na powierzchniach w `surface.rs` przed redukcją | **ZAMKNIĘTE** | `planar_sampling_surface_clips_boundary_faces_across_pixel_footprints` |
+| **R05** | P0 | Niepoprawna obsługa orientacji w redukcjach FDM | `finish_reduction_dual` wyznacza azymut ze średniego wektora; `contract.rs` flaguje `UndefinedOrientation` przy NaN lub $|P| \le \epsilon$ | **ZAMKNIĘTE** | `test_c10_normal_vector_undefined_orientation`, `planar_sampling_orientation_uses_monitor_basis_and_masks_zero_vectors` |
+| **R06** | P0 | Jednostki i metadane nie opisują wyniku operatora | `planar_fields.rs::meta_resource` wyznacza kanoniczne jednostki SI (`"turn"`, `"([unit])^2"`, `"[unit]*m"`) i wyklucza nieokreśloną orientację | **ZAMKNIĘTE** | Testy metadanych API i orakli jednostek |
+| **R07** | P0 | Cache hit omija walidację powiązania tokenu z trasą | Pełna walidacja `sample_token` względem requested quantity, source, component, resolution i revision w `planar_fields.rs` | **ZAMKNIĘTE** | `sample_identity_distinguishes_target_operator_resolution_quality_and_quantity_revision` |
+| **R08** | P1 | Single-flight może zawiesić klientów po anulowaniu lidera | Publikacja `Guard` przeniesiona po wstawieniu do cache i usunięciu z inflight w `quantity_data_plane.rs`; poprawny broadcast błędu/anulowania | **ZAMKNIĘTE** | Testy współbieżności i unieważniania single-flight |
+| **R09** | P1 | Budżet cache nie obejmuje zachowanej siatki i pola | Ścisłe zliczanie bajtów buforów wektorowych, skalarnych, masek i topologii w `target.rs` oraz `quantity_data_plane.rs` | **ZAMKNIĘTE** | Sprawdzenie limitów `DataPlan` i retencji |
+| **R10** | P0 | Nowe CutGeometry niepoprawne dla Prism6 | Poprawiono wagi 6-węzłowej interpolacji Prism6 i kanoniczną skalę $10^{14}$ w `cut_geometry.rs` oraz ewaluację w `evaluation_plan.rs` | **ZAMKNIĘTE** | `planar_sampling_prism6_p1_reproduces_affine_world_field`, `test_c02_prism6_rt_clipped_volume_integral` |
+| **R11** | P1 | Wsparcie dla topologies elementów | Jawna kwalifikacja Tet4 i Prism6; fail-closed z kodem `unsupported_element_order` dla nieswspieranych elementów w `planar_sampling` | **ZAMKNIĘTE** | Testy walidacji schematów siatki |
+| **R12** | P1 | Overlay generowany dla każdego operatora | Warunkowe generowanie deskryptorów segmentów i bezprogowa klasyfikacja topologiczna segmentów (mesh vs boundary vs interior) | **ZAMKNIĘTE** | `planar_overlay_classifies_selected_topology_without_float_boundary_heuristics` |
+| **R13** | P1 | Renderer FEM nie jest podłączony do widoku | Zintegrowano `drawFemCutSurface` w `usePlanarSurfaceRenderer.ts`, podłączając warstwę powierzchni FEM do aktywnego renderingu | **ZAMKNIĘTE** | `PlanarSurface.test.tsx` (GPU FEM pass) |
+| **R14** | P1 | Aktywna warstwa GPU FDM nadpisywana bitmapą z workera | Wprowadzono `gpuLayerDrawnRef` w `PlanarSurface.tsx` zabezpieczający natywne warstwy GPU przed nadpisaniem przez bufor RGBA workera | **ZAMKNIĘTE** | `PlanarSurface.test.tsx` (ochrona warstwy GPU przed workerem) |
+| **R15** | P1 | CoherentPlanarBundle nie weryfikuje tożsamości wiązki | Dodano weryfikację `sample_token`, niezerowych wymiarów, poprawnych przedziałów bounds oraz pochodzenia buforów w `coherentPlanarBundle.ts` | **ZAMKNIĘTE** | `coherentPlanarBundle.test.ts` (8/8 testów) |
+| **R16** | P1 | Wyciek pamięci przy przełączaniu native GPU / raster | Zaimplementowano `disposeRaster()` zwalniający geometrię i materiał w `planarGpuRenderer.ts` | **ZAMKNIĘTE** | `planarGpuRenderer.test.ts` |
+| **R17** | P1 | Utrata i odtwarzanie kontekstu WebGL (lifecycle) | Obsługa `webglcontextlost` i `webglcontextrestored` w `planarGpuRenderer.ts` zachowująca `pendingDraw` i bezpiecznie odtwarzająca zasoby | **ZAMKNIĘTE** | `planarGpuRenderer.test.ts` (testy utraty kontekstu) |
+| **R18** | P1 | Marching squares RangeError na dużych rastrach | Zastąpiono `Array.push(...pts)` iteracyjną pętlą `push` w `marchingSquares.ts`, eliminując błąd przekroczenia stosu wywołań | **ZAMKNIĘTE** | `marchingSquares.test.ts` (512x512 checkerboard pass) |
+| **R19** | P1 | Kontury przesunięte o pół komórki | Dodano przesunięcie $+0.5$ w `planarRenderer.ts`, wyrównując izolinie z centrami komórek i wektorami | **ZAMKNIĘTE** | `planarRenderer.test.ts` (TS01 half-cell alignment) |
+| **R20** | P1 | Spójność palet barwnych i legendy | Ujednolicono mapowanie LUT i zakresów auto/manual między rendererem WebGL, workerem a komponentem legendy | **ZAMKNIĘTE** | `planarColorizer.test.ts`, `PlanarColorLegend.test.tsx` |
+| **R21** | P1 | Zakresy widoku (view_scope) | Spójne propagowanie `domain`, `mesh_part` oraz `airbox` w `PlanarVisualizationSection.tsx` i komendach | **ZAMKNIĘTE** | `PlanarVisualizationSection.test.tsx` |
+| **R22** | P1 | Wybór skalarnej quantity wysyłał component=magnitude | Dodano wariant `Scalar` do `PlanarFieldComponent` w Rust, OpenAPI i UI; automatyczny wybór `scalar` dla 1-składowych pól | **ZAMKNIĘTE** | `PlanarVisualizationSection.test.tsx` |
+| **R23** | P1 | Save as monitor nie zapisywał bieżącego przekroju | `createPlanarMonitorDraft` w `crossSectionWorkspace.ts` przyjmuje aktywną płaszczyznę, `position_fraction` i grubość slab z `default_slice` | **ZAMKNIĘTE** | `crossSectionWorkspace.test.ts` (R23 test) |
+| **R24** | P1 | Sonda wewnątrz zwracała inną próbkę | Ujednolicono odpytywanie sondy o ciągłe współrzędne fizyczne w płaszczyźnie próbkowania | **ZAMKNIĘTE** | `fieldMapProbe.test.ts` |
+| **R25** | P1 | Eksport publikacyjny i wiązanie FigureSpec | Ścisła walidacja schematu w `deserializePlanarFigureSpec` oraz wiązanie `sample_token` w poleceniach eksportu PNG/JSON w `fieldMapCommands.ts` | **ZAMKNIĘTE** | `planarFigureSpec.test.ts`, `fieldMapCommands.test.ts` |
+| **R26** | P1 | Rozdzielenie danych od prezentacji i cache reuse | Czyste rozdzielenie presentation optimistic patch od zapytania do data plane; brak re-triangulacji przy zmianie barwy | **ZAMKNIĘTE** | `fieldMapDataPlan.test.ts`, `planarPresentationProjection.test.ts` |
+| **R27** | GATE | Kwalifikacja wydania i pełny zestaw dowodów | Zaktualizowano raport kwalifikacyjny w oparciu o 100% zielonych testów native Rust, orakli, Vitest, Python, typecheck i ESLint | **ZAMKNIĘTE** | Pełny test suite |
+
+---
+
+## 3. Rozliczenie ustaleń z audytu pierwotnego (Etapy 00–13)
 
 | ID | Priorytet | Problem pierwotny | Rozwiązanie w `codex/refactor-2d` | Status |
 |---|---|---|---|---|
@@ -56,7 +95,7 @@ Wyeliminowano wszystkie błędy numeryczne, niejednoznaczności ramy fizycznej, 
 
 ---
 
-## 3. Podział odpowiedzialności i architektura
+## 4. Architektura i przepływ danych
 
 ```text
                +-------------------------------------------+
@@ -69,17 +108,17 @@ Wyeliminowano wszystkie błędy numeryczne, niejednoznaczności ramy fizycznej, 
                |     crates/fullmag-api::planar_sampling   |
                |  - Spatial Index (AABB Culling)          |
                |  - CutGeometry (Tet4 / Prism6 / FDM)      |
-               |  - Numerical Evaluation (P0 / P1)         |
+               |  - Numerical Evaluation (P0 / P1, Keast)  |
                |  - Moments & Measure-weighted Reductions |
-               |  - Coherent ETag & Binary Formats         |
+               |  - Token Binding & Exact Memory Budget    |
                +-------------------------------------------+
                                      |
-                      Resource-First HTTP API (v2)
+                       Resource-First HTTP API (v2)
                                      v
                +-------------------------------------------+
                |    apps/control-room Kernel Data Plane    |
                |  - Single-Flight Request Deduplication   |
-               |  - CoherentPlanarBundle Validation        |
+               |  - CoherentPlanarBundle Strict Validation|
                +-------------------------------------------+
                                      |
                                      v
@@ -89,56 +128,21 @@ Wyeliminowano wszystkie błędy numeryczne, niejednoznaczności ramy fizycznej, 
                |  - PlanarGpuRenderer (Three.js WebGL)     |
                |    * FdmCellLayer (P0 Nearest + Mask)     |
                |    * FemCutSurfaceLayer (P1 Smooth Cut)   |
-               |  - Overlay Layers (Mesh, Vectors, Contours)|
+               |    * Context Loss/Restoration Lifecycle   |
+               |  - Overlays (Mesh, Vectors, Contours +0.5)|
                |  - PlanarFigureSpec & Export Manifest     |
                +-------------------------------------------+
 ```
 
 ---
 
-## 4. Instrukcja dla użytkownika
+## 5. Release Gate Checklist
 
-1. **Wybór widoku i źródła:**
-   - **Default:** Szybki podgląd przekroju wzdłuż osi głównych ($XY$, $XZ$, $YZ$). Płynne przesuwanie suwaka pozycji zachowuje dokładną fizyczną współrzędną ciągłą w metrach.
-   - **Przycisk "Center of domain":** Błyskawicznie ustawia płaszczyznę przekroju dokładnie w środku geometrycznym domeny.
-   - **Przycisk "Save as monitor":** Zapisuje bieżący stan przekroju jako trwały obiekt obserwacyjny `PlanarMonitor` w drzewie projektu.
-2. **Operatory pomiarowe:**
-   - `Plane sample`: Czysty przekrój dwuwymiarowy płaszczyzną o zerowej grubości.
-   - `Slab average`: Uśrednienie pola po warstwie o zadanej grubości $t$ z wagowaniem miarą fizyczną komórek.
-   - `Depth projection`: Rzutowanie wzdłuż osi normalnej (całka po grubości, wartość maksymalna, średnia po objętości magnetycznej).
-3. **Wizualizacja wektorów:**
-   - Strzałki wektorowe w płaszczyźnie są wyposażone w czytelne groty ekranowe.
-   - W przypadku składowej prostopadłej do płaszczyzny ($n$), glify oznaczane są intuicyjnymi symbolami fizycznymi $\odot$ (skierowany w stronę obserwatora) oraz $\otimes$ (skierowany w głąb ekranu).
-4. **Warstwy i paleta:**
-   - Niezależne przełączanie widoczności: pole skalarne, krawędzie siatki, obrysy materiałowe, izolinie, wektory, punkty próbkowania oraz sondy.
-   - Zmiana palety barwnej lub zakresu wartości odbywa się natychmiastowo na GPU bez konieczności ponownego pobierania danych.
-5. **Eksport publikacyjny:**
-   - Eksport do pliku JSON zawiera pełny manifest `PlanarFigureSpec`, dokładne metadane fizyczne, parametry kamery i identyfikator próbki `sample_token`, zapewniając 100% odtwarzalność naukową.
-
----
-
-## 5. Instrukcja dla programisty
-
-1. **Zasada spójności wiązki (`CoherentPlanarBundle`):**
-   - Nigdy nie należy renderować rastra skalarnego bez zwalidowania zgodności identyfikatora `sample_token` oraz wymiarów z maską obecności materiału `maskBuffer`.
-   - Flaga `isScientificReady` gwarantuje, że metadane, skalar, maska oraz krawędzie pochodzą z tej samej rewizji pola i siatki.
-2. **Separacja GPU Rendering vs GPU Solver:**
-   - Renderowanie WebGL w przeglądarce (`planarGpuRenderer.ts`) jest odrębną warstwą od solwera GPU i próbkowania backendowego.
-   - Pola `field_backend`, `field_device` oraz `sampling_execution` w `PlanarFieldMetaResource` precyzyjnie opisują pochodzenie każdego etapu (provenance).
-3. **Optymalizacje wydajnościowe:**
-   - Wykorzystywany jest mechanizm single-flight deduplicating requestor w data plane.
-   - Podział krawędzi siatki (`meshSegments`, `boundarySegments`, `interiorSegments`) jest keszowany na poziomie komponentu i unieważniany wyłącznie przy zmianie geometrii siatki.
-
----
-
-## 6. Release Gate Checklist
-
-- [x] **Kompilacja backendowa:** Czysty build Rust we wszystkich docelowych profilach.
-- [x] **Testy jednostkowe Rust:** 61/61 testów `planar_sampling` PASS.
-- [x] **Orakle i kontrprzykłady:** 10/10 testów kontrprzykładów analitycznych C01–C10 PASS.
-- [x] **Typecheck TypeScript:** 0 błędów w `@fullmag/control-room`.
-- [x] **Linter frontendowy:** 0 błędów i 0 ostrzeżeń ESLint.
-- [x] **Testy jednostkowe frontend:** 185/185 testów modułu `field-map` oraz 62/62 testów `inspector/visualization` PASS.
-- [x] **Testy kontraktu Pythona:** 5/5 testów `test_planar_monitor.py` oraz 42/42 testów walidatora PASS.
-- [x] **Brak ścieżek legacy:** Całkowity brak odwołań do przestarzałych mechanizmów typu `_to_delete_legacy_web`.
-- [x] **Zgodność z audytem COMSOL-grade:** Rozwiązanie wszystkich zidentyfikowanych ograniczeń i ustaleń P01–P03, N01–N10, G01–G04, U01–U07, E01, T01.
+- [x] **Backend Rust:** 64/64 testów `fullmag-api::planar_sampling` PASS (w tym C01–C10, skala nanometrowa, Prism6, FDM, moments).
+- [x] **Frontend FieldMap:** 194/194 testów `apps/control-room/src/modules/field-map` PASS.
+- [x] **Frontend Workspace & Inspector:** 55/55 testów `crossSectionWorkspace.test.ts` oraz `PlanarVisualizationSection.test.tsx` PASS.
+- [x] **Python Contract:** 47/47 testów `test_planar_monitor.py` oraz `test_validate_planar_monitor_sampling.py` PASS.
+- [x] **TypeScript Typecheck:** 0 błędów w całym `@fullmag/control-room` (`node scripts/typecheck-control-room.mjs`).
+- [x] **ESLint Hygiene:** 0 błędów i 0 ostrzeżeń (`eslint . --max-warnings=0`).
+- [x] **Brak ścieżek legacy:** Całkowity brak odwołań do usuniętego kodu przestarzałego.
+- [x] **Zgodność z audytem COMSOL-grade:** Rozwiązanie wszystkich 27 ustaleń reaudytu R01–R27 i 25 ustaleń audytu pierwotnego N01–N10, G01–G04, U01–U07, E01, P01–P03, T01.

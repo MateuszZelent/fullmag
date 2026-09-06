@@ -8991,7 +8991,7 @@ export interface components {
             padding_m: number;
         };
         /** @enum {string} */
-        PlanarFieldComponent: "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
+        PlanarFieldComponent: "scalar" | "x" | "y" | "z" | "u" | "v" | "normal" | "magnitude" | "in_plane_magnitude" | "orientation";
         PlanarFieldFrameResource: {
             bounds_uv_m: number[];
             normal: number[];
