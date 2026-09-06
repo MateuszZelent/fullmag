@@ -13,8 +13,9 @@ Protocol:
 """
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+import math
 import os
 import struct
 import sys
@@ -42,6 +43,7 @@ from fullmag.meshing.quality import (
 )
 from fullmag.meshing.fmmq import _canonical_json, build_fmmq_v2_spec, write_fmmq_v2
 from fullmag.meshing._gmsh_types import (
+    _MESH_SIZE_PRESET_DEFAULTS,
     _build_mesh_statistics_report,
     _mesh_statistics_report_to_ir,
 )
@@ -664,39 +666,89 @@ def _mesh_result_payload(
         if tet4_only
         else None
     )
+    def _extract_growth_rate_from_dict(
+        d: dict[str, Any],
+        pointer_prefix: str,
+    ) -> tuple[float | None, str | None]:
+        g = d.get("growth_rate")
+        mg = d.get("maximum_element_growth_rate")
+        if g is not None and mg is not None:
+            g_f = float(parse_finite_float(g, f"{pointer_prefix}/growth_rate", positive=True, allow_numeric_string=True))
+            mg_f = float(parse_finite_float(mg, f"{pointer_prefix}/maximum_element_growth_rate", positive=True, allow_numeric_string=True))
+            if not math.isclose(g_f, mg_f, rel_tol=1e-7, abs_tol=1e-9):
+                raise TypedValidationError(
+                    code="conflicting_growth_rate_alias",
+                    pointer=f"{pointer_prefix}/maximum_element_growth_rate",
+                    message=f"Conflicting growth_rate ({g}) and maximum_element_growth_rate ({mg})",
+                )
+            return g_f, f"{pointer_prefix}/growth_rate"
+        if g is not None:
+            g_f = float(parse_finite_float(g, f"{pointer_prefix}/growth_rate", positive=True, allow_numeric_string=True))
+            return g_f, f"{pointer_prefix}/growth_rate"
+        if mg is not None:
+            mg_f = float(parse_finite_float(mg, f"{pointer_prefix}/maximum_element_growth_rate", positive=True, allow_numeric_string=True))
+            return mg_f, f"{pointer_prefix}/maximum_element_growth_rate"
+        preset = d.get("size_preset")
+        if isinstance(preset, str) and preset.strip() in _MESH_SIZE_PRESET_DEFAULTS:
+            return float(_MESH_SIZE_PRESET_DEFAULTS[preset.strip()]["growth_rate"]), f"{pointer_prefix}/size_preset"
+        return None, None
+
     raw_mesh_options = mesh_provenance.get("mesh_options")
-    raw_growth = None
-    growth_pointer = "/mesh_provenance/mesh_options/growth_rate"
+    options_growth = None
+    options_pointer = None
     if isinstance(raw_mesh_options, dict):
-        raw_growth = raw_mesh_options.get("growth_rate")
-        if raw_growth is None:
-            raw_growth = raw_mesh_options.get("maximum_element_growth_rate")
-            if raw_growth is not None:
-                growth_pointer = "/mesh_provenance/mesh_options/maximum_element_growth_rate"
-    if raw_growth is None:
-        raw_growth = mesh_provenance.get("growth_rate")
-        if raw_growth is not None:
-            growth_pointer = "/mesh_provenance/growth_rate"
-        else:
-            raw_growth = mesh_provenance.get("maximum_element_growth_rate")
-            if raw_growth is not None:
-                growth_pointer = "/mesh_provenance/maximum_element_growth_rate"
-    growth_report = None
-    if raw_growth is not None:
-        growth_value = parse_finite_float(
-            raw_growth,
-            growth_pointer,
-            positive=True,
-            allow_numeric_string=True,
+        options_growth, options_pointer = _extract_growth_rate_from_dict(
+            raw_mesh_options, "/mesh_provenance/mesh_options"
         )
+    root_growth, root_pointer = _extract_growth_rate_from_dict(
+        mesh_provenance, "/mesh_provenance"
+    )
+
+    if options_growth is not None and root_growth is not None:
+        if not math.isclose(options_growth, root_growth, rel_tol=1e-7, abs_tol=1e-9):
+            raise TypedValidationError(
+                code="conflicting_growth_rate_specification",
+                pointer="/mesh_provenance/growth_rate",
+                message=f"Conflicting growth_rate in mesh_options ({options_growth}) and mesh_provenance ({root_growth})",
+            )
+
+    resolved_growth = options_growth if options_growth is not None else root_growth
+
+    scope_growth_rates: dict[str, float] = {}
+    per_geom = mesh_provenance.get("per_geometry")
+    if isinstance(per_geom, list):
+        for idx, entry in enumerate(per_geom):
+            if isinstance(entry, dict):
+                r_val, _ = _extract_growth_rate_from_dict(entry, f"/mesh_provenance/per_geometry/{idx}")
+                name = entry.get("geometry") or entry.get("geometry_name")
+                if r_val is not None and name:
+                    scope_growth_rates[str(name)] = r_val
+    recipes = mesh_provenance.get("per_object_recipes") or mesh_provenance.get("recipes")
+    if isinstance(recipes, dict):
+        for r_name, r_entry in recipes.items():
+            if isinstance(r_entry, dict):
+                r_val, _ = _extract_growth_rate_from_dict(r_entry, f"/mesh_provenance/recipes/{r_name}")
+                if r_val is not None:
+                    scope_growth_rates[str(r_name)] = r_val
+    airbox_entry = mesh_provenance.get("airbox")
+    if isinstance(airbox_entry, dict):
+        a_val, _ = _extract_growth_rate_from_dict(airbox_entry, "/mesh_provenance/airbox")
+        if a_val is not None:
+            scope_growth_rates["air"] = a_val
+            scope_growth_rates["0"] = a_val
+
+    if resolved_growth is None and scope_growth_rates:
+        unique_rates = set(scope_growth_rates.values())
+        if len(unique_rates) == 1:
+            resolved_growth = next(iter(unique_rates))
+
+    growth_report = None
+    if resolved_growth is not None or scope_growth_rates:
         growth_report = validate_adjacent_size_growth(
             mesh,
-            resolved_growth_rate=float(growth_value),
+            resolved_growth_rate=resolved_growth,
+            scope_growth_rates=scope_growth_rates or None,
             tolerance=0.0,
-            # A declared post-mesh growth law is a qualification contract,
-            # not merely a Gmsh hint.  A mesh with no measurable face-neighbor
-            # pair must fail closed instead of publishing an ``unknown``
-            # quality result that looks valid to downstream consumers.
             require_pairs=True,
         )
     # Do not publish topology or quality artifacts until every declared

@@ -1325,13 +1325,15 @@ def _validate_layered_mesh_spec(
     if spec.exact_layer_count is True and spec.through_thickness_symmetric:
         raise ValueError(f"{context} exact layer count rejects symmetric distribution")
 
-    if spec.topology == "tetrahedral" and any(
-        value is not None
-        for value in (
-            spec.sweep_direction,
-            spec.element_family,
-            spec.transition_policy,
-            spec.exact_layer_count,
+    if spec.topology == "tetrahedral" and (
+        spec.exact_layer_count is True
+        or any(
+            value is not None
+            for value in (
+                spec.sweep_direction,
+                spec.element_family,
+                spec.transition_policy,
+            )
         )
     ):
         raise ValueError(f"{context} tetrahedral topology contradicts swept element intent")
@@ -1363,16 +1365,20 @@ def _validate_layered_mesh_spec(
             raise ValueError(f"{context} hex elements contradict pyramid_to_tetrahedra transition")
 
     layered_strategy = spec.mesh_strategy in {"swept_prism", "swept_hex"}
-    typed_layered_intent = spec.topology == "prismatic" or any(
-        value is not None
-        for value in (
-            spec.sweep_direction,
-            spec.element_family,
-            spec.transition_policy,
-            spec.exact_layer_count,
-            spec.through_thickness_element_ratio,
+    typed_layered_intent = (
+        spec.topology == "prismatic"
+        or spec.exact_layer_count is True
+        or any(
+            value is not None
+            for value in (
+                spec.sweep_direction,
+                spec.element_family,
+                spec.transition_policy,
+                spec.through_thickness_element_ratio,
+            )
         )
-    ) or spec.through_thickness_symmetric
+        or spec.through_thickness_symmetric
+    )
     if require_complete and (layered_strategy or typed_layered_intent):
         required = {
             "through_thickness_elements": spec.through_thickness_elements,
@@ -2137,6 +2143,16 @@ class GeometryMeshHandle:
         )
         body_hmax = _positive_float_or_none(resolved_hmax) or _positive_float_or_none(spec.hmax)
 
+        if (
+            resolved_hmin is not None
+            and body_hmax is not None
+            and float(resolved_hmin) > float(body_hmax)
+        ):
+            raise ValueError(
+                f"{self._owner._name}.mesh.thin_film: minimum_element_size ({resolved_hmin}) "
+                f"must be <= maximum_element_size ({body_hmax})"
+            )
+
         if prismatic:
             original_spec = self._owner._mesh_spec
             candidate = copy.deepcopy(original_spec)
@@ -2151,11 +2167,18 @@ class GeometryMeshHandle:
             candidate.element_family = "prism"
             candidate.transition_policy = resolved_transition
             candidate.exact_layer_count = True if exact_layers is None else exact_layers
+            if (
+                resolved_hmin is None
+                and candidate.hmin is not None
+                and body_hmax is not None
+                and float(candidate.hmin) > float(body_hmax)
+            ):
+                candidate.hmin = None
             self._owner._mesh_spec = candidate
             try:
                 return self.configure(
                     maximum_element_size=resolved_hmax,
-                    minimum_element_size=resolved_hmin,
+                    minimum_element_size=resolved_hmin if resolved_hmin is not None else candidate.hmin,
                     order=1,
                     curvature_factor=curvature_factor,
                     narrow_region_resolution=narrow_region_resolution,
@@ -2197,9 +2220,27 @@ class GeometryMeshHandle:
         except Exception:
             thickness = None
 
-        body_hmin = resolved_hmin if resolved_hmin is not None else spec.hmin
-        if body_hmin is None and thickness is not None:
-            body_hmin = float(thickness) / float(layer_count)
+        original_spec = self._owner._mesh_spec
+        candidate = copy.deepcopy(original_spec)
+        _clear_layered_mesh_intent(candidate)
+        candidate.mesh_strategy = "thin_film_tetrahedral"
+        candidate.through_thickness_elements = layer_count
+        candidate.through_thickness_distribution = "fixed"
+        candidate.through_thickness_symmetric = False
+        candidate.sweep_face_meshing = "triangular"
+        candidate.exact_layer_count = False if (topology == "tetrahedral" or exact_layers is False) else None
+
+        if (
+            resolved_hmin is None
+            and candidate.hmin is not None
+            and body_hmax is not None
+            and float(candidate.hmin) > float(body_hmax)
+        ):
+            candidate.hmin = None
+
+        auto_thickness_hmin = float(thickness) / float(layer_count) if thickness is not None else None
+        layer_scale = resolved_hmin or candidate.hmin or auto_thickness_hmin
+        validation_hmin = resolved_hmin if resolved_hmin is not None else candidate.hmin
 
         surface_hmax = (
             surface_maximum_element_size
@@ -2210,7 +2251,7 @@ class GeometryMeshHandle:
             surface_hmax = body_hmax
         surface_shell = surface_thickness if surface_thickness is not None else interface_thickness
         if surface_shell is None:
-            surface_shell = _positive_float_or_none(surface_hmax) or body_hmin or thickness
+            surface_shell = _positive_float_or_none(surface_hmax) or layer_scale or thickness
         surface_transition = (
             surface_transition_distance
             if surface_transition_distance is not None
@@ -2219,7 +2260,7 @@ class GeometryMeshHandle:
         if surface_transition is None and _positive_float_or_none(surface_hmax) is not None:
             surface_transition = float(_positive_float_or_none(surface_hmax)) * 8.0
 
-        edge_hmax = edge_maximum_element_size if edge_maximum_element_size is not None else body_hmin
+        edge_hmax = edge_maximum_element_size if edge_maximum_element_size is not None else layer_scale
         edge_shell = edge_thickness if edge_thickness is not None else surface_shell
         edge_transition = edge_transition_distance
         if edge_transition is None and surface_transition is not None:
@@ -2247,24 +2288,6 @@ class GeometryMeshHandle:
             resolved_corner_extent = None
             resolved_corner_transition = None
 
-        validation_hmin = body_hmin
-        if (
-            isinstance(body_hmax, (int, float))
-            and body_hmin is not None
-            and body_hmin > float(body_hmax)
-        ):
-            # Preserve the legacy thin-film metadata contract: the inferred
-            # through-thickness target may be larger than the in-plane hmax.
-            validation_hmin = None
-
-        original_spec = self._owner._mesh_spec
-        candidate = copy.deepcopy(original_spec)
-        _clear_layered_mesh_intent(candidate)
-        candidate.mesh_strategy = "thin_film_tetrahedral"
-        candidate.through_thickness_elements = layer_count
-        candidate.through_thickness_distribution = "fixed"
-        candidate.through_thickness_symmetric = False
-        candidate.sweep_face_meshing = "triangular"
         self._owner._mesh_spec = candidate
         try:
             configured = self.configure(
@@ -2290,7 +2313,6 @@ class GeometryMeshHandle:
         except Exception:
             self._owner._mesh_spec = original_spec
             raise
-        spec = self._owner._mesh_spec
         return configured
 
     def quality(self) -> object | None:

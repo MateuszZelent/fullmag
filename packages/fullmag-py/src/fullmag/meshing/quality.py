@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import math
+
 import numpy as np
 
 from .gmsh_bridge import MeshData
@@ -417,6 +419,20 @@ def build_typed_quality_summary(
         if "minimum" in normalized and "maximum" in normalized and normalized["minimum"] > normalized["maximum"]:
             raise ValueError(f"quality threshold minimum exceeds maximum for {metric_id!r}")
         normalized_thresholds[metric_id] = normalized
+    for fam in ("tet", "tet4", "prism", "prism6", "hex", "hex8", "pyramid", "pyramid5"):
+        skew_id = f"skewness.{fam}.v1"
+        unif_id = f"edge_length_uniformity.{fam}.v1"
+        if skew_id in normalized_thresholds and unif_id in normalized_thresholds:
+            s_rule = normalized_thresholds[skew_id]
+            u_rule = normalized_thresholds[unif_id]
+            for bound in ("minimum", "maximum"):
+                if bound in s_rule and bound in u_rule:
+                    if not math.isclose(s_rule[bound], u_rule[bound], rel_tol=1e-7, abs_tol=1e-9):
+                        raise ValueError(f"Conflicting quality thresholds for {skew_id} and {unif_id}")
+        elif skew_id in normalized_thresholds:
+            normalized_thresholds[unif_id] = dict(normalized_thresholds[skew_id])
+        elif unif_id in normalized_thresholds:
+            normalized_thresholds[skew_id] = dict(normalized_thresholds[unif_id])
     cells: dict[str, list[tuple[int, int, str, float, float, float, float, float]]] = {}
     assigned = 0
     cell_parts = mesh.cell_mesh_parts.tolist()
@@ -581,9 +597,25 @@ def validate_typed_quality_summary(
     so API/CI callers can render a useful failure without reparsing prose.
     """
 
+    resolved_thresholds = dict(thresholds)
+    for fam in ("tet", "tet4", "prism", "prism6", "hex", "hex8", "pyramid", "pyramid5"):
+        skew_id = f"skewness.{fam}.v1"
+        unif_id = f"edge_length_uniformity.{fam}.v1"
+        if skew_id in resolved_thresholds and unif_id in resolved_thresholds:
+            s_rule = resolved_thresholds[skew_id]
+            u_rule = resolved_thresholds[unif_id]
+            for bound in ("minimum", "maximum"):
+                if bound in s_rule and bound in u_rule:
+                    if not math.isclose(float(s_rule[bound]), float(u_rule[bound]), rel_tol=1e-7, abs_tol=1e-9):
+                        raise ValueError(f"Conflicting quality thresholds for {skew_id} and {unif_id}")
+        elif skew_id in resolved_thresholds:
+            resolved_thresholds[unif_id] = dict(resolved_thresholds[skew_id])
+        elif unif_id in resolved_thresholds:
+            resolved_thresholds[skew_id] = dict(resolved_thresholds[unif_id])
+
     summary = build_typed_quality_summary(
         mesh,
-        thresholds=thresholds,
+        thresholds=resolved_thresholds,
         worst_limit=worst_limit,
         policy_fingerprint=policy_fingerprint,
         topology_fingerprint=topology_fingerprint,
@@ -591,7 +623,7 @@ def validate_typed_quality_summary(
     )
     for scope in summary.scopes:
         for metric_id, metric in scope.metrics.items():
-            rule = thresholds.get(metric_id, {})
+            rule = resolved_thresholds.get(metric_id, {})
             minimum = rule.get("minimum")
             maximum = rule.get("maximum")
             if minimum is not None and float(metric["min"]) < float(minimum):
@@ -652,7 +684,8 @@ def _cell_max_edge_sizes(mesh: MeshData) -> np.ndarray:
 def measure_adjacent_size_growth(
     mesh: MeshData,
     *,
-    resolved_growth_rate: float,
+    resolved_growth_rate: float | None = None,
+    scope_growth_rates: dict[str, float] | None = None,
     tolerance: float = 0.0,
     require_pairs: bool = True,
     worst_limit: int = 20,
@@ -667,23 +700,53 @@ def measure_adjacent_size_growth(
 
     if not isinstance(mesh, MeshData):
         raise TypeError("measure_adjacent_size_growth expects a MeshData instance")
-    if isinstance(resolved_growth_rate, bool) or not np.isfinite(float(resolved_growth_rate)):
-        raise ValueError("resolved_growth_rate must be finite and positive")
-    if float(resolved_growth_rate) <= 1.0:
-        raise ValueError(
-            "resolved_growth_rate must be finite and greater than 1.0; "
-            "use None to disable the adjacent-growth gate"
-        )
+    if resolved_growth_rate is None and not scope_growth_rates:
+        raise ValueError("resolved_growth_rate or scope_growth_rates must be provided")
+    if resolved_growth_rate is not None:
+        if isinstance(resolved_growth_rate, bool) or not np.isfinite(float(resolved_growth_rate)):
+            raise ValueError("resolved_growth_rate must be finite and positive")
+        if float(resolved_growth_rate) <= 1.0:
+            raise ValueError(
+                "resolved_growth_rate must be finite and greater than 1.0; "
+                "use None to disable the adjacent-growth gate"
+            )
+        growth = float(resolved_growth_rate)
+    else:
+        growth = max(float(r) for r in scope_growth_rates.values())
+    if scope_growth_rates:
+        for sk, sv in scope_growth_rates.items():
+            if isinstance(sv, bool) or not np.isfinite(float(sv)) or float(sv) <= 1.0:
+                raise ValueError(f"scope_growth_rates[{sk!r}] must be finite and greater than 1.0")
     if isinstance(tolerance, bool) or not np.isfinite(float(tolerance)) or float(tolerance) < 0.0:
         raise ValueError("tolerance must be finite and non-negative")
     if isinstance(worst_limit, bool) or int(worst_limit) < 1:
         raise ValueError("worst_limit must be a positive integer")
 
-    growth = float(resolved_growth_rate)
     tolerance_value = float(tolerance)
     allowed_ratio = growth * (1.0 + tolerance_value)
     sizes = _cell_max_edge_sizes(mesh)
     invalid_size_element_count = int(np.count_nonzero(~np.isfinite(sizes)))
+
+    def _pair_allowed_ratio(
+        l_fam: str, l_mark: int, l_rol: str,
+        r_fam: str, r_mark: int, r_rol: str,
+    ) -> float:
+        if not scope_growth_rates:
+            return allowed_ratio
+        r_l = (
+            scope_growth_rates.get(f"{l_fam}|marker:{l_mark}|role:{l_rol}")
+            or scope_growth_rates.get(l_rol)
+            or scope_growth_rates.get(str(l_mark))
+            or growth
+        )
+        r_r = (
+            scope_growth_rates.get(f"{r_fam}|marker:{r_mark}|role:{r_rol}")
+            or scope_growth_rates.get(r_rol)
+            or scope_growth_rates.get(str(r_mark))
+            or growth
+        )
+        pair_rate = r_l if (l_mark == r_mark and l_rol == r_rol) else max(r_l, r_r)
+        return pair_rate * (1.0 + tolerance_value)
 
     face_owners: dict[tuple[int, ...], list[int]] = {}
     for ordinal, raw_family in enumerate(mesh.cell_types.tolist()):
@@ -757,6 +820,18 @@ def measure_adjacent_size_growth(
     scopes: list[AdjacentSizeGrowthScope] = []
     for scope, values in sorted(scope_ratios.items()):
         scoped = np.asarray(values, dtype=np.float64)
+        s_rate = growth
+        if scope_growth_rates:
+            s_family, s_marker_tok, s_role_tok = scope.split("|", 2)
+            s_marker = s_marker_tok.split(":", 1)[1]
+            s_role = s_role_tok.split(":", 1)[1]
+            s_rate = (
+                scope_growth_rates.get(scope)
+                or scope_growth_rates.get(s_role)
+                or scope_growth_rates.get(s_marker)
+                or growth
+            )
+        s_allowed = s_rate * (1.0 + tolerance_value)
         scopes.append(
             AdjacentSizeGrowthScope(
                 scope=scope,
@@ -765,7 +840,7 @@ def measure_adjacent_size_growth(
                 ratio_p50=float(np.percentile(scoped, 50.0)),
                 ratio_p95=float(np.percentile(scoped, 95.0)),
                 ratio_max=float(np.max(scoped)),
-                violation_count=int(np.count_nonzero(scoped > allowed_ratio)),
+                violation_count=int(np.count_nonzero(scoped > s_allowed)),
             )
         )
 
@@ -773,7 +848,13 @@ def measure_adjacent_size_growth(
     ratio_p50 = float(np.percentile(ratios, 50.0)) if ratios.size else 0.0
     ratio_p95 = float(np.percentile(ratios, 95.0)) if ratios.size else 0.0
     ratio_max = float(np.max(ratios)) if ratios.size else 0.0
-    violation_count = int(np.count_nonzero(ratios > allowed_ratio))
+    violation_count = sum(
+        1 for p in pairs
+        if p.ratio > _pair_allowed_ratio(
+            p.left_family, p.left_marker, p.left_role,
+            p.right_family, p.right_marker, p.right_role,
+        )
+    )
     is_valid = (
         invalid_size_element_count == 0
         and skipped_nonmanifold == 0
@@ -817,7 +898,8 @@ def measure_adjacent_size_growth(
 def validate_adjacent_size_growth(
     mesh: MeshData,
     *,
-    resolved_growth_rate: float,
+    resolved_growth_rate: float | None = None,
+    scope_growth_rates: dict[str, float] | None = None,
     tolerance: float = 0.0,
     require_pairs: bool = True,
     worst_limit: int = 20,
@@ -827,6 +909,7 @@ def validate_adjacent_size_growth(
     report = measure_adjacent_size_growth(
         mesh,
         resolved_growth_rate=resolved_growth_rate,
+        scope_growth_rates=scope_growth_rates,
         tolerance=tolerance,
         require_pairs=require_pairs,
         worst_limit=worst_limit,

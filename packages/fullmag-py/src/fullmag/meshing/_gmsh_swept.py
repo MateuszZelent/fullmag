@@ -1610,7 +1610,7 @@ def classify_sweepability(geometry: Geometry) -> SweepabilityResult:
 
 def _compute_layer_heights(
     n_layers: int,
-    total_thickness: float,
+    total_thickness_or_distribution: float | str = 1.0,
     distribution: str = DISTRIBUTION_FIXED,
     element_ratio: float = 1.0,
     symmetric: bool = False,
@@ -1620,43 +1620,68 @@ def _compute_layer_heights(
     Returns a list of *n_layers* fractional heights that sum to 1.0.
     Gmsh ``extrude()`` expects cumulative normalised heights.
     """
+    if isinstance(total_thickness_or_distribution, str):
+        distribution = total_thickness_or_distribution
     if n_layers < 1:
         raise ValueError("n_layers must be >= 1")
+    if not isinstance(element_ratio, (int, float)) or not math.isfinite(float(element_ratio)) or float(element_ratio) <= 0.0:
+        raise ValueError("element_ratio must be finite and strictly positive")
 
-    if n_layers == 1 or distribution == DISTRIBUTION_FIXED or element_ratio == 1.0:
+    ratio = float(element_ratio)
+    if n_layers == 1 or distribution == DISTRIBUTION_FIXED or ratio == 1.0:
         return [1.0 / n_layers] * n_layers
 
     if symmetric:
-        # Mirror grading: fine at both outer faces, coarser in center.
+        d_max = (n_layers - 1) // 2
+        if d_max == 0:
+            return [1.0 / n_layers] * n_layers
+        d_values = [min(i, n_layers - 1 - i) for i in range(n_layers)]
         if distribution == DISTRIBUTION_LINEAR:
-            center_dist = (n_layers - 1) / 2.0
-            raw = [
-                1.0 + (element_ratio - 1.0) * (min(i, n_layers - 1 - i) / center_dist)
-                for i in range(n_layers)
-            ]
+            raw = [1.0 + (ratio - 1.0) * (d / d_max) for d in d_values]
+            total = sum(raw)
+            res = [h / total for h in raw]
         elif distribution == DISTRIBUTION_EXPONENTIAL:
-            raw = [
-                float(element_ratio) ** min(i, n_layers - 1 - i)
-                for i in range(n_layers)
-            ]
+            log_r = math.log(ratio)
+            ell = [d * log_r for d in d_values]
+            max_ell = max(ell)
+            scaled = [math.exp(e - max_ell) for e in ell]
+            total = sum(scaled)
+            if not math.isfinite(total) or total <= 0.0:
+                raise ValueError(
+                    f"unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+                )
+            res = [s / total for s in scaled]
+            if any(h <= 0.0 or not math.isfinite(h) for h in res):
+                raise ValueError(
+                    f"layer height underflow: unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+                )
         else:
-            raw = [1.0] * n_layers
-        total = sum(raw)
-        return [h / total for h in raw]
+            res = [1.0 / n_layers] * n_layers
+        return res
 
     if distribution == DISTRIBUTION_LINEAR:
-        # Linear grading: height_i = 1 + (ratio-1) * i / (n-1)
         if n_layers == 1:
             return [1.0]
-        raw = [1.0 + (element_ratio - 1.0) * i / (n_layers - 1) for i in range(n_layers)]
+        raw = [1.0 + (ratio - 1.0) * i / (n_layers - 1) for i in range(n_layers)]
         total = sum(raw)
         return [h / total for h in raw]
 
     if distribution == DISTRIBUTION_EXPONENTIAL:
-        # Geometric grading: height_i = ratio^i
-        raw = [element_ratio ** i for i in range(n_layers)]
-        total = sum(raw)
-        return [h / total for h in raw]
+        log_r = math.log(ratio)
+        ell = [i * log_r for i in range(n_layers)]
+        max_ell = max(ell)
+        scaled = [math.exp(e - max_ell) for e in ell]
+        total = sum(scaled)
+        if not math.isfinite(total) or total <= 0.0:
+            raise ValueError(
+                f"unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+            )
+        res = [s / total for s in scaled]
+        if any(h <= 0.0 or not math.isfinite(h) for h in res):
+            raise ValueError(
+                f"layer height underflow: unrepresentable layer height distribution for N={n_layers}, ratio={ratio}"
+            )
+        return res
 
     # Fallback: uniform
     return [1.0 / n_layers] * n_layers
@@ -1950,6 +1975,11 @@ def generate_swept_box_mesh(
     recombines the source face into quadrilaterals.
     """
     opts = options or MeshOptions()
+    if opts.periodic_pair_ids:
+        raise ValueError(
+            "generate_swept_box_mesh does not support periodic pairs: "
+            f"{opts.periodic_pair_ids}"
+        )
     if requested_direction is None:
         requested_direction = opts.sweep_direction
     if requested_direction not in (None, "auto", "x", "y", "z"):
@@ -2159,8 +2189,13 @@ def generate_swept_box_mesh(
             gmsh.option.setNumber("Mesh.MeshSizeFactor", float(opts.size_factor))
         if opts.size_from_curvature > 0:
             gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", opts.size_from_curvature)
-        if opts.curvature_factor is not None and opts.curvature_factor > 0.0:
-            gmsh.option.setNumber("Mesh.MinimumElementsPerTwoPi", float(opts.curvature_factor))
+        elif opts.curvature_factor is not None and opts.curvature_factor > 0.0:
+            from ._gmsh_types import _resolve_curvature_points
+            pts = _resolve_curvature_points(0, opts.curvature_factor)
+            if pts > 0:
+                gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", pts)
+        if opts.smoothing_steps > 0:
+            gmsh.option.setNumber("Mesh.Smoothing", opts.smoothing_steps)
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
         source_refinement_field: int | None = None
         if opts.size_fields:

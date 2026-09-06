@@ -89,6 +89,8 @@ FIELD_SCHEMAS: dict[str, set[str]] = {
     "CornerDistanceThreshold": {"GeometryName", "SizeMin", "SizeMax", "DistMin", "DistMax"},
 }
 
+_METADATA_PARAMS: set[str] = {"Source", "GeometryName", "role", "owner", "origin", "priority"}
+
 
 def validate_size_field_config(config: dict[str, Any]) -> None:
     kind = config.get("kind")
@@ -1525,7 +1527,7 @@ def _configure_mesh_size_fields(
         "sizeminnormal", "sizemintangent",
         "sizemaxnormal", "sizemaxtangent",
     }
-    _METADATA_PARAMS = {"Source"}
+    _METADATA_PARAMS = {"Source", "GeometryName", "role", "owner", "origin", "priority"}
 
     field_ids = []
 

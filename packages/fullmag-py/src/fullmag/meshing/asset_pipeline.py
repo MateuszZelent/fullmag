@@ -41,7 +41,7 @@ from .gmsh_bridge import (
     generate_mesh_from_file,
     generate_shared_domain_mesh_from_components,
 )
-from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS
+from ._gmsh_types import FEM_TOPOLOGY_VOLUME_EPS, MeshValidationError
 from .surface_assets import _geometry_to_trimesh, _import_trimesh, build_surface_preview_payload
 from .voxelization import VoxelMaskData, voxelize_geometry
 
@@ -946,8 +946,8 @@ def _generate_air_mesh_for_frozen_magnetic_submesh(
 def _drop_degenerate_tetrahedra(
     mesh: MeshData,
     *,
-    context: str,
-    fallbacks_triggered: list[str],
+    context: str = "mesh",
+    fallbacks_triggered: list[str] | None = None,
 ) -> MeshData:
     if mesh.n_elements == 0:
         return mesh
@@ -998,7 +998,7 @@ def _drop_degenerate_tetrahedra(
             new_element_count=mesh.n_elements - removed,
         )
     marker = "shared_domain_degenerate_tetra_cleanup"
-    if marker not in fallbacks_triggered:
+    if fallbacks_triggered is not None and marker not in fallbacks_triggered:
         fallbacks_triggered.append(marker)
     emit_progress(
         f"{context}: removed {removed} degenerate tetrahedra below strict volume threshold"
@@ -2287,32 +2287,49 @@ def _strip_overridden_geometry_fields(
     doesn't silently clamp the coarser recipe back to the workflow value.
     """
     overridden_names: set[str] = set()
-    for geometry_name, recipe in per_object_recipes.items():
-        recipe_hmax = recipe.to_ir().get("hmax")
-        if isinstance(recipe_hmax, (int, float)) and float(recipe_hmax) > 0.0:
-            overridden_names.add(geometry_name.strip())
-            if geometry_name.strip().endswith("_geom") and len(geometry_name.strip()) > len("_geom"):
-                overridden_names.add(geometry_name.strip()[: -len("_geom")])
+    if isinstance(per_object_recipes, (set, list, tuple)):
+        for name in per_object_recipes:
+            s_name = str(name).strip()
+            overridden_names.add(s_name)
+            if s_name.endswith("_geom") and len(s_name) > len("_geom"):
+                overridden_names.add(s_name[: -len("_geom")])
             else:
-                overridden_names.add(f"{geometry_name.strip()}_geom")
+                overridden_names.add(f"{s_name}_geom")
+    elif isinstance(per_object_recipes, Mapping):
+        for geometry_name, recipe in per_object_recipes.items():
+            if isinstance(recipe, PerObjectMeshRecipe):
+                recipe_hmax = recipe.to_ir().get("hmax")
+            elif isinstance(recipe, Mapping):
+                recipe_hmax = recipe.get("hmax")
+            else:
+                recipe_hmax = getattr(recipe, "hmax", None)
+            if isinstance(recipe_hmax, (int, float)) and float(recipe_hmax) > 0.0:
+                s_name = str(geometry_name).strip()
+                overridden_names.add(s_name)
+                if s_name.endswith("_geom") and len(s_name) > len("_geom"):
+                    overridden_names.add(s_name[: -len("_geom")])
+                else:
+                    overridden_names.add(f"{s_name}_geom")
     if not overridden_names:
         return existing_fields
 
     def _is_overridden(field: dict[str, object]) -> bool:
+        if field.get("role") == "hotspot" or field.get("is_hotspot") is True:
+            return False
         params = field.get("params")
         if not isinstance(params, dict):
             return False
-        geom_name = params.get("GeometryName")
+        if params.get("role") == "hotspot" or params.get("is_hotspot") is True:
+            return False
+        geom_name = params.get("GeometryName") or field.get("owner")
         if isinstance(geom_name, str) and geom_name in overridden_names:
             return True
-        # For Box / BoundsSurfaceThreshold fields we can't match by geometry name
-        # directly — they don't carry one. We leave them; recipe fields prepended
-        # with smaller VIn will still win via Min. Only component-aware fields
-        # (ComponentVolumeConstant, InterfaceShellThreshold, TransitionShellThreshold)
-        # are reliably matchable.
         return False
 
     return [f for f in existing_fields if not _is_overridden(f)]
+
+
+_strip_overridden_workflow_fields = _strip_overridden_geometry_fields
 
 
 def realize_fem_domain_mesh_asset(
@@ -3200,18 +3217,24 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             build_mode != "conformal_occ"
             and getattr(mesh, "mixed_layer_topology_certificate", None) is None
         ):
-            mesh = _drop_degenerate_tetrahedra(
+            cleaned_mesh = _drop_degenerate_tetrahedra(
                 mesh,
                 context=f"{build_mode} shared-domain mesh",
                 fallbacks_triggered=fallbacks_triggered,
             )
+            if cleaned_mesh is not mesh:
+                mesh = cleaned_mesh
+                if result is not None:
+                    result = _dc_replace(result, mesh=mesh)
 
         # Classify elements back to geometries
         source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
         assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
         region_markers: list[dict[str, object]] = []
         object_region_markers: list[dict[str, object]] = []
-        if result is not None and getattr(result, "mesh", None) is mesh:
+        if result is not None:
+            if getattr(result, "mesh", None) is not mesh:
+                raise MeshValidationError("mesh_result_identity_mismatch")
             for used_marker, geometry in enumerate(geometries, start=1):
                 source_marker = result.component_marker_tags.get(geometry.geometry_name)
                 if source_marker is None:

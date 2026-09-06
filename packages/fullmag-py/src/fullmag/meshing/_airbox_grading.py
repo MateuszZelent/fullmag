@@ -14,11 +14,11 @@ def _math_atom(value: float) -> str:
 
 
 def _growth_number(value: float) -> str:
-    val = float(value)
-    rendered = f"{val:.12g}"
-    if rendered == "1" and val > 1.0:
-        return f"{val:.17g}"
-    return rendered
+    f = float(value)
+    formatted = f"{f:.12g}"
+    if formatted == "1" and f != 1.0:
+        formatted = f"{f:.17g}"
+    return formatted
 
 
 def _geometric_size_profile_expression(

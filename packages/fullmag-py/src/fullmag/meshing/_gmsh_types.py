@@ -495,9 +495,9 @@ class MeshOptions:
             object.__setattr__(self, "size_preset", preset)
         normalized_pair_ids: list[str] = []
         for pair_id in self.periodic_pair_ids:
-            if not isinstance(pair_id, str) or not pair_id.strip():
-                raise ValueError("periodic_pair_ids entries must be non-empty strings")
-            normalized_pair_ids.append(pair_id.strip())
+            if not isinstance(pair_id, (str, int)) or (isinstance(pair_id, str) and not pair_id.strip()):
+                raise ValueError("periodic_pair_ids entries must be non-empty strings or integers")
+            normalized_pair_ids.append(str(pair_id).strip())
         object.__setattr__(self, "periodic_pair_ids", normalized_pair_ids)
 
 
@@ -714,17 +714,21 @@ class SizeFieldData:
     h_values: NDArray[np.float64]
 
     def __post_init__(self) -> None:
-        coords = np.asarray(self.node_coords, dtype=np.float64)
-        h = np.asarray(self.h_values, dtype=np.float64)
+        coords = np.array(self.node_coords, dtype=np.float64, copy=True)
+        h = np.array(self.h_values, dtype=np.float64, copy=True)
+        coords.flags.writeable = False
+        h.flags.writeable = False
         object.__setattr__(self, "node_coords", coords)
         object.__setattr__(self, "h_values", h)
+        if coords.shape[0] == 0:
+            raise ValueError("node_coords and h_values must not be empty")
         if coords.ndim != 2 or coords.shape[1] != 3:
             raise ValueError("node_coords must have shape (N, 3)")
         if h.ndim != 1 or h.shape[0] != coords.shape[0]:
             raise ValueError("h_values must have shape (N,)")
-        if coords.size > 0 and not np.all(np.isfinite(coords)):
+        if not np.all(np.isfinite(coords)):
             raise ValueError("node_coords must contain only finite numbers (no NaN or Inf)")
-        if h.size > 0 and not np.all(np.isfinite(h)):
+        if not np.all(np.isfinite(h)):
             raise ValueError("h_values must contain only finite numbers (no NaN or Inf)")
         if np.any(h <= 0):
             raise ValueError("h_values must be strictly positive")
@@ -750,6 +754,22 @@ class MeshFacetBlockView:
     nodes: NDArray[np.int32]
     markers: NDArray[np.int32]
     global_ordinals: NDArray[np.int64]
+
+
+QUALIFIED_REALIZATION_FALLBACKS: frozenset[str] = frozenset({
+    "swept_cylinder_to_hex8",
+    "swept_cylinder_to_tet4",
+    "swept_order_to_linear",
+    "swept_layer_count_mismatch",
+    "swept_to_free_tet",
+    "swept_axis_mismatch",
+    "conformal_occ_failed",
+    "component_aware_import_failed",
+    "shared_domain_degenerate_tetra_cleanup",
+    "preemptive_imported_stl_fallback",
+    "conformal_occ_hxt_degenerate_retry_delaunay",
+    "conformal_occ_hxt_degenerate_retry_frontal",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -800,20 +820,13 @@ class MeshRealizationReport:
         for item in self.fallbacks_triggered:
             if not isinstance(item, str) or not item.strip():
                 raise ValueError("mesh realization report fallback markers must be non-empty strings")
-            normalized_fallbacks.append(item)
+            clean_item = item.strip()
+            if clean_item not in QUALIFIED_REALIZATION_FALLBACKS:
+                raise ValueError(
+                    f"unknown realization fallback marker {clean_item!r}; must be one of {sorted(QUALIFIED_REALIZATION_FALLBACKS)}"
+                )
+            normalized_fallbacks.append(clean_item)
         object.__setattr__(self, "fallbacks_triggered", tuple(normalized_fallbacks))
-        requested = (
-            self.requested_topology,
-            self.requested_layers,
-            self.requested_axis,
-            self.requested_order,
-        )
-        resolved = (
-            self.resolved_topology,
-            self.resolved_layers,
-            self.resolved_axis,
-            self.resolved_order,
-        )
         if not normalized_fallbacks:
             if (
                 self.requested_topology != self.resolved_topology
@@ -826,8 +839,8 @@ class MeshRealizationReport:
                 )
             if requested_direction != "auto" and self.requested_axis != self.resolved_axis:
                 raise ValueError(
-                    "mesh realization report requested/resolved axis must match "
-                    "when direction is not auto and no fallback was triggered"
+                    "mesh realization report requested/resolved fields must match: "
+                    "axis must match when direction is not auto and no fallback was triggered"
                 )
 
     def to_dict(self) -> dict[str, object]:

@@ -332,8 +332,6 @@ class LayeredMeshAuthoringRoundTripTests(unittest.TestCase):
                 "mode": "custom",
                 "hmax": 3e-9,
                 "maximum_element_size": 3e-9,
-                "hmin": 5e-9,
-                "minimum_element_size": 5e-9,
                 "interface_hmax": 3e-9,
                 "interface_thickness": 3e-9,
                 "transition_distance": 24e-9,

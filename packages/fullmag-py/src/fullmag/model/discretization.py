@@ -682,19 +682,9 @@ class PerObjectMeshRecipe:
     All fields default to ``None`` which means *inherit from the global*
     :class:`~fullmag.model.discretization.FEM` defaults.  Only non-``None``
     values override the study-level settings.
-
-    Example::
-
-        recipe = fm.PerObjectMeshRecipe(
-            maximum_element_size=4e-9,
-            size_from_curvature=20,
-            boundary_layer_count=3,
-            boundary_layer_thickness=2e-9,
-            boundary_layer_stretching=1.4,
-            optimize="Netgen",
-            compute_quality=True,
-        )
     """
+
+    geometry_name: str | None = None
 
     # ── element size ──
     maximum_element_size: float | None = None

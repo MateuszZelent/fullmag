@@ -31,6 +31,7 @@ from typing import Mapping, Sequence
 from fullmag._progress import emit_progress
 from fullmag._validation import (
     TypedValidationError,
+    as_vector3,
     parse_bool,
     parse_finite_float,
     parse_integer,
@@ -247,6 +248,21 @@ def _perimeter_refinement_config(
     }
 
 
+def _unpack_bounds_pair(
+    bounds_pair: object,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+    if not isinstance(bounds_pair, (tuple, list)):
+        return None
+    if len(bounds_pair) == 2:
+        return bounds_pair[0], bounds_pair[1]
+    if len(bounds_pair) == 6:
+        return (
+            (float(bounds_pair[0]), float(bounds_pair[2]), float(bounds_pair[4])),
+            (float(bounds_pair[1]), float(bounds_pair[3]), float(bounds_pair[5])),
+        )
+    return None
+
+
 def _build_perimeter_refinement_fields(
     geometries: list[Geometry],
     *,
@@ -273,9 +289,10 @@ def _build_perimeter_refinement_fields(
 
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
+            unpacked = _unpack_bounds_pair(bounds_pair)
+            if unpacked is None:
                 continue
-            bounds_min, bounds_max = bounds_pair
+            bounds_min, bounds_max = unpacked
         else:
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
@@ -679,9 +696,10 @@ def _legacy_box_size_fields(
     for geometry in geometries:
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
+            unpacked = _unpack_bounds_pair(bounds_pair)
+            if unpacked is None:
                 continue
-            bounds_min, bounds_max = bounds_pair
+            bounds_min, bounds_max = unpacked
         else:
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
@@ -739,6 +757,8 @@ def _build_object_bulk_fields(
             fields.append(
                 {
                     "kind": "ComponentVolumeConstant",
+                    "role": "bulk",
+                    "owner": geometry.geometry_name,
                     "params": {
                         "GeometryName": geometry.geometry_name,
                         "VIn": float(bulk_hmax),
@@ -750,9 +770,10 @@ def _build_object_bulk_fields(
 
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
+            unpacked = _unpack_bounds_pair(bounds_pair)
+            if unpacked is None:
                 continue
-            bounds_min, bounds_max = bounds_pair
+            bounds_min, bounds_max = unpacked
         else:
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
@@ -761,6 +782,8 @@ def _build_object_bulk_fields(
         fields.append(
             {
                 "kind": "Box",
+                "role": "bulk",
+                "owner": geometry.geometry_name,
                 "params": {
                     "GeometryName": geometry.geometry_name,
                     "VIn": float(bulk_hmax),
@@ -825,9 +848,10 @@ def _build_interface_fields(
             if _uses_analytic_box_air_shell(geometry):
                 if bounds_by_name is not None:
                     bounds_pair = bounds_by_name.get(geometry.geometry_name)
-                    if bounds_pair is None:
+                    unpacked = _unpack_bounds_pair(bounds_pair)
+                    if unpacked is None:
                         continue
-                    bounds_min, bounds_max = bounds_pair
+                    bounds_min, bounds_max = unpacked
                 else:
                     bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
                 if bounds_min is None or bounds_max is None:
@@ -864,9 +888,10 @@ def _build_interface_fields(
 
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
+            unpacked = _unpack_bounds_pair(bounds_pair)
+            if unpacked is None:
                 continue
-            bounds_min, bounds_max = bounds_pair
+            bounds_min, bounds_max = unpacked
         else:
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
@@ -935,9 +960,10 @@ def _build_transition_fields(
 
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
+            unpacked = _unpack_bounds_pair(bounds_pair)
+            if unpacked is None:
                 continue
-            bounds_min, bounds_max = bounds_pair
+            bounds_min, bounds_max = unpacked
         else:
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
@@ -1483,9 +1509,10 @@ def _resolve_per_object_mesh_options(
         recipe_payload = recipe.to_ir()
         if bounds_by_name is not None:
             bounds_pair = bounds_by_name.get(geometry.geometry_name)
-            if bounds_pair is None:
+            unpacked = _unpack_bounds_pair(bounds_pair)
+            if unpacked is None:
                 continue
-            bounds_min, bounds_max = bounds_pair
+            bounds_min, bounds_max = unpacked
         else:
             bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
         if bounds_min is None or bounds_max is None:
@@ -1500,6 +1527,8 @@ def _resolve_per_object_mesh_options(
             extra_fields.append(
                 {
                     "kind": "ComponentVolumeConstant",
+                    "role": "bulk",
+                    "owner": geometry.geometry_name,
                     "params": {
                         "GeometryName": geometry.geometry_name,
                         "VIn": float(target_hmax),
@@ -1511,6 +1540,8 @@ def _resolve_per_object_mesh_options(
             extra_fields.append(
                 {
                     "kind": "Box",
+                    "role": "bulk",
+                    "owner": geometry.geometry_name,
                     "params": {
                         "GeometryName": geometry.geometry_name,
                         "VIn": float(target_hmax),
@@ -1546,6 +1577,10 @@ def _mesh_options_from_runtime_metadata(
     object_regions: list[dict] | None = None,
     include_size_fields: bool = True,
 ) -> MeshOptions:
+    if per_object_recipes is None and isinstance(mesh_workflow, Mapping):
+        raw_recipes = mesh_workflow.get("per_object_recipes")
+        if isinstance(raw_recipes, Mapping):
+            per_object_recipes = dict(raw_recipes)
     raw_mesh_options = (
         mesh_workflow.get("mesh_options")
         if isinstance(mesh_workflow, Mapping)
@@ -1553,6 +1588,8 @@ def _mesh_options_from_runtime_metadata(
         else {}
     )
     assert isinstance(raw_mesh_options, Mapping)
+    if "cell_size" in raw_mesh_options and raw_mesh_options["cell_size"] is not None:
+        as_vector3(raw_mesh_options["cell_size"], "/mesh_workflow/mesh_options/cell_size")
     raw_per_geometry = (
         mesh_workflow.get("per_geometry")
         if isinstance(mesh_workflow, Mapping)
@@ -1568,35 +1605,131 @@ def _mesh_options_from_runtime_metadata(
     )
     assert isinstance(raw_default_mesh, Mapping)
 
+    known_geometry_names: set[str] = set()
+    for g in geometries:
+        known_geometry_names.update(_geometry_name_aliases(g.geometry_name))
+    seen_per_geometry_names: set[str] = set()
+    per_geom_by_name: dict[str, Mapping[str, object]] = {}
+    for entry in raw_per_geometry:
+        if not isinstance(entry, Mapping):
+            continue
+        geom_name = entry.get("geometry") or entry.get("geometry_name")
+        if geom_name is not None:
+            geom_name_str = str(geom_name).strip()
+            if geom_name_str in seen_per_geometry_names:
+                raise ValueError(
+                    f"duplicate geometry '{geom_name_str}' in per_geometry"
+                )
+            seen_per_geometry_names.add(geom_name_str)
+            if known_geometry_names and geom_name_str not in known_geometry_names:
+                raise ValueError(
+                    f"unknown geometry '{geom_name_str}' in per_geometry; "
+                    f"known geometries: {sorted({g.geometry_name for g in geometries})}"
+                )
+            per_geom_by_name[geom_name_str] = entry
+
+    _TOPOLOGY_KEYS = (
+        "mesh_strategy",
+        "through_thickness_elements",
+        "through_thickness_distribution",
+        "through_thickness_element_ratio",
+        "through_thickness_symmetric",
+        "sweep_face_meshing",
+        "sweep_direction",
+    )
+
+    def _resolve_geometry_property(geom: Geometry, key: str) -> object | None:
+        if per_object_recipes:
+            recipe = _lookup_geometry_name_alias(per_object_recipes, geom.geometry_name)
+            if isinstance(recipe, PerObjectMeshRecipe):
+                val = getattr(recipe, key, None)
+                if val is not None:
+                    return val
+        entry = _lookup_geometry_name_alias(per_geom_by_name, geom.geometry_name)
+        if entry is not None and entry.get(key) is not None:
+            return entry.get(key)
+        if raw_default_mesh.get(key) is not None:
+            return raw_default_mesh.get(key)
+        if raw_mesh_options.get(key) is not None:
+            return raw_mesh_options.get(key)
+        return None
+
+    def _resolve_box_thin_axis(geom: Geometry) -> str | None:
+        if isinstance(geom, Box) or hasattr(geom, "size"):
+            size = getattr(geom, "size", None)
+            if size is not None and len(size) == 3:
+                dx, dy, dz = abs(float(size[0])), abs(float(size[1])), abs(float(size[2]))
+                min_dim = min(dx, dy, dz)
+                if min_dim == dz:
+                    return "z"
+                elif min_dim == dy:
+                    return "y"
+                else:
+                    return "x"
+        if hasattr(geom, "x1") and hasattr(geom, "x2") and hasattr(geom, "y1") and hasattr(geom, "y2") and hasattr(geom, "z1") and hasattr(geom, "z2"):
+            dx = abs(float(geom.x2) - float(geom.x1))
+            dy = abs(float(geom.y2) - float(geom.y1))
+            dz = abs(float(geom.z2) - float(geom.z1))
+            min_dim = min(dx, dy, dz)
+            if min_dim == dz:
+                return "z"
+            elif min_dim == dy:
+                return "y"
+            else:
+                return "x"
+        return None
+
+    if len(geometries) > 1:
+        strategies = [_resolve_geometry_property(g, "mesh_strategy") for g in geometries]
+        is_any_swept = any(s in {"swept_prism", "swept_hex"} for s in strategies if s is not None)
+        for key in _TOPOLOGY_KEYS:
+            resolved_values = [_resolve_geometry_property(g, key) for g in geometries]
+            non_none_values = [v for v in resolved_values if v is not None]
+            if non_none_values and len(non_none_values) < len(geometries):
+                raise ValueError(
+                    f"unsupported_mesh_combination: component-level '{key}' specified on some "
+                    f"but not all geometries in shared-domain meshing"
+                )
+            if non_none_values:
+                first_val = non_none_values[0]
+                if any(v != first_val for v in non_none_values[1:]):
+                    if key == "through_thickness_elements":
+                        raise ValueError(
+                            f"unsupported_mesh_combination: conflicting per-geometry through-thickness elements: "
+                            f"{non_none_values} in shared-domain meshing"
+                        )
+                    raise ValueError(
+                        f"unsupported_mesh_combination: conflicting per-geometry '{key}' values "
+                        f"({non_none_values}) in shared-domain meshing"
+                    )
+
+        if is_any_swept:
+            resolved_directions = [_resolve_geometry_property(g, "sweep_direction") or "auto" for g in geometries]
+            resolved_axes = []
+            for g, val in zip(geometries, resolved_directions):
+                if str(val).strip().lower() == "auto":
+                    axis = _resolve_box_thin_axis(g)
+                    resolved_axes.append(axis if axis is not None else "auto")
+                else:
+                    resolved_axes.append(str(val).strip().lower())
+            first_axis = resolved_axes[0]
+            if any(a != first_axis for a in resolved_axes[1:]):
+                raise ValueError(
+                    f"unsupported_mesh_combination: conflicting per-geometry thin axis: {resolved_axes} "
+                    f"in shared-domain meshing"
+                )
+
     def _single_geometry_value(key: str) -> object | None:
+        if geometries:
+            resolved = [_resolve_geometry_property(g, key) for g in geometries]
+            non_nones = [v for v in resolved if v is not None]
+            if non_nones:
+                return non_nones[0]
         entries = [entry for entry in raw_per_geometry if isinstance(entry, Mapping)]
         if not entries:
             return None
-        if len(entries) == 1:
-            return entries[0].get(key)
         values = [entry[key] for entry in entries if entry.get(key) is not None]
-        if not values:
-            return None
-        first = values[0]
-        if any(v != first for v in values[1:]):
-            raise ValueError(
-                f"unsupported_mesh_combination: conflicting per-geometry '{key}' values "
-                f"({values}) in shared-domain meshing"
-            )
-        if len(values) < len(entries) and key in (
-            "mesh_strategy",
-            "through_thickness_elements",
-            "through_thickness_distribution",
-            "through_thickness_element_ratio",
-            "through_thickness_symmetric",
-            "sweep_face_meshing",
-            "sweep_direction",
-        ):
-            raise ValueError(
-                f"unsupported_mesh_combination: component-level '{key}' specified on some "
-                f"but not all geometries in shared-domain meshing"
-            )
-        return first
+        return values[0] if values else None
 
     def _per_geometry_values(key: str) -> list[object]:
         return [
@@ -1623,6 +1756,31 @@ def _mesh_options_from_runtime_metadata(
             if not isinstance(recipe, PerObjectMeshRecipe):
                 continue
             recipe_payload = recipe.to_ir()
+            if len(keys) > 1:
+                present_recipe = [
+                    (k, recipe_payload.get(k))
+                    for k in keys
+                    if recipe_payload.get(k) is not None
+                ]
+                if len(present_recipe) > 1:
+                    first_k, first_v = present_recipe[0]
+                    for other_k, other_v in present_recipe[1:]:
+                        try:
+                            v1 = float(first_v)  # type: ignore
+                            v2 = float(other_v)  # type: ignore
+                            if not math.isclose(v1, v2, rel_tol=1e-7, abs_tol=1e-9):
+                                raise TypedValidationError(
+                                    code="conflicting_aliases",
+                                    pointer=f"/mesh_workflow/recipes/{geometry.geometry_name}/{other_k}",
+                                    message=f"Conflicting values for aliases {first_k}={first_v} and {other_k}={other_v}",
+                                )
+                        except (TypeError, ValueError):
+                            if first_v != other_v:
+                                raise TypedValidationError(
+                                    code="conflicting_aliases",
+                                    pointer=f"/mesh_workflow/recipes/{geometry.geometry_name}/{other_k}",
+                                    message=f"Conflicting values for aliases {first_k}={first_v} and {other_k}={other_v}",
+                                )
             for key in keys:
                 value = recipe_payload.get(key)
                 if value is None:
@@ -1644,6 +1802,31 @@ def _mesh_options_from_runtime_metadata(
         return first
 
     def _mesh_option_value(*keys: str, reducer: str = "unique") -> object | None:
+        if len(keys) > 1:
+            present_opts = [
+                (k, raw_mesh_options.get(k))
+                for k in keys
+                if raw_mesh_options.get(k) is not None
+            ]
+            if len(present_opts) > 1:
+                first_k, first_v = present_opts[0]
+                for other_k, other_v in present_opts[1:]:
+                    try:
+                        v1 = float(first_v)  # type: ignore
+                        v2 = float(other_v)  # type: ignore
+                        if not math.isclose(v1, v2, rel_tol=1e-7, abs_tol=1e-9):
+                            raise TypedValidationError(
+                                code="conflicting_aliases",
+                                pointer=f"/mesh_workflow/mesh_options/{other_k}",
+                                message=f"Conflicting values for aliases {first_k}={first_v} and {other_k}={other_v}",
+                            )
+                    except (TypeError, ValueError):
+                        if first_v != other_v:
+                            raise TypedValidationError(
+                                code="conflicting_aliases",
+                                pointer=f"/mesh_workflow/mesh_options/{other_k}",
+                                message=f"Conflicting values for aliases {first_k}={first_v} and {other_k}={other_v}",
+                            )
         value = _recipe_value(*keys, reducer=reducer)
         if value is not None:
             return value
@@ -1830,8 +2013,11 @@ def _mesh_options_from_runtime_metadata(
         result: list[str] = []
         for index, item in enumerate(value):
             if not isinstance(item, str) or not item.strip():
-                raise ValueError(
-                    f"/mesh_workflow/mesh_options/string_list/{index} must be a non-empty string"
+                raise TypedValidationError(
+                    code="string_value_error",
+                    pointer=f"/mesh_workflow/mesh_options/string_list/{index}",
+                    message="value must be a non-empty string",
+                    value=type(item).__name__,
                 )
             result.append(item.strip())
         return result
