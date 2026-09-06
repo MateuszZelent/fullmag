@@ -714,6 +714,8 @@ def _mesh_result_payload(
 
     resolved_growth = options_growth if options_growth is not None else root_growth
 
+    from fullmag.meshing._mesh_targets import _geometry_name_aliases
+
     name_to_marker: dict[str, int] = {}
     for rm_list in (region_markers, object_region_markers):
         if isinstance(rm_list, (list, tuple)):
@@ -723,19 +725,41 @@ def _mesh_result_payload(
                     marker = entry.get("marker") or entry.get("material_marker")
                     if name is not None and marker is not None:
                         try:
-                            name_to_marker[str(name)] = int(marker)
+                            m_int = int(marker)
+                            for alias in _geometry_name_aliases(str(name)):
+                                if alias in name_to_marker and name_to_marker[alias] != m_int:
+                                    raise ValueError(
+                                        f"Conflicting region marker alias mapping for '{alias}': "
+                                        f"{name_to_marker[alias]} vs {m_int}"
+                                    )
+                                name_to_marker[alias] = m_int
                         except (ValueError, TypeError):
-                            pass
+                            raise
 
     scope_growth_rates: dict[str, float] = {}
 
     def _record_scope(name: str, rate: float) -> None:
         key = str(name)
         scope_growth_rates[key] = rate
-        if key in name_to_marker:
-            scope_growth_rates[str(name_to_marker[key])] = rate
+        matched = False
+        for alias in _geometry_name_aliases(key):
+            scope_growth_rates[alias] = rate
+            if alias in name_to_marker:
+                m_int = name_to_marker[alias]
+                scope_growth_rates[str(m_int)] = rate
+                scope_growth_rates[f"marker:{m_int}"] = rate
+                matched = True
         if key == "air":
             scope_growth_rates["0"] = rate
+            scope_growth_rates["marker:0"] = rate
+            matched = True
+        elif hasattr(mesh, "cell_mesh_parts") and key in set(mesh.cell_mesh_parts):
+            matched = True
+        if name_to_marker and not matched:
+            raise ValueError(
+                f"unmapped_growth_scope: scope '{name}' cannot be matched to any "
+                f"known region marker, geometry alias, or cell role"
+            )
 
     per_geom = mesh_provenance.get("per_geometry")
     if not per_geom and isinstance(raw_mesh_options, dict):

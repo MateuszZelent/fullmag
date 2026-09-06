@@ -117,6 +117,7 @@ from ._size_field_plan import (
     _legacy_box_size_fields,
     _mesh_options_from_runtime_metadata as _mesh_options_from_runtime_metadata,
     _resolve_per_object_mesh_options as _resolve_per_object_mesh_options,
+    _unpack_bounds_pair as _unpack_bounds_pair,
 )
 
 _DEFAULT_AIRBOX_GROWTH_RATE = 1.3
@@ -2572,6 +2573,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         default_hmax=float(hints.hmax),
         bounds_by_name=None,
         include_size_fields=False,
+        per_object_recipes=per_object_recipes,
+        object_regions=object_regions,
     )
     # Reject the unsupported mixed-periodic combination at the planner
     # boundary, before OCC/STL preparation or any Gmsh invocation.  This keeps
@@ -2756,7 +2759,53 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "concatenated STL fallback for numerical stability"
             )
 
-        size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
+        effective_airbox_target, effective_per_object_targets = _resolve_effective_shared_domain_targets(
+            geometries,
+            hints,
+            airbox=airbox,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+        )
+
+        effective_hmax = (
+            qualified_mixed_body_hmax
+            if mixed_shared_geo_direct and qualified_mixed_body_hmax is not None
+            else float(hints.hmax)
+        )
+        if not mixed_shared_geo_direct:
+            if airbox is not None and airbox.maximum_element_size is not None:
+                effective_hmax = max(effective_hmax, float(airbox.maximum_element_size))
+            if effective_per_object_targets:
+                for obj_target in effective_per_object_targets.values():
+                    t_hmax = obj_target.get("hmax")
+                    if isinstance(t_hmax, (int, float)) and float(t_hmax) > effective_hmax:
+                        effective_hmax = float(t_hmax)
+            if per_object_recipes:
+                for recipe in per_object_recipes.values():
+                    rec_hmax = (
+                        recipe.maximum_element_size
+                        if recipe.maximum_element_size is not None
+                        else recipe.hmax
+                    )
+                    if rec_hmax is not None and float(rec_hmax) > effective_hmax:
+                        effective_hmax = float(rec_hmax)
+            raw_mesh_opts = (
+                mesh_workflow.get("mesh_options")
+                if isinstance(mesh_workflow, Mapping)
+                else None
+            )
+            if isinstance(raw_mesh_opts, Mapping) and isinstance(raw_mesh_opts.get("size_fields"), list):
+                for sf in raw_mesh_opts["size_fields"]:
+                    if isinstance(sf, Mapping):
+                        vin = (
+                            sf.get("params", {}).get("VIn")
+                            if isinstance(sf.get("params"), Mapping)
+                            else None
+                        )
+        if mixed_shared_geo_direct:
+            size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
+        else:
+            size_field_default_hmax = effective_hmax
         airbox_bounds = _rectangular_airbox_bounds_from_options(airbox, bounds_by_name)
         component_aware_mesh_options = not preemptive_imported_stl_fallback
 
@@ -2784,8 +2833,65 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 list(mesh_options.size_fields), per_object_recipes
             )
             mesh_options = _dc_replace(mesh_options, size_fields=recipe_fields + existing)
+
+        for geometry in geometries:
+            target_info = effective_per_object_targets.get(geometry.geometry_name)
+            t_hmax = target_info.get("hmax") if target_info else None
+            if t_hmax is not None and float(t_hmax) < effective_hmax:
+                has_bulk = any(
+                    f.get("role") == "bulk"
+                    and (
+                        f.get("owner") == geometry.geometry_name
+                        or f.get("params", {}).get("GeometryName") == geometry.geometry_name
+                    )
+                    and float(f.get("params", {}).get("VIn", float("inf"))) <= float(t_hmax) + 1e-12
+                    for f in mesh_options.size_fields
+                    if isinstance(f, dict)
+                )
+                if not has_bulk:
+                    bounds_pair = bounds_by_name.get(geometry.geometry_name) if bounds_by_name else None
+                    unpacked = _unpack_bounds_pair(bounds_pair) if bounds_pair else None
+                    if unpacked is None:
+                        bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
+                    else:
+                        bounds_min, bounds_max = unpacked
+                    if bounds_min is not None and bounds_max is not None:
+                        if component_aware_mesh_options:
+                            field = {
+                                "kind": "ComponentVolumeConstant",
+                                "role": "bulk",
+                                "owner": geometry.geometry_name,
+                                "params": {
+                                    "GeometryName": geometry.geometry_name,
+                                    "VIn": float(t_hmax),
+                                    "VOut": float(_NO_OP_FIELD_SIZE),
+                                },
+                            }
+                        else:
+                            field = {
+                                "kind": "Box",
+                                "role": "bulk",
+                                "owner": geometry.geometry_name,
+                                "params": {
+                                    "GeometryName": geometry.geometry_name,
+                                    "VIn": float(t_hmax),
+                                    "VOut": float(_NO_OP_FIELD_SIZE),
+                                    "XMin": float(bounds_min[0]),
+                                    "XMax": float(bounds_max[0]),
+                                    "YMin": float(bounds_min[1]),
+                                    "YMax": float(bounds_max[1]),
+                                    "ZMin": float(bounds_min[2]),
+                                    "ZMax": float(bounds_max[2]),
+                                },
+                            }
+                        mesh_options = _dc_replace(
+                            mesh_options,
+                            size_fields=[field] + list(mesh_options.size_fields),
+                        )
+
         if (
             surface_mesh_options.mesh_strategy is not None
+            and mesh_options.mesh_strategy in (None, "auto")
             and surface_mesh_options.mesh_strategy != mesh_options.mesh_strategy
         ):
             mesh_options = _dc_replace(
@@ -2797,13 +2903,15 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 through_thickness_element_ratio=surface_mesh_options.through_thickness_element_ratio,
                 through_thickness_symmetric=surface_mesh_options.through_thickness_symmetric,
             )
-        effective_airbox_target, effective_per_object_targets = _resolve_effective_shared_domain_targets(
-            geometries,
-            hints,
-            airbox=airbox,
-            mesh_workflow=mesh_workflow,
-            per_object_recipes=per_object_recipes,
-        )
+        elif (
+            surface_mesh_options.mesh_strategy is not None
+            and mesh_options.mesh_strategy is not None
+            and surface_mesh_options.mesh_strategy != mesh_options.mesh_strategy
+        ):
+            raise ValueError(
+                f"conflicting mesh strategies between preflight ({surface_mesh_options.mesh_strategy}) "
+                f"and generator options ({mesh_options.mesh_strategy})"
+            )
         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
         if mixed_shared_geo_direct:
             planned_build_mode = "single_geometry_geo_mixed"
@@ -3187,6 +3295,48 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             mesh_options = _dc_replace(
                                 mesh_options, size_fields=recipe_fields + existing
                             )
+                        for geometry in geometries:
+                            target_info = effective_per_object_targets.get(geometry.geometry_name)
+                            t_hmax = target_info.get("hmax") if target_info else None
+                            if t_hmax is not None and float(t_hmax) < effective_hmax:
+                                has_bulk = any(
+                                    f.get("role") == "bulk"
+                                    and (
+                                        f.get("owner") == geometry.geometry_name
+                                        or f.get("params", {}).get("GeometryName") == geometry.geometry_name
+                                    )
+                                    and float(f.get("params", {}).get("VIn", float("inf"))) <= float(t_hmax) + 1e-12
+                                    for f in mesh_options.size_fields
+                                    if isinstance(f, dict)
+                                )
+                                if not has_bulk:
+                                    bounds_pair = bounds_by_name.get(geometry.geometry_name) if bounds_by_name else None
+                                    unpacked = _unpack_bounds_pair(bounds_pair) if bounds_pair else None
+                                    if unpacked is None:
+                                        bounds_min, bounds_max = geometry_bounds(geometry, source_root=None)
+                                    else:
+                                        bounds_min, bounds_max = unpacked
+                                    if bounds_min is not None and bounds_max is not None:
+                                        field = {
+                                            "kind": "Box",
+                                            "role": "bulk",
+                                            "owner": geometry.geometry_name,
+                                            "params": {
+                                                "GeometryName": geometry.geometry_name,
+                                                "VIn": float(t_hmax),
+                                                "VOut": float(_NO_OP_FIELD_SIZE),
+                                                "XMin": float(bounds_min[0]),
+                                                "XMax": float(bounds_max[0]),
+                                                "YMin": float(bounds_min[1]),
+                                                "YMax": float(bounds_max[1]),
+                                                "ZMin": float(bounds_min[2]),
+                                                "ZMax": float(bounds_max[2]),
+                                            },
+                                        }
+                                        mesh_options = _dc_replace(
+                                            mesh_options,
+                                            size_fields=[field] + list(mesh_options.size_fields),
+                                        )
                         used_size_field_kinds = _unique_size_field_kinds(list(mesh_options.size_fields))
                         if mesh_options.size_fields:
                             emit_progress(

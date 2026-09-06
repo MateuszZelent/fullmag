@@ -112,9 +112,11 @@ class AdjacentSizeGrowthPair:
     left_size_m: float
     right_size_m: float
     ratio: float
+    allowed_ratio: float | None = None
+    violation: bool | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "left_ordinal": self.left_ordinal,
             "right_ordinal": self.right_ordinal,
             "face_nodes": list(self.face_nodes),
@@ -128,6 +130,11 @@ class AdjacentSizeGrowthPair:
             "right_size_m": self.right_size_m,
             "ratio": self.ratio,
         }
+        if self.allowed_ratio is not None:
+            payload["allowed_ratio"] = self.allowed_ratio
+        if self.violation is not None:
+            payload["violation"] = self.violation
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +188,7 @@ class AdjacentSizeGrowthReport:
     # mesh does not duplicate every face-neighbor record in JSON diagnostics.
     pair_ordinals: tuple[tuple[int, int], ...] = ()
     pair_ratios: tuple[float, ...] = ()
+    evaluation_status: str = "evaluated"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -202,6 +210,7 @@ class AdjacentSizeGrowthReport:
             "scopes": [scope.to_dict() for scope in self.scopes],
             "worst_pairs": [pair.to_dict() for pair in self.worst_pairs],
             "is_valid": self.is_valid,
+            "evaluation_status": self.evaluation_status,
         }
 
 
@@ -757,7 +766,7 @@ def measure_adjacent_size_growth(
                 raise ValueError(
                     f"no growth rate defined for scope {r_fam}|marker:{r_mark}|role:{r_rol}"
                 )
-        pair_rate = r_l if (l_mark == r_mark and l_rol == r_rol) else max(r_l, r_r)
+        pair_rate = max(r_l, r_r)
         return pair_rate * (1.0 + tolerance_value)
 
     face_owners: dict[tuple[int, ...], list[int]] = {}
@@ -806,6 +815,10 @@ def measure_adjacent_size_growth(
             if len(cell_parts) == mesh.n_elements and str(cell_parts[right]).strip()
             else "unknown"
         )
+        pair_limit = _pair_allowed_ratio(
+            left_family, left_marker, left_role,
+            right_family, right_marker, right_role,
+        )
         pair = AdjacentSizeGrowthPair(
             left_ordinal=left,
             right_ordinal=right,
@@ -819,6 +832,8 @@ def measure_adjacent_size_growth(
             left_size_m=float(left_size),
             right_size_m=float(right_size),
             ratio=ratio,
+            allowed_ratio=float(pair_limit),
+            violation=bool(ratio > pair_limit),
         )
         pairs.append(pair)
         for family, marker, role in (
@@ -864,13 +879,7 @@ def measure_adjacent_size_growth(
     ratio_p50 = float(np.percentile(ratios, 50.0)) if ratios.size else 0.0
     ratio_p95 = float(np.percentile(ratios, 95.0)) if ratios.size else 0.0
     ratio_max = float(np.max(ratios)) if ratios.size else 0.0
-    violation_count = sum(
-        1 for p in pairs
-        if p.ratio > _pair_allowed_ratio(
-            p.left_family, p.left_marker, p.left_role,
-            p.right_family, p.right_marker, p.right_role,
-        )
-    )
+    violation_count = sum(1 for p in pairs if p.violation)
     is_valid = (
         invalid_size_element_count == 0
         and skipped_nonmanifold == 0
@@ -885,12 +894,18 @@ def measure_adjacent_size_growth(
         pairs,
         key=lambda pair: (pair.left_ordinal, pair.right_ordinal, pair.face_nodes),
     )
+    evaluated_pair_count = int(ratios.size)
+    if evaluated_pair_count == 0:
+        evaluation_status = "not_applicable" if not require_pairs else "not_evaluated"
+    else:
+        evaluation_status = "evaluated"
+
     return AdjacentSizeGrowthReport(
         schema_version="adjacent_size_growth.v1",
         metric_definition_id="adjacent_size_growth.v1",
         element_count=mesh.n_elements,
         candidate_face_count=candidate_face_count,
-        evaluated_pair_count=int(ratios.size),
+        evaluated_pair_count=evaluated_pair_count,
         skipped_nonmanifold_face_count=skipped_nonmanifold,
         invalid_size_element_count=invalid_size_element_count,
         resolved_growth_rate=growth,
@@ -908,6 +923,7 @@ def measure_adjacent_size_growth(
             (int(pair.left_ordinal), int(pair.right_ordinal)) for pair in metric_pairs
         ),
         pair_ratios=tuple(float(pair.ratio) for pair in metric_pairs),
+        evaluation_status=evaluation_status,
     )
 
 

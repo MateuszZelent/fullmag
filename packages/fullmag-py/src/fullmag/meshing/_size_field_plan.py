@@ -1643,6 +1643,8 @@ def _mesh_options_from_runtime_metadata(
             recipe = _lookup_geometry_name_alias(per_object_recipes, geom.geometry_name)
             if isinstance(recipe, PerObjectMeshRecipe):
                 val = getattr(recipe, key, None)
+                if key == "through_thickness_symmetric" and val is False and recipe.through_thickness_elements is None and recipe.mesh_strategy is None:
+                    val = None
                 if val is not None:
                     return val
         entry = _lookup_geometry_name_alias(per_geom_by_name, geom.geometry_name)

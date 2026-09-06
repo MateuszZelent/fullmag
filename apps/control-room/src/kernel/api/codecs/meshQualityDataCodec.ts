@@ -109,7 +109,8 @@ function expectedV2MetricUnit(metricId: string): string | null {
       if (
         (metricId.startsWith("scaled_jacobian.") ||
           metricId.startsWith("edge_aspect.") ||
-          metricId.startsWith("skewness.")) &&
+          metricId.startsWith("skewness.") ||
+          metricId.startsWith("edge_length_uniformity.")) &&
         metricId.endsWith(".v1")
       ) {
         return "1";
@@ -123,7 +124,8 @@ function isFamilyMetric(metricId: string): boolean {
     metricId.startsWith("signed_jacobian.") ||
     metricId.startsWith("scaled_jacobian.") ||
     metricId.startsWith("edge_aspect.") ||
-    metricId.startsWith("skewness.")
+    metricId.startsWith("skewness.") ||
+    metricId.startsWith("edge_length_uniformity.")
   );
 }
 

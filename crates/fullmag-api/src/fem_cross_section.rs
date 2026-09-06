@@ -521,6 +521,7 @@ fn fmmq_metric_unit(metric_id: &str) -> Option<&'static str> {
                 "scaled_jacobian.",
                 "edge_aspect.",
                 "skewness.",
+                "edge_length_uniformity.",
             ] {
                 if let Some(family) = metric_id
                     .strip_prefix(prefix)
@@ -924,7 +925,8 @@ pub(crate) fn validate_fmmq_v2_payload(
         let is_family_metric = id.starts_with("signed_jacobian.")
             || id.starts_with("scaled_jacobian.")
             || id.starts_with("edge_aspect.")
-            || id.starts_with("skewness.");
+            || id.starts_with("skewness.")
+            || id.starts_with("edge_length_uniformity.");
         if is_family_metric && family.is_none() {
             return Err(ApiError::internal(format!(
                 "FMMQ v2 family metric {id} has no family identity"
@@ -940,6 +942,7 @@ pub(crate) fn validate_fmmq_v2_payload(
                 || id.starts_with("scaled_jacobian.")
                 || id.starts_with("edge_aspect.")
                 || id.starts_with("skewness.")
+                || id.starts_with("edge_length_uniformity.")
             {
                 let family_row = family_rows
                     .iter()
