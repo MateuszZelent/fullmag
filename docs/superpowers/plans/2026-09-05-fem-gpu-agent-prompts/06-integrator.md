@@ -43,8 +43,10 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 
 ZADANIE INTEGRATORA
 
-Utrzymuj jeden zatwierdzony punkt startowy agentów 4 i 5:
-95a1876ed496c757849707f599c418613b7db603 (zamrożony i zweryfikowany commit; stan bramki: READY dla Agenta 4 i Agenta 5 DG0/A13; A11 sparse nadal BLOCKED; poprzedni kandydat C3 3f3fffae31c574b668bab75b93d697020f0ac7ae jest historyczny) na branchu codex/fem-gpu-tasks1-5-remediation,
+Utrzymuj jeden zatwierdzony punkt startowy dla prac cząstkowych:
+`94f332759baca7418e6aa752a1eeee5ead761417` (commit lokalny po remediacji Armijo i rozdzieleniu kontraktów NCG; commit 95a1876ed496c757849707f599c418613b7db603 usunięto z powodu wadliwego skalowania).
+Stan bramki: Recepta just verify-fem-gpu-execution-receipt-contract PASS (exit 0, 6/6 native PASS, 28/28 Rust PASS); Kontrakt A (rejected refinement + backtracking) VERIFIED; Kontrakt B (accepted refinement witness) NOT VERIFIED.
+Pełny baseline: BLOCKED / NOT FULLY QUALIFIED. Dopuszczone wyłącznie niezależne prace: Agent 4 (loader profilu) i Agent 5 (A13 DG0). A11 sparse BLOCKED do integracji Agenta 4. Agent 6 BLOCKED do czasu integracji zamrożonych commitów.
 ze źródłowego worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
 Podaj prawdziwą informację o lokalnej/zdalnej dostępności SHA (commit lokalny, brak na remote bez push).
 Odbiór fazy 1–3 i NCG refinement closure został ukończony (6/6 native PASS bez SKIP, 28/28 Rust PASS, 50/50 Python PASS).

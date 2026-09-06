@@ -9,7 +9,7 @@
 Repozytorium: C:\git\fullmag\fullmag.
 Kanoniczny worktree integracyjny: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
 Branch integracyjny: codex/fem-gpu-tasks1-5-remediation.
-Zweryfikowany baseline wejściowy: `95a1876ed496c757849707f599c418613b7db603` (commit lokalny po odbiorze agentów 1–3 i NCG refinement).
+Baseline wejściowy po remediacji Armijo: `94f332759baca7418e6aa752a1eeee5ead761417` (commit lokalny po naprawie rollbacku i rozdzieleniu kontraktów NCG; recepta receipt contract PASS, Kontrakt A VERIFIED, Kontrakt B NOT VERIFIED).
 Raport Astra Pro: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation/docs/reports/05.09.2026/fullmag-fem-gpu-audit-2026-09-05/fullmag-fem-gpu-audit-2026-09-05/RAPORT.md.
 Raport odbioru: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation/docs/reports/05.09.2026/agent-1-3-integration-review.md.
 Plan domknięcia: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation/docs/superpowers/plans/2026-09-05-fem-gpu-integration-closure.md.

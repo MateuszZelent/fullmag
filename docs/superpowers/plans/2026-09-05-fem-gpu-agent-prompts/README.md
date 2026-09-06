@@ -6,7 +6,11 @@ Pakiet delegacyjny po audycie z 2026-09-05. Każdy plik zawiera samodzielny prom
 **Architektura:** jeden integrator, izolowane branche/worktrees i sekwencyjne przekazywanie plików współdzielonych.
 **Stos:** istniejący FEM/MFEM/hypre/libCEED/CUDA; bez upgrade’u i mixed precision w tym pakiecie.
 **Historyczny baseline audytu:** 4be277e47440a947a30954adb3bbdeef15c9b06f. Nie zaczynaj kolejnych implementacji od niego.
-**Status:** Odbiór agentów 1–3 oraz domknięcie NCG refinement ukończone i zweryfikowane. Zweryfikowany SHA kodu: `95a1876ed496c757849707f599c418613b7db603` (snapshot `c32dd20a220b89a3632b2cc8dde3266023a67232ad9dd842c9f18a49c62707cd`). Wyniki: container-backed `just verify-fem-gpu-execution-receipt-contract` PASS (exit 0), 6/6 native PASS bez SKIP, 28/28 Rust PASS, 50/50 Python PASS. Stan bramki: READY dla Agenta 4 i Agenta 5 (DG0/A13); A11 sparse nadal BLOCKED. Poprzednie SHA (4be277..., 307ef3..., 4ddd9b..., 3f3fff..., fc4410...) są historyczne. Prompty 1–3 są historyczne.
+**Status:** Odbiór agentów 1–3 oraz remediacja Armijo refinement: aktualny SHA wejściowy: `94f332759baca7418e6aa752a1eeee5ead761417` (branch `codex/fem-gpu-tasks1-5-remediation`). Wyniki: container-backed `just verify-fem-gpu-execution-receipt-contract` PASS (exit 0), 6/6 native PASS bez SKIP (w tym `fem_gpu_ncg_runtime_contract` i `fem_gpu_relaxation_preconditioner_contract`), 28/28 Rust exact tests PASS przez `validate_exact_rust_test_log.py`, 50/50 Python PASS.
+- Kontrakt A (odrzucony refinement na CUDA, unscaled Armijo proof, pełny rollback urządzenia/wyniku, backtracking, krok 2): **PASS / VERIFIED**.
+- Kontrakt B (zaakceptowany świadek refinementu bez odrzucenia): **NOT VERIFIED** (brak wykazanego legalnego świadka na badanych konfiguracjach).
+- Pełna bramka produkcyjna: **BLOCKED / NOT QUALIFIED** pod kątem bezwarunkowej kwalifikacji baseline.
+- Propozycja dla użytkownika: dopuszczenie wyłącznie niezależnego loadera profilu (Agent 4) oraz DG0 (Agent 5) na izolowanych worktrees, bez automatycznej promocji baseline do qualified.
 
 ## Obowiązujący punkt wejścia
 
@@ -41,20 +45,26 @@ Stan bramki:
 - **Agent 7:** rola niezależnego audytora i weryfikatora pozostaje propozycją do zatwierdzenia przez użytkownika.
 
 Status tożsamości kodu i weryfikacji numerycznej:
-- Commit `95a1876ed496c757849707f599c418613b7db603` zawierał nieuzasadnione tłumienie granicy błędu zaokrągleń `demag_roundoff_bound_j * (refined_rtol / ordinary_rtol)`, sztucznie wymuszające akceptację kroku Armijo.
-- Nieuzasadniona redukcja została usunięta z `backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp`; certyfikat błędu zaokrągleń IEEE 754 jest niezmienniczy względem tolerancji solvera (zgodnie z uaktualnioną notą `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`).
-- Dodano rygorystyczną regresję numeryczną w `backends/fem/tests/gpu_relaxation_preconditioner_contract.cpp` potwierdzającą niezmienniczość certyfikatu i odrzucanie nierozstrzygniętych przedziałów (PASS, 0.64s).
-- Native 5/6 PASS: `fem_gpu_execution_receipt_contract`, `fem_demag_poisson_contract`, `fem_gpu_rk_device_controller_contract`, `fem_gpu_relaxation_preconditioner_contract`, `fem_cuda_periodic_demag_contract`.
-- NCG Armijo refinement: wejście w procedurę i wykonanie 6 fizycznych rozwiązań Poissona na CUDA zweryfikowane; na siatce 1-czworościennej CG zbiega do precyzji maszynowej, więc doprecyzowanie nie przesuwa energii, a nierozstrzygnięty przedział jest kanonicznie odrzucany (`rejected = 1`), po czym linia backtrackingu akceptuje krok (`cand = 2`, `stats.step = 1`). Asercja izolowanego zaakceptowanego świadka z `rejected = 0` pozostaje **NOT VERIFIED**.
-- Rust 28/28 exact tests PASS przez `validate_exact_rust_test_log.py`.
-- Host Python 50/50 PASS.
+- Commit `95a1876ed496c757849707f599c418613b7db603` został usunięty jako punkt wejścia: zawierał nieuzasadnione skalowanie granicy błędu zaokrągleń `demag_roundoff_bound_j * (refined_rtol / ordinary_rtol)`.
+- Aktualny commit wejściowy: `94f332759baca7418e6aa752a1eeee5ead761417` (commit lokalny na branchu `codex/fem-gpu-tasks1-5-remediation`).
+- `backends/fem/gpu/cuda/relaxation/direct_energy_increment.cpp`: zachowano unscaled certyfikat błędu IEEE 754 ($B = \gamma_N \sum |x_i|$); wdrożono pełny rollback całego `ordinary_result` oraz stanu urządzenia (`base_m`, fresh ordinary snapshot, `base_h_demag_scratch`) po odrzuceniu kandydata refinementu.
+- `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`: uaktualniono sekcję 3.2, wskazując zależność $B$ od sumy modułów operandów $\sum |x_i|$ oraz odróżniając błąd zaokrągleń od błędu algebraicznego Poissona.
+- Poprawiono diagnozę Poissona: `demag_poisson_lifecycle.cpp` dla nieperiodycznej siatki tet bez pyramid wybiera przestrzeń kwadratową H1 (P2, `demag_potential_order = 2`), która na 1 czworościanie ma `potential_true_dof_count = 10` (rozwiązywane przez Hypre PCG w 7 iteracjach z residuum $5.188 \times 10^{-14}$). Usunięto błędne twierdzenie o 4x4.
+- Recepta `just verify-fem-gpu-execution-receipt-contract`: **PASS (exit code 0)**.
+  - Native 6/6 PASS bez SKIP: `fem_gpu_execution_receipt_contract`, `fem_demag_poisson_contract`, `fem_gpu_rk_device_controller_contract`, `fem_gpu_relaxation_preconditioner_contract`, `fem_cuda_periodic_demag_contract`, `fem_gpu_ncg_runtime_contract`.
+  - Kontrakt A (rejected refinement + backtracking + certified energy proof + krok 2): **PASS / VERIFIED**.
+  - Kontrakt B (zaakceptowany świadek refinementu bez odrzucenia): **NOT VERIFIED**.
+  - Rust 28/28 exact tests PASS przez `validate_exact_rust_test_log.py`.
+  - Host Python 50/50 PASS.
 
 Zasady realizacji dla fali:
-- Agent 4: loader/preconditioner; osobny worktree ze sprawdzonego SHA `95a1876ed496c757849707f599c418613b7db603`.
-- Agent 5: wyłącznie DG0/A13; osobny worktree z tego samego SHA `95a1876ed496c757849707f599c418613b7db603`.
-- Agent 5 / A11 sparse: zablokowane do integracji i przekazania przez agenta 4.
-- Agent 6: integruje zamrożone commity i weryfikuje wynik po scaleniu.
-- Agent 7 (propozycja): niezależny audyt i weryfikacja przed scaleniem do gałęzi głównej.
+- Stan pełnej bramki baseline: **BLOCKED / NOT FULLY QUALIFIED** (zgodnie z wymogiem istnienia dowodu zaakceptowanego refinementu).
+- Propozycja dopuszczenia prac w ograniczonym zakresie (wymaga jawnej decyzji użytkownika):
+  - Agent 4: **READY** wyłącznie dla niezależnego loadera konfiguracji/profilu (`gpu_relaxation_preconditioner_loader.cpp/hpp` i testów jednostkowych); kernel preconditionera następuje po loaderze zgodnie z planem; praca na osobnym worktree ze sprawdzonego SHA `94f332759baca7418e6aa752a1eeee5ead761417`.
+  - Agent 5: **READY** wyłącznie dla niezależnego DG0 membership (A13) na osobnym worktree z SHA `94f332759baca7418e6aa752a1eeee5ead761417`.
+  - Agent 5 / A11 sparse: **BLOCKED** do czasu integracji i przekazania prac Agenta 4.
+  - Agent 6: **BLOCKED** do czasu ukończenia i przekazania prac cząstkowych przez Agentów 4 i 5.
+  - Agent 7 (propozycja): niezależny audyt i weryfikacja, bez automatycznego startu.
 - Ograniczenie GPU: buildy i testy z dostępem do GPU oraz benchmarki muszą być wykonywane sekwencyjnie (żadnych równoległych procesów na karcie).
 
 Nie uruchamiać nowej fali automatycznie.

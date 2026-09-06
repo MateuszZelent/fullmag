@@ -42,8 +42,8 @@ Nie modyfikuj oryginalnego pakietu Astra Pro ani SHA256SUMS; własne ustalenia z
 ## Twoje zadanie
 
 PUNKT WEJŚCIA
-Start implementacji A13 ze sprawdzonego SHA: 95a1876ed496c757849707f599c418613b7db603 (stan bramki: READY dla A13/DG0; poprzedni kandydat C3 3f3fffae31c574b668bab75b93d697020f0ac7ae jest historyczny).
-A11 (cuSPARSE / sparse) pozostaje zablokowane (BLOCKED) do czasu zakończenia, weryfikacji i integracji prac Agenta 4.
+Start implementacji A13 z aktualnego SHA wejściowego: `94f332759baca7418e6aa752a1eeee5ead761417` na branchu `codex/fem-gpu-tasks1-5-remediation`. Commit 95a1876ed496c757849707f599c418613b7db603 został usunięty (zawierał wadliwe skalowanie granicy zaokrągleń).
+Stan bramki: A13/DG0 może być realizowane niezależnie na osobnym, izolowanym worktree; A11 (cuSPARSE / sparse) pozostaje bezwzględnie zablokowane (BLOCKED) do czasu zakończenia, weryfikacji i integracji prac Agenta 4. Pełna kwalifikacja baseline pozostaje BLOCKED z uwagi na brak świadka accepted-refinement (Contract B: NOT VERIFIED).
 Źródłowy branch: codex/fem-gpu-tasks1-5-remediation.
 Źródłowy worktree: C:/git/fullmag/fullmag/.worktrees/fem-gpu-tasks1-5-remediation.
 Dostępność commita: lokalny na branchu codex/fem-gpu-tasks1-5-remediation; niedostępny na zdalnym GitHubie bez push.
