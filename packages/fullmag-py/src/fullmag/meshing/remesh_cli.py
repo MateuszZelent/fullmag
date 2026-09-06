@@ -740,18 +740,32 @@ def _mesh_result_payload(
 
     def _record_scope(name: str, rate: float) -> None:
         key = str(name)
-        scope_growth_rates[key] = rate
+        rate_val = float(rate)
         matched = False
         for alias in _geometry_name_aliases(key):
-            scope_growth_rates[alias] = rate
+            if alias in scope_growth_rates and not math.isclose(scope_growth_rates[alias], rate_val, rel_tol=1e-7):
+                raise ValueError(
+                    f"Conflicting growth rate for geometry alias '{alias}': "
+                    f"{scope_growth_rates[alias]} vs {rate_val}"
+                )
+            scope_growth_rates[alias] = rate_val
             if alias in name_to_marker:
                 m_int = name_to_marker[alias]
-                scope_growth_rates[str(m_int)] = rate
-                scope_growth_rates[f"marker:{m_int}"] = rate
+                m_str = str(m_int)
+                m_tag = f"marker:{m_int}"
+                if m_str in scope_growth_rates and not math.isclose(scope_growth_rates[m_str], rate_val, rel_tol=1e-7):
+                    raise ValueError(
+                        f"Conflicting growth rate for marker {m_int} (via '{name}'): "
+                        f"{scope_growth_rates[m_str]} vs {rate_val}"
+                    )
+                scope_growth_rates[m_str] = rate_val
+                scope_growth_rates[m_tag] = rate_val
                 matched = True
         if key == "air":
-            scope_growth_rates["0"] = rate
-            scope_growth_rates["marker:0"] = rate
+            if "0" in scope_growth_rates and not math.isclose(scope_growth_rates["0"], rate_val, rel_tol=1e-7):
+                raise ValueError(f"Conflicting growth rate for air: {scope_growth_rates['0']} vs {rate_val}")
+            scope_growth_rates["0"] = rate_val
+            scope_growth_rates["marker:0"] = rate_val
             matched = True
         elif hasattr(mesh, "cell_mesh_parts") and key in set(mesh.cell_mesh_parts):
             matched = True

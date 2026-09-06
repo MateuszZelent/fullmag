@@ -2802,6 +2802,8 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             if isinstance(sf.get("params"), Mapping)
                             else None
                         )
+                        if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
+                            effective_hmax = float(vin)
         if mixed_shared_geo_direct:
             size_field_default_hmax = _shared_domain_size_field_default_hmax(hints, airbox)
         else:

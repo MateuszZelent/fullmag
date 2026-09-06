@@ -247,6 +247,67 @@ def test_unmapped_growth_scope_rejected_when_markers_present(tmp_path: Path) -> 
         )
 
 
+def test_conflicting_alias_growth_rates_rejected(tmp_path: Path) -> None:
+    """Conflicting growth rates for two aliases that resolve to the same marker must be rejected."""
+    with pytest.raises(ValueError, match="Conflicting growth rate"):
+        _mesh_result_payload(
+            neighboring_tets(),
+            mesh_name="conflict",
+            generation_mode="shared_domain_manual_remesh",
+            mesh_provenance={
+                "per_geometry": [
+                    {"geometry": "film", "growth_rate": 1.4},
+                    {"geometry": "film_geom", "growth_rate": 1.8},
+                ]
+            },
+            region_markers=[{"geometry_name": "film_geom", "marker": 1}],
+            topology_artifact_dir=tmp_path,
+        )
+
+
+def test_workflow_size_field_vin_updates_effective_hmax(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A workflow size field with coarse VIn must update effective_hmax."""
+    captured: dict[str, Any] = {}
+
+    def stop(*args: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        raise StopAtGenerator()
+
+    monkeypatch.setattr(occ, "generate_shared_domain_mesh_via_occ", stop)
+    a = Box(8e-6, 8e-6, 2e-6, name="A")
+    with pytest.raises(StopAtGenerator):
+        assets._realize_fem_domain_mesh_asset_from_components_impl(
+            [a],
+            FEM(order=1, hmax=1e-6),
+            study_universe={
+                "mode": "manual",
+                "size": [60e-6, 30e-6, 20e-6],
+                "center": [10e-6, 0., 0.],
+                "airbox_hmax": 1e-6,
+            },
+            mesh_workflow={
+                "mesh_options": {
+                    "size_fields": [
+                        {"kind": "Box", "params": {"VIn": 4.5e-6, "VOut": 1e-5}}
+                    ]
+                }
+            },
+        )
+    assert captured["hmax"] >= 4.5e-6
+
+
+def test_shared_golden_fmmq_v2_matches_verification() -> None:
+    """The shared golden 4-family FMMQ file validates with exactly 22 metrics and all 4 uniformity channels."""
+    golden_path = repo_root() / "crates/fullmag-api/resources/golden_4family_fmmq_v2.fmmq"
+    assert golden_path.is_file(), f"Golden file missing: {golden_path}"
+    payload = golden_path.read_bytes()
+    verification = fmmq.verify_fmmq_v2(payload)
+    assert verification.element_count == 4
+    assert len(verification.metric_ids) == 22
+    for family in ("tet4", "prism6", "pyramid5", "hex8"):
+        assert f"edge_length_uniformity.{family}.v1" in verification.metric_ids
+
+
 # ---------------------------------------------------------------------------
 # 8FD-05: Pair growth rate commutativity across cell storage order
 # ---------------------------------------------------------------------------

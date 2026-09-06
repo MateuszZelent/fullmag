@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { decodeMeshQualityData } from "./meshQualityDataCodec";
@@ -170,5 +173,30 @@ describe("decodeMeshQualityData", () => {
 
     const decoded = decodeMeshQualityData(buffer);
     expect(decoded.elementCount).toBe(2);
+  });
+
+  it("decodes the real golden 4-family FMMQ v2 file produced by Python with all uniformity metrics", () => {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const goldenPath = path.resolve(
+      __dirname,
+      "../../../../../../crates/fullmag-api/resources/golden_4family_fmmq_v2.fmmq",
+    );
+    const fileBytes = fs.readFileSync(goldenPath);
+    const arrayBuffer = fileBytes.buffer.slice(
+      fileBytes.byteOffset,
+      fileBytes.byteOffset + fileBytes.byteLength,
+    );
+    const decoded = decodeMeshQualityData(arrayBuffer);
+    expect(decoded.elementCount).toBe(4);
+    expect(decoded.metrics.length).toBe(22);
+    const uniformityMetrics = decoded.metrics.filter((m) =>
+      m.id.startsWith("edge_length_uniformity."),
+    );
+    expect(uniformityMetrics.length).toBe(4);
+    const families = uniformityMetrics.map((m) => m.family).sort();
+    expect(families).toEqual(["hex8", "prism6", "pyramid5", "tet4"]);
+    for (const m of uniformityMetrics) {
+      expect(m.unit).toBe("1");
+    }
   });
 });

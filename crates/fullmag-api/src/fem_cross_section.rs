@@ -1643,4 +1643,42 @@ mod tests {
     fn f64_at(bytes: &[u8], offset: usize) -> f64 {
         f64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
     }
+
+    #[test]
+    fn fmmq_metric_unit_recognizes_edge_length_uniformity_for_all_families() {
+        for family in ["tet4", "prism6", "pyramid5", "hex8"] {
+            let id = format!("edge_length_uniformity.{family}.v1");
+            assert_eq!(fmmq_metric_unit(&id), Some("1"));
+        }
+        assert_eq!(fmmq_metric_unit("edge_length_uniformity.unknown.v1"), None);
+    }
+
+    #[test]
+    fn fmmq_v2_validation_accepts_golden_4family_carrier() {
+        let payload = include_bytes!("../resources/golden_4family_fmmq_v2.fmmq");
+        let validation = validate_fmmq_v2_payload(payload, Some("topo_fp_golden"))
+            .expect("golden FMMQ v2 payload should validate");
+        assert_eq!(validation.element_count, 4);
+        assert_eq!(validation.topology_fingerprint, "topo_fp_golden");
+        assert_eq!(validation.policy_fingerprint, "pol_fp_golden");
+        assert_eq!(validation.mesh_revision, "rev_golden");
+    }
+
+    #[test]
+    fn fmmq_v2_validation_rejects_topology_fingerprint_mismatch() {
+        let payload = include_bytes!("../resources/golden_4family_fmmq_v2.fmmq");
+        let err = validate_fmmq_v2_payload(payload, Some("wrong_topo_fp"))
+            .expect_err("should reject mismatched topology fingerprint");
+        assert!(err.to_string().contains("topology fingerprint mismatch"));
+    }
+
+    #[test]
+    fn fmmq_v2_validation_rejects_corrupted_digest() {
+        let mut payload = include_bytes!("../resources/golden_4family_fmmq_v2.fmmq").to_vec();
+        let last = payload.len() - 1;
+        payload[last] ^= 0x55;
+        let err = validate_fmmq_v2_payload(&payload, None)
+            .expect_err("should reject digest mismatch");
+        assert!(err.to_string().contains("digest mismatch"));
+    }
 }
