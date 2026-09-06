@@ -370,4 +370,65 @@ describe("field-map commands", () => {
       planar: { source: { kind: "monitor", monitor_id: "returned-id" } },
     });
   });
+
+  it("exports planar figure manifest via export-data command", async () => {
+    const meta = vi.fn().mockResolvedValue({
+      canonical_unit: "A/m",
+      field_revision: "10",
+      frame: {
+        bounds_uv_m: [0, 1, 0, 1],
+        origin_m: [0, 0, 0],
+      },
+      sample_token: "planar-sample-v3:export-test",
+    });
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.export-data");
+
+    const click = vi.fn();
+    const originalDoc = globalThis.document;
+    (globalThis as unknown as { document: unknown }).document = {
+      createElement: vi.fn(() => ({ click, href: "", download: "" })),
+    };
+
+    try {
+      const result = await command?.run({
+        api: {
+          data: {
+            fields: {
+              planar: {
+                meta,
+              },
+            },
+          },
+          visualization: {
+            state: vi.fn().mockResolvedValue({
+              planar: {
+                colormap: "viridis",
+                component: "magnitude",
+                display_unit: "A/m",
+                interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+                layers: { mesh: true, raster: true },
+                point_style: { color: "red", opacity: 1, size: 2 },
+                quantity_id: "m",
+                range: { max: 1, min: 0, mode: "auto" },
+                raster_opacity: 1,
+                resolution: { height: 64, width: 64, vector_budget: 100 },
+                source: { kind: "default" },
+                default_slice: { plane: "xy" },
+                vector_style: { color: "blue", color_mode: "orientation", length_mode: "uniform", opacity: 1, thickness: 1 },
+                view_scope: { kind: "all" },
+                wireframe_style: { color: "black", opacity: 0.5 },
+              },
+            }),
+          },
+        } as never,
+        source: "test",
+      });
+
+      expect(result).toEqual({ status: "completed" });
+      expect(meta).toHaveBeenCalled();
+      expect(click).toHaveBeenCalled();
+    } finally {
+      (globalThis as unknown as { document: unknown }).document = originalDoc;
+    }
+  });
 });

@@ -12,6 +12,7 @@
  */
 
 import type { PlanarFieldMetaResource } from "../../../kernel/api/apiTypes";
+import { decodeFieldVector } from "../../../kernel/api/codecs";
 
 export interface CoherentPlanarBundle {
   sampleToken: string;
@@ -40,6 +41,12 @@ export interface BufferOrigins {
   vectorsToken?: string | null;
 }
 
+function isFmvp(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength < 4) return false;
+  const v = new Uint8Array(buffer, 0, 4);
+  return v[0] === 0x46 && v[1] === 0x4d && v[2] === 0x56 && v[3] === 0x50;
+}
+
 export function validateCoherentPlanarBundle(
   meta: PlanarFieldMetaResource,
   scalarBuffer: ArrayBuffer | null,
@@ -61,13 +68,26 @@ export function validateCoherentPlanarBundle(
   }
 
   const [w, h] = resolution;
-  if (w <= 0 || h <= 0 || !Number.isFinite(w) || !Number.isFinite(h)) {
+  if (
+    w <= 0 ||
+    h <= 0 ||
+    !Number.isFinite(w) ||
+    !Number.isFinite(h) ||
+    !Number.isInteger(w) ||
+    !Number.isInteger(h)
+  ) {
     return { ok: false, reason: "invalid_resolution: non-positive dimensions" };
   }
   const expectedPoints = w * h;
 
   const bounds = meta.frame?.bounds_uv_m;
-  if (!bounds || bounds.length < 4 || bounds.some((v) => !Number.isFinite(v))) {
+  if (
+    !bounds ||
+    bounds.length < 4 ||
+    bounds.some((v) => !Number.isFinite(v)) ||
+    bounds[0] >= bounds[1] ||
+    bounds[2] >= bounds[3]
+  ) {
     return { ok: false, reason: "invalid_bounds" };
   }
 
@@ -101,15 +121,6 @@ export function validateCoherentPlanarBundle(
     return { ok: false, reason: "missing_mandatory_mask" };
   }
 
-  // Check scalar length (either Float64 8 bytes or Float32 4 bytes)
-  const scalarBytes = scalarBuffer.byteLength;
-  if (scalarBytes !== expectedPoints * 8 && scalarBytes !== expectedPoints * 4) {
-    return {
-      ok: false,
-      reason: `scalar_buffer_size_mismatch: expected ${expectedPoints} elements, got ${scalarBytes} bytes`,
-    };
-  }
-
   // Check mask length (1 byte per pixel)
   if (maskBuffer.byteLength !== expectedPoints) {
     return {
@@ -118,29 +129,72 @@ export function validateCoherentPlanarBundle(
     };
   }
 
-  // Check vectors if expected
-  if (vectorsBuffer) {
-    const vectorBytes = vectorsBuffer.byteLength;
-    if (vectorBytes !== expectedPoints * 3 * 8 && vectorBytes !== expectedPoints * 3 * 4) {
+  let scalarData: Float32Array | Float64Array;
+  if (isFmvp(scalarBuffer)) {
+    try {
+      const decoded = decodeFieldVector(scalarBuffer);
+      scalarData = decoded.values;
+    } catch (e) {
       return {
         ok: false,
-        reason: `vector_buffer_size_mismatch: expected ${expectedPoints * 3} elements, got ${vectorBytes} bytes`,
+        reason: `scalar_fmvp_decode_failed: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  } else {
+    const scalarBytes = scalarBuffer.byteLength;
+    if (scalarBytes !== expectedPoints * 8 && scalarBytes !== expectedPoints * 4) {
+      return {
+        ok: false,
+        reason: `scalar_buffer_size_mismatch: expected ${expectedPoints} elements, got ${scalarBytes} bytes`,
+      };
+    }
+    scalarData =
+      scalarBytes === expectedPoints * 8
+        ? new Float64Array(scalarBuffer)
+        : new Float32Array(scalarBuffer);
+  }
+
+  if (scalarData.length !== expectedPoints) {
+    return {
+      ok: false,
+      reason: `scalar_data_length_mismatch: expected ${expectedPoints} elements, got ${scalarData.length}`,
+    };
+  }
+
+  let vectorsData: Float32Array | Float64Array | null = null;
+  if (vectorsBuffer) {
+    if (isFmvp(vectorsBuffer)) {
+      try {
+        const decoded = decodeFieldVector(vectorsBuffer);
+        vectorsData = decoded.values;
+      } catch (e) {
+        return {
+          ok: false,
+          reason: `vector_fmvp_decode_failed: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+    } else {
+      const vectorBytes = vectorsBuffer.byteLength;
+      if (vectorBytes !== expectedPoints * 3 * 8 && vectorBytes !== expectedPoints * 3 * 4) {
+        return {
+          ok: false,
+          reason: `vector_buffer_size_mismatch: expected ${expectedPoints * 3} elements, got ${vectorBytes} bytes`,
+        };
+      }
+      vectorsData =
+        vectorBytes === expectedPoints * 3 * 8
+          ? new Float64Array(vectorsBuffer)
+          : new Float32Array(vectorsBuffer);
+    }
+    if (vectorsData.length !== expectedPoints * 3) {
+      return {
+        ok: false,
+        reason: `vector_data_length_mismatch: expected ${expectedPoints * 3} elements, got ${vectorsData.length}`,
       };
     }
   }
 
-  const scalarData =
-    scalarBytes === expectedPoints * 8
-      ? new Float64Array(scalarBuffer)
-      : new Float32Array(scalarBuffer);
-
   const maskData = new Uint8Array(maskBuffer);
-
-  const vectorsData = vectorsBuffer
-    ? vectorsBuffer.byteLength === expectedPoints * 3 * 8
-      ? new Float64Array(vectorsBuffer)
-      : new Float32Array(vectorsBuffer)
-    : null;
 
   return {
     ok: true,
@@ -158,7 +212,12 @@ export function validateCoherentPlanarBundle(
       scalarData,
       maskData,
       vectorsData,
-      isScientificReady: true,
+      isScientificReady: Boolean(
+        bufferOrigins &&
+          bufferOrigins.scalarToken === meta.sample_token &&
+          bufferOrigins.maskToken === meta.sample_token &&
+          (!vectorsBuffer || bufferOrigins.vectorsToken === meta.sample_token),
+      ),
     },
   };
 }

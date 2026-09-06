@@ -1,5 +1,6 @@
 use fullmag_ir::{
     EmptyPolicyIR, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PlanarReductionIR,
+    SurfaceBoundarySelectorIR, SurfaceVisibilityPolicyIR,
 };
 
 use super::{
@@ -339,3 +340,115 @@ fn test_c07_fdm_continuous_slab_not_snapped() {
         "C07 / N08: Continuous slab centered at cell boundary z=1.0 must have mean 0.5, got {mean}"
     );
 }
+
+#[test]
+fn test_py13_surface_magnitude_uses_mean_of_magnitude() {
+    let nodes = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ];
+    // Vector values at nodes: (x - y, 0, 0)
+    // node 0 (0,0,0) -> (0,0,0)
+    // node 1 (1,0,0) -> (1,0,0)
+    // node 2 (0,1,0) -> (-1,0,0)
+    // node 3 (0,0,-1) -> (0,0,0)
+    let values = vec![
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+        -1.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,
+    ];
+    let field = FemPlanarField::new(3, nodes, vec![[0, 1, 2, 3]], vec![1], values).unwrap();
+    let frame = explicit_frame(
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::SurfaceProjection {
+            boundary: SurfaceBoundarySelectorIR::ObjectBoundary,
+            visibility_policy: SurfaceVisibilityPolicyIR::Frontmost,
+        },
+        [1, 1],
+        PlanarComponent::Magnitude,
+    );
+    let result = PlanarSamplingEngine::sample_fem(&field, &req).unwrap();
+    let val = result.scalar_values[0];
+    // Exact mean of |x - y| over the unit right triangle is 1/3 ≈ 0.3333333333333333.
+    // Norm of the mean vector would be 0.0.
+    assert!(
+        (val - 1.0 / 3.0).abs() < 1e-6,
+        "PY13: Surface magnitude must integrate mean of magnitude (1/3), got {val}"
+    );
+}
+
+#[test]
+fn test_py15_nan_in_vector_marks_undefined_orientation() {
+    let field = FdmPlanarField::new(
+        3,
+        [1, 1, 1],
+        [0.0; 3],
+        [1.0; 3],
+        vec![1.0, f64::NAN, 0.0],
+    )
+    .unwrap();
+    let frame = explicit_frame(
+        [0.5, 0.5, 0.5],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [-0.5, 0.5, -0.5, 0.5],
+    );
+    let req = request(
+        frame,
+        PlanarOperatorIR::PlaneSample,
+        [1, 1],
+        PlanarComponent::Orientation,
+    );
+    let result = PlanarSamplingEngine::sample_fdm(&field, &req).unwrap();
+    assert_eq!(
+        result.occupancy[0],
+        Occupancy::UndefinedOrientation,
+        "PY15: NaN in vector component must produce UndefinedOrientation occupancy"
+    );
+}
+
+#[test]
+fn test_py07_degenerate_prism6_centroid() {
+    let nodes: [[f64; 3]; 6] = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ];
+    let centroid = [1.0 / 3.0, 1.0 / 3.0, 0.0];
+    let res = crate::planar_sampling::element_evaluator::prism6_invert(&nodes, centroid);
+    assert!(
+        res.is_none(),
+        "PY07: Degenerate zero-height Prism6 must return None, got {res:?}"
+    );
+}
+
+#[test]
+fn test_py10_point_tetrahedron_distance_feature_rank() {
+    // 4 points on the x-axis: three at -1/3 and one at 2/3.
+    // The convex hull is the line segment [-1/3, 2/3] along X.
+    let v0 = [-1.0 / 3.0, 0.0, 0.0];
+    let v1 = [-1.0 / 3.0, 0.0, 0.0];
+    let v2 = [-1.0 / 3.0, 0.0, 0.0];
+    let v3 = [2.0 / 3.0, 0.0, 0.0];
+    let p = [0.0, 0.0, 0.0];
+    let dist = crate::planar_sampling::element_evaluator::point_tetrahedron_distance(p, v0, v1, v2, v3);
+    assert!(
+        dist < 1e-12,
+        "PY10: Point (0,0,0) is inside segment [-1/3, 2/3], distance must be 0, got {dist}"
+    );
+}
+

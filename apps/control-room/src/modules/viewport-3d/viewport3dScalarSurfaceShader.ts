@@ -336,10 +336,6 @@ function shaderColorModeId(mode: string | null | undefined): number {
 }
 
 function scalarPaletteId(palette: string | null | undefined): number {
-  if (palette?.trim().toLowerCase().replace(/[\s-]+/g, "_") === "twilight") {
-    return 5;
-  }
-
   switch (normalizeViewport3DColorPalette(palette)) {
     case "coolwarm":
       return 1;
@@ -349,7 +345,12 @@ function scalarPaletteId(palette: string | null | undefined): number {
       return 3;
     case "magma":
       return 4;
+    case "twilight":
+      return 5;
+    case "grayscale":
+      return 6;
     case "viridis":
+    default:
       return 0;
   }
 }

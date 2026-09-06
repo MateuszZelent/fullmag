@@ -30,90 +30,114 @@ const KEAST14_POINTS: [([f64; 4], f64); 14] = [
     ([KEAST14_V3, KEAST14_V3, KEAST14_V3, KEAST14_U3], KEAST14_W3),
 ];
 
-fn point_triangle_distance_sq(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+fn point_segment_distance_sq(p: [f64; 3], a: [f64; 3], b: [f64; 3]) -> f64 {
     let ab = sub(b, a);
-    let ac = sub(c, a);
     let ap = sub(p, a);
-    let d1 = dot(ab, ap);
-    let d2 = dot(ac, ap);
-    if d1 <= 0.0 && d2 <= 0.0 {
-        let diff = sub(p, a);
-        return dot(diff, diff);
+    let len_sq = dot(ab, ab);
+    if len_sq <= 1.0e-30 {
+        return dot(ap, ap);
     }
-    let bp = sub(p, b);
-    let d3 = dot(ab, bp);
-    let d4 = dot(ac, bp);
-    if d3 >= 0.0 && d4 <= d3 {
-        let diff = sub(p, b);
-        return dot(diff, diff);
-    }
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        let v = d1 / (d1 - d3);
-        let proj = [a[0] + v * ab[0], a[1] + v * ab[1], a[2] + v * ab[2]];
-        let diff = sub(p, proj);
-        return dot(diff, diff);
-    }
-    let cp = sub(p, c);
-    let d5 = dot(ab, cp);
-    let d6 = dot(ac, cp);
-    if d6 >= 0.0 && d5 <= d6 {
-        let diff = sub(p, c);
-        return dot(diff, diff);
-    }
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        let w = d2 / (d2 - d6);
-        let proj = [a[0] + w * ac[0], a[1] + w * ac[1], a[2] + w * ac[2]];
-        let diff = sub(p, proj);
-        return dot(diff, diff);
-    }
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        let bc = sub(c, b);
-        let proj = [b[0] + w * bc[0], b[1] + w * bc[1], b[2] + w * bc[2]];
-        let diff = sub(p, proj);
-        return dot(diff, diff);
-    }
-    let denom = 1.0 / (va + vb + vc);
-    let v = vb * denom;
-    let w = vc * denom;
-    let proj = [
-        a[0] + ab[0] * v + ac[0] * w,
-        a[1] + ab[1] * v + ac[1] * w,
-        a[2] + ab[2] * v + ac[2] * w,
-    ];
+    let t = (dot(ap, ab) / len_sq).clamp(0.0, 1.0);
+    let proj = [a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2]];
     let diff = sub(p, proj);
     dot(diff, diff)
 }
 
-fn point_tetrahedron_distance(
+fn point_triangle_distance_sq(p: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> f64 {
+    let ab = sub(b, a);
+    let ac = sub(c, a);
+    let n = cross(ab, ac);
+    let n_sq = dot(n, n);
+    let edge_scale_sq = dot(ab, ab).max(dot(ac, ac)).max(dot(sub(c, b), sub(c, b)));
+    if n_sq <= edge_scale_sq * 1.0e-24 || edge_scale_sq <= 1.0e-30 {
+        return point_segment_distance_sq(p, a, b)
+            .min(point_segment_distance_sq(p, b, c))
+            .min(point_segment_distance_sq(p, c, a));
+    }
+
+    let ap = sub(p, a);
+    let n_len = n_sq.sqrt();
+    let h = dot(ap, n) / n_len;
+    let proj = [
+        p[0] - h * n[0] / n_len,
+        p[1] - h * n[1] / n_len,
+        p[2] - h * n[2] / n_len,
+    ];
+
+    let c0 = dot(cross(sub(b, a), sub(proj, a)), n);
+    let c1 = dot(cross(sub(c, b), sub(proj, b)), n);
+    let c2 = dot(cross(sub(a, c), sub(proj, c)), n);
+
+    let tol = -1.0e-12 * n_sq;
+    if c0 >= tol && c1 >= tol && c2 >= tol {
+        h * h
+    } else {
+        point_segment_distance_sq(p, a, b)
+            .min(point_segment_distance_sq(p, b, c))
+            .min(point_segment_distance_sq(p, c, a))
+    }
+}
+
+pub(crate) fn point_tetrahedron_distance(
     p: [f64; 3],
     v0: [f64; 3],
     v1: [f64; 3],
     v2: [f64; 3],
     v3: [f64; 3],
 ) -> f64 {
-    let a = sub(v0, v3);
-    let b = sub(v1, v3);
-    let c = sub(v2, v3);
-    let pv = sub(p, v3);
-    let det = dot(a, cross(b, c));
-    if det.abs() > 1e-30 {
-        let w0 = dot(pv, cross(b, c)) / det;
-        let w1 = dot(a, cross(pv, c)) / det;
-        let w2 = dot(a, cross(b, pv)) / det;
+    let verts = [v0, v1, v2, v3];
+    let mut scale = 0.0_f64;
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            let d = dot(sub(verts[i], verts[j]), sub(verts[i], verts[j])).sqrt();
+            if d > scale {
+                scale = d;
+            }
+        }
+    }
+    if scale <= 1.0e-30 {
+        let diff = sub(p, v0);
+        return dot(diff, diff).sqrt();
+    }
+
+    let inv_scale = 1.0 / scale;
+    let p_norm = [
+        (p[0] - v3[0]) * inv_scale,
+        (p[1] - v3[1]) * inv_scale,
+        (p[2] - v3[2]) * inv_scale,
+    ];
+    let a_norm = [
+        (v0[0] - v3[0]) * inv_scale,
+        (v0[1] - v3[1]) * inv_scale,
+        (v0[2] - v3[2]) * inv_scale,
+    ];
+    let b_norm = [
+        (v1[0] - v3[0]) * inv_scale,
+        (v1[1] - v3[1]) * inv_scale,
+        (v1[2] - v3[2]) * inv_scale,
+    ];
+    let c_norm = [
+        (v2[0] - v3[0]) * inv_scale,
+        (v2[1] - v3[1]) * inv_scale,
+        (v2[2] - v3[2]) * inv_scale,
+    ];
+
+    let det = dot(a_norm, cross(b_norm, c_norm));
+    if det.abs() > 1.0e-12 {
+        let w0 = dot(p_norm, cross(b_norm, c_norm)) / det;
+        let w1 = dot(a_norm, cross(p_norm, c_norm)) / det;
+        let w2 = dot(a_norm, cross(b_norm, p_norm)) / det;
         let w3 = 1.0 - w0 - w1 - w2;
-        if w0 >= -1e-12 && w1 >= -1e-12 && w2 >= -1e-12 && w3 >= -1e-12 {
+        if w0 >= -1.0e-11 && w1 >= -1.0e-11 && w2 >= -1.0e-11 && w3 >= -1.0e-11 {
             return 0.0;
         }
     }
+
     let d0 = point_triangle_distance_sq(p, v0, v1, v2);
     let d1 = point_triangle_distance_sq(p, v0, v1, v3);
     let d2 = point_triangle_distance_sq(p, v0, v2, v3);
     let d3 = point_triangle_distance_sq(p, v1, v2, v3);
-    d0.min(d1).min(d2).min(d3).sqrt()
+    d0.min(d1).min(d2).min(d3).max(0.0).sqrt()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -447,7 +471,7 @@ fn interpolate_prism6(
     }
 }
 
-fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
+pub(crate) fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
     let mut reference = [1.0 / 3.0, 1.0 / 3.0, 0.5];
     let scale = nodes
         .iter()
@@ -465,6 +489,21 @@ fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
                 .map(|(local, weight)| weight * nodes[local][axis])
                 .sum::<f64>()
         });
+
+        let jacobian = std::array::from_fn::<_, 3, _>(|column| {
+            [0, 1, 2].map(|axis| {
+                derivatives
+                    .iter()
+                    .enumerate()
+                    .map(|(local, derivative)| derivative[column] * nodes[local][axis])
+                    .sum::<f64>()
+            })
+        });
+        let determinant = dot(jacobian[0], cross(jacobian[1], jacobian[2]));
+        if !determinant.is_finite() || determinant.abs() <= scale.powi(3) * 1.0e-15 {
+            return None;
+        }
+
         let residual = sub(mapped, point);
         if dot(residual, residual).sqrt() <= scale * 1.0e-12 {
             if reference[0] >= -1.0e-11
@@ -477,19 +516,7 @@ fn prism6_invert(nodes: &[[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
             }
             return None;
         }
-        let jacobian = std::array::from_fn::<_, 3, _>(|column| {
-            [0, 1, 2].map(|axis| {
-                derivatives
-                    .iter()
-                    .enumerate()
-                    .map(|(local, derivative)| derivative[column] * nodes[local][axis])
-                    .sum::<f64>()
-            })
-        });
-        let determinant = dot(jacobian[0], cross(jacobian[1], jacobian[2]));
-        if determinant.abs() <= scale.powi(3) * 1.0e-15 {
-            return None;
-        }
+
         let delta = [
             dot(residual, cross(jacobian[1], jacobian[2])) / determinant,
             dot(jacobian[0], cross(residual, jacobian[2])) / determinant,

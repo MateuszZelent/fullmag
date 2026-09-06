@@ -241,6 +241,12 @@ impl FdmPlanarField {
             .as_ref()
             .is_none_or(|membership| membership[cell])
     }
+
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.values.capacity() * std::mem::size_of::<f64>()
+            + self.membership_mask.as_ref().map_or(0, |m| m.capacity() * std::mem::size_of::<bool>())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -360,6 +366,14 @@ impl FemPlanarField {
         &self.values
     }
 
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.nodes.capacity() * std::mem::size_of::<[f64; 3]>()
+            + self.elements.capacity() * std::mem::size_of::<FemPlanarElement>()
+            + self.element_markers.capacity() * std::mem::size_of::<u32>()
+            + self.values.capacity() * std::mem::size_of::<f64>()
+    }
+
     #[cfg(test)]
     pub(crate) fn refine_uniform_p1(&self) -> Self {
         assert!(
@@ -439,10 +453,8 @@ impl PlanarSamplingEngine {
     ) -> Result<PlanarSampleResult, ApiError> {
         request.validate()?;
         let mut result = crate::planar_sampling::fem::sample(field, request)?;
-        result.overlay = Some(crate::planar_sampling::fem::build_overlay(
-            field,
-            &crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&request.frame)?,
-        ));
+        let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&request.frame)?;
+        result.overlay = Some(crate::planar_sampling::fem::build_overlay(field, &frame));
         apply_component(&mut result, request)?;
         Ok(result)
     }
@@ -506,6 +518,14 @@ fn apply_component(
                 if *occupancy == Occupancy::Empty {
                     return f64::NAN;
                 }
+                if !vector[0].is_finite() || !vector[1].is_finite() || !vector[2].is_finite() {
+                    if request.component == PlanarComponent::Orientation {
+                        *occupancy = Occupancy::UndefinedOrientation;
+                    } else {
+                        *occupancy = Occupancy::Empty;
+                    }
+                    return f64::NAN;
+                }
                 match request.component {
                     PlanarComponent::Scalar => unreachable!(),
                     PlanarComponent::Magnitude => dot(*vector, *vector).sqrt(),
@@ -528,7 +548,7 @@ fn apply_component(
                         let u = dot(*vector, request.frame.u_axis);
                         let v = dot(*vector, request.frame.v_axis);
                         let in_plane_norm = (u * u + v * v).sqrt();
-                        if in_plane_norm <= orientation_epsilon {
+                        if !in_plane_norm.is_finite() || in_plane_norm <= orientation_epsilon {
                             *occupancy = Occupancy::UndefinedOrientation;
                             f64::NAN
                         } else {

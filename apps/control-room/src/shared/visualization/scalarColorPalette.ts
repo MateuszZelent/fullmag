@@ -1,17 +1,21 @@
 export type ScalarColorPalette =
   | "coolwarm"
+  | "grayscale"
   | "inferno"
   | "jet"
   | "magma"
+  | "twilight"
   | "viridis";
 
 type Rgb = [number, number, number];
 
 const COLOR_PALETTES = new Set<ScalarColorPalette>([
   "coolwarm",
+  "grayscale",
   "inferno",
   "jet",
   "magma",
+  "twilight",
   "viridis",
 ]);
 
@@ -20,6 +24,10 @@ const PALETTE_STOPS: Record<ScalarColorPalette, Rgb[]> = {
     [0x3b / 255, 0x4c / 255, 0xc0 / 255],
     [0xdd / 255, 0xdd / 255, 0xdd / 255],
     [0xb4 / 255, 0x04 / 255, 0x26 / 255],
+  ],
+  grayscale: [
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
   ],
   inferno: [
     [0x00 / 255, 0x00 / 255, 0x04 / 255],
@@ -41,6 +49,13 @@ const PALETTE_STOPS: Record<ScalarColorPalette, Rgb[]> = {
     [0x8c / 255, 0x29 / 255, 0x80 / 255],
     [0xde / 255, 0x49 / 255, 0x68 / 255],
     [0xfc / 255, 0xfd / 255, 0xbf / 255],
+  ],
+  twilight: [
+    [0.184, 0.079, 0.213],
+    [0.384, 0.461, 0.731],
+    [0.886, 0.85, 0.886],
+    [0.698, 0.338, 0.322],
+    [0.184, 0.079, 0.213],
   ],
   viridis: [
     [0x44 / 255, 0x01 / 255, 0x54 / 255],

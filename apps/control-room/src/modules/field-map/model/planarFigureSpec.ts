@@ -62,7 +62,7 @@ export interface PlanarExportManifest {
     fieldRevision?: string;
     sampleIdentity: string;
   };
-  samplerVersion: "fullmag-planar-sampling.v2";
+  samplerVersion: string;
   schemaVersion: "fullmag.planar-figure-manifest.v1";
 }
 
@@ -112,8 +112,12 @@ export function createPlanarFigureSpec(
 
 export function buildPlanarExportManifest(
   spec: PlanarFigureSpec,
-  exportedAt: string = new Date().toISOString(),
+  options?: string | {
+    exportedAt?: string;
+    samplerVersion?: string;
+  },
 ): PlanarExportManifest {
+  const opts = typeof options === "string" ? { exportedAt: options } : (options ?? {});
   return {
     datasetSpec: {
       component: spec.component,
@@ -126,13 +130,13 @@ export function buildPlanarExportManifest(
         display: spec.displayUnit,
       },
     },
-    exportedAt,
+    exportedAt: opts.exportedAt ?? new Date().toISOString(),
     figureSpec: spec,
     revisions: {
       fieldRevision: spec.fieldRevision,
       sampleIdentity: spec.sampleIdentity,
     },
-    samplerVersion: "fullmag-planar-sampling.v2",
+    samplerVersion: opts.samplerVersion ?? "fullmag-planar-sampling.v2",
     schemaVersion: "fullmag.planar-figure-manifest.v1",
   };
 }
@@ -164,6 +168,8 @@ export function deserializePlanarFigureSpec(json: string): PlanarFigureSpec {
     spec.resolution.length !== 2 ||
     !Number.isFinite(spec.resolution[0]) ||
     !Number.isFinite(spec.resolution[1]) ||
+    !Number.isInteger(spec.resolution[0]) ||
+    !Number.isInteger(spec.resolution[1]) ||
     spec.resolution[0]! <= 0 ||
     spec.resolution[1]! <= 0
   ) {
@@ -172,7 +178,9 @@ export function deserializePlanarFigureSpec(json: string): PlanarFigureSpec {
   if (
     !Array.isArray(spec.meshBounds) ||
     spec.meshBounds.length !== 4 ||
-    !spec.meshBounds.every(Number.isFinite)
+    !spec.meshBounds.every(Number.isFinite) ||
+    spec.meshBounds[0]! >= spec.meshBounds[1]! ||
+    spec.meshBounds[2]! >= spec.meshBounds[3]!
   ) {
     throw new Error("Invalid PlanarFigureSpec: meshBounds must be [uMin, uMax, vMin, vMax] numbers");
   }
@@ -180,9 +188,34 @@ export function deserializePlanarFigureSpec(json: string): PlanarFigureSpec {
     !spec.range ||
     typeof spec.range !== "object" ||
     !Number.isFinite(spec.range.min) ||
-    !Number.isFinite(spec.range.max)
+    !Number.isFinite(spec.range.max) ||
+    spec.range.min > spec.range.max
   ) {
     throw new Error("Invalid PlanarFigureSpec: invalid range object");
+  }
+  if (typeof spec.sampleIdentity !== "string" || !spec.sampleIdentity.trim()) {
+    throw new Error("Invalid PlanarFigureSpec: missing or invalid sampleIdentity");
+  }
+  if (
+    typeof spec.width !== "number" ||
+    !Number.isFinite(spec.width) ||
+    spec.width <= 0
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: invalid width");
+  }
+  if (
+    typeof spec.height !== "number" ||
+    !Number.isFinite(spec.height) ||
+    spec.height <= 0
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: invalid height");
+  }
+  if (
+    typeof spec.dpi !== "number" ||
+    !Number.isFinite(spec.dpi) ||
+    spec.dpi <= 0
+  ) {
+    throw new Error("Invalid PlanarFigureSpec: invalid dpi");
   }
   if (
     !spec.camera ||

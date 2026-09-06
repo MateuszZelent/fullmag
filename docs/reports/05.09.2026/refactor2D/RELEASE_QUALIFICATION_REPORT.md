@@ -19,9 +19,9 @@ Zrealizowano pełną, produkcyjną remediację wszystkich ustaleń reaudytu 34de
 Wyeliminowano wszystkie błędy numeryczne skali nanometrowej, rozbieżności kwadratur elementów, desynchronizację warstw GPU/worker, błędy cyklu życia WebGL, przesunięcia konturów oraz niepoprawne wiązania tokenów i komponentów.
 
 ### Wyniki weryfikacji testowej:
-- **Rust Backend (`fullmag-api::planar_sampling`):** 64/64 testów jednostkowych i orakli zielonych (`cargo test -p fullmag-api -- planar_sampling`).
-- **Kontrprzykłady analityczne C01–C10:** 10/10 potwierdzonych i trwale zabezpieczonych w `counterexamples_tests.rs`.
-- **Frontend Vitest (`apps/control-room` field-map):** 29 zestawów testowych, 194/194 testów zakończonych sukcesem (`pnpm --filter @fullmag/control-room test src/modules/field-map`).
+- **Rust Backend (`fullmag-api::planar_sampling`):** 68/68 testów jednostkowych i orakli zielonych (`cargo test -p fullmag-api -- planar_sampling`), w tym kontrprzykłady C01–C10 oraz orakle z reaudytu Round 2 (PY07, PY10, PY13, PY15).
+- **Kontrprzykłady analityczne i orakle:** 14/14 potwierdzonych i trwale zabezpieczonych w `counterexamples_tests.rs`.
+- **Frontend Vitest (`apps/control-room` field-map):** 29 zestawów testowych, 199/199 testów zakończonych sukcesem (`pnpm --filter @fullmag/control-room test src/modules/field-map`), w tym dekodowanie binarne FMVP, walidacja tożsamości buforów i serializacja wersji samplera.
 - **Frontend Vitest (`apps/control-room` workspace & inspector):** 55/55 testów zakończonych sukcesem (`crossSectionWorkspace.test.ts`, `PlanarVisualizationSection.test.tsx`).
 - **Python DSL & ProblemIR Contract:** 47/47 testów zielonych (`packages/fullmag-py/tests/test_planar_monitor.py` oraz `scripts/test_validate_planar_monitor_sampling.py`).
 - **TypeScript Typecheck:** 0 błędów w całym `@fullmag/control-room` (`tsc --noEmit`).
@@ -138,8 +138,8 @@ Wyeliminowano wszystkie błędy numeryczne skali nanometrowej, rozbieżności kw
 
 ## 5. Release Gate Checklist
 
-- [x] **Backend Rust:** 64/64 testów `fullmag-api::planar_sampling` PASS (w tym C01–C10, skala nanometrowa, Prism6, FDM, moments).
-- [x] **Frontend FieldMap:** 194/194 testów `apps/control-room/src/modules/field-map` PASS.
+- [x] **Backend Rust:** 68/68 testów `fullmag-api::planar_sampling` PASS (w tym C01–C10, PY07, PY10, PY13, PY15, skala nanometrowa, Prism6, FDM, moments).
+- [x] **Frontend FieldMap:** 199/199 testów `apps/control-room/src/modules/field-map` PASS.
 - [x] **Frontend Workspace & Inspector:** 55/55 testów `crossSectionWorkspace.test.ts` oraz `PlanarVisualizationSection.test.tsx` PASS.
 - [x] **Python Contract:** 47/47 testów `test_planar_monitor.py` oraz `test_validate_planar_monitor_sampling.py` PASS.
 - [x] **TypeScript Typecheck:** 0 błędów w całym `@fullmag/control-room` (`node scripts/typecheck-control-room.mjs`).

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use super::frame::ResolvedFrame;
-use super::{FemPlanarField, PlanarMeshOverlay, PlanarOverlayPolygon, PlanarOverlaySegment, PlanarOverlaySegmentKind};
+use super::{
+    FemPlanarElement, FemPlanarField, PlanarMeshOverlay, PlanarOverlayPolygon, PlanarOverlaySegment,
+    PlanarOverlaySegmentKind,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CutVertex {
@@ -107,13 +110,14 @@ pub(super) fn build_cut_geometry(
                 if local_idx < 6 {
                     weights[local_idx] = 1.0;
                 }
+                let ref_coord = element_node_ref_coord(element, local_idx);
                 push_vertex_point(
                     &mut polygon_points,
                     [proj[0], proj[1]],
                     nodes[local_idx],
                     [element.nodes()[local_idx], element.nodes()[local_idx]],
                     weights,
-                    [0.0; 3],
+                    ref_coord,
                     plane_eps,
                 );
             }
@@ -147,13 +151,20 @@ pub(super) fn build_cut_geometry(
                 weights[a] = 1.0 - t;
                 weights[b] = t;
             }
+            let ref_a = element_node_ref_coord(element, a);
+            let ref_b = element_node_ref_coord(element, b);
+            let ref_coord = [
+                ref_a[0] + t * (ref_b[0] - ref_a[0]),
+                ref_a[1] + t * (ref_b[1] - ref_a[1]),
+                ref_a[2] + t * (ref_b[2] - ref_a[2]),
+            ];
             push_vertex_point(
                 &mut polygon_points,
                 uv,
                 world,
                 [element.nodes()[a], element.nodes()[b]],
                 weights,
-                [0.0; 3],
+                ref_coord,
                 plane_eps,
             );
         }
@@ -181,7 +192,7 @@ pub(super) fn build_cut_geometry(
 
         // Clip polygon to viewport extent if specified
         let final_points = if let Some(bounds) = clip_extent {
-            clip_polygon_to_bounds(&polygon_points, bounds)
+            clip_polygon_to_bounds(&polygon_points, bounds, element, field)
         } else {
             polygon_points
         };
@@ -336,6 +347,8 @@ fn polygon_area(points: &[IntersectionVertex]) -> f64 {
 fn clip_polygon_to_bounds(
     points: &[IntersectionVertex],
     bounds: [f64; 4],
+    element: &FemPlanarElement,
+    field: &FemPlanarField,
 ) -> Vec<IntersectionVertex> {
     let mut current = points.to_vec();
     // 4 edges of bounds: u >= min, u <= max, v >= min, v <= max
@@ -375,12 +388,37 @@ fn clip_polygon_to_bounds(
                     for k in 0..6 {
                         weights[k] = a.weights[k] + t * (b.weights[k] - a.weights[k]);
                     }
+                    let mut ref_coord = [
+                        a.ref_coord[0] + t * (b.ref_coord[0] - a.ref_coord[0]),
+                        a.ref_coord[1] + t * (b.ref_coord[1] - a.ref_coord[1]),
+                        a.ref_coord[2] + t * (b.ref_coord[2] - a.ref_coord[2]),
+                    ];
+                    if let FemPlanarElement::Prism6(prism_nodes_idx) = element {
+                        let prism_nodes: [[f64; 3]; 6] = [
+                            field.nodes()[prism_nodes_idx[0] as usize],
+                            field.nodes()[prism_nodes_idx[1] as usize],
+                            field.nodes()[prism_nodes_idx[2] as usize],
+                            field.nodes()[prism_nodes_idx[3] as usize],
+                            field.nodes()[prism_nodes_idx[4] as usize],
+                            field.nodes()[prism_nodes_idx[5] as usize],
+                        ];
+                        if let Some(inv_weights) =
+                            crate::planar_sampling::element_evaluator::prism6_invert(&prism_nodes, world)
+                        {
+                            weights = inv_weights;
+                            ref_coord = [
+                                weights[1] + weights[4],
+                                weights[2] + weights[5],
+                                weights[3] + weights[4] + weights[5],
+                            ];
+                        }
+                    }
                     next.push(IntersectionVertex {
                         uv,
                         world,
                         edge_nodes: [a.edge_nodes[0], b.edge_nodes[1]],
                         weights,
-                        ref_coord: [0.0; 3],
+                        ref_coord,
                     });
                 }
             }
@@ -388,6 +426,27 @@ fn clip_polygon_to_bounds(
         current = next;
     }
     current
+}
+
+fn element_node_ref_coord(element: &FemPlanarElement, local_idx: usize) -> [f64; 3] {
+    match element {
+        FemPlanarElement::Tet4(_) => match local_idx {
+            0 => [0.0, 0.0, 0.0],
+            1 => [1.0, 0.0, 0.0],
+            2 => [0.0, 1.0, 0.0],
+            3 => [0.0, 0.0, 1.0],
+            _ => [0.0, 0.0, 0.0],
+        },
+        FemPlanarElement::Prism6(_) => match local_idx {
+            0 => [0.0, 0.0, 0.0],
+            1 => [1.0, 0.0, 0.0],
+            2 => [0.0, 1.0, 0.0],
+            3 => [0.0, 0.0, 1.0],
+            4 => [1.0, 0.0, 1.0],
+            5 => [0.0, 1.0, 1.0],
+            _ => [0.0, 0.0, 0.0],
+        },
+    }
 }
 
 fn selected_face_counts(field: &FemPlanarField) -> HashMap<Vec<u32>, u32> {
@@ -446,3 +505,41 @@ fn classify_segment(
         None => PlanarOverlaySegmentKind::TargetBoundary,
     }
 }
+
+impl CutGeometry {
+    pub(crate) fn to_planar_mesh_overlay(&self, frame: &ResolvedFrame) -> PlanarMeshOverlay {
+        PlanarMeshOverlay {
+            frame_origin_m: frame.origin,
+            frame_u_axis: frame.u,
+            frame_v_axis: frame.v,
+            frame_normal: frame.normal,
+            bounds_uv_m: self.bounds_uv,
+            polygons: self
+                .polygons
+                .iter()
+                .map(|p| PlanarOverlayPolygon {
+                    vertices_uv_m: p.vertices_uv_m.clone(),
+                    parent_element_id: p.parent_element_id,
+                })
+                .collect(),
+            segments: self
+                .segments
+                .iter()
+                .map(|s| PlanarOverlaySegment {
+                    a_uv_m: s.a_uv_m,
+                    b_uv_m: s.b_uv_m,
+                    kind: s.kind,
+                })
+                .collect(),
+        }
+    }
+}
+
+pub(crate) fn build_planar_cut_mesh_overlay(
+    field: &FemPlanarField,
+    frame: &ResolvedFrame,
+) -> PlanarMeshOverlay {
+    let geom = build_cut_geometry(field, frame, Some(frame.bounds));
+    geom.to_planar_mesh_overlay(frame)
+}
+

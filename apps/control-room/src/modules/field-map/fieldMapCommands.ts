@@ -13,7 +13,8 @@ import {
   type PlanarMonitorCreateIntent,
 } from "@/kernel/workspace/crossSectionWorkspace";
 
-import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import { downloadPlanarJson, downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+import { buildPlanarExportManifest, type PlanarFigureSpec } from "./model/planarFigureSpec";
 
 const commandTitles = {
   "field-map.export-data": "Export 2D Data",
@@ -336,6 +337,115 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           unit: planar.display_unit ?? meta.canonical_unit,
         }),
       );
+    }
+    if (id === "field-map.export-data") {
+      if (!context.api) {
+        return { message: "Planar field API is unavailable.", status: "failed" };
+      }
+      const visualization = await context.api.visualization.state();
+      const planar = visualization.planar;
+      if (!planar) {
+        return {
+          message: "The server did not publish a planar visualization profile.",
+          status: "failed",
+        };
+      }
+      const source =
+        typeof input?.monitorId === "string"
+          ? { kind: "monitor" as const, monitorId: input.monitorId }
+          : planarSourceFromState(visualization);
+      if (!source) {
+        return { message: "Planar source is unavailable.", status: "failed" };
+      }
+      const query = {
+        component: planar.component,
+        include_mesh: planar.layers.mesh,
+        quality: "export",
+        resolution_x: planar.resolution.width,
+        resolution_y: planar.resolution.height,
+        scope_id:
+          planar.view_scope.kind === "mesh_part"
+            ? planar.view_scope.scope_id
+            : undefined,
+        scope_kind: planar.view_scope.kind,
+        vector_budget: planar.resolution.vector_budget,
+      };
+      const [meta, monitor] = await Promise.all([
+        context.api.data.fields.planar.meta(
+          planar.quantity_id,
+          source,
+          query,
+        ),
+        source.kind === "monitor"
+          ? context.api.model.planarMonitors.get(source.monitorId)
+          : Promise.resolve(null),
+      ]);
+      const spec: PlanarFigureSpec = {
+        backgroundPolicy: "solid",
+        camera: {
+          panU: planar.interaction.pan_u_m,
+          panV: planar.interaction.pan_v_m,
+          zoom: planar.interaction.zoom,
+        },
+        canonicalUnit: meta.canonical_unit,
+        colormap: planar.colormap,
+        component: planar.component,
+        displayUnit: planar.display_unit ?? null,
+        dpi: 300,
+        fieldRevision: meta.field_revision,
+        height: planar.resolution.height,
+        layers: { ...planar.layers },
+        meshBounds: [
+          meta.frame.bounds_uv_m[0] ?? 0,
+          meta.frame.bounds_uv_m[1] ?? 0,
+          meta.frame.bounds_uv_m[2] ?? 0,
+          meta.frame.bounds_uv_m[3] ?? 0,
+        ],
+        pointStyle: {
+          color: planar.point_style.color,
+          opacity: planar.point_style.opacity,
+          size: planar.point_style.size,
+        },
+        quantityId: planar.quantity_id,
+        range: {
+          max: planar.range?.max ?? 0,
+          min: planar.range?.min ?? 0,
+          mode: planar.range?.mode ?? "auto",
+        },
+        rasterOpacity: planar.raster_opacity ?? 1,
+        resolution: [planar.resolution.width, planar.resolution.height],
+        sampleIdentity: meta.sample_token,
+        vectorStyle: {
+          color: planar.vector_style.monochrome_color,
+          colorMode: planar.vector_style.color_mode,
+          lengthMode: planar.vector_style.length_mode,
+          opacity: planar.vector_style.opacity,
+          thickness: planar.vector_style.thickness,
+        },
+        width: planar.resolution.width,
+        wireframeStyle: {
+          color: planar.wireframe_style.color,
+          opacity: planar.wireframe_style.opacity,
+        },
+      };
+      const manifest = buildPlanarExportManifest(spec, {
+        samplerVersion: meta.sampler_version ?? "planar_sampling_v1",
+      });
+      const filenameBase = planarExportFilename({
+        fieldRevision: meta.field_revision,
+        monitorName:
+          source.kind === "monitor"
+            ? monitor?.monitor.name ?? source.monitorId
+            : undefined,
+        sourceLabel:
+          source.kind === "default"
+            ? defaultPlanarExportLabel(planar, meta.frame.origin_m)
+            : undefined,
+        quantityId: planar.quantity_id,
+        unit: planar.display_unit ?? meta.canonical_unit,
+      }).replace(/\.png$/, "");
+      downloadPlanarJson(manifest, `${filenameBase}_manifest.json`);
+      return { status: "completed" };
     }
     if (
       id === "planar-monitor.delete" ||

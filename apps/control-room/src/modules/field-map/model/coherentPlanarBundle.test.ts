@@ -64,12 +64,15 @@ describe("coherentPlanarBundle", () => {
     },
   };
 
-  it("validates successfully when mandatory scalar and mask match resolution", () => {
+  it("validates successfully when mandatory scalar and mask match resolution and origins match", () => {
     // 2x2 = 4 elements
     const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
     const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
 
-    const res = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer);
+    const res = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer, null, {
+      scalarToken: mockMeta.sample_token,
+      maskToken: mockMeta.sample_token,
+    });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.bundle.isScientificReady).toBe(true);
@@ -77,6 +80,17 @@ describe("coherentPlanarBundle", () => {
       expect(res.bundle.resolution).toEqual([2, 2]);
       expect(res.bundle.scalarData.length).toBe(4);
       expect(res.bundle.maskData.length).toBe(4);
+    }
+  });
+
+  it("marks isScientificReady as false when buffer origins are omitted (TS04)", () => {
+    const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+
+    const res = validateCoherentPlanarBundle(mockMeta, scalarBuffer, maskBuffer);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.bundle.isScientificReady).toBe(false);
     }
   });
 
@@ -143,6 +157,38 @@ describe("coherentPlanarBundle", () => {
     const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
     const res = validateCoherentPlanarBundle(
       { ...mockMeta, frame: { ...mockMeta.frame, bounds_uv_m: [0, 1] as unknown as [number, number, number, number] } },
+      scalarBuffer,
+      maskBuffer,
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe("invalid_bounds");
+    }
+  });
+
+  it("rejects non-integer fractional resolution (TS06)", () => {
+    const res = validateCoherentPlanarBundle(
+      { ...mockMeta, resolution: [2.5, 2] },
+      new ArrayBuffer(0),
+      new ArrayBuffer(0),
+    );
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toContain("invalid_resolution");
+    }
+  });
+
+  it("rejects non-strictly-increasing reversed bounds (TS05)", () => {
+    const scalarBuffer = new Float64Array([1, 2, 3, 4]).buffer;
+    const maskBuffer = new Uint8Array([1, 1, 1, 1]).buffer;
+    const res = validateCoherentPlanarBundle(
+      {
+        ...mockMeta,
+        frame: {
+          ...mockMeta.frame,
+          bounds_uv_m: [1, 0, 0, 1], // reversed u min > max
+        },
+      },
       scalarBuffer,
       maskBuffer,
     );

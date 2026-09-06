@@ -429,6 +429,8 @@ fn sample_volume(
         include_air_as_zero,
         "fdm_cell_volume_weighted",
         thickness.map(|value| pixel_area * value),
+        0,
+        1,
     )
 }
 
@@ -441,6 +443,8 @@ pub(super) fn finish_reduction_dual(
     include_air_as_zero: bool,
     method: &'static str,
     full_measure: Option<f64>,
+    basis_order: u8,
+    integration_order: u8,
 ) -> Result<PlanarSampleResult, ApiError> {
     let count = scalar_accumulators.len();
     let mut occupancy = Vec::with_capacity(count);
@@ -469,9 +473,12 @@ pub(super) fn finish_reduction_dual(
         for (i, accumulator) in scalar_accumulators.iter().enumerate() {
             occupied_measure += accumulator.weight();
             let v = v_vals[i];
-            if v[0].is_nan() || accumulator.weight() <= 0.0 {
+            if accumulator.weight() <= 0.0 {
                 occupancy.push(Occupancy::Empty);
                 scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
+            } else if !v[0].is_finite() || !v[1].is_finite() || !v[2].is_finite() {
+                occupancy.push(Occupancy::UndefinedOrientation);
+                scalar_values.push(f64::NAN);
             } else {
                 let u = v[0] * request.frame.u_axis[0]
                     + v[1] * request.frame.u_axis[1]
@@ -480,7 +487,7 @@ pub(super) fn finish_reduction_dual(
                     + v[1] * request.frame.v_axis[1]
                     + v[2] * request.frame.v_axis[2];
                 let in_plane_norm = (u * u + v_proj * v_proj).sqrt();
-                if in_plane_norm <= orientation_epsilon {
+                if !in_plane_norm.is_finite() || in_plane_norm <= orientation_epsilon {
                     occupancy.push(Occupancy::UndefinedOrientation);
                     scalar_values.push(f64::NAN);
                 } else {
@@ -504,9 +511,14 @@ pub(super) fn finish_reduction_dual(
             match accumulator.finish(reduction, pixel_area) {
                 Some(value) => {
                     let val = value[0];
-                    if request.component == PlanarComponent::Orientation && val.is_nan() {
-                        occupancy.push(Occupancy::UndefinedOrientation);
-                        scalar_values.push(f64::NAN);
+                    if !val.is_finite() {
+                        if request.component == PlanarComponent::Orientation {
+                            occupancy.push(Occupancy::UndefinedOrientation);
+                            scalar_values.push(f64::NAN);
+                        } else {
+                            occupancy.push(Occupancy::Empty);
+                            scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
+                        }
                     } else {
                         occupancy.push(
                             if full_measure
@@ -529,7 +541,16 @@ pub(super) fn finish_reduction_dual(
     }
 
     Ok(PlanarSampleResult {
-        meta: provenance::meta(request, method, &occupancy, occupied_measure, 0, 0, 0, 1),
+        meta: provenance::meta(
+            request,
+            method,
+            &occupancy,
+            occupied_measure,
+            0,
+            0,
+            basis_order,
+            integration_order,
+        ),
         scalar_values,
         vector_values,
         source_entity_ids: vec![None; count],

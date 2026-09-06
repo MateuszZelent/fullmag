@@ -12,19 +12,27 @@ export function localProbe(
   values: ArrayLike<number>,
   mask?: ArrayLike<number>,
 ) {
-  const x = Math.max(
-    0,
-    Math.min(
-      resolution[0] - 1,
-      Math.floor(((u - bounds[0]) / (bounds[1] - bounds[0])) * resolution[0]),
-    ),
+  if (
+    !Number.isFinite(u) ||
+    !Number.isFinite(v) ||
+    u < bounds[0] ||
+    u > bounds[1] ||
+    v < bounds[2] ||
+    v > bounds[3]
+  ) {
+    return {
+      index: -1,
+      occupancy: "outside_extent",
+      value: null,
+    };
+  }
+  const x = Math.min(
+    resolution[0] - 1,
+    Math.floor(((u - bounds[0]) / (bounds[1] - bounds[0])) * resolution[0]),
   );
-  const y = Math.max(
-    0,
-    Math.min(
-      resolution[1] - 1,
-      Math.floor(((v - bounds[2]) / (bounds[3] - bounds[2])) * resolution[1]),
-    ),
+  const y = Math.min(
+    resolution[1] - 1,
+    Math.floor(((v - bounds[2]) / (bounds[3] - bounds[2])) * resolution[1]),
   );
   const index = y * resolution[0] + x;
   const occupancyCode = mask?.[index];

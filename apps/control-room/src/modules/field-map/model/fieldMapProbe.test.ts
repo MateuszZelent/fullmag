@@ -26,4 +26,17 @@ describe("field-map probes", () => {
       }),
     ).toEqual([10, 22, 33]);
   });
+
+  it("returns outside_extent and null value when probe coordinate is outside bounds", () => {
+    expect(localProbe(-0.1, 0.5, [0, 1, 0, 1], [2, 2], [1, 2, 3, 4])).toEqual({
+      index: -1,
+      occupancy: "outside_extent",
+      value: null,
+    });
+    expect(localProbe(1.5, 0.5, [0, 1, 0, 1], [2, 2], [1, 2, 3, 4])).toEqual({
+      index: -1,
+      occupancy: "outside_extent",
+      value: null,
+    });
+  });
 });

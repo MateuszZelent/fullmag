@@ -476,14 +476,17 @@ async fn build_planar_field_from_source(
 
         match &source {
             PlanarDataSource::Default => {
-                if cached.source.source_kind != "default_slice" {
+                if cached.source.source_kind != "default"
+                    && cached.source.source_kind != "default_slice"
+                {
                     return Err(ApiError::bad_request(
-                        "sample_token_binding_mismatch: source is not default_slice",
+                        "sample_token_binding_mismatch: source is not default",
                     ));
                 }
             }
             PlanarDataSource::Monitor(monitor_id) => {
-                if cached.source.source_kind != "authored_monitor"
+                if (cached.source.source_kind != "monitor"
+                    && cached.source.source_kind != "authored_monitor")
                     || cached.source.source_id.as_deref() != Some(monitor_id.as_str())
                 {
                     return Err(ApiError::bad_request(
@@ -516,6 +519,42 @@ async fn build_planar_field_from_source(
             ));
         }
 
+        if let Some(req_quality) = query.quality.as_deref() {
+            if cached.quality != req_quality {
+                return Err(ApiError::bad_request(
+                    "sample_token_binding_mismatch: quality does not match sample token",
+                ));
+            }
+        }
+        if let Some(exp_stage_id) = query.stage_id.as_deref() {
+            if cached.stage_id.as_deref() != Some(exp_stage_id) {
+                return Err(ApiError::bad_request(
+                    "sample_token_binding_mismatch: stage_id does not match sample token",
+                ));
+            }
+        }
+        if let Some(exp_snapshot_id) = query.snapshot_id.as_deref() {
+            if cached.snapshot_id.as_deref() != Some(exp_snapshot_id) {
+                return Err(ApiError::bad_request(
+                    "sample_token_binding_mismatch: snapshot_id does not match sample token",
+                ));
+            }
+        }
+
+        if let Some(exp_source_rev) = query.expected_source_revision {
+            if cached.source.source_revision != exp_source_rev {
+                return Err(ApiError::conflict(
+                    "stale_source_revision: source revision does not match expected_source_revision",
+                ));
+            }
+        }
+        if let Some(exp_mon_rev) = query.expected_monitor_revision {
+            if cached.source.source_revision != exp_mon_rev {
+                return Err(ApiError::conflict(
+                    "stale_monitor_revision: monitor revision does not match expected_monitor_revision",
+                ));
+            }
+        }
         if let Some(exp_field_rev) = query.expected_field_revision {
             if cached.field_revision != exp_field_rev {
                 return Err(ApiError::conflict(
@@ -1280,17 +1319,22 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     let base_unit = quantity_unit(&built.quantity_id);
-    let canonical_unit = if built.component == "orientation" {
+    let expr_unit = if built.component == "orientation" {
         "turn".to_string()
     } else if built.component == "magnitude_squared" {
         format!("({base_unit})^2")
     } else {
+        base_unit.to_string()
+    };
+    let canonical_unit = if built.component == "orientation" {
+        expr_unit
+    } else {
         match &built.operator {
             PlanarOperatorIR::DepthProjection { reduction, .. } => match reduction {
-                fullmag_ir::PlanarReductionIR::ThicknessIntegral => format!("{base_unit}*m"),
-                _ => base_unit.to_string(),
+                fullmag_ir::PlanarReductionIR::ThicknessIntegral => format!("{expr_unit}*m"),
+                _ => expr_unit,
             },
-            _ => base_unit.to_string(),
+            _ => expr_unit,
         }
     };
     PlanarFieldMetaResource {

@@ -38,6 +38,7 @@ import {
   resolveFieldMapAuxiliaryDiagnostics,
   surfaceProjectionStatus,
 } from "./model/fieldMapRenderModel";
+import { validateCoherentPlanarBundle } from "./model/coherentPlanarBundle";
 import {
   resolvePlanarAxes,
   resolvePlanarProbeCoordinates,
@@ -244,14 +245,32 @@ function useFieldMapModuleController() {
       },
     });
   }, [visualizationSync]);
+  const scalarBuffer = scalar.data?.data;
+  const coherentBundle = useMemo(() => {
+    if (!meta.data || !scalarBuffer || !mask.data) return null;
+    const result = validateCoherentPlanarBundle(
+      meta.data,
+      scalarBuffer,
+      mask.data,
+      vectors.data ?? null,
+      {
+        scalarToken: meta.data.sample_token,
+        maskToken: meta.data.sample_token,
+        vectorsToken: vectors.data ? meta.data.sample_token : null,
+      },
+    );
+    return result.ok ? result.bundle : null;
+  }, [mask.data, meta.data, scalarBuffer, vectors.data]);
+
   const renderModel = useMemo(() => {
     if (!meta.data || !scalar.data || !frame || !presentationPlanar) return null;
-    const scalarValues = decodeFieldVector(scalar.data.data).values;
+    const bundle = coherentBundle;
+    const scalarValues = bundle ? bundle.scalarData : decodeFieldVector(scalar.data.data).values;
     const vectorValues = vectors.data
-      ? projectPlanarVectors(decodeFieldVector(vectors.data).values, frame)
+      ? projectPlanarVectors(bundle?.vectorsData ?? decodeFieldVector(vectors.data).values, frame)
       : null;
     return buildFieldMapRenderModel({
-      bounds: meta.data.frame.bounds_uv_m as [number, number, number, number],
+      bounds: (bundle?.bounds ?? meta.data.frame.bounds_uv_m) as [number, number, number, number],
       canonicalUnit: meta.data.canonical_unit,
       colormap: presentationPlanar.colormap,
       component: presentationPlanar.component,
@@ -272,7 +291,7 @@ function useFieldMapModuleController() {
         raster: presentationPlanar.layers.raster,
         vectors: presentationPlanar.layers.vectors,
       },
-      mask: mask.data ? new Uint8Array(mask.data) : null,
+      mask: bundle ? bundle.maskData : (mask.data ? new Uint8Array(mask.data) : null),
       meshOverlayDescriptor: {
         available: meta.data.mesh_overlay_descriptor.available,
         boundaryClassification: meta.data.mesh_overlay_descriptor.boundary_classification,
@@ -285,7 +304,7 @@ function useFieldMapModuleController() {
       visible: presentationPlanar.visible,
       wireframeStyle: effectiveWireframeStyle,
       pointStyle: presentationPlanar.point_style,
-      resolution: meta.data.resolution as [number, number],
+      resolution: (bundle?.resolution ?? meta.data.resolution) as [number, number],
       sampleIdentity: scalar.data.etag ?? "",
       scalar: scalarValues,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
@@ -299,7 +318,18 @@ function useFieldMapModuleController() {
       },
       vectors: vectorValues,
     });
-  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, frame, mask.data, meshOverlay.data, meta.data, presentationPlanar, scalar.data, vectors.data]);
+  }, [
+    canonicalPlanar?.resolution.vector_budget,
+    coherentBundle,
+    effectiveWireframeStyle,
+    frame,
+    mask.data,
+    meshOverlay.data,
+    meta.data,
+    presentationPlanar,
+    scalar.data,
+    vectors.data,
+  ]);
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {

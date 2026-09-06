@@ -498,6 +498,8 @@ fn sample_volume(
         include_air_as_zero,
         "fem_moment_volume_quadrature",
         thickness.map(|value| pixel_area * value),
+        1,
+        4,
     )
 }
 
@@ -546,81 +548,9 @@ fn interpolate_element(
 }
 
 fn prism6_weights(nodes: [[f64; 3]; 6], point: [f64; 3]) -> Option<[f64; 6]> {
-    let mut reference = [1.0 / 3.0, 1.0 / 3.0, 0.5];
-    let scale = nodes
-        .iter()
-        .flat_map(|a| nodes.iter().map(move |b| dot(sub(*a, *b), sub(*a, *b))))
-        .fold(0.0_f64, f64::max)
-        .sqrt()
-        .max(f64::MIN_POSITIVE);
-    for _ in 0..16 {
-        let (weights, derivatives) = prism6_shape(reference);
-        let mapped = [0, 1, 2].map(|axis| {
-            weights
-                .iter()
-                .enumerate()
-                .map(|(local, weight)| weight * nodes[local][axis])
-                .sum::<f64>()
-        });
-        let residual = sub(mapped, point);
-        if dot(residual, residual).sqrt() <= scale * 1.0e-12 {
-            if reference[0] >= -1.0e-11
-                && reference[1] >= -1.0e-11
-                && reference[0] + reference[1] <= 1.0 + 1.0e-11
-                && reference[2] >= -1.0e-11
-                && reference[2] <= 1.0 + 1.0e-11
-            {
-                return Some(weights);
-            }
-            return None;
-        }
-        let jacobian = std::array::from_fn::<_, 3, _>(|column| {
-            [0, 1, 2].map(|axis| {
-                derivatives
-                    .iter()
-                    .enumerate()
-                    .map(|(local, derivative)| derivative[column] * nodes[local][axis])
-                    .sum::<f64>()
-            })
-        });
-        let determinant = dot(jacobian[0], cross(jacobian[1], jacobian[2]));
-        if determinant.abs() <= scale.powi(3) * 1.0e-15 {
-            return None;
-        }
-        let delta = [
-            dot(residual, cross(jacobian[1], jacobian[2])) / determinant,
-            dot(jacobian[0], cross(residual, jacobian[2])) / determinant,
-            dot(jacobian[0], cross(jacobian[1], residual)) / determinant,
-        ];
-        for axis in 0..3 {
-            reference[axis] -= delta[axis];
-        }
-    }
-    None
+    super::element_evaluator::prism6_invert(&nodes, point)
 }
 
-fn prism6_shape(reference: [f64; 3]) -> ([f64; 6], [[f64; 3]; 6]) {
-    let [r, s, t] = reference;
-    let l0 = 1.0 - r - s;
-    (
-        [
-            l0 * (1.0 - t),
-            r * (1.0 - t),
-            s * (1.0 - t),
-            l0 * t,
-            r * t,
-            s * t,
-        ],
-        [
-            [-(1.0 - t), -(1.0 - t), -l0],
-            [1.0 - t, 0.0, -r],
-            [0.0, 1.0 - t, -s],
-            [-t, -t, l0],
-            [t, 0.0, r],
-            [0.0, t, s],
-        ],
-    )
-}
 
 fn barycentric(nodes: [[f64; 3]; 4], point: [f64; 3]) -> Option<[f64; 4]> {
     let a = sub(nodes[0], nodes[3]);

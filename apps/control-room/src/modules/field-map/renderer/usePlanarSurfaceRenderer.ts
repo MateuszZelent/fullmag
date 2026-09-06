@@ -212,10 +212,32 @@ export function usePlanarSurfaceRenderer(
               const uSpan = Math.max(1e-15, uMax - uMin);
               const vSpan = Math.max(1e-15, vMax - vMin);
 
+              const du = uSpan / width;
+              const dv = vSpan / height;
+
               const sampleScalar = (_vertIdx: number, u: number, v: number) => {
-                const col = Math.min(width - 1, Math.max(0, Math.round(((u - uMin) / uSpan) * (width - 1))));
-                const row = Math.min(height - 1, Math.max(0, Math.round(((v - vMin) / vSpan) * (height - 1))));
-                return model.scalar[row * width + col] ?? 0;
+                if (width <= 1 || height <= 1) {
+                  return model.scalar[0] ?? 0;
+                }
+                const xCell = (u - uMin) / du - 0.5;
+                const yCell = (v - vMin) / dv - 0.5;
+
+                const c0 = Math.max(0, Math.min(width - 2, Math.floor(xCell)));
+                const c1 = c0 + 1;
+                const r0 = Math.max(0, Math.min(height - 2, Math.floor(yCell)));
+                const r1 = r0 + 1;
+
+                const fx = xCell - c0;
+                const fy = yCell - r0;
+
+                const v00 = model.scalar[r0 * width + c0] ?? 0;
+                const v10 = model.scalar[r0 * width + c1] ?? 0;
+                const v01 = model.scalar[r1 * width + c0] ?? 0;
+                const v11 = model.scalar[r1 * width + c1] ?? 0;
+
+                const v0 = v00 + fx * (v10 - v00);
+                const v1 = v01 + fx * (v11 - v01);
+                return v0 + fy * (v1 - v0);
               };
 
               const { scalarValues, verticesUv } = triangulateCutPolygons(

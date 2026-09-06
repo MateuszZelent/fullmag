@@ -356,8 +356,8 @@ void main() {
     s = length(vVectorValue);
   }
 
-  float span = max(fmScalarMax - fmScalarMin, 1e-12);
-  float t = clamp((s - fmScalarMin) / span, 0.0, 1.0);
+  float diff = fmScalarMax - fmScalarMin;
+  float t = diff <= 0.0 ? 0.5 : clamp((s - fmScalarMin) / diff, 0.0, 1.0);
   vec3 rgb = paletteColor(t, fmPaletteId);
   gl_FragColor = vec4(rgb, fmOpacity);
 }

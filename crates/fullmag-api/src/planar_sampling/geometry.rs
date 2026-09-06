@@ -85,6 +85,7 @@ pub(super) fn integrate_clipped_tetra(
             vec![b, c, d],
         ],
     };
+    let char_scale = compute_char_scale(&polyhedron, &bounds);
     for (axis, limit, keep_greater) in [
         (0, bounds[0], true),
         (0, bounds[1], false),
@@ -93,7 +94,7 @@ pub(super) fn integrate_clipped_tetra(
         (2, bounds[4], true),
         (2, bounds[5], false),
     ] {
-        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater);
+        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater, char_scale);
         if polyhedron.faces.is_empty() {
             return MeasureIntegral {
                 measure: 0.0,
@@ -101,7 +102,7 @@ pub(super) fn integrate_clipped_tetra(
             };
         }
     }
-    integrate_polyhedron(&polyhedron)
+    integrate_polyhedron(&polyhedron, char_scale)
 }
 
 pub(super) fn integrate_clipped_convex_element(
@@ -115,6 +116,7 @@ pub(super) fn integrate_clipped_convex_element(
             .map(|face| face.iter().map(|index| vertices[*index].clone()).collect())
             .collect(),
     };
+    let char_scale = compute_char_scale(&polyhedron, &bounds);
     for (axis, limit, keep_greater) in [
         (0, bounds[0], true),
         (0, bounds[1], false),
@@ -123,7 +125,7 @@ pub(super) fn integrate_clipped_convex_element(
         (2, bounds[4], true),
         (2, bounds[5], false),
     ] {
-        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater);
+        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater, char_scale);
         if polyhedron.faces.is_empty() {
             return MeasureIntegral {
                 measure: 0.0,
@@ -131,7 +133,7 @@ pub(super) fn integrate_clipped_convex_element(
             };
         }
     }
-    integrate_polyhedron(&polyhedron)
+    integrate_polyhedron(&polyhedron, char_scale)
 }
 
 pub(super) fn decompose_clipped_convex_element(
@@ -152,6 +154,7 @@ pub(super) fn decompose_clipped_convex_element(
             .map(|face| face.iter().map(|index| vertices[*index].clone()).collect())
             .collect(),
     };
+    let char_scale = compute_char_scale(&polyhedron, &bounds);
     for (axis, limit, keep_greater) in [
         (0, bounds[0], true),
         (0, bounds[1], false),
@@ -160,18 +163,48 @@ pub(super) fn decompose_clipped_convex_element(
         (2, bounds[4], true),
         (2, bounds[5], false),
     ] {
-        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater);
+        polyhedron = clip_polyhedron(polyhedron, axis, limit, keep_greater, char_scale);
         if polyhedron.faces.is_empty() {
             return Vec::new();
         }
     }
-    decompose_polyhedron(&polyhedron)
+    decompose_polyhedron(&polyhedron, char_scale)
 }
 
-fn decompose_polyhedron(polyhedron: &ConvexPolyhedron) -> Vec<[[f64; 3]; 4]> {
+fn compute_char_scale(polyhedron: &ConvexPolyhedron, bounds: &[f64; 6]) -> f64 {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut count = 0;
+    for vertex in polyhedron.faces.iter().flatten() {
+        count += 1;
+        for axis in 0..3 {
+            min[axis] = min[axis].min(vertex.position[axis]);
+            max[axis] = max[axis].max(vertex.position[axis]);
+        }
+    }
+    let mut scale = if count > 0 {
+        (max[0] - min[0]).max(max[1] - min[1]).max(max[2] - min[2])
+    } else {
+        1.0
+    };
+    if scale <= 0.0 || !scale.is_finite() {
+        scale = 1.0;
+    }
+    for i in 0..3 {
+        let diff = bounds[2 * i + 1] - bounds[2 * i];
+        if diff.is_finite() && diff > 0.0 && diff < scale {
+            scale = diff;
+        }
+    }
+    scale
+}
+
+fn decompose_polyhedron(polyhedron: &ConvexPolyhedron, char_scale: f64) -> Vec<[[f64; 3]; 4]> {
+    let tol_sq = (char_scale * 1.0e-6).powi(2).min(1.0e-24);
+    let min_vol = (char_scale.powi(3) * 1.0e-15).min(1.0e-36);
     let mut unique = Vec::new();
     for vertex in polyhedron.faces.iter().flatten() {
-        push_unique(&mut unique, vertex.clone());
+        push_unique(&mut unique, vertex.clone(), tol_sq);
     }
     if unique.len() < 4 {
         return Vec::new();
@@ -190,7 +223,7 @@ fn decompose_polyhedron(polyhedron: &ConvexPolyhedron) -> Vec<[[f64; 3]; 4]> {
             let b = face[index].position;
             let c = face[index + 1].position;
             let volume = tetra_volume(center, a, b, c);
-            if volume > 1e-36 {
+            if volume > min_vol {
                 tetrahedra.push([center, a, b, c]);
             }
         }
@@ -203,15 +236,18 @@ fn clip_polyhedron(
     axis: usize,
     limit: f64,
     keep_greater: bool,
+    char_scale: f64,
 ) -> ConvexPolyhedron {
     if !limit.is_finite() {
         return polyhedron;
     }
+    let tol_eps = (char_scale * 1.0e-7).min(1.0e-13);
+    let tol_sq = (char_scale * 1.0e-6).powi(2).min(1.0e-24);
     let inside = |vertex: &LinearVertex| {
         if keep_greater {
-            vertex.position[axis] >= limit - 1.0e-13
+            vertex.position[axis] >= limit - tol_eps
         } else {
-            vertex.position[axis] <= limit + 1.0e-13
+            vertex.position[axis] <= limit + tol_eps
         }
     };
     let mut faces = Vec::new();
@@ -237,10 +273,10 @@ fn clip_polyhedron(
                 let t = ((limit - current.position[axis]) / denominator).clamp(0.0, 1.0);
                 let intersection = interpolate(current, next, t);
                 clipped.push(intersection.clone());
-                push_unique(&mut cap, intersection);
+                push_unique(&mut cap, intersection, tol_sq);
             }
         }
-        deduplicate_polygon(&mut clipped);
+        deduplicate_polygon(&mut clipped, tol_sq);
         if clipped.len() >= 3 {
             faces.push(clipped);
         }
@@ -265,20 +301,20 @@ fn interpolate(a: &LinearVertex, b: &LinearVertex, t: f64) -> LinearVertex {
     }
 }
 
-fn push_unique(vertices: &mut Vec<LinearVertex>, candidate: LinearVertex) {
+fn push_unique(vertices: &mut Vec<LinearVertex>, candidate: LinearVertex, tol_sq: f64) {
     if vertices
         .iter()
-        .any(|vertex| distance_sq(vertex.position, candidate.position) <= 1.0e-24)
+        .any(|vertex| distance_sq(vertex.position, candidate.position) <= tol_sq)
     {
         return;
     }
     vertices.push(candidate);
 }
 
-fn deduplicate_polygon(vertices: &mut Vec<LinearVertex>) {
+fn deduplicate_polygon(vertices: &mut Vec<LinearVertex>, tol_sq: f64) {
     let mut unique = Vec::with_capacity(vertices.len());
     for vertex in vertices.drain(..) {
-        push_unique(&mut unique, vertex);
+        push_unique(&mut unique, vertex, tol_sq);
     }
     *vertices = unique;
 }
@@ -305,10 +341,12 @@ fn sort_cap(vertices: &mut [LinearVertex], axis: usize) {
     });
 }
 
-fn integrate_polyhedron(polyhedron: &ConvexPolyhedron) -> MeasureIntegral {
+fn integrate_polyhedron(polyhedron: &ConvexPolyhedron, char_scale: f64) -> MeasureIntegral {
+    let tol_sq = (char_scale * 1.0e-6).powi(2).min(1.0e-24);
+    let min_vol = (char_scale.powi(3) * 1.0e-15).min(1.0e-36);
     let mut unique = Vec::new();
     for vertex in polyhedron.faces.iter().flatten() {
-        push_unique(&mut unique, vertex.clone());
+        push_unique(&mut unique, vertex.clone(), tol_sq);
     }
     if unique.len() < 4 {
         return MeasureIntegral {
@@ -342,7 +380,7 @@ fn integrate_polyhedron(polyhedron: &ConvexPolyhedron) -> MeasureIntegral {
             let b = &face[index];
             let c = &face[index + 1];
             let volume = tetra_volume(center.position, a.position, b.position, c.position);
-            if volume == 0.0 {
+            if volume <= min_vol {
                 continue;
             }
             measure += volume;

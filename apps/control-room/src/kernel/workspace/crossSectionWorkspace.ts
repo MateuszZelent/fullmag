@@ -491,20 +491,25 @@ export function createPlanarMonitorDraft({
   intent,
   visualizationState,
 }: PlanarMonitorDraftCreationOptions = {}): PlanarMonitorDraft {
-  const planarSlice = visualizationState?.planar?.default_slice;
+  const isClip = intent?.source === "clip";
+  const clip = visualizationState?.clip;
+  const planarSlice = isClip ? undefined : visualizationState?.planar?.default_slice;
   const slice = visualizationState?.slice;
-  const source = visualizationState?.clip.enabled
-    ? visualizationState.clip
-    : slice;
-  const preset = intent?.preset ?? (planarSlice ? planarSlice.plane : (source ? PLANE_BY_AXIS[source.axis] : "xy"));
+  const source = isClip ? clip : (clip?.enabled ? clip : slice);
+  const preset = intent?.preset ?? (isClip && clip ? PLANE_BY_AXIS[clip.axis] : (planarSlice ? planarSlice.plane : (source ? PLANE_BY_AXIS[source.axis] : "xy")));
   const axis = crossSectionAxisFromPlane(preset);
   const axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
-  const positionFraction = planarSlice?.position_fraction ?? (source?.position_percent !== undefined ? source.position_percent / 100 : 0.5);
+  const positionFraction = isClip && clip
+    ? clip.position_percent / 100
+    : (planarSlice?.position_fraction ?? (source?.position_percent !== undefined ? source.position_percent / 100 : 0.5));
   const positionM = bounds
     ? bounds.min[axisIndex] + positionFraction * (bounds.max[axisIndex] - bounds.min[axisIndex])
     : 0;
   const frame = planarPresetFrame(preset, positionM, DEFAULT_PLANAR_MONITOR.frame.extent);
-  if (visualizationState?.clip.enabled && visualizationState.clip.flipped && !planarSlice) {
+  const shouldFlip = isClip
+    ? Boolean(clip?.flipped)
+    : Boolean(clip?.enabled && clip.flipped && !planarSlice);
+  if (shouldFlip) {
     frame.normal = frame.normal.map((value) => value === 0 ? 0 : -value) as typeof frame.normal;
     frame.v_axis = frame.v_axis.map((value) => value === 0 ? 0 : -value) as typeof frame.v_axis;
   }

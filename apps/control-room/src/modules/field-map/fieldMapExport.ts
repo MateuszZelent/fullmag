@@ -34,9 +34,11 @@ export function planarExportFilename({
 export function downloadPlanarPng(
   data: ArrayBuffer,
   filename: string,
-  objectUrlApi: ObjectUrlApi = URL,
+  objectUrlApi: ObjectUrlApi = typeof URL !== "undefined" ? URL : { createObjectURL: () => "", revokeObjectURL: () => {} },
   createAnchor: () => DownloadAnchor = () =>
-    document.createElement("a") as DownloadAnchor,
+    typeof document !== "undefined"
+      ? (document.createElement("a") as DownloadAnchor)
+      : { click: () => {}, download: "", href: "" },
 ): void {
   const url = objectUrlApi.createObjectURL(
     new Blob([data], { type: "image/png" }),
@@ -54,9 +56,11 @@ export function downloadPlanarPng(
 export function downloadPlanarJson(
   data: object | string,
   filename: string,
-  objectUrlApi: ObjectUrlApi = URL,
+  objectUrlApi: ObjectUrlApi = typeof URL !== "undefined" ? URL : { createObjectURL: () => "", revokeObjectURL: () => {} },
   createAnchor: () => DownloadAnchor = () =>
-    document.createElement("a") as DownloadAnchor,
+    typeof document !== "undefined"
+      ? (document.createElement("a") as DownloadAnchor)
+      : { click: () => {}, download: "", href: "" },
 ): void {
   const content = typeof data === "string" ? data : JSON.stringify(data, null, 2);
   const url = objectUrlApi.createObjectURL(

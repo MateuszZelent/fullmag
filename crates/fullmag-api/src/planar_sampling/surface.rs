@@ -6,7 +6,9 @@ use fullmag_ir::{PlanarReductionIR, SurfaceVisibilityPolicyIR};
 use super::frame::{cross, dot, ResolvedFrame};
 use super::provenance;
 use super::reduction::WeightedAccumulator;
-use super::{FemPlanarField, Occupancy, PlanarSampleResult, ResolvedPlanarSampleRequest};
+use super::{
+    FemPlanarField, Occupancy, PlanarComponent, PlanarSampleResult, ResolvedPlanarSampleRequest,
+};
 
 #[derive(Debug, Clone)]
 struct BoundaryFace {
@@ -57,7 +59,7 @@ pub(super) fn sample_boundary(
         }
     }
 
-    let mut pixel_faces = vec![Vec::<(Vec<f64>, f64, f64, f64, u32)>::new(); pixel_count];
+    let mut pixel_faces = vec![Vec::<(Vec<f64>, f64, f64, f64, f64, u32)>::new(); pixel_count];
     for faces in faces_by_key.values().filter(|faces| faces.len() == 1) {
         let face = &faces[0];
         let points = face
@@ -122,11 +124,13 @@ pub(super) fn sample_boundary(
                 let v_min = frame.bounds[2] + y as f64 * dv;
                 let clipped =
                     clip_surface_polygon(polygon.clone(), [u_min, u_min + du, v_min, v_min + dv]);
-                let Some((value, area, depth)) = integrate_surface_polygon(&clipped) else {
+                let Some((vec_val, sc_val, area, depth)) =
+                    integrate_surface_polygon(&clipped, request.component, &frame)
+                else {
                     continue;
                 };
                 let pixel = (y * request.resolution[0] + x) as usize;
-                pixel_faces[pixel].push((value, area, depth, facing, face.parent_element_id));
+                pixel_faces[pixel].push((vec_val, sc_val, area, depth, facing, face.parent_element_id));
             }
         }
     }
@@ -149,59 +153,78 @@ pub(super) fn sample_boundary(
         let ambiguous = faces.len() > 1;
         if ambiguous {
             overlap_count = overlap_count.saturating_add((faces.len() - 1) as u32);
-            let has_front = faces.iter().any(|face| face.3 > 0.0);
-            let has_back = faces.iter().any(|face| face.3 < 0.0);
+            let has_front = faces.iter().any(|face| face.4 > 0.0);
+            let has_back = faces.iter().any(|face| face.4 < 0.0);
             if has_front && has_back {
                 fold_count = fold_count.saturating_add(1);
             }
         }
         match visibility {
             SurfaceVisibilityPolicyIR::Frontmost => {
-                faces.sort_by(|a, b| b.2.total_cmp(&a.2));
+                faces.sort_by(|a, b| b.3.total_cmp(&a.3));
                 faces.truncate(1);
             }
             SurfaceVisibilityPolicyIR::Backmost => {
-                faces.sort_by(|a, b| a.2.total_cmp(&b.2));
+                faces.sort_by(|a, b| a.3.total_cmp(&b.3));
                 faces.truncate(1);
             }
             SurfaceVisibilityPolicyIR::NearestToOrigin => {
-                faces.sort_by(|a, b| a.2.abs().total_cmp(&b.2.abs()));
+                faces.sort_by(|a, b| a.3.abs().total_cmp(&b.3.abs()));
                 faces.truncate(1);
             }
             SurfaceVisibilityPolicyIR::AreaWeightedOverlap => {}
         }
         let mut accumulator = WeightedAccumulator::new(field.n_comp());
-        let source_entity_id = (faces.len() == 1).then_some(faces[0].4);
-        for (value, area, _, _, _) in faces {
+        let mut scalar_sum = 0.0;
+        let mut total_area = 0.0;
+        let source_entity_id = (faces.len() == 1).then_some(faces[0].5);
+        for (vec_val, sc_val, area, _, _, _) in faces {
             occupied_measure += area;
-            accumulator.add(&value, area);
+            total_area += area;
+            accumulator.add(&vec_val, area);
+            scalar_sum += sc_val * area;
         }
-        let value = accumulator
+        let mean_vec = accumulator
             .finish(PlanarReductionIR::MeanOccupied.into(), 1.0)
             .expect("non-empty boundary face accumulator");
-        occupancy.push(if ambiguous {
-            Occupancy::OverlapAmbiguous
-        } else {
-            Occupancy::Occupied
-        });
-        scalar_values.push(if field.n_comp() == 1 {
-            value[0]
-        } else {
+        let (scalar_val, occ) = if request.component == PlanarComponent::Orientation {
             let vec = [
-                value[0],
-                value.get(1).copied().unwrap_or(0.0),
-                value.get(2).copied().unwrap_or(0.0),
+                mean_vec[0],
+                mean_vec.get(1).copied().unwrap_or(0.0),
+                mean_vec.get(2).copied().unwrap_or(0.0),
             ];
-            super::element_evaluator::evaluate_vector_quantity(
+            let val = super::element_evaluator::evaluate_vector_quantity(
                 vec,
                 request.component,
                 frame.u,
                 frame.v,
                 frame.normal,
-            )
-        });
+            );
+            if !val.is_finite() {
+                (f64::NAN, Occupancy::UndefinedOrientation)
+            } else if ambiguous {
+                (val, Occupancy::OverlapAmbiguous)
+            } else {
+                (val, Occupancy::Occupied)
+            }
+        } else {
+            let sc = if total_area > 0.0 {
+                scalar_sum / total_area
+            } else {
+                f64::NAN
+            };
+            if !sc.is_finite() {
+                (f64::NAN, Occupancy::Empty)
+            } else if ambiguous {
+                (sc, Occupancy::OverlapAmbiguous)
+            } else {
+                (sc, Occupancy::Occupied)
+            }
+        };
+        occupancy.push(occ);
+        scalar_values.push(scalar_val);
         vector_values.push(if field.n_comp() >= 3 {
-            [value[0], value[1], value[2]]
+            [mean_vec[0], mean_vec[1], mean_vec[2]]
         } else {
             [f64::NAN; 3]
         });
@@ -301,12 +324,18 @@ fn interpolate_surface(a: &SurfaceVertex, b: &SurfaceVertex, t: f64) -> SurfaceV
     }
 }
 
-fn integrate_surface_polygon(polygon: &[SurfaceVertex]) -> Option<(Vec<f64>, f64, f64)> {
+fn integrate_surface_polygon(
+    polygon: &[SurfaceVertex],
+    component: PlanarComponent,
+    frame: &ResolvedFrame,
+) -> Option<(Vec<f64>, f64, f64, f64)> {
     if polygon.len() < 3 {
         return None;
     }
     let mut area = 0.0;
-    let mut integral = vec![0.0; polygon[0].value.len()];
+    let n_comp = polygon[0].value.len();
+    let mut integral = vec![0.0; n_comp];
+    let mut scalar_integral = 0.0;
     let mut depth_integral = 0.0;
     for index in 1..polygon.len() - 1 {
         let vertices = [&polygon[0], &polygon[index], &polygon[index + 1]];
@@ -319,20 +348,67 @@ fn integrate_surface_polygon(polygon: &[SurfaceVertex]) -> Option<(Vec<f64>, f64
             continue;
         }
         area += triangle_area;
-        for component in 0..integral.len() {
-            integral[component] += triangle_area
-                * vertices
-                    .iter()
-                    .map(|vertex| vertex.value[component])
-                    .sum::<f64>()
+        for c in 0..n_comp {
+            integral[c] += triangle_area
+                * (vertices[0].value[c] + vertices[1].value[c] + vertices[2].value[c])
                 / 3.0;
         }
+        if n_comp == 1 {
+            scalar_integral += triangle_area
+                * (vertices[0].value[0] + vertices[1].value[0] + vertices[2].value[0])
+                / 3.0;
+        } else if component != PlanarComponent::Orientation {
+            let m0 = [
+                0.5 * (vertices[0].value[0] + vertices[1].value[0]),
+                0.5 * (vertices[0].value.get(1).copied().unwrap_or(0.0)
+                    + vertices[1].value.get(1).copied().unwrap_or(0.0)),
+                0.5 * (vertices[0].value.get(2).copied().unwrap_or(0.0)
+                    + vertices[1].value.get(2).copied().unwrap_or(0.0)),
+            ];
+            let m1 = [
+                0.5 * (vertices[1].value[0] + vertices[2].value[0]),
+                0.5 * (vertices[1].value.get(1).copied().unwrap_or(0.0)
+                    + vertices[2].value.get(1).copied().unwrap_or(0.0)),
+                0.5 * (vertices[1].value.get(2).copied().unwrap_or(0.0)
+                    + vertices[2].value.get(2).copied().unwrap_or(0.0)),
+            ];
+            let m2 = [
+                0.5 * (vertices[2].value[0] + vertices[0].value[0]),
+                0.5 * (vertices[2].value.get(1).copied().unwrap_or(0.0)
+                    + vertices[0].value.get(1).copied().unwrap_or(0.0)),
+                0.5 * (vertices[2].value.get(2).copied().unwrap_or(0.0)
+                    + vertices[0].value.get(2).copied().unwrap_or(0.0)),
+            ];
+            let s0 = super::element_evaluator::evaluate_vector_quantity(
+                m0,
+                component,
+                frame.u,
+                frame.v,
+                frame.normal,
+            );
+            let s1 = super::element_evaluator::evaluate_vector_quantity(
+                m1,
+                component,
+                frame.u,
+                frame.v,
+                frame.normal,
+            );
+            let s2 = super::element_evaluator::evaluate_vector_quantity(
+                m2,
+                component,
+                frame.u,
+                frame.v,
+                frame.normal,
+            );
+            scalar_integral += triangle_area * (s0 + s1 + s2) / 3.0;
+        }
         depth_integral +=
-            triangle_area * vertices.iter().map(|vertex| vertex.uvn[2]).sum::<f64>() / 3.0;
+            triangle_area * (vertices[0].uvn[2] + vertices[1].uvn[2] + vertices[2].uvn[2]) / 3.0;
     }
     (area > 0.0).then(|| {
         (
             integral.into_iter().map(|value| value / area).collect(),
+            scalar_integral / area,
             area,
             depth_integral / area,
         )
