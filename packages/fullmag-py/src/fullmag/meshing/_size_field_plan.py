@@ -1902,60 +1902,60 @@ def _mesh_options_from_runtime_metadata(
         )
     optimize = _mesh_option_value("optimize")
     raw_mesh_strategy = _first_non_none(
-        raw_mesh_options.get("mesh_strategy"),
         _single_geometry_value("mesh_strategy"),
+        raw_mesh_options.get("mesh_strategy"),
     )
     raw_through_thickness_elements = (
-        raw_mesh_options.get("through_thickness_elements")
-        if raw_mesh_options.get("through_thickness_elements") is not None
-        else _single_geometry_value("through_thickness_elements")
+        _single_geometry_value("through_thickness_elements")
+        if _single_geometry_value("through_thickness_elements") is not None
+        else raw_mesh_options.get("through_thickness_elements")
     )
     raw_through_thickness_distribution = _first_non_none(
-        raw_mesh_options.get("through_thickness_distribution"),
         _single_geometry_value("through_thickness_distribution"),
+        raw_mesh_options.get("through_thickness_distribution"),
     )
     raw_through_thickness_element_ratio = (
-        raw_mesh_options.get("through_thickness_element_ratio")
-        if raw_mesh_options.get("through_thickness_element_ratio") is not None
-        else _single_geometry_value("through_thickness_element_ratio")
+        _single_geometry_value("through_thickness_element_ratio")
+        if _single_geometry_value("through_thickness_element_ratio") is not None
+        else raw_mesh_options.get("through_thickness_element_ratio")
     )
     raw_through_thickness_symmetric = (
-        raw_mesh_options.get("through_thickness_symmetric")
-        if raw_mesh_options.get("through_thickness_symmetric") is not None
-        else _single_geometry_value("through_thickness_symmetric")
+        _single_geometry_value("through_thickness_symmetric")
+        if _single_geometry_value("through_thickness_symmetric") is not None
+        else raw_mesh_options.get("through_thickness_symmetric")
     )
     raw_sweep_face_meshing = _first_non_none(
-        raw_mesh_options.get("sweep_face_meshing"),
         _single_geometry_value("sweep_face_meshing"),
+        raw_mesh_options.get("sweep_face_meshing"),
     )
     raw_sweep_direction = _mesh_option_value("sweep_direction")
     raw_boundary_layer_count = _first_non_none(
-        raw_mesh_options.get("boundary_layer_count"),
         _shared_per_geometry_value("boundary_layer_count"),
+        raw_mesh_options.get("boundary_layer_count"),
     )
     raw_boundary_layer_thickness = _first_non_none(
-        raw_mesh_options.get("boundary_layer_thickness"),
         _shared_per_geometry_value("boundary_layer_thickness"),
+        raw_mesh_options.get("boundary_layer_thickness"),
     )
     raw_boundary_layer_stretching = _first_non_none(
-        raw_mesh_options.get("boundary_layer_stretching"),
         _shared_per_geometry_value("boundary_layer_stretching"),
+        raw_mesh_options.get("boundary_layer_stretching"),
     )
     raw_boundary_layer_surface_tags = _first_non_none(
-        raw_mesh_options.get("boundary_layer_target_surface_tags"),
         _merged_per_geometry_list("boundary_layer_target_surface_tags"),
+        raw_mesh_options.get("boundary_layer_target_surface_tags"),
     )
     raw_boundary_layer_curve_tags = _first_non_none(
-        raw_mesh_options.get("boundary_layer_target_curve_tags"),
         _merged_per_geometry_list("boundary_layer_target_curve_tags"),
+        raw_mesh_options.get("boundary_layer_target_curve_tags"),
     )
     raw_boundary_layer_surface_selectors = _first_non_none(
-        raw_mesh_options.get("boundary_layer_target_surface_selectors"),
         _merged_per_geometry_list("boundary_layer_target_surface_selectors"),
+        raw_mesh_options.get("boundary_layer_target_surface_selectors"),
     )
     raw_boundary_layer_curve_selectors = _first_non_none(
-        raw_mesh_options.get("boundary_layer_target_curve_selectors"),
         _merged_per_geometry_list("boundary_layer_target_curve_selectors"),
+        raw_mesh_options.get("boundary_layer_target_curve_selectors"),
     )
     raw_compute_quality = _mesh_option_value("compute_quality")
     raw_per_element_quality = _mesh_option_value("per_element_quality")

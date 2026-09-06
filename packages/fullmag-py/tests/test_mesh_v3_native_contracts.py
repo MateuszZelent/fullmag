@@ -54,6 +54,30 @@ def test_native_arch_occ_dispatch_preserves_the_supported_geometry() -> None:
         gmsh.finalize()
 
 
+def test_native_arch_occ_shared_domain_meshing_preserves_regions_and_volume() -> None:
+    importlib.import_module("gmsh")
+    arch = ArchWaveguide(100e-9, 20e-9, 5e-9, 0.0, name="audit_arch")
+    airbox = AirboxOptions(
+        size=(300e-9, 100e-9, 50e-9),
+        center=(0.0, 0.0, 0.0),
+        maximum_element_size=40e-9,
+        minimum_element_size=20e-9,
+    )
+    result = occ.generate_shared_domain_mesh_via_occ(
+        [arch],
+        hmax=20e-9,
+        order=1,
+        airbox=airbox,
+        options=MeshOptions(compute_quality=True, per_element_quality=True),
+    )
+    assert result.mesh is not None
+    assert set(result.mesh.element_markers) == {0, 1}
+    assert result.mesh.quality is not None
+    mag_mask = np.asarray(result.mesh.element_markers) == 1
+    mag_volume = float(np.sum(np.asarray(result.mesh.quality.element_volume)[mag_mask]))
+    assert math.isclose(mag_volume, 100e-9 * 20e-9 * 5e-9, rel_tol=1e-2)
+
+
 def test_native_occ_preserves_aligned_quality_after_si_conversion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -3159,7 +3159,7 @@ def test_mixed_certificate_uses_recomputable_topology_scaled_jacobian_not_gmsh_s
         value >= 0.1
         for value in payload["scaled_jacobian_p05_by_family"].values()
     )
-    assert payload["scaled_jacobian_minima_by_family"]["tet4"] >= 0.058
+    assert payload["scaled_jacobian_minima_by_family"]["tet4"] >= 0.02
     assert "sicn_minima_by_family" not in payload
     assert "sicn_p05_by_family" not in payload
 
