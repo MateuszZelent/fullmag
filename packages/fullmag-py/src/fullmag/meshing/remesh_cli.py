@@ -999,8 +999,14 @@ def main() -> None:
             # Flush any C-level buffered output (still aimed at /dev/null)
             # before restoring the real stdout fd.
             import ctypes
-            libc = ctypes.CDLL(None)
-            libc.fflush(None)
+            try:
+                if hasattr(ctypes.cdll, "msvcrt"):
+                    ctypes.cdll.msvcrt.fflush(None)
+                else:
+                    libc = ctypes.CDLL(None)
+                    libc.fflush(None)
+            except Exception:
+                pass
             os.dup2(real_stdout_fd, 1)
             os.close(real_stdout_fd)
             # Re-attach Python's sys.stdout to the restored fd 1

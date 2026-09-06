@@ -56,8 +56,12 @@ from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_selectors import collect_orphan_entity_diagnostics
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
-from ._gmsh_waveguides import add_arch_waveguide_to_occ
-from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
+from ._gmsh_occ import (
+    _configure_axis_periodic_surfaces,
+    _scale_periodic_boundary_pairs,
+    _scale_quality_report_volume,
+    _scale_per_domain_quality_volume,
+)
 
 _NO_OP_FIELD_SIZE = 1.0e22
 
@@ -418,8 +422,8 @@ def generate_box_mesh(
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
             boundary_markers=mesh.boundary_markers,
-            quality=mesh.quality,
-            per_domain_quality=mesh.per_domain_quality,
+            quality=_scale_quality_report_volume(mesh.quality, volume_scale=SCALE**3),
+            per_domain_quality=_scale_per_domain_quality_volume(mesh.per_domain_quality, volume_scale=SCALE**3),
         )
     finally:  # pragma: no branch
         gmsh.finalize()
@@ -483,8 +487,8 @@ def generate_cylinder_mesh(
             element_markers=mesh.element_markers,
             boundary_faces=mesh.boundary_faces,
             boundary_markers=mesh.boundary_markers,
-            quality=mesh.quality,
-            per_domain_quality=mesh.per_domain_quality,
+            quality=_scale_quality_report_volume(mesh.quality, volume_scale=SCALE**3),
+            per_domain_quality=_scale_per_domain_quality_volume(mesh.per_domain_quality, volume_scale=SCALE**3),
         )
     finally:  # pragma: no branch
         gmsh.finalize()
@@ -553,8 +557,8 @@ def generate_difference_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=mesh.periodic_node_pairs,
-            quality=quality,
-            per_domain_quality=_pdq,
+            quality=_scale_quality_report_volume(quality, volume_scale=SCALE**3),
+            per_domain_quality=_scale_per_domain_quality_volume(_pdq, volume_scale=SCALE**3),
         )
     finally:  # pragma: no branch
         gmsh.finalize()
@@ -656,8 +660,8 @@ def _generate_csg_mesh(
                 scale=SCALE,
             ),
             periodic_node_pairs=mesh.periodic_node_pairs,
-            quality=quality,
-            per_domain_quality=_pdq,
+            quality=_scale_quality_report_volume(quality, volume_scale=SCALE**3),
+            per_domain_quality=_scale_per_domain_quality_volume(_pdq, volume_scale=SCALE**3),
         )
     finally:  # pragma: no branch
         gmsh.finalize()

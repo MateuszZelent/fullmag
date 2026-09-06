@@ -19,6 +19,7 @@ from fullmag.meshing._gmsh_types import (
     MeshQualityReport,
     MeshRealizationReport,
     QUALIFIED_REALIZATION_FALLBACKS,
+    SharedDomainMeshResult,
     SizeFieldData,
 )
 from fullmag.meshing._size_field_plan import (
@@ -49,13 +50,21 @@ from fullmag.model.geometry import Box
 
 def test_a01_occ_retry_stl_concat_cell_markers() -> None:
     """A01: OCC retry and fallback preserves per-cell component markers."""
+    from unittest.mock import patch, Mock
+    from fullmag.meshing.asset_pipeline import _realize_fem_domain_mesh_asset_from_components_impl
+
+    boxA = Box((1e-6, 1e-6, 0.2e-6), name="A")
+    boxB = Box((1e-6, 1e-6, 0.2e-6), name="B")
+    hints = fm.FEM(order=1, hmax=0.5e-6)
+    universe = {"mode": "manual", "size": [4e-6, 4e-6, 2e-6], "center": [0, 0, 0]}
+
     fallback_mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 1e-6]]),
+        nodes=np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 0.2e-6]]),
         cell_types=["tet4"],
         cell_offsets=[0, 4],
         cell_nodes=[0, 1, 2, 3],
         cell_global_ordinals=[0],
-        element_markers=[42],
+        element_markers=[1],
         facet_types=[],
         facet_roles=[],
         facet_offsets=[0],
@@ -63,13 +72,48 @@ def test_a01_occ_retry_stl_concat_cell_markers() -> None:
         boundary_markers=[],
         facet_global_ordinals=[],
     )
-    assert fallback_mesh.element_markers.tolist() == [42]
+
+    dummy_verts = np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0]])
+    mock_mesh_obj = Mock()
+    mock_mesh_obj.is_watertight = True
+    mock_mesh_obj.export = Mock(return_value=b"solid")
+    mock_mesh_obj.vertices = dummy_verts
+
+    mock_tm = Mock()
+    mock_tm.util = Mock()
+    mock_tm.util.concatenate = Mock(return_value=mock_mesh_obj)
+
+    with patch("fullmag.meshing._gmsh_occ.is_occ_compatible", return_value=True):
+        with patch("fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ", side_effect=RuntimeError("OCC fail")):
+            with patch("fullmag.meshing.surface_assets._import_trimesh", return_value=mock_tm):
+                with patch("fullmag.meshing.asset_pipeline._import_trimesh", return_value=mock_tm):
+                    with patch("fullmag.meshing.asset_pipeline._geometry_to_trimesh", return_value=mock_mesh_obj):
+                        with patch("fullmag.meshing.asset_pipeline._sanitize_surface_mesh_for_stl_export", side_effect=lambda m: m):
+                            with patch("fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components", side_effect=RuntimeError("STL fail")):
+                                with patch("fullmag.meshing.gmsh_bridge.generate_mesh_from_file", return_value=fallback_mesh):
+                                    with patch("fullmag.meshing.asset_pipeline._match_geometry_bounds_to_source_markers", return_value={"A": 1, "B": 1}):
+                                        mesh, region_markers, report = _realize_fem_domain_mesh_asset_from_components_impl(
+                                            [boxA, boxB], hints, study_universe=universe
+                                        )
+                                        assert "conformal_occ_failed" in report.fallbacks_triggered
+                                        assert "component_aware_import_failed" in report.fallbacks_triggered
+                                        assert report.build_mode == "concatenated_stl_fallback"
+                                        assert len(mesh.element_markers) == 1
+                                        assert mesh.element_markers[0] in {1, 2}
 
 
 def test_a02_result_mesh_identity_mismatch_raises_mesh_validation_error() -> None:
-    """A02: result.mesh is not mesh explicitly rejected with MeshValidationError."""
-    target_mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+    """A02: result.mesh is not mesh explicitly rejected with MeshValidationError in pipeline."""
+    from unittest.mock import patch, Mock
+    from fullmag.meshing.asset_pipeline import _realize_fem_domain_mesh_asset_from_components_impl
+
+    boxA = Box((1e-6, 1e-6, 0.2e-6), name="A")
+    boxB = Box((1e-6, 1e-6, 0.2e-6), name="B")
+    hints = fm.FEM(order=1, hmax=0.5e-6)
+    universe = {"mode": "manual", "size": [4e-6, 4e-6, 2e-6], "center": [0, 0, 0]}
+
+    mesh1 = MeshData(
+        nodes=np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 0.2e-6]]),
         cell_types=["tet4"],
         cell_offsets=[0, 4],
         cell_nodes=[0, 1, 2, 3],
@@ -82,20 +126,50 @@ def test_a02_result_mesh_identity_mismatch_raises_mesh_validation_error() -> Non
         boundary_markers=[],
         facet_global_ordinals=[],
     )
-    other_mesh = copy.deepcopy(target_mesh)
-    stale_result = Mock()
-    stale_result.mesh = other_mesh
+    mesh2 = copy.deepcopy(mesh1)
 
-    # Strict check enforced in pipeline:
-    if stale_result is not None and getattr(stale_result, "mesh", None) is not target_mesh:
-        with pytest.raises(MeshValidationError, match="mesh_result_identity_mismatch"):
-            raise MeshValidationError("mesh_result_identity_mismatch")
+    fake_result = SharedDomainMeshResult(
+        mesh=mesh1,
+        component_marker_tags={"A": 1, "B": 2},
+        component_volume_tags={"A": [1], "B": [2]},
+        component_surface_tags={"A": [1], "B": [2]},
+        interface_surface_tags=[],
+        outer_boundary_surface_tags=[],
+    )
+
+    dummy_verts = np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0]])
+    mock_mesh_obj = Mock()
+    mock_mesh_obj.is_watertight = True
+    mock_mesh_obj.export = Mock(return_value=b"solid")
+    mock_mesh_obj.vertices = dummy_verts
+
+    with patch("fullmag.meshing._gmsh_occ.is_occ_compatible", return_value=False):
+        with patch("fullmag.meshing.surface_assets._import_trimesh", return_value=Mock()):
+            with patch("fullmag.meshing.asset_pipeline._import_trimesh", return_value=Mock()):
+                with patch("fullmag.meshing.asset_pipeline._geometry_to_trimesh", return_value=mock_mesh_obj):
+                    with patch("fullmag.meshing.asset_pipeline._sanitize_surface_mesh_for_stl_export", side_effect=lambda m: m):
+                        with patch("fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components", return_value=fake_result):
+                            with patch("fullmag.meshing.asset_pipeline._drop_degenerate_tetrahedra", return_value=mesh2):
+                                # Suppress rebinding so result.mesh remains mesh1 != mesh2
+                                with patch("fullmag.meshing.asset_pipeline._dc_replace", side_effect=lambda obj, **kw: obj):
+                                    with pytest.raises(MeshValidationError, match="mesh_result_identity_mismatch"):
+                                        _realize_fem_domain_mesh_asset_from_components_impl(
+                                            [boxA, boxB], hints, study_universe=universe
+                                        )
 
 
 def test_a03_first_successful_occ_preserves_marker_maps_and_diagnostics() -> None:
-    """A03: Successful OCC preserves component marker tags and diagnostics."""
+    """A03: Successful OCC preserves component marker tags and diagnostics in pipeline."""
+    from unittest.mock import patch
+    from fullmag.meshing.asset_pipeline import _realize_fem_domain_mesh_asset_from_components_impl
+
+    boxA = Box((1e-6, 1e-6, 0.2e-6), name="A")
+    boxB = Box((1e-6, 1e-6, 0.2e-6), name="B")
+    hints = fm.FEM(order=1, hmax=0.5e-6)
+    universe = {"mode": "manual", "size": [4e-6, 4e-6, 2e-6], "center": [0, 0, 0]}
+
     mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        nodes=np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 0.2e-6]]),
         cell_types=["tet4"],
         cell_offsets=[0, 4],
         cell_nodes=[0, 1, 2, 3],
@@ -108,17 +182,42 @@ def test_a03_first_successful_occ_preserves_marker_maps_and_diagnostics() -> Non
         boundary_markers=[],
         facet_global_ordinals=[],
     )
-    mock_result = Mock()
-    mock_result.mesh = mesh
-    mock_result.component_marker_tags = {"box1": 1}
-    assert getattr(mock_result, "mesh", None) is mesh
-    assert mock_result.component_marker_tags["box1"] == 1
+
+    fake_result = SharedDomainMeshResult(
+        mesh=mesh,
+        component_marker_tags={"A": 1, "B": 2},
+        component_volume_tags={"A": [1], "B": [2]},
+        component_surface_tags={"A": [1], "B": [2]},
+        interface_surface_tags=[],
+        outer_boundary_surface_tags=[],
+        selector_resolution=[{"selector": "sel1", "status": "resolved"}],
+    )
+
+    with patch("fullmag.meshing._gmsh_occ.is_occ_compatible", return_value=True):
+        with patch("fullmag.meshing._gmsh_occ.generate_shared_domain_mesh_via_occ", return_value=fake_result):
+            res_mesh, region_markers, report = _realize_fem_domain_mesh_asset_from_components_impl(
+                [boxA, boxB], hints, study_universe=universe
+            )
+            assert report.build_mode == "conformal_occ"
+            assert region_markers == [
+                {"geometry_name": "A", "marker": 1},
+                {"geometry_name": "B", "marker": 2},
+            ]
+            assert report.selector_resolution == [{"selector": "sel1", "status": "resolved"}]
 
 
 def test_a04_legal_mesh_transformation_rebinds_result_mesh() -> None:
     """A04: Legal MeshData transformation re-binds result.mesh to the transformed instance."""
-    mesh = MeshData(
-        nodes=np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+    from unittest.mock import patch, Mock
+    from fullmag.meshing.asset_pipeline import _realize_fem_domain_mesh_asset_from_components_impl
+
+    boxA = Box((1e-6, 1e-6, 0.2e-6), name="A")
+    boxB = Box((1e-6, 1e-6, 0.2e-6), name="B")
+    hints = fm.FEM(order=1, hmax=0.5e-6)
+    universe = {"mode": "manual", "size": [4e-6, 4e-6, 2e-6], "center": [0, 0, 0]}
+
+    mesh1 = MeshData(
+        nodes=np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0], [0.0, 0.0, 0.2e-6]]),
         cell_types=["tet4"],
         cell_offsets=[0, 4],
         cell_nodes=[0, 1, 2, 3],
@@ -131,12 +230,37 @@ def test_a04_legal_mesh_transformation_rebinds_result_mesh() -> None:
         boundary_markers=[],
         facet_global_ordinals=[],
     )
-    mock_result = Mock()
-    mock_result.mesh = mesh
-    # Clean up degenerate tetrahedra re-binds result
-    cleaned_mesh = _drop_degenerate_tetrahedra(mesh)
-    mock_result.mesh = cleaned_mesh
-    assert mock_result.mesh is cleaned_mesh
+    mesh2 = copy.deepcopy(mesh1)
+
+    fake_result = SharedDomainMeshResult(
+        mesh=mesh1,
+        component_marker_tags={"A": 1, "B": 2},
+        component_volume_tags={"A": [1], "B": [2]},
+        component_surface_tags={"A": [1], "B": [2]},
+        interface_surface_tags=[],
+        outer_boundary_surface_tags=[],
+    )
+
+    dummy_verts = np.asarray([[0.0, 0.0, 0.0], [1e-6, 0.0, 0.0], [0.0, 1e-6, 0.0]])
+    mock_mesh_obj = Mock()
+    mock_mesh_obj.is_watertight = True
+    mock_mesh_obj.export = Mock(return_value=b"solid")
+    mock_mesh_obj.vertices = dummy_verts
+
+    with patch("fullmag.meshing._gmsh_occ.is_occ_compatible", return_value=False):
+        with patch("fullmag.meshing.surface_assets._import_trimesh", return_value=Mock()):
+            with patch("fullmag.meshing.asset_pipeline._import_trimesh", return_value=Mock()):
+                with patch("fullmag.meshing.asset_pipeline._geometry_to_trimesh", return_value=mock_mesh_obj):
+                    with patch("fullmag.meshing.asset_pipeline._sanitize_surface_mesh_for_stl_export", side_effect=lambda m: m):
+                        with patch("fullmag.meshing.asset_pipeline.generate_shared_domain_mesh_from_components", return_value=fake_result):
+                            with patch("fullmag.meshing.asset_pipeline._drop_degenerate_tetrahedra", return_value=mesh2):
+                                # Default _dc_replace rebinds result.mesh = mesh2, preventing mismatch exception
+                                res_mesh, region_markers, report = _realize_fem_domain_mesh_asset_from_components_impl(
+                                    [boxA, boxB], hints, study_universe=universe
+                                )
+                                assert np.array_equal(res_mesh.nodes, mesh2.nodes)
+                                assert np.array_equal(res_mesh.cell_nodes, mesh2.cell_nodes)
+                                assert len(region_markers) == 2
 
 
 # ===================================================================
@@ -344,20 +468,114 @@ def test_a12_shared_swept_hex_and_auto_layers_preflight_order_invariant() -> Non
 # A13 - A14: MESH-03 Remesh CLI Flag Propagation & Frozen Options
 # ===================================================================
 
-def test_a13_remesh_cli_adaptive_quality_flag_combinations_no_frozen_mutation() -> None:
-    """A13: All 4 combinations of compute_quality and per_element_quality work without mutation error."""
-    opts = MeshOptions(compute_quality=True, per_element_quality=True)
+def test_a13_remesh_cli_adaptive_quality_flag_combinations_no_frozen_mutation(capfd: pytest.CaptureFixture[str]) -> None:
+    """A13: remesh_cli.main with adaptive_size_field for all 4 quality flag combinations."""
+    import io
+    import json
+    from unittest.mock import patch
+    from fullmag.meshing import remesh_cli
+
+    dummy_mesh = MeshData(
+        nodes=np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        cell_types=["tet4"],
+        cell_offsets=[0, 4],
+        cell_nodes=[0, 1, 2, 3],
+        cell_global_ordinals=[0],
+        element_markers=[1],
+        facet_types=[],
+        facet_roles=[],
+        facet_offsets=[0],
+        facet_nodes=[],
+        boundary_markers=[],
+        facet_global_ordinals=[],
+    )
+
     for cq, peq in [(True, True), (True, False), (False, True), (False, False)]:
-        updated = replace(opts, compute_quality=cq, per_element_quality=peq)
-        assert updated.compute_quality is cq
-        assert updated.per_element_quality is peq
+        capfd.readouterr()  # clear previous buffer
+        config_payload = {
+            "mode": "adaptive_size_field",
+            "geometry": {"kind": "box", "size": [1e-6, 1e-6, 1e-6]},
+            "hmax": 100e-9,
+            "order": 1,
+            "size_field": {
+                "node_coords": [[0.0, 0.0, 0.0]],
+                "h_values": [50e-9],
+            },
+            "mesh_options": {
+                "compute_quality": cq,
+                "per_element_quality": peq,
+            },
+        }
+
+        captured_options: list[MeshOptions] = []
+
+        def mock_remesh(geom, *, size_field, hmax, order, options):
+            captured_options.append(options)
+            return dummy_mesh
+
+        stdin_buf = io.StringIO(json.dumps(config_payload))
+
+        with patch("sys.stdin", stdin_buf):
+            with patch.object(remesh_cli, "remesh_with_size_field", side_effect=mock_remesh):
+                with patch.object(remesh_cli, "emit_progress"):
+                    remesh_cli.main()
+
+        assert len(captured_options) == 1
+        passed_opts = captured_options[0]
+        assert passed_opts.compute_quality is cq, f"Expected compute_quality={cq}, got {passed_opts.compute_quality}"
+        assert passed_opts.per_element_quality is peq, f"Expected per_element_quality={peq}, got {passed_opts.per_element_quality}"
+
+        # Verify output JSON on stdout
+        out_json = capfd.readouterr().out
+        res = json.loads(out_json)
+        assert "mesh_statistics" in res or "nodes" in res
+        assert res["generation_mode"] == "adaptive_size_field"
 
 
 def test_a14_invalid_bool_triggers_typed_validation_not_bool_string() -> None:
-    """A14: Invalid boolean inputs trigger TypedValidationError."""
-    from fullmag._validation import parse_bool
-    with pytest.raises(TypedValidationError):
-        parse_bool("not_a_boolean", "/test/pointer")
+    """A14: Invalid boolean inputs trigger TypedValidationError with code and pointer, not bool(string)."""
+    from fullmag._validation import TypedValidationError
+    from fullmag.meshing.remesh_cli import _mesh_options_from_dict
+    import io
+    import json
+    from unittest.mock import patch
+    from fullmag.meshing import remesh_cli
+
+    # 1. Direct validation via _mesh_options_from_dict
+    with pytest.raises(TypedValidationError) as exc_info:
+        _mesh_options_from_dict({"compute_quality": "not_a_boolean"})
+    assert exc_info.value.code == "boolean_type_error"
+    assert exc_info.value.pointer == "/mesh_options/compute_quality"
+
+    with pytest.raises(TypedValidationError) as exc_info2:
+        _mesh_options_from_dict({"per_element_quality": "invalid"})
+    assert exc_info2.value.code == "boolean_type_error"
+    assert exc_info2.value.pointer == "/mesh_options/per_element_quality"
+
+
+    # 2. CLI main execution with invalid bool in adaptive remesh exits with error code 1
+    config_payload = {
+        "mode": "adaptive_size_field",
+        "geometry": {"kind": "box", "size": [1e-6, 1e-6, 1e-6]},
+        "hmax": 100e-9,
+        "size_field": {
+            "node_coords": [[0.0, 0.0, 0.0]],
+            "h_values": [50e-9],
+        },
+        "mesh_options": {
+            "compute_quality": "not_a_bool",
+        },
+    }
+    stdin_buf = io.StringIO(json.dumps(config_payload))
+    stderr_buf = io.StringIO()
+    with patch("sys.stdin", stdin_buf), patch("sys.stderr", stderr_buf):
+        with pytest.raises(SystemExit) as sys_exit:
+            remesh_cli.main()
+        assert sys_exit.value.code == 1
+    err_out = json.loads(stderr_buf.getvalue())
+    assert "boolean_type_error" in err_out["error"]
+
+
 
 
 # ===================================================================
@@ -608,24 +826,88 @@ def _make_quality_report(
 
 
 def test_a26_volume_analytical_equals_si_nodes_equals_quality_report() -> None:
-    """A26: Volume scaling divides by 10^18 exactly once."""
-    rep = _make_quality_report(
-        volume_min=1.0e18,
-        volume_max=2.0e18,
-        volume_mean=1.5e18,
-        volume_std=0.5e18,
-        element_volume=[1.0e18, 2.0e18],
+    """A26: Analytical volume == SI node volume == scaled quality report (global and per-domain)."""
+    # 1. Geometry: 100 nm x 40 nm x 20 nm
+    lx, ly, lz = 100e-9, 40e-9, 20e-9
+    v_analytical = lx * ly * lz  # 8.0e-23 m^3
+
+    # Partition the box into 6 tetrahedra in SI units
+    si_nodes = np.asarray([
+        [0.0, 0.0, 0.0],
+        [lx, 0.0, 0.0],
+        [lx, ly, 0.0],
+        [0.0, ly, 0.0],
+        [0.0, 0.0, lz],
+        [lx, 0.0, lz],
+        [lx, ly, lz],
+        [0.0, ly, lz],
+    ], dtype=np.float64)
+
+    tets = [
+        [0, 1, 2, 6],
+        [0, 2, 3, 6],
+        [0, 3, 7, 6],
+        [0, 7, 4, 6],
+        [0, 4, 5, 6],
+        [0, 5, 1, 6],
+    ]
+
+    # Calculate exact volume from SI nodes
+    si_volumes: list[float] = []
+    for t in tets:
+        v0, v1, v2, v3 = si_nodes[t[0]], si_nodes[t[1]], si_nodes[t[2]], si_nodes[t[3]]
+        v_tet = abs(np.dot(v1 - v0, np.cross(v2 - v0, v3 - v0))) / 6.0
+        si_volumes.append(float(v_tet))
+
+    v_nodes_sum = sum(si_volumes)
+    assert math.isclose(v_nodes_sum, v_analytical, rel_tol=1e-12)
+
+    # In internal Gmsh units (micro-meters), lengths are scaled by 1e6, so volumes are scaled by 1e18
+    internal_volumes = [v * 1e18 for v in si_volumes]
+    internal_rep = MeshQualityReport(
+        n_elements=6,
         sicn_min=0.8,
-        gamma_min=0.9,
+        sicn_max=0.9,
+        sicn_mean=0.85,
+        sicn_p5=0.81,
+        sicn_histogram=[0] * 20,
+        gamma_min=0.85,
+        gamma_mean=0.9,
+        gamma_histogram=[0] * 20,
+        volume_min=min(internal_volumes),
+        volume_max=max(internal_volumes),
+        volume_mean=float(np.mean(internal_volumes)),
+        volume_std=float(np.std(internal_volumes)),
+        avg_quality=0.87,
+        element_volume=internal_volumes,
     )
-    scaled = _scale_quality_report_volume(rep, volume_scale=1e18)
+
+    # Scale to SI m^3
+    scaled = _scale_quality_report_volume(internal_rep, volume_scale=1e18)
     assert scaled is not None
-    assert math.isclose(scaled.volume_min, 1.0)
-    assert math.isclose(scaled.volume_max, 2.0)
-    assert math.isclose(scaled.volume_mean, 1.5)
-    assert math.isclose(scaled.volume_std, 0.5)
-    assert math.isclose(scaled.element_volume[0], 1.0)
-    assert math.isclose(scaled.element_volume[1], 2.0)
+
+    # Verify: Analytical == SI nodes == scaled quality report
+    assert math.isclose(scaled.volume_mean * scaled.n_elements, v_analytical, rel_tol=1e-12)
+    assert math.isclose(sum(scaled.element_volume), v_nodes_sum, rel_tol=1e-12)
+    assert math.isclose(scaled.volume_min, min(si_volumes), rel_tol=1e-12)
+    assert math.isclose(scaled.volume_max, max(si_volumes), rel_tol=1e-12)
+    assert math.isclose(scaled.volume_mean, v_nodes_sum / 6.0, rel_tol=1e-12)
+    assert math.isclose(scaled.volume_std, float(np.std(si_volumes)), rel_tol=1e-12, abs_tol=1e-30)
+
+    # Verify dimensional order of magnitude is SI m^3 (10^-23), NOT micro-m^3 (10^-5)
+    assert scaled.volume_mean < 1e-20
+
+    # Test per-domain quality scaling with markers
+    from fullmag.meshing._gmsh_occ import _scale_per_domain_quality_volume
+    per_domain_internal = {
+        1: internal_rep,
+        2: internal_rep,
+    }
+    scaled_per_domain = _scale_per_domain_quality_volume(per_domain_internal, volume_scale=1e18)
+    assert scaled_per_domain is not None
+    assert math.isclose(sum(scaled_per_domain[1].element_volume), v_analytical, rel_tol=1e-12)
+    assert math.isclose(sum(scaled_per_domain[2].element_volume), v_analytical, rel_tol=1e-12)
+
 
 
 def test_a27_per_element_alignment_preserved_under_reordering() -> None:
@@ -685,10 +967,20 @@ def test_a31_symmetric_layer_ratio_exact_definition() -> None:
 
 
 def test_a32_large_n_and_r_log_weights_prevent_overflow_and_detect_underflow() -> None:
-    """A32: Large N and r do not overflow or produce NaNs/zeros."""
-    heights = _compute_layer_heights(1025, "exponential", element_ratio=1.01, symmetric=True)
-    assert len(heights) == 1025
+    """A32: Large N and r use log-weights to prevent overflow, and detect float64 underflow."""
+    # 1. N=2049, r=2.0 (exponential): previously failed with OverflowError, now succeeds with log-weights
+    heights = _compute_layer_heights(2049, "exponential", element_ratio=2.0, symmetric=True)
+    assert len(heights) == 2049
     assert all(h > 0.0 and math.isfinite(h) for h in heights)
+    assert math.isclose(sum(heights), 1.0, rel_tol=1e-12)
+    # Check symmetry
+    assert math.isclose(heights[0], heights[-1], rel_tol=1e-12)
+    assert math.isclose(heights[100], heights[2049 - 1 - 100], rel_tol=1e-12)
+
+    # 2. N=2500, r=2.0 (exponential): d_max = 1249 -> exp(-1249*ln(2)) underflows in float64
+    # Must raise typed ValueError detecting underflow instead of producing zeros, NaNs, or silent uniform fallback
+    with pytest.raises(ValueError, match="layer height underflow: unrepresentable layer height distribution"):
+        _compute_layer_heights(2500, "exponential", element_ratio=2.0, symmetric=True)
 
 
 def test_a33_cumulative_heights_strictly_monotonic_final_one() -> None:
@@ -705,21 +997,73 @@ def test_a33_cumulative_heights_strictly_monotonic_final_one() -> None:
 # ===================================================================
 
 def test_a34_typed_validation_error_code_and_pointer() -> None:
-    """A34: Invalid inputs in _size_field_plan raise TypedValidationError with code and pointer."""
+    """A34: Invalid inputs in _gmsh_types and _size_field_plan raise TypedValidationError with code and pointer."""
+    from fullmag._validation import TypedValidationError
     from fullmag.meshing._size_field_plan import _mesh_options_from_runtime_metadata
+
     box = Box(size=(1e-6, 1e-6, 0.2e-6), name="mag")
-    workflow = {
+
+    # 1. fullmag.meshing._gmsh_types: growth_rate <= 1.0 triggers TypedValidationError without NameError
+    with pytest.raises(TypedValidationError) as exc1:
+        MeshOptions(growth_rate=0.8)
+    assert exc1.value.code == "numeric_range_error"
+    assert exc1.value.pointer == "/mesh_options/growth_rate"
+
+    with pytest.raises(TypedValidationError) as exc2:
+        MeshOptions(growth_rate=1.0)
+    assert exc2.value.code == "numeric_range_error"
+    assert exc2.value.pointer == "/mesh_options/growth_rate"
+
+    # 2. fullmag.meshing._size_field_plan: selector list and periodic pair validation without NameError
+    # Non-list selector raises list_type_error
+    wf_invalid_list = {
         "mesh_options": {
-            "cell_size": [1e-9, 1e-9],  # Must be 3 items
+            "boundary_layer_target_surface_selectors": 123,
         }
     }
-    with pytest.raises(Exception):
+    with pytest.raises(TypedValidationError) as exc3:
         _mesh_options_from_runtime_metadata(
-            workflow,
+            wf_invalid_list,
             geometries=[box],
             default_hmax=0.5e-6,
             include_size_fields=False,
         )
+    assert exc3.value.code == "list_type_error"
+    assert exc3.value.pointer == "/mesh_workflow/mesh_options/selector_list"
+
+    # Invalid item in selector list raises selector_type_error
+    wf_invalid_item = {
+        "mesh_options": {
+            "boundary_layer_target_surface_selectors": [123],
+        }
+    }
+    with pytest.raises(TypedValidationError) as exc4:
+        _mesh_options_from_runtime_metadata(
+            wf_invalid_item,
+            geometries=[box],
+            default_hmax=0.5e-6,
+            include_size_fields=False,
+        )
+    assert exc4.value.code == "selector_type_error"
+    assert exc4.value.pointer == "/mesh_workflow/mesh_options/selector_list/0"
+
+    # Invalid item in periodic pair ids raises string_value_error
+    wf_invalid_pair = {
+        "mesh_options": {
+            "periodic_pair_ids": [123],
+        }
+    }
+    with pytest.raises(TypedValidationError) as exc5:
+        _mesh_options_from_runtime_metadata(
+            wf_invalid_pair,
+            geometries=[box],
+            default_hmax=0.5e-6,
+            include_size_fields=False,
+        )
+    assert exc5.value.code == "string_value_error"
+    assert exc5.value.pointer == "/mesh_workflow/mesh_options/string_list/0"
+
+
 
 
 # ===================================================================
@@ -736,14 +1080,46 @@ def test_a35_growth_number_formatting_nextafter_and_threshold() -> None:
 
 
 def test_a36_geometric_size_profile_limit_g_to_one() -> None:
-    """A36: Geometric size profile limits to h0^(1-u) * h1^u as g -> 1.0."""
-    expr = _geometric_size_profile_expression(
-        size_min=10e-9,
-        size_max=100e-9,
+    """A36: Geometric size profile limits to h0^(1-u) * h1^u as g -> 1.0, preserving endpoints and geometric mean."""
+    # h0 = 4.0, h1 = 64.0 -> Geometric mean at u=0.5 is sqrt(4 * 64) = 16.0 (W06, not linear 34.0)
+    h0, h1 = 4.0, 64.0
+
+    def evaluate_matheval(expr_str: str, u_val: float) -> float:
+        # Evaluate Gmsh MathEval expression in Python
+        safe_env = {
+            "u": u_val,
+            "exp": math.exp,
+            "log": math.log,
+            "Min": min,
+            "Max": max,
+        }
+        return float(eval(expr_str, {"__builtins__": {}}, safe_env))
+
+    # 1. g within 1e-7 threshold of 1.0 (e.g. 1.0 + 1e-9)
+    expr_sub = _geometric_size_profile_expression(
+        size_min=h0,
+        size_max=h1,
         ramp="u",
-        growth_rate=1.0 + 1e-9,  # within 1e-7 threshold of 1.0
+        growth_rate=1.0 + 1e-9,
     )
-    assert "log(1)" not in expr
+    assert "log(1)" not in expr_sub
+    assert math.isclose(evaluate_matheval(expr_sub, 0.0), 4.0, rel_tol=1e-12)
+    assert math.isclose(evaluate_matheval(expr_sub, 1.0), 64.0, rel_tol=1e-12)
+    assert math.isclose(evaluate_matheval(expr_sub, 0.5), 16.0, rel_tol=1e-12)
+
+    # 2. g just above 1e-7 threshold of 1.0 (e.g. 1.0 + 2e-7)
+    expr_sup = _geometric_size_profile_expression(
+        size_min=h0,
+        size_max=h1,
+        ramp="u",
+        growth_rate=1.0 + 2e-7,
+    )
+    assert "log(1)" not in expr_sup
+    assert math.isclose(evaluate_matheval(expr_sup, 0.0), 4.0, rel_tol=1e-12)
+    assert math.isclose(evaluate_matheval(expr_sup, 1.0), 64.0, rel_tol=1e-12)
+    # Smooth continuity near threshold: at u=0.5 value is close to 16.0
+    assert math.isclose(evaluate_matheval(expr_sup, 0.5), 16.0, rel_tol=1e-5)
+
 
 
 # ===================================================================
@@ -844,9 +1220,96 @@ def test_a38_no_fields_branch_applies_resolved_options_no_reset(monkeypatch: pyt
 
 
 def test_a39_hotspot_refinement_field_on_source_face() -> None:
-    """A39: Source face refinement field preserves hotspot role."""
-    field = {"kind": "ComponentRestrictedBox", "role": "hotspot", "owner": "film"}
-    assert field["role"] == "hotspot"
+    """A39: Source face refinement applies ComponentRestrictedBox to source surface and marks applied."""
+    from fullmag.meshing._gmsh_swept import _apply_mixed_source_face_mesh_options
+
+    created_fields: list[tuple[int, str]] = []
+    field_numbers: dict[tuple[int, str], float] = {}
+    field_number_lists: dict[tuple[int, str], list[float]] = {}
+    current_field_id = [0]
+
+    class MockField:
+        @staticmethod
+        def add(kind: str) -> int:
+            current_field_id[0] += 1
+            fid = current_field_id[0]
+            created_fields.append((fid, kind))
+            return fid
+
+        @staticmethod
+        def list() -> list[int]:
+            return [fid for fid, _ in created_fields]
+
+        @staticmethod
+        def setNumber(fid: int, name: str, val: float) -> None:
+            field_numbers[(fid, name)] = float(val)
+
+        @staticmethod
+        def setNumbers(fid: int, name: str, vals: list[float]) -> None:
+            field_number_lists[(fid, name)] = [float(v) for v in vals]
+
+        @staticmethod
+        def setAsBackgroundMesh(fid: int) -> None:
+            created_fields.append((fid, "BackgroundMesh"))
+
+    class MockOption:
+        @staticmethod
+        def setNumber(name: str, val: float) -> None: pass
+        @staticmethod
+        def getNumber(name: str) -> float: return 1.0
+
+    mock_gmsh = type("Gmsh", (), {
+        "option": MockOption(),
+        "model": type("M", (), {
+            "mesh": type("Me", (), {
+                "field": MockField(),
+            })(),
+        })(),
+    })()
+
+
+    field_spec = {
+        "kind": "ComponentRestrictedBox",
+        "role": "hotspot",
+        "owner": "film",
+        "params": {
+            "GeometryName": "film",
+            "VIn": 2e-9,
+            "VOut": 10e-9,
+            "XMin": 0.0,
+            "XMax": 10e-9,
+            "YMin": 0.0,
+            "YMax": 10e-9,
+            "ZMin": 0.0,
+            "ZMax": 2e-9,
+        },
+    }
+    opts = MeshOptions(size_fields=[field_spec])
+
+    restricted_id = _apply_mixed_source_face_mesh_options(
+        mock_gmsh,
+        source_surface=42,
+        hmax_scaled=5.0,
+        order=1,
+        opts=opts,
+        hscale=1e6,
+    )
+
+    # 1. Box field was added and configured
+    box_fields = [fid for fid, kind in created_fields if kind == "Box"]
+    assert len(box_fields) == 1
+    box_id = box_fields[0]
+    assert field_numbers[(box_id, "VIn")] == 2e-9 * 1e6
+    assert field_numbers[(box_id, "VOut")] == 10e-9 * 1e6
+
+    # 2. Field spec status updated to applied with field id
+    assert field_spec["_gmsh_status"] == "applied"
+    assert field_spec["_gmsh_field_id"] == box_id
+
+    # 3. Restrict field restricts to source surface 42 and is set as background mesh
+    assert field_number_lists[(restricted_id, "SurfacesList")] == [42.0]
+    assert (restricted_id, "BackgroundMesh") in created_fields
+
 
 
 def test_a40_unsupported_swept_options_rejected_with_reason() -> None:
