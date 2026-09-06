@@ -17,12 +17,47 @@ from fullmag.model.geometry import (
     Translate,
     Union,
 )
-from ._gmsh_types import MeshData, SharedDomainMeshResult
+from ._gmsh_types import MeshData, MeshQualityReport, SharedDomainMeshResult
 from ._airbox_grading import (
     _add_airbox_grading_field,
     _airbox_boundary_distance_from_bbox,
 )
 from .gmsh_bridge import AirboxOptions, MeshOptions, _import_gmsh
+
+
+def _scale_quality_report_volume(
+    report: MeshQualityReport | None,
+    volume_scale: float,
+) -> MeshQualityReport | None:
+    """Scale volume metrics in MeshQualityReport from working units to SI m^3."""
+    if report is None or volume_scale == 1.0:
+        return report
+    element_vol = (
+        [float(v) / volume_scale for v in report.element_volume]
+        if report.element_volume is not None
+        else None
+    )
+    return _dc_replace(
+        report,
+        volume_min=float(report.volume_min) / volume_scale,
+        volume_max=float(report.volume_max) / volume_scale,
+        volume_mean=float(report.volume_mean) / volume_scale,
+        volume_std=float(report.volume_std) / volume_scale,
+        element_volume=element_vol,
+    )
+
+
+def _scale_per_domain_quality_volume(
+    pdq: dict[int, MeshQualityReport] | None,
+    volume_scale: float,
+) -> dict[int, MeshQualityReport] | None:
+    """Scale volume metrics for all per-domain quality reports to SI m^3."""
+    if pdq is None or volume_scale == 1.0:
+        return pdq
+    return {
+        marker: _scale_quality_report_volume(report, volume_scale)  # type: ignore[misc]
+        for marker, report in pdq.items()
+    }
 
 
 def _region_uses_conformal_occ_realization(region: dict[str, object]) -> bool:
@@ -987,9 +1022,13 @@ def generate_shared_domain_mesh_via_occ(
             periodic_pair_specs=periodic_pair_specs,
         )
 
+        scaled_quality = _scale_quality_report_volume(quality, volume_scale=SCALE**3)
+        scaled_pdq = _scale_per_domain_quality_volume(_pdq, volume_scale=SCALE**3)
         scaled_mesh = _dc_replace(
             mesh,
             nodes=mesh.nodes / SCALE,
+            quality=scaled_quality,
+            per_domain_quality=scaled_pdq,
             periodic_boundary_pairs=_scale_periodic_boundary_pairs(
                 mesh.periodic_boundary_pairs,
                 scale=SCALE,

@@ -2291,8 +2291,6 @@ class GeometryMeshHandle:
             self._owner._mesh_spec = original_spec
             raise
         spec = self._owner._mesh_spec
-        if validation_hmin is None and body_hmin is not None:
-            spec.hmin = body_hmin
         return configured
 
     def quality(self) -> object | None:

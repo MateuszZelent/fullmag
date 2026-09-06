@@ -14,7 +14,11 @@ def _math_atom(value: float) -> str:
 
 
 def _growth_number(value: float) -> str:
-    return f"{float(value):.12g}"
+    val = float(value)
+    rendered = f"{val:.12g}"
+    if rendered == "1" and val > 1.0:
+        return f"{val:.17g}"
+    return rendered
 
 
 def _geometric_size_profile_expression(
@@ -32,10 +36,15 @@ def _geometric_size_profile_expression(
 
     clamped_ramp = f"Min(Max(({ramp}), 0), 1)"
     if growth_rate is not None and float(growth_rate) > 1.0:
-        growth = _growth_number(float(growth_rate))
-        shaped_ramp = (
-            f"(log(1 + ({growth} - 1) * ({clamped_ramp})) / log({growth}))"
-        )
+        g = float(growth_rate)
+        if g - 1.0 > 1.0e-7:
+            delta = f"({_growth_number(g)} - 1.0)"
+            shaped_ramp = (
+                f"(log(1 + {delta} * ({clamped_ramp})) / "
+                f"log({_growth_number(g)}))"
+            )
+        else:
+            shaped_ramp = clamped_ramp
     else:
         shaped_ramp = clamped_ramp
 

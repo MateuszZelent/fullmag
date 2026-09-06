@@ -15,7 +15,12 @@ from weakref import WeakSet
 import numpy as np
 from numpy.typing import NDArray
 
-from fullmag._validation import parse_bool, parse_finite_float, parse_integer
+from fullmag._validation import (
+    TypedValidationError,
+    parse_bool,
+    parse_finite_float,
+    parse_integer,
+)
 from fullmag.model.discretization import _MESH_SIZE_PRESET_ALIASES
 
 
@@ -717,6 +722,10 @@ class SizeFieldData:
             raise ValueError("node_coords must have shape (N, 3)")
         if h.ndim != 1 or h.shape[0] != coords.shape[0]:
             raise ValueError("h_values must have shape (N,)")
+        if coords.size > 0 and not np.all(np.isfinite(coords)):
+            raise ValueError("node_coords must contain only finite numbers (no NaN or Inf)")
+        if h.size > 0 and not np.all(np.isfinite(h)):
+            raise ValueError("h_values must contain only finite numbers (no NaN or Inf)")
         if np.any(h <= 0):
             raise ValueError("h_values must be strictly positive")
 
@@ -805,15 +814,21 @@ class MeshRealizationReport:
             self.resolved_axis,
             self.resolved_order,
         )
-        if (
-            not normalized_fallbacks
-            and requested_direction != "auto"
-            and requested != resolved
-        ):
-            raise ValueError(
-                "mesh realization report requested/resolved fields must match "
-                "when no fallback was triggered"
-            )
+        if not normalized_fallbacks:
+            if (
+                self.requested_topology != self.resolved_topology
+                or self.requested_layers != self.resolved_layers
+                or self.requested_order != self.resolved_order
+            ):
+                raise ValueError(
+                    "mesh realization report requested/resolved fields must match "
+                    "(topology, layers, order) when no fallback was triggered"
+                )
+            if requested_direction != "auto" and self.requested_axis != self.resolved_axis:
+                raise ValueError(
+                    "mesh realization report requested/resolved axis must match "
+                    "when direction is not auto and no fallback was triggered"
+                )
 
     def to_dict(self) -> dict[str, object]:
         return {

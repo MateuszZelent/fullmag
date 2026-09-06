@@ -1543,8 +1543,8 @@ def test_body_only_box_prism_rejects_non_integer_controls_before_gmsh(
         ((8.0e-9, 5.0e-9, float("nan")), 2.0e-9, None, "size\\[2\\].*finite and positive"),
         ((8.0e-9, 5.0e-9, 3.0e-9), 0.0, None, "hmax.*finite and positive"),
         ((8.0e-9, 5.0e-9, 3.0e-9), float("inf"), None, "hmax.*finite and positive"),
-        ((8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, -1.0e-9, "hmin.*finite and positive"),
-        ((8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, float("nan"), "hmin.*finite and positive"),
+        ((8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, -1.0e-9, r"(hmin.*finite and positive|numeric_range_error.*/hmin)"),
+        ((8.0e-9, 5.0e-9, 3.0e-9), 2.0e-9, float("nan"), r"(hmin.*finite and positive|numeric_nonfinite.*/hmin)"),
     ],
 )
 def test_body_only_box_prism_rejects_invalid_sizes_before_gmsh(
@@ -2577,7 +2577,10 @@ def test_asset_mixed_route_rejects_unqualified_requests_before_generator(
     elif case == "periodic":
         mesh_options["periodic_pair_ids"] = ["x"]
 
-    with pytest.raises(ValueError, match="qualified mixed shared-domain route rejects"):
+    with pytest.raises(
+        ValueError,
+        match=r"(qualified mixed shared-domain route rejects|mixed_periodic_topology_unsupported)",
+    ):
         asset_pipeline._realize_fem_domain_mesh_asset_from_components_impl(
             geometries,
             hints,
@@ -2664,54 +2667,52 @@ def test_mixed_layer_topology_certificate_survives_owned_mesh_paths(
     )
 
 
-def _mixed_remesh_transport_mesh() -> Mock:
-    mesh = Mock()
-    mesh.nodes = np.asarray(
-        [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [1.0, 0.0, 1.0],
-            [0.0, 1.0, 1.0],
-            [3.0, -1.0, 0.0],
-            [5.0, -1.0, 0.0],
-            [5.0, 1.0, 0.0],
-            [3.0, 1.0, 0.0],
-            [4.0, 0.0, 1.0],
-            [7.0, 0.0, 0.0],
-            [8.0, 0.0, 0.0],
-            [7.0, 1.0, 0.0],
-            [7.0, 0.0, 1.0],
-        ]
+def _mixed_remesh_transport_mesh() -> MeshData:
+    mesh = MeshData(
+        nodes=np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [1.0, 0.0, 1.0],
+                [0.0, 1.0, 1.0],
+                [3.0, -1.0, 0.0],
+                [5.0, -1.0, 0.0],
+                [5.0, 1.0, 0.0],
+                [3.0, 1.0, 0.0],
+                [4.0, 0.0, 1.0],
+                [7.0, 0.0, 0.0],
+                [8.0, 0.0, 0.0],
+                [7.0, 1.0, 0.0],
+                [7.0, 0.0, 1.0],
+            ]
+        ),
+        cell_types=np.asarray(["prism6", "pyramid5", "tet4"]),
+        cell_offsets=np.asarray([0, 6, 11, 15]),
+        cell_nodes=np.arange(15, dtype=np.int32),
+        cell_global_ordinals=np.asarray([0, 1, 2]),
+        cell_mesh_parts=np.asarray(["magnetic", "transition_air", "far_air"]),
+        element_markers=np.asarray([1, 0, 0]),
+        facet_types=np.asarray(["tri3", "quad4", "quad4", "tri3"]),
+        facet_roles=np.asarray(
+            ["material_interface", "exterior", "exterior", "exterior"]
+        ),
+        facet_offsets=np.asarray([0, 3, 7, 11, 14]),
+        facet_nodes=np.asarray(
+            [0, 1, 2, 0, 1, 4, 3, 6, 7, 8, 9, 11, 12, 13], dtype=np.int32
+        ),
+        facet_global_ordinals=np.asarray([0, 1, 2, 3]),
+        boundary_markers=np.asarray([2, 3, 3, 3]),
     )
-    mesh.cell_types = np.asarray(["prism6", "pyramid5", "tet4"])
-    mesh.cell_offsets = np.asarray([0, 6, 11, 15])
-    mesh.cell_nodes = np.arange(15)
-    mesh.cell_global_ordinals = np.asarray([0, 1, 2])
-    mesh.cell_mesh_parts = np.asarray(["magnetic", "transition_air", "far_air"])
-    mesh.element_markers = np.asarray([1, 0, 0])
-    mesh.facet_types = np.asarray(["tri3", "quad4", "quad4", "tri3"])
-    mesh.facet_roles = np.asarray(
-        ["material_interface", "exterior", "exterior", "exterior"]
-    )
-    mesh.facet_offsets = np.asarray([0, 3, 7, 11, 14])
-    mesh.facet_nodes = np.asarray(
-        [0, 1, 2, 0, 1, 4, 3, 6, 7, 8, 9, 11, 12, 13]
-    )
-    mesh.facet_global_ordinals = np.asarray([0, 1, 2, 3])
-    mesh.boundary_markers = np.asarray([2, 3, 3, 3])
-    mesh.periodic_boundary_pairs = []
-    mesh.periodic_node_pairs = []
-    mesh.periodic_mesh_certificate = None
-    mesh.quality = None
-    mesh.mixed_layer_topology_certificate.to_dict.return_value = {
+    cert = Mock()
+    cert.to_dict.return_value = {
         "schema_version": "mixed_layer_topology_certificate.v1",
         "certificate_status": "accepted",
         "topology_fingerprint_version": "v2",
         "topology_fingerprint": "sha256:" + "1" * 64,
     }
-    mesh.oriented_copy.return_value = mesh
+    object.__setattr__(mesh, "mixed_layer_topology_certificate", cert)
     return mesh
 
 

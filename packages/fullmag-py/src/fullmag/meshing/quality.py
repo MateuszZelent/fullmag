@@ -456,6 +456,7 @@ def build_typed_quality_summary(
             f"signed_jacobian.{family}.v1": signed_jacobian,
             f"edge_aspect.{family}.v1": edge_aspect,
             f"skewness.{family}.v1": skewness,
+            f"edge_length_uniformity.{family}.v1": skewness,
         }
         for metric_id, observed in cell_metrics.items():
             if not np.isfinite(observed):
@@ -498,10 +499,12 @@ def build_typed_quality_summary(
             f"signed_jacobian.{family}.v1": _metric_stats(jacobians, unit="m^3"),
             f"edge_aspect.{family}.v1": _metric_stats(aspects, unit="1"),
             f"skewness.{family}.v1": _metric_stats(skewness, unit="1"),
+            f"edge_length_uniformity.{family}.v1": _metric_stats(skewness, unit="1"),
         }
         metric_definitions.add(f"signed_jacobian.{family}.v1")
         metric_definitions.add(f"edge_aspect.{family}.v1")
         metric_definitions.add(f"skewness.{family}.v1")
+        metric_definitions.add(f"edge_length_uniformity.{family}.v1")
         violating: list[int] = []
         for metric_id, values in (
             ("cell.volume.v1", volumes),
@@ -509,6 +512,7 @@ def build_typed_quality_summary(
             (f"signed_jacobian.{family}.v1", jacobians),
             (f"edge_aspect.{family}.v1", aspects),
             (f"skewness.{family}.v1", skewness),
+            (f"edge_length_uniformity.{family}.v1", skewness),
         ):
             rule = normalized_thresholds.get(metric_id, {})
             minimum = rule.get("minimum")

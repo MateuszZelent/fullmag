@@ -29,7 +29,12 @@ import math
 from typing import Mapping, Sequence
 
 from fullmag._progress import emit_progress
-from fullmag._validation import parse_bool, parse_finite_float, parse_integer
+from fullmag._validation import (
+    TypedValidationError,
+    parse_bool,
+    parse_finite_float,
+    parse_integer,
+)
 from fullmag.model.discretization import PerObjectMeshRecipe, SharedMeshAssemblyPolicy
 from fullmag.model.domain_frame import geometry_bounds
 from fullmag.model.geometry import ArchWaveguide, Box, Geometry, Translate
@@ -757,6 +762,7 @@ def _build_object_bulk_fields(
             {
                 "kind": "Box",
                 "params": {
+                    "GeometryName": geometry.geometry_name,
                     "VIn": float(bulk_hmax),
                     "VOut": float(_NO_OP_FIELD_SIZE),
                     "XMin": float(bounds_min[0]),
@@ -1506,6 +1512,7 @@ def _resolve_per_object_mesh_options(
                 {
                     "kind": "Box",
                     "params": {
+                        "GeometryName": geometry.geometry_name,
                         "VIn": float(target_hmax),
                         "VOut": float(_NO_OP_FIELD_SIZE),
                         "XMin": float(bounds_min[0]),
@@ -1563,9 +1570,33 @@ def _mesh_options_from_runtime_metadata(
 
     def _single_geometry_value(key: str) -> object | None:
         entries = [entry for entry in raw_per_geometry if isinstance(entry, Mapping)]
-        if len(entries) != 1:
+        if not entries:
             return None
-        return entries[0].get(key)
+        if len(entries) == 1:
+            return entries[0].get(key)
+        values = [entry[key] for entry in entries if entry.get(key) is not None]
+        if not values:
+            return None
+        first = values[0]
+        if any(v != first for v in values[1:]):
+            raise ValueError(
+                f"unsupported_mesh_combination: conflicting per-geometry '{key}' values "
+                f"({values}) in shared-domain meshing"
+            )
+        if len(values) < len(entries) and key in (
+            "mesh_strategy",
+            "through_thickness_elements",
+            "through_thickness_distribution",
+            "through_thickness_element_ratio",
+            "through_thickness_symmetric",
+            "sweep_face_meshing",
+            "sweep_direction",
+        ):
+            raise ValueError(
+                f"unsupported_mesh_combination: component-level '{key}' specified on some "
+                f"but not all geometries in shared-domain meshing"
+            )
+        return first
 
     def _per_geometry_values(key: str) -> list[object]:
         return [

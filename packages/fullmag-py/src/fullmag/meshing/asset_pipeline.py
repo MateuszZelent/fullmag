@@ -2565,6 +2565,21 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         surface_mesh_options,
         context="shared-domain mesh planner",
     )
+    if surface_mesh_options.mesh_strategy == "swept_hex":
+        raise ValueError(
+            "unsupported_mesh_combination: explicit swept_hex realization is not supported in shared-domain meshing"
+        )
+    if (
+        surface_mesh_options.mesh_strategy in (None, "auto")
+        and surface_mesh_options.through_thickness_elements is not None
+    ):
+        if len(geometries) > 1:
+            raise ValueError(
+                "unsupported_mesh_combination: multi-geometry shared domain does not support through-thickness element layering"
+            )
+        elif len(geometries) == 1 and isinstance(geometries[0], Box):
+            surface_mesh_options = _dc_replace(surface_mesh_options, mesh_strategy="swept_prism")
+
     qualified_mixed_body_hmax: float | None = None
     if surface_mesh_options.mesh_strategy == "swept_prism":
         qualified_mixed_body_hmax = _qualified_mixed_per_geometry_body_hmax(
@@ -2901,6 +2916,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 from ._gmsh_occ import generate_shared_domain_mesh_via_occ
 
                 is_stl_multi = len(geometries) > 1 and any(isinstance(g, ImportedGeometry) for g in geometries)
+                result: SharedDomainMeshResult | None = None
 
                 try:
                     if conformal_occ_direct:
@@ -2974,6 +2990,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 )
                                 break
                             except ValueError as exc:
+                                result = None
                                 retry = (
                                     _conformal_occ_degenerate_retry(
                                         mesh_options,
@@ -3059,6 +3076,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             f"{len(result.component_volume_tags)} components"
                         )
                 except Exception as primary_exc:
+                    result = None
                     if conformal_object_regions:
                         raise
                     # If conformal OCC failed, fall back safely to component-aware STL mesh
@@ -3084,9 +3102,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             )
                             primary_exc = None  # successfully recovered!
                         except Exception as stl_exc:
+                            result = None
                             primary_exc = stl_exc
 
                     if primary_exc is not None:
+                        result = None
                         build_mode = "concatenated_stl_fallback"
                         if _PREEMPTIVE_IMPORTED_STL_FALLBACK in fallbacks_triggered:
                             emit_progress(
@@ -3191,7 +3211,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
         assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
         region_markers: list[dict[str, object]] = []
         object_region_markers: list[dict[str, object]] = []
-        if result is not None:
+        if result is not None and getattr(result, "mesh", None) is mesh:
             for used_marker, geometry in enumerate(geometries, start=1):
                 source_marker = result.component_marker_tags.get(geometry.geometry_name)
                 if source_marker is None:

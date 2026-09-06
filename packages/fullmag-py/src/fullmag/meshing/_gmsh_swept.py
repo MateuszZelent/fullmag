@@ -1476,30 +1476,17 @@ def _repair_mixed_tetrahedra_for_qualification(
 ) -> _MixedTetDegeneracyReport:
     """Run one private qualification candidate through the canonical repair."""
     selected_method = "" if method == "default" else method
-    if (
-        selected_method == _STRICT_MIXED_TET_REPAIR_POLICY.method
-        and iterations == _STRICT_MIXED_TET_REPAIR_POLICY.iterations
-    ):
-        policy = _MixedTetRepairPolicy(
-            algorithm_id=_STRICT_MIXED_TET_REPAIR_POLICY.algorithm_id,
-            method=selected_method,
-            iterations=iterations,
-            optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
-            force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
-            local_first=False,
-        )
-    else:
-        policy = _MixedTetRepairPolicy(
-            algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
-                selected_method,
-                iterations,
-            ),
-            method=selected_method,
-            iterations=iterations,
-            optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
-            force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
-            local_first=False,
-        )
+    policy = _MixedTetRepairPolicy(
+        algorithm_id=_qualification_mixed_tet_repair_algorithm_id(
+            selected_method,
+            iterations,
+        ),
+        method=selected_method,
+        iterations=iterations,
+        optimize_threshold=_STRICT_MIXED_TET_REPAIR_POLICY.optimize_threshold,
+        force=_STRICT_MIXED_TET_REPAIR_POLICY.force,
+        local_first=False,
+    )
     return _execute_mixed_tet_repair_policy(gmsh, policy)
 
 
@@ -1636,22 +1623,26 @@ def _compute_layer_heights(
     if n_layers < 1:
         raise ValueError("n_layers must be >= 1")
 
-    if distribution == DISTRIBUTION_FIXED or element_ratio == 1.0:
+    if n_layers == 1 or distribution == DISTRIBUTION_FIXED or element_ratio == 1.0:
         return [1.0 / n_layers] * n_layers
 
     if symmetric:
-        # Mirror grading: fine at both faces, coarser in center.
-        half_n = n_layers // 2
-        remainder = n_layers - 2 * half_n
-        half_heights = _compute_layer_heights(
-            half_n, total_thickness / 2.0, distribution, element_ratio, symmetric=False,
-        )
-        result = half_heights[:]
-        if remainder > 0:
-            result.append(1.0 / n_layers)
-        result.extend(reversed(half_heights))
-        total = sum(result)
-        return [h / total for h in result]
+        # Mirror grading: fine at both outer faces, coarser in center.
+        if distribution == DISTRIBUTION_LINEAR:
+            center_dist = (n_layers - 1) / 2.0
+            raw = [
+                1.0 + (element_ratio - 1.0) * (min(i, n_layers - 1 - i) / center_dist)
+                for i in range(n_layers)
+            ]
+        elif distribution == DISTRIBUTION_EXPONENTIAL:
+            raw = [
+                float(element_ratio) ** min(i, n_layers - 1 - i)
+                for i in range(n_layers)
+            ]
+        else:
+            raw = [1.0] * n_layers
+        total = sum(raw)
+        return [h / total for h in raw]
 
     if distribution == DISTRIBUTION_LINEAR:
         # Linear grading: height_i = 1 + (ratio-1) * i / (n-1)
@@ -2164,9 +2155,15 @@ def generate_swept_box_mesh(
         gmsh.option.setNumber("Mesh.CharacteristicLengthMax", source_hmax_scaled)
         if opts.hmin is not None:
             gmsh.option.setNumber("Mesh.CharacteristicLengthMin", opts.hmin * SCALE)
+        if opts.size_factor is not None and opts.size_factor > 0.0:
+            gmsh.option.setNumber("Mesh.MeshSizeFactor", float(opts.size_factor))
+        if opts.size_from_curvature > 0:
+            gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", opts.size_from_curvature)
+        if opts.curvature_factor is not None and opts.curvature_factor > 0.0:
+            gmsh.option.setNumber("Mesh.MinimumElementsPerTwoPi", float(opts.curvature_factor))
         gmsh.option.setNumber("Mesh.Algorithm", opts.algorithm_2d)
         source_refinement_field: int | None = None
-        if airbox is not None and opts.size_fields:
+        if opts.size_fields:
             source_refinement_field = _apply_mixed_source_face_mesh_options(
                 gmsh,
                 source_surface=source_surf,
@@ -2175,15 +2172,16 @@ def generate_swept_box_mesh(
                 opts=opts,
                 hscale=SCALE,
             )
-            gmsh.model.mesh.generate(2)
-            _set_mixed_volume_mesh_size_options(
-                gmsh,
-                maximum_element_size_scaled=(
-                    float(airbox.maximum_element_size) * SCALE
-                    if airbox.maximum_element_size is not None
-                    else hmax_scaled
-                ),
-            )
+            if airbox is not None:
+                gmsh.model.mesh.generate(2)
+                _set_mixed_volume_mesh_size_options(
+                    gmsh,
+                    maximum_element_size_scaled=(
+                        float(airbox.maximum_element_size) * SCALE
+                        if airbox.maximum_element_size is not None
+                        else hmax_scaled
+                    ),
+                )
         elif airbox is not None and source_hmax_scaled < hmax_scaled:
             # Restrict the quality-preserving target to the magnetic source
             # face. Letting the fine point size propagate through the 3D

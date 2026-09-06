@@ -665,16 +665,27 @@ def _mesh_result_payload(
         else None
     )
     raw_mesh_options = mesh_provenance.get("mesh_options")
-    raw_growth = (
-        raw_mesh_options.get("growth_rate")
-        if isinstance(raw_mesh_options, dict)
-        else None
-    )
+    raw_growth = None
+    growth_pointer = "/mesh_provenance/mesh_options/growth_rate"
+    if isinstance(raw_mesh_options, dict):
+        raw_growth = raw_mesh_options.get("growth_rate")
+        if raw_growth is None:
+            raw_growth = raw_mesh_options.get("maximum_element_growth_rate")
+            if raw_growth is not None:
+                growth_pointer = "/mesh_provenance/mesh_options/maximum_element_growth_rate"
+    if raw_growth is None:
+        raw_growth = mesh_provenance.get("growth_rate")
+        if raw_growth is not None:
+            growth_pointer = "/mesh_provenance/growth_rate"
+        else:
+            raw_growth = mesh_provenance.get("maximum_element_growth_rate")
+            if raw_growth is not None:
+                growth_pointer = "/mesh_provenance/maximum_element_growth_rate"
     growth_report = None
     if raw_growth is not None:
         growth_value = parse_finite_float(
             raw_growth,
-            "/mesh_provenance/mesh_options/growth_rate",
+            growth_pointer,
             positive=True,
             allow_numeric_string=True,
         )
@@ -851,9 +862,6 @@ def main() -> None:
         hmax = mesh_opts_dict.get("hmax") or config["hmax"]
         order = config.get("order", 1)
         mesh_opts = _mesh_options_from_dict(mesh_opts_dict)
-        if mode == "adaptive_size_field":
-            mesh_opts.compute_quality = bool(mesh_opts_dict.get("compute_quality", True))
-            mesh_opts.per_element_quality = bool(mesh_opts_dict.get("per_element_quality", True))
         emit_progress(
             _describe_remesh_job(
                 mode,
