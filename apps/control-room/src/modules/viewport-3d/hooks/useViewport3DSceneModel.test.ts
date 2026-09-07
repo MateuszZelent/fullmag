@@ -91,7 +91,6 @@ import {
 } from "../model/viewport3DTargetFieldBuffer";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
-  type Viewport3DCommandState,
 } from "../viewport3dStore";
 import {
   identifyVectorGlyphBuildResult,
@@ -4685,17 +4684,13 @@ describe("useViewport3DSceneModel", () => {
   });
 
   it("uses the committed camera registry snapshot for live scene rendering", () => {
-    const commandState = {
-      camera: {
-        position: [3, 2, 1],
-        target: [0.5, 0.25, 0],
-        up: [0, 0, 1],
-      },
-      widgets: {
-        cameraOrthographicScale: 4e-6,
-        cameraProjection: "perspective",
-      },
-    } as Pick<Viewport3DCommandState, "camera" | "widgets">;
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const cameraViewResolver = source.slice(
+      source.indexOf(
+        "export function resolveViewport3DSceneCameraView",
+      ),
+      source.indexOf("export function useViewport3DSceneModel"),
+    );
     const registryCamera = {
       ...DEFAULT_CAMERA_REGISTRY_STATE,
       position: DEFAULT_VIEWPORT_3D_CAMERA_STATE.position,
@@ -4706,7 +4701,6 @@ describe("useViewport3DSceneModel", () => {
     expect(
       resolveViewport3DSceneCameraView({
         cameraRegistryCamera: registryCamera,
-        commandState,
       }).cameraState,
     ).toEqual({
       position: registryCamera.position,
@@ -4720,7 +4714,6 @@ describe("useViewport3DSceneModel", () => {
           orthographic_scale: 2.5e-6,
           projection: "orthographic",
         },
-        commandState,
       }).cameraOrthographicScale,
     ).toBe(2.5e-6);
     expect(
@@ -4730,7 +4723,6 @@ describe("useViewport3DSceneModel", () => {
           orthographic_scale: 2.5e-6,
           projection: "orthographic",
         },
-        commandState,
       }).cameraState,
     ).toEqual({
       position: registryCamera.position,
@@ -4744,10 +4736,10 @@ describe("useViewport3DSceneModel", () => {
           orthographic_scale: 2.5e-6,
           projection: "orthographic",
         },
-        commandState,
       }).cameraOrthographicScale,
     ).toBe(2.5e-6);
-    expect(readFileSync(sceneModelSourceUrl, "utf8")).not.toContain(
+    expect(cameraViewResolver).not.toContain("commandState:");
+    expect(source).not.toContain(
       "useViewport3DCameraRegistryStoreSync",
     );
   });

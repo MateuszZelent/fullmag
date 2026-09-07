@@ -373,7 +373,6 @@ import {
   resolveViewport3DCameraOrthographicScale,
   resolveViewport3DCameraProjection,
   resolveViewport3DCameraState,
-  type Viewport3DCommandState,
   type Viewport3DCameraProjection,
   type Viewport3DCameraState,
   type useViewport3DCommandState,
@@ -2623,7 +2622,6 @@ export function resolveViewport3DSceneCameraView({
   cameraRegistryCamera,
 }: {
   cameraRegistryCamera: VisualizationStateResource["camera"];
-  commandState: Pick<Viewport3DCommandState, "camera" | "widgets">;
 }): {
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -2726,7 +2724,6 @@ export function useViewport3DSceneModel({
   );
   const cameraView = resolveViewport3DSceneCameraView({
     cameraRegistryCamera,
-    commandState,
   });
   const cameraResource = cameraView.cameraResource;
   const visualizationRevision = renderingState?.revision ?? null;
