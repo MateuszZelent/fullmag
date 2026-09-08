@@ -1,0 +1,83 @@
+name: Promote validated meshing documentation v3
+
+on:
+  push:
+    branches:
+      - docs/meshing-v3-production-20260824
+    paths:
+      - public_docs/site/numerical-methods/meshing/**/*.md
+      - public_docs/site/numerical-methods/meshing/*.md
+
+permissions:
+  contents: write
+
+concurrency:
+  group: meshing-docs-v3-promote-20260824
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out validated branch
+        uses: actions/checkout@v4
+        with:
+          ref: docs/meshing-v3-production-20260824
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install documentation dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r public_docs/site/requirements.txt
+          python -m pip install -e packages/fullmag-py
+
+      - name: Revalidate final generated tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find public_docs/site/numerical-methods/meshing -type f -name '*.md' | wc -l)" -eq 28
+          test "$(grep -RIl '<!-- FULLMAG_MESHING_V3_BEGIN -->' public_docs/site/numerical-methods/meshing --include='*.md' | wc -l)" -eq 28
+          python scripts/check_public_docs_information_architecture.py --root public_docs/site
+          python scripts/check_public_doc_examples.py --root public_docs/site
+          rm -rf /tmp/fullmag-public-docs-html
+          sphinx-build -b html -W -n --keep-going public_docs/site /tmp/fullmag-public-docs-html
+          test -f /tmp/fullmag-public-docs-html/numerical-methods/meshing/fem/ferromagnet/swept-prism.html
+
+      - name: Remove transport workflow and create clean branch tip
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/meshing-docs-v3-promote-20260824.yml
+          git commit -m 'chore(docs): remove meshing v3 transport workflow'
+
+      - name: Rebase and fast-forward master
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch='docs/meshing-v3-production-20260824'
+          git fetch origin master
+          git rebase origin/master
+
+          mapfile -t changed < <(git diff --name-only origin/master...HEAD)
+          test "${#changed[@]}" -eq 28
+          for path in "${changed[@]}"; do
+            case "$path" in
+              public_docs/site/numerical-methods/meshing/*.md|public_docs/site/numerical-methods/meshing/**/*.md) ;;
+              *) echo "Unexpected final change: $path" >&2; exit 1 ;;
+            esac
+          done
+          git diff --check origin/master...HEAD
+
+          git push --force-with-lease origin HEAD:"$branch"
+          git push origin HEAD:master
