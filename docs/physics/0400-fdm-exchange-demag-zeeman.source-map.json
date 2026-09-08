@@ -140,6 +140,18 @@
       "responsibility": "CPU FDM effective-field assembly"
     },
     {
+      "id": "cuda_external_energy_reduction",
+      "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu",
+      "symbol": "reduce_external_energy_fp64",
+      "responsibility": "CUDA external-energy reduction over uniform, sampled, and regional external fields with partial-cell volume weighting"
+    },
+    {
+      "id": "cuda_energy_density_materialization",
+      "path": "backends/fdm/gpu/cuda/interactions/energy_density_fp64.cu",
+      "symbol": "launch_energy_density_observable",
+      "responsibility": "CUDA per-cell energy-density materialization aligned with external-field sources and the current partial-cell volume contract"
+    },
+    {
       "id": "state_observables",
       "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
       "symbol": "observe_state_with_antenna_field",
@@ -154,7 +166,7 @@
     {
       "id": "field_materialization",
       "path": "crates/fullmag-runner/src/interactive_runtime.rs",
-      "symbol": "build_full_grid_materialized_fields",
+      "symbol": "build_cached_grid_preview_fields",
       "responsibility": "selectively constructs full-grid live materializations from one observable state; not proof of an atomic terminal generation/batch"
     },
     {
