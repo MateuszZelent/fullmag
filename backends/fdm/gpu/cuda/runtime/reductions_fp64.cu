@@ -1375,16 +1375,18 @@ double reduce_demag_energy_fp32(Context &ctx) {
 }
 
 double reduce_external_energy_fp64(Context &ctx) {
-    if (!ctx.has_external_field && !ctx.has_oersted_field &&
+    const bool has_external_profile =
+        ctx.has_static_external_field_profile || ctx.has_oersted_field;
+    if (!ctx.has_external_field && !has_external_profile &&
         ctx.regional_field_drive_count == 0) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = -MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
-    const auto *oe_x = ctx.has_oersted_field ? static_cast<const double *>(ctx.h_oe_static.x) : nullptr;
-    const auto *oe_y = ctx.has_oersted_field ? static_cast<const double *>(ctx.h_oe_static.y) : nullptr;
-    const auto *oe_z = ctx.has_oersted_field ? static_cast<const double *>(ctx.h_oe_static.z) : nullptr;
+    const auto *oe_x = has_external_profile ? static_cast<const double *>(ctx.h_oe_static.x) : nullptr;
+    const auto *oe_y = has_external_profile ? static_cast<const double *>(ctx.h_oe_static.y) : nullptr;
+    const auto *oe_z = has_external_profile ? static_cast<const double *>(ctx.h_oe_static.z) : nullptr;
     external_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const double *>(ctx.m.x),
         static_cast<const double *>(ctx.m.y),
@@ -1413,16 +1415,18 @@ double reduce_external_energy_fp64(Context &ctx) {
 }
 
 double reduce_external_energy_fp32(Context &ctx) {
-    if (!ctx.has_external_field && !ctx.has_oersted_field &&
+    const bool has_external_profile =
+        ctx.has_static_external_field_profile || ctx.has_oersted_field;
+    if (!ctx.has_external_field && !has_external_profile &&
         ctx.regional_field_drive_count == 0) {
         return 0.0;
     }
     uint64_t blocks = launch_grid_for(ctx.cell_count);
     int has_vf = (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     double coeff = -MU0 * ctx.Ms * ctx.dx * ctx.dy * ctx.dz;
-    const auto *oe_x = ctx.has_oersted_field ? static_cast<const float *>(ctx.h_oe_static.x) : nullptr;
-    const auto *oe_y = ctx.has_oersted_field ? static_cast<const float *>(ctx.h_oe_static.y) : nullptr;
-    const auto *oe_z = ctx.has_oersted_field ? static_cast<const float *>(ctx.h_oe_static.z) : nullptr;
+    const auto *oe_x = has_external_profile ? static_cast<const float *>(ctx.h_oe_static.x) : nullptr;
+    const auto *oe_y = has_external_profile ? static_cast<const float *>(ctx.h_oe_static.y) : nullptr;
+    const auto *oe_z = has_external_profile ? static_cast<const float *>(ctx.h_oe_static.z) : nullptr;
     external_energy_blocks_kernel<<<static_cast<unsigned int>(blocks), REDUCTION_BLOCK_SIZE>>>(
         static_cast<const float *>(ctx.m.x),
         static_cast<const float *>(ctx.m.y),

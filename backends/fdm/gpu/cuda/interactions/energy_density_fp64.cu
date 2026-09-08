@@ -1,6 +1,7 @@
 /* energy_density_fp64.cu - per-cell energy-density materialization. */
 
 #include "context.hpp"
+#include "regional_field_drive.cuh"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -52,16 +53,20 @@ __global__ void energy_density_kernel(
     const Scalar *h_oe_y,
     const Scalar *h_oe_z,
     const uint8_t *active_mask,
+    const double *volume_fraction,
     Scalar *out,
     uint64_t cell_count,
     int nx,
     int ny,
     int nz,
     int has_active_mask,
+    int has_volume_fraction,
     int include_exchange,
     int include_demag,
     int include_external,
+    int include_static_profile,
     int include_drive,
+    int include_regional_field,
     int include_anisotropy,
     int has_uniaxial_anisotropy,
     double ku1,
@@ -91,6 +96,14 @@ __global__ void energy_density_kernel(
     double external_x,
     double external_y,
     double external_z,
+    const Scalar *regional_drive_x,
+    const Scalar *regional_drive_y,
+    const Scalar *regional_drive_z,
+    const RegionalFieldDriveParams *regional_drive_params,
+    const double *regional_drive_points,
+    uint32_t regional_drive_count,
+    uint64_t regional_drive_cell_count,
+    double evaluation_time_s,
     double drive_scale,
     double d_interfacial,
     double d_bulk,
@@ -112,7 +125,9 @@ __global__ void energy_density_kernel(
     const double mmx = static_cast<double>(mx[index]);
     const double mmy = static_cast<double>(my[index]);
     const double mmz = static_cast<double>(mz[index]);
+    const double phi_i = has_volume_fraction ? volume_fraction[index] : 1.0;
     double density = 0.0;
+    double dmi_density = 0.0;
 
     const bool wants_total = kind == FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_EX) && include_exchange) {
@@ -128,7 +143,26 @@ __global__ void energy_density_kernel(
             mmz * static_cast<double>(h_demag_z[index]));
     }
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_EXT) && include_external) {
-        density += -MU0 * ms * (mmx * external_x + mmy * external_y + mmz * external_z);
+        double field_x = external_x;
+        double field_y = external_y;
+        double field_z = external_z;
+        if (include_static_profile && h_oe_x != nullptr) {
+            field_x += static_cast<double>(h_oe_x[index]);
+            field_y += static_cast<double>(h_oe_y[index]);
+            field_z += static_cast<double>(h_oe_z[index]);
+        }
+        if (include_regional_field) {
+            field_x += regional_field_drive_component(
+                regional_drive_x, regional_drive_params, regional_drive_points,
+                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+            field_y += regional_field_drive_component(
+                regional_drive_y, regional_drive_params, regional_drive_points,
+                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+            field_z += regional_field_drive_component(
+                regional_drive_z, regional_drive_params, regional_drive_points,
+                regional_drive_count, regional_drive_cell_count, index, evaluation_time_s);
+        }
+        density += -MU0 * ms * (mmx * field_x + mmy * field_y + mmz * field_z);
     }
     if (kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive) {
         density += -MU0 * ms * drive_scale * (
@@ -191,7 +225,7 @@ __global__ void energy_density_kernel(
             const double dmy_dy = (static_cast<double>(my[yp]) - static_cast<double>(my[ym])) * inv_2dy;
             const double dmz_dx = (static_cast<double>(mz[xp]) - static_cast<double>(mz[xm])) * inv_2dx;
             const double dmz_dy = (static_cast<double>(mz[yp]) - static_cast<double>(mz[ym])) * inv_2dy;
-            density += d_interfacial * (mmz * (dmx_dx + dmy_dy) - mmx * dmz_dx - mmy * dmz_dy);
+            dmi_density += d_interfacial * (mmz * (dmx_dx + dmy_dy) - mmx * dmz_dx - mmy * dmz_dy);
         }
         if (include_bulk_dmi) {
             const double dmz_dy = (static_cast<double>(mz[yp]) - static_cast<double>(mz[ym])) * inv_2dy;
@@ -203,11 +237,13 @@ __global__ void energy_density_kernel(
             const double curl_x = dmz_dy - dmy_dz;
             const double curl_y = dmx_dz - dmz_dx;
             const double curl_z = dmy_dx - dmx_dy;
-            density += d_bulk * (mmx * curl_x + mmy * curl_y + mmz * curl_z);
+            dmi_density += d_bulk * (mmx * curl_x + mmy * curl_y + mmz * curl_z);
         }
     }
 
-    out[index] = static_cast<Scalar>(density);
+    // Scalar DMI reduction currently uses full cell volume; preserve that
+    // measure while applying partial-cell volume to the other energy terms.
+    out[index] = static_cast<Scalar>(phi_i * density + dmi_density);
 }
 
 bool is_energy_density_observable(fullmag_fdm_observable observable) {
@@ -237,7 +273,14 @@ bool launch_energy_density_observable(
 
     const int include_anisotropy =
         (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy) ? 1 : 0;
+    const int include_external =
+        (ctx.has_external_field || ctx.has_static_external_field_profile ||
+         ctx.regional_field_drive_count != 0) ? 1 : 0;
+    const int include_static_profile = ctx.has_static_external_field_profile ? 1 : 0;
     const int include_drive = ctx.has_oersted_field ? 1 : 0;
+    const int include_regional_field = ctx.regional_field_drive_count != 0 ? 1 : 0;
+    const int has_volume_fraction =
+        (ctx.boundary_tier > 0 && ctx.volume_fraction != nullptr) ? 1 : 0;
     const double drive_scale = oersted_field_scale(ctx, ctx.current_time);
     if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
         energy_density_kernel<<<block_count, BLOCK_SIZE, 0, context_compute_stream(ctx)>>>(
@@ -257,14 +300,18 @@ bool launch_energy_density_observable(
             static_cast<const double *>(ctx.h_oe_static.y),
             static_cast<const double *>(ctx.h_oe_static.z),
             ctx.active_mask,
+            ctx.volume_fraction,
             static_cast<double *>(ctx.energy_density),
             ctx.cell_count,
             static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
+            has_volume_fraction,
             ctx.enable_exchange ? 1 : 0,
             ctx.enable_demag ? 1 : 0,
-            ctx.has_external_field ? 1 : 0,
+            include_external,
+            include_static_profile,
             include_drive,
+            include_regional_field,
             include_anisotropy,
             ctx.has_uniaxial_anisotropy ? 1 : 0,
             ctx.Ku1,
@@ -285,7 +332,17 @@ bool launch_energy_density_observable(
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
-            ctx.external_field[0], ctx.external_field[1], ctx.external_field[2],
+            ctx.has_external_field ? ctx.external_field[0] : 0.0,
+            ctx.has_external_field ? ctx.external_field[1] : 0.0,
+            ctx.has_external_field ? ctx.external_field[2] : 0.0,
+            static_cast<const double *>(ctx.regional_field_drive_x),
+            static_cast<const double *>(ctx.regional_field_drive_y),
+            static_cast<const double *>(ctx.regional_field_drive_z),
+            ctx.regional_field_drive_params,
+            ctx.regional_field_drive_points,
+            ctx.regional_field_drive_count,
+            ctx.cell_count,
+            ctx.current_time,
             drive_scale,
             ctx.D_interfacial, ctx.D_bulk,
             0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
@@ -308,14 +365,18 @@ bool launch_energy_density_observable(
             static_cast<const float *>(ctx.h_oe_static.y),
             static_cast<const float *>(ctx.h_oe_static.z),
             ctx.active_mask,
+            ctx.volume_fraction,
             static_cast<float *>(ctx.energy_density),
             ctx.cell_count,
             static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
             ctx.has_active_mask ? 1 : 0,
+            has_volume_fraction,
             ctx.enable_exchange ? 1 : 0,
             ctx.enable_demag ? 1 : 0,
-            ctx.has_external_field ? 1 : 0,
+            include_external,
+            include_static_profile,
             include_drive,
+            include_regional_field,
             include_anisotropy,
             ctx.has_uniaxial_anisotropy ? 1 : 0,
             ctx.Ku1,
@@ -336,7 +397,17 @@ bool launch_energy_density_observable(
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
             ctx.Ms,
-            ctx.external_field[0], ctx.external_field[1], ctx.external_field[2],
+            ctx.has_external_field ? ctx.external_field[0] : 0.0,
+            ctx.has_external_field ? ctx.external_field[1] : 0.0,
+            ctx.has_external_field ? ctx.external_field[2] : 0.0,
+            static_cast<const float *>(ctx.regional_field_drive_x),
+            static_cast<const float *>(ctx.regional_field_drive_y),
+            static_cast<const float *>(ctx.regional_field_drive_z),
+            ctx.regional_field_drive_params,
+            ctx.regional_field_drive_points,
+            ctx.regional_field_drive_count,
+            ctx.cell_count,
+            ctx.current_time,
             drive_scale,
             ctx.D_interfacial, ctx.D_bulk,
             0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,

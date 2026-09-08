@@ -83,13 +83,42 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
     escaped = re.escape(symbol)
     if symbol.startswith("class "):
         class_name = re.escape(symbol.removeprefix("class ").rstrip(":"))
-        pattern = re.compile(rf"^\s*class\s+{class_name}\b", re.MULTILINE)
+        if path.endswith((".ts", ".tsx")):
+            pattern = re.compile(
+                rf"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+{class_name}\b",
+                re.MULTILINE,
+            )
+        else:
+            pattern = re.compile(rf"^\s*class\s+{class_name}\b", re.MULTILINE)
     elif path.endswith(".py"):
         pattern = re.compile(
             rf"^(?:\s*(?:async\s+)?def\s+{escaped}\s*\("
             rf"|{escaped}(?:\s*:\s*[^=\n]+)?\s*=(?!=))",
             re.MULTILINE,
         )
+    elif path.endswith((".ts", ".tsx")):
+        # TypeScript source maps use module declarations, class methods, and
+        # one top-level test-suite call as stable identities.  Keep every
+        # form anchored to a declaration-shaped line so ordinary member
+        # usages do not satisfy a source-map entry.
+        if symbol.startswith("function "):
+            function_name = re.escape(symbol.removeprefix("function ").strip())
+            pattern = re.compile(
+                rf"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+{function_name}\b",
+                re.MULTILINE,
+            )
+        elif symbol in {"describe", "it", "test"}:
+            # Vitest/Jest suite and test calls are the declaration boundary
+            # for a test source entry.  Multiple matching calls remain an
+            # error, preserving the validator's uniqueness requirement.
+            pattern = re.compile(rf"^\s*{escaped}\s*\(", re.MULTILINE)
+        else:
+            declaration = rf"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:const|let|var|function|class)\s+{escaped}\b"
+            method = (
+                rf"^\s*(?:(?:public|private|protected|static|abstract|readonly|override|async|get|set)\s+)*"
+                rf"{escaped}\s*\([^;]*?\)(?:\s*:\s*[^{{]+)?\s*\{{"
+            )
+            pattern = re.compile(rf"(?:{declaration}|{method})", re.MULTILINE | re.DOTALL)
     elif path.endswith(".rs"):
         pattern = re.compile(
             rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:"
@@ -99,6 +128,20 @@ def _source_symbol_declarations(path: str, text: str, symbol: str) -> list[str]:
         )
     elif Path(path).name == "justfile":
         pattern = re.compile(rf"^\s*{escaped}\s*:\s*$", re.MULTILINE)
+    elif path.endswith((".yaml", ".yml")):
+        # YAML service and top-level mapping keys are stable declarations even
+        # though they are not language-level functions.  Source maps use this
+        # form for managed compose services such as ``fem-cpu-tsan``.
+        pattern = re.compile(rf"^\s*{escaped}\s*:\s*$", re.MULTILINE)
+    elif path.endswith(".sh"):
+        # A shell scenario is declared in the first case allow-list.  Later
+        # dispatch branches may repeat the label, so scope the identity to the
+        # allow-list immediately following ``case ... in`` and before its
+        # default ``*)`` arm.
+        case_match = re.search(r"(?ms)^\s*case\b[^\n]*\bin\s*\n(.*?)(?=^\s*\*\))", text)
+        if case_match and re.search(rf"(?<![A-Za-z0-9_-]){escaped}(?![A-Za-z0-9_-])", case_match.group(1)):
+            return [symbol]
+        return []
     else:
         pattern = re.compile(
             rf"^(?!\s*return\b)\s*(?:"

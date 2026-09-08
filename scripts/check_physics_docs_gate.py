@@ -9,7 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PHYSICS_FACING_PREFIXES = (
     "packages/fullmag-py/",
+    "backends/",
     "crates/fullmag-ir/",
+    "crates/fullmag-engine/",
     "native/",
     "docs/specs/",
     "examples/",
