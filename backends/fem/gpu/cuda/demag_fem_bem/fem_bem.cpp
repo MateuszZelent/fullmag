@@ -364,6 +364,7 @@ void read_solver_statistics(
     }
 }
 
+#if FULLMAG_HAS_CUDA_RUNTIME
 bool solve_linear_system(
     Context &ctx,
     GpuFemBemLinearSystem &system,
@@ -433,6 +434,7 @@ bool solve_linear_system(
     }
     return true;
 }
+#endif
 #endif
 
 #if FULLMAG_HAS_MFEM_STACK

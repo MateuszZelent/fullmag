@@ -14,6 +14,9 @@ import {
   buildViewport3DFieldColorBuffer,
   estimateViewport3DFieldColorBuildInputBytes,
   estimateViewport3DFieldColorBuildOutputBytes,
+  normalizeScalarValueForTests,
+  normalizeScalarValueForShaderAttributeForTests,
+  resolveScalarRangeForFieldForTests,
 } from "./viewport3dFieldColorBuildModel";
 
 function fieldVectorFixture(): DecodedFieldVector {
@@ -390,5 +393,251 @@ describe("viewport3dFieldColorBuildModel", () => {
         12 * Float32Array.BYTES_PER_ELEMENT +
         pointIndices.byteLength,
     );
+  });
+
+  describe("normalizeScalarValue (S-05 relative epsilon)", () => {
+    it("maps values linearly when span is well-defined", () => {
+      expect(normalizeScalarValueForTests(5, { max: 10, min: 0 })).toBe(0.5);
+      expect(normalizeScalarValueForTests(0, { max: 10, min: 0 })).toBe(0);
+      expect(normalizeScalarValueForTests(10, { max: 10, min: 0 })).toBe(1);
+    });
+
+    it("clamps values outside the range to [0, 1]", () => {
+      expect(normalizeScalarValueForTests(-5, { max: 10, min: 0 })).toBe(0);
+      expect(normalizeScalarValueForTests(15, { max: 10, min: 0 })).toBe(1);
+    });
+
+    it("returns 0.5 for degenerate range at micromagnetic scale (Ms ≈ 8e5)", () => {
+      expect(
+        normalizeScalarValueForTests(800000, { max: 800000, min: 800000 }),
+      ).toBe(0.5);
+    });
+
+    it("returns 0.5 for float32 ULP rounding noise on uniform high-magnitude field", () => {
+      // span is 0.0625, scale is 800000. span (0.0625) <= 1e-6 * 800000 (0.8) -> degenerate
+      expect(
+        normalizeScalarValueForTests(800000.0625, {
+          max: 800000.0625,
+          min: 800000,
+        }),
+      ).toBe(0.5);
+    });
+
+    it("returns 0.5 for degenerate range at zero", () => {
+      expect(normalizeScalarValueForTests(0, { max: 0, min: 0 })).toBe(0.5);
+    });
+
+    it("returns 0.5 for degenerate range below 1e-6 absolute floor", () => {
+      expect(
+        normalizeScalarValueForTests(1e-8, { max: 1e-8, min: 1e-8 }),
+      ).toBe(0.5);
+    });
+
+    it("returns 0.5 for non-finite values and non-finite range boundaries", () => {
+      expect(normalizeScalarValueForTests(Number.NaN, { max: 10, min: 0 })).toBe(0.5);
+      expect(
+        normalizeScalarValueForTests(Number.POSITIVE_INFINITY, { max: 10, min: 0 }),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueForTests(Number.NEGATIVE_INFINITY, { max: 10, min: 0 }),
+      ).toBe(0.5);
+      expect(normalizeScalarValueForTests(5, { max: Number.NaN, min: 0 })).toBe(0.5);
+      expect(normalizeScalarValueForTests(5, { max: 10, min: Number.NaN })).toBe(0.5);
+      expect(
+        normalizeScalarValueForTests(5, null as unknown as Parameters<typeof normalizeScalarValueForTests>[1]),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueForTests(5, undefined as unknown as Parameters<typeof normalizeScalarValueForTests>[1]),
+      ).toBe(0.5);
+    });
+
+    it("returns 0.5 for inverted range where min > max", () => {
+      expect(normalizeScalarValueForTests(5, { max: 0, min: 10 })).toBe(0.5);
+    });
+  });
+
+  describe("normalizeScalarValueForShaderAttribute (S-07)", () => {
+    it("matches normalizeScalarValue for finite values", () => {
+      expect(
+        normalizeScalarValueForShaderAttributeForTests(5, { max: 10, min: 0 }),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueForShaderAttributeForTests(800000, {
+          max: 800000,
+          min: 800000,
+        }),
+      ).toBe(0.5);
+    });
+
+    it("passes NaN/Inf/overflow sentinels through unnormalized so the GPU fragment shader's bad-value detection still fires", () => {
+      expect(
+        normalizeScalarValueForShaderAttributeForTests(Number.NaN, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(Number.NaN);
+      expect(
+        normalizeScalarValueForShaderAttributeForTests(Number.POSITIVE_INFINITY, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(Number.POSITIVE_INFINITY);
+      expect(
+        normalizeScalarValueForShaderAttributeForTests(4e38, { max: 10, min: 0 }),
+      ).toBe(4e38);
+      expect(
+        normalizeScalarValueForShaderAttributeForTests(15, { max: 10, min: 0 }),
+      ).toBe(1);
+    });
+  });
+
+  describe("resolveScalarRangeForField (S-06 NaN/Inf handling)", () => {
+    it("skips NaN and Inf in field vector without collapsing valid range to {0, 0}", async () => {
+      const fieldVector: DecodedFieldVector = {
+        dtype: "float64",
+        grid: [4, 1, 1],
+        nComp: 1,
+        pointCount: 4,
+        quantityId: "m",
+        valueCount: 4,
+        values: new Float64Array([10, Number.NaN, Number.POSITIVE_INFINITY, 25]),
+      };
+
+      const range = await resolveScalarRangeForFieldForTests(
+        fieldVector,
+        "magnitude",
+        { chunkSize: 2 },
+      );
+
+      expect(range).toEqual({ max: 25, min: 10 });
+    });
+
+    it("returns { max: 0, min: 0 } when all values are non-finite", async () => {
+      const fieldVector: DecodedFieldVector = {
+        dtype: "float64",
+        grid: [3, 1, 1],
+        nComp: 1,
+        pointCount: 3,
+        quantityId: "m",
+        valueCount: 3,
+        values: new Float64Array([
+          Number.NaN,
+          Number.POSITIVE_INFINITY,
+          Number.NEGATIVE_INFINITY,
+        ]),
+      };
+
+      const range = await resolveScalarRangeForFieldForTests(
+        fieldVector,
+        "magnitude",
+        { chunkSize: 1 },
+      );
+
+      expect(range).toEqual({ max: 0, min: 0 });
+    });
+
+    it("builds CPU color buffer for field with NaN and Inf without throwing TypeError", async () => {
+      const fieldVector: DecodedFieldVector = {
+        dtype: "float64",
+        grid: [4, 1, 1],
+        nComp: 1,
+        pointCount: 4,
+        quantityId: "m",
+        valueCount: 4,
+        values: new Float64Array([0, Number.NaN, Number.POSITIVE_INFINITY, 10]),
+      };
+
+      const result = await buildViewport3DFieldColorBuffer({
+        colorMode: "magnitude",
+        colorPalette: "viridis",
+        fieldVector,
+        shaderOnly: false,
+        target: {
+          kind: "full-domain",
+          vertexCount: 4,
+        },
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.range).toEqual({ max: 10, min: 0 });
+      expect(result?.colors.length).toBe(12);
+      // Ensure all color values are finite numbers (no NaN colors)
+      for (let i = 0; i < result!.colors.length; i += 1) {
+        expect(Number.isFinite(result!.colors[i])).toBe(true);
+      }
+    });
+  });
+
+  describe("resolveScalarRangeForField diverging-palette auto-symmetric range (S-11)", () => {
+    function componentFieldVector(componentIndex: 0 | 1 | 2, values: number[]): DecodedFieldVector {
+      const flat: number[] = [];
+      for (const value of values) {
+        const point = [0, 0, 0];
+        point[componentIndex] = value;
+        flat.push(...point);
+      }
+      return {
+        dtype: "float64",
+        grid: [values.length, 1, 1],
+        nComp: 3,
+        pointCount: values.length,
+        quantityId: "m",
+        valueCount: flat.length,
+        values: new Float64Array(flat),
+      };
+    }
+
+    it("symmetrizes an asymmetric x-component range around zero for a diverging palette", async () => {
+      const fieldVector = componentFieldVector(0, [-2, 1, 5]);
+
+      const range = await resolveScalarRangeForFieldForTests(fieldVector, "x", {
+        chunkSize: 2,
+        colorPalette: "coolwarm",
+      });
+
+      expect(range).toEqual({ max: 5, min: -5 });
+    });
+
+    it("leaves an asymmetric x-component range untouched for a sequential palette", async () => {
+      const fieldVector = componentFieldVector(0, [-2, 1, 5]);
+
+      const range = await resolveScalarRangeForFieldForTests(fieldVector, "x", {
+        chunkSize: 2,
+        colorPalette: "viridis",
+      });
+
+      expect(range).toEqual({ max: 5, min: -2 });
+    });
+
+    it("does not symmetrize magnitude mode even with a diverging palette", async () => {
+      const fieldVector: DecodedFieldVector = {
+        dtype: "float64",
+        grid: [3, 1, 1],
+        nComp: 1,
+        pointCount: 3,
+        quantityId: "m",
+        valueCount: 3,
+        values: new Float64Array([1, 4, 9]),
+      };
+
+      const range = await resolveScalarRangeForFieldForTests(fieldVector, "magnitude", {
+        chunkSize: 2,
+        colorPalette: "coolwarm",
+      });
+
+      expect(range).toEqual({ max: 9, min: 1 });
+    });
+
+    it("leaves a caller-provided explicit scalarRange untouched even for a diverging palette", async () => {
+      const fieldVector = componentFieldVector(0, [-2, 1, 5]);
+
+      const range = await resolveScalarRangeForFieldForTests(fieldVector, "x", {
+        chunkSize: 2,
+        colorPalette: "coolwarm",
+        scalarRange: { max: 5, min: -2 },
+      });
+
+      expect(range).toEqual({ max: 5, min: -2 });
+    });
   });
 });

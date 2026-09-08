@@ -6,7 +6,7 @@
 - **Gałąź dokumentacyjna pochodzenia:** `docs/fem-gpu-performance-remediation-2026-09-01`
 - **Rewizja bazowa planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 - **Rewizja pierwotnego audytu:** `7faa259c5597ba447c413f2aea0ff66d6110b297`
-- **Rewizja weryfikacji kodu:** `c3f49db708868f3649a3e894416d230269718920`
+- **Rewizja weryfikacji kodu:** `6cc5e5e0396050f5f859a0e2b28dd3f963d3f7bb`
 - **Data:** 2026-09-01
 - **Lane:** natywny FEM GPU, MFEM 4.9, HYPRE 3.1.0, CUDA.
 - **Przypadek referencyjny:** µMAG SP4 FEM, `mixed_p1`, `layers=1`, `mesh=medium`,
@@ -19,6 +19,15 @@ Pakiet został ponownie sprawdzony względem kodu, testów kontraktowych i
 wydajności, parytet urządzenia i kwalifikacja naukowa pozostają `NOT VERIFIED`.
 Szczegółowy werdykt dla każdego ID znajduje się w
 [10-finding-coverage-matrix.md](10-finding-coverage-matrix.md).
+
+Granice dowodów w tej rewizji są rozdzielone następująco:
+
+| Warstwa dowodu | Status | Co potwierdza ten pakiet |
+|---|---|---|
+| source/contract | `CZĘŚCIOWO` | Statyczne mapowanie kodu, testów kontraktowych i recept `justfile`; nie jest to dowód wykonania operatora. |
+| managed GPU runtime | `NOT VERIFIED` | Brak świeżego, immutable receipt z bieżącego managed runtime GPU. |
+| physics/parity CPU↔GPU | `NOT VERIFIED` | Brak bieżącego porównania pól, energii, kroku, trajektorii i residuów dla tego samego wejścia. |
+| performance | `NOT VERIFIED` | Brak bieżącego benchmarku mediany/p95 z tym samym ProblemIR, meshem, tolerancjami i runtime bundle. |
 
 Stosowane statusy:
 

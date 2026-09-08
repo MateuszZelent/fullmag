@@ -99,4 +99,51 @@ describe("viewport3dRegionOverlayBuildScheduler", () => {
       "transferablesForViewport3DRegionOverlayBuildResult",
     );
   });
+
+  describe("M-08 · recovers the worker instead of permanently degrading a lane", () => {
+    const source = readFileSync(
+      new URL("./viewport3dRegionOverlayBuildScheduler.ts", import.meta.url),
+      "utf8",
+    );
+    const executeStart = source.indexOf(
+      "async function executeViewport3DRegionOverlayBuild",
+    );
+    const disposeStart = source.indexOf(
+      "export function disposeViewport3DRegionOverlayBuildWorker",
+    );
+    const executeSource = source.slice(executeStart, disposeStart);
+    const getClientStart = source.indexOf(
+      "function getRegionOverlayWorkerClient(",
+    );
+    const getClientSource = source.slice(
+      getClientStart,
+      source.indexOf("\n}\n", getClientStart),
+    );
+
+    it("disposes the failed worker and clears it to undefined instead of null so it can be recreated", () => {
+      expect(executeSource).toContain(
+        "regionOverlayWorkerClient?.dispose(error);",
+      );
+      expect(executeSource).toContain("regionOverlayWorkerClient = undefined;");
+      expect(executeSource).not.toContain("regionOverlayWorkerClient = null;");
+    });
+
+    it("backs off before recreating a worker that just failed", () => {
+      expect(source).toContain(
+        "const REGION_OVERLAY_WORKER_RETRY_BACKOFF_MS = 5_000;",
+      );
+      expect(executeSource).toContain(
+        "regionOverlayWorkerRetryNotBeforeMs =\n        Date.now() + REGION_OVERLAY_WORKER_RETRY_BACKOFF_MS;",
+      );
+      expect(getClientSource).toContain(
+        "if (Date.now() < regionOverlayWorkerRetryNotBeforeMs) {",
+      );
+    });
+
+    it("resets the backoff window on an explicit dispose", () => {
+      expect(source).toContain(
+        "regionOverlayWorkerFallbackReason = undefined;\n  regionOverlayWorkerRetryNotBeforeMs = 0;",
+      );
+    });
+  });
 });

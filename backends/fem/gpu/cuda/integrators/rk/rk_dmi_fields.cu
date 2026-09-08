@@ -42,6 +42,7 @@ bool gpu_rk_compute_one_dmi_field(
     cudaStream_t stream,
     int n,
     bool bulk_mode,
+    bool rotated_only,
     std::string &reason)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -55,7 +56,8 @@ bool gpu_rk_compute_one_dmi_field(
         reason = "GPU RK DMI requires device-resident mesh geometry, Ms, lumped mass, and residual buffers";
         return false;
     }
-    FemGpuComponentField &field = bulk_mode ? gpu.fields.h_bulk_dmi : gpu.fields.h_dmi;
+    FemGpuComponentField &field = bulk_mode ? gpu.fields.h_bulk_dmi :
+        (rotated_only ? gpu.fields.h_rotated_dmi : gpu.fields.h_dmi);
     if (field.x == nullptr || field.y == nullptr || field.z == nullptr) {
         reason = "GPU RK DMI requires device-resident H_dmi buffers";
         return false;
@@ -68,7 +70,7 @@ bool gpu_rk_compute_one_dmi_field(
         m.y,
         m.z,
         gpu.materials.ms,
-        bulk_mode ? gpu.materials.dbulk : gpu.materials.dind,
+        bulk_mode ? gpu.materials.dbulk : (rotated_only ? nullptr : gpu.materials.dind),
         gpu.mesh_metrics.lumped_mass,
         gpu.mesh_regions.magnetic_node_mask,
         gpu.local_interactions.vector.x,
@@ -79,17 +81,21 @@ bool gpu_rk_compute_one_dmi_field(
         field.z,
         gpu.reductions.scalar_workspace,
         ctx.material_fields.material.saturation_magnetisation,
-        bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
+        bulk_mode ? ctx.dmi.bulk_D : (rotated_only ? 0.0 : ctx.dmi.interfacial_D),
+        bulk_mode ? 0.0 : ctx.dmi.rotated_interfacial_D,
         ctx.dmi.interface_normal[0],
         ctx.dmi.interface_normal[1],
         ctx.dmi.interface_normal[2],
-        bulk_mode ? !ctx.material_fields.Dbulk_field.empty() : !ctx.material_fields.Dind_field.empty(),
+        bulk_mode ? !ctx.material_fields.Dbulk_field.empty() :
+            (!rotated_only && !ctx.material_fields.Dind_field.empty()),
+        !bulk_mode && ctx.dmi.rotated_interfacial_enabled,
         bulk_mode,
         static_cast<int>(ctx.mesh.n_elements),
         n,
         stream);
     return cuda_launch_ok(
-        bulk_mode ? "launch GPU RK bulk DMI field" : "launch GPU RK interfacial DMI field",
+        bulk_mode ? "launch GPU RK bulk DMI field" :
+            (rotated_only ? "launch GPU RK rotated DMI field" : "launch GPU RK interfacial DMI field"),
         reason);
 }
 
@@ -102,12 +108,17 @@ bool gpu_rk_compute_dmi_field_contributions(
     int n,
     std::string &reason)
 {
-    if (ctx.dmi.interfacial_enabled &&
-        !gpu_rk_compute_one_dmi_field(ctx, m, stream, n, false, reason)) {
+    if ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) &&
+        !gpu_rk_compute_one_dmi_field(ctx, m, stream, n, false, false, reason)) {
+        return false;
+    }
+    if (ctx.dmi.rotated_interfacial_enabled &&
+        // ponytail: a second qualified kernel keeps the public component exact; fuse if profiling warrants it.
+        !gpu_rk_compute_one_dmi_field(ctx, m, stream, n, false, true, reason)) {
         return false;
     }
     if (ctx.dmi.bulk_enabled &&
-        !gpu_rk_compute_one_dmi_field(ctx, m, stream, n, true, reason)) {
+        !gpu_rk_compute_one_dmi_field(ctx, m, stream, n, true, false, reason)) {
         return false;
     }
     return true;

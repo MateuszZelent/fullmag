@@ -1030,6 +1030,27 @@ describe("FdmCuboidLayer model", () => {
     );
   });
 
+  it("disposes the previous instanceColor buffer before replacing it (M-06)", () => {
+    // three only releases a WebGLBuffer in reaction to the attribute's own
+    // `dispose` event — overwriting `surface.instanceColor` without calling
+    // dispose() on the old attribute first leaks that buffer in VRAM every
+    // time the instance count changes (full ↔ surface geometry scope,
+    // airbox layer toggles). Assert both that the old reference is disposed
+    // and that it happens BEFORE the reference is dropped.
+    const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
+    const guardStart = layerSource.indexOf(
+      "!surface.instanceColor ||\n        surface.instanceColor.array.length !== surfaceColors.colors.length",
+    );
+    expect(guardStart).toBeGreaterThan(-1);
+    const block = layerSource.slice(guardStart, guardStart + 400);
+
+    expect(block).toContain("const previousInstanceColor = surface.instanceColor;");
+    expect(block).toContain("previousInstanceColor?.dispose();");
+    expect(block.indexOf("surface.instanceColor = new InstancedBufferAttribute(")).toBeLessThan(
+      block.indexOf("previousInstanceColor?.dispose();"),
+    );
+  });
+
   it("does not recreate FDM materials for vector-only setting changes", () => {
     const layerSource = readFileSync(fdmCuboidLayerPath, "utf8");
     const surfaceMaterialBlock = layerSource.slice(

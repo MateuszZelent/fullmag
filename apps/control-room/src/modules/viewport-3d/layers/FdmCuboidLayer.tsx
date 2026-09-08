@@ -1208,10 +1208,14 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
         !surface.instanceColor ||
         surface.instanceColor.array.length !== surfaceColors.colors.length
       ) {
+        // three usuwa WebGLBuffer wyłącznie w reakcji na zdarzenie `dispose`
+        // atrybutu — samo nadpisanie referencji zostawia bufor w VRAM (M-06).
+        const previousInstanceColor = surface.instanceColor;
         surface.instanceColor = new InstancedBufferAttribute(
           new Float32Array(surfaceColors.colors.length),
           3,
         );
+        previousInstanceColor?.dispose();
         colorRevisionRef.current = null;
       }
       colorChanged = colorRevisionRef.current !== colorRevision;

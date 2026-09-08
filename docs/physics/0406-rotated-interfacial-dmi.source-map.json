@@ -1,0 +1,219 @@
+{
+  "document": {
+    "path": "docs/physics/0406-rotated-interfacial-dmi.md",
+    "title": "Rotated interfacial Dzyaloshinskii-Moriya interaction",
+    "interaction": "rotated interfacial DMI for bimeron stabilization"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "reason": "Double-precision field, energy, boundary, and directional-derivative tests pass; the Goebel CPU runtime is not verified."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "reason": "Focused CUDA boundary and operator runtime tests pass; the published historical FP64 result has no current-working-tree source-bound receipt, so the current Goebel GPU workload is not verified."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented",
+      "reason": "The MFEM weak residual, energy derivative, and focused H_rotated_dmi runtime are tested; the Goebel FEM CPU runtime is not verified."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented",
+      "reason": "The CUDA element residual, managed build, and focused H_rotated_dmi runtime are tested; the Goebel FEM GPU runtime is not verified."
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-term",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class RotatedInterfacialDMI",
+      "responsibility": "Validate the public D coefficient and lower it to canonical ProblemIR.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "ir-term",
+      "path": "crates/fullmag-ir/src/study.rs",
+      "symbol": "EnergyTermIR",
+      "responsibility": "Own the backend-neutral serialized physical interaction.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-shared",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "rotated_interfacial_dmi_field",
+      "responsibility": "Define the reference discrete FDM field and energy algebra.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-weak",
+      "path": "backends/fem/src/dmi_weak_residual.cpp",
+      "symbol": "dmi_accumulate_rotated_interfacial_residual",
+      "responsibility": "Define the shared FEM first-variation algebra used by CPU and GPU realizations.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-cpu-field",
+      "path": "backends/fem/cpu/mfem/interactions/effective_field.cpp",
+      "symbol": "compute_effective_fields_for_magnetization",
+      "responsibility": "Materialize the combined and separate rotated interfacial DMI fields on FEM CPU.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-observable",
+      "path": "crates/fullmag-runner/src/native_fem.rs",
+      "symbol": "NativeFemPreviewObservable",
+      "responsibility": "Expose H_rotated_dmi and derive eden_rotated_dmi without double-counting eden_total.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fdm-gpu-field",
+      "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu",
+      "symbol": "combine_effective_field_fp64_kernel",
+      "responsibility": "Compute the FP64 CUDA field and open-boundary correction.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "fem-gpu",
+      "path": "backends/fem/gpu/cuda/interactions/dmi/dmi_kernels.cu",
+      "symbol": "dmi_element_residual_kernel",
+      "responsibility": "Assemble the device element residual and energy.",
+      "evidence_status": "implemented"
+    },
+    {
+      "id": "verifier",
+      "path": "tests/standard_problems/bimeron/goebel_2019/verify.py",
+      "symbol": "verify_bundle",
+      "responsibility": "Verify topology, energy, runtime identity, and no fallback.",
+      "evidence_status": "implemented"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Erdmi",
+      "latex": "$E_{\\mathrm{rDMI}}$",
+      "meaning": "całkowita energia obróconego interfejsowego DMI",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "D",
+      "latex": "$D$",
+      "meaning": "współczynnik obróconego interfejsowego DMI; znak wybiera chiralność",
+      "si_unit": "$\\mathrm{J\\,m^{-2}}$"
+    },
+    {
+      "id": "Omega",
+      "latex": "$\\Omega_m$",
+      "meaning": "domena magnetyczna",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "m",
+      "latex": "$\\mathbf m$",
+      "meaning": "zredukowana magnetyzacja",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Hrdmi",
+      "latex": "$\\mathbf H_{\\mathrm{rDMI}}$",
+      "meaning": "pole efektywne interakcji",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "przenikalność magnetyczna próżni",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "magnetyzacja nasycenia",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "A",
+      "latex": "$A$",
+      "meaning": "stała wymiany",
+      "si_unit": "$\\mathrm{J\\,m^{-1}}$"
+    },
+    {
+      "id": "n",
+      "latex": "$\\mathbf n$",
+      "meaning": "zewnętrzna normalna do granicy magnetyka",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "partial",
+      "latex": "$\\partial_i$",
+      "meaning": "pochodna względem współrzędnej $i$",
+      "si_unit": "$\\mathrm{m^{-1}}$"
+    },
+    {
+      "id": "v",
+      "latex": "$\\mathbf v$",
+      "meaning": "dopuszczalna wariacja lub funkcja testowa",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "g",
+      "latex": "$\\mathbf g_a$",
+      "meaning": "złożona pochodna energii w węźle FEM a",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "Mlump",
+      "latex": "$M_a^{\\mathrm{lump}}$",
+      "meaning": "lumped mass węzła FEM a",
+      "si_unit": "$\\mathrm{m^3}$"
+    }
+  ],
+  "equations": [
+    {
+      "id": "rdmi-energy",
+      "symbols": ["Erdmi", "D", "Omega", "m", "partial"],
+      "sources": ["fdm-shared", "fem-weak", "fem-gpu"]
+    },
+    {
+      "id": "rdmi-field",
+      "symbols": ["Hrdmi", "D", "mu0", "Ms", "m", "partial"],
+      "sources": ["fdm-shared", "fdm-gpu-field", "fem-weak", "fem-gpu"]
+    },
+    {
+      "id": "rdmi-first-variation",
+      "symbols": ["Erdmi", "D", "Omega", "m", "v", "partial"],
+      "sources": ["fem-weak", "fem-gpu"]
+    },
+    {
+      "id": "rdmi-natural-bc",
+      "symbols": ["A", "D", "n", "m"],
+      "sources": ["fem-weak", "fem-gpu"]
+    },
+    {
+      "id": "rdmi-fem-projection",
+      "symbols": ["Hrdmi", "g", "mu0", "Ms", "Mlump"],
+      "sources": ["fem-weak"]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "RotatedInterfacialDMI.D",
+        "type": "float",
+        "default": "required",
+        "si_unit": "$\\mathrm{J\\,m^{-2}}$",
+        "validation": "wartość skończona; oba znaki i zero dozwolone",
+        "meaning": "siła i chiralność rDMI",
+        "backend_support": "FDM/FEM CPU/GPU po przejściu capability i qualification",
+        "problem_ir": "energy_terms[].D"
+      }
+    ]
+  }
+}

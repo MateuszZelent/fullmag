@@ -55,7 +55,7 @@ from fullmag.model.dynamics import (
     DEFAULT_GAMMA,
     LLG,
 )
-from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, RotatedInterfacialDMI, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
     ArchWaveguide,
@@ -256,6 +256,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "demag_enabled": _problem_has_demag(base_problem),
         "demag_realization": _export_demag_realization(base_problem),
         "external_field": _problem_external_field(base_problem),
+        "rotated_interfacial_dmi": _problem_rotated_interfacial_dmi(base_problem),
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
@@ -433,6 +434,14 @@ def render_loaded_problem_as_script(
             surface=surface,
         )
     )
+    rotated_dmi_lines = _render_rotated_interfacial_dmi(
+        base_problem,
+        overrides=overrides,
+        surface=surface,
+    )
+    if rotated_dmi_lines:
+        lines.append("")
+        lines.extend(rotated_dmi_lines)
     region_owned_lines, region_vars = _render_region_owned_authoring(
         base_problem,
         magnet_vars,
@@ -2654,6 +2663,7 @@ _GEOMETRY_INTERACTION_ORDER = (
     "exchange",
     "demag",
     "interfacial_dmi",
+    "rotated_interfacial_dmi",
     "bulk_dmi",
     "uniaxial_anisotropy",
 )
@@ -2683,6 +2693,9 @@ def _normalize_geometry_interaction_entry(
         if dbulk is None:
             dbulk = _number_or_none(material_dbulk)
         params["dbulk"] = dbulk if dbulk is not None else 1e-3
+    elif kind == "rotated_interfacial_dmi":
+        d = _number_or_none(params.get("d"))
+        params["d"] = d if d is not None else 3e-3
     elif kind == "uniaxial_anisotropy":
         ku1 = _number_or_none(params.get("ku1"))
         params["ku1"] = ku1 if ku1 is not None else 0.0
@@ -8000,6 +8013,31 @@ def _problem_external_field(problem: Problem) -> list[float] | None:
         if isinstance(term, Zeeman):
             return [float(term.B[0]), float(term.B[1]), float(term.B[2])]
     return None
+
+
+def _problem_rotated_interfacial_dmi(problem: Problem) -> float | None:
+    for term in problem.energy:
+        if isinstance(term, RotatedInterfacialDMI):
+            return term.D
+    return None
+
+
+def _render_rotated_interfacial_dmi(
+    problem: Problem,
+    *,
+    overrides: Mapping[str, object],
+    surface: str,
+) -> list[str]:
+    value = _number_or_none(overrides.get("rotated_interfacial_dmi"))
+    if "rotated_interfacial_dmi" not in overrides:
+        value = _problem_rotated_interfacial_dmi(problem)
+    if value is None:
+        return []
+    if surface != "study":
+        raise ValueError("rotated interfacial DMI requires the canonical study API surface")
+    return [
+        f"study.terms.add(fm.RotatedInterfacialDMI(D={_py_number(value)}))"
+    ]
 
 
 def _override_external_field(value: object) -> tuple[float, float, float] | None:

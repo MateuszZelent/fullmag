@@ -162,7 +162,11 @@ def valid_receipt(repo: Path) -> dict[str, object]:
         records: list[dict[str, object]] = []
         for mesh_level in ("coarse", "medium", "fine"):
             for repetition in ("warmup-01", "measured-01", "measured-02", "measured-03", "measured-04", "measured-05"):
-                base = f"runs/{algorithm}--{lane}--{precision}/{workload}/{mesh_level}/{repetition}"
+                # Keep the fixture usable on Windows even when pytest's temp
+                # root is long.  The workload remains in each record and the
+                # artifact paths only need to exercise containment and hashing.
+                case = workload.rsplit(".", 1)[-1]
+                base = f"runs/{case}/{mesh_level}/{repetition}"
                 log_path, log_hash = artifact(repo, f"{base}/runtime.log", {"status": "passed"})
                 input_path, input_hash = artifact(repo, f"{base}/input-contract.json", {"workload_id": workload, "mesh_level": mesh_level})
                 metadata_path, metadata_hash = artifact(

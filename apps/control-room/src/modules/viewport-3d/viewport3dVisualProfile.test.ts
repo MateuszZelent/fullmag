@@ -87,19 +87,34 @@ describe("viewport3d visual profiles", () => {
     });
   });
 
-  it("keeps native canvas antialiasing profile-owned", () => {
-    expect(
-      resolveViewport3DCanvasGlOptions(
-        getViewport3DVisualProfile("interactive"),
-        false,
-      ),
-    ).toMatchObject({ antialias: true });
+  it("honors the antialiasOverride toggle, with the profile keeping a veto (S-15)", () => {
+    // The profile can turn antialiasing OFF unconditionally...
     expect(
       resolveViewport3DCanvasGlOptions(
         getViewport3DVisualProfile("interactive-lite"),
         true,
       ),
     ).toMatchObject({ antialias: false });
+    // ...but where the profile allows it, the override is now honored
+    // instead of being silently discarded (previously `void _antialiasOverride`
+    // made the user-facing "Antialiasing" toggle a no-op whenever no
+    // post-processing effect was active -- see S-15).
+    expect(
+      resolveViewport3DCanvasGlOptions(
+        getViewport3DVisualProfile("interactive"),
+        false,
+      ),
+    ).toMatchObject({ antialias: false });
+    expect(
+      resolveViewport3DCanvasGlOptions(
+        getViewport3DVisualProfile("interactive"),
+        true,
+      ),
+    ).toMatchObject({ antialias: true });
+    // Omitting the override keeps the pure profile-owned behavior.
+    expect(
+      resolveViewport3DCanvasGlOptions(getViewport3DVisualProfile("interactive")),
+    ).toMatchObject({ antialias: true });
   });
 
   it("keeps quality profiles un-tonemapped for scientific surface colors", () => {

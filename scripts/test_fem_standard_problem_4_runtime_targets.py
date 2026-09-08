@@ -9,7 +9,15 @@ def test_full_target_is_managed_strict_cpu_gpu_and_fail_closed():
     script = (ROOT / "scripts/verify_fem_standard_problem_4.sh").read_text()
     assert "verify-fem-standard-problem-4:" in justfile
     assert "just verify-fem-time-domain-native-contract" in justfile
+    assert "just prepare-fem-sp4-runtimes" in justfile
     assert "just ensure-managed-fem-runtime" in justfile
+    assert "scripts/windows/run_fullmag_fem.ps1" in justfile
+    assert '-ScriptPath "tests/standard_problems/mumag/sp4/fem/problem.py"' in justfile
+    assert '-BuildMode false -Frontend dev -Backend fem -Device "$mode"' in justfile
+    assert '-OutputDir "{{output_dir}}";' in justfile
+    assert "-SkipLocalChanges" not in justfile.split("fem-sp4-run", 1)[1].split(
+        "\nfem-sp4-scenario", 1
+    )[0]
     assert 'devices="${FULLMAG_SP4_DEVICES:-cpu gpu}"' in script
     assert (
         'relaxation_algorithms="${FULLMAG_SP4_RELAX_ALGORITHMS:-llg_overdamped '
@@ -19,6 +27,7 @@ def test_full_target_is_managed_strict_cpu_gpu_and_fail_closed():
     assert 'cases="${FULLMAG_SP4_CASES:-case-a case-b}"' in script
     assert "FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson" in script
     assert "FULLMAG_GMSH_THREADS=1" in script
+    assert 'python_exec="${FULLMAG_PYTHON:-python3}"' in script
     assert 'FULLMAG_SP4_COMPATIBILITY="$compatibility_mode"' in script
     assert 'local compatibility_mode="native"' in script
     assert 'compatibility_mode="native"' in script

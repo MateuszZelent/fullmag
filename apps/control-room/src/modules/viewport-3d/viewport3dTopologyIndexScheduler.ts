@@ -79,6 +79,12 @@ interface PendingTopologyIndexBuild {
 }
 
 const TOPOLOGY_INDEX_WORKER_IDLE_TIMEOUT_MS = 30_000;
+// M-08: after a runtime worker error the client is set to `undefined` (not
+// `null`) so it can be recreated, but recreating it on the very next build
+// call would hammer a worker that just failed. Back off for a short window
+// before allowing recreation.
+const TOPOLOGY_INDEX_WORKER_RETRY_BACKOFF_MS = 5_000;
+let topologyIndexWorkerRetryNotBeforeMs = 0;
 
 let fallbackTopologyIndexBuildId = 1;
 let topologyIndexBuildJobScheduler:
@@ -138,7 +144,13 @@ async function executeViewport3DTopologyIndexBuild(
       if (isAbortError(error)) throw error;
       topologyIndexWorkerFallbackReason = "worker-error";
       options.recordFallback?.(topologyIndexWorkerFallbackReason);
-      topologyIndexWorkerClient = null;
+      // M-08: dispose the failed worker and clear it to `undefined` (not
+      // `null`) so getTopologyIndexWorkerClient() can recreate it later
+      // instead of permanently degrading this lane to the main thread.
+      topologyIndexWorkerClient?.dispose(error);
+      topologyIndexWorkerClient = undefined;
+      topologyIndexWorkerRetryNotBeforeMs =
+        Date.now() + TOPOLOGY_INDEX_WORKER_RETRY_BACKOFF_MS;
     }
   } else {
     options.recordFallback?.(
@@ -155,6 +167,7 @@ export function disposeViewport3DTopologyIndexWorker(): void {
   topologyIndexWorkerClient?.dispose();
   topologyIndexWorkerClient = undefined;
   topologyIndexWorkerFallbackReason = undefined;
+  topologyIndexWorkerRetryNotBeforeMs = 0;
 }
 
 /** @deprecated Use disposeViewport3DTopologyIndexWorker. */
@@ -183,6 +196,12 @@ function getTopologyIndexBuildJobScheduler(): ReturnType<
 function getTopologyIndexWorkerClient(): TopologyIndexWorkerClient | null {
   if (topologyIndexWorkerClient !== undefined) {
     return topologyIndexWorkerClient;
+  }
+
+  if (Date.now() < topologyIndexWorkerRetryNotBeforeMs) {
+    // M-08: still inside the post-failure backoff window; fall back to the
+    // main thread for this build instead of hammering a fresh worker.
+    return null;
   }
 
   if (typeof Worker === "undefined") {

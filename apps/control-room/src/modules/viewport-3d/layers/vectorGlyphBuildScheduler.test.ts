@@ -314,4 +314,59 @@ describe("vectorGlyphBuildScheduler", () => {
     disposeVectorGlyphBuildWorker();
     await Promise.all([first, second, third]);
   });
+
+  it("recreates the worker after a runtime error once the backoff window elapses instead of staying permanently degraded (M-08/V-16)", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = {
+        colorMode: "x" as const,
+        headRadiusRatio: 0.2,
+        segments: new Float32Array([0, 0, 0, 2, 0, 0, 1]),
+        shaftRadiusRatio: 0.08,
+      };
+
+      const pendingWorker = installPendingWorkerStub();
+      const failedBuild = buildViewport3DVectorGlyphsOffMainThread(request, {
+        buildKey: "vector-glyph:m08-recover-1",
+      });
+      const listener = pendingWorker.instances[0]?.listeners
+        .get("message")
+        ?.values()
+        .next().value;
+      expect(listener).toBeTypeOf("function");
+      listener?.({
+        data: {
+          error: { message: "boom", name: "Viewport3DVectorGlyphWorkerError" },
+          id: 1,
+          ok: false,
+        },
+      } as MessageEvent);
+
+      const afterFailure = await failedBuild;
+      expect(afterFailure.transforms.count).toBe(1);
+
+      // Still inside the post-failure backoff window: even with a healthy
+      // Worker constructor available, the scheduler must not recreate one
+      // yet (it must fall back to the main thread instead).
+      const secondStub = installPendingWorkerStub();
+      await buildViewport3DVectorGlyphsOffMainThread(request, {
+        buildKey: "vector-glyph:m08-recover-2",
+      });
+      expect(secondStub.instances).toHaveLength(0);
+
+      // Once the backoff window elapses, the lane must recreate the worker
+      // instead of staying degraded to the main thread for the rest of the
+      // session (the M-08/V-16 bug: `= null` instead of `= undefined` froze
+      // this check open forever). This build is left pending on purpose (no
+      // message reply): construction happens synchronously, before the
+      // worker ever replies.
+      vi.advanceTimersByTime(6_000);
+      buildViewport3DVectorGlyphsOffMainThread(request, {
+        buildKey: "vector-glyph:m08-recover-3",
+      }).catch(() => {});
+      expect(secondStub.instances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

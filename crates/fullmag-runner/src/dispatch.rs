@@ -3163,13 +3163,32 @@ pub(crate) fn apply_native_fem_runtime_contract(
     }
 }
 
-#[cfg(feature = "fem-gpu")]
-fn native_fem_requires_initial_snapshot(
-    live_present: bool,
+#[cfg(any(feature = "fem-gpu", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeFemInitialSnapshotRequirements {
+    /// Whether step-zero physics statistics must be evaluated before the
+    /// first accepted step.  A scalar-only live consumer needs this even
+    /// when it does not request a field payload.
+    needs_initial_stats: bool,
+    /// Whether requested step-zero field payloads must be materialized before
+    /// the first accepted step.
+    needs_initial_field_snapshots: bool,
+}
+
+#[cfg(any(feature = "fem-gpu", test))]
+fn native_fem_initial_snapshot_requirements(
+    live: Option<&LiveStepConsumer<'_>>,
     direct_minimization: bool,
     scheduled_fields_present: bool,
-) -> bool {
-    live_present || direct_minimization || scheduled_fields_present
+) -> NativeFemInitialSnapshotRequirements {
+    let needs_initial_field_snapshots = live.is_some_and(|consumer| consumer.initial_snapshot)
+        || direct_minimization
+        || scheduled_fields_present;
+
+    NativeFemInitialSnapshotRequirements {
+        needs_initial_stats: live.is_some() || needs_initial_field_snapshots,
+        needs_initial_field_snapshots,
+    }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -3251,19 +3270,19 @@ fn execute_native_fem(
         native_relaxation_step.is_none(),
     );
     let mut field_schedules = collect_field_schedules(outputs)?;
-    let needs_initial_snapshot = native_fem_requires_initial_snapshot(
-        live.as_ref()
-            .is_some_and(|consumer| consumer.initial_snapshot),
+    let initial_snapshot_requirements = native_fem_initial_snapshot_requirements(
+        live.as_ref(),
         native_relaxation_step.is_some(),
         !field_schedules.is_empty(),
     );
+    let needs_initial_stats = initial_snapshot_requirements.needs_initial_stats;
 
     let native_execution_mode = native_fem_execution_mode(plan);
     let mut backend = create_native_fem_backend_after_strict_gpu_mode_preflight(
         engine,
         execution_mode,
         native_execution_mode,
-        || NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot),
+        || NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_stats),
     )?;
     if engine == FemEngine::NativeGpu {
         backend.set_gpu_execution_request(execution_mode == ExecutionMode::Strict)?;
@@ -3353,14 +3372,14 @@ fn execute_native_fem(
         };
     let dt_is_fixed = plan.fixed_timestep.is_some();
     let mut steps = Vec::new();
-    let current_stats = if needs_initial_snapshot {
+    let current_stats = if needs_initial_stats {
         let mut stats = backend.snapshot_step_stats(node_count)?;
         ensure_fem_object_scalars(&mut stats, plan);
         stats
     } else {
         StepStats::default()
     };
-    let initial_stats = needs_initial_snapshot.then_some(&current_stats);
+    let initial_stats = needs_initial_stats.then_some(&current_stats);
     // FEM-013 fix: serialize resolved demag realization and integrator in provenance.
     let resolved_demag = plan
         .demag_realization
@@ -3459,7 +3478,7 @@ fn execute_native_fem(
     if native_relaxation_step.is_some() && current_stats.step == 0 {
         artifacts.record_scalar(&current_stats)?;
     }
-    if needs_initial_snapshot && current_stats.step == 0 {
+    if initial_snapshot_requirements.needs_initial_field_snapshots && current_stats.step == 0 {
         record_native_fem_initial_field_snapshots(
             &mut backend,
             &mut artifacts,
@@ -4121,35 +4140,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn inactive_cuda_transport_drops_transport_field_schedules() {
-        let outputs = vec![
-            OutputIR::Field {
-                name: "V_electric".into(),
-                every_seconds: 1.0,
-            },
-            OutputIR::Field {
-                name: "torque_stt".into(),
-                every_seconds: 1.0,
-            },
-            OutputIR::Field {
-                name: "m".into(),
-                every_seconds: 1.0,
-            },
-        ];
-        let (transport, magnetic) =
-            partition_cuda_field_schedules(&outputs, false).expect("schedules should parse");
-        assert!(transport.is_empty());
-        assert_eq!(magnetic.len(), 1);
-        assert_eq!(magnetic[0].name, "m");
-
-        let (transport, magnetic) =
-            partition_cuda_field_schedules(&outputs, true).expect("schedules should parse");
-        assert_eq!(transport.len(), 2);
-        assert_eq!(magnetic.len(), 1);
-    }
-
     #[test]
     fn native_fem_field_outputs_expose_dmi_snapshot_quantities() {
         let dispatch = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
@@ -4440,6 +4430,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -4771,13 +4762,75 @@ mod tests {
         assert_eq!(provenance.robin_beta, None);
     }
 
-    #[cfg(feature = "fem-gpu")]
     #[test]
-    fn native_fem_initial_snapshot_is_lazy_for_headless_time_domain() {
-        assert!(!native_fem_requires_initial_snapshot(false, false, false));
-        assert!(native_fem_requires_initial_snapshot(true, false, false));
-        assert!(native_fem_requires_initial_snapshot(false, true, false));
-        assert!(native_fem_requires_initial_snapshot(false, false, true));
+    fn native_fem_initial_snapshot_requirements_are_lazy_without_consumers() {
+        assert_eq!(
+            native_fem_initial_snapshot_requirements(None, false, false),
+            NativeFemInitialSnapshotRequirements {
+                needs_initial_stats: false,
+                needs_initial_field_snapshots: false,
+            }
+        );
+    }
+
+    #[test]
+    fn native_fem_scalar_only_live_consumer_still_gets_initial_stats() {
+        let mut on_step = |_| crate::types::StepAction::Continue;
+        let live = LiveStepConsumer {
+            grid: [0, 0, 0],
+            field_every_n: 8,
+            initial_snapshot: false,
+            display_selection: None,
+            interrupt_requested: None,
+            on_step: &mut on_step,
+        };
+
+        assert_eq!(
+            native_fem_initial_snapshot_requirements(Some(&live), false, false),
+            NativeFemInitialSnapshotRequirements {
+                needs_initial_stats: true,
+                needs_initial_field_snapshots: false,
+            }
+        );
+    }
+
+    #[test]
+    fn native_fem_initial_field_snapshot_requirements_cover_fields_and_minimizers() {
+        let no_live = native_fem_initial_snapshot_requirements(None, false, true);
+        assert_eq!(
+            no_live,
+            NativeFemInitialSnapshotRequirements {
+                needs_initial_stats: true,
+                needs_initial_field_snapshots: true,
+            }
+        );
+
+        let mut on_step = |_| crate::types::StepAction::Continue;
+        let live = LiveStepConsumer {
+            grid: [0, 0, 0],
+            field_every_n: 8,
+            initial_snapshot: true,
+            display_selection: None,
+            interrupt_requested: None,
+            on_step: &mut on_step,
+        };
+        let with_live_field = native_fem_initial_snapshot_requirements(Some(&live), false, false);
+        assert_eq!(
+            with_live_field,
+            NativeFemInitialSnapshotRequirements {
+                needs_initial_stats: true,
+                needs_initial_field_snapshots: true,
+            }
+        );
+
+        let minimizer = native_fem_initial_snapshot_requirements(None, true, false);
+        assert_eq!(
+            minimizer,
+            NativeFemInitialSnapshotRequirements {
+                needs_initial_stats: true,
+                needs_initial_field_snapshots: true,
+            }
+        );
     }
 
     #[test]
@@ -5538,10 +5591,7 @@ mod tests {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
         }
 
-        let result = validate_all_in_gpu_fem_runtime_contract(
-            "all_in_gpu_legacy_sparse",
-            &rk_plan,
-        );
+        let result = validate_all_in_gpu_fem_runtime_contract("all_in_gpu_legacy_sparse", &rk_plan);
 
         unsafe {
             std::env::remove_var("FULLMAG_FEM_ALL_IN_GPU");

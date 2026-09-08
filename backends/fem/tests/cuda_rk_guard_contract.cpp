@@ -290,9 +290,10 @@ void rk_workspace_allocates_only_minimal_transaction_journal()
         error.c_str());
     constexpr uint64_t component_field_count = stage_count + 5u;
     constexpr uint64_t expected_bytes =
-        component_field_count * 3u * node_count * sizeof(double);
+        component_field_count * 3u * node_count * sizeof(double) +
+        sizeof(fullmag::fem::GpuRkAttemptControlPacket);
     check(device_bytes == expected_bytes,
-          "GPU RK workspace VRAM must include only scratch, stages, m, and k0 journal fields");
+          "GPU RK workspace VRAM must include scratch, stages, the minimal journal, and attempt control");
     check(rk.transaction_m.x != nullptr && rk.transaction_k0.x != nullptr,
           "minimal GPU RK transaction journal must allocate m and k0 storage");
     fullmag::fem::gpu_rk_workspace_free(rk);

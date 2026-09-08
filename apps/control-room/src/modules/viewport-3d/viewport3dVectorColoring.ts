@@ -87,7 +87,7 @@ export function magnitudeColorRgb(
   t: number,
   palette: string | null | undefined = "viridis",
 ): [number, number, number] {
-  return scalarColorRgb(t, palette);
+  return scalarColorRgb(Number.isFinite(t) ? t : 0.5, palette);
 }
 
 /**
@@ -123,7 +123,21 @@ function scalarValueColorRgb(
   range: Viewport3DScalarColorRange,
   palette: string | null | undefined = "viridis",
 ): [number, number, number] {
-  const span = Math.max(range.max - range.min, 1e-12);
-  const normalized = Math.min(Math.max((value - range.min) / span, 0), 1);
+  if (
+    !range ||
+    !Number.isFinite(value) ||
+    !Number.isFinite(range.min) ||
+    !Number.isFinite(range.max)
+  ) {
+    return magnitudeColorRgb(0.5, palette);
+  }
+  const scale = Math.max(Math.abs(range.max), Math.abs(range.min));
+  const span = range.max - range.min;
+  const normalized =
+    span <= 1e-6 * Math.max(scale, 1)
+      ? 0.5
+      : Math.min(Math.max((value - range.min) / span, 0), 1);
   return magnitudeColorRgb(normalized, palette);
 }
+
+export const scalarValueColorRgbForTests = scalarValueColorRgb;

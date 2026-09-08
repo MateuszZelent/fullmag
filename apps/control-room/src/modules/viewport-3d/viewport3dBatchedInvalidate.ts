@@ -19,9 +19,18 @@ import {
 } from "react";
 import { useThree } from "@react-three/fiber";
 
-import type { Viewport3DDirtyReason } from "./viewport3dTypes";
+import {
+  VIEWPORT_3D_DIRTY_REASONS,
+  type Viewport3DDirtyReason,
+} from "./viewport3dTypes";
 
-export const VIEWPORT_3D_BATCHED_INVALIDATE_REASON_LIMIT = 16;
+/**
+ * Every declared dirty reason may legitimately appear in a single React commit
+ * (camera + clip + fdm-cuboids + field-colors + overlays + …), so the dedup
+ * budget is the full reason vocabulary, not an arbitrary constant.
+ */
+export const VIEWPORT_3D_BATCHED_INVALIDATE_REASON_LIMIT =
+  VIEWPORT_3D_DIRTY_REASONS.length;
 
 type Viewport3DInvalidate = (reason?: Viewport3DDirtyReason) => void;
 
@@ -46,7 +55,14 @@ export function createViewport3DBatchedInvalidator({
 
   const flush = () => {
     scheduled = false;
-    if (overflowed || reasons.size === 0) return;
+    if (overflowed) {
+      overflowed = false;
+      const overflowReasons = Array.from(reasons);
+      reasons.clear();
+      invalidate(overflowReasons);
+      return;
+    }
+    if (reasons.size === 0) return;
     const frameReasons = Array.from(reasons);
     reasons.clear();
     invalidate(frameReasons);
@@ -64,9 +80,14 @@ export function createViewport3DBatchedInvalidator({
       };
     },
     invalidate(reason: Viewport3DDirtyReason): boolean {
-      if (overflowed) return false;
       if (!reasons.has(reason) && reasons.size >= maxReasons) {
+        // Fail *open*: emit an emergency frame instead of latching the render
+        // loop off for the lifetime of the Canvas.
         overflowed = true;
+        const overflowReasons = Array.from(reasons);
+        reasons.clear();
+        invalidate([...overflowReasons, reason]);
+        overflowed = false;
         return false;
       }
       reasons.add(reason);

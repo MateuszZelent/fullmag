@@ -1,9 +1,15 @@
 # 09. Kolejność PR, testy i Definition of Done
 
 W bieżącym worktree wykonano część zmian z PR-00–PR-13 (kontrakty źródłowe,
-fail-closed paths i testy kontraktowe). Poniższa kolejność nadal opisuje bramy
-kwalifikacyjne: bez managed GPU, parytetu naukowego i benchmarku żaden PR nie
-jest oznaczony jako produkcyjnie zamknięty.
+fail-closed paths i testy kontraktowe). Są to dowody `source/contract`, a nie
+automatycznie dowody wykonania urządzenia. Poniższa kolejność nadal opisuje
+bramy kwalifikacyjne: bez managed GPU, parytetu naukowego i benchmarku żaden
+PR nie jest oznaczony jako produkcyjnie zamknięty.
+
+**Stan tego checkoutu:** source/contract — częściowo potwierdzone; managed GPU
+runtime, fizyka/parity oraz performance — `NOT VERIFIED`. W szczególności
+istnienie `GpuExchangeOperatorKind`, snapshotu liczników albo testu CMake nie
+potwierdza, że dany wariant został wybrany i wykonany w kwalifikowanym runtime.
 
 ## 1. Reguła
 
@@ -71,7 +77,9 @@ Adaptive/Armijo/NCG proofs.
 
 ### PR-13 — NCG preconditioner
 
-Diagonal first, correct PR+, time-to-tolA.
+Diagonal first, correct PR+, time-to-tolA. Obecny builder/resolver jest
+fail-closed, lecz nie jest jeszcze wystarczającym dowodem wpięcia
+preconditionera do produkcyjnego NCG/PG-BB.
 
 ### PR-14 — purpose-dependent Poisson tolerance
 
@@ -79,7 +87,9 @@ Dopiero po pełnej kwalifikacji; default bez zmian.
 
 ### PR-15 — operator planner/PA
 
-Qualified profile i break-even.
+Qualified profile i break-even. Obecny `plan_gpu_exchange_operator` jest
+kontraktem setup-time; nie zastępuje publicznego `GpuExchangePlan` ani managed
+proofu cuSPARSE/PA.
 
 ## 3. Testy każdego PR
 
@@ -110,8 +120,9 @@ Fizyka:
 ## 4. A/B policy
 
 - identyczny mesh digest,
-- 8 warmup,
-- >=31 micro repeats albo 64 steps,
+- dla obecnej recepty regresji: jeden nie zapisywany GPU warm-up (`--gpu-warmup`),
+  64 kroki i domyślnie 5 powtórzeń; osiem warm-upów oraz >=31 powtórzeń są
+  osobną polityką microbenchmarku, nie wynikiem tej recepty,
 - median/p95,
 - bez GUI dla solver benchmarku,
 - pełny device/build provenance.
@@ -136,11 +147,16 @@ just verify-fem-demag-poisson-contract
 just verify-fem-time-domain-native-contract
 just verify-fem-relaxation-runtime
 just verify-fem-relaxation-cpu-gpu-consistency-smoke
+just verify-fem-gpu-performance-regression
+just verify-fem-gpu-relaxation-preconditioner-qualification
 just fem-sp4-run gpu <output_dir>
 ```
 
-Jeżeli target zmienił nazwę, użyć aktualnego odpowiednika z `just --list`.
-Nie zastępować host buildem.
+`verify-fem-gpu-performance-regression` używa przyjętego fixture'u
+`box500_airbox_exchange_demag` i wymaga zgodności tożsamości GPU, stabilnej
+siatki, zbieżności demag, strict residency oraz CPU/GPU consistency. Nie jest
+to jeszcze benchmark SP4 `mixed_p1`. Jeżeli target zmienił nazwę, użyć
+aktualnego odpowiednika z `just --list`; nie zastępować host buildem.
 `fem-managed-headless` jest alternatywnym managed entrypointem.
 `fem-gpu-headless` jest ścieżką ad hoc/diagnostyczną i nie spełnia tej bramki.
 
@@ -205,3 +221,8 @@ Produkcja:
 - actual-device CI,
 - docs/capability/provenance,
 - compatibility removal condition.
+
+Żaden wiersz finalnego DoD nie jest spełniony przez samą obecność kodu
+docelowego. Receipt musi pochodzić z rzeczywistego urządzenia, a benchmark musi
+wiązać ten sam ProblemIR, mesh/topology, tolerancje, runtime image i resolved
+operator.

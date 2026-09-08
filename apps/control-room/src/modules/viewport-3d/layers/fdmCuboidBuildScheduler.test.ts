@@ -19,6 +19,7 @@ class LoopbackFdmCuboidWorker {
   static instances: LoopbackFdmCuboidWorker[] = [];
 
   readonly requests: FdmCuboidBuildWorkerRequest[] = [];
+  readonly transfers: Transferable[][] = [];
   private readonly listeners = new Map<string, Set<EventListener>>();
   private workerListener:
     | ((event: MessageEvent<FdmCuboidBuildWorkerRequest>) => void)
@@ -46,9 +47,9 @@ class LoopbackFdmCuboidWorker {
 
   postMessage(
     request: FdmCuboidBuildWorkerRequest,
-    _transferables?: Transferable[],
+    transferables?: Transferable[],
   ): void {
-    void _transferables;
+    this.transfers.push(transferables ?? []);
     this.requests.push(request);
     this.workerListener?.({ data: request } as MessageEvent<FdmCuboidBuildWorkerRequest>);
   }
@@ -179,6 +180,45 @@ describe("FDM cuboid build scheduler", () => {
     expect(result.model?.regionIds).toEqual(
       new Uint32Array([FMRM_INACTIVE_REGION_ID]),
     );
+  });
+
+  it("copies aliased resource field values once before transferring the worker request", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const values = new Float64Array([1, 0, 0, 0, 1, 0]);
+    const fieldVector = {
+      dtype: "float64" as const,
+      grid: [2, 1, 1] as [number, number, number],
+      nComp: 3,
+      pointCount: 2,
+      quantityId: "m",
+      valueCount: values.length,
+      values,
+    };
+
+    await buildViewport3DFdmCuboidOffMainThread(
+      {
+        ...createFallbackFdmCuboidRequest(2),
+        maxVectorGlyphs: 2,
+        modelFieldVector: { ...fieldVector },
+        vectorField: { ...fieldVector },
+        vectorScale: 1,
+      },
+      { buildKey: "fdm-cuboid:aliased-field-values" },
+    );
+
+    const worker = LoopbackFdmCuboidWorker.instances[0];
+    const request = worker?.requests[0];
+    const modelValues = request?.modelFieldVector?.values;
+    const vectorValues = request?.vectorField?.values;
+    const transferredValues = worker?.transfers[0]?.filter(
+      (transferable) => transferable === modelValues?.buffer,
+    );
+
+    expect(modelValues).toBeDefined();
+    expect(vectorValues).toBe(modelValues);
+    expect(modelValues?.buffer).not.toBe(values.buffer);
+    expect(transferredValues).toHaveLength(1);
+    expect(worker?.transfers[0]).not.toContain(values.buffer);
   });
 
   it("routes vector-only requests through the worker without a cuboid model", async () => {
@@ -463,5 +503,43 @@ describe("FDM cuboid build scheduler", () => {
         state: "failed",
       }),
     ]);
+  });
+
+  it("recreates the worker after a runtime error once the backoff window elapses instead of staying permanently degraded (M-08)", async () => {
+    vi.useFakeTimers();
+    try {
+      const smallRequest = createFallbackFdmCuboidRequest(2);
+
+      vi.stubGlobal("Worker", ErroringFdmCuboidWorker);
+      const afterFailure = await buildViewport3DFdmCuboidOffMainThread(
+        smallRequest,
+        { buildKey: "fdm-cuboid:m08-recover-1" },
+      );
+      expect(afterFailure).toBeTruthy();
+      expect(
+        ErroringFdmCuboidWorker.instances[0]?.terminate,
+      ).toHaveBeenCalledOnce();
+
+      // Still inside the post-failure backoff window: even with a healthy
+      // Worker constructor available, the scheduler must not recreate one
+      // yet (it must fall back to the main thread instead).
+      vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+      await buildViewport3DFdmCuboidOffMainThread(smallRequest, {
+        buildKey: "fdm-cuboid:m08-recover-2",
+      });
+      expect(LoopbackFdmCuboidWorker.instances).toHaveLength(0);
+
+      // Once the backoff window elapses, the lane must recreate the worker
+      // instead of staying degraded to the main thread for the rest of the
+      // session (the M-08 bug: `= null` instead of `= undefined` froze this
+      // check open forever).
+      vi.advanceTimersByTime(6_000);
+      await buildViewport3DFdmCuboidOffMainThread(smallRequest, {
+        buildKey: "fdm-cuboid:m08-recover-3",
+      });
+      expect(LoopbackFdmCuboidWorker.instances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

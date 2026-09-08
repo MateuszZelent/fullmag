@@ -94,4 +94,84 @@ describe("viewport3dBuildEngineStore", () => {
       },
     ]);
   });
+
+  describe("M-09 · bounded jobsByKey", () => {
+    it("evicts a terminal job after the retention window", () => {
+      vi.useFakeTimers();
+      try {
+        const store = createViewport3DBuildEngineStore();
+        store.publishJobState({
+          itemCount: 1,
+          key: "vector-glyph:k1",
+          lane: "vector-glyph",
+          revisionSummary: "r1",
+          state: "ready",
+        });
+        expect(store.getSnapshot().jobs).toHaveLength(1);
+
+        vi.advanceTimersByTime(6_000);
+
+        expect(store.getSnapshot().jobs).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not evict jobs that are still queued or running", () => {
+      vi.useFakeTimers();
+      try {
+        const store = createViewport3DBuildEngineStore();
+        store.publishJobState({
+          itemCount: 1,
+          key: "vector-glyph:k1",
+          lane: "vector-glyph",
+          revisionSummary: "r1",
+          state: "running",
+        });
+
+        vi.advanceTimersByTime(60_000);
+
+        expect(store.getSnapshot().jobs).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not evict in-flight transferring/uploading states", () => {
+      vi.useFakeTimers();
+      try {
+        const store = createViewport3DBuildEngineStore();
+        for (const state of ["transferring", "uploading"] as const) {
+          store.publishJobState({
+            itemCount: 1,
+            key: `vector-glyph:${state}`,
+            lane: "vector-glyph",
+            revisionSummary: "r1",
+            state,
+          });
+        }
+
+        vi.advanceTimersByTime(60_000);
+
+        expect(store.getSnapshot().jobs).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("caps terminal jobs with a hard LRU limit even without the retention timer firing", () => {
+      const store = createViewport3DBuildEngineStore();
+      for (let index = 0; index < 200; index += 1) {
+        store.publishJobState({
+          itemCount: 1,
+          key: `vector-glyph:k${index}`,
+          lane: "vector-glyph",
+          revisionSummary: `r${index}`,
+          state: "ready",
+        });
+      }
+
+      expect(store.getSnapshot().jobs.length).toBeLessThanOrEqual(64);
+    });
+  });
 });

@@ -372,13 +372,33 @@ export const Viewport3DCanvas = forwardRef<
     const lifecycle = lifecycleRef.current;
     return () => {
       const teardown = lifecycle.unmountRoot();
+      // Referencję do renderera trzeba pobrać PRZED unmount — potem
+      // rootStateRef jest już wyzerowany.
+      const renderer = rootStateRef.current?.gl ?? null;
       rootStateRef.current?.events.disconnect?.();
       rootStateRef.current = null;
       rootRef.current?.unmount();
       if (teardown.disconnectEvents) {
         recordVisualizationDebugCanvasLifecycle("events-disconnected");
       }
-      if (teardown.disposeContext) {
+      // W module nie było ANI JEDNEGO wywołania renderer.dispose() /
+      // forceContextLoss(), a telemetria mimo to raportowała zwolnienie
+      // kontekstu (M-07). Przeglądarki limitują liczbę żywych kontekstów
+      // WebGL do 8-16 i zabijają najstarsze — objawem był czarny viewport.
+      let contextDisposed = false;
+      if (teardown.disposeContext && renderer) {
+        try {
+          renderer.renderLists?.dispose?.();
+          renderer.dispose();
+          renderer.forceContextLoss?.();
+          contextDisposed = true;
+        } catch (error) {
+          // Utylizacja kontekstu nigdy nie może zablokować odmontowania.
+          recordVisualizationDebugCanvasLifecycle("context-dispose-failed");
+          void error;
+        }
+      }
+      if (contextDisposed) {
         recordVisualizationDebugCanvasLifecycle("context-disposed");
       }
       rootConfiguredRef.current = false;

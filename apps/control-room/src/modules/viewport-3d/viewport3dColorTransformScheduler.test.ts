@@ -99,4 +99,50 @@ describe("viewport3dColorTransformScheduler", () => {
       }),
     );
   });
+
+  describe("M-08 · recovers the worker instead of permanently degrading a lane", () => {
+    const source = readFileSync(
+      new URL("./viewport3dColorTransformScheduler.ts", import.meta.url),
+      "utf8",
+    );
+    const executeStart = source.indexOf(
+      "async function executeVertexScalarColorBuild",
+    );
+    const getClientStart = source.indexOf(
+      "function getColorTransformWorkerClient(",
+    );
+    const executeSource = source.slice(executeStart, getClientStart);
+    const getClientSource = source.slice(
+      getClientStart,
+      source.indexOf("\n}\n", getClientStart),
+    );
+
+    it("disposes the failed worker and clears it to undefined instead of null so it can be recreated", () => {
+      expect(executeSource).toContain(
+        "colorTransformWorkerClient?.dispose(error);",
+      );
+      expect(executeSource).toContain(
+        "colorTransformWorkerClient = undefined;",
+      );
+      expect(executeSource).not.toContain("colorTransformWorkerClient = null;");
+    });
+
+    it("backs off before recreating a worker that just failed", () => {
+      expect(source).toContain(
+        "const COLOR_TRANSFORM_WORKER_RETRY_BACKOFF_MS = 5_000;",
+      );
+      expect(executeSource).toContain(
+        "colorTransformWorkerRetryNotBeforeMs =\n        Date.now() + COLOR_TRANSFORM_WORKER_RETRY_BACKOFF_MS;",
+      );
+      expect(getClientSource).toContain(
+        "if (Date.now() < colorTransformWorkerRetryNotBeforeMs) {",
+      );
+    });
+
+    it("resets the backoff window on an explicit dispose", () => {
+      expect(source).toContain(
+        "colorTransformWorkerFallbackReason = undefined;\n  colorTransformWorkerRetryNotBeforeMs = 0;",
+      );
+    });
+  });
 });

@@ -151,7 +151,8 @@ bool unpack_energy_snapshot(
     add(GpuFinalScalarSlot::DriveEnergy, !ctx.zeeman.regional_drives.empty());
     add(GpuFinalScalarSlot::AnisotropyEnergy, ctx.anisotropy.uniaxial_enabled);
     add(GpuFinalScalarSlot::CubicAnisotropyEnergy, ctx.anisotropy.cubic_enabled);
-    add(GpuFinalScalarSlot::DmiEnergy, ctx.dmi.interfacial_enabled);
+    add(GpuFinalScalarSlot::DmiEnergy,
+        ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled);
     add(GpuFinalScalarSlot::BulkDmiEnergy, ctx.dmi.bulk_enabled);
     add(GpuFinalScalarSlot::MagnetoelasticEnergy, ctx.magnetoelastic.enabled);
     if (!std::isfinite(snapshot.total_energy_j)) {
@@ -297,7 +298,8 @@ bool direct_difference(
         bool bulk_mode,
         size_t delta_tail_slot,
         size_t absolute_tail_slot) -> bool {
-        if (!(bulk_mode ? ctx.dmi.bulk_enabled : ctx.dmi.interfacial_enabled)) {
+        if (!(bulk_mode ? ctx.dmi.bulk_enabled :
+              (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled))) {
             return true;
         }
         fullmag_cuda_dmi_energy_difference(
@@ -309,10 +311,12 @@ bool direct_difference(
             tail + delta_tail_slot,
             tail + absolute_tail_slot,
             bulk_mode ? ctx.dmi.bulk_D : ctx.dmi.interfacial_D,
+            bulk_mode ? 0.0 : ctx.dmi.rotated_interfacial_D,
             ctx.dmi.interface_normal[0], ctx.dmi.interface_normal[1],
             ctx.dmi.interface_normal[2],
             bulk_mode ? !ctx.material_fields.Dbulk_field.empty()
                       : !ctx.material_fields.Dind_field.empty(),
+            !bulk_mode && ctx.dmi.rotated_interfacial_enabled,
             bulk_mode, static_cast<int>(ctx.mesh.n_elements), stream);
         if (!cuda_launch_ok("launch GPU direct minimizer DMI difference", reason)) {
             return false;
@@ -510,8 +514,9 @@ GpuEnergyIncrementOwner gpu_energy_increment_owner(
             ? GpuEnergyIncrementOwner::EndpointResidual
             : GpuEnergyIncrementOwner::NotEnergy;
     case GpuFinalScalarSlot::DmiEnergy:
-        return ctx.dmi.interfacial_enabled ? GpuEnergyIncrementOwner::Direct
-                                           : GpuEnergyIncrementOwner::NotEnergy;
+        return (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled)
+            ? GpuEnergyIncrementOwner::Direct
+            : GpuEnergyIncrementOwner::NotEnergy;
     case GpuFinalScalarSlot::BulkDmiEnergy:
         return ctx.dmi.bulk_enabled ? GpuEnergyIncrementOwner::Direct
                                     : GpuEnergyIncrementOwner::NotEnergy;
@@ -555,7 +560,7 @@ bool gpu_direct_energy_reduction_counts(
         (ctx.exchange.enabled &&
          (!checked_add_scaled(counts.exchange, exchange_nnz, 16u) ||
           !checked_add_scaled(counts.exchange, node_count, 32u))) ||
-        (ctx.dmi.interfacial_enabled &&
+        ((ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) &&
          !checked_add_scaled(counts.interfacial_dmi, element_count, 512u)) ||
         (ctx.dmi.bulk_enabled &&
          !checked_add_scaled(counts.bulk_dmi, element_count, 512u))) {

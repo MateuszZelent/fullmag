@@ -1,11 +1,11 @@
-use fullmag_engine::fem::{FemLlgProblem, FemLlgState};
+use fullmag_engine::fem::{FemElementEnergy, FemLlgProblem, FemLlgState};
 use fullmag_ir::{FemMeshPartIR, FemMeshPartRole, FemObjectSegmentIR};
 
 use crate::artifact_pipeline::ArtifactRecorder;
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::scalar_metrics::{
-    apply_average_m_to_step_stats, average_magnetization_components, set_object_average_m,
-    single_object_scalars, weighted_object_scalars,
+    apply_average_m_to_step_stats, average_magnetization_components, object_scalar_slots,
+    set_object_average_m, single_object_scalars,
 };
 use crate::schedules::{advance_due_schedules, is_due, same_time, OutputSchedule};
 use crate::types::{FieldSnapshot, RunError, StateObservables, StepStats};
@@ -64,10 +64,11 @@ pub(super) fn record_due_outputs(
             state.time_seconds,
             solver_dt,
             wall_time_ns,
+            problem,
             observables,
             object_segments,
             mesh_parts,
-        );
+        )?;
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
         advance_due_schedules(scalar_schedules, state.time_seconds);
@@ -112,10 +113,11 @@ pub(super) fn record_scalar_snapshot(
         state.time_seconds,
         solver_dt,
         wall_time_ns,
+        problem,
         &observables,
         object_segments,
         mesh_parts,
-    );
+    )?;
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
     Ok(())
@@ -171,10 +173,11 @@ pub(super) fn record_final_outputs(
             state.time_seconds,
             solver_dt,
             0,
+            problem,
             &observables,
             object_segments,
             mesh_parts,
-        );
+        )?;
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
     }
@@ -198,13 +201,26 @@ pub(super) fn record_final_outputs(
 
 pub(super) fn enrich_step_stats_from_magnetization(
     mut stats: StepStats,
+    problem: &FemLlgProblem,
     magnetization: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[FemMeshPartIR],
 ) -> StepStats {
     apply_average_m_to_step_stats(&mut stats, magnetization);
-    stats.per_object_scalars =
-        fem_per_object_scalars(object_segments, mesh_parts, magnetization, &stats);
+    let element_energies = problem
+        .element_energy_breakdown_from_vectors(magnetization)
+        .ok();
+    if let Some(energies) = element_energies.as_deref() {
+        let rotated_dmi_energy = energies.iter().map(|energy| energy.rotated_dmi).sum();
+        stats.set_dmi_energy_components(stats.e_dmi - rotated_dmi_energy, 0.0, rotated_dmi_energy);
+    }
+    stats.per_object_scalars = fem_per_object_scalars(
+        object_segments,
+        mesh_parts,
+        magnetization,
+        element_energies.as_deref(),
+        &stats,
+    );
     stats
 }
 
@@ -261,10 +277,23 @@ pub(super) fn make_step_stats(
     time: f64,
     solver_dt: f64,
     wall_time_ns: u64,
+    problem: &FemLlgProblem,
     observables: &StateObservables,
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[FemMeshPartIR],
-) -> StepStats {
+) -> Result<StepStats, RunError> {
+    let element_energies =
+        if object_segments.is_empty() && problem.terms.rotated_interfacial_dmi.is_none() {
+            None
+        } else {
+            Some(
+                problem
+                    .element_energy_breakdown_from_vectors(&observables.magnetization)
+                    .map_err(|e| RunError {
+                        message: format!("FEM element energies: {}", e),
+                    })?,
+            )
+        };
     let mut stats = StepStats {
         step,
         time,
@@ -283,39 +312,83 @@ pub(super) fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    let rotated_dmi_energy = element_energies
+        .as_deref()
+        .map_or(observables.rotated_dmi_energy, |energies| {
+            energies.iter().map(|energy| energy.rotated_dmi).sum()
+        });
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - rotated_dmi_energy,
+        0.0,
+        rotated_dmi_energy,
+    );
     apply_average_m_to_step_stats(&mut stats, &observables.magnetization);
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
         mesh_parts,
         &observables.magnetization,
+        element_energies.as_deref(),
         &stats,
     );
-    stats
+    Ok(stats)
 }
 
 pub(super) fn fem_per_object_scalars(
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[FemMeshPartIR],
     magnetization: &[[f64; 3]],
+    element_energies: Option<&[FemElementEnergy]>,
     stats: &StepStats,
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
     if object_segments.is_empty() {
         return single_object_scalars("free", stats);
     }
 
-    let mut weights_by_object: std::collections::HashMap<String, f64> =
-        std::collections::HashMap::new();
+    // The reference runner has only global energy scalars.  Do not project
+    // those values onto objects using node-count fractions; leave e_* absent
+    // until a local interaction integral is available.
+    let mut per_object = object_scalar_slots(
+        object_segments
+            .iter()
+            .filter(|segment| segment.object_id != "__air__")
+            .map(|segment| segment.object_id.clone()),
+    );
     for segment in object_segments {
-        let weight = fem_segment_node_indices(mesh_parts, segment, magnetization.len())
-            .len()
-            .max(1) as f64;
-        *weights_by_object
-            .entry(segment.object_id.clone())
-            .or_insert(0.0) += weight;
-    }
-    let weights = weights_by_object.into_iter().collect::<Vec<_>>();
-    let mut per_object = weighted_object_scalars(stats, &weights);
-    for segment in object_segments {
+        if segment.object_id == "__air__" {
+            continue;
+        }
+        if let Some(energies) = element_energies {
+            let start = segment.element_start as usize;
+            let end = start
+                .saturating_add(segment.element_count as usize)
+                .min(energies.len());
+            let element_energy = energies[start.min(end)..end].iter().fold(
+                FemElementEnergy::default(),
+                |mut total, energy| {
+                    total.exchange += energy.exchange;
+                    total.demag += energy.demag;
+                    total.external += energy.external;
+                    total.anisotropy += energy.anisotropy;
+                    total.dmi += energy.dmi;
+                    total.rotated_dmi += energy.rotated_dmi;
+                    total
+                },
+            );
+            let values = per_object.entry(segment.object_id.clone()).or_default();
+            *values.entry("e_ex".to_string()).or_insert(0.0) += element_energy.exchange;
+            *values.entry("e_demag".to_string()).or_insert(0.0) += element_energy.demag;
+            *values.entry("e_ext".to_string()).or_insert(0.0) += element_energy.external;
+            *values.entry("e_ani".to_string()).or_insert(0.0) += element_energy.anisotropy;
+            *values.entry("e_dmi".to_string()).or_insert(0.0) +=
+                element_energy.dmi + element_energy.rotated_dmi;
+            *values.entry("e_rotated_dmi".to_string()).or_insert(0.0) += element_energy.rotated_dmi;
+            *values.entry("e_total".to_string()).or_insert(0.0) += element_energy.exchange
+                + element_energy.demag
+                + element_energy.external
+                + element_energy.anisotropy
+                + element_energy.dmi
+                + element_energy.rotated_dmi;
+        }
         let node_indices = fem_segment_node_indices(mesh_parts, segment, magnetization.len());
         if node_indices.is_empty() {
             set_object_average_m(

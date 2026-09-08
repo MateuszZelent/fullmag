@@ -35,7 +35,7 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
         || ctx.zeeman.has_external_field
         || !ctx.zeeman.regional_drives.empty()
         || ctx.anisotropy.uniaxial_enabled
-        || ctx.dmi.interfacial_enabled
+        || ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled
         || ctx.dmi.bulk_enabled
         || ctx.anisotropy.cubic_enabled
         || ctx.oersted.has_cylinder
@@ -139,7 +139,7 @@ bool compute_effective_fields_for_magnetization(
         }
 
         double dmi = 0.0;
-        if (ctx.dmi.interfacial_enabled) {
+        if (ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled) {
             if (!compute_interfacial_dmi_field(
                     ctx, m_xyz, ctx.dmi.h_interfacial_xyz, &dmi, error)) {
                 return false;
@@ -149,8 +149,30 @@ bool compute_effective_fields_for_magnetization(
                 error = "interfacial DMI periodic projection failed: " + error;
                 return false;
             }
+            if (ctx.dmi.rotated_interfacial_enabled) {
+                // ponytail: reuse the qualified assembler; fuse both outputs if profiling shows this extra pass matters.
+                const bool conventional_enabled = ctx.dmi.interfacial_enabled;
+                ctx.dmi.interfacial_enabled = false;
+                const bool rotated_ok = compute_interfacial_dmi_field(
+                    ctx, m_xyz, ctx.dmi.h_rotated_interfacial_xyz,
+                    &ctx.dmi.rotated_energy_joules, error);
+                ctx.dmi.interfacial_enabled = conventional_enabled;
+                if (!rotated_ok) {
+                    return false;
+                }
+                if (!project_static_periodic_aos_checked(
+                        ctx, ctx.dmi.h_rotated_interfacial_xyz, error)) {
+                    error = "rotated interfacial DMI periodic projection failed: " + error;
+                    return false;
+                }
+            } else {
+                ctx.dmi.h_rotated_interfacial_xyz.assign(m_xyz.size(), 0.0);
+                ctx.dmi.rotated_energy_joules = 0.0;
+            }
         } else {
             ctx.dmi.h_interfacial_xyz.assign(m_xyz.size(), 0.0);
+            ctx.dmi.h_rotated_interfacial_xyz.assign(m_xyz.size(), 0.0);
+            ctx.dmi.rotated_energy_joules = 0.0;
         }
 
         if (ctx.anisotropy.cubic_enabled) {

@@ -238,16 +238,16 @@
       "responsibility": "UI-to-IR parameter serialization"
     },
     {
-      "id": "legacy-catalog",
-      "path": "apps/legacy_web/lib/textureTransform.ts",
-      "symbol": "textureScaleSemantics",
-      "responsibility": "reference-only metric catalog set"
+      "id": "control-room-catalog",
+      "path": "apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts",
+      "symbol": "MAGNETIZATION_TEXTURE_PRESETS",
+      "responsibility": "Current v2 metric preset catalog."
     },
     {
-      "id": "legacy-fit",
-      "path": "apps/legacy_web/lib/textureTransform.ts",
-      "symbol": "fitPresetParamsToBounds",
-      "responsibility": "metric UI fitting"
+      "id": "control-room-defaults",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts",
+      "symbol": "defaultPresetDraftPatch",
+      "responsibility": "Initializes dimensioned preset defaults in the current texture editor."
     },
     {
       "id": "rust-tests",
@@ -268,10 +268,10 @@
       "responsibility": "Control Room catalog and command tests"
     },
     {
-      "id": "legacy-tests",
-      "path": "apps/legacy_web/features/viewport-fem/model/__tests__/textureTransform.bimeron.test.ts",
+      "id": "control-room-bimeron-tests",
+      "path": "apps/control-room/src/shared/domain/magnetization-texture/bimeron.test.ts",
       "symbol": "describe",
-      "responsibility": "legacy metric fitting regression tests"
+      "responsibility": "Current Control Room bimeron catalog and assignment-command regression tests."
     },
     {
       "id": "physics-contract",
@@ -293,10 +293,10 @@
       "responsibility": "bimeron viewport preview color"
     },
     {
-      "id": "legacy-menu",
-      "path": "apps/legacy_web/features/shell/contributions/materials.tsx",
-      "symbol": "buildMaterialsGroups",
-      "responsibility": "legacy reference menu action"
+      "id": "control-room-command-catalog",
+      "path": "apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts",
+      "symbol": "MAGNETIZATION_TEXTURE_COMMANDS",
+      "responsibility": "Current resource-first preset assignment command catalog."
     },
     {
       "id": "rust-parity-tests",
@@ -371,6 +371,3 @@
     ]
   }
 }
-
-
-

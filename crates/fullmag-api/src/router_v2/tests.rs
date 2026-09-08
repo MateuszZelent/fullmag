@@ -63,6 +63,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         demag_realization: None,
         fdm: None,
         external_field: None,
+        rotated_interfacial_dmi: None,
         solver: fullmag_authoring::ScriptBuilderSolverState {
             integrator: "rk45".to_string(),
             fixed_timestep: String::new(),
@@ -3854,6 +3855,7 @@ fn active_lane_operation_catalog_covers_the_canonical_interaction_catalog() {
         "interaction.stt",
         "interaction.sot",
         "interaction.interfacial_dmi",
+        "interaction.rotated_interfacial_dmi",
         "interaction.bulk_dmi",
         "interaction.uniaxial_anisotropy",
         "interaction.cubic_anisotropy",
@@ -20476,6 +20478,65 @@ async fn authoring_object_interaction_get_returns_interfacial_dmi() {
     assert_eq!(json["interaction_kind"], "interfacial_dmi");
     assert_eq!(json["present"], true);
     assert_eq!(json["params"]["dind"], 0.0);
+}
+
+#[tokio::test]
+async fn authoring_object_interaction_patch_round_trips_signed_rotated_dmi() {
+    let scene = sample_scene_document();
+    let object_id = scene.objects[0].id.clone();
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v2/sessions/current/model/objects/{object_id}/interactions/rotated_interfacial_dmi"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "present": true,
+                        "enabled": true,
+                        "params": {"d": -0.003}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["interaction_kind"], "rotated_interfacial_dmi");
+    assert_eq!(json["params"]["d"], -0.003);
+
+    let guard = state.current_live_state.read().await;
+    let committed = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .expect("scene document committed");
+    let interaction = committed.objects[0]
+        .physics_stack
+        .iter()
+        .find(|entry| {
+            entry.kind
+                == fullmag_authoring::ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi
+        })
+        .expect("rotated DMI interaction");
+    assert_eq!(
+        interaction
+            .params
+            .as_ref()
+            .and_then(|params| params.get("d"))
+            .and_then(|value| value.as_f64()),
+        Some(-0.003)
+    );
 }
 
 #[tokio::test]

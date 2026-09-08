@@ -96,6 +96,9 @@ void dmi_plan_fields_are_owned_by_dmi_module() {
         context.find("ctx.dmi.interfacial_enabled = plan.has_interfacial_dmi") == std::string::npos,
         "Context must not own DMI plan flag import");
     check(
+        context.find("plan.has_rotated_interfacial_dmi") == std::string::npos,
+        "Context must not own rotated-interfacial DMI plan import");
+    check(
         context.find("plan.dmi_interface_normal") == std::string::npos,
         "Context must not own DMI interface-normal normalization");
     check(
@@ -110,9 +113,9 @@ void dmi_plan_fields_are_owned_by_dmi_module() {
             std::string::npos,
         "DMI aggregate header must document runtime-output ownership");
     check(
-        dmi_header.find("does not assemble interfacial or bulk") !=
+        dmi_header.find("does not assemble conventional or") !=
                 std::string::npos &&
-            dmi_header.find("residuals, project H_DMI, compute DMI energy") !=
+            dmi_header.find("interfacial or bulk residuals, project H_DMI") !=
                 std::string::npos &&
             dmi_header.find("own element-loop scratch") !=
             std::string::npos,
@@ -143,7 +146,8 @@ void dmi_source_files_document_module_boundaries() {
         dmi.find("DMI aggregate source contract") != std::string::npos,
         "DMI aggregate source file must document its source contract");
     check(
-        dmi.find("does not assemble interfacial or bulk residuals") != std::string::npos,
+        dmi.find("does not assemble DMI") != std::string::npos &&
+            dmi.find("residuals, project H_DMI") != std::string::npos,
         "DMI aggregate source file must document its non-owning residual boundary");
     check(
         interfacial.find("Interfacial DMI source contract") != std::string::npos,
@@ -165,6 +169,17 @@ void dmi_source_files_document_module_boundaries() {
         "DMI workspace source file must document its non-owning physics boundary");
 }
 
+void rotated_dmi_tangent_activation_is_independent_of_conventional_dmi() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string tangent = read_text_file(
+        root / "cpu" / "mfem" / "relaxation" / "tangent_plane_implicit.cpp");
+
+    check(
+        tangent.find("ctx.dmi.rotated_interfacial_enabled && ctx.dmi.rotated_interfacial_D != 0.0") !=
+            std::string::npos,
+        "rotated-interfacial DMI tangent activation must not depend on conventional DMI state");
+}
+
 void dmi_leaf_headers_document_non_owning_boundaries() {
     const std::filesystem::path root = fem_source_root();
     const std::string interfacial_header = read_text_file(
@@ -175,8 +190,12 @@ void dmi_leaf_headers_document_non_owning_boundaries() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "dmi_workspace.hpp");
 
     check(
-        interfacial_header.find("does not own bulk/Bloch residual assembly, shared DMI scratch allocation, direct torque scaling, or effective-field composition") !=
-            std::string::npos,
+        interfacial_header.find("does not own bulk/Bloch residual assembly") !=
+                std::string::npos &&
+            interfacial_header.find("shared DMI scratch allocation") !=
+                std::string::npos &&
+            interfacial_header.find("effective-field") != std::string::npos &&
+            interfacial_header.find("composition") != std::string::npos,
         "interfacial DMI header must document its non-owning bulk/scratch/composition boundary");
     check(
         bulk_header.find("does not own interfacial boundary tilt, shared DMI scratch allocation, direct torque scaling, or effective-field composition") !=
@@ -272,6 +291,12 @@ void dmi_runtime_state_is_owned_by_aggregate_module() {
     check(
         dmi_header.find("double interfacial_D") != std::string::npos,
         "DMI runtime state must own the interfacial DMI constant");
+    check(
+        dmi_header.find("bool rotated_interfacial_enabled") != std::string::npos,
+        "DMI runtime state must own the rotated-interfacial DMI enable flag");
+    check(
+        dmi_header.find("double rotated_interfacial_D") != std::string::npos,
+        "DMI runtime state must own the rotated-interfacial DMI constant");
     check(
         dmi_header.find("std::array<double, 3> interface_normal") != std::string::npos,
         "DMI runtime state must own the normalized interfacial normal");
@@ -508,6 +533,8 @@ void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
     plan.dmi_interface_normal[2] = 4.0;
     plan.has_bulk_dmi = 1;
     plan.bulk_dmi_constant = 2.5e-3;
+    plan.has_rotated_interfacial_dmi = 1;
+    plan.rotated_interfacial_dmi_constant = 3.75e-3;
 
     fullmag::fem::initialize_dmi_plan_fields(ctx, plan);
 
@@ -515,12 +542,18 @@ void dmi_plan_import_normalizes_interface_normal_and_defaults_zero() {
     check(ctx.dmi.interfacial_D == 1.25e-3, "interfacial DMI constant copied");
     check(ctx.dmi.bulk_enabled, "bulk DMI flag copied");
     check(ctx.dmi.bulk_D == 2.5e-3, "bulk DMI constant copied");
+    check(ctx.dmi.rotated_interfacial_enabled, "rotated-interfacial DMI flag copied");
+    check(
+        ctx.dmi.rotated_interfacial_D == 3.75e-3,
+        "rotated-interfacial DMI constant copied");
     check(ctx.dmi.interface_normal[0] == 0.0, "DMI normal x normalized");
     check(ctx.dmi.interface_normal[1] == 0.0, "DMI normal y normalized");
     check(ctx.dmi.interface_normal[2] == 1.0, "DMI normal z normalized");
 
     fullmag_fem_plan_desc zero_normal_plan{};
     fullmag::fem::initialize_dmi_plan_fields(ctx, zero_normal_plan);
+    check(!ctx.dmi.rotated_interfacial_enabled, "rotated-interfacial DMI defaults disabled");
+    check(ctx.dmi.rotated_interfacial_D == 0.0, "rotated-interfacial DMI defaults zero");
     check(ctx.dmi.interface_normal[0] == 0.0, "zero DMI normal defaults x");
     check(ctx.dmi.interface_normal[1] == 0.0, "zero DMI normal defaults y");
     check(ctx.dmi.interface_normal[2] == 1.0, "zero DMI normal defaults z");
@@ -532,6 +565,7 @@ int main() {
     dmi_workspace_is_owned_by_workspace_module();
     dmi_plan_fields_are_owned_by_dmi_module();
     dmi_source_files_document_module_boundaries();
+    rotated_dmi_tangent_activation_is_independent_of_conventional_dmi();
     dmi_leaf_headers_document_non_owning_boundaries();
     dmi_element_loops_are_parallelized_with_thread_local_residuals();
     dmi_periodic_projection_has_one_owner();

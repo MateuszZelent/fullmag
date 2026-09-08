@@ -2,7 +2,10 @@
 
 **Baza planu:** `4c7897f218eb0c32612db1f43a844502a316b4f6`
 
-**Zweryfikowano względem:** `c3f49db708868f3649a3e894416d230269718920`
+**Zweryfikowano względem:** `6cc5e5e0396050f5f859a0e2b28dd3f963d3f7bb`
+
+To jest bieżący `HEAD` checkoutu źródłowego; lokalne, niezatwierdzone zmiany
+w dokumentach 06–10 nie są traktowane jako dowód implementacji.
 
 **Zakres:** kod, testy kontraktowe i `justfile`; managed GPU runtime oraz wyniki
 wydajnościowe: `NOT VERIFIED`.
@@ -15,12 +18,12 @@ oznaczone jako `NOT VERIFIED`.
 
 | ID | Werdykt diagnozy | Dowód w aktualnym kodzie | Korekta / stan celu | Runtime i wydajność | PR |
 |---|---|---|---|---|---|
-| EX-01 | `POTWIERDZONE` | `exchange_operator.cpp::build_gpu_exchange_periodic_reduced_csr`, upload metadanych, `fullmag_cuda_periodic_reduced_exchange_xyz`, `fullmag_cuda_periodic_reduced_exchange_energy_blocks` i `fullmag_cuda_periodic_reduced_exchange_difference_blocks` tworzą/używają reduced CSR/mass/lift; stary kernel nadal istnieje jako kompatybilność | Reduced field/energy/direct-energy consumers są teraz spójne źródłowo; dowód stałości `m` w klasie periodycznej, parytet i promocja runtime nadal wymagają kwalifikacji | `NOT VERIFIED` | PR-10 |
-| EX-02 | `POTWIERDZONE` | `rk_exchange_dispatch.cu::gpu_rk_compute_legacy_sparse_exchange` wybiera fused XYZ dla nieperiodycznego row-scale; split x/y/z pozostaje ścieżką zgodności | Fused XYZ i typed state istnieją źródłowo, lecz profil nie jest jeszcze publicznie zakwalifikowany | `NOT VERIFIED` | PR-08 |
-| EX-03 | `CZĘŚCIOWO` | `exchange_operator.hpp` ma typed kinds `LegacySparse/FusedXYZ/PeriodicReduced/CuSparse/PartialAssembly`; DD pozostaje w kernelach relaksacji | Brak typowanych trybów strict/FMA i zwycięskiego wariantu precision; wymagana kwalifikacja profilu | `NOT VERIFIED` | PR-09 |
-| EX-04 | `CZĘŚCIOWO` | `exchange_operator.cpp` ma deterministyczny resolver fail-closed i builder CSR; brak histogramu/autotune | Planner nie wybiera jeszcze wariantu na podstawie kosztu/nieregularności, a zysk pozostaje niezmierzony | `NOT VERIFIED` | PR-09 |
+| EX-01 | `POTWIERDZONE` | `exchange_operator.cpp::build_gpu_exchange_periodic_reduced_csr`, upload metadanych, `fullmag_cuda_periodic_reduced_exchange_xyz`, `fullmag_cuda_periodic_reduced_exchange_energy_blocks` i `fullmag_cuda_periodic_reduced_exchange_difference_blocks` tworzą/używają reduced CSR/mass/lift; `rk_exchange_dispatch.cu::gpu_rk_compute_legacy_sparse_exchange` wybiera tę ścieżkę dla mapy okresowej | Reduced field/energy/direct-energy consumers są spójne źródłowo; dowód stałości `m` w klasie periodycznej, parytet i promocja runtime nadal wymagają kwalifikacji | `NOT VERIFIED` | PR-10 |
+| EX-02 | `POTWIERDZONE` | `rk_exchange_dispatch.cu::gpu_rk_compute_legacy_sparse_exchange` używa `fullmag_cuda_legacy_sparse_exchange_xyz` dla nieperiodycznego row-scale, a split x/y/z pozostaje compatibility path; publiczny `operator_mode` nadal jest `legacy_sparse_gpu` | Fused XYZ jest realizacją kernela pod legacy mode, nie osobno zakwalifikowanym planner kind; profil i managed runtime proof nie istnieją | `NOT VERIFIED` | PR-08 |
+| EX-03 | `CZĘŚCIOWO` | `exchange_operator.hpp` ma typed kinds `LegacySparse/FusedXYZ/PeriodicReduced/CuSparse/PartialAssembly`; nie ma jeszcze `GpuExchangeRowMapping`, trybów strict/FMA ani typed accumulation w plannerze | Wariant precision/row mapping i qualification profile pozostają celem; nie wybierać ich z samego enumu | `NOT VERIFIED` | PR-09 |
+| EX-04 | `CZĘŚCIOWO` | `exchange_operator.cpp::plan_gpu_exchange_operator` ma deterministyczne gate'y stale/profile/VRAM/runtime, a builder CSR waliduje i kanonizuje dane; brak histogramu/autotune | Planner nie wybiera jeszcze wariantu na podstawie kosztu/nieregularności, a zysk pozostaje niezmierzony | `NOT VERIFIED` | PR-09 |
 | EX-05 | `POTWIERDZONE` | `exchange_plan.cpp::gpu_exchange_plan_stage_exchange` już odrzuca consistent mass w strict GPU | Fail-closed zachować; device consistent-mass solver nie istnieje | `NOT VERIFIED` | później |
-| EX-06 | `POTWIERDZONE` | `cpu/mfem/interactions/exchange_operator.cpp::initialize_exchange_operator_mfem` używa `AssemblyLevel::LEGACY` | Produkcyjny exchange PA/libCEED nadal nie istnieje; ogólny `pa_benchmark.cpp` nie jest dowodem exchange | `NOT VERIFIED` | PR-15 |
+| EX-06 | `POTWIERDZONE` | `cpu/mfem/interactions/exchange_operator.cpp::initialize_exchange_operator_mfem` ustawia `AssemblyLevel::LEGACY` dla exchange i mass | Produkcyjny exchange PA/libCEED nadal nie istnieje; `backends/fem/examples/pa_benchmark.cpp` jest ogólnym benchmarkiem MFEM assembled-vs-PA i nie jest dowodem exchange | `NOT VERIFIED` | PR-15 |
 | EX-07 | `POTWIERDZONE` | `exchange_kernels.cu::exchange_row_scale_kernel` oraz lazy setup w dispatchu precomputują skalę wiersza | Row-scale istnieje źródłowo, ale koszt i poprawność dla wszystkich ścieżek nie mają jeszcze runtime proof | `NOT VERIFIED` | PR-08 |
 | EX-08 | `POTWIERDZONE` | `build_gpu_exchange_off_diagonal_csr` usuwa diagonalę i deterministycznie scala duplikaty; obecny upload nadal może używać pełnego CSR | Builder kontraktowy istnieje, lecz off-diagonal CSR nie jest jeszcze globalnie podłączony do wszystkich konsumentów | `NOT VERIFIED` | PR-08 |
 | RK-01 | `POTWIERDZONE` | `rk_attempt_control_kernels.cu` wykonuje deferred validation, a RK używa pinned `GpuRkAttemptControlPacket`; stary normalizer pozostaje kompatybilnością | Hot path ma odroczony packet i fail-closed fallback; pełny transfer audit oraz każda ścieżka legacy nie są jeszcze zunifikowane | `NOT VERIFIED` | PR-04 |
@@ -44,7 +47,7 @@ oznaczone jako `NOT VERIFIED`.
 | RT-01 | `NIEPRAWDA` w pierwotnym brzmieniu | Istniejący strict receipt nadal odrzuca hybrid/host/unknown/maski/transfers; dodano transactional `GpuPerformanceCounterState`, C ABI snapshot i Rust validator | Snapshot nie jest jeszcze wpięty do pełnego publicznego provenance, a managed runtime pozostaje niezweryfikowany | `NOT VERIFIED` | PR-00 |
 | MEM-01 | `CZĘŚCIOWO` | RK ma dedykowany pinned `GpuRkAttemptControlPacket`; inne redukcje nadal mają pinned scalar buffer z pageable fallback | Packet nie obejmuje jeszcze wszystkich control/data-plane readbacków | `NOT VERIFIED` | PR-04 |
 | BL-01 | `CZĘŚCIOWO` | Inspektor i walidator bundle mają `--require-native-cubin`; `export_fem_gpu_runtime.sh` już wymaga domyślnie `8.9`, `fullmag_fem=sm_89` i `hypre=sm_89` | Brak ogólnego wykryte CC→`sm_xy` zamiast stałego `sm_89` oraz immutable benchmark receipt; historyczne `sm_52` nie dowodzi aktualnego `sm_89` | `NOT VERIFIED` | PR-00 |
-| PA-01 | `POTWIERDZONE` | `exchange_operator.hpp/.cpp` ma jeden typed resolver dla legacy/fused/reduced/cuSPARSE/PA z fail-closed profile/VRAM/runtime gates | Planner i profile są kontraktem źródłowym, ale nie są jeszcze podłączone do publicznego runtime; SpMM/PA nie są produkcyjną realizacją | `NOT VERIFIED` | PR-15 |
+| PA-01 | `POTWIERDZONE` | `exchange_operator.hpp/.cpp` ma typed enum, parser/resolver i `plan_gpu_exchange_operator` z fail-closed profile/stale/VRAM/runtime gates; `exchange_operator_contract.cpp` pokrywa builder i decyzje | Planner nie jest jeszcze podłączony do publicznego `GpuExchangePlan`, nie ma profilu `fem_gpu_exchange_operator_profiles_v1.json`, a SpMM/PA nie są produkcyjną realizacją | `NOT VERIFIED` | PR-15 |
 | NEW-HYPRE-01 | `POTWIERDZONE` | `runtime/hypre_device_policy.cpp` jest jedynym właścicielem process-wide setterów; lokalna konfiguracja z solvera została usunięta | Solver-local tolerancje/iteracje pozostają w solver owner; trzeba potwierdzić build i HYPRE runtime | `NOT VERIFIED` | PR-01 |
 
 ## Reguła zamknięcia

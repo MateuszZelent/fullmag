@@ -67,6 +67,12 @@ interface PendingVectorGlyphBuild {
 const VECTOR_GLYPH_WORKER_IDLE_TIMEOUT_MS = 30_000;
 const VECTOR_GLYPH_WORKER_POOL_SIZE = 2;
 const MAX_MAIN_THREAD_VECTOR_GLYPH_FALLBACK_SEGMENTS = 4096;
+// M-08/V-16: after a runtime worker error the client is set to `undefined`
+// (not `null`) so it can be recreated, but recreating it on the very next
+// build call would hammer a worker that just failed. Back off for a short
+// window before allowing recreation.
+const VECTOR_GLYPH_WORKER_RETRY_BACKOFF_MS = 5_000;
+let vectorGlyphWorkerRetryNotBeforeMs = 0;
 
 let fallbackVectorGlyphBuildId = 1;
 let vectorGlyphBuildJobScheduler:
@@ -123,7 +129,13 @@ async function executeVectorGlyphBuild(
       vectorGlyphWorkerFallbackReason = "worker-error";
       fallbackReason = vectorGlyphWorkerFallbackReason;
       options.recordFallback?.(fallbackReason);
-      vectorGlyphWorkerClient = null;
+      // M-08/V-16: dispose the failed worker and clear it to `undefined`
+      // (not `null`) so getVectorGlyphWorkerClient() can recreate it later
+      // instead of permanently silencing arrows for the rest of the session.
+      vectorGlyphWorkerClient?.dispose(error);
+      vectorGlyphWorkerClient = undefined;
+      vectorGlyphWorkerRetryNotBeforeMs =
+        Date.now() + VECTOR_GLYPH_WORKER_RETRY_BACKOFF_MS;
     }
   } else {
     fallbackReason = vectorGlyphWorkerFallbackReason ?? "worker-unavailable";
@@ -146,6 +158,7 @@ export function disposeVectorGlyphBuildWorker(): void {
   vectorGlyphWorkerClient?.dispose();
   vectorGlyphWorkerClient = undefined;
   vectorGlyphWorkerFallbackReason = undefined;
+  vectorGlyphWorkerRetryNotBeforeMs = 0;
 }
 
 /** @deprecated Use disposeVectorGlyphBuildWorker. */
@@ -174,6 +187,12 @@ function getVectorGlyphBuildJobScheduler(): ReturnType<
 function getVectorGlyphWorkerClient(): VectorGlyphWorkerClient | null {
   if (vectorGlyphWorkerClient !== undefined) {
     return vectorGlyphWorkerClient;
+  }
+
+  if (Date.now() < vectorGlyphWorkerRetryNotBeforeMs) {
+    // M-08/V-16: still inside the post-failure backoff window; fall back to
+    // the main thread for this build instead of hammering a fresh worker.
+    return null;
   }
 
   if (typeof Worker === "undefined") {

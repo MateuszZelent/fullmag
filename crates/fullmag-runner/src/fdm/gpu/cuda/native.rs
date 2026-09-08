@@ -53,6 +53,7 @@ enum CudaSnapshotObservable {
     HExt,
     HOe,
     HAni,
+    HRotatedDmi,
     HEff,
     EdenEx,
     EdenDemag,
@@ -60,6 +61,7 @@ enum CudaSnapshotObservable {
     EdenDrive,
     EdenAni,
     EdenDmi,
+    EdenRotatedDmi,
     EdenTotal,
 }
 
@@ -72,6 +74,7 @@ impl CudaSnapshotObservable {
             QuantityId::HExt => Self::HExt,
             QuantityId::HOe => Self::HOe,
             QuantityId::HAni => Self::HAni,
+            QuantityId::HDmiRotated => Self::HRotatedDmi,
             QuantityId::HEff => Self::HEff,
             QuantityId::EdenEx => Self::EdenEx,
             QuantityId::EdenDemag => Self::EdenDemag,
@@ -79,6 +82,7 @@ impl CudaSnapshotObservable {
             QuantityId::EdenDrive => Self::EdenDrive,
             QuantityId::EdenAni => Self::EdenAni,
             QuantityId::EdenDmi => Self::EdenDmi,
+            QuantityId::EdenRotatedDmi => Self::EdenRotatedDmi,
             QuantityId::EdenTotal => Self::EdenTotal,
             _ => return None,
         })
@@ -94,6 +98,7 @@ impl CudaSnapshotObservable {
                 | Self::EdenDrive
                 | Self::EdenAni
                 | Self::EdenDmi
+                | Self::EdenRotatedDmi
                 | Self::EdenTotal
         )
     }
@@ -791,6 +796,7 @@ pub(crate) struct NativeFdmBackend {
     gpu_transport_bound: bool,
     adaptive_timestep_enabled: bool,
     stats_policy: NativeStatsPolicy,
+    rotated_dmi_only: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -1203,6 +1209,12 @@ impl NativeFdmBackend {
             external_field_am: plan.external_field.unwrap_or([0.0, 0.0, 0.0]),
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
             dmi_d_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            dmi_d_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_d_bulk: plan.bulk_dmi.unwrap_or(0.0),
             layers: layer_descs.as_ptr(),
@@ -1279,6 +1291,9 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none(),
         })
     }
 
@@ -1645,6 +1660,12 @@ impl NativeFdmBackend {
 
             has_interfacial_dmi: if plan.interfacial_dmi.is_some() { 1 } else { 0 },
             dmi_D_interfacial: plan.interfacial_dmi.unwrap_or(0.0),
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            dmi_D_rotated_interfacial: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             has_bulk_dmi: if plan.bulk_dmi.is_some() { 1 } else { 0 },
             dmi_D_bulk: plan.bulk_dmi.unwrap_or(0.0),
             dind_field: plan
@@ -1992,7 +2013,18 @@ impl NativeFdmBackend {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: adaptive.is_some(),
             stats_policy,
+            rotated_dmi_only: plan.rotated_interfacial_dmi.is_some()
+                && plan.interfacial_dmi.is_none()
+                && plan.bulk_dmi.is_none(),
         })
+    }
+
+    fn split_dmi_energy(&self, aggregate_dmi_energy: f64) -> (f64, f64) {
+        if self.rotated_dmi_only {
+            (0.0, aggregate_dmi_energy)
+        } else {
+            (aggregate_dmi_energy, 0.0)
+        }
     }
 
     pub(crate) fn stats_policy(&self) -> NativeStatsPolicy {
@@ -2119,6 +2151,7 @@ impl NativeFdmBackend {
 
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -2127,7 +2160,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
@@ -2813,6 +2847,18 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn copy_layer_h_rotated_dmi(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
+            cell_count,
+        )
+    }
+
     #[allow(dead_code)]
     pub fn copy_layer_h_dmi_f32(
         &self,
@@ -2822,6 +2868,18 @@ impl NativeFdmBackend {
         self.copy_layer_field_f32(
             layer_index,
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DMI,
+            cell_count,
+        )
+    }
+
+    pub fn copy_layer_h_rotated_dmi_f32(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f32; 3]>, RunError> {
+        self.copy_layer_field_f32(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI,
             cell_count,
         )
     }
@@ -3369,6 +3427,7 @@ impl NativeFdmBackend {
         let magnetization = self.copy_m(cell_count)?;
         let native_metrics =
             validate_native_step_metrics(stats.max_torque_Apm, stats.max_rhs_amplitude)?;
+        let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules);
         let mut step_stats = StepStats {
             step: stats.step,
             time: stats.time_seconds,
@@ -3377,7 +3436,8 @@ impl NativeFdmBackend {
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
             e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
-            e_dmi: stats.dmi_energy_joules,
+            e_dmi,
+            e_rotated_dmi,
             e_total: stats.total_energy_joules,
             max_dm_dt: native_metrics.max_rhs_norm_per_s,
             max_rhs_norm_per_s: native_metrics.max_rhs_norm_per_s,
@@ -3684,6 +3744,9 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         CudaSnapshotObservable::HExt => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
         CudaSnapshotObservable::HOe => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
         CudaSnapshotObservable::HAni => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
+        CudaSnapshotObservable::HRotatedDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI
+        }
         CudaSnapshotObservable::HEff => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
         CudaSnapshotObservable::EdenEx => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX
@@ -3702,6 +3765,9 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         }
         CudaSnapshotObservable::EdenDmi => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI
+        }
+        CudaSnapshotObservable::EdenRotatedDmi => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI
         }
         CudaSnapshotObservable::EdenTotal => {
             ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL
@@ -4082,6 +4148,7 @@ mod tests {
             gpu_transport_bound: false,
             adaptive_timestep_enabled: false,
             stats_policy: NativeStatsPolicy::full(1),
+            rotated_dmi_only: false,
         };
         let request = LivePreviewRequest {
             quantity: "frozen_spins".to_string(),
@@ -5038,6 +5105,7 @@ mod tests {
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
+                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
@@ -6332,6 +6400,8 @@ mod tests {
         let double_plan = make_masked_test_plan(true, ExecutionPrecision::Double);
         let mut single_plan = double_plan.clone();
         single_plan.precision = ExecutionPrecision::Single;
+        single_plan.precision_policy =
+            fullmag_ir::FdmPrecisionPolicyIR::resolve(ExecutionPrecision::Single);
         let cell_count = double_plan.initial_magnetization.len();
 
         let mut backend_double =
@@ -6484,9 +6554,11 @@ mod tests {
         double_plan.material.uniaxial_anisotropy_ku1 = Some(8.0e4);
         double_plan.material.uniaxial_anisotropy_ku2 = Some(1.0e4);
         double_plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
-        double_plan.interfacial_dmi = Some(1.2e-3);
+        double_plan.rotated_interfacial_dmi = Some(1.2e-3);
         let mut single_plan = double_plan.clone();
         single_plan.precision = ExecutionPrecision::Single;
+        single_plan.precision_policy =
+            fullmag_ir::FdmPrecisionPolicyIR::resolve(ExecutionPrecision::Single);
 
         let cell_count = double_plan.initial_magnetization.len();
         let active_mask = double_plan.active_mask.as_ref().expect("active mask");
@@ -6509,6 +6581,11 @@ mod tests {
             ("eden_ext", stats_double.e_ext, stats_single.e_ext),
             ("eden_ani", stats_double.e_ani, stats_single.e_ani),
             ("eden_dmi", stats_double.e_dmi, stats_single.e_dmi),
+            (
+                "eden_rotated_dmi",
+                stats_double.e_rotated_dmi,
+                stats_single.e_rotated_dmi,
+            ),
             ("eden_total", stats_double.e_total, stats_single.e_total),
         ];
 
@@ -7102,6 +7179,10 @@ mod exact_metric_contract_tests {
     #[test]
     fn dynamic_native_stats_map_the_same_energy_components_as_snapshot_stats() {
         let source = include_str!("native.rs");
+        let production_source = source
+            .split("#[cfg(test)]\nmod exact_metric_contract_tests")
+            .next()
+            .expect("production source prefix");
         let dynamic_stats = source
             .split("pub fn step_interruptible")
             .nth(1)
@@ -7114,8 +7195,18 @@ mod exact_metric_contract_tests {
             "dynamic native stats must include cubic anisotropy in e_ani"
         );
         assert!(
-            dynamic_stats.contains("e_dmi: stats.dmi_energy_joules"),
+            dynamic_stats.contains("e_dmi,") && dynamic_stats.contains("e_rotated_dmi,"),
             "dynamic native stats must map the native DMI energy"
+        );
+        assert!(
+            production_source.contains("rotated_dmi_only: bool"),
+            "the native wrapper must remember when aggregate DMI is exactly rotated DMI"
+        );
+        assert!(
+            dynamic_stats.contains(
+                "let (e_dmi, e_rotated_dmi) = self.split_dmi_energy(stats.dmi_energy_joules)"
+            ),
+            "dynamic native stats must expose exact rotated-only energy"
         );
         let average_stats = source
             .split("pub fn apply_average_m_to_step_stats(")

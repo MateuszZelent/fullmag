@@ -90,5 +90,39 @@ __device__ inline void add_bulk_dmi_boundary_correction(
     }
 }
 
+template <typename FieldScalar>
+__device__ inline void add_rotated_interfacial_dmi_boundary_correction(
+    double mx,
+    double my,
+    double mz,
+    double dmi_prefactor,
+    double d,
+    double inv_2dx,
+    double inv_2dy,
+    const DmiMissingFaces &missing,
+    FieldScalar &hx,
+    FieldScalar &hy,
+    FieldScalar &hz)
+{
+    const double qx = dmi_prefactor * d * inv_2dx;
+    const double qy = dmi_prefactor * d * inv_2dy;
+    if (missing.xp) {
+        hx -= qx * mz;
+        hz += qx * mx;
+    }
+    if (missing.xm) {
+        hx += qx * mz;
+        hz -= qx * mx;
+    }
+    if (missing.yp) {
+        hx += qy * my;
+        hy -= qy * mx;
+    }
+    if (missing.ym) {
+        hx -= qy * my;
+        hy += qy * mx;
+    }
+}
+
 } // namespace fdm
 } // namespace fullmag

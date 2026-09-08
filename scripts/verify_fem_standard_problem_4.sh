@@ -11,6 +11,7 @@ airboxes="${FULLMAG_SP4_AIRBOXES:-baseline expanded}"
 duration="${FULLMAG_SP4_DURATION_S:-5e-9}"
 qualifying="${FULLMAG_SP4_QUALIFYING:-1}"
 resume="${FULLMAG_SP4_RESUME:-0}"
+python_exec="${FULLMAG_PYTHON:-python3}"
 
 mkdir -p "$root"
 export MPLCONFIGDIR="$root/.matplotlib"
@@ -47,7 +48,7 @@ for mesh in $meshes; do
         relaxation_ready=0
         if [ "$resume" = 1 ]; then
           if [ "$qualifying" = 1 ]; then
-            if python3 scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
+            if "$python_exec" scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
                  --expected-algorithm "$algorithm" --expected-device "$device" \
                  "${compatibility_args[@]}"; then
               relaxation_ready=1
@@ -66,7 +67,7 @@ for mesh in $meshes; do
             just fem-sp4-run "$device" "$relaxation_root"
         fi
         if [ "$qualifying" = 1 ] && \
-           ! python3 scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
+           ! "$python_exec" scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
              --expected-algorithm "$algorithm" --expected-device "$device" \
              "${compatibility_args[@]}"; then
           echo "fresh SP4 relaxation did not satisfy the qualification gate: $device/$mesh/$airbox/$algorithm" >&2
@@ -76,12 +77,12 @@ for mesh in $meshes; do
     done
 
     if [ "$qualifying" = 1 ]; then
-      PYTHONPATH=packages/fullmag-py/src:. python3 \
+      PYTHONPATH=packages/fullmag-py/src:. "$python_exec" \
         scripts/select_fem_sp4_relaxation_state.py "$root" \
         --mesh "$mesh" --airbox "$airbox"
     else
       canonical_artifacts="$root/relaxations/gpu/$mesh/$airbox/llg_overdamped/artifacts"
-      python3 scripts/write_fem_magnetic_initial_state_from_shared_domain.py \
+      "$python_exec" scripts/write_fem_magnetic_initial_state_from_shared_domain.py \
         "$canonical_artifacts" "$state_root/initial_state.json"
       sha256sum "$state_root/initial_state.json" > "$state_root/initial_state.sha256"
     fi
@@ -96,7 +97,7 @@ for mesh in $meshes; do
           run_phase "$device" dynamic "$case_id" "$mesh" "$airbox" "$state_root/initial_state.json" "$duration" "$run_root/artifacts"
         fi
         if [ "$qualifying" = 1 ]; then
-          read -r before after < <(python3 - "$run_root/artifacts/scalars.csv" <<'PY'
+          read -r before after < <("$python_exec" - "$run_root/artifacts/scalars.csv" <<'PY'
 import csv, sys
 rows=list(csv.DictReader(open(sys.argv[1], newline="")))
 for left,right in zip(rows,rows[1:]):
@@ -113,5 +114,5 @@ PY
   done
 done
 
-PYTHONPATH=packages/fullmag-py/src:. python3 -m tests.standard_problems.mumag.sp4.fem.verify "$root" \
+PYTHONPATH=packages/fullmag-py/src:. "$python_exec" -m tests.standard_problems.mumag.sp4.fem.verify "$root" \
   $(if [ "$qualifying" = 1 ]; then printf '%s' '--qualifying'; else printf '%s' '--smoke'; fi)

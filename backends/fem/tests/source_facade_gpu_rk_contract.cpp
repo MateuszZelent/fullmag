@@ -1224,7 +1224,7 @@ void gpu_rk_final_refresh_is_owned_by_cuda_rk_module() {
                 std::string::npos,
         "GPU CUDA RK final refresh source must own final RHS refresh, FSAL copy, and max-RHS reduction");
     check(
-        refresh_source.find("stats.rhs_evaluations = total_stage_rhs_evaluations + 1") !=
+        refresh_source.find("stats.rhs_evaluations = total_stage_rhs_evaluations +") !=
                 std::string::npos &&
             refresh_source.find("stats.fsal_reused = fsal_reused ? 1 : 0") !=
                 std::string::npos &&
@@ -1281,6 +1281,8 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_attempt_setup.hpp");
     const std::string attempt_setup_source =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_attempt_setup.cu");
+    const std::string compact_attempt_setup_source =
+        without_whitespace(attempt_setup_source);
 
     check(
         cmake.find("gpu/cuda/integrators/rk/rk_stage_schedule.cu") !=
@@ -1379,7 +1381,9 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             attempt_setup_source.find("gpu_rk_copy_component_device(") !=
                 std::string::npos &&
-            attempt_setup_source.find("fsal_reused = fsal_method && gpu.rk.fsal_valid") !=
+            compact_attempt_setup_source.find("fsal_reused=fsal_method&&") !=
+                std::string::npos &&
+            attempt_setup_source.find("gpu.rk.fsal_valid;") !=
                 std::string::npos &&
             attempt_setup_source.find("gpu_rk_compute_rhs_for_magnetization(") !=
                 std::string::npos &&
@@ -1504,7 +1508,8 @@ void gpu_rk_stage_schedule_is_owned_by_cuda_rk_module() {
     check(
         schedule_source.find("launch GPU RK23 BS23 k3 for adaptive error estimate") ==
                 std::string::npos &&
-            schedule_source.find("gpu_rk_copy_component_device(") == std::string::npos &&
+            schedule_source.find("cudaMemcpyAsync GPU DP54 exact endpoint cache") !=
+                std::string::npos &&
             schedule_source.find("fsal_reused = fsal_method && gpu.rk.fsal_valid") ==
                 std::string::npos &&
             schedule_source.find("gpu_rk_compute_rhs_for_magnetization(") ==

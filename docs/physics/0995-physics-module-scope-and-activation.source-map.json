@@ -308,7 +308,7 @@
     {
       "id": "stage-torque-python",
       "path": "packages/fullmag-py/src/fullmag/world.py",
-      "symbol": "StudyStagesBuilder.set_spin_torque_enabled",
+      "symbol": "set_spin_torque_enabled",
       "responsibility": "Capture an exact typed spin-torque activation mutation as an ordered public study-pipeline action."
     },
     {
@@ -327,17 +327,52 @@
   "equations": [
     {
       "id": "graph-stage-coupling",
-      "symbols": ["J_c", "H_oe"],
-      "sources": ["scene-graph-normalizer"]
+      "symbols": [
+        "J_c",
+        "H_oe"
+      ],
+      "sources": [
+        "scene-graph-normalizer"
+      ]
     }
   ],
   "symbols": [
-    {"id": "J_c", "latex": "j_c", "meaning": "konwencjonalna gęstość prądu", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "H_oe", "latex": "H_\\mathrm{oe}", "meaning": "pole Oersteda użyte w RHS LLG", "si_unit": "\\mathrm{A\\,m^{-1}}"},
-    {"id": "B_ext", "latex": "B_\\mathrm{ext}", "meaning": "zadane pole indukcji", "si_unit": "\\mathrm T"},
-    {"id": "mu_s", "latex": "\\mu_s", "meaning": "potencjał spinowy", "si_unit": "\\mathrm V"},
-    {"id": "lambda_sf", "latex": "\\lambda_\\mathrm{sf}", "meaning": "długość relaksacji spinowej", "si_unit": "\\mathrm m"},
-    {"id": "sigma", "latex": "\\sigma", "meaning": "przewodność elektryczna", "si_unit": "\\mathrm{S\\,m^{-1}}"}
+    {
+      "id": "J_c",
+      "latex": "j_c",
+      "meaning": "konwencjonalna gęstość prądu",
+      "si_unit": "\\mathrm{A\\,m^{-2}}"
+    },
+    {
+      "id": "H_oe",
+      "latex": "H_\\mathrm{oe}",
+      "meaning": "pole Oersteda użyte w RHS LLG",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "B_ext",
+      "latex": "B_\\mathrm{ext}",
+      "meaning": "zadane pole indukcji",
+      "si_unit": "\\mathrm T"
+    },
+    {
+      "id": "mu_s",
+      "latex": "\\mu_s",
+      "meaning": "potencjał spinowy",
+      "si_unit": "\\mathrm V"
+    },
+    {
+      "id": "lambda_sf",
+      "latex": "\\lambda_\\mathrm{sf}",
+      "meaning": "długość relaksacji spinowej",
+      "si_unit": "\\mathrm m"
+    },
+    {
+      "id": "sigma",
+      "latex": "\\sigma",
+      "meaning": "przewodność elektryczna",
+      "si_unit": "\\mathrm{S\\,m^{-1}}"
+    }
   ],
   "public_api": {
     "parameters": [

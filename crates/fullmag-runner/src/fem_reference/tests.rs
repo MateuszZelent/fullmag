@@ -649,9 +649,21 @@ fn fem_per_object_scalars_uses_mesh_part_node_indices_for_shared_nodes() {
         [5.0, 0.0, 0.0],
     ];
 
-    let per_object = fem_per_object_scalars(&[segment], &[mesh_part], &magnetization, &stats);
+    let air = FemObjectSegmentIR {
+        object_id: "__air__".to_string(),
+        geometry_id: None,
+        node_start: 3,
+        node_count: 3,
+        element_start: 0,
+        element_count: 0,
+        boundary_face_start: 0,
+        boundary_face_count: 0,
+    };
+    let per_object =
+        fem_per_object_scalars(&[segment, air], &[mesh_part], &magnetization, None, &stats);
 
     assert_eq!(per_object["body"]["mx"], 3.0);
+    assert!(!per_object.contains_key("__air__"));
 }
 
 #[test]

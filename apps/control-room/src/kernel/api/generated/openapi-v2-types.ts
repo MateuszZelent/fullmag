@@ -20649,7 +20649,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy */
+                /** @description Interaction kind: exchange | demag | interfacial_dmi | rotated_interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;
@@ -20681,7 +20681,7 @@ export interface operations {
             path: {
                 /** @description Canonical scene object id */
                 object_id: string;
-                /** @description Interaction kind: exchange | demag | interfacial_dmi | uniaxial_anisotropy */
+                /** @description Interaction kind: exchange | demag | interfacial_dmi | rotated_interfacial_dmi | bulk_dmi | uniaxial_anisotropy */
                 interaction_kind: string;
             };
             cookie?: never;

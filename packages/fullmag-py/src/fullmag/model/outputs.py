@@ -30,6 +30,7 @@ _KNOWN_SCALARS = {
     "E_drive",
     "E_ani",
     "E_dmi",
+    "E_rotated_dmi",
     "E_total",
     "time",
     "step",
@@ -101,7 +102,8 @@ _KNOWN_FIELDS = {
     "V_electric", "J_charge", "spin_potential", "spin_current_tensor",
     # Second wave (QB-17)
     "dm_dt", "torque_stt", "torque_sot",
-    "eden_ex", "eden_demag", "eden_ext", "eden_drive", "eden_ani", "eden_dmi", "eden_total",
+    "eden_ex", "eden_demag", "eden_ext", "eden_drive", "eden_ani", "eden_dmi", "eden_rotated_dmi", "eden_total",
+    "H_rotated_dmi",
 }
 _COMPONENTS = {"x", "y", "z"}
 
@@ -308,10 +310,11 @@ _KNOWN_QUANTITY_IDS = {
     "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk", "H_oe", "H_therm",
     "demag_phi",
     "V_electric", "J_charge", "spin_potential", "spin_current_tensor",
-    "E_ex", "E_demag", "E_ext", "E_ani", "E_dmi", "E_total",
+    "E_ex", "E_demag", "E_ext", "E_ani", "E_dmi", "E_rotated_dmi", "E_total",
     "mode_amplitude", "mode_real", "mode_imag", "mode_phase",
     # Second wave (QB-17)
-    "eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi", "eden_total",
+    "eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi", "eden_rotated_dmi", "eden_total",
+    "H_rotated_dmi",
     "dm_dt", "torque_stt", "torque_sot",
 }
 

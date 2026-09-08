@@ -2,9 +2,6 @@ use crate::schedules::{is_due, OutputSchedule};
 use crate::types::StepStats;
 use std::collections::HashMap;
 
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-const ENERGY_KEYS: [&str; 6] = ["e_ex", "e_demag", "e_ext", "e_ani", "e_dmi", "e_total"];
-
 pub(crate) fn average_magnetization_components(values: &[[f64; 3]]) -> [f64; 3] {
     average_magnetization_components_with_active_mask(values, None)
 }
@@ -113,6 +110,7 @@ pub(crate) fn scalar_snapshot_from_step(stats: &StepStats) -> HashMap<String, f6
     scalars.insert("e_demag".to_string(), stats.e_demag);
     scalars.insert("e_ext".to_string(), stats.e_ext);
     scalars.insert("e_ani".to_string(), stats.e_ani);
+    scalars.insert("e_rotated_dmi".to_string(), stats.e_rotated_dmi);
     scalars.insert("e_dmi".to_string(), stats.e_dmi);
     scalars.insert("e_total".to_string(), stats.e_total);
     scalars.insert("mx".to_string(), stats.mx);
@@ -138,48 +136,28 @@ pub(crate) fn single_object_scalars(
     out
 }
 
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-pub(crate) fn weighted_object_scalars(
-    stats: &StepStats,
-    weights: &[(String, f64)],
-) -> HashMap<String, HashMap<String, f64>> {
-    let normalized = normalized_weights(weights);
-    if normalized.is_empty() {
-        return HashMap::new();
-    }
-
-    let global = scalar_snapshot_from_step(stats);
-    let mut out: HashMap<String, HashMap<String, f64>> = HashMap::new();
-
-    for (name, frac) in &normalized {
-        let mut values = global.clone();
-        for key in ENERGY_KEYS {
-            if let Some(value) = values.get_mut(key) {
-                *value *= *frac;
-            }
-        }
-        out.insert(name.clone(), values);
-    }
-
-    // Enforce Σ(per-object term) ~= global term for energy terms.
-    let Some((first_name, _)) = normalized.first() else {
-        return out;
-    };
-    for key in ENERGY_KEYS {
-        let target = global.get(key).copied().unwrap_or(0.0);
-        let current_sum = out
-            .values()
-            .map(|values| values.get(key).copied().unwrap_or(0.0))
-            .sum::<f64>();
-        let correction = target - current_sum;
-        if correction.abs() > 0.0 {
-            if let Some(first_values) = out.get_mut(first_name) {
-                let entry = first_values.entry(key.to_string()).or_insert(0.0);
-                *entry += correction;
-            }
+/// Creates per-object scalar slots without inventing object-local energies.
+///
+/// Native FEM currently publishes global energy reductions and exact
+/// per-object magnetization averages through separate paths.  A global energy
+/// cannot be made object-local by multiplying it by a node-count fraction,
+/// especially for nonlocal terms such as demagnetization.  Callers that do
+/// not have a local energy integral must therefore publish empty object slots
+/// and fill only the reductions they can prove (currently `mx`, `my`, and
+/// `mz`).  Missing energy keys are intentional and mean unavailable, rather
+/// than zero.
+pub(crate) fn object_scalar_slots<I, S>(object_ids: I) -> HashMap<String, HashMap<String, f64>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut out = HashMap::new();
+    for object_id in object_ids {
+        let object_id = object_id.into();
+        if !object_id.is_empty() {
+            out.entry(object_id).or_insert_with(HashMap::new);
         }
     }
-
     out
 }
 
@@ -238,24 +216,6 @@ pub(crate) fn set_object_average_m(
     entry.insert("mz".to_string(), mz);
 }
 
-#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
-fn normalized_weights(weights: &[(String, f64)]) -> Vec<(String, f64)> {
-    let mut filtered = Vec::new();
-    for (name, weight) in weights {
-        if !name.is_empty() && weight.is_finite() && *weight > 0.0 {
-            filtered.push((name.clone(), *weight));
-        }
-    }
-    let sum = filtered.iter().map(|(_, weight)| *weight).sum::<f64>();
-    if sum <= 0.0 {
-        return Vec::new();
-    }
-    filtered
-        .into_iter()
-        .map(|(name, weight)| (name, weight / sum))
-        .collect()
-}
-
 pub(crate) fn scalar_row_due(schedules: &[OutputSchedule], current_time: f64) -> bool {
     schedules
         .iter()
@@ -272,7 +232,7 @@ pub(crate) fn scalar_outputs_request_average_m(schedules: &[OutputSchedule]) -> 
 mod tests {
     use super::{
         apply_average_m_to_step_stats, apply_weighted_average_m_to_step_stats,
-        weighted_average_magnetization_components,
+        scalar_snapshot_from_step, weighted_average_magnetization_components,
     };
     use crate::types::StepStats;
 
@@ -315,6 +275,34 @@ mod tests {
         assert_eq!(
             super::average_magnetization_components(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
             [0.5, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn object_scalar_slots_leave_unavailable_energies_absent() {
+        let slots = super::object_scalar_slots([
+            "left".to_string(),
+            "right".to_string(),
+            "left".to_string(),
+            String::new(),
+        ]);
+
+        assert_eq!(slots.len(), 2);
+        assert!(slots.contains_key("left"));
+        assert!(slots.contains_key("right"));
+        assert!(slots["left"].is_empty());
+        assert!(!slots["left"].contains_key("e_total"));
+    }
+
+    #[test]
+    fn rotated_dmi_energy_is_present_in_scalar_snapshots() {
+        let stats = StepStats {
+            e_rotated_dmi: 2.5e-20,
+            ..StepStats::default()
+        };
+        assert_eq!(
+            scalar_snapshot_from_step(&stats).get("e_rotated_dmi"),
+            Some(&2.5e-20)
         );
     }
 

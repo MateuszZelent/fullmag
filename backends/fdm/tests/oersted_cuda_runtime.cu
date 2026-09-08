@@ -533,8 +533,34 @@ void verify_static_external_profile(fullmag_fdm_precision precision) {
         check_close(h_eff[i], profile[i], tolerance,
                     "static external profile missing from H_EFF");
     }
-    check(std::isfinite(stats.external_energy_joules),
-          "static external profile produced non-finite Zeeman energy");
+    constexpr double mu0 = 1.25663706212e-6;
+    const double expected_energy = -mu0 * (profile[0] + profile[3]);
+    check_close(stats.external_energy_joules, expected_energy,
+                precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 2.0e-6,
+                "static external profile Zeeman energy mismatch");
+    std::array<double, 2> eden_ext{};
+    if (precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        check(fullmag_fdm_backend_copy_scalar_field_f64(
+                  handle, FULLMAG_FDM_OBSERVABLE_EDEN_EXT,
+                  eden_ext.data(), eden_ext.size()) == FULLMAG_FDM_OK,
+              "static EDEN_EXT f64 download failed");
+    } else {
+        std::array<float, 2> eden_ext_f32{};
+        check(fullmag_fdm_backend_copy_scalar_field_f32(
+                  handle, FULLMAG_FDM_OBSERVABLE_EDEN_EXT,
+                  eden_ext_f32.data(), eden_ext_f32.size()) == FULLMAG_FDM_OK,
+              "static EDEN_EXT f32 download failed");
+        for (size_t i = 0; i < eden_ext.size(); ++i) eden_ext[i] = eden_ext_f32[i];
+    }
+    check_close(eden_ext[0], -mu0 * profile[0],
+                precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 2.0e-6,
+                "first static EDEN_EXT cell mismatch");
+    check_close(eden_ext[1], -mu0 * profile[3],
+                precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 2.0e-6,
+                "second static EDEN_EXT cell mismatch");
+    check_close(eden_ext[0] + eden_ext[1], stats.external_energy_joules,
+                precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 4.0e-6,
+                "static EDEN_EXT integral must match scalar energy");
     fullmag_fdm_backend_destroy(handle);
 
     double invalid_profile[6] = {2.0, 3.0, 4.0, -5.0, std::nan(""), -7.0};

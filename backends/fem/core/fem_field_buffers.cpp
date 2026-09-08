@@ -22,6 +22,7 @@ void initialize_context_field_buffers(Context &ctx) {
     fill_zero_vector_field(ctx.demag.h_xyz, ctx.mesh.n_nodes);
     fill_zero_vector_field(ctx.anisotropy.h_uniaxial_xyz, ctx.mesh.n_nodes);
     fill_zero_vector_field(ctx.dmi.h_interfacial_xyz, ctx.mesh.n_nodes);
+    fill_zero_vector_field(ctx.dmi.h_rotated_interfacial_xyz, ctx.mesh.n_nodes);
     fill_zero_vector_field(ctx.anisotropy.h_cubic_xyz, ctx.mesh.n_nodes);
     fill_zero_vector_field(ctx.dmi.h_bulk_xyz, ctx.mesh.n_nodes);
     fill_zero_vector_field(ctx.magnetoelastic.h_xyz, ctx.mesh.n_nodes);

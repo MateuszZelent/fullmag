@@ -12,6 +12,7 @@ import {
   buildFdmMaskedNativeLayerInstanceModel,
   buildViewport3DFdmCuboid,
   buildFdmVectorSegmentsFromAnchors,
+  buildFdmVectorSegmentsUncached,
   createFdmVectorOnlyBuildInput,
   estimateFdmCuboidBuildOutputBytes,
   resolveFdmCuboidMembershipRevision,
@@ -190,6 +191,46 @@ describe("FDM cuboid realized membership", () => {
       (result?.segments?.[5] ?? 0) - (result?.segments?.[2] ?? 0),
     )).toBeCloseTo(1.5 * Math.cbrt(3 / 2));
     expect(result?.segments.length).toBe(2 * 7);
+  });
+
+  it("gives a zero-magnitude cell relMag 0 instead of 1/scaleMagnitude (anchor path)", () => {
+    // Two cells: cell 0 has |M| = 0, cell 1 has |M| = 1. Before V-03 the `|| 1`
+    // fallback silently reused the normalization divisor as the magnitude
+    // channel, so the empty cell reported the *maximum* relative magnitude.
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+      cellSize: [1, 1, 1],
+      cellIndices: new Uint32Array([0, 1]),
+      fieldVector: fieldVector([0, 0, 0, 1, 0, 0]),
+      gridShape: [2, 1, 1],
+      membershipAdmission: "full-domain",
+      maxVectors: 2,
+      scale: 1,
+    });
+
+    expect(result?.segments[6]).toBe(0); // relMag komórki o |M| = 0
+    expect(result?.segments[13]).toBe(1); // relMag komórki o |M| = 1
+  });
+
+  it("keeps relMag = 1 for a uniform near-zero field (anchor path)", () => {
+    // Regression guard against a naive fix that clamps relMag instead of
+    // separating magnitude from the normalization divisor: when every cell
+    // shares the same tiny |M|, scaleMagnitude tracks it and relMag stays 1.
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+      cellSize: [1, 1, 1],
+      cellIndices: new Uint32Array([0, 1]),
+      fieldVector: fieldVector([1e-9, 0, 0, 1e-9, 0, 0]),
+      gridShape: [2, 1, 1],
+      membershipAdmission: "full-domain",
+      maxVectors: 2,
+      scale: 1,
+    });
+
+    expect(result?.segments[6]).toBeCloseTo(1);
+    expect(result?.segments[13]).toBeCloseTo(1);
   });
 
   it("fails closed for vectors-only all-cell selection without membership admission", () => {
@@ -639,6 +680,95 @@ describe("FDM cuboid realized membership", () => {
     expect(airbox?.regionIds).toEqual(
       new Uint32Array([FMRM_INACTIVE_REGION_ID, FMRM_INACTIVE_REGION_ID]),
     );
+  });
+
+  it("gives a zero-magnitude cell relMag 0 instead of 1/scaleMagnitude (full path)", () => {
+    const domain = {
+      bounds: null,
+      displayCellBudget: 2,
+      displayCellCount: 2,
+      kind: "fdm-grid" as const,
+      origin: [0, 0, 0] as [number, number, number],
+      shape: [2, 1, 1] as [number, number, number],
+      spacing: [1, 1, 1] as [number, number, number],
+      stride: 1,
+      totalCells: 2,
+    };
+    const model = buildFdmCuboidInstanceModel(domain, {
+      cellSelection: "all",
+      realizedRegionIds: allActiveMembership(2),
+    });
+
+    const segments = buildFdmVectorSegmentsUncached(
+      model,
+      fieldVector([0, 0, 0, 1, 0, 0]),
+      1,
+      2,
+      {},
+    );
+
+    expect(segments?.[6]).toBe(0);
+    expect(segments?.[13]).toBe(1);
+  });
+
+  describe("V-25 · cellMatchesSelection musi znać wariant \"dense\"", () => {
+    it("builds a model for cellSelection: \"dense\" instead of returning null", () => {
+      const domain = {
+        bounds: null,
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid" as const,
+        origin: [0, 0, 0] as [number, number, number],
+        shape: [4, 2, 1] as [number, number, number],
+        spacing: [1, 1, 1] as [number, number, number],
+        stride: 1,
+        totalCells: 8,
+      };
+      // Every cell is INACTIVE in the region-membership sense — for a dense
+      // carrier, membership must not filter anything.
+      const model = buildFdmCuboidInstanceModel(domain, {
+        cellSelection: "dense",
+        realizedRegionIds: allActiveMembership(8).fill(FMRM_INACTIVE_REGION_ID),
+      });
+
+      expect(model).not.toBeNull();
+      expect(model?.count).toBeGreaterThan(0);
+    });
+
+    it("gives \"dense\" the same cell set as \"all\"", () => {
+      const domain = {
+        bounds: null,
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid" as const,
+        origin: [0, 0, 0] as [number, number, number],
+        shape: [4, 2, 1] as [number, number, number],
+        spacing: [1, 1, 1] as [number, number, number],
+        stride: 1,
+        totalCells: 8,
+      };
+      const realizedRegionIds = Uint32Array.from([1, 1, 0, 0, 1, 0, 1, 0]);
+
+      const dense = buildFdmCuboidInstanceModel(domain, {
+        cellSelection: "dense",
+        realizedRegionIds,
+      });
+      const all = buildFdmCuboidInstanceModel(domain, {
+        cellSelection: "all",
+        realizedRegionIds,
+      });
+
+      expect(dense?.count).toBe(all?.count);
+      expect([...(dense?.cellIndices ?? [])]).toEqual([
+        ...(all?.cellIndices ?? []),
+      ]);
+    });
+
+    it("does not leave the ad-hoc `selection === \"dense\"` workaround in the surface-anchor path", () => {
+      expect(fdmCuboidBuildModelSource).not.toContain(
+        'selection === "dense" || cellMatchesSelection',
+      );
+    });
   });
 
   it("fails closed instead of building authored cell cuboids for an unmaterialized selection", () => {

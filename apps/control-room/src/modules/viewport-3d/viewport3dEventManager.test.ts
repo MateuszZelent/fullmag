@@ -9,7 +9,7 @@ import {
 } from "./viewport3dEventManager";
 
 describe("pickViewport3DEventHandlers", () => {
-  it("removes release handlers but keeps click selection and wheel zoom", () => {
+  it("keeps pointer release, click selection and wheel zoom handlers", () => {
     const handlers = {
       onClick: vi.fn(),
       onContextMenu: vi.fn(),
@@ -30,6 +30,7 @@ describe("pickViewport3DEventHandlers", () => {
       "onPointerDown",
       "onPointerLeave",
       "onPointerMove",
+      "onPointerUp",
       "onWheel",
     ]);
   });
@@ -188,5 +189,20 @@ describe("pickViewport3DEventHandlers", () => {
     handler?.(event);
 
     expect(innerHandler).toHaveBeenCalledWith(event);
+  });
+
+  it("skips hover raycasts during a camera drag but not during a captured drag", () => {
+    const innerHandler = vi.fn();
+    const capturedMap = new Map<number, unknown>();
+    const store = { getState: () => ({ internal: { capturedMap } }) } as never;
+    const handler = createViewport3DPointerMoveHandler(innerHandler, store);
+
+    handler?.({ buttons: 1 } as PointerEvent);
+    expect(innerHandler).not.toHaveBeenCalled();
+
+    capturedMap.set(1, {});
+    const dragEvent = { buttons: 1 } as PointerEvent;
+    handler?.(dragEvent);
+    expect(innerHandler).toHaveBeenCalledWith(dragEvent);
   });
 });

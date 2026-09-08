@@ -146,3 +146,8 @@ pnpm-store/
 playwright-browsers/
 *.diff
 /patch.tmp
+.rotated-review/
+.target-codex-finish-20260908/
+.target*
+.tmp*
+.codex*

@@ -260,6 +260,7 @@ struct CpuPublishedFieldBuffers {
     std::vector<double> demag_cached_visual;
     std::vector<double> zeeman_drive;
     std::vector<double> dmi_interfacial;
+    std::vector<double> dmi_rotated_interfacial;
     std::vector<double> dmi_bulk;
     std::vector<double> effective;
     std::vector<double> effective_visual;
@@ -287,6 +288,7 @@ struct CpuPublishedFieldBuffers {
         resize(demag_cached_visual, ctx.demag.cached_visual_xyz);
         resize(zeeman_drive, ctx.zeeman.h_drive_xyz);
         resize(dmi_interfacial, ctx.dmi.h_interfacial_xyz);
+        resize(dmi_rotated_interfacial, ctx.dmi.h_rotated_interfacial_xyz);
         resize(dmi_bulk, ctx.dmi.h_bulk_xyz);
         resize(effective, ctx.effective_field.h_xyz);
         resize(effective_visual, ctx.effective_field.h_visual_xyz);
@@ -309,6 +311,7 @@ struct CpuPublishedFieldBuffers {
         demag_cached_visual.swap(ctx.demag.cached_visual_xyz);
         zeeman_drive.swap(ctx.zeeman.h_drive_xyz);
         dmi_interfacial.swap(ctx.dmi.h_interfacial_xyz);
+        dmi_rotated_interfacial.swap(ctx.dmi.h_rotated_interfacial_xyz);
         dmi_bulk.swap(ctx.dmi.h_bulk_xyz);
         effective.swap(ctx.effective_field.h_xyz);
         effective_visual.swap(ctx.effective_field.h_visual_xyz);
@@ -332,6 +335,7 @@ struct CpuStepScalarSnapshot {
     double anisotropy_energy_joules = 0.0;
     double magnetoelastic_energy_joules = 0.0;
     double dmi_energy_joules = 0.0;
+    double rotated_dmi_energy_joules = 0.0;
     double zeeman_last_evaluation_time_s = 0.0;
     uint64_t zeeman_regional_drive_revision = 0;
     uint64_t oersted_stage_identity = 0;
@@ -388,6 +392,7 @@ struct RkStepTransaction::Impl {
         cpu_scalars.magnetoelastic_energy_joules =
             ctx.magnetoelastic.energy_joules;
         cpu_scalars.dmi_energy_joules = ctx.dmi.energy_joules;
+        cpu_scalars.rotated_dmi_energy_joules = ctx.dmi.rotated_energy_joules;
         cpu_scalars.zeeman_last_evaluation_time_s =
             ctx.zeeman.last_evaluation_time_s;
         cpu_scalars.zeeman_regional_drive_revision =
@@ -580,6 +585,7 @@ struct RkStepTransaction::Impl {
             ctx.magnetoelastic.energy_joules =
                 cpu_scalars.magnetoelastic_energy_joules;
             ctx.dmi.energy_joules = cpu_scalars.dmi_energy_joules;
+            ctx.dmi.rotated_energy_joules = cpu_scalars.rotated_dmi_energy_joules;
             ctx.zeeman.last_evaluation_time_s =
                 cpu_scalars.zeeman_last_evaluation_time_s;
             ctx.zeeman.regional_drive_revision =

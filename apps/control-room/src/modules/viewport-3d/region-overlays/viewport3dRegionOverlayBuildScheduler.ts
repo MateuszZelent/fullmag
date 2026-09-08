@@ -38,6 +38,12 @@ interface PendingRegionOverlayBuild {
 }
 
 const REGION_OVERLAY_WORKER_IDLE_TIMEOUT_MS = 30_000;
+// M-08: after a runtime worker error the client is set to `undefined` (not
+// `null`) so it can be recreated, but recreating it on the very next build
+// call would hammer a worker that just failed. Back off for a short window
+// before allowing recreation.
+const REGION_OVERLAY_WORKER_RETRY_BACKOFF_MS = 5_000;
+let regionOverlayWorkerRetryNotBeforeMs = 0;
 
 let fallbackRegionOverlayBuildId = 1;
 let regionOverlayBuildJobScheduler:
@@ -96,7 +102,13 @@ async function executeViewport3DRegionOverlayBuild(
       if (isAbortError(error)) throw error;
       regionOverlayWorkerFallbackReason = "worker-error";
       options.recordFallback?.(regionOverlayWorkerFallbackReason);
-      regionOverlayWorkerClient = null;
+      // M-08: dispose the failed worker and clear it to `undefined` (not
+      // `null`) so getRegionOverlayWorkerClient() can recreate it later
+      // instead of permanently degrading this lane to the main thread.
+      regionOverlayWorkerClient?.dispose(error);
+      regionOverlayWorkerClient = undefined;
+      regionOverlayWorkerRetryNotBeforeMs =
+        Date.now() + REGION_OVERLAY_WORKER_RETRY_BACKOFF_MS;
     }
   } else {
     options.recordFallback?.(
@@ -113,6 +125,7 @@ export function disposeViewport3DRegionOverlayBuildWorker(): void {
   regionOverlayWorkerClient?.dispose();
   regionOverlayWorkerClient = undefined;
   regionOverlayWorkerFallbackReason = undefined;
+  regionOverlayWorkerRetryNotBeforeMs = 0;
 }
 
 /** @deprecated Use disposeViewport3DRegionOverlayBuildWorker. */
@@ -141,6 +154,12 @@ function getRegionOverlayBuildJobScheduler(): ReturnType<
 function getRegionOverlayWorkerClient(): RegionOverlayWorkerClient | null {
   if (regionOverlayWorkerClient !== undefined) {
     return regionOverlayWorkerClient;
+  }
+
+  if (Date.now() < regionOverlayWorkerRetryNotBeforeMs) {
+    // M-08: still inside the post-failure backoff window; fall back to the
+    // main thread for this build instead of hammering a fresh worker.
+    return null;
   }
 
   if (typeof Worker === "undefined") {

@@ -59,6 +59,7 @@ bool gpu_field_buffers_upload_local_vector_fields_aos(
     const double *h_ani_xyz,
     const double *h_cubic_ani_xyz,
     const double *h_dmi_xyz,
+    const double *h_rotated_dmi_xyz,
     const double *h_bulk_dmi_xyz,
     const double *h_oe_basis_per_ampere_xyz,
     const double *h_oe_xyz,
@@ -77,6 +78,8 @@ bool gpu_field_buffers_upload_local_vector_fields_aos(
                lifecycle, fields.h_cubic_ani, h_cubic_ani_xyz, len, "h_cubic_ani", audit, error) &&
            gpu_component_upload_optional_aos(
                lifecycle, fields.h_dmi, h_dmi_xyz, len, "h_dmi", audit, error) &&
+           gpu_component_upload_optional_aos(
+               lifecycle, fields.h_rotated_dmi, h_rotated_dmi_xyz, len, "h_rotated_dmi", audit, error) &&
            gpu_component_upload_optional_aos(
                lifecycle, fields.h_bulk_dmi, h_bulk_dmi_xyz, len, "h_bulk_dmi", audit, error) &&
            gpu_component_upload_optional_aos(

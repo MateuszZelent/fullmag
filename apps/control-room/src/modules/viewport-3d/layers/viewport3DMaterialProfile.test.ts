@@ -18,11 +18,32 @@ describe("viewport3D material profile", () => {
       getViewport3DVisualProfile("interactive"),
     );
 
-    expect(interactive.magneticSurface).toEqual({ toneMapped: false });
+    expect(interactive.magneticSurface).toEqual({
+      toneMapped: false,
+      shadeStrength: 0.45,
+    });
     expect(interactive.primitivePreview).toEqual({ toneMapped: false });
     expect(interactive.magneticSurface).not.toHaveProperty("metalness");
     expect(interactive.magneticSurface).not.toHaveProperty("roughness");
     expect(interactive.primitivePreview).not.toHaveProperty("emissiveIntensity");
+  });
+
+  it("gives interactive/balanced profiles a non-zero shading strength for depth cues", () => {
+    for (const id of ["interactive-lite", "interactive", "balanced"] as const) {
+      const profile = resolveViewport3DMaterialProfile(
+        getViewport3DVisualProfile(id),
+      );
+      expect(profile.magneticSurface.shadeStrength).toBe(0.45);
+    }
+  });
+
+  it("keeps figure/capture profiles perfectly flat (color-accurate) with zero shading strength", () => {
+    for (const id of ["figure", "capture"] as const) {
+      const profile = resolveViewport3DMaterialProfile(
+        getViewport3DVisualProfile(id),
+      );
+      expect(profile.magneticSurface.shadeStrength).toBe(0);
+    }
   });
 
   it("keeps capture-oriented primitive previews unlit", () => {

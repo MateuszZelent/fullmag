@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -121,6 +122,12 @@ export function Viewport3DCameraDialog({
   const orientationDirtyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const draft = draftOverride ?? baseDraft;
+
+  // An external camera change invalidates any pending orientation edit: applying
+  // stale yaw/pitch against a new snapshot would teleport the camera.
+  useEffect(() => {
+    orientationDirtyRef.current = false;
+  }, [snapshot]);
 
   function resetDraft(): void {
     setDraftOverride(null);
@@ -506,11 +513,17 @@ function cameraPatchFromDraft(
   orientationDirty: boolean,
   currentUp: CameraTuple,
 ): CameraPatch {
+  const safeParsed = {
+    ...parsed,
+    // A zero orbit radius makes position === target: the camera loses its
+    // rotation frame entirely (see C-10).
+    distance: Math.max(Math.abs(parsed.distance), 1e-12),
+  };
   const oriented = orientationDirty
-      ? buildViewport3DCameraPoseFromOrientation(parsed)
+      ? buildViewport3DCameraPoseFromOrientation(safeParsed)
       : {
-          position: parsed.position,
-          target: parsed.target,
+          position: safeParsed.position,
+          target: safeParsed.target,
           up: currentUp,
         };
 
@@ -531,6 +544,9 @@ function parseTupleDraft(values: [string, string, string]): CameraTuple | null {
 }
 
 function parseFiniteDraftNumber(value: string): number | null {
+  // Number("") === 0 and Number.isFinite(0) === true: an emptied field must be
+  // an error, not a silent zero.
+  if (value.trim() === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }

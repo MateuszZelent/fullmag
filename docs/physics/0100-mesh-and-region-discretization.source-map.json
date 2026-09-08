@@ -215,7 +215,7 @@
     },
     {
       "id": "mixed-volume-evidence-validation",
-      "path": "crates/fullmag-ir/src/mesh_assets.rs",
+      "path": "crates/fullmag-ir/src/mixed_certificate.rs",
       "symbol": "validate_mixed_certificate_evidence_against_mesh",
       "responsibility": "Recomputes mixed-mesh certificate evidence and applies the dedicated cross-language relative-volume comparison boundary.",
       "evidence_status": "implemented"

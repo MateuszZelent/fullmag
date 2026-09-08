@@ -296,6 +296,10 @@ int context_copy_field_f64(
                 gpu_field = &ctx.gpu_state.device.fields.h_dmi;
                 label = "H_dmi";
                 break;
+            case FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED:
+                gpu_field = &ctx.gpu_state.device.fields.h_rotated_dmi;
+                label = "H_rotated_dmi";
+                break;
             case FULLMAG_FEM_OBSERVABLE_H_DMI_BULK:
                 gpu_field = &ctx.gpu_state.device.fields.h_bulk_dmi;
                 label = "H_bulk_dmi";
@@ -378,6 +382,9 @@ int context_copy_field_f64(
             break;
         case FULLMAG_FEM_OBSERVABLE_H_DMI:
             source = &ctx.dmi.h_interfacial_xyz;
+            break;
+        case FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED:
+            source = &ctx.dmi.h_rotated_interfacial_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_MEL:
             source = &ctx.magnetoelastic.h_xyz;
@@ -558,6 +565,7 @@ int context_upload_magnetization_f64(
     if (!ctx.mfem_context.ready) {
         if (ctx.exchange.enabled || ctx.demag.enabled || ctx.anisotropy.uniaxial_enabled ||
             ctx.anisotropy.cubic_enabled || ctx.dmi.interfacial_enabled ||
+            ctx.dmi.rotated_interfacial_enabled ||
             ctx.dmi.bulk_enabled || ctx.oersted.has_cylinder || ctx.oersted.has_explicit_field ||
             ctx.magnetoelastic.enabled || ctx.stt.zhang_li_enabled ||
             ctx.stt.slonczewski_enabled || ctx.thermal_brown.temperature > 0.0) {
@@ -642,6 +650,7 @@ int context_upload_magnetization_f64(
                 ctx.anisotropy.h_uniaxial_xyz.data(),
                 ctx.anisotropy.h_cubic_xyz.data(),
                 ctx.dmi.h_interfacial_xyz.data(),
+                ctx.dmi.h_rotated_interfacial_xyz.data(),
                 ctx.dmi.h_bulk_xyz.data(),
                 ctx.oersted.h_basis_per_ampere_xyz.data(),
                 ctx.oersted.h_xyz.data(),

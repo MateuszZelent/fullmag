@@ -39,6 +39,8 @@ extern void launch_newell_compute_spectra_fp64(Context &ctx);
 extern void launch_newell_compute_spectra_fp32(Context &ctx);
 extern bool launch_multilayer_dmi_field_fp64(Context &ctx);
 extern bool launch_multilayer_dmi_field_fp32(Context &ctx);
+extern bool launch_rotated_interfacial_dmi_field_fp64(Context &ctx);
+extern bool launch_rotated_interfacial_dmi_field_fp32(Context &ctx);
 extern bool launch_multilayer_anisotropy_field_fp64(Context &ctx);
 extern bool launch_multilayer_anisotropy_field_fp32(Context &ctx);
 extern void launch_multilayer_exchange_field_fp64(Context &ctx);
@@ -2108,6 +2110,7 @@ static void free_multilayer_plan_v2(Context &ctx) {
         free_vector_field(layer.h_ex);
         free_vector_field(layer.h_demag);
         free_vector_field(layer.h_dmi);
+        free_vector_field(layer.h_rotated_dmi);
         free_vector_field(layer.h_ani);
         free_vector_field(layer.tmp);
         free_vector_field(layer.k1);
@@ -2996,6 +2999,7 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.h_demag_visual)) return false;
     if (!alloc_vector_field(ctx, ctx.h_eff_visual)) return false;
     if (!alloc_vector_field(ctx, ctx.h_ani)) return false;
+    if (!alloc_vector_field(ctx, ctx.h_rotated_dmi)) return false;
     if (!alloc_energy_density(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
@@ -3082,6 +3086,9 @@ bool context_alloc_device(Context &ctx) {
     cudaMemset(ctx.h_ani.x, 0, bytes);
     cudaMemset(ctx.h_ani.y, 0, bytes);
     cudaMemset(ctx.h_ani.z, 0, bytes);
+    cudaMemset(ctx.h_rotated_dmi.x, 0, bytes);
+    cudaMemset(ctx.h_rotated_dmi.y, 0, bytes);
+    cudaMemset(ctx.h_rotated_dmi.z, 0, bytes);
     cudaMemset(ctx.k1.x, 0, bytes);
     cudaMemset(ctx.k1.y, 0, bytes);
     cudaMemset(ctx.k1.z, 0, bytes);
@@ -3426,6 +3433,7 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.h_demag_visual);
     free_vector_field(ctx.h_eff_visual);
     free_vector_field(ctx.h_ani);
+    free_vector_field(ctx.h_rotated_dmi);
     free_energy_density(ctx);
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
@@ -3750,6 +3758,10 @@ bool context_upload_multilayer_plan_v2(
         if (!alloc_vector_field_cells(ctx, dst.h_dmi, dst.cell_count, "multilayer_h_dmi")) {
             return fail();
         }
+        if (!alloc_vector_field_cells(
+                ctx, dst.h_rotated_dmi, dst.cell_count, "multilayer_h_rotated_dmi")) {
+            return fail();
+        }
         if (!alloc_vector_field_cells(ctx, dst.h_ani, dst.cell_count, "multilayer_h_ani")) {
             return fail();
         }
@@ -3821,6 +3833,21 @@ bool context_upload_multilayer_plan_v2(
         zero_err = cudaMemset(dst.h_dmi.z, 0, layer_bytes);
         if (zero_err != cudaSuccess) {
             set_cuda_error(ctx, "cudaMemset(multilayer_h_dmi.z)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_rotated_dmi.x, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_rotated_dmi.x)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_rotated_dmi.y, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_rotated_dmi.y)", zero_err);
+            return fail();
+        }
+        zero_err = cudaMemset(dst.h_rotated_dmi.z, 0, layer_bytes);
+        if (zero_err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemset(multilayer_h_rotated_dmi.z)", zero_err);
             return fail();
         }
         zero_err = cudaMemset(dst.h_ani.x, 0, layer_bytes);
@@ -4873,6 +4900,13 @@ static bool context_download_field_impl(
         return false;
     }
 
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI) {
+        const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_rotated_interfacial_dmi_field_fp64(ctx)
+            : launch_rotated_interfacial_dmi_field_fp32(ctx);
+        if (!ok) return false;
+    }
+
     uint64_t required_mask = 0;
     switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_H_EX:
@@ -4902,6 +4936,8 @@ static bool context_download_field_impl(
             field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
+        case FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI:
+            field = &ctx.h_rotated_dmi; break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.h_eff_visual; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
             if (ctx.has_static_external_field_profile) {
@@ -5055,8 +5091,9 @@ bool context_download_field_f32(
 }
 
 static bool is_energy_density_observable(fullmag_fdm_observable observable) {
-    return observable >= FULLMAG_FDM_OBSERVABLE_EDEN_EX &&
-        observable <= FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
+    return (observable >= FULLMAG_FDM_OBSERVABLE_EDEN_EX &&
+            observable <= FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL) ||
+        observable == FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI;
 }
 
 template <typename HostScalar>
@@ -5165,7 +5202,8 @@ static bool context_download_layer_field_impl(
     {
         return false;
     }
-    if (observable == FULLMAG_FDM_OBSERVABLE_H_DMI) {
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_DMI ||
+        observable == FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI) {
         const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
             ? launch_multilayer_dmi_field_fp64(ctx)
             : launch_multilayer_dmi_field_fp32(ctx);
@@ -5249,6 +5287,9 @@ static bool context_download_layer_field_impl(
         case FULLMAG_FDM_OBSERVABLE_H_DMI:
             field = &layer.h_dmi;
             break;
+        case FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI:
+            field = &layer.h_rotated_dmi;
+            break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
             field = &layer.h_ani;
             break;
@@ -5330,6 +5371,13 @@ static bool context_download_field_preview_impl(
         return false;
     }
 
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI) {
+        const bool ok = ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+            ? launch_rotated_interfacial_dmi_field_fp64(ctx)
+            : launch_rotated_interfacial_dmi_field_fp32(ctx);
+        if (!ok) return false;
+    }
+
     uint64_t preview_count = static_cast<uint64_t>(preview_nx) * preview_ny * preview_nz;
     if (out_len != preview_count * 3 || z_origin >= ctx.nz) {
         return false;
@@ -5375,6 +5423,9 @@ static bool context_download_field_preview_impl(
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
             field = &ctx.h_ani;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI:
+            field = &ctx.h_rotated_dmi;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
             field = &ctx.h_eff_visual;
@@ -5734,6 +5785,16 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             }
             field = &ctx.h_ani;
             break;
+        case FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI:
+            if (!(ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                    ? launch_rotated_interfacial_dmi_field_fp64(ctx)
+                    : launch_rotated_interfacial_dmi_field_fp32(ctx))) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_rotated_dmi snapshot"
+                                           : ctx.last_error);
+            }
+            field = &ctx.h_rotated_dmi;
+            break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
             if (!context_ensure_observable_fields(
                     ctx, OBSERVABLE_ENDPOINT_H_EFF_VISUAL)) {
@@ -6079,6 +6140,16 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
                                            : ctx.last_error);
             }
             field = &ctx.h_ani;
+            break;
+        case FULLMAG_FDM_OBSERVABLE_H_ROTATED_DMI:
+            if (!(ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                    ? launch_rotated_interfacial_dmi_field_fp64(ctx)
+                    : launch_rotated_interfacial_dmi_field_fp32(ctx))) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_rotated_dmi preview snapshot"
+                                           : ctx.last_error);
+            }
+            field = &ctx.h_rotated_dmi;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
             if (!context_ensure_observable_fields(

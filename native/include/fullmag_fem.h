@@ -103,6 +103,7 @@ typedef enum {
     FULLMAG_FEM_OBSERVABLE_TORQUE = 13,
     FULLMAG_FEM_OBSERVABLE_DEMAG_PHI = 14,
     FULLMAG_FEM_OBSERVABLE_H_DRIVE = 15,
+    FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED = 16,
 } fullmag_fem_observable;
 
 typedef enum {
@@ -704,6 +705,9 @@ typedef struct {
     uint64_t frozen_mask_len;
     const double *frozen_reference_xyz;
     uint64_t frozen_reference_len;
+    /* Append-only Göbel rotated interfacial DMI extension (D_21 = D_32). */
+    int has_rotated_interfacial_dmi;
+    double rotated_interfacial_dmi_constant;
 } fullmag_fem_plan_desc;
 
 /*
@@ -1146,6 +1150,26 @@ typedef struct {
     uint64_t rk_transaction_cpu_snapshot_allocation_count;
     uint64_t rk_transaction_peak_rss_bytes;
 } fullmag_fem_step_stats;
+
+#define FULLMAG_FEM_OBJECT_STATS_V1_ABI_VERSION 1u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    double mx;
+    double my;
+    double mz;
+    double moment_weight;
+    double exchange_energy_joules;
+    double demag_energy_joules;
+    double external_energy_joules;
+    double drive_energy_joules;
+    double anisotropy_energy_joules;
+    double dmi_energy_joules;
+    double rotated_dmi_energy_joules;
+    double magnetoelastic_energy_joules;
+    double total_energy_joules;
+} fullmag_fem_object_stats_v1;
 
 /*
  * Versioned CPU explicit-RK accepted-endpoint cache telemetry.  This is an
@@ -3188,6 +3212,13 @@ int fullmag_fem_backend_average_m_for_nodes_f64(
     uint64_t node_count,
     double *out_xyz,
     uint64_t out_len
+);
+
+int fullmag_fem_backend_object_stats_for_elements_v1(
+    fullmag_fem_backend *handle,
+    const uint32_t *element_indices,
+    uint64_t element_count,
+    fullmag_fem_object_stats_v1 *out_stats
 );
 
 /*

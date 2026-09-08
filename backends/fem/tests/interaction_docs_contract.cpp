@@ -102,23 +102,25 @@ void required_interaction_docs_have_physics_contract_sections() {
         "fem_anisotropy_uniaxial.md",
         "fem_anisotropy_cubic.md",
     };
-    const char *energy[] = {"## Energia"};
-    const char *field_or_torque[] = {"## Pole", "## Pole / torque", "## Torque", "## RHS / torque"};
-    const char *units[] = {"## Jednostki"};
-    const char *boundary[] = {"## Warunki brzegowe"};
-    const char *discretization[] = {"## Dyskretyzacja FEM"};
-    const char *capability[] = {"## Ograniczenia capability"};
-    const char *tests[] = {"## Testy"};
+    const char *energy[] = {"## Energia", "(governing-equations)="};
+    const char *field_or_torque[] = {
+        "## Pole", "## Pole / torque", "## Torque", "## RHS / torque",
+        "(governing-equations)="};
+    const char *units[] = {"## Jednostki", "(symbols-and-si-units)="};
+    const char *boundary[] = {"## Warunki brzegowe", "(assumptions-and-validity)="};
+    const char *discretization[] = {"## Dyskretyzacja FEM", "(discrete-realization)="};
+    const char *capability[] = {"## Ograniczenia capability", "(problem-ir)="};
+    const char *tests[] = {"## Testy", "(validation)="};
 
     for (const char *doc : docs) {
         const std::string text = read_text_file(physics / doc);
-        check_doc_has_section(text, doc, energy, 1, "energy");
-        check_doc_has_section(text, doc, field_or_torque, 4, "field-or-torque");
-        check_doc_has_section(text, doc, units, 1, "units");
-        check_doc_has_section(text, doc, boundary, 1, "boundary-condition");
-        check_doc_has_section(text, doc, discretization, 1, "FEM-discretization");
-        check_doc_has_section(text, doc, capability, 1, "capability");
-        check_doc_has_section(text, doc, tests, 1, "tests");
+        check_doc_has_section(text, doc, energy, 2, "energy");
+        check_doc_has_section(text, doc, field_or_torque, 5, "field-or-torque");
+        check_doc_has_section(text, doc, units, 2, "units");
+        check_doc_has_section(text, doc, boundary, 2, "boundary-condition");
+        check_doc_has_section(text, doc, discretization, 2, "FEM-discretization");
+        check_doc_has_section(text, doc, capability, 2, "capability");
+        check_doc_has_section(text, doc, tests, 2, "tests");
     }
 }
 

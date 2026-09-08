@@ -555,7 +555,8 @@ export function buildFdmVectorSegmentsFromAnchors(
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
-    const length = Math.hypot(vx, vy, vz) || 1;
+    const magnitude = Math.hypot(vx, vy, vz);
+    const length = magnitude || 1; // wyłącznie dzielnik normalizacji kierunku
     const ux = vx / length;
     const uy = vy / length;
     const uz = vz / length;
@@ -578,7 +579,7 @@ export function buildFdmVectorSegmentsFromAnchors(
     segments[target + 3] = request.anchorMode === "tail" ? x + ux * safeScale : x + ux * halfScale;
     segments[target + 4] = request.anchorMode === "tail" ? y + uy * safeScale : y + uy * halfScale;
     segments[target + 5] = request.anchorMode === "tail" ? z + uz * safeScale : z + uz * halfScale;
-    segments[target + 6] = length / scaleMagnitude;
+    segments[target + 6] = magnitude / scaleMagnitude;
   }
   return {
     cellIndices: Uint32Array.from(selected, (ordinal) => cellIndices[ordinal] ?? 0),
@@ -645,7 +646,7 @@ function resolveFdmSurfaceAnchorNormal(
     if (index < 0 || index >= totalCells) return false;
     if (hasMembership) {
       const regionId = realizedRegionIds[index] ?? FMRM_INACTIVE_REGION_ID;
-      return selection === "dense" || cellMatchesSelection(regionId, selection);
+      return cellMatchesSelection(regionId, selection);
     }
     return candidateCells?.has(index) ?? false;
   };
@@ -1074,6 +1075,16 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
   return Uint32Array.from([...selected].toSorted((left, right) => left - right));
 }
 
+/**
+ * Czy komórka o danym `regionId` należy do wskazanej selekcji.
+ *
+ * `"dense"` to nośnik GĘSTY (natywna maska warstwy, nie membership regionów) —
+ * na poziomie przynależności regionowej nie filtruje niczego, więc zachowuje
+ * się jak `"all"`. Filtrowanie dla `"dense"` odbywa się wcześniej, przy
+ * wyborze konstruktora modelu (`buildFdmMaskedNativeLayerInstanceModel`,
+ * :370-375). Pominięcie tej gałęzi sprawia, że KAŻDA pętla filtrująca
+ * odrzuca wszystkie komórki i warstwa znika bez błędu.
+ */
 function cellMatchesSelection(
   regionId: number,
   selection: FdmCuboidCellSelection,
@@ -1081,6 +1092,7 @@ function cellMatchesSelection(
   const inactive = regionId === FMRM_INACTIVE_REGION_ID;
   return (
     selection === "all" ||
+    selection === "dense" ||
     (selection === "active" && !inactive) ||
     (selection === "inactive" && inactive)
   );
@@ -1331,7 +1343,8 @@ export function buildFdmVectorSegmentsUncached(
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
-    const length = Math.hypot(vx, vy, vz) || 1;
+    const magnitude = Math.hypot(vx, vy, vz);
+    const length = magnitude || 1; // wyłącznie dzielnik normalizacji kierunku
     const ux = vx / length;
     const uy = vy / length;
     const uz = vz / length;
@@ -1351,7 +1364,7 @@ export function buildFdmVectorSegmentsUncached(
       segments[target + 4] = y + uy * halfScale;
       segments[target + 5] = z + uz * halfScale;
     }
-    segments[target + 6] = length / scaleMagnitude;
+    segments[target + 6] = magnitude / scaleMagnitude;
   }
 
   return segments;

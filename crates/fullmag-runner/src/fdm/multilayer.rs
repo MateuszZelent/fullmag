@@ -122,6 +122,11 @@ pub(crate) fn make_multilayer_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - observables.rotated_dmi_energy,
+        0.0,
+        observables.rotated_dmi_energy,
+    );
     stats.per_object_scalars = observables.per_object_scalars.clone();
     let averaged = weighted_average_m_from_object_scalars(&stats.per_object_scalars)
         .unwrap_or_else(|| {
@@ -199,6 +204,7 @@ mod tests {
             effective_field: Vec::new(),
             anisotropy_field: Vec::new(),
             dmi_field: Vec::new(),
+            rotated_dmi_field: Vec::new(),
             magnetoelastic_field: Vec::new(),
             cubic_anisotropy_field: Vec::new(),
             bulk_dmi_field: Vec::new(),
@@ -210,6 +216,7 @@ mod tests {
             drive_energy: 0.0,
             anisotropy_energy: 0.0,
             dmi_energy: 0.0,
+            rotated_dmi_energy: 0.0,
             total_energy: 0.0,
             max_dm_dt: 13.0,
             max_rhs_all_norm_per_s: 13.0,

@@ -186,4 +186,51 @@ describe("viewport3dTopologyIndexScheduler", () => {
       topologyIndexBundleByteLength(bundle),
     );
   });
+
+  describe("M-08 · recovers the worker instead of permanently degrading a lane", () => {
+    const source = readFileSync(
+      new URL("./viewport3dTopologyIndexScheduler.ts", import.meta.url),
+      "utf8",
+    );
+    const executeStart = source.indexOf(
+      "async function executeViewport3DTopologyIndexBuild",
+    );
+    const disposeStart = source.indexOf(
+      "export function disposeViewport3DTopologyIndexWorker",
+    );
+    const executeSource = source.slice(executeStart, disposeStart);
+    const getClientStart = source.indexOf(
+      "function getTopologyIndexWorkerClient(",
+    );
+    const getClientSource = source.slice(
+      getClientStart,
+      source.indexOf("\n}\n", getClientStart),
+    );
+
+    it("disposes the failed worker and clears it to undefined instead of null so it can be recreated", () => {
+      expect(executeSource).toContain(
+        "topologyIndexWorkerClient?.dispose(error);",
+      );
+      expect(executeSource).toContain("topologyIndexWorkerClient = undefined;");
+      expect(executeSource).not.toContain("topologyIndexWorkerClient = null;");
+    });
+
+    it("backs off before recreating a worker that just failed", () => {
+      expect(source).toContain(
+        "const TOPOLOGY_INDEX_WORKER_RETRY_BACKOFF_MS = 5_000;",
+      );
+      expect(executeSource).toContain(
+        "topologyIndexWorkerRetryNotBeforeMs =\n        Date.now() + TOPOLOGY_INDEX_WORKER_RETRY_BACKOFF_MS;",
+      );
+      expect(getClientSource).toContain(
+        "if (Date.now() < topologyIndexWorkerRetryNotBeforeMs) {",
+      );
+    });
+
+    it("resets the backoff window on an explicit dispose", () => {
+      expect(source).toContain(
+        "topologyIndexWorkerFallbackReason = undefined;\n  topologyIndexWorkerRetryNotBeforeMs = 0;",
+      );
+    });
+  });
 });

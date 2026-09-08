@@ -27,6 +27,7 @@ export type ActiveLaneOperationId =
   | "interaction.sot"
   | "interaction.stt"
   | "interaction.interfacial_dmi"
+  | "interaction.rotated_interfacial_dmi"
   | "interaction.bulk_dmi"
   | "interaction.uniaxial_anisotropy"
   | "interaction.cubic_anisotropy"

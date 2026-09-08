@@ -162,6 +162,7 @@ set(FEM_SOURCES
     cpu/mfem/runtime/interrupt.cpp
     cpu/mfem/runtime/mfem_context.cpp
     cpu/mfem/runtime/mfem_device.cpp
+    cpu/mfem/runtime/object_stats.cpp
     cpu/mfem/runtime/runtime_build_info.cpp
     cpu/mfem/runtime/mfem_mesh_builder.cpp
     cpu/mfem/runtime/snapshot.cpp
@@ -1329,6 +1330,14 @@ target_include_directories(fem_step_metrics_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_step_metrics_contract COMMAND fem_step_metrics_contract)
+
+add_executable(fem_object_stats_contract tests/object_stats_contract.cpp)
+target_link_libraries(fem_object_stats_contract PRIVATE fullmag_fem)
+target_include_directories(fem_object_stats_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_object_stats_contract COMMAND fem_object_stats_contract)
 
 add_executable(fem_stage_completion_contract tests/stage_completion_contract.cpp)
 target_link_libraries(fem_stage_completion_contract PRIVATE fullmag_fem)

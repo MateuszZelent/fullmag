@@ -38,6 +38,12 @@ interface PendingColorTransform {
 }
 
 const COLOR_TRANSFORM_WORKER_IDLE_TIMEOUT_MS = 120_000;
+// M-08: after a runtime worker error the client is set to `undefined` (not
+// `null`) so it can be recreated, but recreating it on the very next build
+// call would hammer a worker that just failed. Back off for a short window
+// before allowing recreation.
+const COLOR_TRANSFORM_WORKER_RETRY_BACKOFF_MS = 5_000;
+let colorTransformWorkerRetryNotBeforeMs = 0;
 
 let fallbackColorTransformBuildId = 1;
 let colorTransformBuildJobScheduler:
@@ -103,7 +109,13 @@ async function executeVertexScalarColorBuild(
       if (isAbortError(error)) throw error;
       colorTransformWorkerFallbackReason = "worker-error";
       options.recordFallback?.(colorTransformWorkerFallbackReason);
-      colorTransformWorkerClient = null;
+      // M-08: dispose the failed worker and clear it to `undefined` (not
+      // `null`) so getColorTransformWorkerClient() can recreate it later
+      // instead of permanently degrading this lane to the main thread.
+      colorTransformWorkerClient?.dispose(error);
+      colorTransformWorkerClient = undefined;
+      colorTransformWorkerRetryNotBeforeMs =
+        Date.now() + COLOR_TRANSFORM_WORKER_RETRY_BACKOFF_MS;
     }
   } else {
     options.recordFallback?.(
@@ -141,6 +153,12 @@ function getColorTransformWorkerClient(): ColorTransformWorkerClient | null {
     return colorTransformWorkerClient;
   }
 
+  if (Date.now() < colorTransformWorkerRetryNotBeforeMs) {
+    // M-08: still inside the post-failure backoff window; fall back to the
+    // main thread for this build instead of hammering a fresh worker.
+    return null;
+  }
+
   if (typeof Worker === "undefined") {
     colorTransformWorkerFallbackReason = "worker-unavailable";
     colorTransformWorkerClient = null;
@@ -163,6 +181,7 @@ export function disposeViewport3DColorTransformWorker(): void {
   colorTransformWorkerClient?.dispose();
   colorTransformWorkerClient = undefined;
   colorTransformWorkerFallbackReason = undefined;
+  colorTransformWorkerRetryNotBeforeMs = 0;
 }
 
 /** @deprecated Use disposeViewport3DColorTransformWorker. */

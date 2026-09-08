@@ -1389,10 +1389,20 @@ describe("viewport3dRenderModel", () => {
 
     expect(
       Array.from(phaseZero?.scalarColorsByMode.get("x")?.scalarValues ?? []),
-    ).toEqual([1, 3, 5, 7]);
+    ).toEqual([
+      expect.closeTo(0),
+      expect.closeTo(1 / 3),
+      expect.closeTo(2 / 3),
+      expect.closeTo(1),
+    ]);
     expect(
       Array.from(phaseQuarter?.scalarColorsByMode.get("x")?.scalarValues ?? []),
-    ).toEqual([-2, -4, -6, -8]);
+    ).toEqual([
+      expect.closeTo(1),
+      expect.closeTo(2 / 3),
+      expect.closeTo(1 / 3),
+      expect.closeTo(0),
+    ]);
     expect(
       Array.from(
         phaseQuarter?.scalarColorsByMode.get("x")?.complexRealValues ?? [],
@@ -2428,7 +2438,7 @@ describe("viewport3dRenderModel", () => {
       rangeSource: "face_values",
     });
     expect(Array.from(surface?.scalarColors?.scalarValues ?? [])).toEqual([
-      3, 3, 3,
+      0.5, 0.5, 0.5,
     ]);
   });
 
@@ -2962,7 +2972,7 @@ describe("viewport3dRenderModel", () => {
         model?.scalarColorsByPartAndMode.get("part-a")?.get("x")?.scalarValues ??
           [],
       ),
-    ).toEqual([1, 0.5, -0.5, -1]);
+    ).toEqual([1, 0.75, 0.25, 0]);
   });
 
   it("rejects scoped per-part scalar colors without explicit node indices", () => {

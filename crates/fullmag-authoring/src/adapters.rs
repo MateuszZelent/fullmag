@@ -103,6 +103,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             demag_realization: builder.demag_realization.clone(),
             fdm: scene_fdm,
             external_field: builder.external_field,
+            rotated_interfacial_dmi: builder.rotated_interfacial_dmi,
             solver: builder.solver.clone(),
             universe_mesh: builder.universe.clone(),
             shared_domain_mesh: builder.mesh.clone(),
@@ -226,6 +227,7 @@ pub fn scene_document_to_script_builder(
             &normalized_scene.objects,
         ),
         external_field: normalized_scene.study.external_field,
+        rotated_interfacial_dmi: normalized_scene.study.rotated_interfacial_dmi,
         solver: normalized_scene.study.solver.clone(),
         mesh: normalized_scene.study.shared_domain_mesh.clone(),
         universe: normalized_scene
@@ -1130,10 +1132,11 @@ fn builder_fdm_from_scene(
     })
 }
 
-const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 5] = [
+const INTERACTION_ORDER: [ScriptBuilderMagneticInteractionKind; 6] = [
     ScriptBuilderMagneticInteractionKind::Exchange,
     ScriptBuilderMagneticInteractionKind::Demag,
     ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+    ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
     ScriptBuilderMagneticInteractionKind::BulkDmi,
     ScriptBuilderMagneticInteractionKind::UniaxialAnisotropy,
 ];
@@ -1244,6 +1247,16 @@ fn normalize_interaction_entry(
             params.insert("dind".to_string(), Value::from(dind));
             ScriptBuilderMagneticInteractionEntry {
                 kind: ScriptBuilderMagneticInteractionKind::InterfacialDmi,
+                enabled: entry.enabled,
+                params: Some(Value::Object(params)),
+            }
+        }
+        ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi => {
+            let mut params = params_map(entry.params.as_ref());
+            let d = params.get("d").and_then(Value::as_f64).unwrap_or(3.0e-3);
+            params.insert("d".to_string(), Value::from(d));
+            ScriptBuilderMagneticInteractionEntry {
+                kind: ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
                 enabled: entry.enabled,
                 params: Some(Value::Object(params)),
             }
@@ -2086,6 +2099,20 @@ impl From<crate::SceneCoupling> for fullmag_ir::CouplingIR {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotated_dmi_authoring_normalization_preserves_signed_d() {
+        let entry = ScriptBuilderMagneticInteractionEntry {
+            kind: ScriptBuilderMagneticInteractionKind::RotatedInterfacialDmi,
+            enabled: true,
+            params: Some(serde_json::json!({"d": -0.003})),
+        };
+
+        assert_eq!(
+            normalize_interaction_entry(&entry, Some(9.0), Some(8.0)),
+            entry
+        );
+    }
     use crate::{
         MacroStageNode, PrimitiveStageNode, ScriptBuilderAdaptiveTimestepState,
         ScriptBuilderCurrentModuleState, ScriptBuilderDriveState, ScriptBuilderInitialState,
@@ -2153,6 +2180,7 @@ mod tests {
             demag_realization: Some("airbox_robin".to_string()),
             fdm: None,
             external_field: Some([0.0, 0.0, 0.015]),
+            rotated_interfacial_dmi: None,
             solver: ScriptBuilderSolverState {
                 integrator: "rk45".to_string(),
                 fixed_timestep: "1e-15".to_string(),
@@ -2580,6 +2608,18 @@ mod tests {
                 .map(|document| document.version.as_str()),
             Some("study_pipeline.v1")
         );
+    }
+
+    #[test]
+    fn scene_document_round_trips_signed_rotated_interfacial_dmi() {
+        let mut builder = sample_builder();
+        builder.rotated_interfacial_dmi = Some(-3.0e-3);
+
+        let scene = scene_document_from_script_builder(&builder);
+        let round_trip = scene_document_to_script_builder(&scene).expect("scene should validate");
+
+        assert_eq!(scene.study.rotated_interfacial_dmi, Some(-3.0e-3));
+        assert_eq!(round_trip.rotated_interfacial_dmi, Some(-3.0e-3));
     }
 
     #[test]

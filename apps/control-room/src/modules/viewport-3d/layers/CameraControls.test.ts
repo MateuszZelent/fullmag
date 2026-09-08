@@ -57,10 +57,20 @@ describe("CameraControls", () => {
     expect(options.enablePan).toBe(true);
     expect(options.enableRotate).toBe(true);
     expect(options.enableZoom).toBe(true);
-    expect(options.panSpeed).toBeGreaterThan(options.rotateSpeed);
+    expect(options.panSpeed).toBe(1); // 1:1 screen-space panning
     expect(options.rotateSpeed).toBeGreaterThan(0);
     expect(options.zoomSpeed).toBeGreaterThan(0);
     expect(orbitControlsBlock).toContain("panSpeed={options.panSpeed}");
+  });
+
+  it("keeps screen-space panning enabled so panSpeed=1 means 1:1", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const start = source.indexOf("<DreiOrbitControls");
+    const block = source.slice(start, source.indexOf("/>", start));
+    expect(block).toContain("screenSpacePanning");
   });
 
   it("delegates wheel zoom and damping to the single Drei OrbitControls owner", () => {
@@ -157,6 +167,28 @@ describe("CameraControls", () => {
     expect(next.azimuth).toBeLessThan(Math.PI);
     expect(next.polar).toBeGreaterThan(0);
     expect(next.polar).toBeLessThan(Math.PI / 2);
+  });
+
+  it("wraps the orbit debug azimuth through the 0/2π seam", () => {
+    let azimuth = 0.2;
+    for (let frame = 0; frame < 240; frame += 1) {
+      azimuth = resolveViewport3DOrbitDebugStep({
+        currentAngles: { azimuth, polar: Math.PI / 2 },
+        deltaSeconds: 1 / 60,
+        targetAngles: { azimuth: 6.0, polar: Math.PI / 2 },
+      }).azimuth;
+    }
+    expect(azimuth).toBeCloseTo(6.0, 3);
+  });
+
+  it("never parks the orbit debug azimuth at the clamp boundary", () => {
+    const next = resolveViewport3DOrbitDebugStep({
+      currentAngles: { azimuth: 0.02, polar: Math.PI / 2 },
+      deltaSeconds: 1 / 60,
+      targetAngles: { azimuth: 6.0, polar: Math.PI / 2 },
+    });
+    expect(next.azimuth).toBeGreaterThan(6.0 - Math.PI); // poszło w stronę 2π, nie do 0
+    expect(next.azimuth).not.toBe(0);
   });
 
   it("maps absolute temporary orbit debug targets to camera deltas", () => {
@@ -282,6 +314,27 @@ describe("CameraControls", () => {
     expect(commitBlock).toContain("onCameraInteractionEnd?.(epoch);");
     expect(transitionBlock).toContain("cameraGestureEndedRef.current = false;");
     expect(endBlock).toContain("cameraGestureEndedRef.current = true;");
+  });
+
+  it("consumes the suppressed rest commit instead of blocking the scheduler", () => {
+    const source = readFileSync(
+      new URL("./CameraControls.tsx", import.meta.url),
+      "utf8",
+    );
+    const scheduleStart = source.indexOf(
+      "const scheduleCameraControlsPoseCommit",
+    );
+    const scheduleBlock = source.slice(
+      scheduleStart,
+      source.indexOf("}, [clearCameraControlsPoseCommit", scheduleStart),
+    );
+    const commitStart = source.indexOf("const commitCameraControlsPose");
+    const commitBlock = source.slice(commitStart, scheduleStart);
+
+    // the scheduler must not gate on the flag …
+    expect(scheduleBlock).not.toContain("suppressNextRestCommitRef");
+    // … the commit must clear it
+    expect(commitBlock).toContain("suppressNextRestCommitRef.current = false;");
   });
 
   it("does not duplicate Drei OrbitControls invalidation on every change event", () => {

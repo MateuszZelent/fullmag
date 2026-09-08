@@ -7,7 +7,8 @@ preconditionera GPU NCG są potwierdzone. Istnieje fail-closed builder/resolver
 diagonalnego preconditionera, ale nie jest on podłączony do NCG/PG-BB runtime.
 Nie wynika z tego, że preconditioner GPU skróci time-to-`tolA`; to pozostaje
 `NOT VERIFIED`. GPU ma poprawny unpreconditioned PR+, tangent transport,
-restart, fallback i persistent state. Chebyshev/PCG, device Armijo packet i
+restart i persistent state; ma tylko restartową recovery line-search, bez
+trzeciego CPU-owego fallbacku do surowego gradientu. Chebyshev/PCG, device Armijo packet i
 device PG-BB control pozostają celami. Istniejący managed target
 `verify-fem-gpu-relaxation-preconditioner-qualification` i jego evidence należy
 rozszerzyć lub zastąpić, nie dublować.

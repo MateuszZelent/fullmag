@@ -3,39 +3,157 @@
     "path": "docs/physics/0580-canonical-relaxation-equilibrium-contract.md"
   },
   "backend_matrix": [
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
-    {"solver": "FEM", "device": "GPU", "status": "documented"},
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
-    {"solver": "FDM", "device": "GPU", "status": "documented"}
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "documented"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "documented"
+    }
   ],
   "equations": [
     {
       "id": "fdm-cuda-fp32-armijo-budget",
-      "symbols": ["epsilon_E_single", "epsilon_f32", "E"],
-      "sources": ["fp32ArmijoBudget"]
+      "symbols": [
+        "epsilon_E_single",
+        "epsilon_f32",
+        "E"
+      ],
+      "sources": [
+        "fp32ArmijoBudget"
+      ]
     },
     {
       "id": "fdm-cuda-fp32-armijo-acceptance",
-      "symbols": ["E_trial", "E_previous", "c_1", "lambda", "phi_prime", "epsilon_E_single"],
-      "sources": ["fp32ArmijoAcceptance"]
+      "symbols": [
+        "E_trial",
+        "E_previous",
+        "c_1",
+        "lambda",
+        "phi_prime",
+        "epsilon_E_single"
+      ],
+      "sources": [
+        "fp32ArmijoAcceptance"
+      ]
     },
     {
       "id": "representable-chord-armijo",
-      "symbols": ["s_fp", "Delta_E_lin_chord", "H_eff", "Ms", "V_i", "mu0", "E_trial", "E_previous", "c_1"],
-      "sources": ["representableChordIncrement", "representableChordRegression"]
+      "symbols": [
+        "s_fp",
+        "Delta_E_lin_chord",
+        "H_eff",
+        "Ms",
+        "V_i",
+        "mu0",
+        "E_trial",
+        "E_previous",
+        "c_1"
+      ],
+      "sources": [
+        "representableChordIncrement",
+        "representableChordRegression"
+      ]
     }
   ],
   "symbols": [
-    {"id": "epsilon_E_single", "latex": "\\varepsilon_{E,\\mathrm{single}}", "meaning": "FP32 CUDA absolute energy roundoff budget", "si_unit": "\\mathrm{J}"},
-    {"id": "epsilon_f32", "latex": "\\varepsilon_{\\mathrm{f32}}", "meaning": "float32 machine epsilon", "si_unit": "1"},
-    {"id": "E", "latex": "E", "meaning": "total conservative energy", "si_unit": "\\mathrm{J}"},
-    {"id": "E_trial", "latex": "E_{\\mathrm{trial}}", "meaning": "candidate trial energy in line search", "si_unit": "\\mathrm{J}"},
-    {"id": "E_previous", "latex": "E_{\\mathrm{previous}}", "meaning": "last accepted energy", "si_unit": "\\mathrm{J}"},
-    {"id": "c_1", "latex": "c_1", "meaning": "Armijo coefficient", "si_unit": "1"},
-    {"id": "lambda", "latex": "\\lambda", "meaning": "direct-minimizer line-search step", "si_unit": "\\mathrm{m\\,A^{-1}}"},
-    {"id": "phi_prime", "latex": "\\phi'(0)", "meaning": "physical-metric directional energy derivative", "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"},
-    {"id": "s_fp", "latex": "s_i^{\\mathrm{fp}}", "meaning": "representable normalized trial chord", "si_unit": "1"},
-    {"id": "Delta_E_lin_chord", "latex": "\\Delta E_{\\mathrm{lin,chord}}", "meaning": "first-order energy increment along the stored trial chord", "si_unit": "\\mathrm{J}"}
+    {
+      "id": "epsilon_E_single",
+      "latex": "\\varepsilon_{E,\\mathrm{single}}",
+      "meaning": "FP32 CUDA absolute energy roundoff budget",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "epsilon_f32",
+      "latex": "\\varepsilon_{\\mathrm{f32}}",
+      "meaning": "float32 machine epsilon",
+      "si_unit": "1"
+    },
+    {
+      "id": "E",
+      "latex": "E",
+      "meaning": "total conservative energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "E_trial",
+      "latex": "E_{\\mathrm{trial}}",
+      "meaning": "candidate trial energy in line search",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "E_previous",
+      "latex": "E_{\\mathrm{previous}}",
+      "meaning": "last accepted energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "c_1",
+      "latex": "c_1",
+      "meaning": "Armijo coefficient",
+      "si_unit": "1"
+    },
+    {
+      "id": "lambda",
+      "latex": "\\lambda",
+      "meaning": "direct-minimizer line-search step",
+      "si_unit": "\\mathrm{m\\,A^{-1}}"
+    },
+    {
+      "id": "phi_prime",
+      "latex": "\\phi'(0)",
+      "meaning": "physical-metric directional energy derivative",
+      "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"
+    },
+    {
+      "id": "s_fp",
+      "latex": "s_i^{\\mathrm{fp}}",
+      "meaning": "representable trial chord at cell/node `i`",
+      "si_unit": "1"
+    },
+    {
+      "id": "Delta_E_lin_chord",
+      "latex": "\\Delta E_{\\mathrm{lin,chord}}",
+      "meaning": "first-order energy increment along the stored trial chord",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
+      "id": "H_eff",
+      "latex": "H_eff",
+      "meaning": "conservative effective field",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "Ms",
+      "latex": "Ms",
+      "meaning": "saturation magnetization",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "V_i",
+      "latex": "V_i",
+      "meaning": "nodal/cell integration weight",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "mu0",
+      "latex": "mu0",
+      "meaning": "vacuum permeability",
+      "si_unit": "N/A^2"
+    }
   ],
   "sources": [
     {

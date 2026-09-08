@@ -40,7 +40,7 @@ from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM, PerObjectMeshRecipe
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, StaticFieldMap, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, RotatedInterfacialDMI, StaticFieldMap, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.spin_torque import (
     LegacySpinTorque,
     PrescribedSpinOrbitTorque,
@@ -1694,6 +1694,15 @@ class RuntimeSelection:
             if isinstance(execution_precision, ExecutionPrecision)
             else str(execution_precision).lower()
         )
+        resolved_precision = ExecutionPrecision(normalized_precision)
+        # Reapplying the same precision is an idempotent setter and preserves
+        # the exact FDM policy.  A real precision change explicitly supersedes
+        # the old policy because its execution precision no longer matches.
+        fdm_precision_policy = (
+            self.fdm_precision_policy
+            if resolved_precision is self.execution_precision
+            else None
+        )
         return RuntimeSelection(
             backend_target=self.backend_target,
             device_target=self.device_target,
@@ -1701,7 +1710,8 @@ class RuntimeSelection:
             device_index=self.device_index,
             cpu_threads=self.cpu_threads,
             execution_mode=self.execution_mode,
-            execution_precision=ExecutionPrecision(normalized_precision),
+            execution_precision=resolved_precision,
+            fdm_precision_policy=fdm_precision_policy,
         )
 
     def precision_policy(
@@ -1755,7 +1765,7 @@ class RuntimeSelection:
 backend = RuntimeSelection()
 
 
-EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
+EnergyTerm = Exchange | Demag | InterfacialDMI | RotatedInterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
 OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
@@ -2268,7 +2278,7 @@ def _validate_authored_mixed_p1_scope(
         if hasattr(term, "to_ir")
     ]
     device = runtime_selection.get("device")
-    dmi_kinds = {"interfacial_dmi", "bulk_dmi"}
+    dmi_kinds = {"interfacial_dmi", "rotated_interfacial_dmi", "bulk_dmi"}
     has_dmi = any(payload.get("kind") in dmi_kinds for payload in energy_payloads) or any(
         payload.get(key) is not None
         for payload in material_payloads
@@ -2296,7 +2306,14 @@ def _validate_authored_mixed_p1_scope(
         failed.append("demag_term_count_not_one")
     if any(
         payload.get("kind")
-        not in {"exchange", "demag", "zeeman", "interfacial_dmi", "bulk_dmi"}
+        not in {
+            "exchange",
+            "demag",
+            "zeeman",
+            "interfacial_dmi",
+            "rotated_interfacial_dmi",
+            "bulk_dmi",
+        }
         for payload in energy_payloads
     ):
         failed.append("unsupported_energy_term")

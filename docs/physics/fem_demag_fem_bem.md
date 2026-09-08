@@ -11,6 +11,9 @@
   docs/physics/0870-fem-bem-demag-open-boundary.md,
   docs/specs/capability-matrix-v0.md
 - Source map: docs/physics/fem_demag_fem_bem.source-map.json
+- Implementation: `backends/fem/cpu/mfem/interactions/demag_fem_bem_*` oraz
+  `backends/fem/gpu/cuda/demag_fem_bem/`
+- Test: `backends/fem/tests/demag_fem_bem_contract.cpp`
 
 (problem-statement)=
 ## 1. Problem fizyczny

@@ -117,13 +117,21 @@ interface MutableViewport3DDerivedBufferCacheEntry<TBuffer> {
 }
 
 export function createViewport3DDerivedBufferCache<TBuffer>({
+  disposeBuffer,
   maxBytes = Number.POSITIVE_INFINITY,
   maxEntries = Number.POSITIVE_INFINITY,
   now = defaultNow,
+  onBudgetExceeded,
 }: {
+  readonly disposeBuffer?: (buffer: TBuffer) => void;
   readonly maxBytes?: number;
   readonly maxEntries?: number;
   readonly now?: () => number;
+  readonly onBudgetExceeded?: (info: {
+    readonly byteLength: number;
+    readonly maxBytes: number;
+    readonly pinnedBytes: number;
+  }) => void;
 } = {}): Viewport3DDerivedBufferCache<TBuffer> {
   const entries = new Map<
     Viewport3DBuildJobKey,
@@ -157,7 +165,10 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     const entry = entries.get(key);
     if (!entry) return null;
     entry.lastUsedAtMs = now();
-    notify();
+    // Odczyt nie jest zmianą obserwowalną. notify() tutaj wywoływał
+    // subskrybentów (i, w konsekwencji, re-render przez
+    // useSyncExternalStore) na każdy odczyt cache — samo czytanie potrafiło
+    // napędzać pętlę renderowania (M-10).
     return freezeEntry(entry);
   }
 
@@ -235,7 +246,10 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     const entry = entries.get(key);
     if (!entry || entry.refCount > 0) return false;
     const deleted = entries.delete(key);
-    if (deleted) notify();
+    if (deleted) {
+      disposeBuffer?.(entry.buffer);
+      notify();
+    }
     return deleted;
   }
 
@@ -272,9 +286,20 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
     for (const entry of candidates) {
       if (totalBytes <= safeMaxBytes && entryCount <= safeMaxEntries) break;
       if (!entries.delete(entry.key)) continue;
+      disposeBuffer?.(entry.buffer);
       evicted.push(entry.key);
       totalBytes -= entry.estimatedBytes;
       entryCount -= 1;
+    }
+    if (totalBytes > safeMaxBytes || entryCount > safeMaxEntries) {
+      // Every remaining entry has refCount > 0 (pinned) — the budget is
+      // being silently exceeded rather than enforced. Before this fix there
+      // was no signal at all when that happened.
+      onBudgetExceeded?.({
+        byteLength: totalBytes,
+        maxBytes: safeMaxBytes,
+        pinnedBytes: totalBytes,
+      });
     }
     return evicted;
   }
@@ -335,6 +360,20 @@ export function createViewport3DDerivedBufferCache<TBuffer>({
   }
 
   function dispose(): void {
+    if (process.env.NODE_ENV !== "production") {
+      const pinned = Array.from(entries.values()).filter(
+        (entry) => entry.refCount > 0,
+      );
+      if (pinned.length > 0) {
+        console.warn(
+          `[viewport3d] dispose() cache'a buforów pochodnych: ${pinned.length} wpisów ` +
+            `z refCount > 0 — wyciek uchwytu po stronie konsumenta.`,
+        );
+      }
+    }
+    for (const entry of entries.values()) {
+      disposeBuffer?.(entry.buffer);
+    }
     entries.clear();
     notify();
   }

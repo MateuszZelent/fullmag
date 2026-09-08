@@ -255,6 +255,8 @@ pub struct FdmMultilayerPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interfacial_dmi: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotated_interfacial_dmi: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bulk_dmi: Option<f64>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
@@ -577,6 +579,8 @@ struct FdmMultilayerPlanWireIR {
     #[serde(default)]
     interfacial_dmi: Option<f64>,
     #[serde(default)]
+    rotated_interfacial_dmi: Option<f64>,
+    #[serde(default)]
     bulk_dmi: Option<f64>,
     gyromagnetic_ratio: f64,
     precision: ExecutionPrecision,
@@ -795,6 +799,7 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
             fft: wire.fft,
             external_field: wire.external_field,
             interfacial_dmi: wire.interfacial_dmi,
+            rotated_interfacial_dmi: wire.rotated_interfacial_dmi,
             bulk_dmi: wire.bulk_dmi,
             gyromagnetic_ratio: wire.gyromagnetic_ratio,
             precision: wire.precision,
@@ -1150,6 +1155,7 @@ mod multilayer_contract_tests {
             fft: None,
             external_field: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             gyromagnetic_ratio: 1.0,
             precision: ExecutionPrecision::Double,

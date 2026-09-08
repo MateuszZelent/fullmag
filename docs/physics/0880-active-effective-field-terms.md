@@ -61,6 +61,28 @@ M_s(\mathbf x)\,\mathbf m(\mathbf x)\cdot
 \mathbf H_{\mathrm d}(\mathbf x)\,\mathrm dV.
 ```
 
+For a magnetic object $o$ with element domain $\Omega_o$, Fullmag reports
+object-local energies by restricting each discrete energy integral to the
+elements owned by that object. It never obtains an object value by multiplying
+the global energy by a node-count or volume fraction. In particular, the
+demagnetizing contribution is
+
+```{math}
+:label: eq-object-demag
+
+E_{\mathrm d,o}[\mathbf m]
+=-\frac{\mu_0}{2}\int_{\Omega_o}
+M_s(\mathbf x)\,\mathbf m(\mathbf x)\cdot
+\mathbf H_{\mathrm d}[\mathbf m](\mathbf x)\,\mathrm dV.
+```
+
+The field in this integral is the field of the complete magnetic system. This
+defines the mutual demagnetizing contribution by the standard symmetric
+half-interaction convention, so disjoint object domains satisfy
+$\sum_o E_{\mathrm d,o}=E_{\mathrm d}$. Shared mesh nodes do not imply shared
+ownership: integration is partitioned by elements, and air elements are never
+published as magnetic objects.
+
 Calling `disable_exchange()` removes $E_{\mathrm{ex}}$ and
 $\mathbf H_{\mathrm{ex}}$ from $\mathcal A$. Calling `disable_demag()` removes
 $E_{\mathrm d}$ and $\mathbf H_{\mathrm d}$. Material values remain authored and available if
@@ -83,6 +105,7 @@ the term is re-enabled or the script is edited later.
 | $A_{\mathrm{ex}}$ | exchange stiffness field | $\mathrm{J\,m^{-1}}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
 | $\Omega_m$ | magnetic domain | $\mathrm{m^3}$ |
+| $\Omega_o$ | element domain owned by magnetic object o | $\mathrm{m^3}$ |
 | $\mathcal A$ | authored set of active energy terms | $1$ |
 | $\nabla$ | spatial gradient | $\mathrm{m^{-1}}$ |
 | $\lVert\cdot\rVert_F$ | Frobenius norm | $1$ |
@@ -267,8 +290,10 @@ Re-enabling after a disable uses the compatibility configuration call `exchange(
 | exchange IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Exchange` | serialize the active exchange term | Python/ProblemIR | source and tests |
 | demag IR | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | serialize the active demag term | Python/ProblemIR | source and tests |
 | explicit opt-out | `packages/fullmag-py/src/fullmag/world.py` | `disable_exchange`, `disable_demag`, `StudyBuilder.disable_exchange`, `StudyBuilder.disable_demag` | public API | Python | focused tests |
-| Python contract tests | `packages/fullmag-py/tests/test_api.py` | `class ProblemApiTests` | default, opt-out, rewrite, and round-trip tests | Python | executed focused tests |
+| Python contract tests | `packages/fullmag-py/tests/test_api.py` | `test_study_defaults_exchange_and_demag_without_enable_calls` | proves default, opt-out, rewrite, and round-trip coverage | Python | executed focused tests |
 | browser defaults | `crates/fullmag-authoring/src/scene.rs` | `SceneStudyState` | default-true SceneDocument flags | Control room | Rust adapter tests |
 | FDM planning | `crates/fullmag-plan/src/fdm.rs` | `plan_fdm` | resolve FDM active operators | FDM CPU/GPU | existing planner tests |
 | FEM planning | `crates/fullmag-plan/src/fem.rs` | `plan_fem` | resolve FEM active operators | FEM CPU/GPU | existing planner tests |
+| native FEM object energy | `backends/fem/cpu/mfem/runtime/object_stats.cpp` | `compute_object_stats_for_elements` | integrate each energy over owned elements | FEM CPU/GPU | managed CPU/GPU contract |
+| reference FEM object energy | `crates/fullmag-runner/src/fem_reference.rs` | `fem_per_object_scalars` | partition element energies and omit air | FEM reference | focused Rust tests |
 

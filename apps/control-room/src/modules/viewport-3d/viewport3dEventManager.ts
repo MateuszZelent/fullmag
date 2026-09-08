@@ -10,6 +10,7 @@ const VIEWPORT_3D_EVENT_HANDLER_KEYS = [
   "onClick",
   "onPointerDown",
   "onPointerMove",
+  "onPointerUp",
   "onPointerLeave",
   "onPointerCancel",
   "onLostPointerCapture",
@@ -105,12 +106,17 @@ export function createViewport3DClickSelectionHandler({
 
 export function createViewport3DPointerMoveHandler(
   handler: EventListener | undefined,
+  store?: Parameters<typeof createPointerEvents>[0],
 ): EventListener | undefined {
   if (!handler) return undefined;
 
   return (event) => {
     const pointerEvent = event as PointerEvent;
-    if (pointerEvent.buttons !== 0) return;
+    // Skip hover raycasts while a camera drag is in flight, but never while an
+    // object has pointer capture — that is a drag gesture that needs the moves.
+    const dragging = pointerEvent.buttons !== 0;
+    const captured = (store?.getState().internal.capturedMap?.size ?? 0) > 0;
+    if (dragging && !captured) return;
     handler(event);
   };
 }
@@ -135,6 +141,7 @@ export function createViewport3DEventManager(
       ),
       onPointerMove: createViewport3DPointerMoveHandler(
         pickedHandlers?.onPointerMove,
+        store,
       ),
       onWheel: () => {
         // Native wheel event is allowed to propagate for camera controls, but we

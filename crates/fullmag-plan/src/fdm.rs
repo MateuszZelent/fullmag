@@ -2265,6 +2265,7 @@ pub(crate) fn plan_fdm(
                     );
                 }
             }
+            EnergyTermIR::RotatedInterfacialDmi { .. } => {}
             EnergyTermIR::BulkDmi { .. } => {
                 has_bulk_dmi = true;
             }
@@ -2359,6 +2360,21 @@ pub(crate) fn plan_fdm(
     if has_bulk_dmi && !bulk_dmi_is_fully_periodic {
         errors.push(
             "BulkDmi requires a natural exchange+DMI free-surface boundary condition; the current executable FDM lanes do not implement it. Use periodic axes on all three dimensions or remove BulkDmi."
+                .to_string(),
+        );
+    }
+    let has_rotated_interfacial_dmi = problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::RotatedInterfacialDmi { .. }));
+    let has_open_magnetic_boundary = problem.pbc.as_ref().is_none_or(|pbc| {
+        pbc.axes
+            .iter()
+            .any(|axis| matches!(axis, AxisBoundary::Open))
+    });
+    if has_rotated_interfacial_dmi && has_open_magnetic_boundary && !enable_exchange {
+        errors.push(
+            "RotatedInterfacialDmi with open magnetic boundaries requires Exchange for the coupled natural boundary condition"
                 .to_string(),
         );
     }
@@ -2473,6 +2489,10 @@ pub(crate) fn plan_fdm(
             )
         }),
         false,
+        problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, EnergyTermIR::RotatedInterfacialDmi { .. })),
         false,
         false,
         problem
@@ -3200,6 +3220,7 @@ pub(crate) fn plan_fdm(
         temperature: thermal_temperature,
         thermal_seed_config,
         interfacial_dmi: None,
+        rotated_interfacial_dmi: None,
         bulk_dmi: None,
         dind_field: None,
         dbulk_field: None,
@@ -3294,6 +3315,9 @@ pub(crate) fn plan_fdm(
         match term {
             EnergyTermIR::InterfacialDmi { d, .. } => {
                 fdm_plan.interfacial_dmi = Some(*d);
+            }
+            EnergyTermIR::RotatedInterfacialDmi { d } => {
+                fdm_plan.rotated_interfacial_dmi = Some(*d);
             }
             EnergyTermIR::BulkDmi { d } => {
                 fdm_plan.bulk_dmi = Some(*d);
@@ -3980,6 +4004,7 @@ pub(crate) fn plan_fdm_multilayer(
     let mut enable_demag = false;
     let mut external_field = None;
     let mut interfacial_dmi = None;
+    let mut rotated_interfacial_dmi = None;
     let mut bulk_dmi = None;
     for term in &problem.energy_terms {
         match term {
@@ -4029,6 +4054,11 @@ pub(crate) fn plan_fdm_multilayer(
                     errors.push("BulkDmi is declared more than once".to_string());
                 }
                 bulk_dmi = Some(*d);
+            }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+                if rotated_interfacial_dmi.replace(*d).is_some() {
+                    errors.push("RotatedInterfacialDmi is declared more than once".to_string());
+                }
             }
             fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
             | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
@@ -4097,6 +4127,7 @@ pub(crate) fn plan_fdm_multilayer(
         }),
         interfacial_dmi.is_some() || bulk_dmi.is_some(),
         false,
+        rotated_interfacial_dmi.is_some(),
         false,
         false,
         false,
@@ -4885,6 +4916,7 @@ pub(crate) fn plan_fdm_multilayer(
         fft,
         external_field,
         interfacial_dmi,
+        rotated_interfacial_dmi,
         bulk_dmi,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,

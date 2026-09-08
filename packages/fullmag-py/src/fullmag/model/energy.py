@@ -147,6 +147,19 @@ class InterfacialDMI:
 
 
 @dataclass(frozen=True, slots=True)
+class RotatedInterfacialDMI:
+    """Göbel rotated interfacial DMI with ``D21 = D32 = D`` [J/m²]."""
+
+    D: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "D", require_finite(self.D, "D"))
+
+    def to_ir(self) -> dict[str, object]:
+        return {"kind": "rotated_interfacial_dmi", "D": self.D}
+
+
+@dataclass(frozen=True, slots=True)
 class BulkDMI:
     D: float
 
@@ -475,11 +488,16 @@ class Magnetoelastic:
 class UniaxialAnisotropy:
     """Uniaxial magnetocrystalline anisotropy energy.
 
-    The anisotropy energy density is::
+    With ``q = m · a``, where ``m`` is the reduced magnetization and ``a`` is
+    the normalized easy-axis vector, the anisotropy energy density is::
 
-        e = Ku1 * sin²(θ) + Ku2 * sin⁴(θ)
+        e = -Ku1 * q² - Ku2 * q⁴
 
-    where θ is the angle between the magnetization and the easy axis.
+    This is the negative-power convention used by the canonical physics model
+    and by the backend lowering.  For source data written as
+    ``K1_sin * sin²(theta) + K2_sin * sin⁴(theta)``, use
+    ``Ku1 = K1_sin + 2*K2_sin`` and ``Ku2 = -K2_sin``.  The two densities then
+    differ only by the orientation-independent constant ``K1_sin + K2_sin``.
 
     Parameters
     ----------

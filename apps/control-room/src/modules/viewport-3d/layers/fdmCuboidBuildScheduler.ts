@@ -42,6 +42,12 @@ interface PendingFdmCuboidBuild {
 
 const FDM_CUBOID_WORKER_IDLE_TIMEOUT_MS = 30_000;
 const MAX_MAIN_THREAD_FDM_CUBOID_FALLBACK_CELLS = 4096;
+// M-08: after a runtime worker error the client is set to `undefined` (not
+// `null`) so it can be recreated, but recreating it on the very next build
+// call would hammer a worker that just failed. Back off for a short window
+// before allowing recreation.
+const FDM_CUBOID_WORKER_RETRY_BACKOFF_MS = 5_000;
+let fdmCuboidWorkerRetryNotBeforeMs = 0;
 
 let fallbackFdmCuboidBuildId = 1;
 let fdmCuboidBuildJobScheduler:
@@ -56,6 +62,7 @@ export function disposeViewport3DFdmCuboidBuildWorker(): void {
   fdmCuboidWorkerClient?.dispose();
   fdmCuboidWorkerClient = undefined;
   fdmCuboidWorkerFallbackReason = undefined;
+  fdmCuboidWorkerRetryNotBeforeMs = 0;
 }
 
 export function getViewport3DFdmCuboidWorkerRuntimeCounts(): { timers: number; workers: number } {
@@ -149,7 +156,13 @@ async function executeFdmCuboidBuild(
       if (isAbortError(error)) throw error;
       fdmCuboidWorkerFallbackReason = "worker-error";
       options.recordFallback?.(fdmCuboidWorkerFallbackReason);
-      fdmCuboidWorkerClient = null;
+      // M-08: dispose the failed worker and clear it to `undefined` (not
+      // `null`) so getFdmCuboidWorkerClient() can recreate it later instead
+      // of permanently degrading this lane to the main thread.
+      fdmCuboidWorkerClient?.dispose(error);
+      fdmCuboidWorkerClient = undefined;
+      fdmCuboidWorkerRetryNotBeforeMs =
+        Date.now() + FDM_CUBOID_WORKER_RETRY_BACKOFF_MS;
     }
   } else {
     options.recordFallback?.(
@@ -184,6 +197,12 @@ function getFdmCuboidBuildJobScheduler(): ReturnType<
 function getFdmCuboidWorkerClient(): FdmCuboidWorkerClient | null {
   if (fdmCuboidWorkerClient !== undefined) {
     return fdmCuboidWorkerClient;
+  }
+
+  if (Date.now() < fdmCuboidWorkerRetryNotBeforeMs) {
+    // M-08: still inside the post-failure backoff window; fall back to the
+    // main thread for this build instead of hammering a fresh worker.
+    return null;
   }
 
   if (typeof Worker === "undefined") {
@@ -350,17 +369,34 @@ function cloneFdmCuboidBuildRequestForWorker(
   input: FdmCuboidBuildRequest,
   id: number,
 ): FdmCuboidBuildWorkerRequest {
+  // A resource field can be used by both the cuboid and vector lanes. Keep
+  // one worker-owned copy for aliases in this request while never transferring
+  // the resource-owned values buffer itself.
+  const clonedFieldVectors = new WeakMap<
+    DecodedFieldVector,
+    DecodedFieldVector
+  >();
+  const clonedFieldValues = new WeakMap<Float64Array, Float64Array>();
+
   return {
     ...input,
     id,
-    modelFieldVector: cloneFieldVectorForWorker(input.modelFieldVector),
+    modelFieldVector: cloneFieldVectorForWorker(
+      input.modelFieldVector,
+      clonedFieldVectors,
+      clonedFieldValues,
+    ),
     nativeActiveMask: input.nativeActiveMask
       ? new Uint8Array(input.nativeActiveMask)
       : input.nativeActiveMask,
     realizedRegionIds: input.realizedRegionIds
       ? new Uint32Array(input.realizedRegionIds)
       : input.realizedRegionIds,
-    vectorField: cloneFieldVectorForWorker(input.vectorField),
+    vectorField: cloneFieldVectorForWorker(
+      input.vectorField,
+      clonedFieldVectors,
+      clonedFieldValues,
+    ),
     vectorOnly: input.vectorOnly
       ? {
           ...input.vectorOnly,
@@ -376,20 +412,35 @@ function cloneFdmCuboidBuildRequestForWorker(
 
 function cloneFieldVectorForWorker(
   fieldVector: DecodedFieldVector | null | undefined,
+  clonedFieldVectors: WeakMap<DecodedFieldVector, DecodedFieldVector>,
+  clonedFieldValues: WeakMap<Float64Array, Float64Array>,
 ): DecodedFieldVector | null | undefined {
   if (!fieldVector) return fieldVector;
-  return {
+  const cached = clonedFieldVectors.get(fieldVector);
+  if (cached) return cached;
+
+  const cloned = {
     ...fieldVector,
-    values: cloneFieldVectorValues(fieldVector.values),
+    values: cloneFieldVectorValues(fieldVector.values, clonedFieldValues),
   };
+  clonedFieldVectors.set(fieldVector, cloned);
+  return cloned;
 }
 
-function cloneFieldVectorValues(values: DecodedFieldVector["values"]) {
+function cloneFieldVectorValues(
+  values: DecodedFieldVector["values"],
+  clonedFieldValues: WeakMap<Float64Array, Float64Array>,
+): Float64Array {
+  const cached = clonedFieldValues.get(values);
+  if (cached) return cached;
+
   recordVisualizationDebugPerformanceMetric(
     "typedArrayCopiedBytes",
     values.byteLength,
   );
-  return new Float64Array(values);
+  const cloned = new Float64Array(values);
+  clonedFieldValues.set(values, cloned);
+  return cloned;
 }
 
 function transferablesForFdmCuboidBuildRequest(

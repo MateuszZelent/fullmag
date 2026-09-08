@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import type { ShaderMaterial } from "three";
+
+import {
+  createScalarSurfaceShaderMaterial,
+  scalarSurfaceShaderVariantKey,
+  updateScalarSurfaceShaderMaterial,
+} from "../viewport3dScalarSurfaceShader";
 
 import {
   DEFAULT_OBJECT_VISUALIZATION,
@@ -392,7 +400,6 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("<meshBasicMaterial");
     expect(source).not.toContain("<meshStandardMaterial");
     expect(source).not.toContain("MeshStandardMaterial");
-    expect(source).not.toContain("computeVertexNormals");
   });
 
   it("does not render depth-bypassing hidden edges for magnetic-object wireframe", () => {
@@ -469,6 +476,42 @@ describe("MeshPartLayer", () => {
       1, 0, 0,
       0, 1, 0,
     ]);
+  });
+
+  it("computes vertex normals for face-expanded surface geometry (S-01: shading needs real normals)", () => {
+    const geometry = createMeshPartSurfaceGeometry({
+      expandSurfaceFaces: true,
+      positions: new Float32Array([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+      ]),
+      surfaceIndices: Uint32Array.from([0, 1, 2]),
+    });
+
+    expect(geometry?.hasAttribute("normal")).toBe(true);
+    // A flat triangle in the XY plane has its face normal along +/-Z.
+    const normal = geometry?.getAttribute("normal");
+    for (let i = 0; i < (normal?.count ?? 0); i += 1) {
+      expect(Math.abs(normal?.getX(i) ?? 0)).toBeCloseTo(0);
+      expect(Math.abs(normal?.getY(i) ?? 0)).toBeCloseTo(0);
+      expect(Math.abs(normal?.getZ(i) ?? 0)).toBeCloseTo(1);
+    }
+  });
+
+  it("computes vertex normals for indexed (non-expanded) surface geometry", () => {
+    const geometry = createMeshPartSurfaceGeometry({
+      expandSurfaceFaces: false,
+      positions: new Float32Array([
+        0, 0, 0,
+        1, 0, 0,
+        0, 1, 0,
+      ]),
+      surfaceIndices: Uint32Array.from([0, 1, 2]),
+    });
+
+    expect(geometry?.index).not.toBeNull();
+    expect(geometry?.hasAttribute("normal")).toBe(true);
   });
 
   it("expands surface geometry for every projected surface mode", () => {
@@ -1159,3 +1202,119 @@ buildReference: null,
     ).toBeNull();
   });
 });
+
+describe("S-08 · MeshPartLayer scalar shader material lifecycle and variant stability", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  it("derives scalarShaderVariantKey from buffer without depending on scalarShaderBuffer identity in useMemo", () => {
+    expect(source).toContain("const scalarShaderVariantKey = scalarShaderBuffer");
+    expect(source).toContain("? scalarSurfaceShaderVariantKey(scalarShaderBuffer)");
+    expect(source).toContain(": null;");
+
+    // The useMemo dependencies for scalarShaderMaterial must include scalarShaderVariantKey
+    // and must NOT include scalarShaderBuffer directly.
+    const useMemoMatch = source.match(
+      /const scalarShaderMaterial = useMemo\(\(\) => \{[\s\S]*?\}, \[([\s\S]*?)\]\);/,
+    );
+    expect(useMemoMatch?.[1]).toBeDefined();
+    const deps = useMemoMatch![1];
+    expect(deps).toContain("scalarShaderVariantKey");
+    expect(deps).not.toContain("scalarShaderBuffer");
+    expect(deps).not.toContain("surfaceOpacity");
+    expect(deps).not.toContain("surfacePolicy");
+  });
+
+  it("re-applies surface policy props and toneMapped on the existing material instance in update effect", () => {
+    expect(source).toContain("Object.assign(scalarShaderMaterial, surfacePolicy);");
+    expect(source).toContain(
+      "scalarShaderMaterial.toneMapped =",
+    );
+    expect(source).toContain("materialProfile.magneticSurface.toneMapped");
+  });
+
+  it("reuses ShaderMaterial across mode phase animation and range updates without recreating it", () => {
+    const trackedMaterials: unknown[] = [];
+    const tracker = {
+      track: vi.fn(<T>(kind: string, res: T): T => {
+        if (kind === "material") trackedMaterials.push(res);
+        return res;
+      }),
+      release: vi.fn(),
+    };
+
+    const initialBuffer = {
+      colors: new Float32Array(0),
+      colorMode: "magnitude",
+      colorPalette: "viridis",
+      complexPhaseRad: 0,
+      range: { max: 1, min: -1 },
+      scalarValues: new Float32Array([0.1, 0.2]),
+    };
+
+    // Frame 1: initial creation
+    let currentKey = scalarSurfaceShaderVariantKey(initialBuffer);
+    let material: ShaderMaterial = tracker.track(
+      "material",
+      createScalarSurfaceShaderMaterial(initialBuffer, {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        side: 0,
+        transparent: false,
+      }),
+    ) as ShaderMaterial;
+    expect(tracker.track).toHaveBeenCalledTimes(1);
+
+    // Frame 2: animation frame advances phase and range shifts
+    const frame2Buffer = {
+      ...initialBuffer,
+      complexPhaseRad: Math.PI / 4,
+      range: { max: 2, min: -2 },
+    };
+    const frame2Key = scalarSurfaceShaderVariantKey(frame2Buffer);
+
+    // Variant key remains stable across phase/range animation
+    expect(frame2Key).toBe(currentKey);
+
+    // Since variant key didn't change, useMemo does not recreate material.
+    // Instead, update effect applies changes in-place:
+    updateScalarSurfaceShaderMaterial(material, frame2Buffer, 0.7);
+    expect(material.uniforms.fmPhaseRad.value).toBeCloseTo(Math.PI / 4, 4);
+    expect(material.uniforms.fmScalarMax.value).toBe(2);
+    expect(material.uniforms.fmOpacity.value).toBe(0.7);
+    expect(tracker.track).toHaveBeenCalledTimes(1); // STILL 1: no new material!
+
+    // Frame 3: mode switches to orientation (structural variant change)
+    const frame3Buffer = {
+      ...initialBuffer,
+      colorMode: "orientation",
+      vectorValues: new Float32Array([0, 1, 0, 1, 0, 0]),
+    };
+    const frame3Key = scalarSurfaceShaderVariantKey(frame3Buffer);
+    expect(frame3Key).not.toBe(currentKey);
+
+    // Now variant key changed, so useMemo creates new material
+    currentKey = frame3Key;
+    material = tracker.track(
+      "material",
+      createScalarSurfaceShaderMaterial(frame3Buffer, {
+        depthTest: true,
+        depthWrite: true,
+        opacity: 1,
+        polygonOffset: false,
+        polygonOffsetFactor: 0,
+        polygonOffsetUnits: 0,
+        side: 0,
+        transparent: false,
+      }),
+    ) as ShaderMaterial;
+    expect(tracker.track).toHaveBeenCalledTimes(2);
+  });
+});
+

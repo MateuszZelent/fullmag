@@ -105,6 +105,7 @@ class ProblemApiTests(unittest.TestCase):
                 discretization=discretization,
                 study_universe=None,
                 mesh_workflow=None,
+                per_object_recipes=None,
                 object_regions=None,
                 fdm_only=False,
             )
@@ -122,6 +123,7 @@ class ProblemApiTests(unittest.TestCase):
                     discretization=discretization,
                     study_universe=None,
                     mesh_workflow=None,
+                    per_object_recipes=None,
                     object_regions=None,
                     fdm_only=False,
                 ),
@@ -2251,6 +2253,42 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "bulk_dmi", "D": -2e-3},
         )
 
+    def test_rotated_dmi_outputs_use_canonical_quantity_ids(self) -> None:
+        self.assertEqual(
+            fm.SaveField("H_rotated_dmi", every=1e-12).to_ir(),
+            {"kind": "field", "name": "H_rotated_dmi", "every_seconds": 1e-12},
+        )
+        self.assertEqual(
+            fm.SaveField("eden_rotated_dmi", every=1e-12).to_ir(),
+            {
+                "kind": "field",
+                "name": "eden_rotated_dmi",
+                "every_seconds": 1e-12,
+            },
+        )
+        self.assertEqual(
+            fm.SaveScalar("E_rotated_dmi", every=1e-12).to_ir(),
+            {
+                "kind": "scalar",
+                "name": "E_rotated_dmi",
+                "every_seconds": 1e-12,
+            },
+        )
+        self.assertEqual(
+            fm.SaveQuantity("eden_rotated_dmi", every=1e-12).to_ir(),
+            {
+                "kind": "save_quantity",
+                "quantity_id": "eden_rotated_dmi",
+                "every_seconds": 1e-12,
+            },
+        )
+
+    def test_rotated_interfacial_dmi_serializes_signed_constant(self) -> None:
+        self.assertEqual(
+            fm.RotatedInterfacialDMI(D=-3e-3).to_ir(),
+            {"kind": "rotated_interfacial_dmi", "D": -3e-3},
+        )
+
     def test_interfacial_dmi_rejects_invalid_interface_normal_shape(self) -> None:
         with self.assertRaises(ValueError):
             fm.InterfacialDMI(D=3e-3, interface_normal=(0.0, 1.0))
@@ -2549,6 +2587,35 @@ class ProblemApiTests(unittest.TestCase):
                 execution_precision="double",
                 fdm_precision_policy="single_storage_fp64_reduction",
             )
+
+    def test_precision_setter_is_idempotent_and_preserves_fdm_policy(self) -> None:
+        policy = fm.FdmPrecisionPolicy.SINGLE_STORAGE_FP64_REDUCTION
+        runtime = fm.RuntimeSelection(
+            execution_precision=fm.ExecutionPrecision.SINGLE,
+            fdm_precision_policy=policy,
+        )
+
+        reapplied = runtime.precision("single")
+
+        self.assertIs(reapplied.fdm_precision_policy, policy)
+        self.assertEqual(reapplied, runtime)
+        self.assertEqual(
+            reapplied.to_runtime_metadata(), runtime.to_runtime_metadata()
+        )
+
+    def test_precision_setter_change_clears_incompatible_fdm_policy(self) -> None:
+        runtime = fm.RuntimeSelection(
+            execution_precision="single",
+            fdm_precision_policy="single_storage_fp64_reduction",
+        )
+
+        changed = runtime.precision("double")
+
+        self.assertEqual(changed.execution_precision, fm.ExecutionPrecision.DOUBLE)
+        self.assertIsNone(changed.fdm_precision_policy)
+        metadata = changed.to_runtime_metadata()
+        self.assertEqual(metadata["execution_precision"], "double")
+        self.assertNotIn("fdm_precision_policy", metadata)
 
     def test_runtime_selection_rejects_unimplemented_multi_gpu_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "multi-GPU execution is not implemented"):
@@ -8299,6 +8366,7 @@ class ProblemApiTests(unittest.TestCase):
         study.engine("fem")
         study.device("cpu", precision="double")
         study.mode("strict")
+        study.terms.add(fm.RotatedInterfacialDMI(D=3e-3))
         study.universe(mode="manual", size=(100e-9, 80e-9, 65e-9))
         film = study.geometry(
             fm.Box(size=(24e-9, 12e-9, 1e-9), name="magnet"),

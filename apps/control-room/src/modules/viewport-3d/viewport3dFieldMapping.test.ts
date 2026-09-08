@@ -10,8 +10,12 @@ import {
   buildVertexScalarColors,
   buildVertexScalarColorsChunked,
   fieldTransformNeedsChunking,
+  normalizeScalarValueFieldMappingForTests,
+  normalizeScalarValueForShaderAttributeFieldMappingForTests,
   resolveScalarRange,
+  resolveScalarRangeChunkedForTests,
   resolveViewport3DScalarColorBufferKey,
+  scalarRangeFromValuesForTests,
 } from "./viewport3dFieldMapping";
 import {
   magnitudeColorRgb,
@@ -112,7 +116,11 @@ describe("viewport3dFieldMapping", () => {
 
     expect(result?.colorMode).toBe("y");
     expect(result?.range).toEqual({ max: 4, min: -2 });
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([-2, 0, 4]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([
+      0,
+      expect.closeTo(1 / 3),
+      1,
+    ]);
     expect(result?.colors).toHaveLength(9);
   });
 
@@ -175,7 +183,7 @@ describe("viewport3dFieldMapping", () => {
     expect(result).not.toBeNull();
     expect(Array.from(result?.scalarValues ?? [])).toEqual([
       expect.closeTo(1),
-      expect.closeTo(0.1),
+      expect.closeTo(0),
     ]);
   });
 
@@ -304,7 +312,7 @@ describe("viewport3dFieldMapping", () => {
       4,
     );
 
-    expect(result?.range).toEqual({ max: 0, min: 0 });
+    expect(result?.range).toEqual({ max: 2, min: 0 });
     expect(result?.rangeDiagnostics).toMatchObject({
       finiteCount: 2,
       max: 2,
@@ -314,6 +322,25 @@ describe("viewport3dFieldMapping", () => {
       p01: 0,
       p99: 0,
       zeroCount: 1,
+    });
+    expect(result?.colors.length).toBe(12);
+    for (let i = 0; i < (result?.colors.length ?? 0); i += 1) {
+      expect(Number.isFinite(result!.colors[i])).toBe(true);
+    }
+  });
+
+  it("returns zero range when all scalar values are non-finite", () => {
+    const result = buildVertexScalarColors(
+      vectorField([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY], 1),
+      3,
+    );
+
+    expect(result?.range).toEqual({ max: 0, min: 0 });
+    expect(result?.rangeDiagnostics).toMatchObject({
+      finiteCount: 0,
+      max: 0,
+      min: 0,
+      nonFiniteCount: 3,
     });
   });
 
@@ -354,7 +381,7 @@ describe("viewport3dFieldMapping", () => {
     expect(result?.geometryRole).toBe("face_expanded_surface");
     expect(result?.projectionMode).toBe("surface_faces");
     expect(result?.rangeSource).toBe("face_values");
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
     expect(result?.faceCount).toBe(1);
     expect(result?.degradedFaceCount).toBe(0);
   });
@@ -375,7 +402,7 @@ describe("viewport3dFieldMapping", () => {
       "x",
     );
 
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([6, 6, 6]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
   });
 
   it("degrades surface-face projection when a face node is missing from the field map", () => {
@@ -418,7 +445,7 @@ describe("viewport3dFieldMapping", () => {
       "x",
     );
 
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([3, 3, 3]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
   });
 
   it("maps legacy scoped payloads for surface-face projection", () => {
@@ -438,7 +465,7 @@ describe("viewport3dFieldMapping", () => {
     );
 
     expect(result?.degradedFaceCount).toBe(0);
-    expect(Array.from(result?.scalarValues ?? [])).toEqual([20, 20, 20]);
+    expect(Array.from(result?.scalarValues ?? [])).toEqual([0.5, 0.5, 0.5]);
   });
 
   it("maps sampled node-index payloads for thickness-average-z projection", () => {
@@ -805,7 +832,7 @@ describe("viewport3dFieldMapping", () => {
 
     if (!result) throw new Error("expected chunked shader scalar buffer");
     expect(result.colors).toHaveLength(0);
-    expect(Array.from(result.scalarValues ?? [])).toEqual([1, 2, 3]);
+    expect(Array.from(result.scalarValues ?? [])).toEqual([0, 0.5, 1]);
     expect(result.colorMode).toBe("magnitude");
     expect(result.colorPalette).toBe("inferno");
   });
@@ -824,7 +851,7 @@ describe("viewport3dFieldMapping", () => {
 
     if (!result) throw new Error("expected chunked shader scalar buffer");
     expect(result.colors).toHaveLength(0);
-    expect(Array.from(result.scalarValues ?? [])).toEqual([-3, 2, 5]);
+    expect(Array.from(result.scalarValues ?? [])).toEqual([0, 0.625, 1]);
     expect(result.colorMode).toBe("y");
     expect(result.colorPalette).toBe("magma");
     expect(result.range).toEqual({ max: 5, min: -3 });
@@ -862,5 +889,230 @@ describe("viewport3dFieldMapping", () => {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  describe("scalar range consistency and relative epsilon (S-05 / S-06)", () => {
+    it("resolveScalarRange skips non-finite values without collapsing the range", () => {
+      const field = vectorField(
+        [5, Number.NaN, 20, Number.POSITIVE_INFINITY, -10, Number.NEGATIVE_INFINITY],
+        1,
+      );
+      expect(resolveScalarRange(field, "magnitude")).toEqual({ max: 20, min: -10 });
+    });
+
+    it("resolveScalarRange returns { max: 0, min: 0 } when all values are non-finite", () => {
+      const field = vectorField(
+        [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+        1,
+      );
+      expect(resolveScalarRange(field, "magnitude")).toEqual({ max: 0, min: 0 });
+    });
+
+    it("resolveScalarRangeChunked skips non-finite values across chunks", async () => {
+      const field = vectorField(
+        [5, Number.NaN, 20, Number.POSITIVE_INFINITY, -10, Number.NEGATIVE_INFINITY],
+        1,
+      );
+      const range = await resolveScalarRangeChunkedForTests(field, "magnitude", "viridis", 2);
+      expect(range).toEqual({ max: 20, min: -10 });
+    });
+
+    it("resolveScalarRangeChunked returns { max: 0, min: 0 } when all values are non-finite", async () => {
+      const field = vectorField(
+        [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+        1,
+      );
+      const range = await resolveScalarRangeChunkedForTests(field, "magnitude", "viridis", 1);
+      expect(range).toEqual({ max: 0, min: 0 });
+    });
+
+    it("scalarRangeFromValues skips non-finite values", () => {
+      expect(
+        scalarRangeFromValuesForTests([
+          5,
+          Number.NaN,
+          20,
+          Number.POSITIVE_INFINITY,
+          -10,
+        ]),
+      ).toEqual({ max: 20, min: -10 });
+      expect(
+        scalarRangeFromValuesForTests([Number.NaN, Number.POSITIVE_INFINITY]),
+      ).toEqual({ max: 0, min: 0 });
+    });
+
+    it("normalizeScalarValue handles degenerate range at micromagnetic scale (Ms ≈ 8e5)", () => {
+      expect(
+        normalizeScalarValueFieldMappingForTests(800000, {
+          max: 800000,
+          min: 800000,
+        }),
+      ).toBe(0.5);
+    });
+
+    it("normalizeScalarValue handles float32 ULP noise on uniform high-magnitude field", () => {
+      expect(
+        normalizeScalarValueFieldMappingForTests(800000.0625, {
+          max: 800000.0625,
+          min: 800000,
+        }),
+      ).toBe(0.5);
+    });
+
+    it("normalizeScalarValue returns 0.5 for non-finite values and invalid ranges", () => {
+      expect(
+        normalizeScalarValueFieldMappingForTests(Number.NaN, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueFieldMappingForTests(Number.POSITIVE_INFINITY, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueFieldMappingForTests(5, {
+          max: Number.NaN,
+          min: 0,
+        }),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueFieldMappingForTests(5, {
+          max: 10,
+          min: Number.NaN,
+        }),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueFieldMappingForTests(
+          5,
+          null as unknown as Parameters<typeof normalizeScalarValueFieldMappingForTests>[1],
+        ),
+      ).toBe(0.5);
+      expect(
+        normalizeScalarValueFieldMappingForTests(
+          5,
+          undefined as unknown as Parameters<typeof normalizeScalarValueFieldMappingForTests>[1],
+        ),
+      ).toBe(0.5);
+    });
+
+    it("normalizeScalarValue returns 0.5 for inverted range where min > max", () => {
+      expect(
+        normalizeScalarValueFieldMappingForTests(5, {
+          max: 0,
+          min: 10,
+        }),
+      ).toBe(0.5);
+    });
+
+    it("S-07: normalizeScalarValueForShaderAttribute matches normalizeScalarValue for finite values", () => {
+      expect(
+        normalizeScalarValueForShaderAttributeFieldMappingForTests(800000, {
+          max: 800000.0001,
+          min: 799999.9999,
+        }),
+      ).toBeCloseTo(
+        normalizeScalarValueFieldMappingForTests(800000, {
+          max: 800000.0001,
+          min: 799999.9999,
+        }),
+      );
+      expect(
+        normalizeScalarValueForShaderAttributeFieldMappingForTests(5, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(0.5);
+    });
+
+    it("S-07: normalizeScalarValueForShaderAttribute passes NaN/Inf/overflow sentinels through unnormalized so the GPU fragment shader's bad-value detection still fires", () => {
+      expect(
+        normalizeScalarValueForShaderAttributeFieldMappingForTests(Number.NaN, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(Number.NaN);
+      expect(
+        normalizeScalarValueForShaderAttributeFieldMappingForTests(
+          Number.POSITIVE_INFINITY,
+          { max: 10, min: 0 },
+        ),
+      ).toBe(Number.POSITIVE_INFINITY);
+      expect(
+        normalizeScalarValueForShaderAttributeFieldMappingForTests(4e38, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(4e38);
+      // Ordinary finite values, including ones outside [min, max], are
+      // still normalized (and clamped) as usual.
+      expect(
+        normalizeScalarValueForShaderAttributeFieldMappingForTests(15, {
+          max: 10,
+          min: 0,
+        }),
+      ).toBe(1);
+    });
+
+    it("resolveScalarRangeChunked handles chunkSize <= 0 safely without infinite loop", async () => {
+      const field = vectorField([1, 2, 3, 4], 1);
+      const range = await resolveScalarRangeChunkedForTests(field, "magnitude", "viridis", 0);
+      expect(range).toEqual({ max: 4, min: 1 });
+    });
+  });
+
+  describe("diverging-palette auto-symmetric scalar range (S-11)", () => {
+    it("resolveScalarRange symmetrizes an asymmetric x-component range around zero for a diverging palette", () => {
+      const field = vectorField([-2, 0, 0, 1, 0, 0, 5, 0, 0], 3);
+      expect(resolveScalarRange(field, "x", "coolwarm")).toEqual({
+        max: 5,
+        min: -5,
+      });
+    });
+
+    it("resolveScalarRange leaves an asymmetric x-component range untouched for a sequential palette", () => {
+      const field = vectorField([-2, 0, 0, 1, 0, 0, 5, 0, 0], 3);
+      expect(resolveScalarRange(field, "x", "viridis")).toEqual({
+        max: 5,
+        min: -2,
+      });
+    });
+
+    it("resolveScalarRange does not symmetrize magnitude mode even with a diverging palette", () => {
+      const field = vectorField([1, 4, 9], 1);
+      expect(resolveScalarRange(field, "magnitude", "coolwarm")).toEqual({
+        max: 9,
+        min: 1,
+      });
+    });
+
+    it("resolveScalarRange defaults to the sequential (unsymmetrized) behavior when no palette is given", () => {
+      const field = vectorField([-2, 0, 0, 1, 0, 0, 5, 0, 0], 3);
+      expect(resolveScalarRange(field, "x")).toEqual({ max: 5, min: -2 });
+    });
+
+    it("resolveScalarRangeChunked symmetrizes an asymmetric y-component range around zero for a diverging palette", async () => {
+      const field = vectorField([0, -2, 0, 0, 1, 0, 0, 5, 0], 3);
+      const range = await resolveScalarRangeChunkedForTests(
+        field,
+        "y",
+        "coolwarm",
+        2,
+      );
+      expect(range).toEqual({ max: 5, min: -5 });
+    });
+
+    it("resolveScalarRangeChunked leaves an asymmetric y-component range untouched for a sequential palette", async () => {
+      const field = vectorField([0, -2, 0, 0, 1, 0, 0, 5, 0], 3);
+      const range = await resolveScalarRangeChunkedForTests(
+        field,
+        "y",
+        "viridis",
+        2,
+      );
+      expect(range).toEqual({ max: 5, min: -2 });
+    });
   });
 });

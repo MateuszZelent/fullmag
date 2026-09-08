@@ -15,6 +15,21 @@ const COLOR_PALETTES = new Set<ScalarColorPalette>([
   "viridis",
 ]);
 
+/**
+ * S-11 — palettes whose midpoint is a neutral/white color meant to sit at
+ * zero (as opposed to sequential palettes like viridis/inferno/magma/jet,
+ * whose extremes just map low/high magnitude). Auto-computed ranges for a
+ * signed quantity (a vector component, not "magnitude") should be
+ * symmetrized around zero when one of these palettes is selected, or the
+ * neutral midpoint color visually lands away from the true zero crossing.
+ * "coolwarm" is currently the only diverging palette this codebase ships.
+ */
+const DIVERGING_SCALAR_PALETTES = new Set<ScalarColorPalette>(["coolwarm"]);
+
+export function isDivergingScalarPalette(palette: string): boolean {
+  return DIVERGING_SCALAR_PALETTES.has(palette as ScalarColorPalette);
+}
+
 const PALETTE_STOPS: Record<ScalarColorPalette, Rgb[]> = {
   coolwarm: [
     [0x3b / 255, 0x4c / 255, 0xc0 / 255],
@@ -60,11 +75,23 @@ export function normalizeScalarColorPalette(
     : fallback;
 }
 
-export function scalarColorRgb(
+/**
+ * Converts a single sRGB channel value [0..1] to linear-sRGB, using the
+ * standard sRGB EOTF (same piecewise formula as three.js's internal
+ * `sRGBTransferEOTF` GLSL chunk).
+ */
+function srgbChannelToLinear(component: number): number {
+  return component <= 0.04045
+    ? component / 12.92
+    : Math.pow((component + 0.055) / 1.055, 2.4);
+}
+
+export function scalarColorSrgb(
   t: number,
   palette: string | null | undefined = "viridis",
 ): Rgb {
-  const clamped = Math.min(Math.max(t, 0), 1);
+  const safeT = Number.isFinite(t) ? t : 0.5;
+  const clamped = Math.min(Math.max(safeT, 0), 1);
   const stops = PALETTE_STOPS[normalizeScalarColorPalette(palette)];
   const scaled = clamped * (stops.length - 1);
   const index = Math.min(Math.floor(scaled), stops.length - 2);
@@ -75,6 +102,26 @@ export function scalarColorRgb(
     start[0] + (end[0] - start[0]) * fraction,
     start[1] + (end[1] - start[1]) * fraction,
     start[2] + (end[2] - start[2]) * fraction,
+  ];
+}
+
+export function scalarColorRgb(
+  t: number,
+  palette: string | null | undefined = "viridis",
+): Rgb {
+  // Consumers of this function (magnitudeColorRgb → resolveViewport3DVectorColorRgb)
+  // feed CPU-computed colors into geometry "color" vertex attributes consumed by
+  // three.js's built-in materials (meshBasicMaterial vertexColors, MeshPartLayer.tsx).
+  // Those materials treat vertex colors as linear-sRGB and re-encode them to the
+  // renderer's output color space automatically (colorspace_fragment). The palette
+  // stops are literal sRGB values, so we convert them to linear here to avoid a
+  // double sRGB encode (S-02). scalarColorPaletteGradientCss() below does NOT go
+  // through this function, so the CSS legend gradient is unaffected.
+  const srgb = scalarColorSrgb(t, palette);
+  return [
+    srgbChannelToLinear(srgb[0]),
+    srgbChannelToLinear(srgb[1]),
+    srgbChannelToLinear(srgb[2]),
   ];
 }
 

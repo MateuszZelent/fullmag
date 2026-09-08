@@ -14,3 +14,4 @@ export {
   type Viewport3DRenderedScalarRange,
   type Viewport3DRenderedScalarRangeQuery,
 } from "./viewport3dStore";
+export type { Viewport3DFieldScopeKind } from "./model/viewport3DFieldDataPlan";

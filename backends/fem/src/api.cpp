@@ -22,6 +22,7 @@
 #include "cpu/mfem/runtime/interrupt.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mfem_device.hpp"
+#include "cpu/mfem/runtime/object_stats.hpp"
 #include "cpu/mfem/runtime/runtime_build_info.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -393,6 +394,8 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
         return &context.gpu_state.device.fields.h_cubic_ani;
     case FULLMAG_FEM_OBSERVABLE_H_DMI:
         return &context.gpu_state.device.fields.h_dmi;
+    case FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED:
+        return &context.gpu_state.device.fields.h_rotated_dmi;
     case FULLMAG_FEM_OBSERVABLE_H_DMI_BULK:
         return &context.gpu_state.device.fields.h_bulk_dmi;
     case FULLMAG_FEM_OBSERVABLE_H_OE:
@@ -5500,6 +5503,50 @@ int fullmag_fem_backend_get_gpu_state_info(
         return FULLMAG_FEM_ERR_INVALID;
     }
     *out_info = fullmag::fem::gpu_state_info(handle->context);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_object_stats_for_elements_v1(
+    fullmag_fem_backend *handle,
+    const uint32_t *element_indices,
+    uint64_t element_count,
+    fullmag_fem_object_stats_v1 *out_stats)
+{
+    if (handle == nullptr || out_stats == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "per-object FEM reduction requires non-null handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (out_stats->abi_version != FULLMAG_FEM_OBJECT_STATS_V1_ABI_VERSION ||
+        out_stats->struct_size != sizeof(fullmag_fem_object_stats_v1)) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "per-object FEM reduction received an incompatible ABI record");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    if (element_count == 0u || element_indices == nullptr) {
+        fullmag_fem_set_handle_error(
+            handle,
+            "per-object FEM reduction requires at least one element index");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const uint32_t abi_version = out_stats->abi_version;
+    const uint32_t struct_size = out_stats->struct_size;
+    *out_stats = {};
+    out_stats->abi_version = abi_version;
+    out_stats->struct_size = struct_size;
+    handle->last_error.clear();
+    if (!fullmag::fem::compute_object_stats_for_elements(
+            handle->context,
+            element_indices,
+            element_count,
+            *out_stats,
+            handle->last_error)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
     return FULLMAG_FEM_OK;
 }
 

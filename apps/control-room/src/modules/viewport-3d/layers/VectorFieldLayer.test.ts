@@ -323,8 +323,8 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(vectorFieldLayerSource).toContain("onVisible:");
     expect(vectorFieldLayerSource).toContain(
       `onVisible: () => {
-        activeShaft.count = activeGlyphs.count;
-        activeHead.count = activeGlyphs.count;`,
+        activeShaft.count = renderCount;
+        activeHead.count = renderCount;`,
     );
     expect(vectorFieldLayerSource).toContain("addUpdateRange");
     expect(vectorFieldLayerSource).toContain(
@@ -400,7 +400,7 @@ describe("VectorFieldLayer performance contracts", () => {
       /markVectorGlyphAttributeRange\(\s*instanceColorAttr/,
     );
     expect(matrixVisibleSource).toContain(
-      "activeShaft.count = activeGlyphs.count",
+      "activeShaft.count = renderCount",
     );
   });
 
@@ -455,6 +455,99 @@ describe("VectorFieldLayer performance contracts", () => {
       "targetRevision: uploadKeys?.targetRevision ?? null",
     );
     expect(vectorFieldLayerSource).toContain("buildKey: vectorGlyphBuildKey");
+  });
+
+  describe("V-05 · clamps glyph uploads to instanced capacity", () => {
+    const uploadHookStart = vectorFieldLayerSource.indexOf(
+      "function useVectorGlyphUpload(",
+    );
+    const componentStart = vectorFieldLayerSource.indexOf(
+      "export function VectorFieldLayer(",
+      uploadHookStart,
+    );
+    const uploadSource = vectorFieldLayerSource.slice(
+      uploadHookStart,
+      componentStart,
+    );
+    const colorVisibleStart = uploadSource.indexOf("onVisible: () => {");
+    const matrixVisibleStart = uploadSource.indexOf(
+      "onVisible: () => {",
+      colorVisibleStart + 1,
+    );
+    const colorEffectSource = uploadSource.slice(0, matrixVisibleStart);
+    const matrixEffectSource = uploadSource.slice(matrixVisibleStart);
+
+    it("threads capacity into useVectorGlyphUpload's parameters", () => {
+      expect(uploadSource).toContain(
+        "function useVectorGlyphUpload({\n  buildKey,\n  capacity,",
+      );
+      expect(uploadSource).toContain("capacity: number;");
+    });
+
+    it("clamps the color upload to renderCount = min(glyphCount, capacity)", () => {
+      expect(colorEffectSource).toContain(
+        "const renderCount = Math.min(glyphCount, capacity);",
+      );
+      expect(colorEffectSource).toContain(
+        "buildVectorGlyphUploadBatches(renderCount)",
+      );
+      expect(colorEffectSource).not.toContain(
+        "buildVectorGlyphUploadBatches(glyphCount)",
+      );
+      expect(colorEffectSource).toContain("glyphCount: renderCount,");
+    });
+
+    it("clamps the matrix upload to renderCount = min(activeGlyphs.count, capacity)", () => {
+      expect(matrixEffectSource).toContain(
+        "const renderCount = Math.min(activeGlyphs.count, capacity);",
+      );
+      expect(matrixEffectSource).toContain(
+        "buildVectorGlyphUploadBatches(renderCount)",
+      );
+      expect(matrixEffectSource).not.toContain(
+        "buildVectorGlyphUploadBatches(activeGlyphs.count)",
+      );
+      expect(matrixEffectSource).toContain("activeShaft.count = renderCount;");
+      expect(matrixEffectSource).toContain("activeHead.count = renderCount;");
+      expect(matrixEffectSource).toContain(
+        "markVectorGlyphAttributeRange(\n            instanceColorAttr,\n            0,\n            renderCount,\n            3,",
+      );
+      expect(matrixEffectSource).toContain(
+        "markVectorGlyphAttributeRange(\n          activeShaft.instanceMatrix,\n          0,\n          renderCount,\n          16,",
+      );
+      expect(matrixEffectSource).toContain(
+        "markVectorGlyphAttributeRange(\n          activeHead.instanceMatrix,\n          0,\n          renderCount,\n          16,",
+      );
+      expect(matrixEffectSource).not.toContain(
+        "activeShaft.count = activeGlyphs.count",
+      );
+      expect(matrixEffectSource).not.toContain(
+        "activeHead.count = activeGlyphs.count",
+      );
+    });
+
+    it("warns in development instead of silently truncating when count exceeds capacity", () => {
+      expect(colorEffectSource).toContain(
+        'if (renderCount < glyphCount && process.env.NODE_ENV !== "production")',
+      );
+      expect(matrixEffectSource).toContain(
+        'if (renderCount < activeGlyphs.count && process.env.NODE_ENV !== "production")',
+      );
+    });
+
+    it("passes capacity from VectorFieldLayer into useVectorGlyphUpload", () => {
+      const componentSource = vectorFieldLayerSource.slice(componentStart);
+      const callStart = componentSource.indexOf("useVectorGlyphUpload({");
+      const callSource = componentSource.slice(
+        callStart,
+        componentSource.indexOf("});", callStart),
+      );
+
+      expect(componentSource).toContain(
+        "const capacity = useMemo(\n    () => resolveVectorGlyphCapacity(glyphCount),\n    [glyphCount],\n  );",
+      );
+      expect(callSource).toContain("capacity,");
+    });
   });
 });
 

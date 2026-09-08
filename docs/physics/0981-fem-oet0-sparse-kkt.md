@@ -282,3 +282,7 @@ full dynamic Oersted capability.
 | `backends/fem/tests/source_facade_gpu_rk_contract.cpp` | `main` | runs source ownership regression |
 | `backends/fem/tests/source_facade_gpu_rk_contract.cpp` | `fem_oet0_large_mesh_has_sparse_kkt_lane` | source ownership and no-dense-limit regression |
 | `backends/fem/cpu/mfem/transport/conservative_current_view.hpp` | `class ConservativeCurrentView` | immutable current-view public boundary |
+| `justfile` | `verify-fem-oersted-oet0-cpu-contract` | managed serial, MPI-n1, MPI-n2 and byte-identity OE-T0 qualification gate |
+| `justfile` | `verify-fem-oersted-oet0-tsan-cpu-contract` | isolated sanitizer gate using the TSan compose service and ASLR-disabled launcher |
+| `compose.yaml` | `fem-cpu-tsan` | sanitizer-only service with the narrowly scoped seccomp relaxation |
+| `scripts/run_fem_cpu_only_contract.sh` | `oersted-oet0-tsan` | TSan scenario selection and fail-closed ASLR-disabled execution |

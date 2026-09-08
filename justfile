@@ -780,8 +780,17 @@ verify-fem-time-domain-native-contract:
     PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" scripts/check_llg_time_domain_contract_docs.py
     PYTHONDONTWRITEBYTECODE=1 "{{repo_python}}" scripts/test_compare_fem_llg_time_domain_qualification.py
     docker compose --profile fem-gpu run --rm -T \
+      -v fullmag_fem-time-domain-build:/workspace/native/build \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -c 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_interaction_docs_contract fem_mesh_contract fem_frozen_spins_contract fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_rk_transaction_fault_injection_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_slonczewski_contract fem_cuda_rk_guard_contract fem_gpu_pageable_scalar_readback_contract fem_gpu_execution_receipt_contract fem_gpu_strict_execution_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract fem_gpu_solver_docs_contract fem_cpu_threads_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_interaction_docs_contract && native/build/backends/fem/fem_mesh_contract && native/build/backends/fem/fem_frozen_spins_contract && native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_rk_transaction_fault_injection_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_slonczewski_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && FULLMAG_FEM_FORCE_PAGEABLE_SCALAR_READBACK=1 native/build/backends/fem/fem_gpu_pageable_scalar_readback_contract && native/build/backends/fem/fem_gpu_execution_receipt_contract && native/build/backends/fem/fem_gpu_strict_execution_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract && native/build/backends/fem/fem_gpu_solver_docs_contract && native/build/backends/fem/fem_cpu_threads_contract && FULLMAG_FEM_LIB_DIR=/workspace/native/build/backends/fem LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} CARGO_TARGET_DIR=/tmp/fullmag-fem-mesh-abi-rust-target RUSTUP_TOOLCHAIN=nightly cargo test -p fullmag-fem-sys --lib'
+
+verify-fem-object-stats-contract:
+    MSYS_NO_PATHCONV=1 docker run --rm --network none --gpus all \
+      -v "{{repo_root}}:/workspace" -v fullmag_target-cache:/workspace/target \
+      -w /workspace -e CMAKE_PREFIX_PATH=/opt/fullmag-deps \
+      -e LD_LIBRARY_PATH=/opt/fullmag-deps/lib \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fullmag/fem-gpu:local bash -c 'cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build native/build --target fem_object_stats_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_OBJECT_STATS_DEVICE=cpu native/build/backends/fem/fem_object_stats_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} FULLMAG_OBJECT_STATS_DEVICE=cuda native/build/backends/fem/fem_object_stats_contract'
 
 verify-fem-mesh-runner-abi-contract:
     docker compose --profile fem-gpu run --rm \
@@ -862,6 +871,7 @@ verify-fem-llg-periodic-antidot-qualification-production:
       --output .fullmag/reports/fem-llg-periodic-antidot-qualification/parity-fp64.json
 
 verify-fdm-time-domain-native-contract:
+    rm -rf native/build-fdm-cpu
     docker compose --profile fem-gpu run --rm \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
@@ -6442,23 +6452,39 @@ fem-managed-headless fem_execution script output_dir="":
 
 fem-sp4-run fem_execution output_dir:
     just ensure-python
-    just ensure-managed-fem-runtime
     mode="{{fem_execution}}"; case "$mode" in cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported SP4 FEM device: $mode" >&2; exit 2 ;; esac; \
-    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="$mode" FULLMAG_RELAX_DEVICE="$mode" FULLMAG_CPU_THREADS=auto \
-    '{{gpu_runtime_bin}}' tests/standard_problems/mumag/sp4/fem/problem.py --backend fem --headless --json --output-dir "{{output_dir}}"
+      host_windows=false; case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows=true ;; esac; \
+      if [ "$host_windows" = true ]; then \
+        powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" \
+          -BuildMode false -Frontend dev -Backend fem -Device "$mode" -RunMode headless \
+          -ScriptPath "tests/standard_problems/mumag/sp4/fem/problem.py" -OutputDir "{{output_dir}}"; \
+      else \
+        just ensure-managed-fem-runtime; \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="$mode" FULLMAG_RELAX_DEVICE="$mode" FULLMAG_CPU_THREADS=auto \
+          '{{gpu_runtime_bin}}' tests/standard_problems/mumag/sp4/fem/problem.py --backend fem --headless --json --output-dir "{{output_dir}}"; \
+      fi
 
 fem-sp4-scenario device script attempt_id build="false" ledger=".fullmag/reports/standard-problems/mumag/sp4/fem/ledger/results.csv":
     bash scripts/run_fem_sp4_scenario.sh "{{device}}" "{{script}}" "{{attempt_id}}" "{{build}}" "{{ledger}}"
 
+prepare-fem-sp4-runtimes:
+    host_windows=false; case "$(uname -s 2>/dev/null || true)" in MINGW*|MSYS*|CYGWIN*) host_windows=true ;; esac; \
+      if [ "$host_windows" = true ]; then \
+        for mode in cpu gpu; do \
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "{{repo_root}}/scripts/windows/run_fullmag_fem.ps1" \
+            -BuildMode true -BuildOnly -Frontend dev -Backend fem -Device "$mode"; \
+        done; \
+      else just ensure-managed-fem-runtime; fi
+
 verify-fem-standard-problem-4:
     just verify-fem-time-domain-native-contract
-    just ensure-managed-fem-runtime
-    FULLMAG_SP4_QUALIFYING=1 ./scripts/verify_fem_standard_problem_4.sh
+    just prepare-fem-sp4-runtimes
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_SP4_QUALIFYING=1 ./scripts/verify_fem_standard_problem_4.sh
 
 verify-fem-standard-problem-4-smoke:
     just verify-fem-time-domain-native-contract
-    just ensure-managed-fem-runtime
-    FULLMAG_SP4_QUALIFYING=0 FULLMAG_SP4_DEVICES="cpu gpu" FULLMAG_SP4_RELAX_ALGORITHMS=llg_overdamped FULLMAG_SP4_MESH_LEVELS=coarse FULLMAG_SP4_CASES="case-a case-b" FULLMAG_SP4_AIRBOXES=baseline FULLMAG_SP4_DURATION_S=1e-14 FULLMAG_SP4_RELAX_MAX_STEPS=1 ./scripts/verify_fem_standard_problem_4.sh
+    just prepare-fem-sp4-runtimes
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_SP4_QUALIFYING=0 FULLMAG_SP4_DEVICES="cpu gpu" FULLMAG_SP4_RELAX_ALGORITHMS=llg_overdamped FULLMAG_SP4_MESH_LEVELS=coarse FULLMAG_SP4_CASES="case-a case-b" FULLMAG_SP4_AIRBOXES=baseline FULLMAG_SP4_DURATION_S=1e-14 FULLMAG_SP4_RELAX_MAX_STEPS=1 ./scripts/verify_fem_standard_problem_4.sh
 
 verify-fem-sp4-mixed-matrix-smoke:
     just ensure-managed-fem-runtime

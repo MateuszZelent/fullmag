@@ -10,7 +10,18 @@ export interface Viewport3DMaterialProfile {
   magneticSurface: Pick<
     MeshBasicMaterialParameters,
     | "toneMapped"
-  >;
+  > & {
+    /**
+     * Strength [0..1] of the cheap view-space-normal shading applied by the
+     * custom scalar/orientation surface ShaderMaterial (see S-01). 0 keeps
+     * the surface perfectly flat -- pure palette colors, no lighting-derived
+     * modulation -- which is what publication/export profiles need for
+     * color-accurate figures. A non-zero value adds just enough
+     * normal-based brightness variation for the interactive viewport to
+     * convey which face is being looked at.
+     */
+    shadeStrength: number;
+  };
   primitivePreview: Pick<
     MeshBasicMaterialParameters,
     | "toneMapped"
@@ -55,6 +66,10 @@ export function resolveViewport3DMaterialProfile(
     },
     magneticSurface: {
       toneMapped: visualProfile.toneMapping !== "none",
+      shadeStrength:
+        visualProfile.id === "figure" || visualProfile.id === "capture"
+          ? 0
+          : 0.45,
     },
     primitivePreview: {
       toneMapped: visualProfile.toneMapping !== "none",

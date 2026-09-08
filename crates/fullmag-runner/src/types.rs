@@ -545,6 +545,8 @@ pub struct StepStats {
     pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
+    #[serde(default, rename = "E_rotated_dmi")]
+    pub e_rotated_dmi: f64,
     pub e_total: f64,
     pub max_dm_dt: f64,
     /// Maximum total dynamic RHS norm in 1/s.
@@ -949,6 +951,7 @@ impl Default for StepStats {
             e_drive: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
+            e_rotated_dmi: 0.0,
             e_total: 0.0,
             max_dm_dt: 0.0,
             max_rhs_norm_per_s: 0.0,
@@ -1623,6 +1626,16 @@ mod all_in_gpu_fem_transfer_audit_tests {
 }
 
 impl StepStats {
+    pub(crate) fn set_dmi_energy_components(
+        &mut self,
+        interfacial_dmi: f64,
+        bulk_dmi: f64,
+        rotated_interfacial_dmi: f64,
+    ) {
+        self.e_rotated_dmi = rotated_interfacial_dmi;
+        self.e_dmi = interfacial_dmi + bulk_dmi + rotated_interfacial_dmi;
+    }
+
     /// Extract solver diagnostics (non-physics telemetry).
     pub fn to_diagnostics(&self) -> fullmag_quantities::StepDiagnostics {
         fullmag_quantities::StepDiagnostics {
@@ -1690,6 +1703,7 @@ impl StepStats {
             e_drive: self.e_drive,
             e_ani: self.e_ani,
             e_dmi: self.e_dmi,
+            e_rotated_dmi: self.e_rotated_dmi,
             e_el: 0.0,
             e_kin_el: 0.0,
             e_total: self.e_total,
@@ -1701,6 +1715,28 @@ impl StepStats {
             max_torque_T: self.max_torque_T,
             per_object_scalars: self.per_object_scalars.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod rotated_dmi_energy_tests {
+    use super::StepStats;
+
+    #[test]
+    fn rotated_dmi_energy_is_reported_separately_and_in_total_dmi() {
+        let mut stats = StepStats::default();
+        stats.set_dmi_energy_components(1.25, -0.5, 0.75);
+
+        assert_eq!(stats.e_rotated_dmi, 0.75);
+        assert_eq!(stats.e_dmi, 1.5);
+        assert_eq!(
+            stats.to_quantity_row().scalar_value("e_rotated_dmi"),
+            Some(0.75)
+        );
+        assert_eq!(
+            serde_json::to_value(&stats).unwrap()["E_rotated_dmi"],
+            serde_json::json!(0.75)
+        );
     }
 }
 
@@ -4548,6 +4584,7 @@ pub(crate) struct StateObservables {
     // PH-02: extended vector observables
     pub anisotropy_field: Vec<[f64; 3]>,
     pub dmi_field: Vec<[f64; 3]>,
+    pub rotated_dmi_field: Vec<[f64; 3]>,
     pub magnetoelastic_field: Vec<[f64; 3]>,
     pub cubic_anisotropy_field: Vec<[f64; 3]>,
     pub bulk_dmi_field: Vec<[f64; 3]>,
@@ -4559,6 +4596,7 @@ pub(crate) struct StateObservables {
     pub drive_energy: f64,
     pub anisotropy_energy: f64,
     pub dmi_energy: f64,
+    pub rotated_dmi_energy: f64,
     pub total_energy: f64,
     pub max_dm_dt: f64,
     pub max_rhs_all_norm_per_s: f64,
@@ -4687,6 +4725,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,

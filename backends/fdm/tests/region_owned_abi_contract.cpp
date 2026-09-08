@@ -86,7 +86,8 @@ void exchange_pair_descriptors_are_public_abi() {
           "exchange pair default must preserve zero-initialized legacy compatibility");
     check(header.find("FULLMAG_FDM_EXCHANGE_PAIR_HARMONIC_MEAN = 1") != std::string::npos,
           "exchange pair ABI must expose harmonic mean");
-    check(header.find("typedef struct {\n    uint32_t region_i;") != std::string::npos,
+    check(header.find("uint32_t region_i;") != std::string::npos &&
+              header.find("} fullmag_fdm_exchange_pair_desc;") != std::string::npos,
           "exchange pair descriptor struct must be public ABI");
     check(header.find("const fullmag_fdm_exchange_pair_desc *exchange_pairs") != std::string::npos,
           "fullmag_fdm_plan_desc must carry exchange pair descriptors");

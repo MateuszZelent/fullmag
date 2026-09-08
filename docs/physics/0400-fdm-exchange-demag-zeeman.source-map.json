@@ -35,14 +35,38 @@
   "equations": [
     {
       "id": "fdm-active-effective-field",
-      "symbols": ["Heffm", "A_m_LLG", "A_m_E", "A_m_obs", "Hdemag", "Hext", "Hoe", "Hant", "Omega_m"],
-      "sources": ["state_observables", "fdm_fields"],
+      "symbols": [
+        "Heffm",
+        "A_m_LLG",
+        "A_m_E",
+        "A_m_obs",
+        "Hdemag",
+        "Hext",
+        "Hoe",
+        "Hant",
+        "Omega_m"
+      ],
+      "sources": [
+        "state_observables",
+        "fdm_fields"
+      ],
       "publication_anchor": "Active-support effective-field sum for the FDM state"
     },
     {
       "id": "fdm-airbox-effective-field",
-      "symbols": ["Heffair", "Hdemag", "Hext", "Hoe", "Hant", "Omega_air"],
-      "sources": ["state_observables", "airbox_reconstruction", "field_materialization"],
+      "symbols": [
+        "Heffair",
+        "Hdemag",
+        "Hext",
+        "Hoe",
+        "Hant",
+        "Omega_air"
+      ],
+      "sources": [
+        "state_observables",
+        "airbox_reconstruction",
+        "field_materialization"
+      ],
       "publication_anchor": "Airbox observable built only from same-state materialized source fields"
     }
   ],
@@ -154,8 +178,8 @@
     {
       "id": "field_materialization",
       "path": "crates/fullmag-runner/src/interactive_runtime.rs",
-      "symbol": "build_full_grid_materialized_fields",
-      "responsibility": "selectively constructs full-grid live materializations from one observable state; not proof of an atomic terminal generation/batch"
+      "symbol": "build_cached_grid_preview_fields",
+      "responsibility": "selectively constructs full-grid live preview materializations from one observable state; not proof of an atomic terminal generation/batch"
     },
     {
       "id": "terminal_outcome",
@@ -216,7 +240,7 @@
         "default": "required",
         "si_unit": "T at the transitional API boundary",
         "validation": "three finite values",
-      "meaning": "external-field request; planner normalizes to $H$",
+        "meaning": "external-field request; planner normalizes to $H$",
         "backend_support": "FDM/FEM authoring; unit conversion gated",
         "problem_ir": "`energy_terms[].kind=zeeman` plus normalized field"
       }

@@ -16,6 +16,7 @@ different symmetry, field operators, natural boundary terms, and backend restric
 :maxdepth: 1
 
 interfacial
+rotated-interfacial
 bulk
 boundary-conditions
 validation

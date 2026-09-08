@@ -420,6 +420,6 @@ Required gates are cumulative:
 | Field energy | `backends/fem/cpu/mfem/interactions/demag_poisson_energy.cpp` + `demag_poisson_energy_from_field` | FEM CPU | implemented independent field form |
 | Solve orchestration | `backends/fem/cpu/mfem/interactions/demag_poisson_solve.cpp` + `context_compute_demag_poisson` | FEM CPU | implemented direct variational and recovered-field energy telemetry |
 | Device mixed-order operators | `backends/fem/gpu/cuda/demag_poisson/operators.hpp` + `build_p1_demag_operators` | FEM GPU | P2 nonperiodic operator implementation compiled; executed-device qualification pending |
-| Device stage | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` + `compute_device_demag_for_device_stage` | FEM GPU | P2 nonperiodic stage implementation compiled; executed-device qualification pending |
+| Device stage | `backends/fem/gpu/cuda/demag_poisson/stage_compute.cpp` + `compute_device_demag_for_device_stage_impl` | FEM GPU | P2 nonperiodic stage implementation compiled; executed-device qualification pending |
 | Perimeter refinement | `packages/fullmag-py/src/fullmag/meshing/_size_field_plan.py` + `_build_perimeter_refinement_fields` | FEM meshing | implemented fields; near-air scoping correction pending |
 | SP4 ordinary workflow | `packages/fullmag-py/src/fullmag/world.py` + `study` | FEM CPU/GPU | executable public stage-first authoring entrypoint |

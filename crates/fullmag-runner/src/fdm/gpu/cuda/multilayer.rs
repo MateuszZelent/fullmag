@@ -705,6 +705,7 @@ fn build_contexts_and_states(
                             .unwrap_or([0.0, 1.0, 0.0]),
                     }),
                 interfacial_dmi: plan.interfacial_dmi,
+                rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
                 slonczewski_stt: None,
@@ -1729,6 +1730,7 @@ fn snapshot_native_multilayer_observables(
     let mut external_field = Vec::new();
     let mut anisotropy_field = Vec::new();
     let mut dmi_field = Vec::new();
+    let mut rotated_dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
@@ -1736,6 +1738,7 @@ fn snapshot_native_multilayer_observables(
     let mut external_energy = 0.0;
     let mut anisotropy_energy = 0.0;
     let mut dmi_energy = 0.0;
+    let mut rotated_dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -1748,6 +1751,7 @@ fn snapshot_native_multilayer_observables(
         let mut h_ex = backend.copy_layer_h_ex(layer_index as u32, cell_count)?;
         let mut h_ani = backend.copy_layer_h_ani(layer_index as u32, cell_count)?;
         let mut h_dmi = backend.copy_layer_h_dmi(layer_index as u32, cell_count)?;
+        let mut h_rotated_dmi = backend.copy_layer_h_rotated_dmi(layer_index as u32, cell_count)?;
         let mut native_h_eff = backend.copy_layer_h_eff(layer_index as u32, cell_count)?;
         let active_mask = context.problem.active_mask.as_deref();
         // The native multilayer ABI materializes the uniform Zeeman field in
@@ -1769,7 +1773,7 @@ fn snapshot_native_multilayer_observables(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_else(|| vec![[0.0; 3]; cell_count]);
-        for _ in 0..6 {
+        for _ in 0..7 {
             transfer_counters.record_observed_snapshot_d2h_vector(cell_count);
         }
         for field in [
@@ -1778,6 +1782,7 @@ fn snapshot_native_multilayer_observables(
             &mut h_ext,
             &mut h_ani,
             &mut h_dmi,
+            &mut h_rotated_dmi,
             &mut native_h_eff,
         ] {
             zero_outside_active(field, active_mask);
@@ -1823,6 +1828,9 @@ fn snapshot_native_multilayer_observables(
             })?;
         let local_anisotropy_energy = local_reference.anisotropy_energy_joules;
         let local_dmi_energy = local_reference.dmi_energy_joules;
+        let local_rotated_dmi_energy = context
+            .problem
+            .rotated_interfacial_dmi_energy_from_vectors(local_state.magnetization());
         let rhs = llg_rhs_for_layer(context, &m, &h_eff);
         let local_torque = compute_torque_field(
             &m,
@@ -1852,6 +1860,7 @@ fn snapshot_native_multilayer_observables(
                 ("e_ext".to_string(), local_external_energy),
                 ("e_ani".to_string(), local_anisotropy_energy),
                 ("e_dmi".to_string(), local_dmi_energy),
+                ("e_rotated_dmi".to_string(), local_rotated_dmi_energy),
                 ("e_total".to_string(), local_total),
                 ("mx".to_string(), mx),
                 ("my".to_string(), my),
@@ -1865,6 +1874,7 @@ fn snapshot_native_multilayer_observables(
         external_energy += local_external_energy;
         anisotropy_energy += local_anisotropy_energy;
         dmi_energy += local_dmi_energy;
+        rotated_dmi_energy += local_rotated_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&h_eff));
         max_h_demag = max_h_demag.max(max_norm(&h_demag));
@@ -1874,6 +1884,7 @@ fn snapshot_native_multilayer_observables(
         external_field.extend(h_ext);
         anisotropy_field.extend(h_ani);
         dmi_field.extend(h_dmi);
+        rotated_dmi_field.extend(h_rotated_dmi);
         effective_field.extend(h_eff);
         torque_field.extend(local_torque);
     }
@@ -1897,6 +1908,7 @@ fn snapshot_native_multilayer_observables(
         effective_field,
         anisotropy_field,
         dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -1908,6 +1920,7 @@ fn snapshot_native_multilayer_observables(
         drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
+        rotated_dmi_energy,
         total_energy,
         max_dm_dt,
         max_rhs_all_norm_per_s: max_dm_dt,
@@ -2375,6 +2388,7 @@ fn build_native_stacked_cuda_plan(
             temperature: None,
             thermal_seed_config: None,
             interfacial_dmi: plan.interfacial_dmi,
+            rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
             bulk_dmi: plan.bulk_dmi,
             dind_field: None,
             dbulk_field: None,
@@ -2778,6 +2792,7 @@ fn single_layer_cuda_plan(plan: &FdmMultilayerPlanIR, layer: &FdmLayerPlanIR) ->
         temperature: None,
         thermal_seed_config: None,
         interfacial_dmi: plan.interfacial_dmi,
+        rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
         bulk_dmi: plan.bulk_dmi,
         dind_field: None,
         dbulk_field: None,
@@ -2915,6 +2930,7 @@ fn observe_multilayer_cuda(
     let mut external_field = Vec::new();
     let mut anisotropy_field = Vec::new();
     let mut dmi_field = Vec::new();
+    let mut rotated_dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
@@ -2922,6 +2938,7 @@ fn observe_multilayer_cuda(
     let mut external_energy = 0.0;
     let mut anisotropy_energy = 0.0;
     let mut dmi_energy = 0.0;
+    let mut rotated_dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -2949,12 +2966,19 @@ fn observe_multilayer_cuda(
         let mut local_external = local_observables.external_field;
         let mut local_anisotropy = context.problem.anisotropy_field(state.magnetization());
         let mut local_dmi = local_observables.dmi_field;
+        let mut local_rotated_dmi = context
+            .problem
+            .rotated_interfacial_dmi_field(state.magnetization());
         zero_outside_active(&mut local_external, context.problem.active_mask.as_deref());
         zero_outside_active(
             &mut local_anisotropy,
             context.problem.active_mask.as_deref(),
         );
         zero_outside_active(&mut local_dmi, context.problem.active_mask.as_deref());
+        zero_outside_active(
+            &mut local_rotated_dmi,
+            context.problem.active_mask.as_deref(),
+        );
         let mut local_effective = local_observables.effective_field;
         for cell in 0..local_effective.len() {
             local_effective[cell] = add(
@@ -2982,11 +3006,15 @@ fn observe_multilayer_cuda(
             .sum::<f64>();
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
+        let local_rotated_dmi_energy = context
+            .problem
+            .rotated_interfacial_dmi_energy_from_vectors(state.magnetization());
         exchange_energy += local_exchange_energy;
         demag_energy += local_demag_energy;
         external_energy += local_external_energy;
         anisotropy_energy += local_anisotropy_energy;
         dmi_energy += local_dmi_energy;
+        rotated_dmi_energy += local_rotated_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
@@ -3015,6 +3043,7 @@ fn observe_multilayer_cuda(
                 ("e_ext".to_string(), local_external_energy),
                 ("e_ani".to_string(), local_anisotropy_energy),
                 ("e_dmi".to_string(), local_dmi_energy),
+                ("e_rotated_dmi".to_string(), local_rotated_dmi_energy),
                 (
                     "e_total".to_string(),
                     local_exchange_energy
@@ -3036,6 +3065,7 @@ fn observe_multilayer_cuda(
         external_field.extend(local_external);
         anisotropy_field.extend(local_anisotropy);
         dmi_field.extend(local_dmi);
+        rotated_dmi_field.extend(local_rotated_dmi);
         effective_field.extend(local_effective);
     }
 
@@ -3058,6 +3088,7 @@ fn observe_multilayer_cuda(
         effective_field,
         anisotropy_field,
         dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -3069,6 +3100,7 @@ fn observe_multilayer_cuda(
         drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
+        rotated_dmi_energy,
         total_energy: exchange_energy
             + demag_energy
             + external_energy
@@ -3266,6 +3298,7 @@ fn observe_multilayer_cuda_single(
     let mut external_field = Vec::new();
     let mut anisotropy_field = Vec::new();
     let mut dmi_field = Vec::new();
+    let mut rotated_dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut torque_field = Vec::new();
     let mut exchange_energy = 0.0;
@@ -3273,6 +3306,7 @@ fn observe_multilayer_cuda_single(
     let mut external_energy = 0.0;
     let mut anisotropy_energy = 0.0;
     let mut dmi_energy = 0.0;
+    let mut rotated_dmi_energy = 0.0;
     let mut max_dm_dt: f64 = 0.0;
     let mut max_h_eff: f64 = 0.0;
     let mut max_h_demag: f64 = 0.0;
@@ -3297,12 +3331,21 @@ fn observe_multilayer_cuda_single(
         let mut local_external = to_f32_vectors(&local_observables.external_field);
         let mut local_anisotropy = context.problem.anisotropy_field(&local_magnetization);
         let mut local_dmi = to_f32_vectors(&local_observables.dmi_field);
+        let mut local_rotated_dmi = to_f32_vectors(
+            &context
+                .problem
+                .rotated_interfacial_dmi_field(&local_magnetization),
+        );
         zero_outside_active_f32(&mut local_external, context.problem.active_mask.as_deref());
         zero_outside_active(
             &mut local_anisotropy,
             context.problem.active_mask.as_deref(),
         );
         zero_outside_active_f32(&mut local_dmi, context.problem.active_mask.as_deref());
+        zero_outside_active_f32(
+            &mut local_rotated_dmi,
+            context.problem.active_mask.as_deref(),
+        );
         let mut local_effective = to_f32_vectors(&local_observables.effective_field);
         for cell in 0..local_effective.len() {
             local_effective[cell] = add_f32(
@@ -3328,11 +3371,15 @@ fn observe_multilayer_cuda_single(
         );
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
+        let local_rotated_dmi_energy = context
+            .problem
+            .rotated_interfacial_dmi_energy_from_vectors(&local_magnetization);
         exchange_energy += local_exchange_energy;
         demag_energy += local_demag_energy;
         external_energy += local_external_energy;
         anisotropy_energy += local_anisotropy_energy;
         dmi_energy += local_dmi_energy;
+        rotated_dmi_energy += local_rotated_dmi_energy;
         max_dm_dt = max_dm_dt.max(max_norm_f32(&rhs));
         max_h_eff = max_h_eff.max(max_norm_f32(&local_effective));
         max_h_demag = max_h_demag.max(max_norm_f32(&local_demag));
@@ -3361,6 +3408,7 @@ fn observe_multilayer_cuda_single(
                 ("e_ext".to_string(), local_external_energy),
                 ("e_ani".to_string(), local_anisotropy_energy),
                 ("e_dmi".to_string(), local_dmi_energy),
+                ("e_rotated_dmi".to_string(), local_rotated_dmi_energy),
                 (
                     "e_total".to_string(),
                     local_exchange_energy
@@ -3382,6 +3430,7 @@ fn observe_multilayer_cuda_single(
         external_field.extend(to_f64_vectors(&local_external));
         anisotropy_field.extend(local_anisotropy);
         dmi_field.extend(to_f64_vectors(&local_dmi));
+        rotated_dmi_field.extend(to_f64_vectors(&local_rotated_dmi));
         effective_field.extend(to_f64_vectors(&local_effective));
     }
 
@@ -3404,6 +3453,7 @@ fn observe_multilayer_cuda_single(
         effective_field,
         anisotropy_field,
         dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -3415,6 +3465,7 @@ fn observe_multilayer_cuda_single(
         drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
+        rotated_dmi_energy,
         total_energy: exchange_energy
             + demag_energy
             + external_energy
@@ -3741,9 +3792,11 @@ fn observe_native_stacked_fields(
         std::collections::HashMap<String, f64>,
     > = std::collections::HashMap::new();
     let mut dmi_field = Vec::new();
+    let mut rotated_dmi_field = Vec::new();
     let mut anisotropy_field = Vec::new();
     let mut anisotropy_energy = 0.0;
     let mut dmi_energy = 0.0;
+    let mut rotated_dmi_energy = 0.0;
     let local_self_field_energy_factor = -0.5 * MU0 * ms * cell_volume;
     let local_external_field_energy_factor = -MU0 * ms * cell_volume;
     for layer in &native.layers {
@@ -3813,13 +3866,27 @@ fn observe_native_stacked_fields(
             layer.context.problem.active_mask.as_deref(),
         );
         let mut local_dmi = local_observables.dmi_field;
+        let mut local_rotated_dmi = layer
+            .context
+            .problem
+            .rotated_interfacial_dmi_field(local_state.magnetization());
         zero_outside_active(&mut local_dmi, layer.context.problem.active_mask.as_deref());
+        zero_outside_active(
+            &mut local_rotated_dmi,
+            layer.context.problem.active_mask.as_deref(),
+        );
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
+        let local_rotated_dmi_energy = layer
+            .context
+            .problem
+            .rotated_interfacial_dmi_energy_from_vectors(local_state.magnetization());
         anisotropy_energy += local_anisotropy_energy;
         dmi_energy += local_dmi_energy;
+        rotated_dmi_energy += local_rotated_dmi_energy;
         anisotropy_field.extend(local_anisotropy);
         dmi_field.extend(local_dmi);
+        rotated_dmi_field.extend(local_rotated_dmi);
 
         let inv = if active_count > 0 {
             1.0 / active_count as f64
@@ -3834,6 +3901,7 @@ fn observe_native_stacked_fields(
                 ("e_ext".to_string(), local_external_energy),
                 ("e_ani".to_string(), local_anisotropy_energy),
                 ("e_dmi".to_string(), local_dmi_energy),
+                ("e_rotated_dmi".to_string(), local_rotated_dmi_energy),
                 (
                     "e_total".to_string(),
                     local_exchange_energy
@@ -3885,6 +3953,7 @@ fn observe_native_stacked_fields(
         effective_field,
         anisotropy_field,
         dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -3896,6 +3965,7 @@ fn observe_native_stacked_fields(
         drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
+        rotated_dmi_energy,
         total_energy: exchange_energy
             + demag_energy
             + external_energy
@@ -4632,6 +4702,7 @@ mod tests {
             requested_common_cell_size: None,
             grid_certificate: None,
             resolved_periodic_images: None,
+            rotated_interfacial_dmi: None,
             layers: vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),
@@ -5151,6 +5222,7 @@ mod tests {
             requested_common_cell_size: None,
             grid_certificate: None,
             resolved_periodic_images: None,
+            rotated_interfacial_dmi: None,
             field_refresh: None,
             layers: vec![
                 FdmLayerPlanIR {
@@ -5575,6 +5647,7 @@ mod tests {
             effective_field: Vec::new(),
             anisotropy_field: Vec::new(),
             dmi_field: Vec::new(),
+            rotated_dmi_field: Vec::new(),
             magnetoelastic_field: Vec::new(),
             cubic_anisotropy_field: Vec::new(),
             bulk_dmi_field: Vec::new(),
@@ -5586,6 +5659,7 @@ mod tests {
             drive_energy: 0.0,
             anisotropy_energy: 0.5,
             dmi_energy: 0.25,
+            rotated_dmi_energy: 0.0,
             total_energy: 6.75,
             max_dm_dt: 7.0,
             max_rhs_all_norm_per_s: 7.0,

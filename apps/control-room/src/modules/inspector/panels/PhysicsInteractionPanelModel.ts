@@ -230,6 +230,7 @@ function isObjectInteractionKind(id: PhysicsInteractionId): id is ObjectInteract
     id === "exchange" ||
     id === "demag" ||
     id === "interfacial_dmi" ||
+    id === "rotated_interfacial_dmi" ||
     id === "uniaxial_anisotropy"
   );
 }

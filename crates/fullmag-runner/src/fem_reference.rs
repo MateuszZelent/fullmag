@@ -12,7 +12,8 @@
 #![allow(dead_code)]
 
 use fullmag_engine::fem::{
-    FemBackendId, FemIntegratorWorkspace, FemLlgProblem, FemLlgState, MeshTopology,
+    FemBackendId, FemElementEnergy, FemIntegratorWorkspace, FemLlgProblem, FemLlgState,
+    MeshTopology,
 };
 use fullmag_engine::{
     dot, AdaptiveStepConfig, EffectiveFieldTerms, LlgConfig, MaterialParameters, TimeIntegrator,
@@ -38,9 +39,9 @@ use crate::relaxation::{
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::scalar_metrics::{
-    apply_weighted_average_m_to_step_stats, average_magnetization_components,
+    apply_weighted_average_m_to_step_stats, average_magnetization_components, object_scalar_slots,
     scalar_outputs_request_average_m, scalar_row_due, single_object_scalars,
-    weighted_average_magnetization_components, weighted_object_scalars,
+    weighted_average_magnetization_components,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -101,12 +102,7 @@ pub(crate) fn snapshot_preview(
         .clone()
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let observables = observe_state(&problem, &state, &antenna_field)?;
-    build_fem_preview_field(
-        request,
-        &observables,
-        &plan.mesh,
-        problem.material.saturation_magnetisation,
-    )
+    build_fem_preview_field(request, &observables, plan)
 }
 
 pub(crate) fn snapshot_vector_fields(
@@ -135,8 +131,7 @@ pub(crate) fn snapshot_vector_fields(
         cached.push(build_fem_preview_field(
             &preview_request,
             &observables,
-            &plan.mesh,
-            problem.material.saturation_magnetisation,
+            plan,
         )?);
     }
     Ok(cached)
@@ -145,17 +140,13 @@ pub(crate) fn snapshot_vector_fields(
 pub(crate) fn build_fem_preview_field(
     request: &LivePreviewRequest,
     observables: &StateObservables,
-    mesh: &fullmag_ir::MeshIR,
-    saturation_magnetisation: f64,
+    plan: &FemPlanIR,
 ) -> Result<crate::LivePreviewField, RunError> {
     let quantity = normalized_quantity_name(&request.quantity)?;
-    let active_mask = mesh_quantity_active_mask(quantity, mesh);
-    if let Some(values) = fem_energy_density_values(
-        observables,
-        quantity,
-        saturation_magnetisation,
-        active_mask.as_deref(),
-    )? {
+    let active_mask = mesh_quantity_active_mask(quantity, &plan.mesh);
+    if let Some(values) =
+        fem_energy_density_values(observables, quantity, plan, active_mask.as_deref())?
+    {
         return Ok(build_mesh_scalar_preview_field_with_active_mask(
             request,
             &values,
@@ -173,9 +164,10 @@ pub(crate) fn build_fem_preview_field(
 pub(crate) fn fem_energy_density_values(
     observables: &StateObservables,
     quantity: &str,
-    saturation_magnetisation: f64,
+    plan: &FemPlanIR,
     active_mask: Option<&[bool]>,
 ) -> Result<Option<Vec<f64>>, RunError> {
+    let saturation_magnetisation = plan.material.saturation_magnetisation;
     let values = match quantity {
         "eden_ex" => field_dot_energy_density(
             &observables.magnetization,
@@ -201,6 +193,9 @@ pub(crate) fn fem_energy_density_values(
             active_mask,
             quantity,
         )?,
+        "eden_ani" if reference_plan_has_uniaxial_anisotropy(plan) => {
+            fem_uniaxial_energy_density_values(plan, &observables.magnetization, active_mask)?
+        }
         "eden_ani" => field_dot_energy_density(
             &observables.magnetization,
             &observables.anisotropy_field,
@@ -217,18 +212,32 @@ pub(crate) fn fem_energy_density_values(
             active_mask,
             quantity,
         )?,
+        "eden_rotated_dmi" => field_dot_energy_density(
+            &observables.magnetization,
+            &observables.rotated_dmi_field,
+            saturation_magnetisation,
+            -0.5,
+            active_mask,
+            quantity,
+        )?,
         "eden_total" => {
             let mut total = vec![0.0; observables.magnetization.len()];
-            for term in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
-                if let Some(values) = fem_energy_density_values(
-                    observables,
-                    term,
-                    saturation_magnetisation,
-                    active_mask,
-                )? {
-                    for (accum, value) in total.iter_mut().zip(values) {
-                        *accum += value;
-                    }
+            for term in [
+                "eden_ex",
+                "eden_demag",
+                "eden_ext",
+                "eden_ani",
+                "eden_dmi",
+                "eden_rotated_dmi",
+            ] {
+                let values = fem_energy_density_values(observables, term, plan, active_mask)?
+                    .ok_or_else(|| RunError {
+                        message: format!(
+                            "FEM preview eden_total component '{term}' is not materializable"
+                        ),
+                    })?;
+                for (accum, value) in total.iter_mut().zip(values) {
+                    *accum += value;
                 }
             }
             total
@@ -236,6 +245,66 @@ pub(crate) fn fem_energy_density_values(
         _ => return Ok(None),
     };
     Ok(Some(values))
+}
+
+fn reference_plan_has_uniaxial_anisotropy(plan: &FemPlanIR) -> bool {
+    plan.material.uniaxial_anisotropy.is_some()
+        || plan.material.uniaxial_anisotropy_k2.is_some()
+        || plan.material.ku_field.is_some()
+        || plan.material.ku2_field.is_some()
+}
+
+fn fem_uniaxial_energy_density_values(
+    plan: &FemPlanIR,
+    magnetization: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
+) -> Result<Vec<f64>, RunError> {
+    let node_count = magnetization.len();
+    for (name, len) in [
+        ("Ku1", plan.material.ku_field.as_ref().map(Vec::len)),
+        ("Ku2", plan.material.ku2_field.as_ref().map(Vec::len)),
+        (
+            "anisotropy axis",
+            plan.anisotropy_axis_field.as_ref().map(Vec::len),
+        ),
+    ] {
+        if len.is_some_and(|len| len != node_count) {
+            return Err(RunError {
+                message: format!("FEM preview {name} field must have {node_count} values"),
+            });
+        }
+    }
+    let uniform_axis = plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]);
+    Ok(magnetization
+        .iter()
+        .enumerate()
+        .map(|(index, m)| {
+            if active_mask
+                .and_then(|mask| mask.get(index))
+                .is_some_and(|active| !*active)
+            {
+                return 0.0;
+            }
+            let axis = plan
+                .anisotropy_axis_field
+                .as_ref()
+                .map_or(uniform_axis, |axes| axes[index]);
+            let ku1 = plan
+                .material
+                .ku_field
+                .as_ref()
+                .map_or(plan.material.uniaxial_anisotropy.unwrap_or(0.0), |values| {
+                    values[index]
+                });
+            let ku2 = plan.material.ku2_field.as_ref().map_or(
+                plan.material.uniaxial_anisotropy_k2.unwrap_or(0.0),
+                |values| values[index],
+            );
+            let q = dot(*m, axis);
+            let q2 = q * q;
+            -ku1 * q2 - ku2 * q2 * q2
+        })
+        .collect())
 }
 
 fn field_dot_energy_density(
@@ -434,6 +503,7 @@ pub(crate) fn build_problem_and_state(
         uniaxial_anisotropy: None,
         cubic_anisotropy: None,
         interfacial_dmi: plan.interfacial_dmi,
+        rotated_interfacial_dmi: plan.rotated_interfacial_dmi,
         bulk_dmi: plan.bulk_dmi,
         zhang_li_stt: None,
         slonczewski_stt: None,
@@ -654,11 +724,12 @@ fn execute_reference_fem_impl(
         state.time_seconds,
         0.0,
         0,
+        &problem,
         &current_observables,
         &plan.object_segments,
         &plan.mesh_parts,
         &problem.topology.magnetic_node_volumes,
-    );
+    )?;
     apply_frozen_spin_step_telemetry(&mut current_stats, &problem, state.magnetization());
 
     let until_label = if until_seconds.is_finite() {
@@ -768,6 +839,8 @@ fn execute_reference_fem_impl(
             e_ex: report.exchange_energy_joules,
             e_demag: report.demag_energy_joules,
             e_ext: report.external_energy_joules,
+            e_ani: report.anisotropy_energy_joules,
+            e_dmi: report.dmi_energy_joules,
             e_total: report.total_energy_joules,
             max_dm_dt: report.max_rhs_amplitude,
             max_rhs_norm_per_s: report.max_rhs_amplitude,
@@ -782,11 +855,12 @@ fn execute_reference_fem_impl(
         };
         current_stats = enrich_step_stats_from_magnetization(
             latest_stats.clone(),
+            &problem,
             state.magnetization(),
             &plan.object_segments,
             &plan.mesh_parts,
             &problem.topology.magnetic_node_volumes,
-        );
+        )?;
         apply_frozen_spin_step_telemetry(&mut current_stats, &problem, state.magnetization());
         artifacts.record_solver_step(&current_stats);
 
@@ -1256,11 +1330,12 @@ fn record_due_outputs(
             state.time_seconds,
             solver_dt,
             wall_time_ns,
+            problem,
             &observables,
             object_segments,
             mesh_parts,
             &problem.topology.magnetic_node_volumes,
-        );
+        )?;
         apply_frozen_spin_step_telemetry(&mut stats, problem, state.magnetization());
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1306,11 +1381,12 @@ fn record_scalar_snapshot(
         state.time_seconds,
         solver_dt,
         wall_time_ns,
+        problem,
         &observables,
         object_segments,
         mesh_parts,
         &problem.topology.magnetic_node_volumes,
-    );
+    )?;
     apply_frozen_spin_step_telemetry(&mut stats, problem, state.magnetization());
     artifacts.record_scalar(&stats)?;
     steps.push(stats);
@@ -1374,11 +1450,12 @@ fn record_final_outputs(
             state.time_seconds,
             solver_dt,
             0,
+            problem,
             &observables,
             object_segments,
             mesh_parts,
             &problem.topology.magnetic_node_volumes,
-        );
+        )?;
         apply_frozen_spin_step_telemetry(&mut stats, problem, state.magnetization());
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
@@ -1403,20 +1480,38 @@ fn record_final_outputs(
 
 fn enrich_step_stats_from_magnetization(
     mut stats: StepStats,
+    problem: &FemLlgProblem,
     magnetization: &[[f64; 3]],
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnetic_node_volumes: &[f64],
-) -> StepStats {
+) -> Result<StepStats, RunError> {
     apply_weighted_average_m_to_step_stats(&mut stats, magnetization, magnetic_node_volumes);
+    let element_energies =
+        if object_segments.is_empty() && problem.terms.rotated_interfacial_dmi.is_none() {
+            None
+        } else {
+            Some(
+                problem
+                    .element_energy_breakdown_from_vectors(magnetization)
+                    .map_err(|e| RunError {
+                        message: format!("FEM element energies: {}", e),
+                    })?,
+            )
+        };
+    if let Some(energies) = element_energies.as_deref() {
+        let rotated_dmi_energy = energies.iter().map(|energy| energy.rotated_dmi).sum();
+        stats.set_dmi_energy_components(stats.e_dmi - rotated_dmi_energy, 0.0, rotated_dmi_energy);
+    }
     stats.per_object_scalars = fem_per_object_scalars(
         object_segments,
         mesh_parts,
         magnetization,
         magnetic_node_volumes,
+        element_energies.as_deref(),
         &stats,
     );
-    stats
+    Ok(stats)
 }
 
 fn apply_frozen_spin_step_telemetry(
@@ -1450,12 +1545,38 @@ pub(crate) fn observe_state(
     let observables = problem.observe(state).map_err(|e| RunError {
         message: format!("FEM engine observables: {}", e),
     })?;
+    let rotated_dmi_field =
+        problem.rotated_interfacial_dmi_field_from_vectors(&observables.magnetization);
+    let dmi_field = observables
+        .dmi_field
+        .iter()
+        .zip(rotated_dmi_field.iter())
+        .map(|(dmi, rotated)| {
+            [
+                dmi[0] - rotated[0],
+                dmi[1] - rotated[1],
+                dmi[2] - rotated[2],
+            ]
+        })
+        .collect::<Vec<_>>();
     let torque_field = compute_torque_field(
         &observables.magnetization,
         &observables.effective_field,
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
+    let rotated_dmi_energy = if problem.terms.rotated_interfacial_dmi.is_some() {
+        problem
+            .element_energy_breakdown_from_vectors(&observables.magnetization)
+            .map_err(|e| RunError {
+                message: format!("FEM element energies: {}", e),
+            })?
+            .iter()
+            .map(|energy| energy.rotated_dmi)
+            .sum()
+    } else {
+        0.0
+    };
     Ok(StateObservables {
         magnetization: observables.magnetization,
         torque_field,
@@ -1466,7 +1587,8 @@ pub(crate) fn observe_state(
         drive_field: vec![[0.0, 0.0, 0.0]; observables.effective_field.len()],
         effective_field: observables.effective_field,
         anisotropy_field: Vec::new(),
-        dmi_field: Vec::new(),
+        dmi_field,
+        rotated_dmi_field,
         magnetoelastic_field: Vec::new(),
         cubic_anisotropy_field: Vec::new(),
         bulk_dmi_field: Vec::new(),
@@ -1476,8 +1598,9 @@ pub(crate) fn observe_state(
         demag_energy: observables.demag_energy_joules,
         external_energy: observables.external_energy_joules,
         drive_energy: 0.0,
-        anisotropy_energy: 0.0,
-        dmi_energy: 0.0,
+        anisotropy_energy: observables.anisotropy_energy_joules,
+        dmi_energy: observables.dmi_energy_joules,
+        rotated_dmi_energy,
         total_energy: observables.total_energy_joules,
         max_dm_dt: observables.max_rhs_amplitude,
         max_rhs_all_norm_per_s: observables.max_rhs_all_amplitude,
@@ -1497,11 +1620,24 @@ fn make_step_stats(
     time: f64,
     solver_dt: f64,
     wall_time_ns: u64,
+    problem: &FemLlgProblem,
     observables: &StateObservables,
     object_segments: &[FemObjectSegmentIR],
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnetic_node_volumes: &[f64],
-) -> StepStats {
+) -> Result<StepStats, RunError> {
+    let element_energies =
+        if object_segments.is_empty() && problem.terms.rotated_interfacial_dmi.is_none() {
+            None
+        } else {
+            Some(
+                problem
+                    .element_energy_breakdown_from_vectors(&observables.magnetization)
+                    .map_err(|e| RunError {
+                        message: format!("FEM element energies: {}", e),
+                    })?,
+            )
+        };
     let mut stats = StepStats {
         step,
         time,
@@ -1523,6 +1659,16 @@ fn make_step_stats(
         wall_time_ns,
         ..StepStats::default()
     };
+    let rotated_dmi_energy = element_energies
+        .as_deref()
+        .map_or(observables.rotated_dmi_energy, |energies| {
+            energies.iter().map(|energy| energy.rotated_dmi).sum()
+        });
+    stats.set_dmi_energy_components(
+        observables.dmi_energy - rotated_dmi_energy,
+        0.0,
+        rotated_dmi_energy,
+    );
     apply_weighted_average_m_to_step_stats(
         &mut stats,
         &observables.magnetization,
@@ -1533,9 +1679,10 @@ fn make_step_stats(
         mesh_parts,
         &observables.magnetization,
         magnetic_node_volumes,
+        element_energies.as_deref(),
         &stats,
     );
-    stats
+    Ok(stats)
 }
 
 fn fem_per_object_scalars(
@@ -1543,33 +1690,57 @@ fn fem_per_object_scalars(
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
     magnetization: &[[f64; 3]],
     magnetic_node_volumes: &[f64],
+    element_energies: Option<&[FemElementEnergy]>,
     stats: &StepStats,
 ) -> std::collections::HashMap<String, std::collections::HashMap<String, f64>> {
     if object_segments.is_empty() {
         return single_object_scalars("free", stats);
     }
 
-    let mut weights_by_object: std::collections::HashMap<String, f64> =
-        std::collections::HashMap::new();
-    for segment in object_segments {
-        let node_indices = fem_segment_node_indices(mesh_parts, segment, magnetization.len());
-        let weight = node_indices
+    // Only locally computed averages are object quantities. Global interaction
+    // energies cannot be partitioned by node or volume fractions.
+    let mut per_object = object_scalar_slots(
+        object_segments
             .iter()
-            .filter_map(|index| magnetic_node_volumes.get(*index).copied())
-            .filter(|weight| weight.is_finite() && *weight > 0.0)
-            .sum::<f64>();
-        let weight = if weight > 0.0 {
-            weight
-        } else {
-            node_indices.len().max(1) as f64
-        };
-        *weights_by_object
-            .entry(segment.object_id.clone())
-            .or_insert(0.0) += weight;
-    }
-    let weights = weights_by_object.into_iter().collect::<Vec<_>>();
-    let mut per_object = weighted_object_scalars(stats, &weights);
+            .filter(|segment| segment.object_id != "__air__")
+            .map(|segment| segment.object_id.clone()),
+    );
     for segment in object_segments {
+        if segment.object_id == "__air__" {
+            continue;
+        }
+        if let Some(energies) = element_energies {
+            let start = segment.element_start as usize;
+            let end = start
+                .saturating_add(segment.element_count as usize)
+                .min(energies.len());
+            let element_energy = energies[start.min(end)..end].iter().fold(
+                FemElementEnergy::default(),
+                |mut total, energy| {
+                    total.exchange += energy.exchange;
+                    total.demag += energy.demag;
+                    total.external += energy.external;
+                    total.anisotropy += energy.anisotropy;
+                    total.dmi += energy.dmi;
+                    total.rotated_dmi += energy.rotated_dmi;
+                    total
+                },
+            );
+            let values = per_object.entry(segment.object_id.clone()).or_default();
+            *values.entry("e_ex".to_string()).or_insert(0.0) += element_energy.exchange;
+            *values.entry("e_demag".to_string()).or_insert(0.0) += element_energy.demag;
+            *values.entry("e_ext".to_string()).or_insert(0.0) += element_energy.external;
+            *values.entry("e_ani".to_string()).or_insert(0.0) += element_energy.anisotropy;
+            *values.entry("e_dmi".to_string()).or_insert(0.0) +=
+                element_energy.dmi + element_energy.rotated_dmi;
+            *values.entry("e_rotated_dmi".to_string()).or_insert(0.0) += element_energy.rotated_dmi;
+            *values.entry("e_total".to_string()).or_insert(0.0) += element_energy.exchange
+                + element_energy.demag
+                + element_energy.external
+                + element_energy.anisotropy
+                + element_energy.dmi
+                + element_energy.rotated_dmi;
+        }
         let node_indices = fem_segment_node_indices(mesh_parts, segment, magnetization.len());
         if node_indices.is_empty() {
             set_object_average_m(
@@ -1852,6 +2023,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -1887,6 +2059,22 @@ mod tests {
             dmi_interface_normal: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn fem_reference_uniaxial_energy_density_uses_ku2_quartic_functional() {
+        let mut plan = make_test_plan(false);
+        plan.material.uniaxial_anisotropy_k2 = Some(20_000.0);
+        plan.material.anisotropy_axis = Some([1.0, 0.0, 0.0]);
+        let values = fem_uniaxial_energy_density_values(
+            &plan,
+            &[[0.5, 0.0, 0.0]; 4],
+            Some(&[true, false, true, true]),
+        )
+        .expect("uniaxial energy density");
+
+        assert_eq!(values[0], -1250.0);
+        assert_eq!(values[1], 0.0, "nonmagnetic node must remain masked");
     }
 
     fn resolved_frozen_spins(mask: Vec<bool>) -> ResolvedFrozenSpinsPlanIR {
@@ -2248,6 +2436,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -2450,6 +2639,7 @@ mod tests {
                 boundary_marker_source: None,
             }),
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
             dbulk_field: None,
@@ -2605,6 +2795,45 @@ mod tests {
     }
 
     #[test]
+    fn fem_rotated_dmi_energy_density_is_included_in_total_preview() {
+        let mut plan = make_box_demag_plan();
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+        plan.rotated_interfacial_dmi = Some(3.0e-3);
+        plan.initial_magnetization = (0..plan.mesh.nodes.len())
+            .map(|index| match index % 4 {
+                0 => [1.0, 0.1, 0.2],
+                1 => [0.7, 0.4, 0.1],
+                2 => [0.2, 0.9, 0.3],
+                _ => [0.1, 0.3, 0.95],
+            })
+            .collect();
+
+        let fields = snapshot_vector_fields(
+            &plan,
+            &["eden_rotated_dmi", "eden_total"],
+            &crate::LivePreviewRequest::default(),
+        )
+        .expect("rotated DMI energy density preview should succeed");
+        let rotated = fields
+            .iter()
+            .find(|field| field.quantity == "eden_rotated_dmi")
+            .expect("rotated DMI density preview should be present");
+        let total = fields
+            .iter()
+            .find(|field| field.quantity == "eden_total")
+            .expect("total density preview should be present");
+        assert!(
+            rotated
+                .vector_field_values
+                .iter()
+                .any(|value| value.abs() > 0.0),
+            "rotated DMI density should be nonzero for a nonuniform state"
+        );
+        assert_eq!(total.vector_field_values, rotated.vector_field_values);
+    }
+
+    #[test]
     fn fem_airbox_plan_uses_airbox_demag_operator_in_reference_runner() {
         let plan = make_shared_domain_airbox_demag_plan();
         let (_problem, _state) = build_problem_and_state(&plan)
@@ -2691,10 +2920,101 @@ mod tests {
             &[mesh_part],
             &magnetization,
             &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            None,
             &stats,
         );
 
         assert_eq!(per_object["body"]["mx"], 3.0);
+    }
+
+    #[test]
+    fn fem_per_object_energies_use_element_ranges_for_shared_nodes_and_skip_air() {
+        let mut plan = make_test_plan(false);
+        plan.enable_exchange = false;
+        plan.external_field = Some([1.0e5, 0.0, 0.0]);
+        plan.mesh.nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ];
+        plan.mesh.cells =
+            fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 4, 2, 3]]);
+        plan.mesh.element_markers = vec![1, 1];
+        plan.mesh.facets = fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 4],
+            [1, 4, 3],
+            [2, 4, 3],
+        ]);
+        plan.mesh.boundary_markers = vec![1; 6];
+        plan.initial_magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [-1.0, 0.0, 0.0],
+        ];
+        plan.object_segments = vec![
+            FemObjectSegmentIR {
+                object_id: "left".to_string(),
+                geometry_id: None,
+                node_start: 0,
+                node_count: 4,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 3,
+            },
+            FemObjectSegmentIR {
+                object_id: "right".to_string(),
+                geometry_id: None,
+                node_start: 1,
+                node_count: 4,
+                element_start: 1,
+                element_count: 1,
+                boundary_face_start: 3,
+                boundary_face_count: 3,
+            },
+            FemObjectSegmentIR {
+                object_id: "__air__".to_string(),
+                geometry_id: None,
+                node_start: 0,
+                node_count: 0,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+        ];
+
+        let (problem, state) = build_problem_and_state(&plan).expect("shared tet problem");
+        let antenna = vec![[0.0, 0.0, 0.0]; state.magnetization().len()];
+        let observables = observe_state(&problem, &state, &antenna).expect("observables");
+        let stats = make_step_stats(
+            0,
+            0.0,
+            0.0,
+            0,
+            &problem,
+            &observables,
+            &plan.object_segments,
+            &plan.mesh_parts,
+            &problem.topology.magnetic_node_volumes,
+        )
+        .expect("step stats");
+
+        let left = &stats.per_object_scalars["left"];
+        let right = &stats.per_object_scalars["right"];
+        assert!(left["e_ext"] < 0.0);
+        assert!(right["e_ext"] > 0.0);
+        let sum = left["e_ext"] + right["e_ext"];
+        let tolerance = stats.e_ext.abs().max(1.0) * 1e-12;
+        assert!((sum - stats.e_ext).abs() <= tolerance);
+        assert!(!stats.per_object_scalars.contains_key("__air__"));
     }
 
     #[test]
@@ -2710,6 +3030,7 @@ mod tests {
             effective_field: Vec::new(),
             anisotropy_field: Vec::new(),
             dmi_field: Vec::new(),
+            rotated_dmi_field: Vec::new(),
             magnetoelastic_field: Vec::new(),
             cubic_anisotropy_field: Vec::new(),
             bulk_dmi_field: Vec::new(),
@@ -2721,6 +3042,7 @@ mod tests {
             drive_energy: 0.0,
             anisotropy_energy: 0.0,
             dmi_energy: 0.0,
+            rotated_dmi_energy: 0.0,
             total_energy: 0.0,
             max_dm_dt: 0.0,
             max_rhs_all_norm_per_s: 0.0,
@@ -2731,7 +3053,19 @@ mod tests {
             per_object_scalars: std::collections::HashMap::new(),
         };
 
-        let stats = make_step_stats(0, 0.0, 0.0, 0, &observables, &[], &[], &[1.0, 2.0, 7.0]);
+        let (problem, _) = build_problem_and_state(&make_test_plan(false)).expect("test problem");
+        let stats = make_step_stats(
+            0,
+            0.0,
+            0.0,
+            0,
+            &problem,
+            &observables,
+            &[],
+            &[],
+            &[1.0, 2.0, 7.0],
+        )
+        .expect("step stats");
 
         for (actual, expected) in [
             (stats.mx, 0.1),

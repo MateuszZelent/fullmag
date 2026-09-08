@@ -3147,6 +3147,7 @@ pub(crate) fn plan_fem(
     let mut external_field = None;
     let mut demag_realization = fullmag_ir::RequestedFemDemagIR::Auto;
     let mut interfacial_dmi: Option<f64> = None;
+    let mut rotated_interfacial_dmi: Option<f64> = None;
     let mut interfacial_dmi_normal: Option<[f64; 3]> = None;
     let mut bulk_dmi: Option<f64> = None;
     let mut has_magnetoelastic = false;
@@ -3216,6 +3217,11 @@ pub(crate) fn plan_fem(
                 interfacial_dmi = Some(*d);
                 interfacial_dmi_normal = *interface_normal;
             }
+            fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { d } => {
+                if rotated_interfacial_dmi.replace(*d).is_some() {
+                    errors.push("RotatedInterfacialDmi is declared more than once".to_string());
+                }
+            }
             fullmag_ir::EnergyTermIR::BulkDmi { d } => {
                 if bulk_dmi.is_some() {
                     errors.push("BulkDmi is declared more than once".to_string());
@@ -3266,13 +3272,14 @@ pub(crate) fn plan_fem(
         || enable_demag
         || external_field.is_some()
         || interfacial_dmi.is_some()
+        || rotated_interfacial_dmi.is_some()
         || bulk_dmi.is_some()
         || has_material_interfacial_dmi
         || has_material_bulk_dmi
         || has_magnetoelastic)
     {
         errors.push(
-            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, BulkDmi, or Magnetoelastic"
+            "the current FEM planning baseline requires at least one of Exchange, Demag, Zeeman, InterfacialDmi, RotatedInterfacialDmi, BulkDmi, or Magnetoelastic"
                 .to_string(),
         );
     }
@@ -3291,6 +3298,7 @@ pub(crate) fn plan_fem(
         }),
         interfacial_dmi.is_some() || has_material_interfacial_dmi,
         bulk_dmi.is_some() || has_material_bulk_dmi,
+        rotated_interfacial_dmi.is_some(),
         true,
         has_magnetoelastic,
         problem
@@ -3893,6 +3901,7 @@ pub(crate) fn plan_fem(
         demag_realization: resolved_demag_realization,
         air_box_config,
         interfacial_dmi,
+        rotated_interfacial_dmi,
         dmi_interface_normal: interfacial_dmi_normal,
         bulk_dmi,
         dind_field,
@@ -4335,6 +4344,17 @@ pub(crate) fn plan_fem_eigen(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }))
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "RotatedInterfacialDmi is not implemented for eigen execution".to_string(),
+            ],
+        });
+    }
     let mut errors = Vec::new();
 
     let fem_hints = match &problem.backend_policy.discretization_hints {
@@ -5158,6 +5178,18 @@ pub(crate) fn plan_fem_frequency_response(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
 ) -> Result<ExecutionPlanIR, PlanError> {
+    if problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, fullmag_ir::EnergyTermIR::RotatedInterfacialDmi { .. }))
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "RotatedInterfacialDmi is not implemented for frequency-domain execution"
+                    .to_string(),
+            ],
+        });
+    }
     let fullmag_ir::StudyIR::FrequencyResponse {
         dynamics,
         operator,

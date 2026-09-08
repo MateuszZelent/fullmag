@@ -807,6 +807,7 @@ function isAbortError(error: unknown): boolean {
 
 function useVectorGlyphUpload({
   buildKey,
+  capacity,
   glyphColors,
   glyphCount,
   glyphTransforms,
@@ -822,6 +823,8 @@ function useVectorGlyphUpload({
   transformScratch,
 }: {
   buildKey?: string | null;
+  /** Allocated instance capacity of shaftRef/headRef/instanceColorAttr. Uploads and mesh.count must never exceed this. */
+  capacity: number;
   glyphColors: Float32Array | null;
   glyphCount: number;
   glyphTransforms: VectorGlyphTransforms | null;
@@ -867,13 +870,23 @@ function useVectorGlyphUpload({
       return;
     }
 
+    // V-05: instanceColorAttr is allocated for `capacity` instances (capped at
+    // 1<<20 by resolveVectorGlyphCapacity). glyphCount can exceed capacity, so
+    // every upload must be clamped to renderCount or colorArray.set() throws a
+    // RangeError past the allocated buffer.
+    const renderCount = Math.min(glyphCount, capacity);
+    if (renderCount < glyphCount && process.env.NODE_ENV !== "production") {
+      console.warn(
+        `[VectorFieldLayer] glyph count ${glyphCount} exceeds instanced capacity ${capacity}; clamping colors to ${renderCount}.`,
+      );
+    }
     const colorArray = instanceColorAttr.array as Float32Array;
-    const batches = buildVectorGlyphUploadBatches(glyphCount);
+    const batches = buildVectorGlyphUploadBatches(renderCount);
     const uploadKeys = buildKey
       ? createVectorGlyphUploadKeys({
           buildKey,
           colorByteLength: glyphColors.byteLength,
-          glyphCount,
+          glyphCount: renderCount,
           targetRevision: targetRevision ?? null,
           transformByteLength: 0,
         })
@@ -911,7 +924,7 @@ function useVectorGlyphUpload({
       estimatedBytes: glyphColors.byteLength,
       key:
         uploadKeys?.colorKey ??
-        `vector-glyph-colors:${glyphCount}:${glyphColors.byteLength}`,
+        `vector-glyph-colors:${renderCount}:${glyphColors.byteLength}`,
       lane: "vector-glyph",
       onVisible: () => {
         measureVectorGlyphWork(VECTOR_GLYPH_COLOR_UPLOAD_MEASURE, startMark);
@@ -929,6 +942,7 @@ function useVectorGlyphUpload({
     };
   }, [
     buildKey,
+    capacity,
     glyphColors,
     glyphCount,
     headRef,
@@ -954,7 +968,17 @@ function useVectorGlyphUpload({
     activeShaft.instanceMatrix.setUsage(DynamicDrawUsage);
     activeHead.instanceMatrix.setUsage(DynamicDrawUsage);
 
-    const batches = buildVectorGlyphUploadBatches(activeGlyphs.count);
+    // V-05: shaft/head are allocated for `capacity` instances (instanceMatrix
+    // has capacity*16 elements). activeGlyphs.count can exceed capacity when
+    // resolveVectorGlyphCapacity's 1<<20 hard cap kicks in, so every write and
+    // mesh.count must be clamped to renderCount instead of the raw count.
+    const renderCount = Math.min(activeGlyphs.count, capacity);
+    if (renderCount < activeGlyphs.count && process.env.NODE_ENV !== "production") {
+      console.warn(
+        `[VectorFieldLayer] glyph count ${activeGlyphs.count} exceeds instanced capacity ${capacity}; clamping matrices to ${renderCount}.`,
+      );
+    }
+    const batches = buildVectorGlyphUploadBatches(renderCount);
     const { direction, matrix, position, quaternion, scale } = transformScratch;
     const startMark = markVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE);
     let measured = false;
@@ -974,7 +998,7 @@ function useVectorGlyphUpload({
       ? createVectorGlyphUploadKeys({
           buildKey,
           colorByteLength: glyphColors?.byteLength ?? 0,
-          glyphCount: activeGlyphs.count,
+          glyphCount: renderCount,
           targetRevision: targetRevision ?? null,
           transformByteLength,
         })
@@ -1030,14 +1054,14 @@ function useVectorGlyphUpload({
     uploadManager.enqueue({
       chunks,
       estimatedBytes:
-        activeGlyphs.count * 16 * Float32Array.BYTES_PER_ELEMENT * 2,
+        renderCount * 16 * Float32Array.BYTES_PER_ELEMENT * 2,
       key:
         uploadKeys?.matrixKey ??
-        `vector-glyph-matrices:${activeGlyphs.count}:${activeGlyphs.directions.byteLength}`,
+        `vector-glyph-matrices:${renderCount}:${activeGlyphs.directions.byteLength}`,
       lane: "vector-glyph",
       onVisible: () => {
-        activeShaft.count = activeGlyphs.count;
-        activeHead.count = activeGlyphs.count;
+        activeShaft.count = renderCount;
+        activeHead.count = renderCount;
         syncVectorGlyphColorState({
           hasInstanceColors: Boolean(glyphColors),
           head: activeHead,
@@ -1050,20 +1074,20 @@ function useVectorGlyphUpload({
           markVectorGlyphAttributeRange(
             instanceColorAttr,
             0,
-            activeGlyphs.count,
+            renderCount,
             3,
           );
         }
         markVectorGlyphAttributeRange(
           activeShaft.instanceMatrix,
           0,
-          activeGlyphs.count,
+          renderCount,
           16,
         );
         markVectorGlyphAttributeRange(
           activeHead.instanceMatrix,
           0,
-          activeGlyphs.count,
+          renderCount,
           16,
         );
         measureVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE, startMark);
@@ -1086,6 +1110,7 @@ function useVectorGlyphUpload({
     };
   }, [
     buildKey,
+    capacity,
     glyphColors,
     glyphTransforms,
     headRef,
@@ -1269,6 +1294,7 @@ export function VectorFieldLayer({
   });
   useVectorGlyphUpload({
     buildKey: visibleGlyphBuild?.buildKey ?? null,
+    capacity,
     glyphColors,
     glyphCount,
     glyphTransforms,

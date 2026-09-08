@@ -133,6 +133,7 @@ assert local.to_ir()["kind"] == "region"
 | Python | Typ | Domyślnie | Jednostka SI | Walidacja | Znaczenie | Backend | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `PhysicsScope.kind` | `Literal['global','object','region','interface','cross_object','unresolved']` | `required` | `$1$` | `one of the tagged scope variants; unknown values are unresolved` | `fizyczny zakres modułu` | `FEM/FDM wspólna semantyka; realizacja lane-specific` | `physics_graph.modules[].applies_to[].kind` |
+| `StudyStagesBuilder.set_spin_torque_enabled` | `module_id plus bool` | `required` | `$1$` | `exactly one typed and graph spin_torque identity; only active or inactive workflow states` | `stage-local inclusion of a named torque in executable physics` | `backend-neutral graph semantics with lane-specific planner checks` | `physics_graph.modules[].activation and incoming edges[].status` |
 
 (problem-ir)=
 ## 6. ProblemIR i lowering
@@ -264,6 +265,9 @@ utworzeniu pozostać w stanie, który ponowiłby `POST`.
 | `apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanelModel.ts` | `resolveRegionalFieldDrivePanelModel` | rozpoznanie jawnego create draftu i zbudowanie kanonicznego payloadu z unikalnym ID |
 | `apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanelModel.ts` | `commitRegionalFieldDrive` | rozdzielenie POST create od PUT replace |
 | `apps/control-room/src/modules/inspector/panels/RegionalFieldDrivePanel.tsx` | `RegionalFieldDrivePanel` | responsywny authoring draftu, invalidacja zasobu i przejście selekcji na zapisany moduł |
+| `packages/fullmag-py/src/fullmag/world.py` | `set_spin_torque_enabled` | zapis stage-local typed spin-torque activation mutation |
+| `crates/fullmag-cli/src/step_utils.rs` | `apply_pipeline_set_spin_torque_enabled` | atomowa walidacja i zmiana aktywacji modułu torque oraz statusu krawędzi |
+| `crates/fullmag-plan/src/spin_transport.rs` | `materialize_fdm_descriptor` | fail-closed wyjątek wyłącznie dla nieaktywnego torque przy zerowym terminalnym prądzie |
 | `crates/fullmag-authoring/src/scene.rs` | `default_scene_version` | wersja dokumentu sceny |
 | `crates/fullmag-ir/src/lib.rs` | `is_supported_ir_version_for_read` | granica odczytu IR |
 | `crates/fullmag-ir/src/validation.rs` | `validate_oersted_energy_terms` | walidacja stabilnego ID Oersteda przy zachowaniu odczytu historycznego rekordu bez ID |

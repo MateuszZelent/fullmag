@@ -1005,6 +1005,21 @@ pub struct MeshTopology {
     pub n_elements: usize,
 }
 
+/// Element-local energy contributions used by the Rust FEM reference runner.
+///
+/// The values are integrated over one tetrahedron.  Air elements carry zero
+/// contributions; callers can therefore accumulate them by object element
+/// ranges without assigning shared nodal values to one object or another.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FemElementEnergy {
+    pub exchange: f64,
+    pub demag: f64,
+    pub external: f64,
+    pub anisotropy: f64,
+    pub dmi: f64,
+    pub rotated_dmi: f64,
+}
+
 impl MeshTopology {
     pub fn static_periodic_dof_map(&self) -> Result<PeriodicDofMap> {
         PeriodicDofMap::from_periodic_pair_tuples_static(self.n_nodes, &self.periodic_node_pairs)
@@ -1698,6 +1713,205 @@ impl FemLlgProblem {
     pub fn observe(&self, state: &FemLlgState) -> Result<EffectiveFieldObservables> {
         self.ensure_state_matches_topology(state)?;
         self.observe_vectors(state.magnetization())
+    }
+
+    /// Compute integrated energy contributions independently for every mesh
+    /// element.  This is intentionally an element quadrature API: assigning
+    /// global energies by nodal fractions is wrong for shared FEM nodes and
+    /// for nonlocal demagnetisation.
+    pub fn element_energy_breakdown_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Result<Vec<FemElementEnergy>> {
+        if magnetization.len() != self.topology.n_nodes {
+            return Err(EngineError::new(format!(
+                "magnetization length {} does not match FEM node count {}",
+                magnetization.len(),
+                self.topology.n_nodes
+            )));
+        }
+
+        let external_field = self.external_field_vectors();
+        let demag_potential = if self.terms.demag {
+            Some(self.demag_potential_from_vectors(magnetization)?)
+        } else {
+            None
+        };
+        let ms = self.material.saturation_magnetisation;
+        let uniaxial = self.terms.uniaxial_anisotropy.as_ref();
+        let uniaxial_axis = uniaxial.map(|term| {
+            let magnitude = norm(term.axis).max(ZERO_THRESHOLD);
+            scale(term.axis, 1.0 / magnitude)
+        });
+        let cubic_basis = self
+            .terms
+            .cubic_anisotropy
+            .as_ref()
+            .map(|term| cubic_anisotropy_basis(term.axis1, term.axis2))
+            .transpose()?;
+        let interface_d = self
+            .terms
+            .interfacial_dmi
+            .filter(|value| value.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|value| value.abs() > ZERO_THRESHOLD);
+        let bulk_d = self
+            .terms
+            .bulk_dmi
+            .filter(|value| value.abs() > ZERO_THRESHOLD);
+        let n_hat = normalized_dmi_interface_normal(self.dmi_interface_normal);
+
+        let projected_magnetization;
+        let m_ref: &[Vector3] = if let Some(dof_map) = &self.static_periodic_dof_map {
+            projected_magnetization = {
+                let mut values = magnetization.to_vec();
+                apply_static_periodic_constraints_to_vectors(&mut values, dof_map);
+                values
+            };
+            &projected_magnetization
+        } else {
+            magnetization
+        };
+
+        let mut energies = Vec::with_capacity(self.topology.elements.len());
+        for (element_index, element) in self.topology.elements.iter().enumerate() {
+            if !self.topology.magnetic_element_mask[element_index] {
+                energies.push(FemElementEnergy::default());
+                continue;
+            }
+
+            let volume = self.topology.element_volumes[element_index];
+            let local_m = [
+                m_ref[element[0] as usize],
+                m_ref[element[1] as usize],
+                m_ref[element[2] as usize],
+                m_ref[element[3] as usize],
+            ];
+            let avg_m = scale(
+                add(add(local_m[0], local_m[1]), add(local_m[2], local_m[3])),
+                0.25,
+            );
+            let mut energy = FemElementEnergy::default();
+
+            if self.terms.exchange {
+                let stiffness = &self.topology.element_stiffness[element_index];
+                for component in 0..3 {
+                    let local_values = [
+                        local_m[0][component],
+                        local_m[1][component],
+                        local_m[2][component],
+                        local_m[3][component],
+                    ];
+                    for i in 0..4 {
+                        for j in 0..4 {
+                            energy.exchange += self.material.exchange_stiffness
+                                * local_values[i]
+                                * stiffness[i][j]
+                                * local_values[j];
+                        }
+                    }
+                }
+            }
+
+            if let Some(potential) = demag_potential.as_deref() {
+                let gradients = self.topology.grad_phi[element_index];
+                let mut grad_u = [0.0, 0.0, 0.0];
+                for local_index in 0..4 {
+                    grad_u = add(
+                        grad_u,
+                        scale(
+                            gradients[local_index],
+                            potential[element[local_index] as usize],
+                        ),
+                    );
+                }
+                let h_demag = scale(grad_u, -1.0);
+                // E_demag = -mu0/2 * integral_Omega_o Ms m.H_demag dV.
+                energy.demag = -0.5 * MU0 * ms * volume * dot(avg_m, h_demag);
+            }
+
+            if self.terms.external_field.is_some() || self.terms.per_node_field.is_some() {
+                let nodal_dot = (0..4)
+                    .map(|local_index| {
+                        dot(
+                            local_m[local_index],
+                            external_field[element[local_index] as usize],
+                        )
+                    })
+                    .sum::<f64>();
+                energy.external = -MU0 * ms * volume * 0.25 * nodal_dot;
+            }
+
+            if let Some(term) = uniaxial {
+                let axis = uniaxial_axis.expect("uniaxial axis is derived with the term");
+                energy.anisotropy += local_m
+                    .iter()
+                    .map(|m| {
+                        let q = dot(*m, axis);
+                        let q2 = q * q;
+                        volume * 0.25 * (-term.ku1 * q2 - term.ku2 * q2 * q2)
+                    })
+                    .sum::<f64>();
+            }
+            if let (Some(term), Some((c1, c2, c3))) = (&self.terms.cubic_anisotropy, cubic_basis) {
+                energy.anisotropy += local_m
+                    .iter()
+                    .map(|m| {
+                        let m1 = dot(*m, c1);
+                        let m2 = dot(*m, c2);
+                        let m3 = dot(*m, c3);
+                        let density = term.kc1
+                            * (m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m3 * m3 * m1 * m1)
+                            + term.kc2 * m1 * m1 * m2 * m2 * m3 * m3;
+                        volume * 0.25 * density
+                    })
+                    .sum::<f64>();
+            }
+
+            if interface_d.is_some() || rotated_d.is_some() || bulk_d.is_some() {
+                let gradients = self.topology.grad_phi[element_index];
+                let mut grad_m = [[0.0; 3]; 3];
+                for local_index in 0..4 {
+                    let m = local_m[local_index];
+                    let gradient = gradients[local_index];
+                    for component in 0..3 {
+                        grad_m[component][0] += m[component] * gradient[0];
+                        grad_m[component][1] += m[component] * gradient[1];
+                        grad_m[component][2] += m[component] * gradient[2];
+                    }
+                }
+                if let Some(d) = interface_d {
+                    let div_m = grad_m[0][0] + grad_m[1][1] + grad_m[2][2];
+                    let grad_m_dot_n = [
+                        n_hat[0] * grad_m[0][0] + n_hat[1] * grad_m[1][0] + n_hat[2] * grad_m[2][0],
+                        n_hat[0] * grad_m[0][1] + n_hat[1] * grad_m[1][1] + n_hat[2] * grad_m[2][1],
+                        n_hat[0] * grad_m[0][2] + n_hat[1] * grad_m[1][2] + n_hat[2] * grad_m[2][2],
+                    ];
+                    energy.dmi +=
+                        d * volume * (dot(avg_m, n_hat) * div_m - dot(avg_m, grad_m_dot_n));
+                }
+                if let Some(d) = rotated_d {
+                    energy.rotated_dmi += d
+                        * volume
+                        * (avg_m[2] * grad_m[0][0] - avg_m[0] * grad_m[2][0]
+                            + avg_m[0] * grad_m[1][1]
+                            - avg_m[1] * grad_m[0][1]);
+                }
+                if let Some(d) = bulk_d {
+                    let curl_m = [
+                        grad_m[2][1] - grad_m[1][2],
+                        grad_m[0][2] - grad_m[2][0],
+                        grad_m[1][0] - grad_m[0][1],
+                    ];
+                    energy.dmi += d * volume * dot(avg_m, curl_m);
+                }
+            }
+
+            energies.push(energy);
+        }
+        Ok(energies)
     }
 
     /// Reconstruct the scalar Poisson potential used by the FEM demag solve.
@@ -3386,19 +3600,27 @@ impl FemLlgProblem {
         magnetization: &[Vector3],
         interfacial_field: &mut [Vector3],
         bulk_field: &mut [Vector3],
+        mut rotated_field: Option<&mut [Vector3]>,
     ) {
         let n_nodes = self.topology.n_nodes;
         let interfacial_field = &mut interfacial_field[..n_nodes];
         let bulk_field = &mut bulk_field[..n_nodes];
         interfacial_field.fill([0.0, 0.0, 0.0]);
         bulk_field.fill([0.0, 0.0, 0.0]);
+        if let Some(field) = rotated_field.as_deref_mut() {
+            field[..n_nodes].fill([0.0, 0.0, 0.0]);
+        }
 
         let interfacial_d = self
             .terms
             .interfacial_dmi
             .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
         let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
-        if interfacial_d.is_none() && bulk_d.is_none() {
+        if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;
         }
 
@@ -3472,6 +3694,35 @@ impl FemLlgProblem {
                 }
             }
 
+            if let Some(d) = rotated_d {
+                const X: usize = 0;
+                const Y: usize = 1;
+                const Z: usize = 2;
+                let dw_dm = [
+                    d * (-grad_m[Z][X] + grad_m[Y][Y]),
+                    -d * grad_m[X][Y],
+                    d * grad_m[X][X],
+                ];
+                for local_index in 0..4 {
+                    let node = element[local_index] as usize;
+                    let grad_shape = gradients[local_index];
+                    let gradient_action = [
+                        d * (m_centroid[Z] * grad_shape[X] - m_centroid[Y] * grad_shape[Y]),
+                        d * m_centroid[X] * grad_shape[Y],
+                        -d * m_centroid[X] * grad_shape[X],
+                    ];
+                    let residual = [
+                        volume * (0.25 * dw_dm[X] + gradient_action[X]),
+                        volume * (0.25 * dw_dm[Y] + gradient_action[Y]),
+                        volume * (0.25 * dw_dm[Z] + gradient_action[Z]),
+                    ];
+                    interfacial_field[node] = add(interfacial_field[node], residual);
+                    if let Some(field) = rotated_field.as_deref_mut() {
+                        field[node] = add(field[node], residual);
+                    }
+                }
+            }
+
             if let Some(d) = bulk_d {
                 let curl_m = [
                     grad_m[2][1] - grad_m[1][2],
@@ -3502,8 +3753,13 @@ impl FemLlgProblem {
             let lumped_mass = self.topology.magnetic_node_volumes[node];
             if lumped_mass > ZERO_THRESHOLD {
                 let inv_projection_mass = -(MU0 * ms * lumped_mass).recip();
-                if interfacial_d.is_some() {
+                if interfacial_d.is_some() || rotated_d.is_some() {
                     interfacial_field[node] = scale(interfacial_field[node], inv_projection_mass);
+                }
+                if rotated_d.is_some() {
+                    if let Some(field) = rotated_field.as_deref_mut() {
+                        field[node] = scale(field[node], inv_projection_mass);
+                    }
                 }
                 if bulk_d.is_some() {
                     bulk_field[node] = scale(bulk_field[node], inv_projection_mass);
@@ -3518,12 +3774,17 @@ impl FemLlgProblem {
                 .map(|i| dof_map.reduced_node(i))
                 .collect();
             let reduced_n = dof_map.reduced_node_count;
-            if interfacial_d.is_some() {
+            if interfacial_d.is_some() || rotated_d.is_some() {
                 project_vector_field_by_periodic_classes(
                     interfacial_field,
                     &full_to_red,
                     reduced_n,
                 );
+            }
+            if rotated_d.is_some() {
+                if let Some(field) = rotated_field.as_deref_mut() {
+                    project_vector_field_by_periodic_classes(field, &full_to_red, reduced_n);
+                }
             }
             if bulk_d.is_some() {
                 project_vector_field_by_periodic_classes(bulk_field, &full_to_red, reduced_n);
@@ -3535,9 +3796,23 @@ impl FemLlgProblem {
         let n_nodes = self.topology.n_nodes;
         let mut interfacial_field = vec![[0.0, 0.0, 0.0]; n_nodes];
         let mut bulk_field = vec![[0.0, 0.0, 0.0]; n_nodes];
-        self.dmi_fields_compute_into(magnetization, &mut interfacial_field, &mut bulk_field);
+        self.dmi_fields_compute_into(magnetization, &mut interfacial_field, &mut bulk_field, None);
 
         (interfacial_field, bulk_field)
+    }
+
+    /// Rotated-interfacial contribution only. `dmi_field` remains the sum of
+    /// conventional, rotated, and bulk DMI for backward-compatible totals.
+    pub fn rotated_interfacial_dmi_field_from_vectors(
+        &self,
+        magnetization: &[Vector3],
+    ) -> Vec<Vector3> {
+        let n_nodes = self.topology.n_nodes;
+        let mut combined = vec![[0.0, 0.0, 0.0]; n_nodes];
+        let mut bulk = vec![[0.0, 0.0, 0.0]; n_nodes];
+        let mut rotated = vec![[0.0, 0.0, 0.0]; n_nodes];
+        self.dmi_fields_compute_into(magnetization, &mut combined, &mut bulk, Some(&mut rotated));
+        rotated
     }
 
     fn dmi_energy_from_vectors(&self, magnetization: &[Vector3]) -> f64 {
@@ -3545,8 +3820,12 @@ impl FemLlgProblem {
             .terms
             .interfacial_dmi
             .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
         let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
-        if interfacial_d.is_none() && bulk_d.is_none() {
+        if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return 0.0;
         }
 
@@ -3597,6 +3876,14 @@ impl FemLlgProblem {
                     d * volume * (dot(m_centroid, n_hat) * div_m - dot(m_centroid, grad_m_dot_n));
             }
 
+            if let Some(d) = rotated_d {
+                energy += d
+                    * volume
+                    * (m_centroid[2] * grad_m[0][0] - m_centroid[0] * grad_m[2][0]
+                        + m_centroid[0] * grad_m[1][1]
+                        - m_centroid[1] * grad_m[0][1]);
+            }
+
             if let Some(d) = bulk_d {
                 let curl_m = [
                     grad_m[2][1] - grad_m[1][2],
@@ -3625,14 +3912,18 @@ impl FemLlgProblem {
             .terms
             .interfacial_dmi
             .filter(|d| d.abs() > ZERO_THRESHOLD);
+        let rotated_d = self
+            .terms
+            .rotated_interfacial_dmi
+            .filter(|d| d.abs() > ZERO_THRESHOLD);
         let bulk_d = self.terms.bulk_dmi.filter(|d| d.abs() > ZERO_THRESHOLD);
-        if interfacial_d.is_none() && bulk_d.is_none() {
+        if interfacial_d.is_none() && rotated_d.is_none() && bulk_d.is_none() {
             return;
         }
 
-        self.dmi_fields_compute_into(magnetization, interfacial_tmp, bulk_tmp);
+        self.dmi_fields_compute_into(magnetization, interfacial_tmp, bulk_tmp, None);
         for node in 0..n_nodes {
-            if interfacial_d.is_some() {
+            if interfacial_d.is_some() || rotated_d.is_some() {
                 h_eff[node] = add(h_eff[node], interfacial_tmp[node]);
             }
             if bulk_d.is_some() {
@@ -5340,6 +5631,44 @@ mod tests {
         assert!(
             relative_error <= 1e-9,
             "interfacial DMI field action must match dE/deps on the proof tet: \
+             derivative={derivative:.6e}, field_action={field_action:.6e}, \
+             rel_error={relative_error:.6e}"
+        );
+    }
+
+    #[test]
+    fn rotated_interfacial_dmi_field_action_matches_energy_directional_derivative() {
+        let mut problem = unit_tet_problem();
+        problem.terms.exchange = false;
+        problem.terms.interfacial_dmi = None;
+        problem.terms.rotated_interfacial_dmi = Some(3.0e-3);
+        problem.terms.bulk_dmi = None;
+        let magnetization = vec![
+            normalized([1.0, 0.1, 0.2]).expect("nonzero m0"),
+            normalized([0.7, 0.4, 0.1]).expect("nonzero m1"),
+            normalized([0.2, 0.9, 0.3]).expect("nonzero m2"),
+            normalized([0.1, 0.3, 0.95]).expect("nonzero m3"),
+        ];
+        let perturbation = vec![
+            [0.10, -0.03, 0.02],
+            [-0.04, 0.08, 0.03],
+            [0.05, 0.02, -0.07],
+            [-0.02, -0.06, 0.09],
+        ];
+        let eps = 1.0e-4;
+        let plus = add_scaled_field(&magnetization, &perturbation, eps);
+        let minus = add_scaled_field(&magnetization, &perturbation, -eps);
+        let derivative = (problem.dmi_energy_from_vectors(&plus)
+            - problem.dmi_energy_from_vectors(&minus))
+            / (2.0 * eps);
+        let field_action =
+            dmi_projected_field_action(&problem, &magnetization, &perturbation, true);
+        let denominator = derivative.abs().max(field_action.abs()).max(1e-30);
+        let relative_error = (derivative - field_action).abs() / denominator;
+
+        assert!(
+            relative_error <= 1e-9,
+            "rotated interfacial DMI field action must match dE/deps on the proof tet: \
              derivative={derivative:.6e}, field_action={field_action:.6e}, \
              rel_error={relative_error:.6e}"
         );

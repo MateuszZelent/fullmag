@@ -2768,7 +2768,7 @@ void mixed_p1_gpu_relaxators_depend_on_operators_not_tetrahedral_connectivity() 
         "mixed-P1 nonlinear-CG must pack the fresh energy snapshot and current direction scalars into one bounded control readback");
 
     const auto dmi_gate = direct_energy.find(
-        "if (!(bulk_mode ? ctx.dmi.bulk_enabled : ctx.dmi.interfacial_enabled))");
+        "if (!(bulk_mode ? ctx.dmi.bulk_enabled :");
     const auto dmi_geometry = direct_energy.find("gpu.mesh_geometry.nodes_xyz");
     check(
         dmi_gate != std::string::npos && dmi_geometry != std::string::npos &&
@@ -2779,7 +2779,9 @@ void mixed_p1_gpu_relaxators_depend_on_operators_not_tetrahedral_connectivity() 
             "bool gpu_state_requires_tetrahedral_mesh_geometry(const Context &ctx)") !=
                 std::string::npos &&
             gpu_state_runtime.find(
-                "return ctx.dmi.interfacial_enabled || ctx.dmi.bulk_enabled ||") !=
+                "return ctx.dmi.interfacial_enabled || ctx.dmi.rotated_interfacial_enabled ||") !=
+                std::string::npos &&
+            gpu_state_runtime.find("ctx.dmi.bulk_enabled ||") !=
                 std::string::npos &&
             gpu_state_runtime.find("ctx.stt.zhang_li_enabled;") !=
                 std::string::npos,

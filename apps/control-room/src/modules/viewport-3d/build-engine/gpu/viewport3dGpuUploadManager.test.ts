@@ -349,6 +349,118 @@ describe("viewport3dGpuUploadManager", () => {
     ]);
   });
 
+  it("rolls back chunks that already uploaded before an abort (M-04)", () => {
+    const scheduled: Array<() => void> = [];
+    const rolledBack: number[] = [];
+    const manager = createViewport3DGpuUploadManager({
+      policy: {
+        maxBytesPerSlice: 1024,
+        maxFrameBudgetMs: 1_000,
+        maxItemsPerSlice: 1,
+        targetFrameBudgetMs: 1_000,
+      },
+      scheduleFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelFrame: () => {},
+    });
+
+    manager.enqueue({
+      chunks: [0, 1, 2, 3].map((index) => ({
+        estimatedBytes: 16,
+        itemCount: 1,
+        upload: () => {},
+        rollback: () => rolledBack.push(index),
+      })),
+      estimatedBytes: 64,
+      key: "k",
+      lane: "vector-glyph",
+      onVisible: () => {},
+      targetRevision: "target=v1",
+    });
+
+    // A single item-capped slice runs exactly one chunk before yielding.
+    scheduled.shift()?.();
+    expect(manager.abort("k")).toBe(true);
+    // abort() only marks the ticket; settlement (and rollback) happens on
+    // the next scheduled frame, same as the existing "aborts obsolete
+    // tickets after partial upload" case above.
+    scheduled.shift()?.();
+
+    // Only the chunk(s) that actually executed are rolled back — not the
+    // three that never ran.
+    expect(rolledBack).toEqual([0]);
+  });
+
+  it("dispose() rolls back every ticket still in the queue", () => {
+    const scheduled: Array<() => void> = [];
+    const rolledBack: string[] = [];
+    const manager = createViewport3DGpuUploadManager({
+      policy: {
+        maxBytesPerSlice: 1024,
+        maxFrameBudgetMs: 1_000,
+        maxItemsPerSlice: 1,
+        targetFrameBudgetMs: 1_000,
+      },
+      scheduleFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelFrame: () => {},
+    });
+
+    for (const key of ["a", "b"]) {
+      manager.enqueue({
+        // Two chunks with a one-item-per-slice cap: only the first chunk
+        // runs before yielding, so the ticket is still mid-flight (and still
+        // in `queue`) when dispose() is called below.
+        chunks: [0, 1].map(() => ({
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => {},
+          rollback: () => rolledBack.push(key),
+        })),
+        estimatedBytes: 16,
+        key,
+        lane: "vector-glyph",
+        onVisible: () => {},
+        targetRevision: "target=v1",
+      });
+    }
+
+    scheduled.shift()?.(); // executes ticket "a"'s first chunk, then yields
+    manager.dispose();
+
+    expect(rolledBack).toContain("a");
+  });
+
+  it("a rollback for a ticket with no executed chunks is a no-op", () => {
+    const manager = createViewport3DGpuUploadManager({
+      scheduleFrame: () => 0,
+      cancelFrame: () => {},
+    });
+
+    manager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => {
+            throw new Error("never called before abort");
+          },
+        },
+      ],
+      estimatedBytes: 8,
+      key: "k",
+      lane: "vector-glyph",
+      onVisible: () => {},
+      targetRevision: "target=v1",
+    });
+
+    expect(() => manager.abort("k")).not.toThrow();
+  });
+
   it("fails one ticket without blocking another manager and rolls back uploaded chunks", () => {
     const scheduled: Array<() => void> = [];
     const diagnostics: unknown[] = [];

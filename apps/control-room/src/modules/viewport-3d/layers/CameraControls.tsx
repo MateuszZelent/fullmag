@@ -106,6 +106,7 @@ const ORBIT_TARGET_SYNC_EPSILON = 1e-12;
 const ORBIT_DEBUG_ANGLE_EPSILON = 1e-6;
 const ORBIT_DEBUG_DAMPING = 18;
 const ORBIT_DEBUG_TWO_PI = Math.PI * 2;
+const ORBIT_DEBUG_ANIMATION_TIMEOUT_MS = 2000;
 const VIEWPORT_3D_CAMERA_CONTROLS_COMMIT_DELAY_MS = 180;
 export const VIEWPORT_3D_ORBIT_DEBUG_LIMITS = {
   azimuthMax: ORBIT_DEBUG_TWO_PI,
@@ -120,7 +121,9 @@ const VIEWPORT_3D_CAMERA_INTERACTION_OPTIONS = {
   enablePan: true,
   enableRotate: true,
   enableZoom: true,
-  panSpeed: 2,
+  // With screenSpacePanning, panSpeed is a dimensionless 1:1 screen-to-world
+  // mapping factor. Anything but 1 makes the model slide out from the cursor.
+  panSpeed: 1,
   rotateSpeed: 1,
   zoomSpeed: 1,
 } satisfies Viewport3DCameraInteractionOptions;
@@ -216,16 +219,15 @@ export function resolveViewport3DOrbitDebugStep({
   const safeDelta = Math.min(Math.max(deltaSeconds, 0), 0.05);
   const dampingFactor = 1 - Math.exp(-ORBIT_DEBUG_DAMPING * safeDelta);
   const nextAngles = {
-    azimuth: clampOrbitDebugAngle(
+    // Azimuth is cyclic: wrap through the 0/2π seam instead of clamping,
+    // otherwise the shortest-path delta is truncated to 0 and never settles.
+    azimuth: normalizeOrbitDebugAzimuthFromControls(
       currentAngles.azimuth +
         shortestOrbitDebugAzimuthDelta(
           currentAngles.azimuth,
           targetAngles.azimuth,
         ) *
           dampingFactor,
-      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMin,
-      VIEWPORT_3D_ORBIT_DEBUG_LIMITS.azimuthMax,
-      currentAngles.azimuth,
     ),
     polar: MathUtils.damp(
       currentAngles.polar,
@@ -793,6 +795,7 @@ function useOrbitCameraControlsModel({
   const handledOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
   const pendingOrbitDebugCommitRevisionRef = useRef(orbitDebugCommitRevision);
   const orbitDebugAnimatingRef = useRef(false);
+  const orbitDebugAnimationStartedAtRef = useRef(0);
   const orbitDebugTargetRef = useRef(
     normalizeViewport3DOrbitDebugAngles(orbitDebugAngles),
   );
@@ -982,6 +985,7 @@ function useOrbitCameraControlsModel({
     handledOrbitDebugRevisionRef.current = orbitDebugRevision;
     orbitDebugTargetRef.current = normalizeViewport3DOrbitDebugAngles(orbitDebugAngles);
     orbitDebugAnimatingRef.current = true;
+    orbitDebugAnimationStartedAtRef.current = performance.now();
     suppressNextRestCommitRef.current = true;
     beginViewport3DCameraGesture(cameraGestureRef);
     invalidate();
@@ -1000,6 +1004,7 @@ function useOrbitCameraControlsModel({
     }
     pendingOrbitDebugCommitRevisionRef.current = orbitDebugCommitRevision;
     orbitDebugAnimatingRef.current = true;
+    orbitDebugAnimationStartedAtRef.current = performance.now();
     suppressNextRestCommitRef.current = true;
     beginViewport3DCameraGesture(cameraGestureRef);
     invalidate();
@@ -1011,6 +1016,17 @@ function useOrbitCameraControlsModel({
 
     const controls = controlsRef.current;
     if (!controls) return;
+
+    if (
+      performance.now() - orbitDebugAnimationStartedAtRef.current >
+      ORBIT_DEBUG_ANIMATION_TIMEOUT_MS
+    ) {
+      // Never let a convergence failure hold the field-update lock open.
+      orbitDebugAnimatingRef.current = false;
+      endViewport3DCameraGesture(cameraGestureRef);
+      invalidate();
+      return;
+    }
 
     const targetAngles = orbitDebugTargetRef.current;
     const currentAngles =
@@ -1036,6 +1052,11 @@ function useOrbitCameraControlsModel({
       targetAngles,
     );
     orbitDebugAnimatingRef.current = !settled;
+    if (settled) {
+      // The debug animation owns its own commit path; do not carry the
+      // "skip one rest commit" flag into the next pointer gesture.
+      suppressNextRestCommitRef.current = false;
+    }
     if (
       settled &&
       handledOrbitDebugCommitRevisionRef.current !==
@@ -1143,11 +1164,10 @@ function useOrbitCameraControlsModel({
   const scheduleCameraControlsPoseCommit = useCallback((epoch: number, {
     restart = false,
   }: { restart?: boolean } = {}) => {
-    if (
-      controlsSyncingRef.current ||
-      orbitDebugAnimatingRef.current ||
-      suppressNextRestCommitRef.current
-    ) {
+    // NOTE: suppressNextRestCommitRef is *consumed* inside
+    // commitCameraControlsPose. Refusing to schedule the timer here made the
+    // flag unclearable (the only clearing path is the timer itself).
+    if (controlsSyncingRef.current || orbitDebugAnimatingRef.current) {
       return;
     }
     if (cameraControlsPoseCommitTimeoutRef.current !== null) {

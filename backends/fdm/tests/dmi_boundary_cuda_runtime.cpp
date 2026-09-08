@@ -44,6 +44,7 @@ std::vector<Vec3> dmi_oracle(
     double dz,
     double ms,
     double d_interfacial,
+    double d_rotated_interfacial,
     double d_bulk,
     bool periodic_x,
     bool periodic_y,
@@ -98,6 +99,21 @@ std::vector<Vec3> dmi_oracle(
             if (missing_yp) { h[1] -= qy * m[index][2]; h[2] += qy * m[index][1]; }
             if (missing_ym) { h[1] += qy * m[index][2]; h[2] -= qy * m[index][1]; }
         }
+        if (d_rotated_interfacial != 0.0) {
+            const double dmz_dx = (m[xp][2] - m[xm][2]) / (2.0 * dx);
+            const double dmy_dy = (m[yp][1] - m[ym][1]) / (2.0 * dy);
+            const double dmx_dy = (m[yp][0] - m[ym][0]) / (2.0 * dy);
+            const double dmx_dx = (m[xp][0] - m[xm][0]) / (2.0 * dx);
+            h[0] += prefactor * d_rotated_interfacial * (dmz_dx - dmy_dy);
+            h[1] += prefactor * d_rotated_interfacial * dmx_dy;
+            h[2] -= prefactor * d_rotated_interfacial * dmx_dx;
+            const double qx = d_rotated_interfacial / (MU0 * ms * dx);
+            const double qy = d_rotated_interfacial / (MU0 * ms * dy);
+            if (missing_xp) { h[0] -= qx * m[index][2]; h[2] += qx * m[index][0]; }
+            if (missing_xm) { h[0] += qx * m[index][2]; h[2] -= qx * m[index][0]; }
+            if (missing_yp) { h[0] += qy * m[index][1]; h[1] -= qy * m[index][0]; }
+            if (missing_ym) { h[0] -= qy * m[index][1]; h[1] += qy * m[index][0]; }
+        }
         if (d_bulk != 0.0) {
             const double dmz_dy = (m[yp][2] - m[ym][2]) / (2.0 * dy);
             const double dmy_dz = (m[zp][1] - m[zm][1]) / (2.0 * dz);
@@ -131,6 +147,54 @@ std::vector<double> flatten(const std::vector<Vec3> &values) {
         }
     }
     return flat;
+}
+
+double rotated_dmi_face_energy(
+    uint32_t nx,
+    uint32_t ny,
+    uint32_t nz,
+    double dx,
+    double dy,
+    double dz,
+    double d,
+    bool periodic_x,
+    bool periodic_y,
+    const std::vector<uint8_t> &active,
+    const std::vector<Vec3> &m)
+{
+    const uint64_t plane = static_cast<uint64_t>(nx) * ny;
+    double energy = 0.0;
+    for (uint64_t index = 0; index < m.size(); ++index) {
+        if (active[index] == 0) continue;
+        const uint32_t z = static_cast<uint32_t>(index / plane);
+        const uint64_t remainder = index - static_cast<uint64_t>(z) * plane;
+        const uint32_t y = static_cast<uint32_t>(remainder / nx);
+        const uint32_t x = static_cast<uint32_t>(remainder - static_cast<uint64_t>(y) * nx);
+        const auto flat = [=](uint32_t xx, uint32_t yy) {
+            return static_cast<uint64_t>(z) * plane + static_cast<uint64_t>(yy) * nx + xx;
+        };
+        if (periodic_x || x + 1 < nx) {
+            const uint64_t right = flat(neighbor(x, nx, 1, periodic_x), y);
+            if (active[right] != 0) {
+                const double avg_x = 0.5 * (m[index][0] + m[right][0]);
+                const double avg_z = 0.5 * (m[index][2] + m[right][2]);
+                energy += d * dy * dz *
+                    (avg_z * (m[right][0] - m[index][0]) -
+                     avg_x * (m[right][2] - m[index][2]));
+            }
+        }
+        if (periodic_y || y + 1 < ny) {
+            const uint64_t right = flat(x, neighbor(y, ny, 1, periodic_y));
+            if (active[right] != 0) {
+                const double avg_x = 0.5 * (m[index][0] + m[right][0]);
+                const double avg_y = 0.5 * (m[index][1] + m[right][1]);
+                energy += d * dx * dz *
+                    (avg_x * (m[right][1] - m[index][1]) -
+                     avg_y * (m[right][0] - m[index][0]));
+            }
+        }
+    }
+    return energy;
 }
 
 void compare_field(
@@ -212,6 +276,7 @@ fullmag_fdm_step_transaction_telemetry_v1 transaction_telemetry(
 void verify_single_grid(
     fullmag_fdm_precision precision,
     bool bulk,
+    bool rotated,
     bool periodic,
     const char *label)
 {
@@ -234,7 +299,7 @@ void verify_single_grid(
     magnetization[14] = {};
     const auto expected = dmi_oracle(
         nx, ny, nz, spacing, spacing, spacing, ms,
-        bulk ? 0.0 : d, bulk ? d : 0.0,
+        (bulk || rotated) ? 0.0 : d, rotated ? d : 0.0, bulk ? d : 0.0,
         periodic, periodic, periodic, active, magnetization);
     const auto m_flat = flatten(magnetization);
 
@@ -247,14 +312,16 @@ void verify_single_grid(
     plan.initial_magnetization_len = m_flat.size();
     plan.active_mask = active.data();
     plan.active_mask_len = active.size();
-    plan.has_interfacial_dmi = bulk ? 0 : 1;
-    plan.dmi_D_interfacial = bulk ? 0.0 : d;
+    plan.has_interfacial_dmi = (bulk || rotated) ? 0 : 1;
+    plan.dmi_D_interfacial = (bulk || rotated) ? 0.0 : d;
     plan.has_bulk_dmi = bulk ? 1 : 0;
     plan.dmi_D_bulk = bulk ? d : 0.0;
+    plan.has_rotated_interfacial_dmi = rotated ? 1 : 0;
+    plan.dmi_D_rotated_interfacial = rotated ? d : 0.0;
     plan.periodic_x = periodic ? 1 : 0;
     plan.periodic_y = periodic ? 1 : 0;
     plan.periodic_z = periodic ? 1 : 0;
-    plan.stats_mode = FULLMAG_FDM_STATS_NONE;
+    plan.stats_mode = rotated ? FULLMAG_FDM_STATS_FULL : FULLMAG_FDM_STATS_NONE;
 
     fullmag_fdm_backend *backend = fullmag_fdm_backend_create(&plan);
     check(backend != nullptr, "single-grid DMI backend create returned null");
@@ -266,9 +333,52 @@ void verify_single_grid(
               FULLMAG_FDM_OK,
           "single-grid DMI H_eff copy failed");
     compare_field(actual, expected, precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2e-12 : 3e-5, label);
+    if (rotated) {
+        std::vector<double> density(count);
+        check(fullmag_fdm_backend_copy_scalar_field_f64(
+                  backend,
+                  FULLMAG_FDM_OBSERVABLE_EDEN_ROTATED_DMI,
+                  density.data(),
+                  density.size()) == FULLMAG_FDM_OK,
+              "single-grid rotated DMI energy-density copy failed");
+        double integrated = 0.0;
+        for (const double value : density) integrated += value * spacing * spacing * spacing;
+        const double expected_energy = rotated_dmi_face_energy(
+            nx, ny, nz, spacing, spacing, spacing, d,
+            periodic, periodic, active, magnetization);
+        const double tolerance = std::max(
+            1.0e-25,
+            (precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 5.0e-5) *
+                std::fabs(expected_energy));
+        check(std::fabs(integrated - expected_energy) <= tolerance,
+              "single-grid rotated DMI energy density does not integrate to face energy");
+    }
     fullmag_fdm_step_stats stats{};
     check(fullmag_fdm_backend_step(backend, 1.0e-15, &stats) == FULLMAG_FDM_OK,
           "single-grid DMI step failed");
+    if (rotated) {
+        std::vector<double> stepped_flat(count * 3);
+        check(fullmag_fdm_backend_copy_field_f64(
+                  backend, FULLMAG_FDM_OBSERVABLE_M,
+                  stepped_flat.data(), stepped_flat.size()) == FULLMAG_FDM_OK,
+              "single-grid rotated DMI stepped magnetization copy failed");
+        std::vector<Vec3> stepped(count);
+        for (size_t index = 0; index < count; ++index) {
+            stepped[index] = {
+                stepped_flat[3 * index],
+                stepped_flat[3 * index + 1],
+                stepped_flat[3 * index + 2]};
+        }
+        const double expected_step_energy = rotated_dmi_face_energy(
+            nx, ny, nz, spacing, spacing, spacing, d,
+            periodic, periodic, active, stepped);
+        const double tolerance = std::max(
+            1.0e-25,
+            (precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 5.0e-5) *
+                std::fabs(expected_step_energy));
+        check(std::fabs(stats.dmi_energy_joules - expected_step_energy) <= tolerance,
+              "single-grid rotated DMI step stats do not match face energy");
+    }
     const auto execution = receipt(backend);
     check((execution.executed_device_operator_mask & FULLMAG_FDM_OPERATOR_DMI) != 0,
           "single-grid DMI operator was not recorded as device-executed");
@@ -282,6 +392,7 @@ void verify_single_grid(
 void verify_multilayer(
     fullmag_fdm_precision precision,
     fullmag_fdm_integrator integrator,
+    bool rotated,
     const char *label)
 {
     constexpr uint32_t nx = 3;
@@ -294,7 +405,8 @@ void verify_multilayer(
     const std::vector<Vec3> magnetization = {
         Vec3{0.6, 0.0, 0.8}, Vec3{0.0, 0.8, 0.6}, Vec3{0.0, 0.0, 0.0}};
     const auto expected = dmi_oracle(
-        nx, ny, nz, spacing, spacing, spacing, ms, d, 0.0,
+        nx, ny, nz, spacing, spacing, spacing, ms,
+        rotated ? 0.0 : d, rotated ? d : 0.0, 0.0,
         false, false, false, active, magnetization);
     const auto m_flat = flatten(magnetization);
 
@@ -314,8 +426,10 @@ void verify_multilayer(
     plan.kind = FULLMAG_FDM_PLAN_MULTILAYER_CONV;
     plan.precision = precision;
     plan.integrator = integrator;
-    plan.has_interfacial_dmi = 1;
-    plan.dmi_D_interfacial = d;
+    plan.has_interfacial_dmi = rotated ? 0 : 1;
+    plan.dmi_D_interfacial = rotated ? 0.0 : d;
+    plan.has_rotated_interfacial_dmi = rotated ? 1 : 0;
+    plan.dmi_D_rotated_interfacial = rotated ? d : 0.0;
     plan.layers = layers.data();
     plan.layer_count = layers.size();
     plan.stats_mode = FULLMAG_FDM_STATS_NONE;
@@ -449,13 +563,17 @@ void verify_multilayer(
 
 int main() {
     check(fullmag_fdm_is_available() != 0, "CUDA FDM backend is unavailable");
-    verify_single_grid(FULLMAG_FDM_PRECISION_DOUBLE, false, false,
+    verify_single_grid(FULLMAG_FDM_PRECISION_DOUBLE, false, false, false,
                        "single-grid iDMI fp64 open/mask boundary oracle");
-    verify_single_grid(FULLMAG_FDM_PRECISION_SINGLE, false, false,
+    verify_single_grid(FULLMAG_FDM_PRECISION_SINGLE, false, false, false,
                        "single-grid iDMI fp32 open/mask boundary oracle");
-    verify_single_grid(FULLMAG_FDM_PRECISION_DOUBLE, true, true,
+    verify_single_grid(FULLMAG_FDM_PRECISION_DOUBLE, false, true, false,
+                       "single-grid rotated iDMI fp64 open/mask boundary oracle");
+    verify_single_grid(FULLMAG_FDM_PRECISION_SINGLE, false, true, true,
+                       "single-grid rotated iDMI fp32 periodic/mask boundary oracle");
+    verify_single_grid(FULLMAG_FDM_PRECISION_DOUBLE, true, false, true,
                        "single-grid bulk DMI fp64 periodic/mask boundary oracle");
-    verify_single_grid(FULLMAG_FDM_PRECISION_SINGLE, true, true,
+    verify_single_grid(FULLMAG_FDM_PRECISION_SINGLE, true, false, true,
                        "single-grid bulk DMI fp32 periodic/mask boundary oracle");
     for (const auto integrator : {FULLMAG_FDM_INTEGRATOR_HEUN,
                                   FULLMAG_FDM_INTEGRATOR_RK4,
@@ -463,11 +581,23 @@ int main() {
         verify_multilayer(
             FULLMAG_FDM_PRECISION_DOUBLE,
             integrator,
+            false,
             "multilayer iDMI fp64 boundary oracle");
         verify_multilayer(
             FULLMAG_FDM_PRECISION_SINGLE,
             integrator,
+            false,
             "multilayer iDMI fp32 boundary oracle");
+        verify_multilayer(
+            FULLMAG_FDM_PRECISION_DOUBLE,
+            integrator,
+            true,
+            "multilayer rotated iDMI fp64 boundary oracle");
+        verify_multilayer(
+            FULLMAG_FDM_PRECISION_SINGLE,
+            integrator,
+            true,
+            "multilayer rotated iDMI fp32 boundary oracle");
     }
     std::printf("FDM CUDA DMI boundary runtime qualification: PASS\n");
     return 0;

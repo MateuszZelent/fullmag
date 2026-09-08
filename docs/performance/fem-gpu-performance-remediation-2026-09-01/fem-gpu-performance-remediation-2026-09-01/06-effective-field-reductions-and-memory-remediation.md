@@ -3,7 +3,8 @@
 **Ustalenia:** HF-01, HF-02, RD-01, MEM-01 oraz część RK-04/RK-05.
 
 **Status po weryfikacji:** HF-01/HF-02 nadal są component-split passes; `has_ext`
-jest już wyznaczane z rzeczywistego planu pola zewnętrznego, nie stałe.
+jest już wyznaczane z `ctx.zeeman.has_external_field`, a nie przekazywane jako
+stałe `true`.
 Typed reducers, maski materializacji i fused base compose nie istnieją. MEM-01
 ma dedykowany pinned `GpuRkAttemptControlPacket`, lecz generyczne readbacki
 nadal mają pageable fallback. Wpływ wszystkich fuzji na rejestry, occupancy i

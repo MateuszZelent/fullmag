@@ -61,14 +61,29 @@ pub(super) fn direct_field_values_available(name: &str) -> bool {
     };
     matches!(
         base,
-        "m" | "H_ex" | "H_demag" | "H_ext" | "H_ani" | "H_dmi" | "H_OE" | "H_eff" | "torque"
+        "m"
+            | "H_ex"
+            | "H_demag"
+            | "H_ext"
+            | "H_ani"
+            | "H_dmi"
+            | "H_rotated_dmi"
+            | "H_OE"
+            | "H_eff"
+            | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
 }
 
 fn direct_scalar_values_available(name: &str) -> bool {
     matches!(
         name,
-        "eden_ex" | "eden_demag" | "eden_ext" | "eden_ani" | "eden_dmi" | "eden_total"
+        "eden_ex"
+            | "eden_demag"
+            | "eden_ext"
+            | "eden_ani"
+            | "eden_dmi"
+            | "eden_rotated_dmi"
+            | "eden_total"
     )
 }
 
@@ -81,6 +96,7 @@ pub(super) struct DirectFieldSnapshotCache<'a> {
     external_field: Option<Vec<Vector3>>,
     anisotropy_field: Option<Vec<Vector3>>,
     dmi_field: Option<Vec<Vector3>>,
+    rotated_dmi_field: Option<Vec<Vector3>>,
     oersted_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
@@ -97,6 +113,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             external_field: None,
             anisotropy_field: None,
             dmi_field: None,
+            rotated_dmi_field: None,
             oersted_field: None,
             effective_field: None,
             torque_field: None,
@@ -147,9 +164,19 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 .map_err(|error| RunError {
                     message: format!("CPU FDM snapshot '{}': DMI energy density: {}", name, error),
                 }),
+            "eden_rotated_dmi" => Ok(self
+                .problem
+                .rotated_interfacial_dmi_energy_density_from_vectors(self.state.magnetization())),
             "eden_total" => {
                 let mut total = vec![0.0; self.state.magnetization().len()];
-                for quantity in ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"] {
+                for quantity in [
+                    "eden_ex",
+                    "eden_demag",
+                    "eden_ext",
+                    "eden_ani",
+                    "eden_dmi",
+                    "eden_rotated_dmi",
+                ] {
                     let values = self.select_scalar(quantity)?;
                     for (accum, value) in total.iter_mut().zip(values) {
                         *accum += value;
@@ -240,6 +267,18 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                         );
                 }
                 Ok(self.dmi_field.as_deref().expect("cached DMI field"))
+            }
+            "H_rotated_dmi" => {
+                if self.rotated_dmi_field.is_none() {
+                    self.rotated_dmi_field = Some(
+                        self.problem
+                            .rotated_interfacial_dmi_field(self.state.magnetization()),
+                    );
+                }
+                Ok(self
+                    .rotated_dmi_field
+                    .as_deref()
+                    .expect("cached rotated DMI field"))
             }
             "H_OE" => {
                 if self.oersted_field.is_none() {

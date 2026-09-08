@@ -4244,12 +4244,7 @@ impl CpuInteractiveFemPreviewRuntime {
         }
         let observables =
             fem_baseline::observe_state(&self.problem, &self.state, &self.antenna_field)?;
-        fem_baseline::build_fem_preview_field(
-            request,
-            &observables,
-            &self.plan_signature.mesh,
-            self.problem.material.saturation_magnetisation,
-        )
+        fem_baseline::build_fem_preview_field(request, &observables, &self.plan_signature)
     }
 
     fn snapshot_vector_fields(
@@ -4275,8 +4270,7 @@ impl CpuInteractiveFemPreviewRuntime {
             cached.push(fem_baseline::build_fem_preview_field(
                 &preview_request,
                 &observables,
-                &self.plan_signature.mesh,
-                self.problem.material.saturation_magnetisation,
+                &self.plan_signature,
             )?);
         }
         Ok(cached)

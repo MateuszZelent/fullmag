@@ -200,6 +200,14 @@ def test_windows_launcher_reuses_existing_msvc_rust_toolchain() -> None:
     assert '"target", "add"' not in launcher
 
 
+def test_windows_launcher_hashes_files_without_optional_utility_module() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "function Get-Sha256File" in launcher
+    assert "System.Security.Cryptography.SHA256" in launcher
+    assert "Get-FileHash" not in launcher
+
+
 def test_windows_launcher_recognizes_pnpm_windows_swc_store_entry() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
 

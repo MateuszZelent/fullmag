@@ -84,7 +84,11 @@ def qualification(device: str) -> dict[str, object]:
                 }
             ]
         },
-        "relax_to_run": {"endpoint_m": [1.0, 0.0, 0.0]},
+        "relax_to_run": {
+            "accepted_dt_s": 1.0e-15,
+            "handoff_m": [1.0, 0.0, 0.0],
+            "endpoint_m": [1.0, 0.0, 0.0],
+        },
     }
     if device == "gpu":
         document["qualification_mode"] = "strict"

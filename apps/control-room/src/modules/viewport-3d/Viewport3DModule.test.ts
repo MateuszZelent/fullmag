@@ -2003,8 +2003,13 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("VIEWPORT_3D_CANVAS_GL_ANTIALIAS");
     expect(source).toContain("VIEWPORT_3D_CANVAS_GL_CAPTURE");
     expect(source).toContain("resolveStableViewport3DCanvasGlOptions");
-    expect(source).toContain(
-      "const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(visualProfile);",
+    // S-15: the antialias toggle now threads through as a second argument
+    // instead of the previously-discarded resolveViewport3DCanvasGlOptions
+    // override, so the canvasGlOptions call site grew a second line. Match
+    // with a CRLF-tolerant regex rather than toContain, since this source
+    // file uses CRLF line endings.
+    expect(source).toMatch(
+      /const canvasGlOptions = resolveStableViewport3DCanvasGlOptions\(\r?\n\s*visualProfile,\r?\n\s*effectAntialias,\r?\n\s*\);/,
     );
     expect(source).toContain("const handleCanvasCreated = useCallback");
     expect(source).toContain("const handleCanvasContextMenu = useCallback");
@@ -2150,5 +2155,60 @@ describe("Viewport3DModule scene wiring", () => {
     expect(styles).toMatch(
       /\.fm-viewport-3d__airbox-legend\s*\{[\s\S]*?text-overflow:\s*ellipsis;/,
     );
+  });
+});
+
+describe("M-15 · retained colorbar plan slot cleanup", () => {
+  // Viewport3DModule is a large R3F component tree with no exported test
+  // surface for its module-private `retainedViewport3DColorbarPlansBySlot`
+  // map (see the other structural tests in this file for the established
+  // pattern), so this is covered the same way: assert on the source rather
+  // than mounting the component.
+  const readSource = () =>
+    readFileSync("src/modules/viewport-3d/Viewport3DModule.tsx", "utf8");
+
+  it("clears this slot's retained plans on unmount and on slotId change", () => {
+    const source = readSource();
+    const cleanupStart = source.indexOf(
+      "// Per-slot state: `retainedViewport3DColorbarPlansBySlot`",
+    );
+    expect(cleanupStart).toBeGreaterThan(-1);
+    const cleanupBlock = source.slice(cleanupStart, cleanupStart + 700);
+
+    expect(cleanupBlock).toContain(
+      "setRetainedViewport3DColorbarPlans(slotId, EMPTY_VIEWPORT_3D_COLORBAR_PLANS);",
+    );
+    expect(cleanupBlock).toContain("}, [slotId]);");
+  });
+
+  it("keeps the singleton viewport3dStore cleanup unmount-only (no slotId in its deps)", () => {
+    // Merging this into the per-slot effect would mean a slotId change (not
+    // just a full unmount) wipes activeScalarColorbarLegends /
+    // renderedScalarRanges that the NEW slot just published.
+    const source = readSource();
+    const storeCleanupStart = source.indexOf(
+      "useEffect(() => () => {\n    viewport3dStore.setActiveScalarColorbarLegends([]);",
+    );
+    expect(storeCleanupStart).toBeGreaterThan(-1);
+    const storeCleanupBlock = source.slice(
+      storeCleanupStart,
+      storeCleanupStart + 200,
+    );
+
+    expect(storeCleanupBlock).toContain("}, []);");
+    expect(storeCleanupBlock).not.toContain("[slotId]");
+  });
+
+  it("setRetainedViewport3DColorbarPlans still deletes the map entry for an empty plan list", () => {
+    // Regression guard for the piece M-15 relies on: passing an empty array
+    // must DELETE the key, not just store an empty array under it — a
+    // stored empty array would still grow the map by one entry per slotId.
+    const source = readSource();
+    const setterStart = source.indexOf(
+      "function setRetainedViewport3DColorbarPlans(",
+    );
+    const setterBlock = source.slice(setterStart, setterStart + 500);
+
+    expect(setterBlock).toContain("retainedViewport3DColorbarPlansBySlot.delete(slotId);");
   });
 });

@@ -61,6 +61,7 @@ void cuda_materialization_contract_is_present() {
     const auto root = source_root();
     const auto context = read_text(root / "gpu" / "cuda" / "runtime" / "context.cu");
     const auto kernel = read_text(root / "gpu" / "cuda" / "interactions" / "energy_density_fp64.cu");
+    const auto reductions = read_text(root / "gpu" / "cuda" / "runtime" / "reductions_fp64.cu");
     check(context.find("context_download_scalar_f64") != std::string::npos,
           "context must provide f64 scalar materialization");
     check(context.find("context_begin_async_field_snapshot") != std::string::npos,
@@ -74,7 +75,17 @@ void cuda_materialization_contract_is_present() {
           "CUDA anisotropy density must use the canonical Ku2 functional");
     check(kernel.find("kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive") !=
               std::string::npos,
-          "regional drive density must not be folded into eden_total implicitly");
+          "Oersted drive density must remain a separate observable from eden_total");
+    check(reductions.find("const bool has_external_profile") != std::string::npos &&
+              reductions.find("ctx.has_static_external_field_profile || ctx.has_oersted_field") !=
+                  std::string::npos &&
+              kernel.find("ctx.has_static_external_field_profile") != std::string::npos &&
+              kernel.find("regional_field_drive_component") != std::string::npos &&
+              kernel.find("const double phi_i = has_volume_fraction ? volume_fraction[index] : 1.0") !=
+                  std::string::npos &&
+              kernel.find("out[index] = static_cast<Scalar>(phi_i * density + dmi_density)") !=
+                  std::string::npos,
+          "energy density must include resolved external profiles and partial-cell volume");
 }
 
 } // namespace

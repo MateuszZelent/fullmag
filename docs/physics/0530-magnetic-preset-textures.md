@@ -222,7 +222,7 @@ IR pozostaje bez zmian strukturalnych:
 ```
 
 Rust planner rozpoznaje preset przez tekstowy preset_kind. Python DSL,
-Control Room i katalog legacy serializują te same nazwy parametrów. Nie jest
+Control Room serializuje kanoniczne nazwy parametrów; usunięte moduły legacy nie są bieżącym źródłem wykonania. Nie jest
 wymagany nowy enum, endpoint, wersjonowanie transportu ani capability ID.
 
 (round-trip-and-failure-semantics)=
@@ -289,8 +289,8 @@ wartości startowe do widoku, ale nie zmienia zapisanych jednostek metrycznych.
 | Control Room | katalog, draft, panel i command contribution | apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts: MAGNETIZATION_TEXTURE_PRESETS; apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts: presetParamsFromDraft; apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanel.tsx |
 | Python export | kanoniczne odtwarzanie wywołania DSL | packages/fullmag-py/src/fullmag/runtime/script_builder.py: _render_texture_factory_call |
 | Control Room preview | kolor podglądu presetów analitycznych | apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts: function magnetizationPreviewColor |
-| Legacy metadata | referencyjny katalog i dopasowanie rozmiaru | apps/legacy_web/lib/magnetizationPresetCatalog.ts; apps/legacy_web/lib/textureTransform.ts |
-| Legacy menu | akcja przypisania presetu w reference UI | apps/legacy_web/features/shell/contributions/materials.tsx: buildMaterialsGroups |
+| Current metadata | bieżący katalog presetów i domyślne parametry edytora | apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts: MAGNETIZATION_TEXTURE_PRESETS; apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts: defaultPresetDraftPatch |
+| Current command catalog | akcja przypisania presetu w resource-first UI | apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts: MAGNETIZATION_TEXTURE_COMMANDS |
 | Parity fixture | wspólne przypadki Rust/Python | crates/fullmag-plan/tests/fixtures/bimeron_parity.json; crates/fullmag-plan/tests/bimeron_textures.rs: bimeron_matches_shared_rust_python_parity_fixture |
 | Dokumentacja | kontrakt fizyczny i source map | docs/physics/0530-magnetic-preset-textures.source-map.json |
 
@@ -353,16 +353,16 @@ należy raportować jako ograniczenie dowodu, nie jako passing.
 | packages/fullmag-py/src/fullmag/init/textures.py | bimeron |
 | packages/fullmag-py/src/fullmag/runtime/initial_state.py | prepare_initial_magnetization |
 | apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts | buildObjectMagneticTextureAssetDraft |
-| apps/legacy_web/lib/textureTransform.ts | textureScaleSemantics |
-| apps/legacy_web/lib/textureTransform.ts | fitPresetParamsToBounds |
+| apps/control-room/src/shared/domain/magnetization-texture/texturePresets.ts | MAGNETIZATION_TEXTURE_PRESETS |
+| apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts | defaultPresetDraftPatch |
 | packages/fullmag-py/src/fullmag/runtime/script_builder.py | _render_texture_factory_call |
 | apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts | function magnetizationPreviewColor |
-| apps/legacy_web/features/shell/contributions/materials.tsx | buildMaterialsGroups |
+| apps/control-room/src/kernel/authoring/magnetization-texture/commands.ts | MAGNETIZATION_TEXTURE_COMMANDS |
 | crates/fullmag-plan/tests/bimeron_textures.rs | bimeron_has_in_plane_background_and_opposite_meron_cores |
 | crates/fullmag-plan/tests/bimeron_textures.rs | bimeron_matches_shared_rust_python_parity_fixture |
 | packages/fullmag-py/tests/test_bimeron_textures.py | test_bimeron_factory_serializes_canonical_parameters |
 | apps/control-room/src/shared/domain/magnetization-texture/bimeron.test.ts | describe |
-| apps/legacy_web/features/viewport-fem/model/__tests__/textureTransform.bimeron.test.ts | describe |
+| apps/control-room/src/shared/domain/magnetization-texture/bimeron.test.ts | describe |
 | docs/physics/0530-magnetic-preset-textures.md | DOC-ANCHOR:bimeron-topological-density |
 | docs/physics/0530-magnetic-preset-textures.source-map.json | source map |
 

@@ -376,6 +376,13 @@ const VIEWPORT_3D_CANVAS_GL_CAPTURE = {
   preserveDrawingBuffer: true,
 };
 
+const VIEWPORT_3D_CANVAS_GL_CAPTURE_NO_ANTIALIAS = {
+  alpha: false,
+  antialias: false,
+  powerPreference: "high-performance" as const,
+  preserveDrawingBuffer: true,
+};
+
 interface Viewport3DPointerHoldEventTarget {
   addEventListener(
     type: "pointerup" | "pointercancel",
@@ -514,13 +521,27 @@ function formatLegendValue(value: number): string {
   return formatDisplayUnitValue(value);
 }
 
+/**
+ * S-15: mirrors resolveViewport3DCanvasGlOptions (viewport3dVisualProfile.ts)
+ * but returns one of four module-level frozen objects, because the returned
+ * value is handed to R3F as the `gl` prop -- a fresh object literal per render
+ * would make the canvas re-create its renderer. The user-facing
+ * "Antialiasing" toggle now reaches the WebGL context here (it previously only
+ * fed the EffectComposer's `multisampling`, which does not exist while both
+ * post effects are off); the visual profile keeps its veto so
+ * `interactive-lite` stays MSAA-free for performance.
+ */
 function resolveStableViewport3DCanvasGlOptions(
   profile: Viewport3DVisualProfile,
+  antialiasEnabled = true,
 ) {
+  const antialias = profile.antialias && antialiasEnabled;
   if (profile.preserveDrawingBuffer) {
-    return VIEWPORT_3D_CANVAS_GL_CAPTURE;
+    return antialias
+      ? VIEWPORT_3D_CANVAS_GL_CAPTURE
+      : VIEWPORT_3D_CANVAS_GL_CAPTURE_NO_ANTIALIAS;
   }
-  return profile.antialias
+  return antialias
     ? VIEWPORT_3D_CANVAS_GL_ANTIALIAS
     : VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS;
 }
@@ -1323,6 +1344,7 @@ interface Viewport3DFrameProps
   captureRevision: number;
   diagnostics: string;
   domainSummary: string;
+  effectAntialias: boolean;
   fieldDataIssue: Viewport3DFieldDataIssue | null;
   fieldRefresh: Viewport3DFieldRefreshState;
   fdmFieldIdentityCompatible: boolean;
@@ -1642,6 +1664,7 @@ export default function Viewport3DModule({
       cameraDialogState={commandState.camera}
       dimensionFrameDensity={commandState.widgets.dimensionFrameDensity}
       dimensionFrameMode={commandState.widgets.dimensionFrameMode}
+      effectAntialias={commandState.widgets.effectAntialias}
       fitRevision={commandState.fitRevision}
       kernel={kernel}
       fdmSelectionCellOrdinal={fdmSelectionCellOrdinal}
@@ -1852,6 +1875,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   fieldDataIssue,
   fieldRefresh,
   fdmSelectionCellOrdinal,
+  effectAntialias,
   fdmSelectionAnnouncement,
   hysteresisReplayGlyphModel,
   hysteresisReplayTarget,
@@ -1897,7 +1921,10 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
     profile: visualProfile,
   });
-  const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(visualProfile);
+  const canvasGlOptions = resolveStableViewport3DCanvasGlOptions(
+    visualProfile,
+    effectAntialias,
+  );
   const canvasContextKey = `viewport-3d-canvas-aa:${canvasGlOptions.antialias ? "1" : "0"}-preserve:${canvasGlOptions.preserveDrawingBuffer ? "1" : "0"}`;
   const orbitDebugEnabled = viewport3DOrbitDebugEnabledFromBrowserConfig();
   const hysteresisReplayLabel = formatHysteresisReplayLabel(hysteresisReplayTarget);
@@ -2202,6 +2229,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     slotId,
     viewportColorbarRequested,
   ]);
+  // Per-slot state: `retainedViewport3DColorbarPlansBySlot` is a module-level
+  // map keyed by `slotId`, so it survives this component's unmount unless
+  // something explicitly deletes the key. `setRetainedViewport3DColorbarPlans`
+  // already deletes the map entry when given an empty plan list — the bug was
+  // that nothing ever CALLED it with an empty list when a slot went away, so
+  // the map only ever grew across "open panel / close panel" cycles (M-15).
+  // Cleared on both unmount and slotId change, unlike the singleton store
+  // effect below (which must stay unmount-only, or a slotId change would wipe
+  // legends the *new* slot just published).
+  useEffect(() => () => {
+    setRetainedViewport3DColorbarPlans(slotId, EMPTY_VIEWPORT_3D_COLORBAR_PLANS);
+  }, [slotId]);
   useEffect(() => () => {
     viewport3dStore.setActiveScalarColorbarLegends([]);
     viewport3dStore.setRenderedScalarRanges([]);

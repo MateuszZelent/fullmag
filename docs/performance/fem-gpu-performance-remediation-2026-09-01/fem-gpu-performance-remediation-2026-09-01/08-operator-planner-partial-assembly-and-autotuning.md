@@ -2,12 +2,14 @@
 
 **Ustalenie:** PA-01 oraz docelowa decyzja dla EX-04/EX-06.
 
-**Status po weryfikacji:** `exchange_operator.hpp/.cpp` dodaje jeden typed
-resolver dla legacy/fused/reduced/cuSPARSE/PA z fail-closed gates profilu,
-VRAM i runtime. Nie ma jeszcze produkcyjnego cuSPARSE SpMM ani PA exchange,
-a resolver nie jest podłączony do publicznego `GpuExchangePlan`. `pa_benchmark.cpp`
- nadal mierzy ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie
-emituje opisanego JSON. Cały wybór wariantu oraz break-even pozostają
+**Status po weryfikacji:** `exchange_operator.hpp/.cpp` ma typed enum,
+parser/resolver oraz deterministyczny `plan_gpu_exchange_operator` z
+fail-closed gate'ami profilu, VRAM i dostępności runtime. Nie ma jeszcze
+produkcyjnego cuSPARSE SpMM ani PA exchange, a resolver nie jest podłączony do
+publicznego `GpuExchangePlan`: bieżący RK publikuje
+`exchange_operator_mode="legacy_sparse_gpu"`. `pa_benchmark.cpp` nadal mierzy
+ogólny assembled-vs-PA Laplacian, nie operator wymiany, i nie emituje
+opisanego JSON. Cały wybór wariantu, break-even oraz runtime proof pozostają
 `NOT VERIFIED`.
 
 ## 1. Problem
@@ -16,7 +18,12 @@ Jeden assembled CSR nie jest uniwersalny dla regularnych pryzmatów, wyższych
 rzędów, nieregularnych wierszy i różnych GPU. Runtime autotune utrudnia
 reprodukowalność. Planner ma wybierać tylko warianty zakwalifikowane offline.
 
-## 2. Typowany plan
+## 2. Typowany plan docelowy
+
+Poniższy typ jest kontraktem docelowym, nie nazwą istniejącego API. Bieżący
+kod ma tylko `GpuExchangePlannerRequest` i
+`GpuExchangePlannerDecision`; nie ma jeszcze pól `row_mapping`,
+`accumulation`, `block_size` ani `qualification_id` w decyzji publicznej.
 
 ```cpp
 enum class GpuExchangeOperatorKind : uint32_t {
@@ -54,24 +61,24 @@ Przykład qualification ID:
 fem.exchange.gpu.ada.sm89.p1_tet.csr_xyz.v1
 ```
 
-Brak profilu:
+Obecne zachowanie resolvera:
 
-- explicit kind → fail,
-- auto → konserwatywny qualified fused CSR,
+- explicit unqualified non-legacy kind → fail,
+- pusty `requested_kind` → `LegacySparse` w trybie kompatybilności;
+  nie jest to zakwalifikowany fused CSR,
+- explicit `legacy_sparse_gpu` może przejść bez profilu,
+- każdy explicit fused/reduced/cuSPARSE/PA wymaga profilu i wspieranego
+  runtime,
 - nigdy silent niewalidowany PA.
 
-## 3. Inputs
+## 3. Inputs planera
 
-- FE order,
-- cell families,
-- N/NNZ,
-- row histogram,
-- PBC,
-- strictness,
-- compute capability,
-- VRAM,
-- expected applies,
-- output/materialization mode.
+Aktualny resolver przyjmuje wyłącznie `requested_kind`,
+`profile_qualified`, `profile_stale`, `vram_preflight_ok` oraz
+`runtime_supported`. FE order, rodziny elementów, histogram wierszy, PBC,
+compute capability, oczekiwana liczba apply i maska materializacji są
+wejściami planowanego profilu; nie są jeszcze oceniane przez produkcyjny
+planner.
 
 Nie używać bieżącego load ani losowego runtime microbenchmarku.
 
@@ -130,7 +137,7 @@ nie musi przechodzić.
 
 ## 7. Qualified profiles
 
-Źródłowy artifact:
+Planowany artifact (nie istnieje w bieżącym checkoutcie):
 
 ```text
 docs/performance/fem_gpu_exchange_operator_profiles_v1.json
@@ -139,8 +146,9 @@ docs/performance/fem_gpu_exchange_operator_profiles_v1.json
 Wpis zawiera device family, FE order, cells, PBC, kind, mapping, accumulation,
 qualified commit, validation i benchmark artifact.
 
-Runtime korzysta ze zwalidowanej projekcji profilu, nie parsuje arbitralnie docs
-w hot path.
+Runtime powinien korzystać ze zwalidowanej projekcji profilu, nie parsować
+arbitralnych docs w hot path. Sam obecny enum/resolver nie jest takim
+profilem.
 
 ## 8. Break-even
 
@@ -162,4 +170,6 @@ Raportować break-even apply count. Krótka symulacja może preferować CSR.
 - operator parity,
 - stale profile reject.
 
-DoD: każdy resolved kind ma proof i poprawia time-to-solution w swoim profilu.
+DoD: każdy resolved kind ma proof i poprawia time-to-solution w swoim profilu;
+do tego czasu jedyną bezpieczną ścieżką domyślną pozostaje
+`legacy_sparse_gpu`, a pozostałe warianty są kandydatami `NOT VERIFIED`.

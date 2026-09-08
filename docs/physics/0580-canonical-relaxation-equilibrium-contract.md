@@ -223,13 +223,14 @@ It is a derivative oracle, not the final floating-point acceptance quantity.
 For every direct-minimizer lane, the strict acceptance threshold uses the
 representable chord of the actual normalized trial state:
 
-\[
+```{math}
+:label: representable-chord-armijo
 s_i^{\mathrm{fp}}=m_{1,i}^{\mathrm{fp}}-m_{0,i}^{\mathrm{fp}},
 \qquad
 \Delta E_{\mathrm{lin,chord}}
 =-\mu_0\sum_i M_{s,i}V_i
 H_{\mathrm{eff},i}(m_0)\cdot s_i^{\mathrm{fp}}.
-\]
+```
 
 The chord increment must be finite and strictly negative. The Armijo decision
 is then
@@ -978,7 +979,9 @@ from the current runs.
 | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `stage_completion_from_ffi` | Maps the native typed completion reason and metric into public runner completion provenance. |
 | `crates/fullmag-runner/src/types.rs` | `CertifiedFemEquilibriumFields::from_fields` | Freezes the accepted FEM field snapshot as `CertifiedFemEquilibriumFields.v1` and computes its exact content digest. |
 | `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | Writes the certified field bundle only from the final accepted native FEM state. |
-| `crates/fullmag-runner/src/fem_eigen.rs` | `AcceptedFemRelaxStageHandoff::from_completed_relax` | Current source owner of the handoff; it must migrate from the incompatible expanded v2 label to v3 and bind source-equilibrium signatures. |
+| `crates/fullmag-runner/src/fem/eigen_equilibrium_contract.rs` | `AcceptedFemRelaxStageHandoff::from_completed_relax` | Current source owner of the handoff; it must migrate from the incompatible expanded v2 label to v3 and bind source-equilibrium signatures. |
+| `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `representable_chord_energy_linear_increment` | Computes the Joule-valued Armijo increment from the stored normalized floating-point trial chord. |
+| `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `armijo_uses_representable_retraction_chord` | Regression coverage for acceptance based on the representable retraction chord. |
 
 (scientific-bibliography)=
 ## 8. References

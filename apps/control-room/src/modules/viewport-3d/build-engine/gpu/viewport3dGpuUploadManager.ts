@@ -138,6 +138,7 @@ export function createViewport3DGpuUploadManager({
     sharedViewport3DGpuUploadFrameCoordinator.remove(frameHost);
     for (const ticket of queue.splice(0)) {
       ticket.aborted = true;
+      rollbackTicket(ticket);
       cleanupTicket(ticket);
       recordTerminal(ticket, "aborted");
     }
@@ -259,7 +260,10 @@ export function createViewport3DGpuUploadManager({
       removeTicket(ticket);
     }
     try {
-      if (status === "failed") {
+      // Anulowanie w połowie transferu zostawiało częściowo wgrane atrybuty
+      // bez żadnej ścieżki zwolnienia: onVisible() nigdy nie następuje, więc
+      // konsument nie dostaje uchwytu do zasobu (M-04).
+      if (status === "failed" || status === "aborted") {
         rollbackTicket(ticket);
       }
     } finally {

@@ -336,4 +336,139 @@ describe("viewport3dDerivedBufferCache", () => {
       }),
     ).toEqual([retainedOldFieldKey]);
   });
+
+  describe("M-10 · read notifications, disposeBuffer, budget-exceeded signal", () => {
+    it("get() does not notify subscribers", () => {
+      const cache = createViewport3DDerivedBufferCache<Float32Array>();
+      const cacheKey = key();
+      cache.putReady({
+        buffer: new Float32Array(4),
+        estimatedBytes: 16,
+        fieldRevision: "f1",
+        groupKey: "full-vector",
+        key: cacheKey,
+        lane: "vector-glyph",
+        targetRevision: "f1",
+        topologyRevision: "t1",
+      });
+
+      let notifications = 0;
+      const unsubscribe = cache.subscribe(() => {
+        notifications += 1;
+      });
+      cache.get(cacheKey);
+      cache.get(cacheKey);
+      unsubscribe();
+
+      expect(notifications).toBe(0);
+    });
+
+    it("reports pinnedBytes when the only entry is retained and now exceeds budget", () => {
+      const events: Array<{ byteLength: number; maxBytes: number; pinnedBytes: number }> = [];
+      const cache = createViewport3DDerivedBufferCache<Float32Array>({
+        maxBytes: 8,
+        onBudgetExceeded: (info) => events.push(info),
+      });
+      const cacheKey = key();
+      // Fits comfortably while unretained — putReady's own evictToBudget
+      // pass would otherwise evict it immediately, since a brand-new entry
+      // always starts with refCount 0.
+      cache.putReady({
+        buffer: new Float32Array(1),
+        estimatedBytes: 4,
+        fieldRevision: "f1",
+        groupKey: "full-vector",
+        key: cacheKey,
+        lane: "vector-glyph",
+        targetRevision: "f1",
+        topologyRevision: "t1",
+      });
+      const retained = cache.retain(cacheKey);
+      expect(events).toEqual([]);
+
+      // Re-publishing the SAME key preserves refCount from the previous
+      // entry (putReady: `refCount: previous?.refCount ?? 0`), so the
+      // now-larger buffer is pinned from the moment it enters the cache —
+      // exactly the "budget silently broken by a pinned entry" case this
+      // fix makes visible instead of swallowing.
+      cache.putReady({
+        buffer: new Float32Array(5),
+        estimatedBytes: 20,
+        fieldRevision: "f2",
+        groupKey: "full-vector",
+        key: cacheKey,
+        lane: "vector-glyph",
+        targetRevision: "f2",
+        topologyRevision: "t1",
+      });
+
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.at(-1)).toMatchObject({ maxBytes: 8, pinnedBytes: 20 });
+      retained.release();
+    });
+
+    it("dispose() calls disposeBuffer for every remaining entry", () => {
+      const disposed: Float32Array[] = [];
+      const cache = createViewport3DDerivedBufferCache<Float32Array>({
+        disposeBuffer: (buffer) => disposed.push(buffer),
+      });
+      const bufferA = new Float32Array(4);
+      const bufferB = new Float32Array(4);
+      cache.putReady({
+        buffer: bufferA,
+        estimatedBytes: 16,
+        fieldRevision: "f1",
+        groupKey: "a",
+        key: key({ groupKey: "a", revisionSummary: "a" }),
+        lane: "vector-glyph",
+        targetRevision: "f1",
+        topologyRevision: "t1",
+      });
+      cache.putReady({
+        buffer: bufferB,
+        estimatedBytes: 16,
+        fieldRevision: "f1",
+        groupKey: "b",
+        key: key({ groupKey: "b", revisionSummary: "b" }),
+        lane: "vector-glyph",
+        targetRevision: "f1",
+        topologyRevision: "t1",
+      });
+
+      cache.dispose();
+
+      expect(disposed).toEqual([bufferA, bufferB]);
+    });
+
+    it("disposeBuffer also runs for a single LRU-evicted entry, not only for dispose()", () => {
+      const disposed: Float32Array[] = [];
+      const cache = createViewport3DDerivedBufferCache<Float32Array>({
+        disposeBuffer: (buffer) => disposed.push(buffer),
+        maxEntries: 1,
+      });
+      const evictedBuffer = new Float32Array(4);
+      cache.putReady({
+        buffer: evictedBuffer,
+        estimatedBytes: 4,
+        fieldRevision: "f1",
+        groupKey: "a",
+        key: key({ groupKey: "a", revisionSummary: "a" }),
+        lane: "vector-glyph",
+        targetRevision: "f1",
+        topologyRevision: "t1",
+      });
+      cache.putReady({
+        buffer: new Float32Array(4),
+        estimatedBytes: 4,
+        fieldRevision: "f1",
+        groupKey: "b",
+        key: key({ groupKey: "b", revisionSummary: "b" }),
+        lane: "vector-glyph",
+        targetRevision: "f1",
+        topologyRevision: "t1",
+      });
+
+      expect(disposed).toEqual([evictedBuffer]);
+    });
+  });
 });

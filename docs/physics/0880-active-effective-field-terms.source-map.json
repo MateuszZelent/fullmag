@@ -94,8 +94,20 @@
     {
       "id": "python-contract-tests",
       "path": "packages/fullmag-py/tests/test_api.py",
-      "symbol": "class ProblemApiTests",
-      "responsibility": "proves default terms, explicit opt-out, canonical rewrite, and round-trip"
+      "symbol": "test_study_defaults_exchange_and_demag_without_enable_calls",
+      "responsibility": "Proves the default exchange and demag terms are preserved in the public study round-trip."
+    },
+    {
+      "id": "fem-object-energy-native",
+      "path": "backends/fem/cpu/mfem/runtime/object_stats.cpp",
+      "symbol": "compute_object_stats_for_elements",
+      "responsibility": "Integrates native FEM object energies over the elements owned by each magnetic object."
+    },
+    {
+      "id": "fem-object-energy-reference",
+      "path": "crates/fullmag-runner/src/fem_reference.rs",
+      "symbol": "fem_per_object_scalars",
+      "responsibility": "Partitions reference FEM element energies by object ownership and omits the air domain."
     }
   ],
   "symbols": [
@@ -172,6 +184,12 @@
       "si_unit": "$\\mathrm{m^3}$"
     },
     {
+      "id": "OmegaObject",
+      "latex": "$\\Omega_o$",
+      "meaning": "element domain owned by magnetic object o",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
       "id": "active",
       "latex": "$\\mathcal A$",
       "meaning": "authored set of active energy terms",
@@ -243,6 +261,22 @@
       "sources": [
         "python-demag-term",
         "python-lowering"
+      ]
+    },
+    {
+      "id": "eq-object-demag",
+      "symbols": [
+        "m",
+        "Ms",
+        "Hd",
+        "Ed",
+        "mu0",
+        "OmegaObject",
+        "dV"
+      ],
+      "sources": [
+        "fem-object-energy-native",
+        "fem-object-energy-reference"
       ]
     }
   ],

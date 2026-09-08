@@ -63,8 +63,8 @@ pub(crate) use plan::{
 #[cfg(feature = "fem-gpu")]
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, stage_completion_is_representability_stationary,
-    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency,
-    NativeFemGpuRkPlanInfo, NativeFemGpuStateInfo,
+    strict_gpu_runtime_build_info, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
+    NativeFemGpuStateInfo,
 };
 #[cfg(feature = "fem-gpu")]
 pub(crate) use stage_coupled::StageM2CoupledProvider;
@@ -93,7 +93,6 @@ use crate::preview::{
 use crate::quantities::normalize_quantity_id;
 use crate::quantities::QuantityId;
 #[cfg(feature = "fem-gpu")]
-use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{
     FemMaterialFieldLocation, FemRepresentationReceipt, FemStateRepresentation, LivePreviewField,
@@ -867,6 +866,7 @@ enum NativeFemPreviewObservable {
     Torque,
     HAni,
     HDmi,
+    HDmiRotated,
     HMel,
     HAniCubic,
     HDmiBulk,
@@ -887,6 +887,7 @@ impl NativeFemPreviewObservable {
             QuantityId::Torque => Self::Torque,
             QuantityId::HAni => Self::HAni,
             QuantityId::HDmi => Self::HDmi,
+            QuantityId::HDmiRotated => Self::HDmiRotated,
             QuantityId::HMel => Self::HMel,
             QuantityId::HAniCubic => Self::HAniCubic,
             QuantityId::HDmiBulk => Self::HDmiBulk,
@@ -933,6 +934,9 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
         NativeFemPreviewObservable::HDmi => {
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI
         }
+        NativeFemPreviewObservable::HDmiRotated => {
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED
+        }
         NativeFemPreviewObservable::HMel => {
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_MEL
         }
@@ -959,9 +963,9 @@ pub(crate) struct NativeFemBackend {
     saturation_magnetisation_by_node: Arc<[f64]>,
     dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
     energy_density_terms: NativeFemEnergyDensityTerms,
+    uniaxial_energy_density: Option<Arc<NativeFemUniaxialEnergyDensity>>,
     cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
-    object_weights: Vec<(String, f64)>,
-    object_node_indices: Vec<(String, Vec<u32>)>,
+    object_element_indices: Vec<(String, Vec<u32>)>,
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
     adaptive_max_error: Option<f64>,
@@ -1461,6 +1465,7 @@ struct NativeFemEnergyDensityTerms {
     uniaxial_anisotropy: bool,
     cubic_anisotropy: bool,
     interfacial_dmi: bool,
+    rotated_interfacial_dmi: bool,
     bulk_dmi: bool,
 }
 
@@ -1477,6 +1482,7 @@ impl NativeFemEnergyDensityTerms {
                     .dind_field
                     .as_ref()
                     .is_some_and(|values| !values.is_empty()),
+            rotated_interfacial_dmi: plan.rotated_interfacial_dmi.is_some(),
             bulk_dmi: plan.bulk_dmi.is_some()
                 || plan
                     .dbulk_field
@@ -1488,20 +1494,21 @@ impl NativeFemEnergyDensityTerms {
     fn observables_for(&self, quantity: &str) -> Option<Vec<(&'static str, f64)>> {
         let mut terms = Vec::new();
         match quantity {
-            "eden_ex" => terms.push(("H_ex", -0.5)),
-            "eden_demag" => terms.push(("H_demag", -0.5)),
-            "eden_ext" => terms.push(("H_ext", -1.0)),
-            "eden_ani" => {
-                if self.uniaxial_anisotropy {
-                    terms.push(("H_ani", -0.5));
-                }
-            }
+            "eden_ex" if self.exchange => terms.push(("H_ex", -0.5)),
+            "eden_demag" if self.demag => terms.push(("H_demag", -0.5)),
+            "eden_ext" if self.external => terms.push(("H_ext", -1.0)),
+            "eden_ani" => {}
             "eden_dmi" => {
                 if self.interfacial_dmi {
                     terms.push(("H_dmi", -0.5));
                 }
                 if self.bulk_dmi {
                     terms.push(("H_dmi_bulk", -0.5));
+                }
+            }
+            "eden_rotated_dmi" => {
+                if self.rotated_interfacial_dmi {
+                    terms.push(("H_rotated_dmi", -0.5));
                 }
             }
             "eden_total" => {
@@ -1514,11 +1521,11 @@ impl NativeFemEnergyDensityTerms {
                 if self.external {
                     terms.push(("H_ext", -1.0));
                 }
-                if self.uniaxial_anisotropy {
-                    terms.push(("H_ani", -0.5));
-                }
                 if self.interfacial_dmi {
                     terms.push(("H_dmi", -0.5));
+                }
+                if self.rotated_interfacial_dmi {
+                    terms.push(("H_rotated_dmi", -0.5));
                 }
                 if self.bulk_dmi {
                     terms.push(("H_dmi_bulk", -0.5));
@@ -1526,12 +1533,22 @@ impl NativeFemEnergyDensityTerms {
             }
             _ => return None,
         }
-        Some(terms)
+        match quantity {
+            "eden_total" => Some(terms),
+            "eden_ani" if self.uniaxial_anisotropy || self.cubic_anisotropy => Some(terms),
+            _ if !terms.is_empty() => Some(terms),
+            _ => None,
+        }
     }
 
     #[cfg(feature = "fem-gpu")]
     fn includes_cubic(&self, quantity: &str) -> bool {
         self.cubic_anisotropy && matches!(quantity, "eden_ani" | "eden_total")
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    fn includes_uniaxial(&self, quantity: &str) -> bool {
+        self.uniaxial_anisotropy && matches!(quantity, "eden_ani" | "eden_total")
     }
 }
 
@@ -1544,6 +1561,14 @@ pub(crate) fn can_materialize_preview_quantity(
         || NativeFemEnergyDensityTerms::from_plan(plan)
             .observables_for(id.as_str())
             .is_some()
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug)]
+struct NativeFemUniaxialEnergyDensity {
+    ku1_by_node: Arc<[f64]>,
+    ku2_by_node: Arc<[f64]>,
+    axes_by_node: Arc<[[f64; 3]]>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1581,6 +1606,43 @@ fn resolved_nodal_material_coefficient(
         });
     }
     Ok(values.into())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn resolved_uniaxial_energy_density(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Option<Arc<NativeFemUniaxialEnergyDensity>>, RunError> {
+    if !native_fem_plan_has_uniaxial_anisotropy(plan) {
+        return Ok(None);
+    }
+    let node_count = plan.mesh.nodes.len();
+    let axes = match plan.anisotropy_axis_field.as_deref() {
+        Some(axes) if axes.len() != node_count => {
+            return Err(RunError {
+                message: format!(
+                    "native FEM anisotropy axis field has {} values for {node_count} mesh nodes",
+                    axes.len()
+                ),
+            });
+        }
+        Some(axes) => axes.to_vec(),
+        None => vec![plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]); node_count],
+    };
+    Ok(Some(Arc::new(NativeFemUniaxialEnergyDensity {
+        ku1_by_node: resolved_nodal_material_coefficient(
+            "Ku1",
+            plan.material.uniaxial_anisotropy.unwrap_or(0.0),
+            plan.material.ku_field.as_deref(),
+            node_count,
+        )?,
+        ku2_by_node: resolved_nodal_material_coefficient(
+            "Ku2",
+            plan.material.uniaxial_anisotropy_k2.unwrap_or(0.0),
+            plan.material.ku2_field.as_deref(),
+            node_count,
+        )?,
+        axes_by_node: axes.into(),
+    })))
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1849,6 +1911,7 @@ pub(crate) struct NativeFemEnergyDensitySnapshot {
     request: LivePreviewRequest,
     magnetization: NativeFemFieldSnapshot,
     terms: Vec<(bool, f64, NativeFemFieldSnapshot)>,
+    uniaxial_energy_density: Option<Arc<NativeFemUniaxialEnergyDensity>>,
     cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
     saturation_magnetisation_by_node: Arc<[f64]>,
     dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
@@ -1865,44 +1928,6 @@ pub(crate) struct NativeFemFieldSnapshotInfo {
     pub node_count: usize,
     pub component_count: usize,
     pub scalar_bytes: usize,
-}
-
-#[cfg(feature = "fem-gpu")]
-fn native_fem_segment_weight(
-    plan: &fullmag_ir::FemPlanIR,
-    segment: &fullmag_ir::FemObjectSegmentIR,
-) -> f64 {
-    let explicit_count = plan
-        .mesh_parts
-        .iter()
-        .find(|part| {
-            part.role == fullmag_ir::FemMeshPartRole::MagneticObject
-                && (part
-                    .object_id
-                    .as_deref()
-                    .is_some_and(|id| native_fem_object_ids_match(id, &segment.object_id))
-                    || part
-                        .geometry_id
-                        .as_deref()
-                        .zip(segment.geometry_id.as_deref())
-                        .is_some_and(|(part_geometry, segment_geometry)| {
-                            native_fem_object_ids_match(part_geometry, segment_geometry)
-                        })
-                    || native_fem_object_ids_match(&part.id, &segment.object_id))
-        })
-        .map(|part| {
-            part.node_indices
-                .iter()
-                .filter(|index| (**index as usize) < plan.mesh.nodes.len())
-                .collect::<BTreeSet<_>>()
-                .len()
-        })
-        .unwrap_or(0);
-    if explicit_count > 0 {
-        explicit_count as f64
-    } else {
-        f64::from(segment.node_count.max(1))
-    }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1928,34 +1953,37 @@ fn native_fem_matching_object_part<'a>(
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_segment_node_indices(
+fn native_fem_segment_element_indices(
     plan: &fullmag_ir::FemPlanIR,
     segment: &fullmag_ir::FemObjectSegmentIR,
 ) -> Vec<u32> {
     if let Some(part) = native_fem_matching_object_part(plan, segment) {
-        if !part.node_indices.is_empty() {
-            return part
-                .node_indices
-                .iter()
-                .copied()
-                .filter(|index| (*index as usize) < plan.mesh.nodes.len())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-        }
-        if let fullmag_ir::FemMeshPartSelector::NodeRange { start, count } = &part.node_selector {
-            let end = start
-                .saturating_add(*count)
-                .min(plan.mesh.nodes.len() as u32);
-            return (*start..end).collect();
+        match &part.element_selector {
+            fullmag_ir::FemMeshPartSelector::ElementRange { start, count } => {
+                let end = start
+                    .saturating_add(*count)
+                    .min(plan.mesh.cell_count() as u32);
+                return (*start..end).collect();
+            }
+            fullmag_ir::FemMeshPartSelector::ElementMarkerSet { markers } => {
+                let markers = markers.iter().copied().collect::<BTreeSet<_>>();
+                return plan
+                    .mesh
+                    .element_markers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, marker)| markers.contains(marker).then_some(index as u32))
+                    .collect();
+            }
+            _ => {}
         }
     }
 
-    let start = segment.node_start.min(plan.mesh.nodes.len() as u32);
+    let start = segment.element_start.min(plan.mesh.cell_count() as u32);
     let end = segment
-        .node_start
-        .saturating_add(segment.node_count)
-        .min(plan.mesh.nodes.len() as u32);
+        .element_start
+        .saturating_add(segment.element_count)
+        .min(plan.mesh.cell_count() as u32);
     if end <= start {
         Vec::new()
     } else {
@@ -1964,12 +1992,21 @@ fn native_fem_segment_node_indices(
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_object_node_indices(plan: &fullmag_ir::FemPlanIR) -> Vec<(String, Vec<u32>)> {
+fn native_fem_object_element_indices(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Vec<(String, Vec<u32>)>, RunError> {
+    let magnetic_elements = plan
+        .mesh
+        .element_markers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, marker)| (*marker != 0).then_some(index as u32))
+        .collect::<BTreeSet<_>>();
     if plan.object_segments.is_empty() {
-        return vec![(
+        return Ok(vec![(
             "free".to_string(),
-            (0..plan.mesh.nodes.len() as u32).collect(),
-        )];
+            magnetic_elements.iter().copied().collect(),
+        )]);
     }
 
     let mut by_object: HashMap<String, BTreeSet<u32>> = HashMap::new();
@@ -1977,30 +2014,60 @@ fn native_fem_object_node_indices(plan: &fullmag_ir::FemPlanIR) -> Vec<(String, 
         if segment.object_id == "__air__" {
             continue;
         }
-        let nodes = native_fem_segment_node_indices(plan, segment);
-        if nodes.is_empty() {
-            continue;
+        let elements = native_fem_segment_element_indices(plan, segment);
+        if elements.is_empty() {
+            return Err(RunError {
+                message: format!(
+                    "FEM object '{}' does not own any mesh elements",
+                    segment.object_id
+                ),
+            });
         }
         by_object
             .entry(segment.object_id.clone())
             .or_default()
-            .extend(nodes);
+            .extend(elements);
     }
 
     let mut collected = by_object
         .into_iter()
-        .map(|(object_id, nodes)| (object_id, nodes.into_iter().collect::<Vec<_>>()))
-        .filter(|(_, nodes)| !nodes.is_empty())
+        .map(|(object_id, elements)| (object_id, elements.into_iter().collect::<Vec<_>>()))
         .collect::<Vec<_>>();
     collected.sort_by(|a, b| a.0.cmp(&b.0));
     if collected.is_empty() {
-        vec![(
-            "free".to_string(),
-            (0..plan.mesh.nodes.len() as u32).collect(),
-        )]
-    } else {
-        collected
+        return Err(RunError {
+            message: "FEM object ownership contains no magnetic objects".to_string(),
+        });
     }
+
+    let mut owners = HashMap::<u32, &str>::new();
+    for (object_id, elements) in &collected {
+        for element in elements {
+            if !magnetic_elements.contains(element) {
+                return Err(RunError {
+                    message: format!("FEM object '{object_id}' owns nonmagnetic element {element}"),
+                });
+            }
+            if let Some(previous) = owners.insert(*element, object_id.as_str()) {
+                return Err(RunError {
+                    message: format!(
+                        "FEM element {element} is owned by both '{previous}' and '{object_id}'"
+                    ),
+                });
+            }
+        }
+    }
+    let covered = owners.keys().copied().collect::<BTreeSet<_>>();
+    if covered != magnetic_elements {
+        let missing = magnetic_elements.difference(&covered).next().copied();
+        return Err(RunError {
+            message: format!(
+                "FEM object ownership does not cover every magnetic element{}",
+                missing.map_or_else(String::new, |element| format!(": missing {element}"))
+            ),
+        });
+    }
+    Ok(collected)
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -2258,6 +2325,7 @@ impl NativeFemBackend {
             } else {
                 None
             };
+        let uniaxial_energy_density = resolved_uniaxial_energy_density(plan)?;
         let cubic_energy_density = resolved_cubic_energy_density(plan)?;
         let packed_mesh = PackedNativeMesh::new(&plan.mesh);
         let m_flat: Vec<f64> = plan
@@ -2785,6 +2853,12 @@ impl NativeFemBackend {
             } else {
                 0
             },
+            has_rotated_interfacial_dmi: if plan.rotated_interfacial_dmi.is_some() {
+                1
+            } else {
+                0
+            },
+            rotated_interfacial_dmi_constant: plan.rotated_interfacial_dmi.unwrap_or(0.0),
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -2956,26 +3030,9 @@ impl NativeFemBackend {
             saturation_magnetisation_by_node: saturation_magnetisation_by_node.into(),
             dg0_energy_projection,
             energy_density_terms: NativeFemEnergyDensityTerms::from_plan(plan),
+            uniaxial_energy_density,
             cubic_energy_density,
-            object_weights: if plan.object_segments.is_empty() {
-                vec![("free".to_string(), 1.0)]
-            } else {
-                let mut weights: HashMap<String, f64> = HashMap::new();
-                for segment in &plan.object_segments {
-                    if segment.object_id == "__air__" {
-                        continue;
-                    }
-                    let weight = native_fem_segment_weight(plan, segment);
-                    *weights.entry(segment.object_id.clone()).or_insert(0.0) += weight;
-                }
-                let collected = weights.into_iter().collect::<Vec<_>>();
-                if collected.is_empty() {
-                    vec![("free".to_string(), 1.0)]
-                } else {
-                    collected
-                }
-            },
-            object_node_indices: native_fem_object_node_indices(plan),
+            object_element_indices: native_fem_object_element_indices(plan)?,
             demag_solver: demag_policy.as_ref().map(|policy| policy.solver.clone()),
             demag_preconditioner: demag_policy.map(|policy| policy.preconditioner),
             adaptive_max_error: plan
@@ -3159,8 +3216,7 @@ impl NativeFemBackend {
     ) -> Result<Option<runtime_info::NativeFemDemagFemBemProvenance>, RunError> {
         let mut provenance = ffi::fullmag_fem_demag_fem_bem_provenance_v1 {
             abi_version: ffi::FULLMAG_FEM_DEMAG_FEM_BEM_PROVENANCE_V1_ABI_VERSION,
-            struct_size:
-                std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_demag_fem_bem_provenance_v1>() as u32,
             ..Default::default()
         };
         let rc = unsafe {
@@ -3220,42 +3276,102 @@ impl NativeFemBackend {
         Ok(())
     }
 
-    fn average_m_for_nodes(&self, node_indices: &[u32]) -> Result<Option<[f64; 3]>, RunError> {
-        if node_indices.is_empty() {
-            return Ok(None);
-        }
-        let mut average = [0.0f64; 3];
+    fn object_stats_for_elements(
+        &self,
+        element_indices: &[u32],
+    ) -> Result<ffi::fullmag_fem_object_stats_v1, RunError> {
+        let mut stats = ffi::fullmag_fem_object_stats_v1 {
+            abi_version: ffi::FULLMAG_FEM_OBJECT_STATS_V1_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_object_stats_v1>() as u32,
+            ..Default::default()
+        };
         let rc = unsafe {
-            ffi::fullmag_fem_backend_average_m_for_nodes_f64(
+            ffi::fullmag_fem_backend_object_stats_for_elements_v1(
                 self.handle,
-                node_indices.as_ptr(),
-                node_indices.len() as u64,
-                average.as_mut_ptr(),
-                average.len() as u64,
+                element_indices.as_ptr(),
+                element_indices.len() as u64,
+                &mut stats,
             )
         };
         if rc != ffi::FULLMAG_FEM_OK {
-            return Err(self.last_error_or("FEM native per-object average_m reduction failed"));
+            return Err(self.last_error_or("FEM native per-object scalar reduction failed"));
         }
-        Ok(Some(average))
+        if stats.abi_version != ffi::FULLMAG_FEM_OBJECT_STATS_V1_ABI_VERSION
+            || stats.struct_size as usize != std::mem::size_of::<ffi::fullmag_fem_object_stats_v1>()
+        {
+            return Err(RunError {
+                message: "native FEM returned an incompatible per-object scalar ABI record"
+                    .to_string(),
+            });
+        }
+        Ok(stats)
     }
 
-    fn attach_native_object_average_m(&self, stats: &mut StepStats) -> Result<(), RunError> {
-        if self.object_node_indices.len() == 1 && self.object_node_indices[0].0 == "free" {
-            return Ok(());
+    fn attach_native_object_stats(&self, stats: &mut StepStats) -> Result<(), RunError> {
+        let mut per_object = HashMap::new();
+        let mut sums = [0.0f64; 7];
+        let mut rotated_dmi = 0.0;
+        for (object_id, element_indices) in &self.object_element_indices {
+            let raw = self.object_stats_for_elements(element_indices)?;
+            let fields = [
+                ("mx", raw.mx),
+                ("my", raw.my),
+                ("mz", raw.mz),
+                ("m_weight", raw.moment_weight),
+                ("e_ex", raw.exchange_energy_joules),
+                ("e_demag", raw.demag_energy_joules),
+                ("e_ext", raw.external_energy_joules),
+                ("e_drive", raw.drive_energy_joules),
+                ("e_ani", raw.anisotropy_energy_joules),
+                ("e_rotated_dmi", raw.rotated_dmi_energy_joules),
+                ("e_dmi", raw.dmi_energy_joules),
+                ("e_mel", raw.magnetoelastic_energy_joules),
+                ("e_total", raw.total_energy_joules),
+            ];
+            let mut values = HashMap::new();
+            for (name, value) in fields {
+                values.insert(
+                    name.to_string(),
+                    checked_native_finite(&format!("{object_id}.{name}"), value)?,
+                );
+            }
+            if raw.moment_weight <= 0.0 {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM returned non-positive magnetic moment weight for object '{object_id}'"
+                    ),
+                });
+            }
+            sums[0] += raw.exchange_energy_joules;
+            sums[1] += raw.demag_energy_joules;
+            sums[2] += raw.external_energy_joules;
+            sums[3] += raw.drive_energy_joules;
+            sums[4] += raw.anisotropy_energy_joules;
+            sums[5] += raw.dmi_energy_joules;
+            sums[6] += raw.total_energy_joules;
+            rotated_dmi += raw.rotated_dmi_energy_joules;
+            per_object.insert(object_id.clone(), values);
         }
-        for (object_id, node_indices) in &self.object_node_indices {
-            let Some([mx, my, mz]) = self.average_m_for_nodes(node_indices)? else {
-                continue;
-            };
-            let values = stats
-                .per_object_scalars
-                .entry(object_id.clone())
-                .or_default();
-            values.insert("mx".to_string(), mx);
-            values.insert("my".to_string(), my);
-            values.insert("mz".to_string(), mz);
+        for (name, local, global) in [
+            ("E_ex", sums[0], stats.e_ex),
+            ("E_demag", sums[1], stats.e_demag),
+            ("E_ext", sums[2], stats.e_ext),
+            ("E_drive", sums[3], stats.e_drive),
+            ("E_ani", sums[4], stats.e_ani),
+            ("E_dmi", sums[5], stats.e_dmi),
+            ("E_total", sums[6], stats.e_total),
+        ] {
+            let tolerance = 1.0e-11 * local.abs().max(global.abs()) + 1.0e-28;
+            if (local - global).abs() > tolerance {
+                return Err(RunError {
+                    message: format!(
+                        "native FEM per-object {name} sum {local:.16e} differs from global reduction {global:.16e}"
+                    ),
+                });
+            }
         }
+        stats.e_rotated_dmi = rotated_dmi;
+        stats.per_object_scalars = per_object;
         Ok(())
     }
 
@@ -3484,13 +3600,7 @@ impl NativeFemBackend {
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
-        step_stats.per_object_scalars =
-            if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
-                single_object_scalars("free", &step_stats)
-            } else {
-                weighted_object_scalars(&step_stats, &self.object_weights)
-            };
-        self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_native_object_stats(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -3926,13 +4036,7 @@ impl NativeFemBackend {
         self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
-        step_stats.per_object_scalars =
-            if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
-                single_object_scalars("free", &step_stats)
-            } else {
-                weighted_object_scalars(&step_stats, &self.object_weights)
-            };
-        self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_native_object_stats(&mut step_stats)?;
         Ok(Some(step_stats))
     }
 
@@ -4275,13 +4379,7 @@ impl NativeFemBackend {
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         self.attach_representation_receipt(&mut step_stats)?;
-        step_stats.per_object_scalars =
-            if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
-                single_object_scalars("free", &step_stats)
-            } else {
-                weighted_object_scalars(&step_stats, &self.object_weights)
-            };
-        self.attach_native_object_average_m(&mut step_stats)?;
+        self.attach_native_object_stats(&mut step_stats)?;
         Ok(step_stats)
     }
 
@@ -4332,6 +4430,14 @@ impl NativeFemBackend {
     pub fn copy_h_dmi(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
         self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI,
+            node_count,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn copy_h_rotated_dmi(&self, node_count: usize) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_field(
+            ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED,
             node_count,
         )
     }
@@ -4435,6 +4541,11 @@ impl NativeFemBackend {
             request: request.clone(),
             magnetization,
             terms: snapshots,
+            uniaxial_energy_density: self
+                .energy_density_terms
+                .includes_uniaxial(quantity)
+                .then(|| self.uniaxial_energy_density.clone())
+                .flatten(),
             cubic_energy_density: self
                 .energy_density_terms
                 .includes_cubic(quantity)
@@ -4495,7 +4606,7 @@ impl NativeFemBackend {
         let conservative_dg0_energy = self.dg0_energy_projection.is_some()
             && matches!(
                 crate::quantities::normalized_quantity_name(&request.quantity)?,
-                "eden_ex" | "eden_demag" | "eden_ext" | "eden_total"
+                "eden_ex" | "eden_demag" | "eden_ext" | "eden_rotated_dmi" | "eden_total"
             );
         if let Some(values) = self.copy_energy_density_values(&request.quantity, node_count)? {
             return Ok(build_native_fem_energy_density_preview_field(
@@ -4549,6 +4660,21 @@ impl NativeFemBackend {
                 &self.saturation_magnetisation_by_node,
                 &self.magnetic_node_mask,
                 prefactor,
+            )?;
+        }
+        if self.energy_density_terms.includes_uniaxial(quantity) {
+            let uniaxial = self
+                .uniaxial_energy_density
+                .as_deref()
+                .ok_or_else(|| RunError {
+                    message: "native FEM uniaxial energy-density configuration is missing"
+                        .to_string(),
+                })?;
+            accumulate_uniaxial_energy_density(
+                &mut values,
+                &magnetization,
+                uniaxial,
+                &self.magnetic_node_mask,
             )?;
         }
         if self.energy_density_terms.includes_cubic(quantity) {
@@ -4929,6 +5055,36 @@ fn tetra_p1_scalar_integral(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn accumulate_uniaxial_energy_density(
+    values: &mut [f64],
+    magnetization: &[[f64; 3]],
+    uniaxial: &NativeFemUniaxialEnergyDensity,
+    active_mask: &[bool],
+) -> Result<(), RunError> {
+    let node_count = values.len();
+    if magnetization.len() != node_count
+        || uniaxial.ku1_by_node.len() != node_count
+        || uniaxial.ku2_by_node.len() != node_count
+        || uniaxial.axes_by_node.len() != node_count
+        || active_mask.len() != node_count
+    {
+        return Err(RunError {
+            message: "native FEM uniaxial energy-density snapshot returned mismatched node count"
+                .to_string(),
+        });
+    }
+    for index in 0..node_count {
+        if active_mask[index] {
+            let q = dot(magnetization[index], uniaxial.axes_by_node[index]);
+            let q2 = q * q;
+            values[index] -=
+                uniaxial.ku1_by_node[index] * q2 + uniaxial.ku2_by_node[index] * q2 * q2;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
 fn accumulate_cubic_energy_density(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -5011,6 +5167,14 @@ impl NativeFemEnergyDensitySnapshot {
                 prefactor,
             )?;
         }
+        if let Some(uniaxial) = self.uniaxial_energy_density.as_deref() {
+            accumulate_uniaxial_energy_density(
+                &mut values,
+                &magnetization,
+                uniaxial,
+                &self.active_mask,
+            )?;
+        }
         if let Some(cubic) = self.cubic_energy_density.as_deref() {
             accumulate_cubic_energy_density(&mut values, &magnetization, cubic, &self.active_mask)?;
         }
@@ -5036,13 +5200,12 @@ mod task5_energy_density_tests {
             uniaxial_anisotropy: true,
             cubic_anisotropy: true,
             interfacial_dmi: true,
+            rotated_interfacial_dmi: true,
             bulk_dmi: true,
         };
 
-        assert_eq!(
-            terms.observables_for("eden_ani"),
-            Some(vec![("H_ani", -0.5)])
-        );
+        assert_eq!(terms.observables_for("eden_ani"), Some(vec![]));
+        assert!(terms.includes_uniaxial("eden_ani"));
         assert!(terms.includes_cubic("eden_ani"));
         assert_eq!(
             terms.observables_for("eden_dmi"),
@@ -5054,12 +5217,32 @@ mod task5_energy_density_tests {
                 ("H_ex", -0.5),
                 ("H_demag", -0.5),
                 ("H_ext", -1.0),
-                ("H_ani", -0.5),
                 ("H_dmi", -0.5),
+                ("H_rotated_dmi", -0.5),
                 ("H_dmi_bulk", -0.5),
             ])
         );
         assert!(terms.includes_cubic("eden_total"));
+    }
+
+    #[test]
+    fn uniaxial_energy_density_uses_ku2_quartic_functional() {
+        let uniaxial = NativeFemUniaxialEnergyDensity {
+            ku1_by_node: vec![0.0, 1.0].into(),
+            ku2_by_node: vec![20_000.0, 1.0].into(),
+            axes_by_node: vec![[1.0, 0.0, 0.0]; 2].into(),
+        };
+        let mut values = vec![0.0, 23.0];
+        accumulate_uniaxial_energy_density(
+            &mut values,
+            &[[0.5, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            &uniaxial,
+            &[true, false],
+        )
+        .expect("uniaxial energy density");
+
+        assert_eq!(values[0], -1250.0);
+        assert_eq!(values[1], 23.0, "nonmagnetic node must remain masked");
     }
 
     #[test]
@@ -5913,8 +6096,13 @@ mod tests {
                 ],
                 cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
                 element_markers: vec![1],
-                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![[0, 1, 2]]),
-                boundary_markers: vec![1],
+                facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                    [0, 2, 1],
+                    [0, 1, 3],
+                    [0, 3, 2],
+                    [1, 2, 3],
+                ]),
+                boundary_markers: vec![1; 4],
                 periodic_boundary_pairs: Vec::new(),
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
@@ -5977,6 +6165,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,
@@ -6023,12 +6212,29 @@ mod tests {
         plan.material.kc2_field = Some(vec![2.0; plan.mesh.nodes.len()]);
         plan.dind_field = Some(vec![3.0; plan.mesh.nodes.len()]);
         plan.dbulk_field = Some(vec![4.0; plan.mesh.nodes.len()]);
+        plan.rotated_interfacial_dmi = Some(5.0);
 
         let terms = NativeFemEnergyDensityTerms::from_plan(&plan);
         assert_eq!(
             terms.observables_for("eden_total"),
-            Some(vec![("H_ani", -0.5), ("H_dmi", -0.5), ("H_dmi_bulk", -0.5),])
+            Some(vec![
+                ("H_dmi", -0.5),
+                ("H_rotated_dmi", -0.5),
+                ("H_dmi_bulk", -0.5),
+            ])
         );
+        assert_eq!(
+            terms.observables_for("eden_rotated_dmi"),
+            Some(vec![("H_rotated_dmi", -0.5)])
+        );
+        let mut without_rotated = plan.clone();
+        without_rotated.rotated_interfacial_dmi = None;
+        assert_eq!(
+            NativeFemEnergyDensityTerms::from_plan(&without_rotated)
+                .observables_for("eden_rotated_dmi"),
+            None
+        );
+        assert!(terms.includes_uniaxial("eden_total"));
         assert!(terms.includes_cubic("eden_total"));
     }
 
@@ -7017,6 +7223,7 @@ mod tests {
             [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
         ];
         plan.interfacial_dmi = Some(1.0e-3);
+        plan.rotated_interfacial_dmi = Some(1.5e-3);
         plan.dmi_interface_normal = Some([0.0, 0.0, 1.0]);
         plan.bulk_dmi = Some(2.0e-3);
 
@@ -7044,6 +7251,9 @@ mod tests {
         let h_bulk_dmi = backend
             .copy_h_dmi_bulk(plan.mesh.nodes.len())
             .expect("copy bulk DMI field");
+        let h_rotated_dmi = backend
+            .copy_h_rotated_dmi(plan.mesh.nodes.len())
+            .expect("copy rotated interfacial DMI field");
         assert!(
             h_dmi
                 .iter()
@@ -7057,6 +7267,13 @@ mod tests {
                 .flatten()
                 .any(|component| component.abs() > 0.0),
             "active bulk DMI should expose a non-zero H_dmi_bulk field"
+        );
+        assert!(
+            h_rotated_dmi
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "active rotated interfacial DMI should expose a non-zero H_rotated_dmi field"
         );
     }
 
@@ -7078,6 +7295,7 @@ mod tests {
             [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
         ];
         plan.interfacial_dmi = Some(1.0e-3);
+        plan.rotated_interfacial_dmi = Some(1.5e-3);
         plan.dmi_interface_normal = Some([0.0, 0.0, 1.0]);
         plan.bulk_dmi = Some(2.0e-3);
 
@@ -7095,6 +7313,9 @@ mod tests {
         let h_bulk_dmi = backend
             .copy_h_dmi_bulk(plan.mesh.nodes.len())
             .expect("copy GPU bulk DMI field");
+        let h_rotated_dmi = backend
+            .copy_h_rotated_dmi(plan.mesh.nodes.len())
+            .expect("copy GPU rotated interfacial DMI field");
         assert!(
             h_dmi
                 .iter()
@@ -7108,6 +7329,13 @@ mod tests {
                 .flatten()
                 .any(|component| component.abs() > 0.0),
             "active GPU bulk DMI should expose a non-zero H_dmi_bulk field"
+        );
+        assert!(
+            h_rotated_dmi
+                .iter()
+                .flatten()
+                .any(|component| component.abs() > 0.0),
+            "active GPU rotated interfacial DMI should expose a non-zero H_rotated_dmi field"
         );
     }
 
@@ -7358,6 +7586,7 @@ mod tests {
             demag_realization: None,
             air_box_config: None,
             interfacial_dmi: None,
+            rotated_interfacial_dmi: None,
             dmi_interface_normal: None,
             bulk_dmi: None,
             dind_field: None,
@@ -7703,6 +7932,7 @@ mod tests {
                 uniaxial_anisotropy: None,
                 cubic_anisotropy: None,
                 interfacial_dmi: None,
+                rotated_interfacial_dmi: None,
                 bulk_dmi: None,
                 zhang_li_stt: if has_zhang_li_stt(plan) {
                     Some(fullmag_engine::ZhangLiSttConfig {
@@ -9413,41 +9643,85 @@ mod tests {
     }
 
     #[test]
-    fn native_fem_per_object_average_m_uses_native_node_reduction() {
+    fn native_fem_per_object_scalars_use_owned_element_reductions() {
         let source = include_str!("native_fem.rs");
         let header = include_str!("../../../native/include/fullmag_fem.h");
         let api = include_str!("../../../backends/fem/src/api.cpp");
+        let reduction = include_str!("../../../backends/fem/cpu/mfem/runtime/object_stats.cpp");
 
         assert!(
-            header.contains("fullmag_fem_backend_average_m_for_nodes_f64"),
-            "native FEM C ABI must expose per-node-list average magnetization reduction"
+            header.contains("fullmag_fem_backend_object_stats_for_elements_v1"),
+            "native FEM C ABI must expose element-owned object scalar reductions"
         );
         assert!(
-            api.contains("int fullmag_fem_backend_average_m_for_nodes_f64(")
-                && api.contains("context_sync_gpu_magnetization_to_host(")
-                && api.contains("handle->context.state.m_xyz"),
-            "native FEM C ABI implementation must reduce object averages from native state"
+            api.contains("int fullmag_fem_backend_object_stats_for_elements_v1(")
+                && api.contains("compute_object_stats_for_elements("),
+            "native FEM C ABI must route object reductions to the MFEM owner"
+        );
+        assert!(
+            reduction.contains("local_lumped")
+                && reduction.contains("ComputeElementMatrix")
+                && reduction.contains("rotated_dmi_energy_joules"),
+            "object averages and energies must be integrated on owned elements"
+        );
+        assert!(
+            source.contains("ffi::fullmag_fem_backend_object_stats_for_elements_v1(")
+                && source.contains("native FEM per-object {name} sum"),
+            "Rust wrapper must call the element reduction and fail closed on a bad partition sum"
+        );
+    }
+
+    #[test]
+    fn native_fem_object_ownership_uses_elements_even_when_nodes_are_shared() {
+        let mut plan = make_test_plan();
+        plan.mesh.nodes.push([0.0, 0.0, 2.0]);
+        plan.mesh.set_tet4_cells(vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+        plan.mesh.element_markers = vec![1, 2];
+        plan.object_segments = vec![
+            FemObjectSegmentIR {
+                object_id: "lower".to_string(),
+                geometry_id: Some("lower".to_string()),
+                node_start: 0,
+                node_count: 4,
+                element_start: 0,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+            FemObjectSegmentIR {
+                object_id: "upper".to_string(),
+                geometry_id: Some("upper".to_string()),
+                node_start: 0,
+                node_count: 5,
+                element_start: 1,
+                element_count: 1,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+            FemObjectSegmentIR {
+                object_id: "__air__".to_string(),
+                geometry_id: None,
+                node_start: 0,
+                node_count: 0,
+                element_start: 2,
+                element_count: 0,
+                boundary_face_start: 0,
+                boundary_face_count: 0,
+            },
+        ];
+
+        assert_eq!(
+            native_fem_object_element_indices(&plan).expect("valid element ownership"),
+            vec![
+                ("lower".to_string(), vec![0]),
+                ("upper".to_string(), vec![1])
+            ]
         );
 
-        let body = source_block(
-            source,
-            "fn attach_native_object_average_m(",
-            "\n    pub fn step_interruptible(",
-        );
-        assert!(
-            body.contains("self.average_m_for_nodes(node_indices)?"),
-            "per-object mx/my/mz must come from native node-index reductions"
-        );
-        assert!(
-            body.contains("values.insert(\"mx\".to_string(), mx)")
-                && body.contains("values.insert(\"my\".to_string(), my)")
-                && body.contains("values.insert(\"mz\".to_string(), mz)"),
-            "native per-object averages must overwrite weighted global mx/my/mz"
-        );
-        assert!(
-            source.contains("ffi::fullmag_fem_backend_average_m_for_nodes_f64("),
-            "Rust wrapper must call the native per-object average_m ABI"
-        );
+        plan.object_segments[1].element_start = 0;
+        let error = native_fem_object_element_indices(&plan)
+            .expect_err("overlapping element ownership must fail");
+        assert!(error.message.contains("owned by both"));
     }
 
     #[test]

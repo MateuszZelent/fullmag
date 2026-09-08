@@ -28,10 +28,13 @@ export interface Viewport3DScalarSurfaceShaderOptions {
   polygonOffset: boolean;
   polygonOffsetFactor: number;
   polygonOffsetUnits: number;
+  shadeStrength?: number;
   side: Side;
   toneMapped?: boolean;
   transparent: boolean;
 }
+
+const DEFAULT_SCALAR_SURFACE_SHADE_STRENGTH = 0.45;
 
 export function canApplyScalarShaderColorBuffer(
   buffer: ScalarColorBuffer | null | undefined,
@@ -138,6 +141,7 @@ export function createScalarSurfaceShaderMaterial(
     : 1;
   const floquetActive = buffer.wavevectorKf ? 1 : 0;
   const material = new ShaderMaterial({
+    clipping: true,
     depthTest: options.depthTest,
     depthWrite: options.depthWrite,
     fragmentShader: orientationMode
@@ -158,8 +162,17 @@ export function createScalarSurfaceShaderMaterial(
       fmRepresentationId: {
         value: complexRepresentationId(buffer.complexRepresentation),
       },
-      fmScalarMax: { value: buffer.range.max },
-      fmScalarMin: { value: buffer.range.min },
+      fmScalarMax: {
+        value: Number.isFinite(buffer.range?.max) ? buffer.range.max : 0,
+      },
+      fmScalarMin: {
+        value: Number.isFinite(buffer.range?.min) ? buffer.range.min : 0,
+      },
+      fmShadeStrength: {
+        value: Number.isFinite(options.shadeStrength)
+          ? (options.shadeStrength as number)
+          : DEFAULT_SCALAR_SURFACE_SHADE_STRENGTH,
+      },
       fmWavevectorKf: { value: buffer.wavevectorKf ?? [0, 0, 0] },
       fmCellOrigin: { value: buffer.cellOrigin ?? [0, 0, 0] },
       fmSpatialPhaseSign: { value: spatialPhaseSign },
@@ -172,10 +185,26 @@ export function createScalarSurfaceShaderMaterial(
   return material;
 }
 
+/**
+ * Stable identifier for "which of the four vertex/fragment shader variants"
+ * a given buffer would select (scalar/orientation × real/complex). Used by
+ * consumers (MeshPartLayer.tsx) to decide when a ShaderMaterial must be
+ * recreated (program shape changed) vs. merely updated in place via
+ * updateScalarSurfaceShaderMaterial (data changed, e.g. per-frame phase
+ * animation) — see S-08.
+ */
+export function scalarSurfaceShaderVariantKey(buffer: ScalarColorBuffer): string {
+  const colorModeId = shaderColorModeId(buffer.colorMode);
+  const orientationMode = colorModeId === 1;
+  const complexMode = hasComplexShaderValues(buffer);
+  return `${orientationMode ? "orientation" : "scalar"}:${complexMode ? "complex" : "real"}`;
+}
+
 export function updateScalarSurfaceShaderMaterial(
   material: ShaderMaterial,
   buffer: ScalarColorBuffer,
   opacity: number,
+  shadeStrength?: number,
 ): void {
   const nextColorModeId = shaderColorModeId(buffer.colorMode);
   const orientationMode = nextColorModeId === 1;
@@ -214,8 +243,15 @@ export function updateScalarSurfaceShaderMaterial(
   material.uniforms.fmRepresentationId.value = complexRepresentationId(
     buffer.complexRepresentation,
   );
-  material.uniforms.fmScalarMax.value = buffer.range.max;
-  material.uniforms.fmScalarMin.value = buffer.range.min;
+  material.uniforms.fmScalarMax.value = Number.isFinite(buffer.range?.max)
+    ? buffer.range.max
+    : 0;
+  material.uniforms.fmScalarMin.value = Number.isFinite(buffer.range?.min)
+    ? buffer.range.min
+    : 0;
+  material.uniforms.fmShadeStrength.value = Number.isFinite(shadeStrength)
+    ? (shadeStrength as number)
+    : DEFAULT_SCALAR_SURFACE_SHADE_STRENGTH;
   material.uniforms.fmWavevectorKf.value = buffer.wavevectorKf ?? [0, 0, 0];
   material.uniforms.fmCellOrigin.value = buffer.cellOrigin ?? [0, 0, 0];
   material.uniforms.fmSpatialPhaseSign.value = spatialPhaseSign;
@@ -357,20 +393,32 @@ function scalarPaletteId(palette: string | null | undefined): number {
 const SCALAR_SURFACE_VERTEX_SHADER = `
 attribute float ${VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE};
 varying float vScalarValue;
+varying vec3 vNormalView;
+
+#include <clipping_planes_pars_vertex>
 
 void main() {
   vScalarValue = ${VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE};
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalMatrix * normal;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
 const ORIENTATION_SURFACE_VERTEX_SHADER = `
 attribute vec3 ${VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE};
 varying vec3 vVectorValue;
+varying vec3 vNormalView;
+
+#include <clipping_planes_pars_vertex>
 
 void main() {
   vVectorValue = ${VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE};
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalMatrix * normal;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
@@ -386,9 +434,45 @@ uniform vec3 fmCellOrigin;
 uniform float fmSpatialPhaseSign;
 uniform float fmTemporalPhaseSign;
 uniform int fmFloquetActive;
+uniform float fmScalarMin;
+uniform float fmScalarMax;
 varying float vScalarValue;
+varying vec3 vNormalView;
+
+#include <clipping_planes_pars_vertex>
+
+// S-12: GLSL ES leaves atan(y, x) undefined when x == y == 0.0 (e.g. nodes
+// with zero mode amplitude -- air, out-of-support cells). Guard it so the
+// result is deterministic across drivers (Mesa / ANGLE / Metal disagree).
+float safeAtan2(float y, float x) {
+  return (abs(x) < 1e-30 && abs(y) < 1e-30) ? 0.0 : atan(y, x);
+}
+
+const float FM_PI = 3.141592653589793;
+const float FM_TWO_PI = 6.283185307179586;
+
+// S-13: k in micromagnetics is on the order of 1e7-1e8 rad/m; for a cell
+// size of 1e-6-1e-5 m the Floquet spatial phase term
+// dot(fmWavevectorKf, position - fmCellOrigin) can reach 1e2-1e4 (more for
+// larger supercells). GLSL ES sin/cos give no accuracy guarantee outside a
+// small argument range: ANGLE/D3D and mobile drivers lose precision in
+// their own argument reduction once |theta| grows large, turning a smooth
+// traveling wave into phase noise that differs between Chrome/ANGLE and
+// Firefox/Metal, and drifts frame-to-frame during animation. Wrapping
+// theta into [-PI, PI] right after the (potentially huge) spatial term is
+// added keeps the sin/cos argument small and the reduction accurate on
+// every driver.
+float wrapPhase(float value) {
+  return mod(value + FM_PI, FM_TWO_PI) - FM_PI;
+}
 
 float scalarFromVector(vec3 value) {
+  // S-12: for the "phase" representation, projectComplex below already
+  // resolves the single correct phase value for whichever colorMode is
+  // selected (including a dedicated magnitude-of-phase formula) and
+  // replicates it across all 3 components -- so length(value) here would
+  // wrongly scale a single phase by sqrt(3). Read it back directly instead.
+  if (fmRepresentationId == 4) return value.x;
   if (fmColorModeId == 2) return value.x;
   if (fmColorModeId == 3) return value.y;
   if (fmColorModeId == 4) return value.z;
@@ -401,7 +485,25 @@ vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
   if (fmRepresentationId == 3) {
     return fmAmplitudeScale * sqrt(complexReal * complexReal + complexImag * complexImag);
   }
-  if (fmRepresentationId == 4) return atan(complexImag, complexReal);
+  if (fmRepresentationId == 4) {
+    // S-12: "phase" is only well-defined per selected component (or, for
+    // magnitude mode, as a single amplitude-weighted combined phase) -- not
+    // as three independent per-axis phases fed through length().
+    float phase;
+    if (fmColorModeId == 2) {
+      phase = safeAtan2(complexImag.x, complexReal.x);
+    } else if (fmColorModeId == 3) {
+      phase = safeAtan2(complexImag.y, complexReal.y);
+    } else if (fmColorModeId == 4) {
+      phase = safeAtan2(complexImag.z, complexReal.z);
+    } else {
+      phase = safeAtan2(
+        sign(dot(complexImag, complexReal)) * length(complexImag),
+        length(complexReal)
+      );
+    }
+    return vec3(phase);
+  }
   return fmAmplitudeScale * (complexReal * cos(theta) - complexImag * sin(theta));
 }
 
@@ -409,12 +511,30 @@ void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
     theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
+    // S-13: reduce the argument before it reaches cos/sin below.
+    theta = wrapPhase(theta);
   }
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vec3 projected = projectComplex(complexReal, complexImag, theta);
-  vScalarValue = scalarFromVector(projected);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  float rawScalar = scalarFromVector(projected);
+  // S-07: normalize to [0, 1] here (GPU, float32) so the fragment shader can
+  // treat vScalarValue uniformly with the CPU-pre-normalized plain-scalar
+  // path -- see SCALAR_SURFACE_FRAGMENT_SHADER. Modal/Floquet amplitudes are
+  // small oscillations rather than a large-baseline physical quantity, so
+  // float32 precision here is not the concern S-07 addresses; this merely
+  // relocates the existing (v - min) / span formula from the fragment stage.
+  bool rawBad = !(rawScalar == rawScalar) || abs(rawScalar) > 3.0e38;
+  float scale = max(abs(fmScalarMax), abs(fmScalarMin));
+  float span = fmScalarMax - fmScalarMin;
+  bool degenerate = span <= 1e-6 * max(scale, 1.0);
+  vScalarValue = rawBad
+    ? rawScalar
+    : (degenerate ? 0.5 : clamp((rawScalar - fmScalarMin) / span, 0.0, 1.0));
+  vNormalView = normalMatrix * normal;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
@@ -430,6 +550,34 @@ uniform float fmSpatialPhaseSign;
 uniform float fmTemporalPhaseSign;
 uniform int fmFloquetActive;
 varying vec3 vVectorValue;
+varying vec3 vNormalView;
+
+#include <clipping_planes_pars_vertex>
+
+// S-12: GLSL ES leaves atan(y, x) undefined when x == y == 0.0 (e.g. nodes
+// with zero mode amplitude). Guard each component so the per-axis phase
+// vector is deterministic across drivers.
+float safeAtan2(float y, float x) {
+  return (abs(x) < 1e-30 && abs(y) < 1e-30) ? 0.0 : atan(y, x);
+}
+
+const float FM_PI = 3.141592653589793;
+const float FM_TWO_PI = 6.283185307179586;
+
+// S-13: k in micromagnetics is on the order of 1e7-1e8 rad/m; for a cell
+// size of 1e-6-1e-5 m the Floquet spatial phase term
+// dot(fmWavevectorKf, position - fmCellOrigin) can reach 1e2-1e4 (more for
+// larger supercells). GLSL ES sin/cos give no accuracy guarantee outside a
+// small argument range: ANGLE/D3D and mobile drivers lose precision in
+// their own argument reduction once |theta| grows large, turning a smooth
+// traveling wave into phase noise that differs between Chrome/ANGLE and
+// Firefox/Metal, and drifts frame-to-frame during animation. Wrapping
+// theta into [-PI, PI] right after the (potentially huge) spatial term is
+// added keeps the sin/cos argument small and the reduction accurate on
+// every driver.
+float wrapPhase(float value) {
+  return mod(value + FM_PI, FM_TWO_PI) - FM_PI;
+}
 
 vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
   if (fmRepresentationId == 1) return fmAmplitudeScale * complexReal;
@@ -437,7 +585,13 @@ vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
   if (fmRepresentationId == 3) {
     return fmAmplitudeScale * sqrt(complexReal * complexReal + complexImag * complexImag);
   }
-  if (fmRepresentationId == 4) return atan(complexImag, complexReal);
+  if (fmRepresentationId == 4) {
+    return vec3(
+      safeAtan2(complexImag.x, complexReal.x),
+      safeAtan2(complexImag.y, complexReal.y),
+      safeAtan2(complexImag.z, complexReal.z)
+    );
+  }
   return fmAmplitudeScale * (complexReal * cos(theta) - complexImag * sin(theta));
 }
 
@@ -445,11 +599,16 @@ void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
     theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
+    // S-13: reduce the argument before it reaches cos/sin below.
+    theta = wrapPhase(theta);
   }
   vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
   vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
   vVectorValue = projectComplex(complexReal, complexImag, theta);
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vNormalView = normalMatrix * normal;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  #include <clipping_planes_vertex>
+  gl_Position = projectionMatrix * mvPosition;
 }
 `;
 
@@ -460,7 +619,11 @@ uniform float fmOpacity;
 uniform int fmPaletteId;
 uniform float fmScalarMin;
 uniform float fmScalarMax;
+uniform float fmShadeStrength;
 varying float vScalarValue;
+varying vec3 vNormalView;
+
+#include <clipping_planes_pars_fragment>
 
 vec3 mixStops3(float t, vec3 a, vec3 b, vec3 c) {
   if (t < 0.5) {
@@ -511,10 +674,28 @@ vec3 paletteColor(float t) {
   return mixStops4(t, vec3(0.267, 0.004, 0.329), vec3(0.192, 0.408, 0.557), vec3(0.208, 0.718, 0.475), vec3(0.992, 0.906, 0.145));
 }
 
+vec3 srgbToLinearVec3(vec3 c) {
+  vec3 lower = c / 12.92;
+  vec3 higher = pow((c + 0.055) / 1.055, vec3(2.4));
+  return mix(lower, higher, step(vec3(0.04045), c));
+}
+
 void main() {
-  float span = max(fmScalarMax - fmScalarMin, 1e-12);
-  float t = clamp((vScalarValue - fmScalarMin) / span, 0.0, 1.0);
-  gl_FragColor = vec4(paletteColor(t), fmOpacity);
+  #include <clipping_planes_fragment>
+  float v = vScalarValue;
+  bool bad = !(v == v) || abs(v) > 3.0e38;
+
+  // S-07: vScalarValue arrives already normalized to [0, 1] in float64 on
+  // the CPU (plain scalar buffers) or in the vertex shader (complex/modal
+  // buffers, see COMPLEX_SCALAR_SURFACE_VERTEX_SHADER) -- no further
+  // (v - min) / span division is done here at float32 precision.
+  float t = bad ? 0.5 : clamp(v, 0.0, 1.0);
+  vec3 base = srgbToLinearVec3(bad ? vec3(0.85, 0.0, 0.85) : paletteColor(t));
+  vec3 n = normalize(vNormalView) * (gl_FrontFacing ? 1.0 : -1.0);
+  float ndl = clamp(dot(n, normalize(vec3(0.35, 0.55, 0.75))) * 0.5 + 0.5, 0.0, 1.0);
+  vec3 color = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);
+  gl_FragColor = vec4(color, fmOpacity);
+  #include <colorspace_fragment>
 }
 `;
 
@@ -522,7 +703,11 @@ const ORIENTATION_SURFACE_FRAGMENT_SHADER = `
 precision highp float;
 
 uniform float fmOpacity;
+uniform float fmShadeStrength;
 varying vec3 vVectorValue;
+varying vec3 vNormalView;
+
+#include <clipping_planes_pars_fragment>
 
 const float FM_PI = 3.141592653589793;
 
@@ -558,6 +743,11 @@ vec3 orientationColor(vec3 vectorValue) {
 }
 
 void main() {
-  gl_FragColor = vec4(orientationColor(vVectorValue), fmOpacity);
+  #include <clipping_planes_fragment>
+  vec3 base = orientationColor(vVectorValue);
+  vec3 n = normalize(vNormalView) * (gl_FrontFacing ? 1.0 : -1.0);
+  float ndl = clamp(dot(n, normalize(vec3(0.35, 0.55, 0.75))) * 0.5 + 0.5, 0.0, 1.0);
+  vec3 color = base * mix(1.0, 0.55 + 0.75 * ndl, fmShadeStrength);
+  gl_FragColor = vec4(color, fmOpacity);
 }
 `;

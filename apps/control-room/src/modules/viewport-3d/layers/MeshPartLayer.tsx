@@ -52,6 +52,7 @@ import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopol
 import {
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
+  scalarSurfaceShaderVariantKey,
   updateScalarSurfaceShaderMaterial,
 } from "../viewport3dScalarSurfaceShader";
 import type {
@@ -164,6 +165,7 @@ export function createMeshPartSurfaceGeometry({
   if (!expandSurfaceFaces) {
     attachViewport3DSharedTopologyPosition(next, positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
+    next.computeVertexNormals();
     return next;
   }
 
@@ -180,6 +182,7 @@ export function createMeshPartSurfaceGeometry({
     expandedPositions[targetOffset + 2] = positions[sourceOffset + 2] ?? 0;
   }
   next.setAttribute("position", new BufferAttribute(expandedPositions, 3));
+  next.computeVertexNormals();
   return next;
 }
 
@@ -901,6 +904,16 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     [surfaceOpacity],
   );
   const scalarShaderBuffer = committedScalarColorState.buffer;
+  // Stable "program shape" key: null when there is no buffer (material must not
+  // exist), otherwise one of 4 strings (scalar/orientation × real/complex).
+  // Deliberately does NOT depend on scalarShaderBuffer's identity, phase,
+  // range, palette or opacity — those are data, not shape, and are pushed onto
+  // the existing material via updateScalarSurfaceShaderMaterial below instead
+  // of forcing a new ShaderMaterial (and a synchronous GL program relink) on
+  // every animation frame. See S-08.
+  const scalarShaderVariantKey = scalarShaderBuffer
+    ? scalarSurfaceShaderVariantKey(scalarShaderBuffer)
+    : null;
   const scalarShaderMaterial = useMemo(() => {
     if (!modalSurfaceActive && !fieldColorLayersEnabled && !meshQualityColors) return null;
     if (
@@ -913,17 +926,21 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         ...surfacePolicy,
         opacity: surfaceOpacity,
         toneMapped: materialProfile.magneticSurface.toneMapped,
+        shadeStrength: materialProfile.magneticSurface.shadeStrength,
       }),
     );
+    // scalarShaderBuffer/surfacePolicy/surfaceOpacity/materialProfile are read
+    // here only to construct the INITIAL material; they are intentionally
+    // excluded from the dependency array below (see comment above
+    // scalarShaderVariantKey) and are kept in sync afterwards by the update
+    // effect further down, which applies uniforms + policy props in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     fieldColorLayersEnabled,
-    materialProfile.magneticSurface.toneMapped,
     meshQualityColors,
     modalSurfaceActive,
     committedScalarColorState.pipeline,
-    scalarShaderBuffer,
-    surfaceOpacity,
-    surfacePolicy,
+    scalarShaderVariantKey,
     tracker,
   ]);
 
@@ -941,12 +958,27 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       scalarShaderMaterial,
       committedScalarColorState.buffer,
       surfaceOpacity,
+      materialProfile.magneticSurface.shadeStrength,
     );
+    // Render-policy props (transparent/depthWrite/depthTest/side/polygonOffset*)
+    // and toneMapped are only baked in at material construction time by
+    // createScalarSurfaceShaderMaterial. Since scalarShaderMaterial is no
+    // longer recreated on every surfacePolicy/opacity/toneMapped change (see
+    // above), re-apply them here directly on the existing material instance.
+    // None of these require material.needsUpdate — they are plain per-draw
+    // renderer state read by WebGLRenderer, not baked into the compiled
+    // program body.
+    Object.assign(scalarShaderMaterial, surfacePolicy);
+    scalarShaderMaterial.toneMapped =
+      materialProfile.magneticSurface.toneMapped ?? false;
   }, [
     committedScalarColorState.buffer,
     committedScalarColorState.pipeline,
+    materialProfile.magneticSurface.shadeStrength,
+    materialProfile.magneticSurface.toneMapped,
     scalarShaderMaterial,
     surfaceOpacity,
+    surfacePolicy,
   ]);
 
   useEffect(() => {

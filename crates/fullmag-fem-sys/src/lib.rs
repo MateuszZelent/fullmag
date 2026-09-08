@@ -116,6 +116,7 @@ pub enum fullmag_fem_observable {
     FULLMAG_FEM_OBSERVABLE_TORQUE = 13,
     FULLMAG_FEM_OBSERVABLE_DEMAG_PHI = 14,
     FULLMAG_FEM_OBSERVABLE_H_DRIVE = 15,
+    FULLMAG_FEM_OBSERVABLE_H_DMI_ROTATED = 16,
 }
 
 #[repr(C)]
@@ -777,6 +778,8 @@ pub struct fullmag_fem_plan_desc {
     pub frozen_mask_len: u64,
     pub frozen_reference_xyz: *const f64,
     pub frozen_reference_len: u64,
+    pub has_rotated_interfacial_dmi: i32,
+    pub rotated_interfacial_dmi_constant: f64,
 }
 
 #[repr(C)]
@@ -1214,6 +1217,28 @@ pub struct fullmag_fem_step_stats {
     pub demag_recovered_field_energy_joules: f64,
     pub rk_transaction_cpu_snapshot_allocation_count: u64,
     pub rk_transaction_peak_rss_bytes: u64,
+}
+
+pub const FULLMAG_FEM_OBJECT_STATS_V1_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_object_stats_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub mx: f64,
+    pub my: f64,
+    pub mz: f64,
+    pub moment_weight: f64,
+    pub exchange_energy_joules: f64,
+    pub demag_energy_joules: f64,
+    pub external_energy_joules: f64,
+    pub drive_energy_joules: f64,
+    pub anisotropy_energy_joules: f64,
+    pub dmi_energy_joules: f64,
+    pub rotated_dmi_energy_joules: f64,
+    pub magnetoelastic_energy_joules: f64,
+    pub total_energy_joules: f64,
 }
 
 pub const FULLMAG_FEM_ACCEPTED_ENERGY_PROOF_V1_ABI_VERSION: u32 = 1;
@@ -2917,6 +2942,13 @@ extern "C" {
         out_len: u64,
     ) -> i32;
 
+    pub fn fullmag_fem_backend_object_stats_for_elements_v1(
+        handle: *mut fullmag_fem_backend,
+        element_indices: *const u32,
+        element_count: u64,
+        out_stats: *mut fullmag_fem_object_stats_v1,
+    ) -> i32;
+
     pub fn fullmag_fem_backend_begin_field_snapshot(
         handle: *mut fullmag_fem_backend,
         observable: fullmag_fem_observable,
@@ -3506,6 +3538,15 @@ mod tests {
         assert!(
             std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len)
                 > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_xyz)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, has_rotated_interfacial_dmi)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, frozen_reference_len),
+            "rotated-interfacial DMI must remain an append-only plan extension"
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, rotated_interfacial_dmi_constant)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, has_rotated_interfacial_dmi)
         );
     }
 
