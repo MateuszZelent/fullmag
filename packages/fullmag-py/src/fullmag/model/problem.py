@@ -416,6 +416,8 @@ def _fem_mesh_cache_dir() -> Path | None:
         return None
     if raw:
         path = Path(raw).expanduser()
+    elif (cache_root := os.environ.get("FULLMAG_CACHE_ROOT")) and cache_root.strip():
+        path = Path(cache_root).expanduser() / "fem_mesh_assets"
     else:
         path = Path.cwd() / ".fullmag" / "local" / "cache" / "fem_meshes"
     path.mkdir(parents=True, exist_ok=True)

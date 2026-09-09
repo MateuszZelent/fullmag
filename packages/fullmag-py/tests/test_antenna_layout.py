@@ -287,3 +287,19 @@ def test_layout_uses_native_occ_for_shared_fem_domains() -> None:
     )
 
     assert is_occ_compatible([layout]) is True
+
+
+def test_fem_mesh_cache_follows_canonical_cache_root(monkeypatch) -> None:
+    from pathlib import Path
+
+    from fullmag.model.problem import _fem_mesh_cache_dir
+
+    canonical_cache = Path("D:/git/fullmag/storage/cache/windows/antenna-test")
+    monkeypatch.delenv("FULLMAG_FEM_MESH_CACHE_DIR", raising=False)
+    monkeypatch.setenv("FULLMAG_CACHE_ROOT", str(canonical_cache))
+
+    with patch.object(Path, "mkdir") as mkdir:
+        resolved = _fem_mesh_cache_dir()
+
+    assert resolved == canonical_cache / "fem_mesh_assets"
+    mkdir.assert_called_once_with(parents=True, exist_ok=True)
