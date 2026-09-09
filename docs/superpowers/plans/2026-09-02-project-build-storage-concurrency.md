@@ -1,6 +1,20 @@
 # Zarządzanie buildami projektu i równoległością — Implementation Plan
 
+> **Status (2026-09-09): historyczny plan wdrożenia, nieobowiązujący jako
+> instrukcja operacyjna i niebędący dowodem implementacji.** Aktualne zasady
+> znajdują się w [Fullmag build-storage governance](../../guides/fullmag-build-storage-governance.md).
+> W szczególności zwykła praca używa stabilnego, blokowanego profilu per
+> worktree; osobna generacja pozostaje tylko dla niezgodnego toolchainu/ABI,
+> izolowanej kwalifikacji lub publikacji. Opis osobnego `build_N` dla każdego
+> wywołania w tym planie jest propozycją historyczną i został zastąpiony.
+> Poniższe kroki pozostają niezrealizowanym planem, dopóki bieżący kod i
+> weryfikacja nie wykażą inaczej.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> Powyższa dyrektywa jest zachowana jako historyczna metadana planu. Nie
+> uruchamiaj tego planu wyłącznie na jej podstawie; najpierw uzgodnij bieżący
+> zakres i stosuj aktualny kontrakt storage.
 
 **Goal:** Przenieść nowe buildy, cache, runtime’y, logi i wyniki do jednego jawnego katalogu storage obok repozytorium oraz zapewnić bezkolizyjną pracę równoległych sesji Windows i Linux.
 

@@ -5,7 +5,7 @@ description: "Use when modifying frontend v2 migration plans, legacy apps/web re
 
 # Frontend v2 Cutover Governance
 
-Use this skill for migration policy, legacy references, feature flags, cutover, freeze, removal, or deployment-default changes. The user instruction and root `AGENTS.md` take precedence.
+Use this skill for migration policy, legacy references, feature flags, cutover, freeze, removal, or deployment-default changes. The user instruction and root `AGENTS.md` take precedence. When the change creates frontend build, browser, or deployment artifacts, apply the shared project-storage policy in `../../../docs/adr/0030-project-storage-and-build-concurrency.md`; accepted storage paths and cleanup status must remain separate from v2 cutover status.
 
 In the current checkout, `apps/control-room` is the v2 target and `apps/web` is the legacy/reference tree. Keep that naming synchronized with the root instructions and migration specs; do not invent `apps/legacy_web` unless the repository actually creates it.
 

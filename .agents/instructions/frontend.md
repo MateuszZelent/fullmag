@@ -20,6 +20,34 @@ Rules:
 - frontend code must use the central typed client/facade and must not hand-roll endpoint strings outside the API client layer,
 - JSON contract changes must be reflected in OpenAPI and shared frontend types.
 
+### 9.0 Granica buildów i artefaktów frontendu
+
+Build/cache/browser storage podlega [ADR
+0030](../../docs/adr/0030-project-storage-and-build-concurrency.md) oraz
+root `AGENTS.md`. `apps/control-room` pozostaje repozytoryjnym źródłem kodu,
+ale nie jest magazynem dużych artefaktów:
+
+- `FULLMAG_PROJECT_STORAGE_ROOT` jest jedynym override’em project storage po
+  walidacji; domyślnie na Windowsie jest to `C:\git\fullmag\storage`, a na
+  managed Linux `/zfn2/mateuszz/git/fullmag/storage`;
+- pnpm store/home, npm/pip/uv cache, Playwright browsers, Vite/TypeScript
+  cache i duże test outputs muszą być potomkami zaakceptowanego
+  `storage/cache`, `storage/builds/<worktree-id>/<profile-id>` albo jawnego
+  `storage/runs/<task-id>/<run-id>`;
+- `node_modules` jest zależne od worktree. Nie kopiuj go pomiędzy checkoutami;
+  kontrolowany link może być użyty wyłącznie, gdy narzędzie i rejestr storage
+  zachowują jego własność oraz izolację;
+- każdy test lub build, który generuje duży output, wybiera profil przypisany
+  do worktree i zapisuje manifest/status. Zgodne kolejne uruchomienia mogą
+  reuse’ować profil pod blokadą; równoczesny zapis do mutable outputu czeka albo
+  kończy się błędem;
+- odmowa ścieżki lub uprawnień kończy polecenie przed instalacją i kompilacją.
+  Nie wolno przekierować outputu do checkoutu, rootu dysku, profilu użytkownika
+  ani niekwalifikowanego `TEMP`.
+
+Control Room nie tworzy osobnej gałęzi storage dla FDM i FEM. Różnice urządzeń
+i backendów należą do profilu builda oraz capability/runtime provenance.
+
 ### 9.2 Frontend architecture invariant
 
 The control room must use:
