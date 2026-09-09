@@ -5,6 +5,8 @@ description: "Use when a code change needs checkout isolation or the user reques
 
 # Worktree isolation
 
+Read host storage configuration through the resolver from the main checkout's `.env` (`FULLMAG_PROJECT_STORAGE_ROOT`; template `.env.example`). Do not hardcode Windows/Linux build paths or copy secrets into worktrees. Explicit process variables take precedence for validated container mapping. Git identifies the project and worktree roots; the configured storage root determines build destinations.
+
 Inspect `git status --short`, `git worktree list --porcelain`, `git rev-parse --git-dir`, `git rev-parse --git-common-dir`, and `git rev-parse --show-superproject-working-tree` before choosing a checkout. Different git/common directories do not by themselves prove isolation inside a submodule.
 
 For Fullmag, apply [the shared storage policy](../../../docs/guides/fullmag-build-storage-governance.md): derive the project root from the common Git directory and keep `worktrees` and `storage` as its siblings. Do not derive either path from `cwd.parent`. Register the task and owner before creating or reusing a worktree; the registry and the final resource state are mandatory.

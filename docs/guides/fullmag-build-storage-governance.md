@@ -43,6 +43,17 @@ kontrakt i wykrywalne braki, a nie pełną gwarancję wykonawczą.
 
 ## Granica projektu
 
+Fizyczną ścieżkę storage danego hosta deklaruje operator w `.env` głównego
+checkoutu przez `FULLMAG_PROJECT_STORAGE_ROOT`. `.env.example` dokumentuje klucz,
+ale nie narzuca lokalizacji Windows/Linux. Resolver czyta tylko zarządzane
+zmienne storage, bez wykonywania kodu i interpolacji; zmienne procesu mają
+pierwszeństwo (w szczególności dla ścieżek wewnątrz kontenera). Wszystkie
+worktree korzystają z `.env` głównego checkoutu. Nie kopiuj pliku z sekretami.
+Poniższy układ rodzeństwa jest wyłącznie fallbackiem zgodności przy braku
+konfiguracji; nowe buildy agenta wymagają jawnej deklaracji w `.env`.
+Niestandardowy root nadal wymaga zatwierdzonego markera projektu. Instrukcje
+i skille odsyłają do resolvera, nie ustalają fizycznych ścieżek hosta.
+
 Tożsamość projektu wyznacza się z Git, a nie z bieżącego katalogu procesu:
 
 1. rozwiąż bieżący checkout przez `git rev-parse --show-toplevel`;

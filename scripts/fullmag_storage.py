@@ -140,6 +140,32 @@ def validate_managed_view(layout):
         raise StorageError(f"Wrong managed backing image: expected {layout['native_backing_image']}, observed {observed}")
 
 
+def storage_dotenv(main_repo):
+    """Read only storage settings; never execute or interpolate dotenv values."""
+    path = main_repo / ".env"
+    if not path.is_file():
+        return {}
+    values = {}
+    for number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or key not in MANAGED_VARIABLES:
+            continue
+        value = value.strip()
+        if value.startswith(("'", '"')):
+            if len(value) < 2 or value[-1] != value[0]:
+                raise StorageError(f"Invalid storage setting at {path}:{number}")
+            value = value[1:-1]
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+        if value:
+            values[key] = value
+    return values
+
+
 def resolve_layout(repo_root, profile=None, environ=None):
     env = os.environ if environ is None else environ
     repo = Path(git(repo_root, "rev-parse", "--show-toplevel")).resolve()
@@ -147,6 +173,7 @@ def resolve_layout(repo_root, profile=None, environ=None):
         raise StorageError("Resolve storage from the Fullmag checkout, not a Git submodule")
     registrations = worktree_records(repo)
     main_repo = Path(registrations[0]["worktree"]).resolve()
+    env = {**storage_dotenv(main_repo), **env}
     project = main_repo.parent
     profile = profile or env.get("FULLMAG_STORAGE_PROFILE") or ("windows-native" if os.name == "nt" else "linux-host")
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,79}", profile):
