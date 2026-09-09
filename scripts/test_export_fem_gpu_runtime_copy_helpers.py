@@ -1958,11 +1958,11 @@ def test_export_mounts_durable_staging_for_container_postprocessing() -> None:
     assert '-v "${FULLMAG_CONTAINER_TARGET_DIR}:/workspace/managed-runtime-target"' not in exporter
 
 
-def test_export_keeps_nvcc_temp_local_but_cache_and_build_log_durable() -> None:
+def test_export_uses_durable_target_temp_for_container_build() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
-    assert '-e TMPDIR="/tmp/fullmag-runtime-export"' in exporter
-    assert '-e TMPDIR="/workspace/target/tmp"' not in exporter
+    assert '-e TMPDIR="/workspace/target/tmp/runtime-export"' in exporter
+    assert '-e TMPDIR="/tmp/fullmag-runtime-export"' not in exporter
     assert '-e CARGO_HOME="/workspace/target/cargo-home"' in exporter
     assert '-e FULLMAG_BUILD_LOG="/workspace/target/tmp/fullmag-build.log"' in exporter
     assert (
@@ -2000,7 +2000,7 @@ def test_export_defaults_to_exact_persistent_build_root() -> None:
         REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
     ).read_text(encoding="utf-8")
 
-    assert "resolve_managed_fem_native_storage_profile" in exporter
+    assert "resolve_managed_fem_native_storage" in exporter
     assert '/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4' in storage_helper
     assert '/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native-2.ext4' in storage_helper
     assert 'readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"' in exporter

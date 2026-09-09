@@ -1,6 +1,14 @@
 # Zarządzanie buildami projektu i równoległością — specyfikacja
 
-- Status: draft po korekcie granicy storage przez użytkownika, przed przeglądem specyfikacji
+> **Uwaga o statusie ścieżek — 2026-09-09:** Ta specyfikacja jest starszym
+> projektem wdrożenia i podlega [ADR
+> 0030](../../adr/0030-project-storage-and-build-concurrency.md). Wystąpienia
+> płaskich katalogów poniżej opisują historyczne dowody wejściowe albo kryteria
+> ich odrzucenia podczas migracji; nie są aktywnymi defaultami. Aktualny
+> operacyjny root to `C:\git\fullmag\storage` na Windowsie oraz
+> `/zfn2/mateuszz/git/fullmag/storage` na managed Linux.
+
+- Status: draft po korekcie granicy storage przez użytkownika, przed przeglądem specyfikacji; storage policy reconciled by ADR 0030
 - Data: 2026-09-02
 - Zakres: storage buildów, cache, runtime’ów i artefaktów uruchomień dla Windows i Linux
 - Checkout referencyjny: `C:\git\fullmag\fullmag`

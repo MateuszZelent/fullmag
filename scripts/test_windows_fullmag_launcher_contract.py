@@ -12,6 +12,8 @@ WINDOWS_COMPOSE = ROOT / "compose.windows.yaml"
 FEM_GPU_DOCKERFILE = ROOT / "docker" / "fem-gpu" / "Dockerfile"
 FEM_CPU_DOCKERFILE = ROOT / "docker" / "fem-cpu" / "Dockerfile"
 SETUP = ROOT / "scripts" / "windows" / "setup_fullmag.ps1"
+STORAGE_ADAPTER = ROOT / "scripts" / "windows" / "fullmag_storage.ps1"
+STORAGE_RESOLVER = ROOT / "scripts" / "fullmag_storage.py"
 
 
 def test_justfile_exposes_native_windows_fullmag_route() -> None:
@@ -27,10 +29,13 @@ def test_justfile_exposes_native_windows_fullmag_route() -> None:
 
 def test_windows_launcher_keeps_build_and_cache_storage_outside_repo() -> None:
     launcher = LAUNCHER.read_text(encoding="utf-8")
+    adapter = STORAGE_ADAPTER.read_text(encoding="utf-8")
+    resolver = STORAGE_RESOLVER.read_text(encoding="utf-8")
 
-    assert "GetPathRoot($RepoRoot)" in launcher
-    assert "Require-ExternalBuildPath" in launcher
-    assert "must be outside the repository" in launcher
+    assert "Resolve-FullmagStorageLayout" in launcher
+    assert "Set-FullmagStorageEnvironment" in launcher
+    assert "Assert-FullmagStoragePath" in launcher
+    assert "fullmag_storage.py" in adapter
     assert "Require-DPath" not in launcher
     for variable in (
         "CARGO_HOME",
@@ -49,7 +54,7 @@ def test_windows_launcher_keeps_build_and_cache_storage_outside_repo() -> None:
         "PLAYWRIGHT_BROWSERS_PATH",
         "PYTHONPYCACHEPREFIX",
     ):
-        assert f"$env:{variable}" in launcher
+        assert variable in adapter or variable in launcher or variable in resolver
 
     assert 'Join-Path $RepoRoot "target"' not in launcher
     assert "build_windows_msi.ps1" not in launcher
@@ -164,6 +169,23 @@ def test_windows_launcher_supports_build_false_without_rebuilding() -> None:
     assert "release\\fullmag.exe" in launcher
 
 
+def test_native_auto_reuses_cpu_storage_profile_without_changing_request() -> None:
+    launcher = LAUNCHER.read_text(encoding="utf-8")
+
+    assert '$StorageDevice = if ($Device -eq "gpu") { "gpu" } else { "cpu" }' in launcher
+    assert '$useCuda = $Device -eq "gpu"' in launcher
+    assert '"-Device", $Device' in launcher
+
+
+def test_fem_auto_resolves_storage_profile_before_managed_entry() -> None:
+    launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
+
+    assert "function Resolve-FullmagWindowsAutoDevice" in launcher
+    assert '$StorageProfile = "windows-fem-$StorageDevice"' in launcher
+    assert '$Device = $StorageDevice' in launcher
+    assert '$RequestedDevice = $Device' in launcher
+
+
 def test_windows_simulation_launchers_forward_explicit_output_directory() -> None:
     for path in (LAUNCHER, LEGACY_FEM_LAUNCHER, DOCKER_LAUNCHER):
         launcher = path.read_text(encoding="utf-8")
@@ -218,7 +240,8 @@ def test_root_workspace_and_windows_setup_use_one_pnpm_lock_contract() -> None:
     assert not (ROOT / "package-lock.json").exists()
     assert "/package-lock.json" in (ROOT / ".gitignore").read_text(encoding="utf-8")
     assert '$PinnedPnpmVersion = "10.8.1"' in setup
-    assert '$env:COREPACK_HOME = $CorepackHome' in setup
+    assert '$CorepackHome = [string]$StorageLayout.env.COREPACK_HOME' in setup
+    assert "Set-FullmagStorageEnvironment -Layout $StorageLayout" in setup
     assert '"install", "--global", "pnpm@$PinnedPnpmVersion"' in setup
     assert "Pinned pnpm validation failed" in setup
 
@@ -236,6 +259,20 @@ def test_windows_fem_gpu_routes_to_docker_before_posix_host_setup() -> None:
     )
 
 
+def test_windows_fem_aliases_share_storage_contract() -> None:
+    for path in (LEGACY_FEM_LAUNCHER, FEM_LAUNCHER, DOCKER_LAUNCHER):
+        launcher = path.read_text(encoding="utf-8")
+
+        assert (
+            "FULLMAG_PROJECT_STORAGE_ROOT" in launcher
+            or "fullmag_storage.ps1" in launcher
+            or "run_fullmag_wsl.ps1" in launcher
+        )
+        assert '"fullmag-build\\$WorkspaceNamespace"' not in launcher
+        assert '"fullmag-cache\\$WorkspaceNamespace"' not in launcher
+        assert '"fullmag-tmp\\$WorkspaceNamespace"' not in launcher
+
+
 def test_windows_fem_entrypoint_is_windows_powerShell_to_docker_and_wsl_free() -> None:
     launcher = FEM_LAUNCHER.read_text(encoding="utf-8")
 
@@ -249,8 +286,10 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
     launcher = LEGACY_FEM_LAUNCHER.read_text(encoding="utf-8")
 
     for required in (
-        "GetPathRoot($RepoRoot)",
-        "Require-ExternalBuildPath",
+        "fullmag_storage.ps1",
+        "Resolve-FullmagStorageLayout",
+        "Set-FullmagStorageEnvironment",
+        "Assert-FullmagStoragePath",
         "docker compose",
         "BUILDX_BUILDER",
         "fullmag-windows",
@@ -275,7 +314,7 @@ def test_windows_fem_launcher_is_container_backed_without_direct_wsl_dependency(
         "docker info",
         "nvidia-smi",
         "compose.windows.yaml",
-        "Get-WorkspaceNamespace",
+        "$WorkspaceNamespace = [string]$StorageLayout.worktree_id",
         "$ComposeProjectName = \"fullmag-windows-fem-$WorkspaceNamespace-$Device\"",
         '$env:COMPOSE_PROJECT_NAME = $ComposeProjectName',
         '$DefaultFemCpuImage = "fullmag/fem-cpu:windows-local-$WorkspaceNamespace"',
@@ -341,12 +380,13 @@ def test_windows_launchers_and_setup_namespace_default_storage_per_worktree() ->
     setup = SETUP.read_text(encoding="utf-8")
 
     for script in (launcher, fem_launcher, setup):
-        assert "function Get-WorkspaceNamespace" in script
-        assert "$WorkspaceNamespace = Get-WorkspaceNamespace $RepoRoot" in script
-        assert '"fullmag-cache\\$WorkspaceNamespace"' in script
-        assert '"fullmag-build\\$WorkspaceNamespace"' in script
-    assert '"fullmag-tmp\\$WorkspaceNamespace"' in fem_launcher
-    assert '"fullmag-tmp\\$WorkspaceNamespace"' in setup
+        assert "Resolve-FullmagStorageLayout" in script
+        assert "Set-FullmagStorageEnvironment" in script
+        assert "$WorkspaceNamespace = [string]$StorageLayout.worktree_id" in script
+        assert "[string]$StorageLayout.cache_root" in script
+        assert "[string]$StorageLayout.build_root" in script
+    assert "[string]$StorageLayout.temp_root" in fem_launcher
+    assert "[string]$StorageLayout.temp_root" in setup
     assert '$env:COMPOSE_PROJECT_NAME = "fullmag-windows-fem"' not in fem_launcher
 
 
@@ -379,11 +419,13 @@ def test_windows_setup_bootstraps_tools_and_validates_storage() -> None:
         "cargo",
         "just",
         "uv",
-        "GetPathRoot($RepoRoot)",
+        "fullmag_storage.ps1",
+        "Resolve-FullmagStorageLayout",
+        "Set-FullmagStorageEnvironment",
+        "Assert-FullmagStoragePath",
         "FULLMAG_WINDOWS_CACHE_ROOT",
         "FULLMAG_WINDOWS_BUILD_ROOT",
         "FULLMAG_WINDOWS_TEMP_ROOT",
-        "must be outside the repository",
         "vcvars64.bat",
         "Git\\bin\\bash.exe",
     ):

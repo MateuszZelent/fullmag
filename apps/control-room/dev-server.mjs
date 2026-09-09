@@ -270,6 +270,12 @@ function removeStaleNextDevLock(distDir) {
 }
 
 function pruneIsolatedNextCaches() {
+  // Managed Next directories are junctions/symlinks into FULLMAG_FRONTEND_ROOT.
+  // Removing one recursively can delete the external cache target, so stale
+  // managed generations are retired by the storage inventory instead.
+  if (process.env.FULLMAG_FRONTEND_ROOT?.trim()) {
+    return;
+  }
   const retentionDays = Math.min(
     365,
     Math.max(

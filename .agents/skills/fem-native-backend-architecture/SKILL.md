@@ -9,6 +9,8 @@ Use this skill for architecture, documentation, operator extraction, interaction
 
 The user instruction and root `AGENTS.md` take precedence. Use `../../instructions/backend.md` as shared routing when present. Reuse already loaded skills; do not read the same skill twice in one turn.
 
+For build and runtime paths, apply [the shared Fullmag storage policy](../../../docs/guides/fullmag-build-storage-governance.md). Keep new FEM outputs in the resolved per-worktree profile and use the registry/final-state lifecycle; do not introduce a second storage root or a flat native build exception.
+
 ## Build and runtime boundary
 
 Inspect the repository `justfile` before native FEM work. Use the matching container-backed managed recipe first for build and runtime proof. Host `cargo`, `cmake`, Docker, and direct binaries are smoke diagnostics only unless a host-only check is explicitly requested. If no matching managed recipe exists, state that before using a host diagnostic. Do not start with a hand-built host command when a managed recipe covers the work.

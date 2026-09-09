@@ -1,5 +1,63 @@
 #!/usr/bin/env bash
 
+# Resolve the project-owned storage layout through the Python resolver.  This
+# is deliberately a shell boundary adapter: the path policy and mount choice
+# stay in one implementation, while managed recipes can consume the exported
+# environment without duplicating Linux/Windows rules.
+resolve_managed_fem_project_storage() {
+  local repo_root="${1:-${FULLMAG_REPO_ROOT:-${PWD}}}"
+  local resolver="${FULLMAG_STORAGE_RESOLVER:-${repo_root}/scripts/fullmag_storage.py}"
+  local python_cmd
+
+  if [ ! -f "${resolver}" ]; then
+    echo "[managed_fem_build_policy] common storage resolver is missing: ${resolver}" >&2
+    return 2
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python_cmd="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    python_cmd="$(command -v python)"
+  else
+    echo "[managed_fem_build_policy] Python is required for the common storage resolver" >&2
+    return 2
+  fi
+  local resolved_env
+  if ! resolved_env="$("${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" --format sh)"; then
+    echo "[managed_fem_build_policy] common storage resolver failed for: ${repo_root}" >&2
+    return 2
+  fi
+  # Keep command substitution failure visible. `if ! eval "$(...)"` tests
+  # eval's status and can turn a resolver failure with empty output into a
+  # successful no-op.
+  if ! eval "${resolved_env}"; then
+    echo "[managed_fem_build_policy] cannot apply resolved storage environment for: ${repo_root}" >&2
+    return 2
+  fi
+}
+
+initialize_managed_fem_project_storage() {
+  local repo_root="${1:-${FULLMAG_REPO_ROOT:-${PWD}}}"
+  local resolver="${FULLMAG_STORAGE_RESOLVER:-${repo_root}/scripts/fullmag_storage.py}"
+  if [ ! -f "${resolver}" ]; then
+    echo "[managed_fem_build_policy] common storage resolver is missing: ${resolver}" >&2
+    return 2
+  fi
+  local python_cmd
+  if command -v python3 >/dev/null 2>&1; then
+    python_cmd="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    python_cmd="$(command -v python)"
+  else
+    echo "[managed_fem_build_policy] Python is required for the common storage resolver" >&2
+    return 2
+  fi
+  if ! "${python_cmd}" "${resolver}" resolve --repo-root "${repo_root}" --create --format json >/dev/null; then
+    echo "[managed_fem_build_policy] common storage initialization failed for: ${repo_root}" >&2
+    return 2
+  fi
+  resolve_managed_fem_project_storage "${repo_root}"
+}
+
 resolve_managed_fem_build_policy() {
   local repo_root="${FULLMAG_REPO_ROOT:-${PWD}}"
   local gitdir_record=""
@@ -52,7 +110,7 @@ resolve_managed_fem_build_policy() {
 
   local profile="${FULLMAG_NATIVE_STORAGE_PROFILE:-canonical}"
   case "${profile}" in
-    canonical|local-d) ;;
+    canonical|native-2|local-d) ;;
     *)
       echo "[managed_fem_build_policy] unsupported FULLMAG_NATIVE_STORAGE_PROFILE: ${profile}" >&2
       return 2
@@ -61,7 +119,7 @@ resolve_managed_fem_build_policy() {
 
   if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD+x}" != "x" ]; then
     case "${profile}" in
-      canonical) FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 ;;
+      canonical|native-2) FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 ;;
       local-d) FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 ;;
     esac
   fi

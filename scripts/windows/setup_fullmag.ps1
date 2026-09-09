@@ -10,53 +10,29 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
 
-function Resolve-AbsolutePath {
-  param([Parameter(Mandatory = $true)][string]$Path)
-  return [System.IO.Path]::GetFullPath($Path)
+$StorageAdapter = Join-Path $RepoRoot "scripts\windows\fullmag_storage.ps1"
+if (-not (Test-Path -LiteralPath $StorageAdapter -PathType Leaf)) {
+  throw "Fullmag Windows storage adapter is missing: $StorageAdapter"
+}
+. $StorageAdapter
+$StorageProfile = "windows-setup"
+
+if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
+  $managedArguments = @("-Lane", $Lane)
+  if ($InstallMissing) { $managedArguments += "-InstallMissing" }
+  $managedExitCode = Invoke-FullmagStorageManagedScript `
+    -RepoRoot $RepoRoot -Profile $StorageProfile -ScriptPath $PSCommandPath `
+    -Arguments $managedArguments
+  exit $managedExitCode
 }
 
-function Get-WorkspaceNamespace {
-  param([Parameter(Mandatory = $true)][string]$Path)
-  $normalized = (Resolve-AbsolutePath $Path).TrimEnd("\").ToLowerInvariant()
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
-  $hasher = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $digest = ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
-  }
-  finally {
-    $hasher.Dispose()
-  }
-  $slug = [System.IO.Path]::GetFileName($normalized) -replace "[^a-z0-9._-]", "-"
-  if (-not $slug) { $slug = "repo" }
-  return "$slug-$($digest.Substring(0, 16))"
-}
-
-$WorkspaceNamespace = Get-WorkspaceNamespace $RepoRoot
-$defaultCacheRoot = Join-Path $RepoDriveRoot ("fullmag-cache\$WorkspaceNamespace")
-$defaultBuildRoot = Join-Path $RepoDriveRoot ("fullmag-build\$WorkspaceNamespace")
-$defaultTempRoot = Join-Path $RepoDriveRoot ("fullmag-tmp\$WorkspaceNamespace")
-
-function Require-ExternalBuildPath {
-  param(
-    [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-  $resolved = (Resolve-AbsolutePath $Path).TrimEnd("\")
-  $repo = $RepoRoot.TrimEnd("\")
-  if (-not [System.IO.Path]::IsPathRooted($resolved)) {
-    throw "$Label must be an absolute Windows path, got $resolved"
-  }
-  if ($resolved -eq [System.IO.Path]::GetPathRoot($resolved).TrimEnd("\")) {
-    throw "$Label must not use a drive root directly, got $resolved"
-  }
-  if ($resolved.Equals($repo, [System.StringComparison]::OrdinalIgnoreCase) -or
-      $resolved.StartsWith($repo + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "$Label must be outside the repository, got $resolved"
-  }
-  return $resolved
-}
+$StorageLayout = Resolve-FullmagStorageLayout -RepoRoot $RepoRoot -Profile $StorageProfile
+Set-FullmagStorageEnvironment -Layout $StorageLayout
+$WorkspaceNamespace = [string]$StorageLayout.worktree_id
+$CacheRoot = [string]$StorageLayout.cache_root
+$BuildRoot = [string]$StorageLayout.build_root
+$TempRoot = [string]$StorageLayout.temp_root
 
 function Ensure-Directory {
   param([Parameter(Mandatory = $true)][string]$Path)
@@ -81,16 +57,17 @@ function Invoke-Checked {
 }
 
 $PinnedPnpmVersion = "10.8.1"
-
-$cacheCandidate = if ($env:FULLMAG_WINDOWS_CACHE_ROOT) { $env:FULLMAG_WINDOWS_CACHE_ROOT } else { $defaultCacheRoot }
-$buildCandidate = if ($env:FULLMAG_WINDOWS_BUILD_ROOT) { $env:FULLMAG_WINDOWS_BUILD_ROOT } else { $defaultBuildRoot }
-$tempCandidate = if ($env:FULLMAG_WINDOWS_TEMP_ROOT) { $env:FULLMAG_WINDOWS_TEMP_ROOT } else { $defaultTempRoot }
-$CacheRoot = Require-ExternalBuildPath $cacheCandidate "FULLMAG_WINDOWS_CACHE_ROOT"
-$BuildRoot = Require-ExternalBuildPath $buildCandidate "FULLMAG_WINDOWS_BUILD_ROOT"
-$TempRoot = Require-ExternalBuildPath $tempCandidate "FULLMAG_WINDOWS_TEMP_ROOT"
-$CorepackHome = Join-Path $CacheRoot "corepack"
+$CorepackHome = [string]$StorageLayout.env.COREPACK_HOME
 $PinnedPnpmCli = Join-Path $CorepackHome "v1\pnpm\$PinnedPnpmVersion\bin\pnpm.cjs"
-$env:COREPACK_HOME = $CorepackHome
+
+foreach ($item in @(
+    @{ Path = $CacheRoot; Label = "FULLMAG_WINDOWS_CACHE_ROOT" },
+    @{ Path = $BuildRoot; Label = "FULLMAG_WINDOWS_BUILD_ROOT" },
+    @{ Path = $TempRoot; Label = "FULLMAG_WINDOWS_TEMP_ROOT" },
+    @{ Path = $CorepackHome; Label = "COREPACK_HOME" }
+  )) {
+  $null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $item.Path -Label $item.Label
+}
 
 foreach ($directory in @($CacheRoot, $BuildRoot, $TempRoot)) {
   Ensure-Directory $directory

@@ -9,6 +9,8 @@ Use this skill for backend architecture, solver layout, runtime selection, inter
 
 The user instruction and root `AGENTS.md` take precedence. If `../../instructions/backend.md` exists, use it as the shared routing source. Reuse any skill already loaded in the current turn; do not read it again unless it changed or a referenced source is missing.
 
+For build and runtime paths, apply [the shared Fullmag storage policy](../../../docs/guides/fullmag-build-storage-governance.md). Do not add backend-specific storage roots, flat build directories, or fallback paths. Use the repository `justfile`, the resolved per-worktree profile, and the registered final state.
+
 ## Build and runtime boundary
 
 For FEM/MFEM/CUDA/hypre/libCEED work, inspect the repository `justfile` first and use the matching managed/container recipe as the default build and runtime path. Host `cargo`, `cmake`, Docker, or direct native binaries are diagnostics only unless the user explicitly requests a host-only check. If no matching managed recipe exists, record that fact before using a host diagnostic. Do not start with a hand-built host FEM command when a managed recipe owns the task.

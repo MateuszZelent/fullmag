@@ -7,6 +7,8 @@ description: "Use before reporting a change complete to match each claim to curr
 
 Match each claim to the evidence that proves it: a behavior test for a fix, compiler output for a build, browser evidence for rendering, or numerical/runtime evidence for scientific claims. A successful linter or a subagent summary does not establish all of these.
 
+For Fullmag storage and build claims, also verify the resolved project/storage root, worktree/profile registry entry, preflight result, final state, and output inventory. Check that the `justfile` recipe used the intended platform route and that a profile was reused or a separately justified generation was recorded. Documentation of a rule is not evidence that every launcher enforces it.
+
 Run the applicable checks, inspect their output and exit status, and record source/input identity and material limitations. Evidence remains usable while the relevant source, inputs, environment, and required freshness conditions are unchanged. It need not be rerun in the same message as the final answer.
 
 Review delegated changes and their evidence. Independently verify risky or unsupported claims, without automatically repeating a completed suite. Re-run checks after relevant changes or when failures or remaining concerns justify it.

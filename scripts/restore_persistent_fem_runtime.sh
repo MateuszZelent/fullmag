@@ -3,10 +3,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
-resolve_managed_fem_native_storage_profile
+source "${REPO_ROOT}/scripts/lib/managed_fem_native_storage.sh"
+export FULLMAG_REPO_ROOT="${REPO_ROOT}"
+resolve_managed_fem_native_storage
 readonly FULLMAG_NATIVE_STORAGE_PROFILE FULLMAG_NATIVE_BUILD_STORAGE_ROOT
 readonly FULLMAG_NATIVE_BUILD_IMAGE FULLMAG_NATIVE_MOUNT_VIEW
-: "${FULLMAG_BUILD_ROOT:=/zfn2/mateuszz/git/fullmag}"
+: "${FULLMAG_BUILD_ROOT:=${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}}"
 archive="${FULLMAG_BUILD_ROOT}/runtimes/fem-gpu-host-latest.tar"
 runtime_parent="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"

@@ -34,50 +34,45 @@ $ProgressPreference = "SilentlyContinue"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $TargetTriple = "x86_64-pc-windows-msvc"
-$RepoDriveRoot = [System.IO.Path]::GetPathRoot($RepoRoot)
+
+$StorageAdapter = Join-Path $RepoRoot "scripts\windows\fullmag_storage.ps1"
+if (-not (Test-Path -LiteralPath $StorageAdapter -PathType Leaf)) {
+  throw "Fullmag Windows storage adapter is missing: $StorageAdapter"
+}
+. $StorageAdapter
+$StorageDevice = if ($Device -eq "gpu") { "gpu" } else { "cpu" }
+$StorageProfile = "windows-native-fdm-$StorageDevice"
+
+if ($env:FULLMAG_STORAGE_MANAGED_ENTRY -ne "1") {
+  $managedArguments = @(
+    "-BuildMode", $BuildMode,
+    "-Frontend", $Frontend,
+    "-Backend", $Backend,
+    "-Device", $Device,
+    "-RunMode", $RunMode,
+    "-WebPort", $WebPort.ToString()
+  )
+  if ($ScriptPath) { $managedArguments += @("-ScriptPath", $ScriptPath) }
+  if ($OutputDir) { $managedArguments += @("-OutputDir", $OutputDir) }
+  if ($BuildOnly) { $managedArguments += "-BuildOnly" }
+  if ($SkipLocalChanges) { $managedArguments += "-SkipLocalChanges" }
+  $managedExitCode = Invoke-FullmagStorageManagedScript `
+    -RepoRoot $RepoRoot -Profile $StorageProfile -ScriptPath $PSCommandPath `
+    -Arguments $managedArguments
+  exit $managedExitCode
+}
+
+$StorageLayout = Resolve-FullmagStorageLayout -RepoRoot $RepoRoot -Profile $StorageProfile
+Set-FullmagStorageEnvironment -Layout $StorageLayout
+$WorkspaceNamespace = [string]$StorageLayout.worktree_id
+$CacheRoot = [string]$StorageLayout.cache_root
+$BuildRoot = [string]$StorageLayout.build_root
+$TargetRoot = [string]$StorageLayout.env.CARGO_TARGET_DIR
+$TempRoot = [string]$StorageLayout.temp_root
 
 function Resolve-AbsolutePath {
   param([Parameter(Mandatory = $true)][string]$Path)
   return [System.IO.Path]::GetFullPath($Path)
-}
-
-function Get-WorkspaceNamespace {
-  param([Parameter(Mandatory = $true)][string]$Path)
-  $normalized = (Resolve-AbsolutePath $Path).TrimEnd("\").ToLowerInvariant()
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($normalized)
-  $hasher = [System.Security.Cryptography.SHA256]::Create()
-  try {
-    $digest = ([BitConverter]::ToString($hasher.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
-  }
-  finally {
-    $hasher.Dispose()
-  }
-  $slug = [System.IO.Path]::GetFileName($normalized) -replace "[^a-z0-9._-]", "-"
-  if (-not $slug) { $slug = "repo" }
-  return "$slug-$($digest.Substring(0, 16))"
-}
-
-$WorkspaceNamespace = Get-WorkspaceNamespace $RepoRoot
-$defaultCacheRoot = Join-Path $RepoDriveRoot ("fullmag-cache\$WorkspaceNamespace")
-$defaultBuildRoot = Join-Path $RepoDriveRoot ("fullmag-build\$WorkspaceNamespace")
-
-function Require-ExternalBuildPath {
-  param(
-    [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][string]$Label
-  )
-  $resolved = (Resolve-AbsolutePath $Path).TrimEnd("\")
-  $repo = $RepoRoot.TrimEnd("\")
-  if (-not [System.IO.Path]::IsPathRooted($resolved)) {
-    throw "$Label must be an absolute Windows path, got $resolved"
-  }
-  if ($resolved -eq [System.IO.Path]::GetPathRoot($resolved).TrimEnd("\")) {
-    throw "$Label must not use a drive root directly, got $resolved"
-  }
-  if ($resolved.Equals($repo, [System.StringComparison]::OrdinalIgnoreCase) -or
-      $resolved.StartsWith($repo + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "$Label must be outside the repository, got $resolved"
-  }
 }
 
 function Ensure-Directory {
@@ -361,82 +356,63 @@ function Stage-NativeFdmDll {
   return (Resolve-AbsolutePath $destination)
 }
 
-$CacheRoot = if ($env:FULLMAG_WINDOWS_CACHE_ROOT) {
-  Resolve-AbsolutePath $env:FULLMAG_WINDOWS_CACHE_ROOT
-} else {
-  $defaultCacheRoot
-}
-$BuildRoot = if ($env:FULLMAG_WINDOWS_BUILD_ROOT) {
-  Resolve-AbsolutePath $env:FULLMAG_WINDOWS_BUILD_ROOT
-} else {
-  $defaultBuildRoot
-}
-$TargetRoot = if ($env:FULLMAG_WINDOWS_TARGET_DIR) {
-  Resolve-AbsolutePath $env:FULLMAG_WINDOWS_TARGET_DIR
-} else {
-  Join-Path $BuildRoot "cargo-targets\fullmag-windows"
-}
-$CargoHome = Join-Path $CacheRoot "cargo"
-$RustupHome = if ($env:FULLMAG_WINDOWS_RUSTUP_HOME) {
-  Resolve-AbsolutePath $env:FULLMAG_WINDOWS_RUSTUP_HOME
-} elseif (Get-Command "rustup" -ErrorAction SilentlyContinue) {
-  (& rustup show home 2>$null | Select-Object -First 1).Trim()
-} else {
-  Join-Path $CacheRoot "rustup"
-}
-$PnpmHome = Join-Path $CacheRoot "pnpm-home"
-$PnpmStore = Join-Path $CacheRoot "pnpm-store"
+$useCuda = $Device -eq "gpu"
+$CargoHome = [string]$StorageLayout.env.CARGO_HOME
+$RustupHome = [string]$StorageLayout.env.RUSTUP_HOME
+$PnpmHome = [string]$StorageLayout.env.PNPM_HOME
+$PnpmStore = [string]$StorageLayout.env.npm_config_store_dir
 $PinnedPnpmVersion = "10.8.1"
 $PinnedPnpmCli = Join-Path $CacheRoot "corepack\v1\pnpm\$PinnedPnpmVersion\bin\pnpm.cjs"
-$NpmCache = Join-Path $CacheRoot "npm-cache"
-$PipCache = Join-Path $CacheRoot "pip-cache"
-$UvCache = Join-Path $CacheRoot "uv"
-$TempRoot = Join-Path $CacheRoot "tmp"
-$CudaCache = Join-Path $CacheRoot "cuda"
-$PlaywrightRoot = Join-Path $CacheRoot "playwright-browsers"
-$PythonRoot = Join-Path $CacheRoot "python"
+$NpmCache = [string]$StorageLayout.env.npm_config_cache
+$PipCache = [string]$StorageLayout.env.PIP_CACHE_DIR
+$UvCache = [string]$StorageLayout.env.UV_CACHE_DIR
+$CudaCache = [string]$StorageLayout.env.CUDA_CACHE_PATH
+$PlaywrightRoot = [string]$StorageLayout.env.PLAYWRIGHT_BROWSERS_PATH
+$PythonRoot = Join-Path $BuildRoot "python"
 $PythonVenv = Join-Path $PythonRoot "fullmag"
 $PythonExe = Join-Path $PythonVenv "Scripts\python.exe"
 $ManifestPath = Join-Path $BuildRoot "windows-runtime\build-manifest.json"
 $FullmagExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag.exe"
 $FullmagApiExe = Join-Path $TargetRoot "$TargetTriple\release\fullmag-api.exe"
 $StaticControlRoom = Join-Path $RepoRoot "apps\control-room\out\index.html"
+$needsControlRoomToolchain = $Frontend -eq "static" -or
+  (-not $BuildOnly -and $RunMode -eq "interactive")
 
-foreach ($item in @(
-  @{ Path = $CacheRoot; Label = "FULLMAG_WINDOWS_CACHE_ROOT" },
-  @{ Path = $BuildRoot; Label = "FULLMAG_WINDOWS_BUILD_ROOT" },
-  @{ Path = $TargetRoot; Label = "FULLMAG_WINDOWS_TARGET_DIR" },
-  @{ Path = $RustupHome; Label = "FULLMAG_WINDOWS_RUSTUP_HOME" }
-)) {
-  Require-ExternalBuildPath $item.Path $item.Label
+$nextDistDir = if ($needsControlRoomToolchain -and $Frontend -eq "dev") {
+  ".next-control-room-$WebPort"
+} else {
+  $null
 }
+$prepareArguments = @{
+  RepoRoot = $RepoRoot
+  Profile = $StorageProfile
+  Compat = $true
+}
+if ($needsControlRoomToolchain) {
+  $prepareArguments.Frontend = $true
+}
+if ($nextDistDir) {
+  $prepareArguments.NextDistDir = $nextDistDir
+}
+$null = Prepare-FullmagStorageLinks @prepareArguments
 
 foreach ($directory in @(
-  $CacheRoot, $BuildRoot, $TargetRoot, $CargoHome, $RustupHome, $PnpmHome,
-  $PnpmStore, $NpmCache, $PipCache, $UvCache, $TempRoot, $CudaCache,
-  $PlaywrightRoot, $PythonRoot, (Split-Path -Parent $ManifestPath)
+  $CargoHome, $RustupHome, $PnpmHome, $PnpmStore, $NpmCache, $PipCache, $UvCache,
+  $TempRoot, $CudaCache, $PlaywrightRoot, $PythonRoot,
+  (Split-Path -Parent $ManifestPath)
 )) {
-  Ensure-Directory $directory
+  if ($directory) {
+    Ensure-Directory $directory
+  }
 }
 
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $TargetRoot -Label "CARGO_TARGET_DIR" -Parent $BuildRoot
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $PythonRoot -Label "Fullmag Python root" -Parent $BuildRoot
 $env:CARGO_HOME = $CargoHome
 $env:RUSTUP_HOME = $RustupHome
-$env:RUSTUP_PERMIT_COPY_RENAME = "1"
-$env:CARGO_TARGET_DIR = $TargetRoot
 $env:CARGO_INCREMENTAL = if ($Frontend -eq "dev" -and -not $BuildOnly) { "1" } else { "0" }
-$env:PNPM_HOME = $PnpmHome
-$env:npm_config_store_dir = $PnpmStore
-$env:npm_config_cache = $NpmCache
-$env:COREPACK_HOME = Join-Path $CacheRoot "corepack"
-$env:PIP_CACHE_DIR = $PipCache
-$env:UV_CACHE_DIR = $UvCache
+$env:FULLMAG_FDM_EXECUTION = $null
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $PythonRoot "managed"
-$env:TEMP = $TempRoot
-$env:TMP = $TempRoot
-$env:CUDA_CACHE_PATH = $CudaCache
-$env:PLAYWRIGHT_BROWSERS_PATH = $PlaywrightRoot
-$env:PYTHONPYCACHEPREFIX = Join-Path $CacheRoot "python-bytecode"
-$env:PYTHONDONTWRITEBYTECODE = "1"
 $env:PYTHONPATH = Join-Path $RepoRoot "packages\fullmag-py\src"
 $env:FULLMAG_PYTHON = $PythonExe
 Add-NodePaths
@@ -445,18 +421,16 @@ if ($Backend -eq "fem") {
   throw "Native Windows launcher currently supports FDM only; FEM remains on its managed runtime path"
 }
 
-$useCuda = $Device -eq "gpu"
 if ($useCuda -and $Backend -notin @("auto", "fdm")) {
   throw "device=gpu is only supported for the native Windows FDM lane"
 }
 
-$nativeFdmBuildRootName = if ($useCuda) { "native-fdm-cuda" } else { "native-fdm-cpu" }
 $nativeFdmBuildRoot = if ($env:FULLMAG_FDM_NATIVE_BUILD_ROOT) {
   Resolve-AbsolutePath $env:FULLMAG_FDM_NATIVE_BUILD_ROOT
 } else {
-  Join-Path $BuildRoot $nativeFdmBuildRootName
+  Join-Path $BuildRoot "native"
 }
-Require-ExternalBuildPath $nativeFdmBuildRoot "FULLMAG_FDM_NATIVE_BUILD_ROOT"
+$null = Assert-FullmagStoragePath -Layout $StorageLayout -Path $nativeFdmBuildRoot -Label "FULLMAG_FDM_NATIVE_BUILD_ROOT" -Parent $BuildRoot
 Ensure-Directory $nativeFdmBuildRoot
 $env:FULLMAG_FDM_NATIVE_BUILD_ROOT = $nativeFdmBuildRoot
 
@@ -486,8 +460,6 @@ $env:FULLMAG_SOURCE_SNAPSHOT_SHA256 = $sourceSnapshotSha256
 # Headless runs never launch the Control Room, so they must not be coupled to
 # the Node/pnpm profile recorded by a binary-only (`-BuildOnly`) build.  Static
 # exports always need the frontend toolchain; interactive dev runs do as well.
-$needsControlRoomToolchain = $Frontend -eq "static" -or
-  (-not $BuildOnly -and $RunMode -eq "interactive")
 if ($needsControlRoomToolchain) {
   Ensure-NodeToolchain
 }
