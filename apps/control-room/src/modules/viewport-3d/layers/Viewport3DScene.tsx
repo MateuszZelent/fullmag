@@ -1623,7 +1623,7 @@ function Viewport3DInteractionAndHudStack({
         />
       ) : null}
       {viewport3DPostProcessingEnabledFromBrowserConfig() ? (
-        <PostProcessingLayer />
+        <PostProcessingLayer sceneRadius={bounds?.radius ?? 1e-6} />
       ) : null}
     </>
   );
