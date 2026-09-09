@@ -11,6 +11,7 @@ import numpy as np
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
+    CPWAntennaLayout,
     Cylinder,
     Difference,
     Ellipse,
@@ -18,6 +19,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MicrostripAntennaLayout,
     Translate,
     Union,
 )
@@ -277,6 +279,56 @@ def build_surface_preview_payload(geometry: Geometry) -> dict[str, object] | Non
     }
 
 
+def _antenna_layout_to_trimesh(
+    geometry: MicrostripAntennaLayout | CPWAntennaLayout,
+    trimesh: Any,
+) -> Any:
+    """Build a watertight preview mesh for every conductor in a layout.
+
+    The layout owns already-transformed section vertices, so this helper only
+    connects adjacent sections.  It deliberately stays a presentation mesh;
+    conductor part identity remains in the typed layout/IR and is not inferred
+    from triangle ordering.
+    """
+    sections = geometry._sections()
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int]] = []
+    for part_id in geometry.conductor_part_ids:
+        part_sections = [
+            tuple(section["conductors"][part_id])  # type: ignore[index]
+            for section in sections
+        ]
+        offset = len(vertices)
+        vertices.extend(vertex for section in part_sections for vertex in section)
+        section_count = len(part_sections)
+        for index in range(section_count - 1):
+            start = offset + index * 4
+            end = start + 4
+            for edge in range(4):
+                a0 = start + edge
+                a1 = start + (edge + 1) % 4
+                b0 = end + edge
+                b1 = end + (edge + 1) % 4
+                faces.extend(((a0, a1, b1), (a0, b1, b0)))
+        first = offset
+        last = offset + (section_count - 1) * 4
+        faces.extend(
+            (
+                (first, first + 1, first + 2),
+                (first, first + 2, first + 3),
+                (last, last + 2, last + 1),
+                (last, last + 3, last + 2),
+            )
+        )
+    if not vertices or not faces:
+        raise ValueError("antenna layout has no conductor sections")
+    return trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=False,
+    )
+
+
 def export_geometry_to_stl(
     geometry: Geometry,
     destination: str | Path,
@@ -299,6 +351,8 @@ def export_geometry_to_stl(
     trimesh = _import_trimesh()
     if isinstance(geometry, Box):
         mesh = trimesh.creation.box(extents=geometry.size)
+    elif isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        mesh = _antenna_layout_to_trimesh(geometry, trimesh)
     elif isinstance(geometry, Cylinder):
         mesh = trimesh.creation.cylinder(
             radius=geometry.radius,
@@ -386,6 +440,8 @@ def _geometry_to_trimesh(
             through_thickness_element_ratio=through_thickness_element_ratio,
             through_thickness_symmetric=through_thickness_symmetric,
         )
+    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        return _antenna_layout_to_trimesh(geometry, trimesh)
     if isinstance(geometry, Difference):
         coaxial = _coaxial_cylinder_difference(geometry)
         if coaxial is not None:

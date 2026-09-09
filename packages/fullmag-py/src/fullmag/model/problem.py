@@ -952,10 +952,21 @@ def build_geometry_assets_for_request(
                     )
 
     if discretization.fdm is not None:
-        from fullmag.model.geometry import Cylinder, ImportedGeometry
+        from fullmag.model.geometry import (
+            CPWAntennaLayout,
+            Cylinder,
+            ImportedGeometry,
+            MicrostripAntennaLayout,
+        )
         from fullmag.meshing import realize_fdm_grid_asset
 
         for geometry in geometries:
+            # A conductor-backed antenna is an authoring/field-solve object,
+            # never a magnetic FDM occupancy mask.  Keep it in the canonical
+            # geometry list for bounds and visualization, but do not hand it
+            # to the magnetic voxelizer when a study universe is present.
+            if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+                continue
             should_realize = isinstance(geometry, (Cylinder, ImportedGeometry)) or study_universe is not None
             if should_realize:
                 asset = realize_fdm_grid_asset(

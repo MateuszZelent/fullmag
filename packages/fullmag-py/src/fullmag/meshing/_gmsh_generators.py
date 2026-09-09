@@ -12,6 +12,7 @@ from fullmag._progress import emit_progress
 from fullmag.model.geometry import (
     ArchWaveguide,
     Box,
+    CPWAntennaLayout,
     Cylinder,
     Difference,
     Ellipse,
@@ -19,6 +20,7 @@ from fullmag.model.geometry import (
     Geometry,
     ImportedGeometry,
     Intersection,
+    MicrostripAntennaLayout,
     Translate,
     Union,
 )
@@ -56,7 +58,7 @@ from ._gmsh_fields import _apply_mesh_options, _apply_post_mesh_options
 from ._gmsh_selectors import collect_orphan_entity_diagnostics
 from ._gmsh_airbox import _add_airbox_and_fragment, _add_airbox_geo
 from ._gmsh_swept import should_use_swept, generate_swept_mesh, classify_sweepability
-from ._gmsh_waveguides import add_arch_waveguide_to_occ
+from ._gmsh_waveguides import add_arch_waveguide_to_occ, add_antenna_layout_to_occ
 from ._gmsh_occ import _configure_axis_periodic_surfaces, _scale_periodic_boundary_pairs
 
 _NO_OP_FIELD_SIZE = 1.0e22
@@ -325,7 +327,21 @@ def generate_mesh(
             airbox=resolved_airbox,
             options=opts,
         )
-    if isinstance(geometry, (Cylinder, Difference, Union, Intersection, Translate, Ellipsoid, Ellipse, ArchWaveguide)):
+    if isinstance(
+        geometry,
+        (
+            Cylinder,
+            Difference,
+            Union,
+            Intersection,
+            Translate,
+            Ellipsoid,
+            Ellipse,
+            ArchWaveguide,
+            MicrostripAntennaLayout,
+            CPWAntennaLayout,
+        ),
+    ):
         # A chain of Translate wrapping an ImportedGeometry cannot go through
         # the OCC CSG pipeline (OCC cannot ingest STL/NPZ sources). Detect this
         # pattern, mesh the imported file directly, and apply the accumulated
@@ -714,6 +730,8 @@ def _add_geometry_to_occ(
         return [(3, tag)]
     if isinstance(geometry, ArchWaveguide):
         return add_arch_waveguide_to_occ(gmsh, geometry, scale=scale)
+    if isinstance(geometry, (MicrostripAntennaLayout, CPWAntennaLayout)):
+        return add_antenna_layout_to_occ(gmsh, geometry, scale=scale)
     if isinstance(geometry, Difference):
         base_tags = _add_geometry_to_occ(gmsh, geometry.base, scale=scale)
         tool_tags = _add_geometry_to_occ(gmsh, geometry.tool, scale=scale)

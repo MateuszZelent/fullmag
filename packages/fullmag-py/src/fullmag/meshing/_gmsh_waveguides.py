@@ -3,7 +3,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from fullmag.model.geometry import ArchWaveguide
+from fullmag.model.geometry import (
+    ArchWaveguide,
+    CPWAntennaLayout,
+    MicrostripAntennaLayout,
+)
 
 
 def add_arch_waveguide_to_occ(
@@ -57,3 +61,40 @@ def add_arch_waveguide_to_occ(
         wires.append(gmsh.model.occ.addWire(lines))
 
     return list(gmsh.model.occ.addThruSections(wires, makeSolid=True, makeRuled=True))
+
+
+def add_antenna_layout_to_occ(
+    gmsh: Any,
+    geometry: MicrostripAntennaLayout | CPWAntennaLayout,
+    *,
+    scale: float = 1.0,
+) -> list[tuple[int, int]]:
+    """Create one finite OCC loft solid for each authored conductor part."""
+    sections = geometry._sections()
+    result: list[tuple[int, int]] = []
+    for part_id in geometry.conductor_part_ids:
+        wires: list[int] = []
+        for section in sections:
+            vertices = section["conductors"][part_id]  # type: ignore[index]
+            points = [
+                gmsh.model.occ.addPoint(
+                    float(vertex[0]) * scale,
+                    float(vertex[1]) * scale,
+                    float(vertex[2]) * scale,
+                )
+                for vertex in vertices
+            ]
+            lines = [
+                gmsh.model.occ.addLine(points[index], points[(index + 1) % 4])
+                for index in range(4)
+            ]
+            wires.append(gmsh.model.occ.addWire(lines))
+        lofts = gmsh.model.occ.addThruSections(
+            wires,
+            makeSolid=True,
+            makeRuled=True,
+        )
+        result.extend((int(dim), int(tag)) for dim, tag in lofts)
+    if not result:
+        raise ValueError(f"antenna layout '{geometry.geometry_name}' has no conductor solids")
+    return result

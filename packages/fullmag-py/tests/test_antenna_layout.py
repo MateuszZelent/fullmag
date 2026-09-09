@@ -1,4 +1,5 @@
 import math
+from unittest.mock import patch
 
 import pytest
 
@@ -214,3 +215,57 @@ def test_scene_builder_round_trip_keeps_editable_antenna_stations() -> None:
     namespace = {"fm": fm}
     rebuilt_layout = eval(source, namespace, {})
     assert rebuilt_layout == layout
+
+
+def test_layout_exposes_a_finite_preview_mesh_for_all_conductor_parts() -> None:
+    trimesh = pytest.importorskip("trimesh")
+    from fullmag.meshing.surface_assets import _geometry_to_trimesh
+
+    layout = fm.CPWAntennaLayout(
+        name="preview_cpw",
+        length_m=4.0e-6,
+        thickness_m=80.0e-9,
+        conductivity_s_per_m=58.0e6,
+        stations=_cpw_stations(),
+        transform=fm.RigidTransform(translation=(2.0e-6, -1.0e-6, 3.0e-6)),
+    )
+
+    mesh = _geometry_to_trimesh(layout, trimesh)
+
+    assert len(mesh.vertices) == 12 * len(layout.stations)
+    assert len(mesh.faces) > 0
+    assert all(math.isfinite(float(value)) for value in mesh.vertices.reshape(-1))
+    assert tuple(mesh.bounds[0]) == pytest.approx(layout.world_bounds()[0])
+    assert tuple(mesh.bounds[1]) == pytest.approx(layout.world_bounds()[1])
+
+
+def test_layout_is_not_voxelized_as_a_magnetic_fdm_body() -> None:
+    from fullmag.model.problem import build_geometry_assets_for_request
+
+    layout = fm.CPWAntennaLayout(
+        name="fdm_excluded_cpw",
+        length_m=2.0e-6,
+        thickness_m=50.0e-9,
+        conductivity_s_per_m=58.0e6,
+        stations=(
+            fm.CPWWidthStation.symmetric(
+                s=0.0, signal_width=0.5e-6, gap=0.2e-6, ground_width=0.5e-6
+            ),
+            fm.CPWWidthStation.symmetric(
+                s=1.0, signal_width=0.5e-6, gap=0.2e-6, ground_width=0.5e-6
+            ),
+        ),
+    )
+    hints = fm.DiscretizationHints(fdm=fm.FDM(cell=(0.1e-6, 0.1e-6, 0.1e-6)))
+    universe = {"mode": "manual", "size": [4.0e-6, 4.0e-6, 2.0e-6]}
+
+    with patch("fullmag.meshing.realize_fdm_grid_asset") as realize:
+        assets = build_geometry_assets_for_request(
+            requested_backend=fm.BackendTarget.FDM,
+            geometries=(layout,),
+            discretization=hints,
+            study_universe=universe,
+        )
+
+    assert assets is None
+    realize.assert_not_called()
