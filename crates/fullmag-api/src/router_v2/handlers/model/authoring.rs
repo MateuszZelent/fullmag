@@ -5262,3 +5262,114 @@ mod regional_field_drive_tests {
         assert_eq!(round_tripped.spatial_profile, source.spatial_profile);
     }
 }
+
+#[cfg(test)]
+mod antenna_scene_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn merge_patch_preserves_all_five_antenna_composition_collections() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "revision": 12
+        }))
+        .expect("minimal scene");
+        let patched = apply_scene_merge_patch(
+            &scene,
+            &serde_json::json!({
+                "antenna_port_modes": [{
+                    "schema_version": "antenna_port_mode.v2",
+                    "id": "port_1",
+                    "source_object_id": "antenna_1",
+                    "current_transport_id": "transport_1",
+                    "branches": [{
+                        "id": "signal",
+                        "inlet_terminal_ref": "signal_in",
+                        "outlet_terminal_ref": "signal_out",
+                        "signed_weight": 1.0
+                    }, {
+                        "id": "return",
+                        "inlet_terminal_ref": "return_in",
+                        "outlet_terminal_ref": "return_out",
+                        "signed_weight": -1.0
+                    }]
+                }],
+                "antenna_field_solve_stages": [{
+                    "id": "solve_1",
+                    "source_object_id": "antenna_1",
+                    "current_transport_id": "transport_1",
+                    "port_mode_ids": ["port_1"],
+                    "conservative_current_view_ref": "transport_1:rt0",
+                    "model": "quasistatic_conduction_biot_savart3d",
+                    "oersted_realization": "direct_tetra_quadrature",
+                    "conductor_mesh_policy": "authored_shared_domain",
+                    "field_sampling_domain": {"kind": "global"},
+                    "target_refs": [{"kind": "global"}],
+                    "solver_policy": "production_default",
+                    "outputs": [{"id": "basis", "quantity": "H_ant_basis"}]
+                }],
+                "antenna_target_projections": [{
+                    "id": "projection_1",
+                    "solution": {
+                        "stage_id": "solve_1",
+                        "output_id": "basis",
+                        "asset_id": "asset_1",
+                        "content_digest": "sha256:asset"
+                    },
+                    "target": {"kind": "global"},
+                    "output_id": "projected"
+                }],
+                "solved_antenna_drives": [{
+                    "id": "drive_1",
+                    "name": "Drive 1",
+                    "projection_ref": "projection_1",
+                    "port_mode_id": "port_1",
+                    "peak_current_a": 0.01,
+                    "waveform": {"kind": "constant"},
+                    "time_origin": "stage_local",
+                    "activation": {"kind": "all_time_evolution"}
+                }],
+                "antenna_spectrum_requests": [{
+                    "id": "spectrum_1",
+                    "solution_ref": {
+                        "stage_id": "solve_1",
+                        "output_id": "basis",
+                        "asset_id": "asset_1",
+                        "content_digest": "sha256:asset"
+                    },
+                    "target": {"kind": "global"},
+                    "transform": "spatial_fft",
+                    "sampling_plane": {
+                        "origin_m": [0.0, 0.0, 0.0],
+                        "axis_u": [1.0, 0.0, 0.0],
+                        "axis_v": [0.0, 1.0, 0.0],
+                        "extent_u_m": 1.0,
+                        "extent_v_m": 1.0,
+                        "sample_count_u": 2,
+                        "sample_count_v": 2,
+                        "interpolation": "fem_element",
+                        "outside_policy": "error"
+                    },
+                    "window": "rectangular",
+                    "normalization": "integral_si",
+                    "component": "x",
+                    "output_id": "spectrum_out"
+                }]
+            }),
+        )
+        .expect("antenna merge patch must deserialize");
+
+        assert_eq!(patched.antenna_port_modes[0].id, "port_1");
+        assert_eq!(patched.antenna_field_solve_stages[0].id, "solve_1");
+        assert_eq!(patched.antenna_target_projections[0].id, "projection_1");
+        assert_eq!(patched.solved_antenna_drives[0].id, "drive_1");
+        assert_eq!(patched.antenna_spectrum_requests[0].id, "spectrum_1");
+
+        let serialized = serde_json::to_value(patched).expect("scene serialization");
+        assert_eq!(serialized["antenna_port_modes"][0]["id"], "port_1");
+        assert_eq!(serialized["antenna_field_solve_stages"][0]["id"], "solve_1");
+        assert_eq!(serialized["antenna_target_projections"][0]["id"], "projection_1");
+        assert_eq!(serialized["solved_antenna_drives"][0]["id"], "drive_1");
+        assert_eq!(serialized["antenna_spectrum_requests"][0]["id"], "spectrum_1");
+    }
+}

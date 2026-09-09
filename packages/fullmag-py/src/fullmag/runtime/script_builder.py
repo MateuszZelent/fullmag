@@ -333,6 +333,21 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "current_modules": [
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
+        "antenna_port_modes": [
+            mode.to_ir() for mode in base_problem.antenna_port_modes
+        ],
+        "antenna_field_solve_stages": [
+            stage.to_ir() for stage in base_problem.antenna_field_solve_stages
+        ],
+        "antenna_target_projections": [
+            projection.to_ir() for projection in base_problem.antenna_target_projections
+        ],
+        "solved_antenna_drives": [
+            drive.to_ir() for drive in base_problem.solved_antenna_drives
+        ],
+        "antenna_spectrum_requests": [
+            request.to_ir() for request in base_problem.antenna_spectrum_requests
+        ],
         "spin_transports": [
             _export_spin_transport_entry(base_problem, module)
             for module in base_problem.spin_transports
@@ -1098,6 +1113,7 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         "export",
         "change_device",
         "add_field_drive",
+        "antenna_field_solve",
         "remove_field_drive",
         "table_autosave",
         "autosave",
@@ -1129,6 +1145,7 @@ def _study_pipeline_stage_label(
         return f"Imported {index + 1} · {original_kind}"
     kind_label = {
         "add_field_drive": "Add Antenna",
+        "antenna_field_solve": "Antenna Field Solve",
         "autosave": "Autosave",
         "change_device": "Change Device",
         "eigenmodes": "Eigenmodes",
@@ -1223,6 +1240,17 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "kind": "add_field_drive",
                 "entrypoint_kind": stage.entrypoint_kind,
                 "drive": drive_payload,
+            }
+        if action_kind == "antenna_field_solve":
+            definition = action.get("definition")
+            if not isinstance(definition, dict):
+                raise TypeError(
+                    "antenna_field_solve action requires a serialized field-solve definition"
+                )
+            return {
+                "kind": "antenna_field_solve",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "definition": copy.deepcopy(definition),
             }
         if action_kind == "remove_field_drive":
             drive_id = _text_value(action.get("drive_id"))
@@ -6490,6 +6518,7 @@ def _stage_override_for(
             "export",
             "change_device",
             "add_field_drive",
+            "antenna_field_solve",
             "remove_field_drive",
             "table_autosave",
             "autosave",

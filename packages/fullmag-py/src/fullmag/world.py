@@ -47,10 +47,17 @@ from fullmag._validation import (
     require_positive,
 )
 from fullmag.model.antenna import (
+    AntennaFieldSolutionRef,
+    AntennaFieldSolveStage,
     AntennaFieldSource,
     Antenna,
+    AntennaStageOutputRef,
+    AntennaTargetProjection,
+    AntennaPortMode,
+    AntennaSpectrumRequest,
     RegionalFieldDrive,
     RfDrive,
+    SolvedAntennaDrive,
     SpinWaveExcitationAnalysis,
 )
 from fullmag.model.absorbing_boundary import AbsorbingBoundaryLayer
@@ -2449,6 +2456,11 @@ class _WorldState:
     _outputs_explicit: bool = False
     _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
+    _antenna_port_modes: list[AntennaPortMode] = field(default_factory=list)
+    _antenna_field_solve_stages: list[AntennaFieldSolveStage] = field(default_factory=list)
+    _antenna_target_projections: list[AntennaTargetProjection] = field(default_factory=list)
+    _solved_antenna_drives: list[SolvedAntennaDrive] = field(default_factory=list)
+    _antenna_spectrum_requests: list[AntennaSpectrumRequest] = field(default_factory=list)
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
@@ -4037,6 +4049,51 @@ class StudyStagesBuilder:
             _state._wait_for_solve = True
         return self
 
+    def add_antenna_field_solve(
+        self,
+        *,
+        id: str,
+        definition: AntennaFieldSolveStage,
+    ) -> AntennaStageOutputRef:
+        """Declare a static antenna-field precompute and return its symbolic output."""
+        stage_id = require_non_empty(id, "id")
+        if not isinstance(definition, AntennaFieldSolveStage):
+            raise TypeError("definition must be an AntennaFieldSolveStage")
+        if any(
+            stage.stage_id == stage_id
+            for stage in _state._declared_stages
+            if stage.stage_id is not None
+        ):
+            raise ValueError(f"duplicate stage_id {stage_id!r}")
+        if any(stage.id == stage_id for stage in _state._antenna_field_solve_stages):
+            raise ValueError(f"duplicate antenna field solve id {stage_id!r}")
+        normalized_definition = replace(definition, id=stage_id)
+        basis_outputs = [
+            output
+            for output in normalized_definition.outputs
+            if output.quantity == "H_ant_basis"
+        ]
+        if len(basis_outputs) != 1:
+            raise ValueError(
+                "antenna field solve requires exactly one H_ant_basis output"
+            )
+        problem_before_action = _build_problem()
+        _state._antenna_field_solve_stages.append(normalized_definition)
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_antenna_field_solve",
+                action={
+                    "kind": "antenna_field_solve",
+                    "definition": normalized_definition.to_ir(),
+                },
+                stage_id=stage_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return AntennaStageOutputRef(stage_id=stage_id, output_id=basis_outputs[0].id)
+
     def remove_field_drive(
         self,
         drive_id: str,
@@ -5313,6 +5370,56 @@ class StudyBuilder:
     def name(self, problem_name: str) -> "StudyBuilder":
         name(problem_name)
         return self
+
+    def add_solved_antenna_drive(
+        self,
+        *,
+        drive: SolvedAntennaDrive,
+        projection: AntennaTargetProjection,
+    ) -> SolvedAntennaDrive:
+        """Register a solved antenna drive and its target projection."""
+        if not isinstance(drive, SolvedAntennaDrive):
+            raise TypeError("drive must be a SolvedAntennaDrive")
+        if not isinstance(projection, AntennaTargetProjection):
+            raise TypeError("projection must be an AntennaTargetProjection")
+        if drive.projection_ref != projection.id:
+            raise ValueError(
+                "drive.projection_ref must match the supplied projection.id"
+            )
+        if isinstance(projection.solution, AntennaStageOutputRef):
+            solve = next(
+                (
+                    stage
+                    for stage in _state._antenna_field_solve_stages
+                    if stage.id == projection.solution.stage_id
+                ),
+                None,
+            )
+            if solve is None:
+                raise ValueError(
+                    f"projection.solution references unknown antenna field solve "
+                    f"{projection.solution.stage_id!r}"
+                )
+            if not any(
+                output.id == projection.solution.output_id for output in solve.outputs
+            ):
+                raise ValueError(
+                    f"projection.solution references unknown output "
+                    f"{projection.solution.output_id!r} on solve "
+                    f"{projection.solution.stage_id!r}"
+                )
+        elif not isinstance(projection.solution, AntennaFieldSolutionRef):
+            raise TypeError(
+                "projection.solution must be an AntennaStageOutputRef or "
+                "AntennaFieldSolutionRef"
+            )
+        if any(item.id == projection.id for item in _state._antenna_target_projections):
+            raise ValueError(f"duplicate antenna projection id {projection.id!r}")
+        if any(item.id == drive.id for item in _state._solved_antenna_drives):
+            raise ValueError(f"duplicate solved antenna drive id {drive.id!r}")
+        _state._antenna_target_projections.append(projection)
+        _state._solved_antenna_drives.append(drive)
+        return drive
 
     def load(
         self,
@@ -8752,6 +8859,11 @@ def _build_problem(
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         auxiliary_geometry_roles=dict(s._auxiliary_geometry_roles),
         current_modules=tuple(s._current_modules),
+        antenna_port_modes=tuple(s._antenna_port_modes),
+        antenna_field_solve_stages=tuple(s._antenna_field_solve_stages),
+        antenna_target_projections=tuple(s._antenna_target_projections),
+        solved_antenna_drives=tuple(s._solved_antenna_drives),
+        antenna_spectrum_requests=tuple(s._antenna_spectrum_requests),
         field_drives=tuple(s._field_drives),
         monitors=tuple(s._planar_monitors),
         spin_torques=tuple(s._spin_torques),

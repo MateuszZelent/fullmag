@@ -1243,6 +1243,18 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    for collection in (
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        if collection in builder:
+            value = builder[collection]
+            if not isinstance(value, list):
+                raise ValueError(f"{collection} must be a list when present")
+            document[collection] = copy.deepcopy(value)
     if "fdm" in builder:
         document["study"]["fdm"] = copy.deepcopy(builder.get("fdm"))
     if "spin_torques" in builder:
@@ -1417,6 +1429,18 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         builder["oersted_terms"] = _canonical_oersted_fields(
             scene["oersted_terms"], scene_ids=False
         )
+    for collection in (
+        "antenna_port_modes",
+        "antenna_field_solve_stages",
+        "antenna_target_projections",
+        "solved_antenna_drives",
+        "antenna_spectrum_requests",
+    ):
+        if collection in scene:
+            value = scene[collection]
+            if not isinstance(value, list):
+                raise ValueError(f"{collection} must be a list when present")
+            builder[collection] = copy.deepcopy(value)
     return builder
 
 
@@ -1588,6 +1612,11 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
     _copy_present_collection(builder, overrides, "spin_torques")
     _copy_present_collection(builder, overrides, "spin_transports")
     _copy_present_collection(builder, overrides, "oersted_terms")
+    _copy_present_collection(builder, overrides, "antenna_port_modes")
+    _copy_present_collection(builder, overrides, "antenna_field_solve_stages")
+    _copy_present_collection(builder, overrides, "antenna_target_projections")
+    _copy_present_collection(builder, overrides, "solved_antenna_drives")
+    _copy_present_collection(builder, overrides, "antenna_spectrum_requests")
     if "fdm" in builder:
         fdm = copy.deepcopy(builder.get("fdm"))
         if isinstance(fdm, dict):

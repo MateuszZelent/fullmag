@@ -3,6 +3,7 @@ from .absorbing_boundary import AbsorbingBoundaryLayer
 from .antenna import (
     AntennaFieldSolveStage,
     AntennaFieldSolutionRef,
+    AntennaStageOutputRef,
     AntennaFieldSource,
     AntennaNamedOutput,
     AntennaPortBranch,

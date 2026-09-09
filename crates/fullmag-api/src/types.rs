@@ -1641,6 +1641,11 @@ mod tests {
             spin_transports: Vec::new(),
             spin_torques: Vec::new(),
             oersted_terms: Vec::new(),
+            antenna_port_modes: Vec::new(),
+            antenna_field_solve_stages: Vec::new(),
+            antenna_target_projections: Vec::new(),
+            solved_antenna_drives: Vec::new(),
+            antenna_spectrum_requests: Vec::new(),
             excitation_analysis: None,
         }
     }

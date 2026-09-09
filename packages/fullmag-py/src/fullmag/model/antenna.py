@@ -169,6 +169,25 @@ class AntennaFieldSolutionRef:
 
 
 @dataclass(frozen=True, slots=True)
+class AntennaStageOutputRef:
+    """Authoring-time reference to an output declared by a solve stage."""
+
+    stage_id: str
+    output_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stage_id", require_non_empty(self.stage_id, "stage_id"))
+        object.__setattr__(self, "output_id", require_non_empty(self.output_id, "output_id"))
+
+    def to_ir(self) -> dict[str, str]:
+        return {
+            "kind": "stage_output",
+            "stage_id": self.stage_id,
+            "output_id": self.output_id,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class SolvedAntennaDrive:
     id: str
     name: str
@@ -367,7 +386,7 @@ class AntennaFieldSolveStage:
 @dataclass(frozen=True, slots=True)
 class AntennaTargetProjection:
     id: str
-    solution: AntennaFieldSolutionRef
+    solution: AntennaStageOutputRef | AntennaFieldSolutionRef
     target: FieldTarget
     output_id: str
 
@@ -378,8 +397,10 @@ class AntennaTargetProjection:
             "output_id",
             require_non_empty(self.output_id, "antenna_projection.output_id"),
         )
-        if not isinstance(self.solution, AntennaFieldSolutionRef):
-            raise TypeError("solution must be an AntennaFieldSolutionRef")
+        if not isinstance(self.solution, (AntennaStageOutputRef, AntennaFieldSolutionRef)):
+            raise TypeError(
+                "solution must be an AntennaStageOutputRef or AntennaFieldSolutionRef"
+            )
         if not isinstance(self.target, FieldTarget):
             raise TypeError("target must be a FieldTarget")
 

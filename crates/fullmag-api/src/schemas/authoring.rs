@@ -272,19 +272,19 @@ pub struct SceneResource {
     pub current_modules: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<Object>)]
-    pub antenna_port_modes: Vec<Value>,
+    pub antenna_port_modes: Vec<fullmag_ir::AntennaPortModeIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<Object>)]
-    pub antenna_field_solve_stages: Vec<Value>,
+    pub antenna_field_solve_stages: Vec<fullmag_ir::AntennaFieldSolveStageIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<Object>)]
-    pub antenna_target_projections: Vec<Value>,
+    pub antenna_target_projections: Vec<fullmag_ir::AntennaTargetProjectionRefIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<Object>)]
-    pub solved_antenna_drives: Vec<Value>,
+    pub solved_antenna_drives: Vec<fullmag_ir::SolvedAntennaDriveIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schema(value_type = Vec<Object>)]
-    pub antenna_spectrum_requests: Vec<Value>,
+    pub antenna_spectrum_requests: Vec<fullmag_ir::AntennaSpectrumRequestIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_transports: Vec<fullmag_authoring::SceneCurrentTransport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1690,11 +1690,84 @@ mod stage_autosave_tests {
     #[test]
     fn scene_round_trips_antenna_composition_resources_without_field_drive_substitution() {
         let scene: SceneResource = serde_json::from_value(serde_json::json!({
-            "antenna_port_modes": [{"id": "port_1"}],
-            "antenna_field_solve_stages": [{"id": "solve_1"}],
-            "antenna_target_projections": [{"id": "projection_1"}],
-            "solved_antenna_drives": [{"id": "drive_1"}],
-            "antenna_spectrum_requests": [{"id": "spectrum_1"}]
+            "antenna_port_modes": [{
+                "schema_version": "antenna_port_mode.v2",
+                "id": "port_1",
+                "source_object_id": "antenna_1",
+                "current_transport_id": "transport_1",
+                "branches": [{
+                    "id": "signal",
+                    "inlet_terminal_ref": "signal_in",
+                    "outlet_terminal_ref": "signal_out",
+                    "signed_weight": 1.0
+                }, {
+                    "id": "return",
+                    "inlet_terminal_ref": "return_in",
+                    "outlet_terminal_ref": "return_out",
+                    "signed_weight": -1.0
+                }]
+            }],
+            "antenna_field_solve_stages": [{
+                "id": "solve_1",
+                "source_object_id": "antenna_1",
+                "current_transport_id": "transport_1",
+                "port_mode_ids": ["port_1"],
+                "conservative_current_view_ref": "transport_1:rt0",
+                "model": "quasistatic_conduction_biot_savart3d",
+                "oersted_realization": "direct_tetra_quadrature",
+                "conductor_mesh_policy": "authored_shared_domain",
+                "field_sampling_domain": {"kind": "global"},
+                "target_refs": [{"kind": "global"}],
+                "solver_policy": "production_default",
+                "outputs": [{"id": "basis", "quantity": "H_ant_basis"}]
+            }],
+            "antenna_target_projections": [{
+                "id": "projection_1",
+                "solution": {
+                    "stage_id": "solve_1",
+                    "output_id": "basis",
+                    "asset_id": "asset_1",
+                    "content_digest": "sha256:asset"
+                },
+                "target": {"kind": "global"},
+                "output_id": "projected"
+            }],
+            "solved_antenna_drives": [{
+                "id": "drive_1",
+                "name": "Drive 1",
+                "projection_ref": "projection_1",
+                "port_mode_id": "port_1",
+                "peak_current_a": 0.01,
+                "waveform": {"kind": "constant"},
+                "time_origin": "stage_local",
+                "activation": {"kind": "all_time_evolution"}
+            }],
+            "antenna_spectrum_requests": [{
+                "id": "spectrum_1",
+                "solution_ref": {
+                    "stage_id": "solve_1",
+                    "output_id": "basis",
+                    "asset_id": "asset_1",
+                    "content_digest": "sha256:asset"
+                },
+                "target": {"kind": "global"},
+                "transform": "spatial_fft",
+                "sampling_plane": {
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "axis_u": [1.0, 0.0, 0.0],
+                    "axis_v": [0.0, 1.0, 0.0],
+                    "extent_u_m": 1.0,
+                    "extent_v_m": 1.0,
+                    "sample_count_u": 2,
+                    "sample_count_v": 2,
+                    "interpolation": "fem_element",
+                    "outside_policy": "error"
+                },
+                "window": "rectangular",
+                "normalization": "integral_si",
+                "component": "x",
+                "output_id": "spectrum_out"
+            }]
         }))
         .unwrap();
         let value = serde_json::to_value(scene).unwrap();
@@ -1703,8 +1776,8 @@ mod stage_autosave_tests {
         assert_eq!(value["antenna_target_projections"][0]["id"], "projection_1");
         assert_eq!(value["solved_antenna_drives"][0]["id"], "drive_1");
         assert_eq!(value["antenna_spectrum_requests"][0]["id"], "spectrum_1");
-        assert!(value["field_drives"]["drives"]
-            .as_array()
-            .is_some_and(Vec::is_empty));
+        assert!(value["field_drives"].get("drives").is_none_or(|drives| {
+            drives.as_array().is_some_and(Vec::is_empty)
+        }));
     }
 }
