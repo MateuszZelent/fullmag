@@ -395,8 +395,10 @@ fn measured_port_current(
                 ),
             });
         }
-        let signed_current = 0.5 * (outlet_current - inlet_current);
-        branch_currents.push((branch.signed_weight, signed_current));
+        // `boundary_current_a` is the outward flux. The outlet is therefore
+        // the single canonical positive orientation for a branch; the inlet
+        // is used only to certify local current balance.
+        branch_currents.push((branch.signed_weight, outlet_current));
     }
     let positive_weight = branch_currents
         .iter()
@@ -420,12 +422,15 @@ fn measured_port_current(
         });
     }
 
+    let reference_current = branch_currents
+        .iter()
+        .find(|(weight, _)| *weight > 0.0)
+        .map(|(weight, current)| *current / *weight)
+        .unwrap_or(f64::NAN);
     let normalized_currents = branch_currents
         .iter()
         .map(|(weight, current)| *current / *weight)
         .collect::<Vec<_>>();
-    let reference_current =
-        normalized_currents.iter().sum::<f64>() / normalized_currents.len().max(1) as f64;
     let scale = reference_current.abs().max(1.0e-30);
     if !reference_current.is_finite() || reference_current <= 1.0e-30 {
         return Err(RunError {
@@ -975,6 +980,15 @@ mod tests {
         )
         .expect("balanced CPW terminal currents");
         assert_eq!(current, 2.0);
+
+        let outlet_reference = measured_port_current(
+            &request,
+            &driven_boundaries(),
+            &charge_dirichlet,
+            &[-2.0, 2.00000001, 1.0, -1.0, 1.0, -1.0],
+        )
+        .expect("small terminal imbalance remains within the balance certificate");
+        assert!((outlet_reference - 2.00000001).abs() < 1.0e-12);
 
         let split_error = measured_port_current(
             &request,
